@@ -163,3 +163,32 @@ export function flattenVisibleSpans(
 
   return result;
 }
+
+// Re-export categorization functions
+export {
+  categorizeSpan,
+  categorizeSpans,
+  categorizeSpanTree,
+  getSpanCategory,
+  getCategoryMeta,
+  filterSpansByCategory,
+  filterSpanTreeByCategory,
+  countByCategory,
+  buildDisplayName,
+} from './spanCategorization';
+
+// Re-export tool similarity functions
+export {
+  extractCommonArgKeys,
+  groupToolSpans,
+  calculateToolSimilarity,
+  getToolGroupStats,
+} from './toolSimilarity';
+
+// Re-export trace comparison functions
+export {
+  calculateSpanSimilarity,
+  compareTraces,
+  flattenAlignedTree,
+  getComparisonTypeInfo,
+} from './traceComparison';

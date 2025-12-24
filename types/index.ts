@@ -303,6 +303,75 @@ export interface TraceSearchResult {
   total: number;
 }
 
+// ============ Trace Tree View Types ============
+
+/**
+ * Span category based on OTel GenAI semantic conventions
+ * @see https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/
+ */
+export type SpanCategory = 'AGENT' | 'LLM' | 'TOOL' | 'ERROR' | 'OTHER';
+
+/**
+ * Extended span with category metadata for tree visualization
+ */
+export interface CategorizedSpan extends Span {
+  category: SpanCategory;
+  categoryLabel: string;
+  categoryColor: string;
+  categoryIcon: string; // lucide-react icon name
+  displayName: string; // Constructed label using OTel attributes
+}
+
+/**
+ * Configuration for tool similarity grouping
+ */
+export interface ToolSimilarityConfig {
+  /** Which tool arguments to use for determining "sameness" */
+  keyArguments: string[];
+  /** Whether grouping is enabled */
+  enabled: boolean;
+}
+
+/**
+ * Grouped tool spans for similarity view
+ */
+export interface ToolGroup {
+  toolName: string;
+  keyArgsValues: Record<string, any>;
+  spans: CategorizedSpan[];
+  count: number;
+  totalDuration: number;
+  avgDuration: number;
+}
+
+// ============ Trace Comparison Types ============
+
+/**
+ * Aligned span pair for tree comparison
+ */
+export interface AlignedSpanPair {
+  type: 'matched' | 'added' | 'removed' | 'modified';
+  leftSpan?: CategorizedSpan;
+  rightSpan?: CategorizedSpan;
+  similarity?: number;
+  children?: AlignedSpanPair[];
+}
+
+/**
+ * Result of comparing two trace trees
+ */
+export interface TraceComparisonResult {
+  alignedTree: AlignedSpanPair[];
+  stats: {
+    totalLeft: number;
+    totalRight: number;
+    matched: number;
+    added: number;
+    removed: number;
+    modified: number;
+  };
+}
+
 // ============ Experiment Types ============
 
 // Result status for a single use case within a run

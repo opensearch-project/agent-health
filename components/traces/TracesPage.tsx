@@ -17,6 +17,8 @@ import {
 } from '@/services/traces';
 import { formatDuration } from '@/services/traces/utils';
 import TraceTimelineChart from './TraceTimelineChart';
+import TraceTreeView from './TraceTreeView';
+import ViewToggle, { ViewMode } from './ViewToggle';
 import SpanDetailsPanel from './SpanDetailsPanel';
 import {
   SSEClient,
@@ -42,6 +44,7 @@ export const TracesPage: React.FC = () => {
   const [spans, setSpans] = useState<Span[]>([]);
   const [selectedSpan, setSelectedSpan] = useState<Span | null>(null);
   const [expandedSpans, setExpandedSpans] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<ViewMode>('tree');
 
   const agent = DEFAULT_CONFIG.agents.find(a => a.name === selectedAgentName);
 
@@ -333,13 +336,16 @@ export const TracesPage: React.FC = () => {
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <Activity size={14} />
-                Trace Timeline
+                Trace Viewer
               </CardTitle>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span>{spans.length} spans</span>
-                {timeRange.duration > 0 && (
-                  <span>{formatDuration(timeRange.duration)}</span>
-                )}
+              <div className="flex items-center gap-3">
+                <ViewToggle viewMode={viewMode} onChange={setViewMode} />
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span>{spans.length} spans</span>
+                  {timeRange.duration > 0 && (
+                    <span>{formatDuration(timeRange.duration)}</span>
+                  )}
+                </div>
               </div>
             </div>
           </CardHeader>
@@ -352,20 +358,35 @@ export const TracesPage: React.FC = () => {
               </div>
             ) : (
               <>
-                {/* Timeline Chart */}
-                <ScrollArea className="flex-1 border-b">
-                  <TraceTimelineChart
-                    spanTree={spanTree}
-                    timeRange={timeRange}
-                    selectedSpan={selectedSpan}
-                    onSelect={setSelectedSpan}
-                    expandedSpans={expandedSpans}
-                    onToggleExpand={handleToggleExpand}
-                  />
-                </ScrollArea>
+                {/* View Content - Timeline or Tree */}
+                <div className="flex-1 overflow-hidden border-b">
+                  {viewMode === 'timeline' ? (
+                    <ScrollArea className="h-full">
+                      <TraceTimelineChart
+                        spanTree={spanTree}
+                        timeRange={timeRange}
+                        selectedSpan={selectedSpan}
+                        onSelect={setSelectedSpan}
+                        expandedSpans={expandedSpans}
+                        onToggleExpand={handleToggleExpand}
+                      />
+                    </ScrollArea>
+                  ) : (
+                    <div className="h-full p-4">
+                      <TraceTreeView
+                        spanTree={spanTree}
+                        timeRange={timeRange}
+                        selectedSpan={selectedSpan}
+                        onSelectSpan={setSelectedSpan}
+                        expandedSpans={expandedSpans}
+                        onToggleExpand={handleToggleExpand}
+                      />
+                    </div>
+                  )}
+                </div>
 
-                {/* Span Details Panel */}
-                {selectedSpan && (
+                {/* Span Details Panel - only for timeline mode (tree has it integrated) */}
+                {viewMode === 'timeline' && selectedSpan && (
                   <div className="h-[300px] overflow-hidden">
                     <SpanDetailsPanel
                       span={selectedSpan}

@@ -30,6 +30,8 @@ import { fetchRunMetrics, formatCost, formatDuration, formatTokens } from '@/ser
 import { TrajectoryView } from './TrajectoryView';
 import { RawEventsPanel } from './RawEventsPanel';
 import TraceTimelineChart from './traces/TraceTimelineChart';
+import TraceTreeView from './traces/TraceTreeView';
+import ViewToggle, { ViewMode } from './traces/ViewToggle';
 import SpanDetailsPanel from './traces/SpanDetailsPanel';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
 import { fetchTracesByRunIds, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
@@ -78,6 +80,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   const [tracesError, setTracesError] = useState<string | null>(null);
   const [tracesFetched, setTracesFetched] = useState(false);
   const [activeTab, setActiveTab] = useState('summary');
+  const [traceViewMode, setTraceViewMode] = useState<ViewMode>('timeline');
 
   // Live report state for auto-refresh when judge completes
   // This allows the UI to update without a page refresh when metricsStatus changes
@@ -801,7 +804,12 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             {isTraceMode ? (
               /* TRACE MODE: Show trace visualization */
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold">Traces</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">Traces</h3>
+                  {spanTree.length > 0 && !tracesLoading && (
+                    <ViewToggle viewMode={traceViewMode} onChange={setTraceViewMode} />
+                  )}
+                </div>
 
                 {/* Loading state */}
                 {tracesLoading && (
@@ -860,19 +868,31 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                             Run ID: {report.runId}
                           </span>
                         </div>
-                        <TraceTimelineChart
-                          spanTree={spanTree}
-                          timeRange={timeRange}
-                          selectedSpan={selectedSpan}
-                          onSelect={setSelectedSpan}
-                          expandedSpans={expandedSpans}
-                          onToggleExpand={handleToggleExpand}
-                        />
+
+                        {traceViewMode === 'timeline' ? (
+                          <TraceTimelineChart
+                            spanTree={spanTree}
+                            timeRange={timeRange}
+                            selectedSpan={selectedSpan}
+                            onSelect={setSelectedSpan}
+                            expandedSpans={expandedSpans}
+                            onToggleExpand={handleToggleExpand}
+                          />
+                        ) : (
+                          <TraceTreeView
+                            spanTree={spanTree}
+                            timeRange={timeRange}
+                            selectedSpan={selectedSpan}
+                            onSelectSpan={setSelectedSpan}
+                            expandedSpans={expandedSpans}
+                            onToggleExpand={handleToggleExpand}
+                          />
+                        )}
                       </CardContent>
                     </Card>
 
-                    {/* Span details panel */}
-                    {selectedSpan && (
+                    {/* Span details panel - only for timeline mode (tree has it integrated) */}
+                    {traceViewMode === 'timeline' && selectedSpan && (
                       <Card>
                         <CardContent className="p-0">
                           <SpanDetailsPanel
