@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Server,
   FlaskConical,
+  Activity,
 } from "lucide-react";
 import OpenSearchLogo from "@/assets/opensearch-logo.svg";
 import { Link, useLocation } from "react-router-dom";
@@ -31,6 +32,7 @@ const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/test-cases", icon: ClipboardList, label: "Test Cases" },
   { to: "/experiments", icon: FlaskConical, label: "Experiments" },
+  { to: "/traces", icon: Activity, label: "Live Traces" },
 ];
 
 const settingsItems = [

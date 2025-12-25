@@ -49,6 +49,8 @@ export interface TracesQueryOptions {
   startTime?: number;
   endTime?: number;
   size?: number;
+  serviceName?: string;
+  textSearch?: string;
 }
 
 export interface TracesResponse {
@@ -133,14 +135,18 @@ export async function fetchTraces(
   options: TracesQueryOptions,
   config: OpenSearchConfig
 ): Promise<TracesResponse> {
-  const { traceId, runIds, startTime, endTime, size = 500 } = options;
+  const { traceId, runIds, startTime, endTime, size = 500, serviceName, textSearch } = options;
   const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = config;
 
-  if (!traceId && (!runIds || runIds.length === 0)) {
-    throw new Error('Either traceId or runIds is required');
+  // For live tailing, we allow queries with just time range + optional filters
+  const hasTimeRange = startTime || endTime;
+  const hasIdFilter = traceId || (runIds && runIds.length > 0);
+
+  if (!hasIdFilter && !hasTimeRange) {
+    throw new Error('Either traceId, runIds, or time range is required');
   }
 
-  console.log('[TracesService] Fetching traces:', { traceId, runIds: runIds?.length, size });
+  console.log('[TracesService] Fetching traces:', { traceId, runIds: runIds?.length, serviceName, textSearch, size });
 
   // Build OpenSearch query
   const must: any[] = [];
@@ -157,14 +163,38 @@ export async function fetchTraces(
 
   if (startTime || endTime) {
     const range: any = { 'startTime': {} };
-    if (startTime) range['startTime'].gte = startTime;
-    if (endTime) range['startTime'].lte = endTime;
+    if (startTime) range['startTime'].gte = new Date(startTime).toISOString();
+    if (endTime) range['startTime'].lte = new Date(endTime).toISOString();
     must.push({ range });
+  }
+
+  // Filter by service/agent name
+  if (serviceName) {
+    must.push({
+      bool: {
+        should: [
+          { term: { 'serviceName': serviceName } },
+          { term: { 'span.attributes.gen_ai@agent@name': serviceName } }
+        ],
+        minimum_should_match: 1
+      }
+    });
+  }
+
+  // Text search across span name and attributes
+  if (textSearch) {
+    must.push({
+      query_string: {
+        query: `*${textSearch}*`,
+        fields: ['name', 'span.attributes.*'],
+        default_operator: 'AND'
+      }
+    });
   }
 
   const query = {
     size,
-    sort: [{ 'startTime': { order: 'asc' } }],
+    sort: [{ 'startTime': { order: 'desc' } }],  // Most recent first for live tailing
     query: { bool: { must } }
   };
 

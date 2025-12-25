@@ -4,7 +4,7 @@ import { GitBranch, Scale, Activity } from 'lucide-react';
 import { EvaluationReport, ExperimentRun } from '@/types';
 import { TrajectorySection } from './sections/TrajectorySection';
 import { JudgeSection } from './sections/JudgeSection';
-import { TraceTreeComparison } from './sections/TraceTreeComparison';
+import { TraceFlowComparison } from './sections/TraceFlowComparison';
 
 interface UseCaseExpandedRowProps {
   useCaseId: string;
@@ -44,7 +44,7 @@ export const UseCaseExpandedRow: React.FC<UseCaseExpandedRowProps> = ({
         </TabsContent>
 
         <TabsContent value="traces" className="mt-0">
-          <TraceTreeComparison
+          <TraceFlowComparison
             runs={runs}
             reports={reports}
             useCaseId={useCaseId}

@@ -30,7 +30,7 @@ import { fetchRunMetrics, formatCost, formatDuration, formatTokens } from '@/ser
 import { TrajectoryView } from './TrajectoryView';
 import { RawEventsPanel } from './RawEventsPanel';
 import TraceTimelineChart from './traces/TraceTimelineChart';
-import TraceTreeView from './traces/TraceTreeView';
+import TraceFlowView from './traces/TraceFlowView';
 import ViewToggle, { ViewMode } from './traces/ViewToggle';
 import SpanDetailsPanel from './traces/SpanDetailsPanel';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
@@ -879,19 +879,19 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                             onToggleExpand={handleToggleExpand}
                           />
                         ) : (
-                          <TraceTreeView
-                            spanTree={spanTree}
-                            timeRange={timeRange}
-                            selectedSpan={selectedSpan}
-                            onSelectSpan={setSelectedSpan}
-                            expandedSpans={expandedSpans}
-                            onToggleExpand={handleToggleExpand}
-                          />
+                          <div className="h-[700px] w-full">
+                            <TraceFlowView
+                              spanTree={spanTree}
+                              timeRange={timeRange}
+                              selectedSpan={selectedSpan}
+                              onSelectSpan={setSelectedSpan}
+                            />
+                          </div>
                         )}
                       </CardContent>
                     </Card>
 
-                    {/* Span details panel - only for timeline mode (tree has it integrated) */}
+                    {/* Span details panel - only for timeline mode (flow view has it integrated) */}
                     {traceViewMode === 'timeline' && selectedSpan && (
                       <Card>
                         <CardContent className="p-0">

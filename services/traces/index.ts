@@ -45,6 +45,28 @@ export async function fetchTracesByRunIds(runIds: string[]): Promise<TraceSearch
 }
 
 /**
+ * Fetch recent traces for live tailing
+ */
+export async function fetchRecentTraces(options: {
+  minutesAgo?: number;
+  serviceName?: string;
+  textSearch?: string;
+  size?: number;
+}): Promise<TraceSearchResult> {
+  const { minutesAgo = 5, serviceName, textSearch, size = 500 } = options;
+  const now = Date.now();
+  const startTime = now - (minutesAgo * 60 * 1000);
+
+  return fetchTraces({
+    startTime,
+    endTime: now,
+    serviceName,
+    textSearch,
+    size,
+  });
+}
+
+/**
  * Check traces API health
  */
 export async function checkTracesHealth(): Promise<{ status: string; index?: string; error?: string }> {
@@ -192,3 +214,18 @@ export {
   flattenAlignedTree,
   getComparisonTypeInfo,
 } from './traceComparison';
+
+// Re-export flow transform functions
+export {
+  spansToFlow,
+  applyDagreLayout,
+  detectParallelExecution,
+  countSpansInTree,
+} from './flowTransform';
+
+// Re-export execution order transform functions
+export {
+  spansToExecutionFlow,
+  isContainerSpan,
+  findMainFlowSpans,
+} from './executionOrderTransform';

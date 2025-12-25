@@ -1,3 +1,5 @@
+import type { Node, Edge } from '@xyflow/react';
+
 // Shared type for difficulty levels
 export type Difficulty = 'Easy' | 'Medium' | 'Hard';
 
@@ -293,9 +295,11 @@ export interface TimeRange {
 export interface TraceQueryParams {
   traceId?: string;
   runIds?: string[];
-  startTime?: Date;
-  endTime?: Date;
+  startTime?: number;  // Unix timestamp ms
+  endTime?: number;    // Unix timestamp ms
   size?: number;
+  serviceName?: string;
+  textSearch?: string;
 }
 
 export interface TraceSearchResult {
@@ -370,6 +374,46 @@ export interface TraceComparisonResult {
     removed: number;
     modified: number;
   };
+}
+
+// ============ Trace Flow View Types ============
+
+/**
+ * Data payload for span nodes in React Flow
+ * Index signature required for React Flow compatibility
+ */
+export interface SpanNodeData extends Record<string, unknown> {
+  span: CategorizedSpan;
+  totalDuration: number;
+}
+
+/**
+ * Result of transforming spans to React Flow format
+ */
+export interface FlowTransformResult {
+  nodes: Node<SpanNodeData>[];
+  edges: Edge[];
+}
+
+/**
+ * Options for flow transformation
+ */
+export interface FlowTransformOptions {
+  direction?: 'TB' | 'LR'; // Top-to-bottom or Left-to-right
+  mode?: 'hierarchy' | 'execution-order'; // Flow mode: parent-child hierarchy or execution-order linking
+  nodeWidth?: number;
+  nodeHeight?: number;
+  nodeSpacingX?: number;
+  nodeSpacingY?: number;
+}
+
+/**
+ * Group of spans detected as parallel execution
+ */
+export interface ParallelGroup {
+  spans: CategorizedSpan[];
+  startTime: number;
+  endTime: number;
 }
 
 // ============ Experiment Types ============

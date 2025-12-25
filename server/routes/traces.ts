@@ -12,12 +12,15 @@ const router = Router();
  */
 router.post('/api/traces', async (req: Request, res: Response) => {
   try {
-    const { traceId, runIds, startTime, endTime, size = 500 } = req.body;
+    const { traceId, runIds, startTime, endTime, size = 500, serviceName, textSearch } = req.body;
 
-    // Validate request
-    if (!traceId && (!runIds || runIds.length === 0)) {
+    // Validate request - allow time range queries for live tailing
+    const hasTimeRange = startTime || endTime;
+    const hasIdFilter = traceId || (runIds && runIds.length > 0);
+
+    if (!hasIdFilter && !hasTimeRange) {
       return res.status(400).json({
-        error: 'Either traceId or runIds is required'
+        error: 'Either traceId, runIds, or time range is required'
       });
     }
 
@@ -35,7 +38,7 @@ router.post('/api/traces', async (req: Request, res: Response) => {
 
     // Call traces service to fetch traces
     const result = await fetchTraces(
-      { traceId, runIds, startTime, endTime, size },
+      { traceId, runIds, startTime, endTime, size, serviceName, textSearch },
       { endpoint, username, password, indexPattern }
     );
 

@@ -1,15 +1,15 @@
 /**
  * ViewToggle
  *
- * Toggle between Timeline and Tree view modes.
+ * Toggle between Timeline and Flow view modes.
  */
 
 import React from 'react';
-import { Activity, GitBranch } from 'lucide-react';
+import { BarChart3, GitBranch } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-export type ViewMode = 'timeline' | 'tree';
+export type ViewMode = 'timeline' | 'flow';
 
 interface ViewToggleProps {
   viewMode: ViewMode;
@@ -33,7 +33,7 @@ const ViewToggle: React.FC<ViewToggleProps> = ({
         )}
         onClick={() => onChange('timeline')}
       >
-        <Activity size={14} />
+        <BarChart3 size={14} />
         Timeline
       </Button>
       <Button
@@ -41,12 +41,12 @@ const ViewToggle: React.FC<ViewToggleProps> = ({
         size="sm"
         className={cn(
           'h-7 px-2 text-xs gap-1.5',
-          viewMode === 'tree' && 'bg-background shadow-sm'
+          viewMode === 'flow' && 'bg-background shadow-sm'
         )}
-        onClick={() => onChange('tree')}
+        onClick={() => onChange('flow')}
       >
         <GitBranch size={14} />
-        Tree
+        Flow
       </Button>
     </div>
   );

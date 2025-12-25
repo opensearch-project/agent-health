@@ -10,6 +10,7 @@ import { RunDetailsPage } from './components/RunDetailsPage';
 import { TestCasesPage } from './components/TestCasesPage';
 import { TestCaseRunsPage } from './components/TestCaseRunsPage';
 import { ComparisonPage } from './components/comparison/ComparisonPage';
+import { TracesPage } from './components/traces/TracesPage';
 
 function App() {
   return (
@@ -36,11 +37,13 @@ function App() {
           {/* Comparison */}
           <Route path="/compare/:experimentId" element={<ComparisonPage />} />
 
+          {/* Live Traces */}
+          <Route path="/traces" element={<TracesPage />} />
+
           {/* Redirects for deprecated routes */}
           <Route path="/evals" element={<Navigate to="/test-cases" replace />} />
           <Route path="/run" element={<Navigate to="/test-cases" replace />} />
           <Route path="/reports" element={<Navigate to="/experiments" replace />} />
-          <Route path="/traces" element={<Navigate to="/settings" replace />} />
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />
