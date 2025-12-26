@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Activity, RefreshCw, AlertCircle, GitMerge, Columns } from 'lucide-react';
+import { Activity, RefreshCw, AlertCircle, GitMerge, Columns, Maximize2, Minimize2 } from 'lucide-react';
 import {
   ReactFlow,
   Background,
@@ -23,6 +23,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import {
+  FullScreenDialog,
+  FullScreenDialogContent,
+  FullScreenDialogHeader,
+  FullScreenDialogTitle,
+  FullScreenDialogCloseButton,
+} from '@/components/ui/fullscreen-dialog';
 import {
   EvaluationReport,
   ExperimentRun,
@@ -442,6 +449,7 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
   const [traceData, setTraceData] = useState<Map<string, TraceData>>(new Map());
   const [selectedSpan, setSelectedSpan] = useState<CategorizedSpan | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Get run IDs from reports
   const runInfos = useMemo(() => {
@@ -640,6 +648,15 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
             <Button variant="ghost" size="sm" onClick={fetchAllTraces} disabled={isLoading}>
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsFullscreen(true)}
+              className="gap-1.5"
+            >
+              <Maximize2 size={14} />
+              Fullscreen
+            </Button>
           </div>
         </div>
       </CardHeader>
@@ -687,6 +704,89 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
           </div>
         )}
       </div>
+
+      {/* Fullscreen Dialog */}
+      <FullScreenDialog open={isFullscreen} onOpenChange={setIsFullscreen}>
+        <FullScreenDialogContent>
+          <FullScreenDialogHeader>
+            <div className="flex items-center gap-3">
+              <Activity size={20} className="text-opensearch-blue" />
+              <div>
+                <FullScreenDialogTitle className="flex items-center gap-2">
+                  Trace Flow Comparison
+                  <Badge variant="secondary" className="ml-2">
+                    {comparisonResult.stats.totalLeft + comparisonResult.stats.totalRight} spans
+                  </Badge>
+                </FullScreenDialogTitle>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {leftTrace.runName} vs {rightTrace.runName}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <ModeToggle mode={mode} onChange={setMode} />
+              <Button variant="ghost" size="sm" onClick={fetchAllTraces} disabled={isLoading}>
+                <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsFullscreen(false)}
+                className="gap-1.5"
+              >
+                <Minimize2 size={16} />
+                Exit Fullscreen
+              </Button>
+              <FullScreenDialogCloseButton />
+            </div>
+          </FullScreenDialogHeader>
+
+          {/* Stats Banner */}
+          <ComparisonStats stats={comparisonResult.stats} />
+
+          {/* Full height visualization */}
+          <div className="flex-1 flex overflow-hidden">
+            {mode === 'side-by-side' ? (
+              <>
+                <FlowPanel
+                  spanTree={leftTrace.spanTree}
+                  timeRange={leftTrace.timeRange}
+                  runName={leftTrace.runName}
+                  spanCount={comparisonResult.stats.totalLeft}
+                  selectedSpan={selectedSpan}
+                  onSelectSpan={setSelectedSpan}
+                />
+                <FlowPanel
+                  spanTree={rightTrace.spanTree}
+                  timeRange={rightTrace.timeRange}
+                  runName={rightTrace.runName}
+                  spanCount={comparisonResult.stats.totalRight}
+                  selectedSpan={selectedSpan}
+                  onSelectSpan={setSelectedSpan}
+                />
+              </>
+            ) : (
+              <MergedFlowView
+                comparisonResult={comparisonResult}
+                totalDuration={maxDuration}
+                selectedSpan={selectedSpan}
+                onSelectSpan={setSelectedSpan}
+              />
+            )}
+
+            {/* Details panel */}
+            {selectedSpan && (
+              <div className="w-96 border-l overflow-auto bg-card">
+                <SpanDetailsPanel
+                  span={selectedSpan}
+                  onClose={() => setSelectedSpan(null)}
+                />
+              </div>
+            )}
+          </div>
+        </FullScreenDialogContent>
+      </FullScreenDialog>
     </Card>
   );
 };

@@ -22,6 +22,7 @@ import {
   Pencil,
   Target,
   Hash,
+  Maximize2,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -33,6 +34,7 @@ import TraceTimelineChart from './traces/TraceTimelineChart';
 import TraceFlowView from './traces/TraceFlowView';
 import ViewToggle, { ViewMode } from './traces/ViewToggle';
 import SpanDetailsPanel from './traces/SpanDetailsPanel';
+import TraceFullScreenView from './traces/TraceFullScreenView';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
 import { fetchTracesByRunIds, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -81,6 +83,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   const [tracesFetched, setTracesFetched] = useState(false);
   const [activeTab, setActiveTab] = useState('summary');
   const [traceViewMode, setTraceViewMode] = useState<ViewMode>('timeline');
+  const [traceFullscreenOpen, setTraceFullscreenOpen] = useState(false);
 
   // Live report state for auto-refresh when judge completes
   // This allows the UI to update without a page refresh when metricsStatus changes
@@ -807,7 +810,18 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-semibold">Traces</h3>
                   {spanTree.length > 0 && !tracesLoading && (
-                    <ViewToggle viewMode={traceViewMode} onChange={setTraceViewMode} />
+                    <div className="flex items-center gap-2">
+                      <ViewToggle viewMode={traceViewMode} onChange={setTraceViewMode} />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setTraceFullscreenOpen(true)}
+                        className="gap-1.5"
+                      >
+                        <Maximize2 size={14} />
+                        Fullscreen
+                      </Button>
+                    </div>
                   )}
                 </div>
 
@@ -919,6 +933,21 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                     </Button>
                   </div>
                 )}
+
+                {/* Fullscreen Trace View */}
+                <TraceFullScreenView
+                  open={traceFullscreenOpen}
+                  onOpenChange={setTraceFullscreenOpen}
+                  title={`Traces: ${testCase?.name || 'Unknown Test Case'}`}
+                  subtitle={`Run ID: ${report.runId}`}
+                  spanTree={spanTree}
+                  timeRange={timeRange}
+                  selectedSpan={selectedSpan}
+                  onSelectSpan={setSelectedSpan}
+                  initialViewMode={traceViewMode}
+                  onViewModeChange={setTraceViewMode}
+                  spanCount={traceSpans.length}
+                />
               </div>
             ) : (
               /* STANDARD MODE: Show OpenSearch logs */
