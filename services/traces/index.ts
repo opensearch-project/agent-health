@@ -197,6 +197,8 @@ export {
   filterSpanTreeByCategory,
   countByCategory,
   buildDisplayName,
+  checkOTelCompliance,
+  hasAnyWarnings,
 } from './spanCategorization';
 
 // Re-export tool similarity functions
@@ -228,4 +230,18 @@ export {
   spansToExecutionFlow,
   isContainerSpan,
   findMainFlowSpans,
+  sortByStartTime,
 } from './executionOrderTransform';
+
+// Re-export intent transform functions
+export {
+  spansToIntentNodes,
+  getRootContainerSpan,
+} from './intentTransform';
+
+// Re-export category styles
+export {
+  CATEGORY_COLORS,
+  getCategoryColors,
+  type CategoryColorConfig,
+} from './categoryStyles';

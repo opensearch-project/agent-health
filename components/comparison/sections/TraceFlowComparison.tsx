@@ -262,7 +262,28 @@ const FlowPanel: React.FC<{
 };
 
 /**
+ * Sort AlignedSpanPairs by their span's startTime
+ * Adapted from sortByStartTime in executionOrderTransform.ts
+ */
+function sortAlignedPairsByStartTime(pairs: AlignedSpanPair[]): AlignedSpanPair[] {
+  return [...pairs].sort((a, b) => {
+    const spanA = a.leftSpan || a.rightSpan;
+    const spanB = b.leftSpan || b.rightSpan;
+    if (!spanA || !spanB) return 0;
+    return new Date(spanA.startTime).getTime() - new Date(spanB.startTime).getTime();
+  });
+}
+
+/**
+ * Get node ID from an AlignedSpanPair
+ */
+function getNodeIdFromPair(pair: AlignedSpanPair): string {
+  return pair.leftSpan?.spanId || pair.rightSpan?.spanId || `pair-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
  * Convert aligned span pairs to merged flow nodes/edges
+ * Uses sequential sibling edges (chain topology) for vertical layout
  */
 function alignedPairsToFlow(
   alignedTree: AlignedSpanPair[],
@@ -271,60 +292,77 @@ function alignedPairsToFlow(
   const nodes: Node<MergedSpanNodeData>[] = [];
   const edges: Edge[] = [];
 
-  const processAlignedPair = (pair: AlignedSpanPair, parentId?: string) => {
-    // Use left span preferentially, fall back to right
-    const span = pair.leftSpan || pair.rightSpan;
-    if (!span) return;
+  /**
+   * Process siblings at each level using sequential linking pattern.
+   * Adapted from spansToExecutionFlow in executionOrderTransform.ts
+   */
+  const processSiblings = (siblings: AlignedSpanPair[], parentId?: string) => {
+    if (siblings.length === 0) return;
 
-    // Generate unique ID based on pair content
-    const nodeId = pair.leftSpan?.spanId || pair.rightSpan?.spanId || `pair-${nodes.length}`;
+    // Sort siblings by start time for execution order
+    const sorted = sortAlignedPairsByStartTime(siblings);
 
-    // Create node with diff info
-    const node: Node<MergedSpanNodeData> = {
-      id: nodeId,
-      type: span.category.toLowerCase(),
-      data: {
-        span,
-        totalDuration,
-        diffType: pair.type,
-        leftSpan: pair.leftSpan,
-        rightSpan: pair.rightSpan,
-      },
-      position: { x: 0, y: 0 },
-      style: {
-        width: 200,
-        height: 70,
-      },
-      className: getDiffBorderStyle(pair.type),
-    };
-    nodes.push(node);
+    // Create nodes for all siblings at this level
+    sorted.forEach(pair => {
+      const span = pair.leftSpan || pair.rightSpan;
+      if (!span) return;
+      const nodeId = getNodeIdFromPair(pair);
 
-    // Create edge from parent
-    if (parentId) {
-      edges.push({
-        id: `${parentId}-${nodeId}`,
-        source: parentId,
-        target: nodeId,
-        type: 'smoothstep',
-        style: {
-          stroke: '#64748b',
-          strokeWidth: 2,
+      nodes.push({
+        id: nodeId,
+        type: span.category.toLowerCase(),
+        data: {
+          span,
+          totalDuration,
+          diffType: pair.type,
+          leftSpan: pair.leftSpan,
+          rightSpan: pair.rightSpan,
         },
+        position: { x: 0, y: 0 },
+        style: { width: 200, height: 70 },
+        className: getDiffBorderStyle(pair.type),
+      });
+    });
+
+    // Create sequential sibling edges: A→B→C (chain topology for vertical layout)
+    // Pattern from createSiblingEdges in executionOrderTransform.ts
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const currentId = getNodeIdFromPair(sorted[i]);
+      const nextId = getNodeIdFromPair(sorted[i + 1]);
+      edges.push({
+        id: `${currentId}-${nextId}`,
+        source: currentId,
+        target: nextId,
+        type: 'smoothstep',
+        style: { stroke: '#64748b', strokeWidth: 2 },
       });
     }
 
-    // Process children
-    if (pair.children && pair.children.length > 0) {
-      pair.children.forEach(childPair => {
-        processAlignedPair(childPair, nodeId);
+    // Create branch edge from parent to first child only
+    // Pattern from createBranchEdges in executionOrderTransform.ts
+    if (parentId && sorted.length > 0) {
+      const firstChildId = getNodeIdFromPair(sorted[0]);
+      edges.push({
+        id: `${parentId}-branch-${firstChildId}`,
+        source: parentId,
+        target: firstChildId,
+        type: 'smoothstep',
+        style: { stroke: '#6366f1', strokeWidth: 1.5, strokeDasharray: '3,3' },
       });
     }
+
+    // Recursively process children of each sibling
+    sorted.forEach(pair => {
+      if (pair.children && pair.children.length > 0) {
+        processSiblings(pair.children, getNodeIdFromPair(pair));
+      }
+    });
   };
 
-  // Process all root pairs
-  alignedTree.forEach(pair => processAlignedPair(pair));
+  // Start processing from root level
+  processSiblings(alignedTree);
 
-  // Apply layout
+  // Apply dagre layout for positioning (reusing existing function)
   const layoutedResult = applyDagreLayout(
     nodes as Node<SpanNodeData>[],
     edges,

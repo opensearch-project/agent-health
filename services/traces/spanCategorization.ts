@@ -5,7 +5,7 @@
  * @see https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/
  */
 
-import { Span, SpanCategory, CategorizedSpan } from '@/types';
+import { Span, SpanCategory, CategorizedSpan, OTelComplianceResult } from '@/types';
 
 /**
  * OTel operation names that map to AGENT category
@@ -261,4 +261,38 @@ export function countByCategory(spans: CategorizedSpan[]): Record<SpanCategory, 
 
   countRecursive(spans);
   return counts;
+}
+
+// ============ OTEL Compliance Checking ============
+
+/**
+ * Expected OTEL GenAI attributes by category
+ * @see https://opentelemetry.io/docs/specs/semconv/gen-ai/
+ */
+const EXPECTED_ATTRIBUTES: Record<SpanCategory, string[]> = {
+  LLM: ['gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.system'],
+  TOOL: ['gen_ai.operation.name', 'gen_ai.tool.name'],
+  AGENT: ['gen_ai.operation.name', 'gen_ai.agent.name'],
+  ERROR: [],  // Errors just need status
+  OTHER: [],  // No expectations for OTHER
+};
+
+/**
+ * Check if a span follows OTEL GenAI semantic conventions
+ */
+export function checkOTelCompliance(span: CategorizedSpan): OTelComplianceResult {
+  const expected = EXPECTED_ATTRIBUTES[span.category] || [];
+  const missing = expected.filter(attr => !span.attributes?.[attr]);
+
+  return {
+    isCompliant: missing.length === 0,
+    missingAttributes: missing,
+  };
+}
+
+/**
+ * Check if any span in array has OTEL compliance warnings
+ */
+export function hasAnyWarnings(spans: CategorizedSpan[]): boolean {
+  return spans.some(span => !checkOTelCompliance(span).isCompliant);
 }

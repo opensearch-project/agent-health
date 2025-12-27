@@ -1,15 +1,15 @@
 /**
  * ViewToggle
  *
- * Toggle between Timeline and Flow view modes.
+ * Toggle between Timeline, Flow, and Intent view modes.
  */
 
 import React from 'react';
-import { BarChart3, GitBranch } from 'lucide-react';
+import { BarChart3, GitBranch, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-export type ViewMode = 'timeline' | 'flow';
+export type ViewMode = 'timeline' | 'flow' | 'intent';
 
 interface ViewToggleProps {
   viewMode: ViewMode;
@@ -47,6 +47,18 @@ const ViewToggle: React.FC<ViewToggleProps> = ({
       >
         <GitBranch size={14} />
         Flow
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={cn(
+          'h-7 px-2 text-xs gap-1.5',
+          viewMode === 'intent' && 'bg-background shadow-sm'
+        )}
+        onClick={() => onChange('intent')}
+      >
+        <Layers size={14} />
+        Intent
       </Button>
     </div>
   );

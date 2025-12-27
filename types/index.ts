@@ -416,6 +416,32 @@ export interface ParallelGroup {
   endTime: number;
 }
 
+// ============ Intent View Types ============
+
+/**
+ * Result of checking OTEL GenAI semantic convention compliance
+ */
+export interface OTelComplianceResult {
+  isCompliant: boolean;
+  missingAttributes: string[];
+}
+
+/**
+ * Compressed node for Intent view - represents one or more consecutive same-category spans
+ */
+export interface IntentNode {
+  id: string;
+  category: SpanCategory;
+  spans: CategorizedSpan[];      // 1 or more spans in this group
+  count: number;                 // Number of spans (for "×N" badge)
+  displayName: string;           // e.g., "LLM" or "TOOL ×2"
+  subtitle: string;              // e.g., "callModel" or "search_api, list_items"
+  hasWarnings: boolean;          // Any span missing OTEL conventions
+  executionOrder: number;        // Position in time-series sequence
+  startIndex: number;            // 0-based index of first span in global sequence
+  totalDuration: number;         // Combined duration of all spans in this node (ms)
+}
+
 // ============ Experiment Types ============
 
 // Result status for a single use case within a run

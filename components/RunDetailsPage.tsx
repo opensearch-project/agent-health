@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Calendar, CheckCircle2, XCircle, BarChart3, PanelLeftClose, PanelLeft, Clock, Loader2, StopCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
+import { useSidebar } from '@/components/ui/sidebar';
 import { asyncExperimentStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { cancelExperimentRun } from '@/services/client';
 import { Experiment, ExperimentRun, EvaluationReport, TestCase } from '@/types';
@@ -50,9 +51,11 @@ interface SidebarProps {
   context: ExperimentContext;
   selectedItem: string;
   onSelectItem: (item: string) => void;
+  onToggleCollapse: () => void;
+  isCollapsed: boolean;
 }
 
-const Sidebar = ({ context, selectedItem, onSelectItem }: SidebarProps) => {
+const Sidebar = ({ context, selectedItem, onSelectItem, onToggleCollapse, isCollapsed }: SidebarProps) => {
   const { experimentRun, siblingReports, testCases, reportsMap } = context;
 
   const getTestCase = (testCaseId: string) => testCases.find(tc => tc.id === testCaseId);
@@ -62,7 +65,7 @@ const Sidebar = ({ context, selectedItem, onSelectItem }: SidebarProps) => {
   return (
     <ScrollArea className="h-full">
       <div className="p-3 space-y-2">
-        {/* Summary Entry */}
+        {/* Summary Entry with collapse toggle */}
         <Card
           className={`cursor-pointer transition-colors ${
             selectedItem === 'summary'
@@ -72,7 +75,19 @@ const Sidebar = ({ context, selectedItem, onSelectItem }: SidebarProps) => {
           onClick={() => onSelectItem('summary')}
         >
           <CardContent className="p-3">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCollapse();
+                }}
+                title={isCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+              >
+                {isCollapsed ? <PanelLeft size={14} /> : <PanelLeftClose size={14} />}
+              </Button>
               <div className={`p-1.5 rounded ${
                 selectedItem === 'summary' ? 'bg-opensearch-blue/20' : 'bg-muted'
               }`}>
@@ -89,8 +104,15 @@ const Sidebar = ({ context, selectedItem, onSelectItem }: SidebarProps) => {
           </CardContent>
         </Card>
 
-        {/* Divider */}
-        <div className="border-t my-2" />
+        {/* Runs Header with count */}
+        <div className="flex items-center justify-between px-1 pt-2">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Runs
+          </span>
+          <Badge variant="secondary" className="text-xs">
+            {testCaseIds.length}
+          </Badge>
+        </div>
 
         {/* Test Cases */}
         {testCaseIds.map(testCaseId => {
@@ -177,6 +199,10 @@ export const RunDetailsPage: React.FC = () => {
   // Support both /runs/:runId and /experiments/:experimentId/runs/:runId routes
   const { runId, experimentId: routeExperimentId } = useParams<{ runId: string; experimentId?: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Main app sidebar control
+  const { setOpen: setMainSidebarOpen } = useSidebar();
 
   // Core state
   const [report, setReport] = useState<EvaluationReport | null>(null);
@@ -248,8 +274,16 @@ export const RunDetailsPage: React.FC = () => {
           reportsMap,
         });
 
-        // Default to summary view
-        setSelectedItem('summary');
+        // Check URL param for selected test case, default to summary
+        const testCaseFromUrl = searchParams.get('testCase');
+        const testCaseIds = Object.keys(expRun.results || {});
+        if (testCaseFromUrl && testCaseIds.includes(testCaseFromUrl)) {
+          setSelectedItem(testCaseFromUrl);
+          // Collapse main sidebar when loading with a test case selected
+          setMainSidebarOpen(false);
+        } else {
+          setSelectedItem('summary');
+        }
 
         // Set first available report for header display
         const firstReportId = Object.values(expRun.results || {}).find(r => r.reportId)?.reportId;
@@ -289,7 +323,7 @@ export const RunDetailsPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [runId, routeExperimentId, navigate]);
+  }, [runId, routeExperimentId, navigate, searchParams, setMainSidebarOpen]);
 
   useEffect(() => {
     loadRunData();
@@ -319,8 +353,17 @@ export const RunDetailsPage: React.FC = () => {
 
   const handleSelectItem = (item: string) => {
     setSelectedItem(item);
-    // Don't navigate - just update selectedItem state
-    // getDisplayReport() will pull the correct report from experimentContext.reportsMap
+
+    // Update URL with selected test case
+    if (item && item !== 'summary') {
+      searchParams.set('testCase', item);
+      setSearchParams(searchParams, { replace: true });
+      // Collapse main sidebar when selecting a specific test case run
+      setMainSidebarOpen(false);
+    } else {
+      searchParams.delete('testCase');
+      setSearchParams(searchParams, { replace: true });
+    }
   };
 
   const handleViewAllReports = () => {
@@ -527,17 +570,6 @@ export const RunDetailsPage: React.FC = () => {
             </Button>
           )}
 
-          {/* Sidebar Toggle (only when sidebar is available) */}
-          {hasSidebar && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-            >
-              {sidebarCollapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
-            </Button>
-          )}
         </div>
       </div>
 
@@ -556,6 +588,8 @@ export const RunDetailsPage: React.FC = () => {
               context={experimentContext!}
               selectedItem={selectedItem}
               onSelectItem={handleSelectItem}
+              onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+              isCollapsed={sidebarCollapsed}
             />
           </ResizablePanel>
 

@@ -20,8 +20,7 @@ import {
   calculateTimeRange,
 } from '@/services/traces';
 import { formatDuration } from '@/services/traces/utils';
-import TraceFlowView from './TraceFlowView';
-import TraceTimelineChart from './TraceTimelineChart';
+import TraceVisualization from './TraceVisualization';
 import ViewToggle, { ViewMode } from './ViewToggle';
 
 const REFRESH_INTERVAL_MS = 10000; // 10 seconds
@@ -244,7 +243,7 @@ export const TracesPage: React.FC = () => {
         <CardHeader className="py-2 px-4 border-b">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <Activity size={14} />
-            {viewMode === 'flow' ? 'Trace Flow' : 'Trace Timeline'}
+            {viewMode === 'flow' ? 'Trace Flow' : viewMode === 'intent' ? 'Trace Intent' : 'Trace Timeline'}
             {isTailing && (
               <span className="flex items-center gap-1 text-xs text-green-400 font-normal">
                 <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
@@ -264,24 +263,18 @@ export const TracesPage: React.FC = () => {
                   : 'Traces will appear here as agents execute'}
               </p>
             </div>
-          ) : viewMode === 'flow' ? (
-            <TraceFlowView
+          ) : (
+            <TraceVisualization
               spanTree={spanTree}
               timeRange={timeRange}
+              initialViewMode={viewMode}
+              onViewModeChange={setViewMode}
+              showViewToggle={false}
               selectedSpan={selectedSpan}
               onSelectSpan={setSelectedSpan}
+              expandedSpans={expandedSpans}
+              onToggleExpand={handleToggleExpand}
             />
-          ) : (
-            <div className="p-4 h-full overflow-auto">
-              <TraceTimelineChart
-                spanTree={spanTree}
-                timeRange={timeRange}
-                selectedSpan={selectedSpan}
-                onSelect={setSelectedSpan}
-                expandedSpans={expandedSpans}
-                onToggleExpand={handleToggleExpand}
-              />
-            </div>
           )}
         </CardContent>
       </Card>

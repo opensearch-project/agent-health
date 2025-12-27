@@ -30,10 +30,8 @@ import { EvaluationReport, RunAnnotation, TestCase, Span, TimeRange, TraceMetric
 import { fetchRunMetrics, formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import { TrajectoryView } from './TrajectoryView';
 import { RawEventsPanel } from './RawEventsPanel';
-import TraceTimelineChart from './traces/TraceTimelineChart';
-import TraceFlowView from './traces/TraceFlowView';
+import TraceVisualization from './traces/TraceVisualization';
 import ViewToggle, { ViewMode } from './traces/ViewToggle';
-import SpanDetailsPanel from './traces/SpanDetailsPanel';
 import TraceFullScreenView from './traces/TraceFullScreenView';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
 import { fetchTracesByRunIds, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
@@ -883,39 +881,22 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                           </span>
                         </div>
 
-                        {traceViewMode === 'timeline' ? (
-                          <TraceTimelineChart
+                        <div className="h-[700px]">
+                          <TraceVisualization
                             spanTree={spanTree}
                             timeRange={timeRange}
+                            initialViewMode={traceViewMode}
+                            onViewModeChange={setTraceViewMode}
+                            showViewToggle={false}
                             selectedSpan={selectedSpan}
-                            onSelect={setSelectedSpan}
+                            onSelectSpan={setSelectedSpan}
                             expandedSpans={expandedSpans}
                             onToggleExpand={handleToggleExpand}
+                            showSpanDetailsPanel={true}
                           />
-                        ) : (
-                          <div className="h-[700px] w-full">
-                            <TraceFlowView
-                              spanTree={spanTree}
-                              timeRange={timeRange}
-                              selectedSpan={selectedSpan}
-                              onSelectSpan={setSelectedSpan}
-                            />
-                          </div>
-                        )}
+                        </div>
                       </CardContent>
                     </Card>
-
-                    {/* Span details panel - only for timeline mode (flow view has it integrated) */}
-                    {traceViewMode === 'timeline' && selectedSpan && (
-                      <Card>
-                        <CardContent className="p-0">
-                          <SpanDetailsPanel
-                            span={selectedSpan}
-                            onClose={() => setSelectedSpan(null)}
-                          />
-                        </CardContent>
-                      </Card>
-                    )}
                   </div>
                 )}
 
