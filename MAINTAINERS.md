@@ -11,12 +11,12 @@ This document contains a list of maintainers in this repo. See [opensearch-proje
 | Maintainer        | GitHub ID                                               | Affiliation |
 | ----------------- | ------------------------------------------------------- | ----------- |
 | Adam Tackett      | [TackAdam](https://github.com/TackAdam)                 | Amazon      |
-| Saishruti Shetty  | [earthling-shruti](https://github.com/earthling-shruti) | Amazon      |
-| Jessica Lew       | [jessrlew](https://github.com/jessrlew)               | Amazon      |
 | Megha Goyal       | [goyamegh](https://github.com/goyamegh)                 | Amazon      |
+| Shenoy Pratik     | [ps48](https://github.com/ps48)                        | Amazon      |
 
 ## Emeritus
 
-| Maintainer         | GitHub ID                           | Affiliation |
-| ------------------ | ----------------------------------- | ----------- |
-
+| Maintainer         | GitHub ID                                               | Affiliation |
+| ------------------ | ------------------------------------------------------- | ----------- |
+| Saishruti Shetty   | [earthling-shruti](https://github.com/earthling-shruti) | Amazon      |
+| Jessica Lew        | [jessrlew](https://github.com/jessrlew)                 | Amazon      |
