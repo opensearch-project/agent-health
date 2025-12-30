@@ -13,6 +13,7 @@ This document contains a list of maintainers in this repo. See [opensearch-proje
 | Adam Tackett      | [TackAdam](https://github.com/TackAdam)                 | Amazon      |
 | Saishruti Shetty  | [earthling-shruti](https://github.com/earthling-shruti) | Amazon      |
 | Jessica Lew       | [jessrlew](https://github.com/jessrlew)               | Amazon      |
+| Megha Goyal       | [goyamegh](https://github.com/goyamegh)                 | Amazon      |
 
 ## Emeritus
 
