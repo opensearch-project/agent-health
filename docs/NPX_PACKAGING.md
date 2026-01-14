@@ -2,9 +2,7 @@
 
 ## Overview
 
-Package the AgentEval application as an NPX-runnable CLI tool with:
-- **Demo mode** (default): Sample data + mock agent/judge, zero config
-- **Configure mode**: Connect to real OpenSearch, agent, and Bedrock
+Package the AgentEval application as an NPX-runnable CLI tool. Agent and judge model selection is done in the UI.
 
 **Package name**: `@opensearch-project/agent-health`
 
@@ -25,23 +23,20 @@ When OpenSearch is configured, real data is merged with sample data. Sample data
 
 ## Quick Start
 
-### Demo Mode (Default)
 ```bash
+# Start the server
 npx @opensearch-project/agent-health
-# or explicitly:
-npx @opensearch-project/agent-health --demo
-```
-Uses mock agent, mock judge, sample data only. No external dependencies.
 
-### Configure Mode
-```bash
-npx @opensearch-project/agent-health --configure
+# With custom port
+npx @opensearch-project/agent-health --port 3000
+
+# With environment file
+npx @opensearch-project/agent-health --env-file .env
 ```
-Interactive wizard to connect to your infrastructure:
-- OpenSearch storage (optional - for persisting your own data)
-- Agent endpoint (ML-Commons or Langgraph)
-- LLM Judge (AWS Bedrock)
-- Traces endpoint (for OTel trace visualization)
+
+Configuration is done via:
+- **UI dropdowns** - Select agent and judge model in the interface
+- **Environment variables** - Configure OpenSearch storage, AWS credentials via `.env` file
 
 ---
 
@@ -52,18 +47,14 @@ Interactive wizard to connect to your infrastructure:
 ├── bin/
 │   └── cli.js                    # Entry point (#!/usr/bin/env node)
 ├── cli/
-│   ├── index.ts                  # Main CLI orchestration
-│   ├── commands/
-│   │   ├── demo.ts               # Default mode handler
-│   │   └── configure.ts          # --configure handler
+│   ├── index.ts                  # Main CLI - starts server
 │   ├── demo/
 │   │   ├── sampleTestCases.ts    # 5 embedded test cases (always visible)
 │   │   ├── sampleExperiments.ts  # 1 sample experiment (always visible)
 │   │   ├── sampleRuns.ts         # 5 runs with trajectories (always visible)
 │   │   └── sampleTraces.ts       # OTel spans for sample runs (always visible)
-│   ├── utils/
-│   │   └── startServer.ts        # Server startup utility
-│   └── types.ts                  # CLI type definitions
+│   └── utils/
+│       └── startServer.ts        # Server startup utility
 ├── server/                        # Backend (Express)
 │   ├── services/
 │   │   └── opensearchClient.ts   # Returns null if not configured
@@ -110,53 +101,45 @@ Each includes prompt, context, and expected outcomes.
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-d, --demo` | Demo mode (sample data + mock) | Default |
-| `-c, --configure` | Interactive configuration wizard | - |
 | `-p, --port <num>` | Server port | 4001 |
+| `-e, --env-file <path>` | Load environment variables from file | - |
 | `--no-browser` | Don't open browser automatically | false |
 
 **Examples:**
 ```bash
-# Start demo on custom port
+# Start on custom port
 npx @opensearch-project/agent-health --port 3000
 
-# Configure without opening browser
-npx @opensearch-project/agent-health --configure --no-browser
+# Start without opening browser
+npx @opensearch-project/agent-health --no-browser
+
+# Use custom environment file
+npx @opensearch-project/agent-health --env-file .env.production
 ```
 
 ---
 
-## Configuration File
+## Configuration
 
-Saved by `--configure` mode to `~/.agent-health/config.json`:
+Configuration is done via environment variables (`.env` file):
 
-```json
-{
-  "mode": "configure",
-  "port": 4001,
-  "noBrowser": false,
-  "storage": {
-    "endpoint": "http://localhost:9200",
-    "username": "admin",
-    "password": "admin"
-  },
-  "agent": {
-    "type": "mlcommons",
-    "endpoint": "http://localhost:9200/_plugins/_ml/agents/{id}/_execute/stream"
-  },
-  "judge": {
-    "type": "bedrock",
-    "region": "us-west-2",
-    "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0"
-  },
-  "traces": {
-    "endpoint": "http://localhost:9200",
-    "index": "otel-v1-apm-span-*"
-  }
-}
+```bash
+# AWS credentials for Bedrock Judge
+AWS_REGION=us-west-2
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
+
+# OpenSearch Storage (optional - for persisting data)
+OPENSEARCH_STORAGE_ENDPOINT=http://localhost:9200
+OPENSEARCH_STORAGE_USERNAME=admin
+OPENSEARCH_STORAGE_PASSWORD=admin
+
+# Traces (optional)
+OPENSEARCH_LOGS_ENDPOINT=http://localhost:9200
+OPENSEARCH_LOGS_TRACES_INDEX=otel-v1-apm-span-*
 ```
 
-**Note:** `storage` is optional. When omitted, only sample data is available.
+**Note:** Storage is optional. When not configured, sample data is displayed.
 
 ---
 
@@ -193,7 +176,7 @@ npm run build:all      # Build everything (UI + server + CLI)
 ### Testing Locally
 ```bash
 npm link
-agent-health --demo
+agent-health
 ```
 
 ### Publishing

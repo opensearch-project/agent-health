@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { TestCase, TrajectoryStep, EvaluationReport } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { parseLabels } from '@/lib/labels';
 import { runEvaluation } from '@/services/evaluation';
 import { asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { TrajectoryView } from './TrajectoryView';
@@ -179,7 +180,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
             </CardTitle>
             {testCase && (
               <p className="text-xs text-muted-foreground mt-1">
-                Version {testCase.currentVersion} · {testCase.category}
+                Version {testCase.currentVersion} · {parseLabels(testCase.labels || []).category || 'Uncategorized'}
               </p>
             )}
           </div>
