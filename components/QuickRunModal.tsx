@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X, Play, Save, Star, CheckCircle2, XCircle, Loader2, ExternalLink, Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,7 +13,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { TestCase, TrajectoryStep, EvaluationReport } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { runEvaluation } from '@/services/evaluation';
@@ -47,7 +46,15 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   const [report, setReport] = useState<EvaluationReport | null>(null);
 
   const selectedAgent = DEFAULT_CONFIG.agents.find(a => a.key === selectedAgentKey);
-  const selectedModel = DEFAULT_CONFIG.models[selectedModelId];
+
+  // Lock body scroll when modal is open
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, []);
 
   const effectivePrompt = testCase ? testCase.initialPrompt : adHocPrompt;
   const effectiveName = testCase ? testCase.name : (adHocName || 'Ad-hoc Run');
@@ -145,8 +152,11 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   const hasResults = report !== null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <Card className="w-full max-w-4xl max-h-[90vh] flex flex-col">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-hidden"
+      onWheel={(e) => e.stopPropagation()}
+    >
+      <Card className="w-full max-w-4xl h-[90vh] flex flex-col">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <div>
             <CardTitle>
@@ -163,8 +173,8 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
           </Button>
         </CardHeader>
 
-        <CardContent className="flex-1 overflow-hidden p-0">
-          <div className="flex flex-col h-full">
+        <CardContent className="flex-1 overflow-hidden p-0 min-h-0">
+          <div className="flex flex-col h-full min-h-0">
             {/* Config Bar */}
             <div className="p-4 border-b flex items-end gap-4">
               {/* Ad-hoc prompt input (only when no testCase) */}
@@ -251,7 +261,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
             </div>
 
             {/* Results Area */}
-            <ScrollArea className="flex-1 p-4">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
               {currentSteps.length > 0 || report ? (
                 <div className="space-y-4">
                   {/* Status Badge */}
@@ -312,7 +322,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                   <p>{testCase ? 'Click Run to start the evaluation' : 'Enter a prompt and click Run'}</p>
                 </div>
               )}
-            </ScrollArea>
+            </div>
 
             {/* Footer Actions */}
             {hasResults ? (
