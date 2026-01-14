@@ -8,7 +8,27 @@
  * Used by all CLI commands to start the Express server
  */
 
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { existsSync } from 'fs';
 import type { CLIConfig } from '../types.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/**
+ * Find the package root by searching up for package.json
+ */
+function findPackageRoot(): string {
+  let dir = __dirname;
+  for (let i = 0; i < 5; i++) {
+    if (existsSync(join(dir, 'package.json'))) {
+      return dir;
+    }
+    dir = dirname(dir);
+  }
+  return join(__dirname, '..');
+}
 
 /**
  * Start the Express server with CLI config
@@ -55,8 +75,11 @@ export async function startServer(config: CLIConfig): Promise<void> {
     }
   }
 
-  // Dynamic import the server module
-  const { createApp } = await import('../../server/app.js');
+  // Dynamic import the server module from package root
+  // Using computed path prevents esbuild from bundling server code into CLI
+  const packageRoot = findPackageRoot();
+  const serverPath = join(packageRoot, 'server', 'dist', 'app.js');
+  const { createApp } = await import(serverPath);
 
   const app = createApp(config);
 

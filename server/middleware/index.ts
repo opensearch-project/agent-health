@@ -12,6 +12,12 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+// Get directory of this file for resolving paths relative to package location
+// Server always runs from server/dist/, so path resolution is straightforward
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Setup CORS middleware
@@ -39,9 +45,14 @@ function setupJsonParser(app: Express): void {
  * Serves built frontend from dist/ folder
  */
 function setupStaticServing(app: Express): void {
-  // Use process.cwd() for more reliable path resolution
-  const distPath = path.join(process.cwd(), 'dist');
+  // From server/dist/, go up 2 levels to package root, then into dist/
+  const distPath = path.join(__dirname, '..', '..', 'dist');
   const distExists = fs.existsSync(distPath);
+
+  // Debug logging to diagnose path resolution
+  console.log('[StaticServer] __dirname:', __dirname);
+  console.log('[StaticServer] Computed distPath:', distPath);
+  console.log('[StaticServer] distPath exists:', distExists);
 
   if (distExists) {
     console.log('[StaticServer] Serving frontend from dist/ folder');
