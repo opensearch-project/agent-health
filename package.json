@@ -52,9 +52,9 @@
     "test:integration:experimentRunner": "jest --testPathPatterns=experimentRunner",
     "test:integration:tracePoller": "jest --testPathPatterns=tracePoller",
     "test:all": "npm run test:unit && npm run test:integration",
-    "build:cli": "esbuild cli/index.ts cli/commands/demo.ts cli/commands/configure.ts cli/demo/sampleTestCases.ts cli/demo/sampleExperiments.ts cli/demo/sampleRuns.ts cli/demo/sampleTraces.ts cli/types.ts cli/utils/startServer.ts --bundle --platform=node --format=esm --outdir=cli/dist --packages=external --external:inquirer",
+    "build:cli": "esbuild cli/index.ts --bundle --platform=node --format=esm --outdir=cli/dist --packages=external --external:inquirer",
     "build:all": "npm run build && npm run build:server && npm run build:cli",
-    "demo": "npm run build:all && node cli/dist/index.js --demo",
+    "demo": "npm run build:all && node cli/dist/index.js",
     "prepublishOnly": "npm run build:all"
   },
   "dependencies": {

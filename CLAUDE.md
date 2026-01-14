@@ -53,12 +53,11 @@ npm test -- path/to/file.test.ts  # Single test file
 ```bash
 npm run build:cli           # Build CLI only
 npm run build:all           # Build UI + server + CLI
-npm run demo                # Build all + run in demo mode
+npm run demo                # Build all + run server
 
 # NPX usage (after publishing)
-npx @opensearch-project/agent-health           # Start with sample data
+npx @opensearch-project/agent-health           # Start server
 npx @opensearch-project/agent-health --port 8080
-npx @opensearch-project/agent-health --configure  # Interactive setup
 npx @opensearch-project/agent-health --env-file .env
 ```
 
@@ -127,8 +126,6 @@ import { getConfig } from '@/lib/config';
 ### CLI (`cli/`)
 
 Entry point for NPX package (`bin/cli.js` → `cli/index.ts`):
-- `commands/demo.ts`: Demo mode with sample data and mock services
-- `commands/configure.ts`: Interactive configuration wizard
 - `demo/sample*.ts`: Sample test cases, experiments, runs, traces
 - `utils/startServer.ts`: Server bootstrap for CLI context
 
@@ -137,7 +134,6 @@ Entry point for NPX package (`bin/cli.js` → `cli/index.ts`):
 ```
 .
 ├── cli/              # NPX package entry point
-│   ├── commands/     # CLI command handlers (demo, configure)
 │   └── demo/         # Sample data generators
 ├── components/       # React UI components (shadcn/ui + custom)
 ├── services/         # Business logic layer

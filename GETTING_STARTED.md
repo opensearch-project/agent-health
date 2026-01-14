@@ -6,7 +6,7 @@ This guide walks you through using Agent Health to evaluate Root Cause Analysis 
 
 1. [Quick Start](#quick-start)
 2. [Installation Methods](#installation-methods)
-3. [Demo Mode Features](#demo-mode-features)
+3. [Demo Agent & Judge](#demo-agent--judge)
 4. [Configuration Options](#configuration-options)
 5. [Exploring the UI](#exploring-the-ui)
 6. [Screenshots Walkthrough](#screenshots-walkthrough)
@@ -22,7 +22,7 @@ This guide walks you through using Agent Health to evaluate Root Cause Analysis 
 Run Agent Health instantly without cloning the repository:
 
 ```bash
-# Start in demo mode (default)
+# Start the server
 npx @opensearch-project/agent-health
 
 # With custom port
@@ -30,9 +30,6 @@ npx @opensearch-project/agent-health --port 8080
 
 # With environment file
 npx @opensearch-project/agent-health --env-file .env
-
-# Interactive configuration mode
-npx @opensearch-project/agent-health --configure
 ```
 
 The application will:
@@ -93,11 +90,23 @@ npm run server
 
 ---
 
-## Demo Mode Features
+## Demo Agent & Judge
 
-When running without external configuration, Agent Health provides a fully-functional demo environment:
+Agent Health includes built-in Demo Agent and Demo Judge for testing without external services. Select these in the UI when running evaluations:
 
-### Sample Data Included
+### Demo Agent
+- Simulates agent responses with realistic trajectories
+- No external endpoint required
+- Select "Demo Agent" in the agent dropdown
+
+### Demo Judge
+- Provides mock evaluation scores without AWS Bedrock
+- Automatically selected when using Demo Agent
+- No AWS credentials required
+
+### Sample Data
+
+When OpenSearch storage is not configured, sample data is displayed:
 
 | Data Type | Count | Description |
 |-----------|-------|-------------|
@@ -106,12 +115,7 @@ When running without external configuration, Agent Health provides a fully-funct
 | Runs | 5 | Completed evaluation results |
 | Traces | 5 | OpenTelemetry spans for visualization |
 
-### Mock Services
-
-- **Mock Agent** - Simulates agent responses with realistic trajectories
-- **Mock Judge** - Provides evaluation scores without AWS Bedrock
-
-All sample data IDs start with `demo-` prefix and are read-only.
+Sample data IDs start with `demo-` prefix and are read-only.
 
 ---
 
@@ -124,8 +128,6 @@ agent-health [options]
 
 Options:
   -V, --version          Output version number
-  -d, --demo             Run in demo mode with sample data (default)
-  -c, --configure        Run interactive configuration wizard
   -p, --port <number>    Server port (default: "4001")
   -e, --env-file <path>  Load environment variables from file
   --no-browser           Do not open browser automatically
@@ -137,7 +139,7 @@ Options:
 Create a `.env` file for persistent configuration:
 
 ```bash
-# Required for real LLM Judge (optional in demo mode)
+# Required for AWS Bedrock Judge (not needed for Demo Judge)
 AWS_REGION=us-west-2
 AWS_ACCESS_KEY_ID=your_key
 AWS_SECRET_ACCESS_KEY=your_secret
@@ -156,22 +158,6 @@ Use this for custom env file path (defaults to root folder for .env file):
 ```bash
 npx @opensearch-project/agent-health --env-file .env
 ```
-
-### Interactive Configuration
-
-The `--configure` flag launches a wizard:
-
-```bash
-npx @opensearch-project/agent-health --configure
-```
-
-This will prompt for:
-1. OpenSearch storage configuration
-2. Agent type (Mock, ML-Commons, Langgraph)
-3. LLM Judge type (Mock, AWS Bedrock)
-4. Trace visualization settings
-
-Configuration is saved to `~/.agent-health/config.json` for future use.
 
 ---
 
@@ -433,7 +419,7 @@ npx @opensearch-project/agent-health --port 8080
 
 ### "OpenSearch not configured" Messages
 
-This is expected in demo mode. Sample data is displayed instead of real data.
+This is expected when OpenSearch is not configured. Sample data is displayed instead.
 
 ### Agent Query Returns Empty Traces
 
@@ -443,7 +429,7 @@ This is expected in demo mode. Sample data is displayed instead of real data.
 
 ### LLM Judge Timeouts
 
-In demo mode, the mock judge is used. For real evaluations:
+When using Demo Judge, mock evaluations are instant. For AWS Bedrock Judge:
 - Verify AWS credentials in your `.env` file
 - Check Bedrock model access in your AWS account
 

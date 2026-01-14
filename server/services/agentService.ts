@@ -8,7 +8,6 @@
  */
 
 import { Response } from 'express';
-import { useMockAgent } from '../app.js';
 
 // ============================================================================
 // Types
@@ -169,20 +168,23 @@ export async function proxyAgentRequest(
   const { endpoint, payload, headers: customHeaders = {} } = request;
 
   console.log('\n========== AGENT PROXY REQUEST ==========');
+  console.log('[AgentProxy] Timestamp:', new Date().toISOString());
   console.log('[AgentProxy] Target endpoint:', endpoint);
-  console.log('[AgentProxy] Custom headers:', Object.keys(customHeaders));
-  console.log('[AgentProxy] Payload:', JSON.stringify(payload).substring(0, 200) + '...');
+  console.log('[AgentProxy] Custom headers:', JSON.stringify(customHeaders));
+  console.log('[AgentProxy] Payload preview:', JSON.stringify(payload).substring(0, 300) + '...');
 
   // Set SSE headers for streaming response
   setSSEHeaders(res);
 
-  // Use mock agent in demo mode
-  if (useMockAgent()) {
-    console.log('[AgentProxy] Using mock agent (demo mode)');
+  // Check if Demo Agent selected (mock:// endpoint)
+  if (endpoint.startsWith('mock://')) {
+    console.log('[AgentProxy] Demo Agent - returning mock response');
     await streamMockAgentResponse(payload, res);
     res.end();
     return;
   }
+
+  console.log('[AgentProxy] Calling real endpoint:', endpoint);
 
   // Make request to agent endpoint
   const response = await fetch(endpoint, {

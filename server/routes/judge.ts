@@ -9,7 +9,6 @@
 
 import { Request, Response, Router } from 'express';
 import { evaluateTrajectory, parseBedrockError } from '../services/bedrockService';
-import { useMockJudge } from '../app.js';
 
 const router = Router();
 
@@ -65,7 +64,7 @@ ${expectedOutcomes?.map((outcome, i) => `${i + 1}. "${outcome.substring(0, 50)}.
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
   try {
-    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId } = req.body;
+    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, judgeKey } = req.body;
 
     // Validate required fields
     if (!trajectory) {
@@ -80,15 +79,16 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       });
     }
 
-    // Use mock judge in demo mode
-    if (useMockJudge()) {
-      console.log('[JudgeAPI] Using mock judge (demo mode)');
+    // Check if Demo Judge selected (judgeKey === 'demo')
+    if (judgeKey === 'demo') {
+      console.log('[JudgeAPI] Demo Judge - returning mock evaluation');
       const mockResult = generateMockEvaluation(trajectory, expectedOutcomes);
       return res.json(mockResult);
     }
 
     // Call Bedrock service to evaluate trajectory
     // modelId is optional - falls back to BEDROCK_MODEL_ID env var if not provided
+    console.log('[JudgeAPI] Using Bedrock Judge:', judgeKey || 'bedrock (default)');
     const result = await evaluateTrajectory({
       trajectory,
       expectedOutcomes,

@@ -28,6 +28,15 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
 export const DEFAULT_CONFIG: AppConfig = {
   agents: [
     {
+      key: "demo",
+      name: "Demo Agent",
+      endpoint: "mock://demo",
+      description: "Mock agent for testing (simulated responses)",
+      models: ["demo-model"],
+      headers: {},
+      useTraces: false,
+    },
+    {
       key: "langgraph",
       name: "Langgraph",
       endpoint: ENV_CONFIG.langgraphEndpoint,
@@ -71,7 +80,29 @@ export const DEFAULT_CONFIG: AppConfig = {
       useTraces: true
     }
   ],
+  judges: [
+    {
+      key: "demo",
+      name: "Demo Judge",
+      endpoint: "mock://demo",
+      description: "Mock judge for testing (simulated evaluations)",
+    },
+    {
+      key: "bedrock",
+      name: "AWS Bedrock",
+      endpoint: "bedrock://",
+      description: "AWS Bedrock LLM judge for real evaluations",
+      modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      region: "us-west-2",
+    }
+  ],
   models: {
+    "demo-model": {
+      model_id: "mock://demo-model",
+      display_name: "Demo Model",
+      context_window: 200000,
+      max_output_tokens: 4096
+    },
     "claude-sonnet-4": {
       model_id: "anthropic.claude-sonnet-4-20250514-v1:0",
       display_name: "Claude Sonnet 4",

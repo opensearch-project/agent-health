@@ -17,7 +17,7 @@
  * Uses dagre for automatic layout positioning with TB (top-to-bottom) direction.
  */
 
-import React, { useCallback, useMemo, useEffect } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -26,6 +26,7 @@ import {
   useEdgesState,
   BackgroundVariant,
   type Node,
+  type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -83,6 +84,7 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
 }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const reactFlowInstance = useRef<ReactFlowInstance | null>(null);
 
   // Categorize spans and convert to flow
   const categorizedTree = useMemo(
@@ -130,7 +132,23 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
 
     setNodes(flowNodes);
     setEdges(flowEdges);
+
+    // Fit view after nodes are set (with small delay to ensure render)
+    setTimeout(() => {
+      if (reactFlowInstance.current) {
+        reactFlowInstance.current.fitView({ padding: 0.1, maxZoom: 1 });
+      }
+    }, 100);
   }, [categorizedTree, timeRange.duration, setNodes, setEdges]);
+
+  // Handle React Flow initialization
+  const onInit = useCallback((instance: ReactFlowInstance) => {
+    reactFlowInstance.current = instance;
+    // Fit view on init
+    setTimeout(() => {
+      instance.fitView({ padding: 0.1, maxZoom: 1 });
+    }, 100);
+  }, []);
 
   // Handle node click
   const onNodeClick = useCallback(
@@ -199,14 +217,15 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
             onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
+            onInit={onInit}
             nodeTypes={nodeTypes}
             fitView
             fitViewOptions={{
               padding: 0.1,
-              minZoom: 0.4,
+              minZoom: 0.1,
               maxZoom: 1,
             }}
-            minZoom={0.2}
+            minZoom={0.1}
             maxZoom={2}
             defaultEdgeOptions={{
               type: 'smoothstep',

@@ -29,8 +29,18 @@ export interface AgentConfig {
   useTraces?: boolean; // When true, fetch traces instead of logs for evaluation
 }
 
+export interface JudgeConfig {
+  key: string; // Unique identifier for the judge
+  name: string;
+  endpoint: string; // 'mock://demo' for demo judge, 'bedrock://' for real
+  description?: string;
+  modelId?: string; // Bedrock model ID (for real judges)
+  region?: string; // AWS region (for real judges)
+}
+
 export interface AppConfig {
   agents: AgentConfig[];
+  judges: JudgeConfig[];
   models: Record<string, ModelConfig>;
   defaults: {
     retry_attempts: number;
@@ -115,6 +125,8 @@ export interface TestCaseRun {
   // Execution context
   agentName: string;
   agentKey?: string;
+  judgeName?: string;
+  judgeKey?: string;
   modelName: string;
   modelId?: string;
   agentEndpoint?: string;
@@ -486,6 +498,7 @@ export interface ExperimentRun {
   agentKey: string;                // Reference to AgentConfig.key
   agentEndpoint?: string;          // Override agent endpoint (optional)
   modelId: string;                 // Model to use
+  judgeKey?: string;               // Reference to JudgeConfig.key (defaults to 'bedrock')
   headers?: Record<string, string>; // Custom headers
 
   // Results (directly embedded, no separate VariantRun type)

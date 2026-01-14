@@ -46,6 +46,8 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   const [report, setReport] = useState<EvaluationReport | null>(null);
 
   const selectedAgent = DEFAULT_CONFIG.agents.find(a => a.key === selectedAgentKey);
+  // Automatically select judge based on agent - Demo Agent uses Demo Judge, others use Bedrock
+  const judgeKey = selectedAgentKey === 'demo' ? 'demo' : 'bedrock';
 
   // Lock body scroll when modal is open
   useEffect(() => {
@@ -95,6 +97,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
         selectedAgent,
         selectedModelId,
         runTestCase,
+        judgeKey,
         (step) => setCurrentSteps(prev => [...prev, step])
       );
 
@@ -225,9 +228,9 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
 
               {/* Model Selection */}
               <div className="space-y-1">
-                <Label className="text-xs">Judge Model</Label>
+                <Label className="text-xs">Model</Label>
                 <Select value={selectedModelId} onValueChange={setSelectedModelId}>
-                  <SelectTrigger className="w-48 h-8">
+                  <SelectTrigger className="w-40 h-8">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

@@ -15,13 +15,9 @@ import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
 import { readFileSync, existsSync } from 'fs';
 import { config as loadDotenv } from 'dotenv';
-
-// Import command handlers
-import { runDemoMode } from './commands/demo.js';
-import { runConfigureMode } from './commands/configure.js';
-
-// Re-export types for use by commands
-export type { CLIConfig } from './types.js';
+import open from 'open';
+import ora from 'ora';
+import { startServer } from './utils/startServer.js';
 
 // Get package.json for version
 const __filename = fileURLToPath(import.meta.url);
@@ -68,14 +64,12 @@ program
 
 // CLI options
 program
-  .option('-d, --demo', 'Run in demo mode with sample data (default)')
-  .option('-c, --configure', 'Run interactive configuration wizard')
   .option('-p, --port <number>', 'Server port', '4001')
   .option('-e, --env-file <path>', 'Load environment variables from file (e.g., .env)')
   .option('--no-browser', 'Do not open browser automatically');
 
 program.action(async (options) => {
-  console.log(chalk.cyan.bold('\n  Agent Health - AI Agent Evaluation Framework\n'));
+  console.log(chalk.cyan.bold(`\n  Agent Health v${version} - AI Agent Evaluation Framework\n`));
 
   // Load environment file if specified
   if (options.envFile) {
@@ -90,13 +84,32 @@ program.action(async (options) => {
   }
 
   const port = parseInt(options.port, 10);
+  const spinner = ora('Starting server...').start();
 
-  // Determine mode
-  if (options.configure) {
-    await runConfigureMode({ port, noBrowser: !options.browser });
-  } else {
-    // Default: demo mode (sample data + mock agent/judge)
-    await runDemoMode({ port, noBrowser: !options.browser });
+  try {
+    // Start the server
+    await startServer({ port });
+    spinner.succeed('Server started');
+
+    console.log(chalk.gray('\n  Configuration:'));
+    console.log(chalk.gray(`    Storage: Sample data (configure OpenSearch for persistence)`));
+    console.log(chalk.gray(`    Agent: Select in UI (Demo Agent for mock, real agents require endpoints)`));
+    console.log(chalk.gray(`    Judge: Select in UI (Demo Judge for mock, Bedrock requires AWS creds)\n`));
+
+    const url = `http://localhost:${port}`;
+    console.log(chalk.green(`  Server running at ${chalk.bold(url)}\n`));
+
+    if (options.browser !== false) {
+      console.log(chalk.gray('  Opening browser...'));
+      await open(url);
+    }
+
+    console.log(chalk.gray('  Press Ctrl+C to stop\n'));
+
+  } catch (error) {
+    spinner.fail('Failed to start server');
+    console.error(chalk.red(`\n  Error: ${error instanceof Error ? error.message : error}\n`));
+    process.exit(1);
   }
 });
 
