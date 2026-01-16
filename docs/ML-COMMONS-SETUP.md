@@ -21,41 +21,44 @@ AgentEval --> ML-Commons Agent (9200) --> MCP Server (3030) --> OpenSearch Data 
 |-------------|---------|---------|
 | Java | 11+ | OpenSearch and ML-Commons |
 | Python | 3.9+ | MCP server (`pip install uvx`) |
-| AWS credentials | - | Bedrock access for agent LLM |
+| AWS CLI | 2.x | Profile-based authentication |
+| AWS Profile | - | Configured profile with Bedrock access |
 
 ---
 
 ## Option 1: Automated Setup
 
-### Quick Start (ML-Commons already running)
-```bash
-./scripts/setup.sh
-```
+### Prerequisites
+1. ML-Commons must be running on port 9200
+2. `AWS_PROFILE` must be set (in `.env` or environment)
 
-### Full Setup (first time, builds everything)
+### Quick Start
 ```bash
-./scripts/setup.sh --setup-opensearch
+# Set your AWS profile
+export AWS_PROFILE=Bedrock
+
+# Run setup
+./scripts/setup.sh
 ```
 
 ### Script Options
 
 | Command | Description |
 |---------|-------------|
-| `./scripts/setup.sh` | Refresh AWS creds, register new agent, update .env, start servers |
-| `./scripts/setup.sh --setup-opensearch` | Clone + build OpenSearch/ML-Commons from scratch |
-| `./scripts/setup.sh --stop` | Stop all running services |
+| `./scripts/setup.sh` | Register agent, update .env, start servers |
+| `./scripts/setup.sh --stop` | Stop MCP server and AgentEval (not ML-Commons) |
 | `./scripts/setup.sh --status` | Check which services are running |
 
 ### What the Script Does
 
-1. Refreshes AWS credentials via `ada` (uses AWS_BEDROCK_ACCOUNT and AWS_BEDROCK_ROLE env vars)
-2. Registers Bedrock model with fresh credentials
-3. Creates MCP connector pointing to localhost:3030
-4. Registers AG-UI agent with the model and MCP connector
-5. Tests agent execution to verify setup works
-6. Updates `.env` with new agent ID and AWS credentials
-7. Starts log ingestion (`./gradlew ingestLogs` from ml-commons)
-8. Starts evals services - Frontend runs in foreground with live logs
+1. Validates AWS profile and fetches credentials
+2. Starts MCP server if not running (port 3030)
+3. Registers Bedrock model with credentials from profile
+4. Creates MCP connector pointing to localhost:3030
+5. Registers AG-UI agent with the model and MCP connector
+6. Tests agent execution to verify setup works
+7. Updates `.env` with new agent endpoint
+8. Starts AgentEval server (port 4001)
 
 ---
 
@@ -121,8 +124,14 @@ curl -X PUT 'http://localhost:9200/_cluster/settings' \
 ### Step 5: Register Bedrock Model
 
 ```bash
-# Get fresh AWS credentials first (set AWS_BEDROCK_ACCOUNT and AWS_BEDROCK_ROLE env vars)
-ada credentials update --account $AWS_BEDROCK_ACCOUNT --role ${AWS_BEDROCK_ROLE:-Bedrock-Access} --once
+# Ensure your AWS credentials are configured (choose one method):
+# Option 1: Use AWS CLI profile
+export AWS_PROFILE=your-profile-name
+
+# Option 2: Set credentials directly
+export AWS_ACCESS_KEY_ID=your_access_key
+export AWS_SECRET_ACCESS_KEY=your_secret_key
+export AWS_SESSION_TOKEN=your_session_token  # if using temporary credentials
 
 # Register model (save the model_id from response)
 curl 'http://localhost:9200/_plugins/_ml/models/_register?deploy=true' \
@@ -222,7 +231,7 @@ These headers allow the ML-Commons agent to access the OpenSearch data cluster:
 |---------|------|---------|---------|
 | ML-Commons | 9200 | `./gradlew run -Dstreaming=true` | AG-UI agent endpoint |
 | MCP Server | 3030 | `uvx opensearch-mcp-server-py@0.5.2` | OpenSearch tools for agent |
-| Log Ingestion | - | `./gradlew ingestLogs` | Ships ML-Commons logs to OpenSearch |
+| AgentEval | 4001 | `npm run server` | Evaluation UI and API |
 
 ---
 
@@ -232,8 +241,8 @@ These headers allow the ML-Commons agent to access the OpenSearch data cluster:
 |-------|----------|
 | Agent not responding | Check ML-Commons: `curl http://localhost:9200/_cat/health` |
 | MCP server issues | Verify: `curl http://localhost:3030/health`, check MCP env vars |
-| AWS credentials expired | Run `ada credentials update` or `./scripts/setup.sh` |
-| Port conflicts | Use `./scripts/setup.sh --stop` to stop all services |
+| AWS profile invalid | Ensure profile exists: `aws sts get-caller-identity --profile $AWS_PROFILE` |
+| Port conflicts | Use `./scripts/setup.sh --stop` to stop MCP and AgentEval services |
 
 ### Check Service Status
 ```bash

@@ -6,11 +6,14 @@
 # AgentEval Setup Script
 # Automates the complete setup of AgentEval environment with ML-Commons AG-UI agent
 #
+# Prerequisites:
+#   - ML-Commons must be running on port 9200
+#   - AWS_PROFILE must be set (in .env or environment) for Bedrock authentication
+#
 # Usage:
-#   ./scripts/setup.sh                  # Quick start: fetch creds, register new agent, update .env, start servers
-#   ./scripts/setup.sh --setup-opensearch # Full setup: clone + build OpenSearch/ML-Commons + configure + start
-#   ./scripts/setup.sh --stop           # Stop all running services
-#   ./scripts/setup.sh --status         # Check which services are running
+#   ./scripts/setup.sh           # Quick start: register agent, update .env, start servers
+#   ./scripts/setup.sh --stop    # Stop all running services
+#   ./scripts/setup.sh --status  # Check which services are running
 
 set -e
 
@@ -38,6 +41,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Note: We use port-based cleanup instead of PID files for reliability
+
+# ============================================================================
+# LOAD ENVIRONMENT FILE
+# ============================================================================
+
+load_env_file() {
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        log_info "Loading configuration from .env file..."
+        # Only export lines that are valid KEY=VALUE assignments (not comments or malformed lines)
+        while IFS= read -r line || [ -n "$line" ]; do
+            # Skip empty lines, comments, and lines without '='
+            if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# && "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+                export "$line"
+            fi
+        done < "$PROJECT_ROOT/.env"
+    fi
+}
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -108,18 +128,31 @@ cleanup_ports() {
 
 cleanup_on_exit() {
     echo ""
-    log_info "Shutting down services..."
-    for port in $MCP_SERVER_PORT $SERVER_PORT; do
-        local pid=$(lsof -ti:$port 2>/dev/null || true)
-        if [ -n "$pid" ]; then
-            log_info "Stopping process on port $port (PID: $pid)..."
-            kill $pid 2>/dev/null || true
+    log_info "Shutting down AgentEval services (MCP + server)..."
+
+    # Kill MCP server (port 3030) - only python/uvx processes
+    for pid in $(lsof -ti:$MCP_SERVER_PORT 2>/dev/null || true); do
+        local cmd=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+        if [[ "$cmd" == *"python"* ]] || [[ "$cmd" == *"uvx"* ]] || [[ "$cmd" == *"uvicorn"* ]]; then
+            log_info "Stopping MCP server (PID: $pid)..."
+            kill "$pid" 2>/dev/null || true
         fi
     done
-    log_success "All services stopped"
+
+    # Kill AgentEval server (port 4001) - only node processes
+    for pid in $(lsof -ti:$SERVER_PORT 2>/dev/null || true); do
+        local cmd=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+        if [[ "$cmd" == *"node"* ]]; then
+            log_info "Stopping AgentEval server (PID: $pid)..."
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+
+    log_success "AgentEval services stopped"
 }
 
-trap cleanup_on_exit EXIT INT TERM
+# Only run cleanup on interrupt (Ctrl+C) or terminate signal, not on normal exit
+trap cleanup_on_exit INT TERM
 
 # ============================================================================
 # COMMAND HANDLERS
@@ -157,17 +190,20 @@ show_status() {
 }
 
 stop_services() {
-    log_info "Stopping all services..."
+    log_info "Stopping AgentEval services (not ML-Commons)..."
 
-    for port in $MLCOMMONS_PORT $MCP_SERVER_PORT $SERVER_PORT; do
-        local pid=$(lsof -ti:$port 2>/dev/null || true)
-        if [ -n "$pid" ]; then
-            log_info "Stopping process on port $port (PID: $pid)..."
-            kill $pid 2>/dev/null || true
+    for port in $MCP_SERVER_PORT $SERVER_PORT; do
+        # Get PIDs and handle each one separately (lsof can return multiple)
+        local pids=$(lsof -ti:$port 2>/dev/null || true)
+        if [ -n "$pids" ]; then
+            for pid in $pids; do
+                log_info "Stopping process on port $port (PID: $pid)..."
+                kill "$pid" 2>/dev/null || true
+            done
         fi
     done
 
-    log_success "All services stopped"
+    log_success "AgentEval services stopped (ML-Commons still running)"
 }
 
 # ============================================================================
@@ -227,11 +263,12 @@ check_prerequisites() {
         all_ok=false
     fi
 
-    # Check ada (for AWS credentials)
-    if check_command ada; then
-        log_success "ada found"
+    # Check AWS CLI (required for profile-based authentication)
+    if check_command aws; then
+        log_success "AWS CLI found"
     else
-        log_warn "ada not found - you'll need to manually set AWS credentials"
+        log_error "AWS CLI not found - required for profile-based authentication"
+        all_ok=false
     fi
 
     if [ "$all_ok" = false ]; then
@@ -242,66 +279,13 @@ check_prerequisites() {
     log_success "All prerequisites satisfied"
 }
 
-# ============================================================================
-# CLONE & BUILD OPENSEARCH CORE
-# ============================================================================
-
-setup_opensearch_core() {
-    log_step "2" "Setting up OpenSearch Core (Streaming Plugins)"
-
-    mkdir -p "$WORKSPACE_DIR"
-    cd "$WORKSPACE_DIR"
-
-    if [ -d "OpenSearch" ]; then
-        log_info "OpenSearch directory already exists, skipping clone"
-        cd OpenSearch
-    else
-        log_info "Cloning OpenSearch..."
-        git clone https://github.com/opensearch-project/OpenSearch
-        cd OpenSearch
-    fi
-
-    log_info "Building streaming plugins..."
-    ./gradlew :plugins:transport-reactor-netty4:assemble
-    ./gradlew :plugins:arrow-flight-rpc:assemble
-
-    export OPENSEARCH_CORE_PATH=$(pwd)
-    log_success "OpenSearch Core ready at: $OPENSEARCH_CORE_PATH"
-}
-
-# ============================================================================
-# CLONE & START ML-COMMONS
-# ============================================================================
-
-setup_mlcommons() {
-    log_step "3" "Setting up ML-Commons"
-
-    cd "$WORKSPACE_DIR"
-
-    if [ -d "ml-commons" ]; then
-        log_info "ml-commons directory already exists, skipping clone"
-        cd ml-commons
-    else
-        log_info "Cloning ML-Commons..."
-        git clone https://github.com/jiapingzeng/ml-commons
-        cd ml-commons
-        git switch 3.4-jpz
-    fi
-
-    log_info "Starting ML-Commons with streaming enabled..."
-    ./gradlew run -Dstreaming=true &
-    local mlcommons_pid=$!
-
-    wait_for_service "http://localhost:$MLCOMMONS_PORT" 120
-    log_success "ML-Commons started (PID: $mlcommons_pid)"
-}
 
 # ============================================================================
 # START MCP SERVER
 # ============================================================================
 
 start_mcp_server() {
-    log_step "4" "Starting MCP Server"
+    log_step "2" "Starting MCP Server"
 
     # Load MCP config from .env if available
     if [ -f "$PROJECT_ROOT/.env" ]; then
@@ -323,38 +307,37 @@ start_mcp_server() {
 }
 
 # ============================================================================
-# REFRESH AWS CREDENTIALS
+# AWS PROFILE CREDENTIAL HANDLING
 # ============================================================================
 
-refresh_aws_credentials() {
-    log_info "Refreshing AWS credentials..."
+fetch_credentials_from_profile() {
+    log_info "Fetching credentials from AWS profile '$AWS_PROFILE'..."
 
-    if command -v ada &> /dev/null; then
-        ada credentials update --account ${AWS_BEDROCK_ACCOUNT:-YOUR_AWS_ACCOUNT_ID} --role ${AWS_BEDROCK_ROLE:-Admin} --once
-
-        # Parse credentials from ~/.aws/credentials or environment
-        # ada typically exports these automatically, but let's ensure they're set
-        if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
-            log_warn "AWS credentials not in environment. Attempting to read from ~/.aws/credentials..."
-
-            # Try to read from credentials file
-            if [ -f ~/.aws/credentials ]; then
-                export AWS_ACCESS_KEY_ID=$(grep -A 3 '\[default\]' ~/.aws/credentials | grep aws_access_key_id | cut -d'=' -f2 | tr -d ' ')
-                export AWS_SECRET_ACCESS_KEY=$(grep -A 3 '\[default\]' ~/.aws/credentials | grep aws_secret_access_key | cut -d'=' -f2 | tr -d ' ')
-                export AWS_SESSION_TOKEN=$(grep -A 3 '\[default\]' ~/.aws/credentials | grep aws_session_token | cut -d'=' -f2 | tr -d ' ')
-            fi
-        fi
-    else
-        log_warn "ada not available. Using existing AWS credentials from environment."
-    fi
-
-    # Verify credentials are set
-    if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
-        log_error "AWS credentials not found. Please set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN"
+    # Validate AWS_PROFILE is set
+    if [ -z "$AWS_PROFILE" ]; then
+        log_error "AWS_PROFILE not set. Set it in .env file or environment."
+        log_info "Example: AWS_PROFILE=Bedrock"
         exit 1
     fi
 
-    log_success "AWS credentials configured"
+    # Verify the profile works by calling STS
+    if ! aws sts get-caller-identity --profile "$AWS_PROFILE" > /dev/null 2>&1; then
+        log_error "AWS profile '$AWS_PROFILE' is not valid or credentials expired"
+        log_info "Ensure your profile is configured in ~/.aws/credentials or ~/.aws/config"
+        exit 1
+    fi
+
+    log_success "AWS profile '$AWS_PROFILE' is valid"
+
+    # Export credentials from the configured profile for connector registration
+    eval $(aws configure export-credentials --profile "$AWS_PROFILE" --format env 2>/dev/null)
+
+    if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+        log_error "Failed to export credentials from profile '$AWS_PROFILE'"
+        exit 1
+    fi
+
+    log_success "Credentials exported from profile '$AWS_PROFILE'"
 }
 
 # ============================================================================
@@ -362,7 +345,7 @@ refresh_aws_credentials() {
 # ============================================================================
 
 configure_mlcommons() {
-    log_step "5" "Configuring ML-Commons (5 API calls)"
+    log_step "3" "Configuring ML-Commons (5 API calls)"
 
     local endpoint="http://localhost:$MLCOMMONS_PORT"
 
@@ -390,9 +373,9 @@ configure_mlcommons() {
     log_success "Streaming settings enabled"
 
     # -------------------------------------------------------------------------
-    # Refresh AWS Credentials (before model registration)
+    # Fetch AWS Credentials from profile (before model registration)
     # -------------------------------------------------------------------------
-    refresh_aws_credentials
+    fetch_credentials_from_profile
 
     # -------------------------------------------------------------------------
     # API 2: Register Bedrock model
@@ -547,7 +530,7 @@ configure_mlcommons() {
 # ============================================================================
 
 update_env_file() {
-    log_step "6" "Updating .env file"
+    log_step "4" "Updating .env file"
 
     cd "$PROJECT_ROOT"
 
@@ -573,30 +556,21 @@ update_env_file() {
         echo "MLCOMMONS_ENDPOINT=http://localhost:$MLCOMMONS_PORT/_plugins/_ml/agents/$AGENT_ID/_execute/stream" >> .env
     fi
 
-    # Update AWS credentials (same creds used for Bedrock connector)
-    if grep -q "^AWS_ACCESS_KEY_ID=" .env; then
-        sed -i '' "s|^AWS_ACCESS_KEY_ID=.*|AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID|" .env
-    else
-        echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> .env
-    fi
-
-    if grep -q "^AWS_SECRET_ACCESS_KEY=" .env; then
-        sed -i '' "s|^AWS_SECRET_ACCESS_KEY=.*|AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY|" .env
-    else
-        echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> .env
-    fi
-
-    if grep -q "^AWS_SESSION_TOKEN=" .env; then
-        sed -i '' "s|^AWS_SESSION_TOKEN=.*|AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN|" .env
-    else
-        echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> .env
-    fi
-
+    # Update AWS_REGION
     if grep -q "^AWS_REGION=" .env; then
         sed -i '' "s|^AWS_REGION=.*|AWS_REGION=$AWS_REGION|" .env
     else
         echo "AWS_REGION=$AWS_REGION" >> .env
     fi
+
+    # Ensure AWS_PROFILE is set
+    if ! grep -q "^AWS_PROFILE=" .env; then
+        echo "AWS_PROFILE=$AWS_PROFILE" >> .env
+    fi
+
+    # Export the new MLCOMMONS_ENDPOINT to environment so child processes get the updated value
+    export MLCOMMONS_ENDPOINT="http://localhost:$MLCOMMONS_PORT/_plugins/_ml/agents/$AGENT_ID/_execute/stream"
+    log_info "Exported MLCOMMONS_ENDPOINT with new agent ID: $AGENT_ID"
 
     # Add setup comment at top of file
     local temp_file=$(mktemp)
@@ -607,43 +581,16 @@ update_env_file() {
     cat .env >> "$temp_file"
     mv "$temp_file" .env
 
-    log_success ".env file updated with agent configuration and AWS credentials"
+    log_success ".env file updated with agent configuration"
 }
 
-# ============================================================================
-# LOG INGESTION SERVER
-# ============================================================================
-
-start_log_ingestion_server() {
-    log_step "7" "Log Ingestion Server"
-
-    # Log ingestion runs from ml-commons repo
-    # Branch: jpz-goyamegh from https://github.com/jiapingzeng/ml-commons
-    if [ -d "$WORKSPACE_DIR/ml-commons" ]; then
-        log_info "Starting log ingestion from ml-commons..."
-        cd "$WORKSPACE_DIR/ml-commons"
-
-        # Ensure we're on the correct branch
-        git fetch origin jpz-goyamegh 2>/dev/null || true
-        git checkout jpz-goyamegh 2>/dev/null || log_warn "Could not switch to jpz-goyamegh branch"
-
-        ./gradlew ingestLogs &
-        local ingest_pid=$!
-        log_success "Log ingestion server started (PID: $ingest_pid)"
-
-        cd "$PROJECT_ROOT"
-    else
-        log_warn "ml-commons directory not found at $WORKSPACE_DIR/ml-commons"
-        log_info "Log ingestion requires --setup-opensearch first, or manual ml-commons clone"
-    fi
-}
 
 # ============================================================================
 # START AGENTEVAL SERVICES
 # ============================================================================
 
 start_agenteval_services() {
-    log_step "8" "Starting AgentEval Services"
+    log_step "5" "Starting AgentEval Services"
 
     cd "$PROJECT_ROOT"
 
@@ -678,6 +625,9 @@ main() {
     echo -e "${GREEN}      AgentEval Setup Script${NC}"
     echo -e "${GREEN}================================================${NC}\n"
 
+    # Load .env file to get AWS_BEDROCK_ACCOUNT and other config
+    load_env_file
+
     # Handle command line arguments
     case "${1:-}" in
         --stop)
@@ -688,25 +638,10 @@ main() {
             show_status
             exit 0
             ;;
-        --setup-opensearch)
-            # Full OpenSearch/ML-Commons setup
-            log_info "Full OpenSearch/ML-Commons setup mode..."
-            cleanup_ports
-
-            check_prerequisites
-            setup_opensearch_core
-            setup_mlcommons
-            start_mcp_server
-            configure_mlcommons
-            update_env_file
-            start_log_ingestion_server
-            start_agenteval_services
-            ;;
         "")
             # Default: Quick start mode
-            # Assumes ML-Commons and MCP Server are already running
+            # Assumes ML-Commons is already running
             log_info "Quick start mode (assumes ML-Commons already running)..."
-            log_info "Use --setup-opensearch for full setup"
             echo ""
 
             cleanup_ports
@@ -714,7 +649,7 @@ main() {
             # Check if ML-Commons is running
             if ! curl -s "http://localhost:$MLCOMMONS_PORT" > /dev/null 2>&1; then
                 log_error "ML-Commons not running on port $MLCOMMONS_PORT"
-                log_info "Run './scripts/setup.sh --setup-opensearch' for full setup first"
+                log_info "Start ML-Commons first, then run this script"
                 exit 1
             fi
             log_success "ML-Commons is running"
@@ -730,15 +665,13 @@ main() {
             # Core quick start flow
             configure_mlcommons
             update_env_file
-            start_log_ingestion_server
             start_agenteval_services
             ;;
         *)
-            echo "Usage: $0 [--setup-opensearch|--stop|--status]"
+            echo "Usage: $0 [--stop|--status]"
             echo ""
             echo "Commands:"
-            echo "  (default)          Quick start: fetch creds, register new agent, start servers"
-            echo "  --setup-opensearch Full setup: clone + build OpenSearch/ML-Commons"
+            echo "  (default)          Quick start: register agent, update .env, start servers"
             echo "  --stop             Stop all running services"
             echo "  --status           Check which services are running"
             exit 1
