@@ -9,6 +9,7 @@
 
 import { TraceMetrics } from '@/types';
 import { ENV_CONFIG } from '@/lib/config';
+import { getObservabilityConfigHeaders } from '@/lib/dataSourceConfig';
 
 const API_BASE = ENV_CONFIG.backendUrl;
 
@@ -19,7 +20,9 @@ const API_BASE = ENV_CONFIG.backendUrl;
  * @returns Computed metrics including tokens, cost, duration, tool calls
  */
 export async function fetchRunMetrics(runId: string): Promise<TraceMetrics> {
-  const response = await fetch(`${API_BASE}/api/metrics/${encodeURIComponent(runId)}`);
+  const response = await fetch(`${API_BASE}/api/metrics/${encodeURIComponent(runId)}`, {
+    headers: getObservabilityConfigHeaders(),
+  });
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
@@ -54,7 +57,10 @@ export async function fetchBatchMetrics(runIds: string[]): Promise<{
 }> {
   const response = await fetch(`${API_BASE}/api/metrics/batch`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...getObservabilityConfigHeaders(),
+    },
     body: JSON.stringify({ runIds })
   });
 

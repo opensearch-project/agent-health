@@ -335,7 +335,9 @@ export const ExperimentsPage: React.FC = () => {
             </CardContent>
           </Card>
         ) : (
-          experiments.map(exp => {
+          [...experiments]
+            .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+            .map(exp => {
             const latestRun = getLatestRun(exp);
             const isRunning = runningExperimentId === exp.id;
 

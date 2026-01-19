@@ -163,11 +163,15 @@ class AsyncTestCaseStorage {
   // ==================== Core CRUD Operations ====================
 
   /**
-   * Get all test cases (latest versions)
+   * Get all test cases (latest versions), sorted by updatedAt descending
    */
   async getAll(): Promise<TestCase[]> {
     const stored = await opensearchTestCases.getAll();
-    return stored.map(toTestCase);
+    const testCases = stored.map(toTestCase);
+    // Sort by updatedAt descending (most recent first)
+    return testCases.sort((a, b) =>
+      new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
+    );
   }
 
   /**

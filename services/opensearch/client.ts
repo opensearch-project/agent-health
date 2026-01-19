@@ -4,6 +4,7 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
+import { getObservabilityConfigHeaders } from '@/lib/dataSourceConfig';
 import { OpenSearchLog, LogQueryParams } from '@/types';
 
 // Default time range for log queries (in minutes)
@@ -44,6 +45,7 @@ class OpenSearchClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getObservabilityConfigHeaders(),
         },
         body: JSON.stringify({
           query: params?.query,
@@ -90,6 +92,7 @@ class OpenSearchClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getObservabilityConfigHeaders(),
         },
         body: JSON.stringify({
           runId,
@@ -125,6 +128,7 @@ class OpenSearchClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getObservabilityConfigHeaders(),
         },
         body: JSON.stringify({
           size: 1,

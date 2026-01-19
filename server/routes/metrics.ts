@@ -9,6 +9,7 @@
 
 import { Request, Response, Router } from 'express';
 import { computeMetrics, computeAggregateMetrics } from '../services/metricsService';
+import { resolveObservabilityConfig, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceConfig.js';
 import { MetricsResult } from '@/types';
 
 const router = Router();
@@ -20,21 +21,24 @@ router.get('/api/metrics/:runId', async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
 
-    const endpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;
-    const username = process.env.OPENSEARCH_LOGS_USERNAME;
-    const password = process.env.OPENSEARCH_LOGS_PASSWORD;
-    const indexPattern = process.env.OPENSEARCH_LOGS_TRACES_INDEX || 'otel-v1-apm-span-*';
+    // Get observability configuration from headers or env vars
+    const config = resolveObservabilityConfig(req);
 
-    if (!endpoint || !username || !password) {
-      return res.status(500).json({
-        error: 'OpenSearch traces not configured. Set OPENSEARCH_LOGS_* environment variables.'
+    if (!config) {
+      return res.status(503).json({
+        error: 'Observability data source not configured'
       });
     }
+
+    const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
 
     console.log('[MetricsAPI] Computing metrics for runId:', runId);
 
     const metrics = await computeMetrics(runId, {
-      endpoint, username, password, indexPattern
+      endpoint: config.endpoint,
+      username: config.username,
+      password: config.password,
+      indexPattern
     });
 
     console.log('[MetricsAPI] Metrics computed:', {
@@ -65,20 +69,25 @@ router.post('/api/metrics/batch', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'runIds must be an array' });
     }
 
-    const endpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;
-    const username = process.env.OPENSEARCH_LOGS_USERNAME;
-    const password = process.env.OPENSEARCH_LOGS_PASSWORD;
-    const indexPattern = process.env.OPENSEARCH_LOGS_TRACES_INDEX || 'otel-v1-apm-span-*';
+    // Get observability configuration from headers or env vars
+    const config = resolveObservabilityConfig(req);
 
-    if (!endpoint || !username || !password) {
-      return res.status(500).json({
-        error: 'OpenSearch traces not configured'
+    if (!config) {
+      return res.status(503).json({
+        error: 'Observability data source not configured'
       });
     }
 
+    const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
+
     console.log('[MetricsAPI] Computing batch metrics for', runIds.length, 'runs');
 
-    const osConfig = { endpoint, username, password, indexPattern };
+    const osConfig = {
+      endpoint: config.endpoint,
+      username: config.username,
+      password: config.password,
+      indexPattern
+    };
 
     const results = await Promise.all(
       runIds.map(runId =>

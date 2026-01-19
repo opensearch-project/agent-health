@@ -18,20 +18,10 @@ import {
   getAllSampleTraceSpans,
   isSampleTraceId,
 } from '../../cli/demo/sampleTraces.js';
+import { resolveObservabilityConfig, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceConfig.js';
 import type { Span } from '../../types/index.js';
 
 const router = Router();
-
-/**
- * Check if OpenSearch logs cluster is configured
- */
-function isLogsConfigured(): boolean {
-  return !!(
-    process.env.OPENSEARCH_LOGS_ENDPOINT &&
-    process.env.OPENSEARCH_LOGS_USERNAME &&
-    process.env.OPENSEARCH_LOGS_PASSWORD
-  );
-}
 
 /**
  * POST /api/traces - Fetch traces by trace ID or run IDs
@@ -65,22 +55,27 @@ router.post('/api/traces', async (req: Request, res: Response) => {
 
     let realSpans: Span[] = [];
 
-    // Fetch from OpenSearch logs cluster if configured
-    if (isLogsConfigured()) {
+    // Get observability configuration from headers or env vars
+    const config = resolveObservabilityConfig(req);
+
+    // Fetch from observability cluster if configured
+    if (config) {
       try {
-        const endpoint = process.env.OPENSEARCH_LOGS_ENDPOINT!;
-        const username = process.env.OPENSEARCH_LOGS_USERNAME!;
-        const password = process.env.OPENSEARCH_LOGS_PASSWORD!;
-        const indexPattern = process.env.OPENSEARCH_LOGS_TRACES_INDEX || 'otel-v1-apm-span-*';
+        const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
 
         const result = await fetchTraces(
           { traceId, runIds, startTime, endTime, size, serviceName, textSearch },
-          { endpoint, username, password, indexPattern }
+          {
+            endpoint: config.endpoint,
+            username: config.username,
+            password: config.password,
+            indexPattern
+          }
         );
 
         realSpans = (result.spans || []) as Span[];
       } catch (e: any) {
-        console.warn('[TracesAPI] OpenSearch logs unavailable, returning sample data only:', e.message);
+        console.warn('[TracesAPI] Observability data source unavailable, returning sample data only:', e.message);
       }
     }
 
@@ -100,25 +95,25 @@ router.post('/api/traces', async (req: Request, res: Response) => {
  */
 router.get('/api/traces/health', async (req: Request, res: Response) => {
   try {
-    // If logs not configured, return sample-only status
-    if (!isLogsConfigured()) {
+    // Get observability configuration from headers or env vars
+    const config = resolveObservabilityConfig(req);
+
+    // If observability not configured, return sample-only status
+    if (!config) {
       return res.json({
         status: 'sample_only',
-        message: 'OpenSearch logs not configured. Sample trace data available.',
+        message: 'Observability data source not configured. Sample trace data available.',
         sampleTraceCount: getAllSampleTraceSpans().length,
       });
     }
 
-    const endpoint = process.env.OPENSEARCH_LOGS_ENDPOINT!;
-    const username = process.env.OPENSEARCH_LOGS_USERNAME!;
-    const password = process.env.OPENSEARCH_LOGS_PASSWORD!;
-    const indexPattern = process.env.OPENSEARCH_LOGS_TRACES_INDEX || 'otel-v1-apm-span-*';
+    const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
 
     // Call traces service to check health
     const result = await checkTracesHealth({
-      endpoint,
-      username,
-      password,
+      endpoint: config.endpoint,
+      username: config.username,
+      password: config.password,
       indexPattern
     });
 

@@ -696,3 +696,49 @@ export interface MetricsResult {
   toolsUsed: string[];
   status: 'pending' | 'success' | 'error';
 }
+
+// ============ Data Source Configuration Types ============
+
+/**
+ * Base cluster configuration (endpoint + credentials)
+ * Used for connecting to OpenSearch or other data sources
+ */
+export interface ClusterConfig {
+  endpoint: string;
+  username?: string;
+  password?: string;
+}
+
+/**
+ * Storage cluster configuration - endpoint + credentials only
+ * Index names (evals_test_cases, evals_experiments, evals_runs, evals_analytics)
+ * are hardcoded in the adapter and not user-configurable.
+ */
+export type StorageClusterConfig = ClusterConfig;
+
+/**
+ * Observability cluster configuration - endpoint + credentials + OTEL index patterns
+ * Used for traces, logs, and metrics from OpenTelemetry instrumentation
+ */
+export interface ObservabilityClusterConfig extends ClusterConfig {
+  indexes?: {
+    traces?: string;   // default: 'otel-v1-apm-span-*'
+    logs?: string;     // default: 'ml-commons-logs-*'
+    metrics?: string;  // default: 'otel-v1-apm-service-map*'
+  };
+}
+
+/**
+ * Full data source configuration stored in localStorage
+ * Both storage and observability can point to the same or different clusters
+ */
+export interface DataSourceConfig {
+  storage?: StorageClusterConfig;
+  observability?: ObservabilityClusterConfig;
+}
+
+/**
+ * Adapter type for data sources
+ * 'opensearch' is the default, 'memory' is for testing/demo
+ */
+export type DataSourceAdapterType = 'opensearch' | 'memory';

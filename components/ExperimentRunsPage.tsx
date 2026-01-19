@@ -571,6 +571,7 @@ export const ExperimentRunsPage: React.FC = () => {
                               <Calendar size={12} />
                               {formatDate(run.createdAt)}
                             </span>
+                            <span>Agent: {DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey)?.name || run.agentKey}</span>
                             <span>Model: {getModelName(run.modelId)}</span>
                           </div>
                         </div>

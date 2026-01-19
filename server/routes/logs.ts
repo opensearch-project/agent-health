@@ -9,27 +9,36 @@
 
 import { Request, Response, Router } from 'express';
 import { fetchLogs, fetchLogsLegacy } from '../services/logsService';
+import { resolveObservabilityConfig } from '../middleware/dataSourceConfig.js';
 
 const router = Router();
 
 /**
  * POST /api/logs - Fetch agent execution logs from OpenSearch
- * Uses server-side credentials to avoid CORS issues
+ * Uses headers for config, falls back to env vars
  */
 router.post('/api/logs', async (req: Request, res: Response) => {
   try {
     const { runId, query, startTime, endTime, size = 100 } = req.body;
 
-    // Get OpenSearch configuration
-    const endpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;
-    const username = process.env.OPENSEARCH_LOGS_USERNAME;
-    const password = process.env.OPENSEARCH_LOGS_PASSWORD;
-    const indexPattern = process.env.OPENSEARCH_LOGS_INDEX || 'ml-commons-logs-*';
+    // Get OpenSearch configuration from headers or env vars
+    const config = resolveObservabilityConfig(req);
+
+    if (!config) {
+      return res.status(503).json({
+        error: 'Observability data source not configured'
+      });
+    }
 
     // Call logs service to fetch logs
     const result = await fetchLogs(
       { runId, query, startTime, endTime, size },
-      { endpoint, username, password, indexPattern }
+      {
+        endpoint: config.endpoint,
+        username: config.username,
+        password: config.password,
+        indexPattern: config.indexes?.logs || 'ml-commons-logs-*'
+      }
     );
 
     res.json(result);
