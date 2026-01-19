@@ -100,13 +100,15 @@ router.post('/api/judge', async (req: Request, res: Response) => {
 
     // For now, only bedrock is supported for real evaluation
     // Future: add ollama, openai providers here
-    console.log('[JudgeAPI] Using provider:', provider, 'model:', modelId);
+    // Use the resolved model_id from config, not the key
+    const resolvedModelId = modelConfig?.model_id || modelId;
+    console.log('[JudgeAPI] Using provider:', provider, 'model:', resolvedModelId);
     const result = await evaluateTrajectory({
       trajectory,
       expectedOutcomes,
       expectedTrajectory,
       logs
-    }, modelId);
+    }, resolvedModelId);
 
     res.json(result);
 

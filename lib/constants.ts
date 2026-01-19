@@ -8,19 +8,11 @@ import { ENV_CONFIG, buildMLCommonsHeaders } from '@/lib/config';
 
 // Model pricing per 1M tokens (USD)
 export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  // Claude 4.x models
-  'anthropic.claude-sonnet-4-20250514-v1:0': { input: 3.0, output: 15.0 },
+  // Claude 4.x models (with inference profile prefix)
+  'us.anthropic.claude-sonnet-4-20250514-v1:0': { input: 3.0, output: 15.0 },
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0': { input: 3.0, output: 15.0 },
-  'anthropic.claude-haiku-4-5-20250514-v1:0': { input: 0.80, output: 4.0 },
-  'global.anthropic.claude-opus-4-5-20251101-v1:0': { input: 15.0, output: 75.0 },
   // Claude 3.x models
-  'anthropic.claude-3-5-sonnet-20241022-v2:0': { input: 3.0, output: 15.0 },
-  'anthropic.claude-3-7-sonnet-20250219-v1:0': { input: 3.0, output: 15.0 },
-  // Generic model name patterns
-  'anthropic.claude-sonnet-4': { input: 3.0, output: 15.0 },
-  'anthropic.claude-sonnet-4.5': { input: 3.0, output: 15.0 },
-  'anthropic.claude-haiku-4': { input: 0.80, output: 4.0 },
-  'anthropic.claude-opus-4.5': { input: 15.0, output: 75.0 },
+  'us.anthropic.claude-3-5-haiku-20241022-v1:0': { input: 0.80, output: 4.0 },
   // Default fallback
   'default': { input: 3.0, output: 15.0 },
 };
@@ -43,9 +35,11 @@ export const DEFAULT_CONFIG: AppConfig = {
       description: "Langgraph AG-UI agent server",
       models: [
         "claude-sonnet-4.5",
+        "claude-sonnet-4",
+        "claude-haiku-3.5",
       ],
-      headers: {}, // No headers needed for Langgraph
-      useTraces: true, // Use traces instead of logs for evaluation (traces take ~5 min to propagate)
+      headers: {},
+      useTraces: true,
     },
     {
       key: "mlcommons-local",
@@ -53,12 +47,9 @@ export const DEFAULT_CONFIG: AppConfig = {
       endpoint: ENV_CONFIG.mlcommonsEndpoint,
       description: "Local OpenSearch ML-Commons conversational agent",
       models: [
-        "claude-sonnet-4",
         "claude-sonnet-4.5",
-        "claude-opus-4.5",
-        "claude-sonnet-3.5",
-        "claude-sonnet-3.7",
-        "claude-haiku-4.5"
+        "claude-sonnet-4",
+        "claude-haiku-3.5",
       ],
       headers: buildMLCommonsHeaders(),
       useTraces: true,
@@ -69,12 +60,9 @@ export const DEFAULT_CONFIG: AppConfig = {
       endpoint: ENV_CONFIG.holmesGptEndpoint,
       description: "HolmesGPT AI-powered RCA agent (AG-UI)",
       models: [
-        "claude-sonnet-4",
         "claude-sonnet-4.5",
-        "claude-opus-4.5",
-        "claude-sonnet-3.5",
-        "claude-sonnet-3.7",
-        "claude-haiku-4.5"
+        "claude-sonnet-4",
+        "claude-haiku-3.5",
       ],
       headers: {},
       useTraces: true
@@ -88,13 +76,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       context_window: 200000,
       max_output_tokens: 4096
     },
-    "claude-sonnet-4": {
-      model_id: "anthropic.claude-sonnet-4-20250514-v1:0",
-      display_name: "Claude Sonnet 4",
-      provider: "bedrock",
-      context_window: 200000,
-      max_output_tokens: 4096
-    },
     "claude-sonnet-4.5": {
       model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
       display_name: "Claude Sonnet 4.5",
@@ -102,34 +83,20 @@ export const DEFAULT_CONFIG: AppConfig = {
       context_window: 200000,
       max_output_tokens: 4096
     },
-    "claude-haiku-4.5": {
-      model_id: "anthropic.claude-haiku-4-5-20250514-v1:0",
-      display_name: "Claude Haiku 4.5",
+    "claude-sonnet-4": {
+      model_id: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+      display_name: "Claude Sonnet 4",
       provider: "bedrock",
       context_window: 200000,
       max_output_tokens: 4096
     },
-    "claude-sonnet-3.5": {
-      model_id: "anthropic.claude-3-5-sonnet-20241022-v2:0",
-      display_name: "Claude Sonnet 3.5",
+    "claude-haiku-3.5": {
+      model_id: "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+      display_name: "Claude Haiku 3.5",
       provider: "bedrock",
       context_window: 200000,
-      max_output_tokens: 8192
+      max_output_tokens: 4096
     },
-    "claude-sonnet-3.7": {
-      model_id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-      display_name: "Claude Sonnet 3.7",
-      provider: "bedrock",
-      context_window: 200000,
-      max_output_tokens: 8192
-    },
-    "claude-opus-4.5": {
-      model_id: "global.anthropic.claude-opus-4-5-20251101-v1:0",
-      display_name: "Claude Opus 4.5",
-      provider: "bedrock",
-      context_window: 200000,
-      max_output_tokens: 32000
-    }
   },
   defaults: {
     retry_attempts: 2,

@@ -8,6 +8,7 @@
  */
 
 import { Span, TimeRange, TraceQueryParams, TraceSearchResult } from '@/types';
+import { getObservabilityConfigHeaders } from '@/lib/dataSourceConfig';
 
 // Re-export trace grouping utilities
 export { groupSpansByTrace, getSpansForTrace } from './traceGrouping';
@@ -27,12 +28,26 @@ function getApiBaseUrl(): string {
 }
 
 /**
+ * Get observability headers (only in browser context)
+ */
+function getObservabilityHeaders(): Record<string, string> {
+  const isServerSide = typeof window === 'undefined';
+  if (isServerSide) {
+    return {}; // No localStorage on server side
+  }
+  return getObservabilityConfigHeaders();
+}
+
+/**
  * Fetch traces from the backend API
  */
 export async function fetchTraces(params: TraceQueryParams): Promise<TraceSearchResult> {
   const response = await fetch(`${getApiBaseUrl()}/api/traces`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...getObservabilityHeaders(),
+    },
     body: JSON.stringify(params)
   });
 
@@ -84,7 +99,9 @@ export async function fetchRecentTraces(options: {
  * Check traces API health
  */
 export async function checkTracesHealth(): Promise<{ status: string; index?: string; error?: string }> {
-  const response = await fetch(`${getApiBaseUrl()}/api/traces/health`);
+  const response = await fetch(`${getApiBaseUrl()}/api/traces/health`, {
+    headers: getObservabilityHeaders(),
+  });
   return response.json();
 }
 

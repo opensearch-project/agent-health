@@ -11,6 +11,8 @@
 import { Router, Request, Response } from 'express';
 import { getOpenSearchClient, isStorageConfigured, INDEXES } from '../../services/opensearchClient';
 import { INDEX_MAPPINGS } from '../../constants/indexMappings';
+import { testStorageConnection } from '../../adapters/index.js';
+import { resolveStorageConfig } from '../../middleware/dataSourceConfig.js';
 
 const router = Router();
 
@@ -24,18 +26,56 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<any>) {
 // Health Check
 // ============================================================================
 
-router.get('/api/storage/health', async (_req: Request, res: Response) => {
+router.get('/api/storage/health', async (req: Request, res: Response) => {
   try {
-    if (!isStorageConfigured()) {
-      return res.json({ status: 'not_configured', message: 'Storage environment variables not set' });
+    // Try to resolve config from headers or env vars
+    const config = resolveStorageConfig(req);
+
+    if (!config) {
+      return res.json({ status: 'not_configured', message: 'Storage not configured' });
     }
 
-    const client = getOpenSearchClient();
-    const result = await client.cluster.health();
-    res.json({ status: 'ok', cluster: result.body });
+    // Use the test connection function for health check
+    const result = await testStorageConnection(config);
+    if (result.status === 'ok') {
+      res.json({
+        status: 'ok',
+        cluster: {
+          name: result.clusterName,
+          status: result.clusterStatus,
+        },
+      });
+    } else {
+      res.json({ status: 'error', error: result.message });
+    }
   } catch (error: any) {
     console.error('[StorageAPI] Health check failed:', error.message);
     res.json({ status: 'error', error: error.message });
+  }
+});
+
+// ============================================================================
+// Test Connection
+// ============================================================================
+
+/**
+ * POST /api/storage/test-connection
+ * Test connection to a storage cluster with provided credentials
+ * Body: { endpoint, username?, password? }
+ */
+router.post('/api/storage/test-connection', async (req: Request, res: Response) => {
+  try {
+    const { endpoint, username, password } = req.body;
+
+    if (!endpoint) {
+      return res.status(400).json({ status: 'error', message: 'Endpoint is required' });
+    }
+
+    const result = await testStorageConnection({ endpoint, username, password });
+    res.json(result);
+  } catch (error: any) {
+    console.error('[StorageAPI] Test connection failed:', error.message);
+    res.status(500).json({ status: 'error', message: error.message });
   }
 });
 

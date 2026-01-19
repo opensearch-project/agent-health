@@ -11,11 +11,13 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
+import { getStorageConfigHeaders } from '@/lib/dataSourceConfig';
 
 const STORAGE_BASE_URL = ENV_CONFIG.storageApiUrl;
 
 /**
  * Generic HTTP client for storage API
+ * Includes storage config headers from localStorage when available
  */
 async function request<T>(
   method: string,
@@ -24,10 +26,14 @@ async function request<T>(
 ): Promise<T> {
   const url = `${STORAGE_BASE_URL}${endpoint}`;
 
+  // Get storage config headers from localStorage (if configured)
+  const storageHeaders = getStorageConfigHeaders();
+
   const options: RequestInit = {
     method,
     headers: {
       'Content-Type': 'application/json',
+      ...storageHeaders,
     },
   };
 

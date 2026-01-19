@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, Trash2, Database, CheckCircle2, XCircle, Upload, Download, Loader2, Server, Plus, Edit2, X, Save, ExternalLink } from 'lucide-react';
+import { AlertTriangle, Trash2, Database, CheckCircle2, XCircle, Upload, Download, Loader2, Server, Plus, Edit2, X, Save, ExternalLink, Eye, EyeOff, ChevronDown, ChevronRight } from 'lucide-react';
 import { isDebugEnabled, setDebugEnabled } from '@/lib/debug';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
@@ -21,7 +21,14 @@ import {
   clearLocalStorageData,
   MigrationStats,
 } from '@/services/storage';
+import {
+  loadDataSourceConfig,
+  saveStorageConfig,
+  saveObservabilityConfig,
+  clearDataSourceConfig,
+} from '@/lib/dataSourceConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { ENV_CONFIG } from '@/lib/config';
 
 interface StorageStats {
   testCases: number;
@@ -74,6 +81,28 @@ export const SettingsPage: React.FC = () => {
   const [newEndpointUrl, setNewEndpointUrl] = useState('');
   const [endpointUrlError, setEndpointUrlError] = useState<string | null>(null);
 
+  // Data source configuration state
+  const [storageConfig, setStorageConfigState] = useState({
+    endpoint: '',
+    username: '',
+    password: '',
+  });
+  const [observabilityConfig, setObservabilityConfigState] = useState({
+    endpoint: '',
+    username: '',
+    password: '',
+    tracesIndex: '',
+    logsIndex: '',
+    metricsIndex: '',
+  });
+  const [showStoragePassword, setShowStoragePassword] = useState(false);
+  const [showObservabilityPassword, setShowObservabilityPassword] = useState(false);
+  const [showAdvancedIndexes, setShowAdvancedIndexes] = useState(false);
+  const [storageTestStatus, setStorageTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [storageTestMessage, setStorageTestMessage] = useState('');
+  const [observabilityTestStatus, setObservabilityTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [observabilityTestMessage, setObservabilityTestMessage] = useState('');
+
   const loadStorageStats = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -114,6 +143,26 @@ export const SettingsPage: React.FC = () => {
 
     // Load custom agent endpoints
     setCustomEndpoints(loadCustomEndpoints());
+
+    // Load data source configuration from localStorage
+    const savedConfig = loadDataSourceConfig();
+    if (savedConfig?.storage) {
+      setStorageConfigState({
+        endpoint: savedConfig.storage.endpoint || '',
+        username: savedConfig.storage.username || '',
+        password: savedConfig.storage.password || '',
+      });
+    }
+    if (savedConfig?.observability) {
+      setObservabilityConfigState({
+        endpoint: savedConfig.observability.endpoint || '',
+        username: savedConfig.observability.username || '',
+        password: savedConfig.observability.password || '',
+        tracesIndex: savedConfig.observability.indexes?.traces || '',
+        logsIndex: savedConfig.observability.indexes?.logs || '',
+        metricsIndex: savedConfig.observability.indexes?.metrics || '',
+      });
+    }
   }, [loadStorageStats]);
 
   // Validate URL format
@@ -256,6 +305,163 @@ export const SettingsPage: React.FC = () => {
     setLocalCounts(null);
     setMigrationResult(null);
     setMigrationStatus('');
+  };
+
+  // Data source configuration handlers
+  const handleTestStorageConnection = async () => {
+    if (!storageConfig.endpoint) {
+      setStorageTestStatus('error');
+      setStorageTestMessage('Endpoint URL is required');
+      return;
+    }
+
+    setStorageTestStatus('testing');
+    setStorageTestMessage('Testing connection...');
+
+    try {
+      const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/test-connection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: storageConfig.endpoint,
+          username: storageConfig.username || undefined,
+          password: storageConfig.password || undefined,
+        }),
+      });
+
+      const result = await response.json();
+      if (result.status === 'ok') {
+        setStorageTestStatus('success');
+        setStorageTestMessage(`Connected to ${result.clusterName || 'cluster'} (${result.clusterStatus})`);
+      } else {
+        setStorageTestStatus('error');
+        setStorageTestMessage(result.message || 'Connection failed');
+      }
+    } catch (error) {
+      setStorageTestStatus('error');
+      setStorageTestMessage(error instanceof Error ? error.message : 'Connection test failed');
+    }
+  };
+
+  const handleSaveStorageConfig = () => {
+    if (!storageConfig.endpoint) {
+      alert('Endpoint URL is required');
+      return;
+    }
+
+    saveStorageConfig({
+      endpoint: storageConfig.endpoint,
+      username: storageConfig.username || undefined,
+      password: storageConfig.password || undefined,
+    });
+    setStorageTestStatus('idle');
+    setStorageTestMessage('Configuration saved');
+    setTimeout(() => setStorageTestMessage(''), 3000);
+    loadStorageStats(); // Refresh stats with new config
+  };
+
+  const handleClearStorageConfig = () => {
+    if (!window.confirm('Clear storage configuration? Will fall back to environment variables.')) {
+      return;
+    }
+    const savedConfig = loadDataSourceConfig();
+    clearDataSourceConfig();
+    // Restore observability config if it existed
+    if (savedConfig?.observability) {
+      saveObservabilityConfig(savedConfig.observability);
+    }
+    setStorageConfigState({ endpoint: '', username: '', password: '' });
+    setStorageTestStatus('idle');
+    setStorageTestMessage('Configuration cleared - using environment variables');
+    setTimeout(() => setStorageTestMessage(''), 3000);
+    loadStorageStats();
+  };
+
+  const handleTestObservabilityConnection = async () => {
+    if (!observabilityConfig.endpoint) {
+      setObservabilityTestStatus('error');
+      setObservabilityTestMessage('Endpoint URL is required');
+      return;
+    }
+
+    setObservabilityTestStatus('testing');
+    setObservabilityTestMessage('Testing connection...');
+
+    try {
+      const response = await fetch(`${ENV_CONFIG.backendUrl}/api/observability/test-connection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: observabilityConfig.endpoint,
+          username: observabilityConfig.username || undefined,
+          password: observabilityConfig.password || undefined,
+          indexes: {
+            traces: observabilityConfig.tracesIndex || undefined,
+            logs: observabilityConfig.logsIndex || undefined,
+            metrics: observabilityConfig.metricsIndex || undefined,
+          },
+        }),
+      });
+
+      const result = await response.json();
+      if (result.status === 'ok') {
+        setObservabilityTestStatus('success');
+        const msg = result.message
+          ? `Connected to ${result.clusterName || 'cluster'}. ${result.message}`
+          : `Connected to ${result.clusterName || 'cluster'} (${result.clusterStatus})`;
+        setObservabilityTestMessage(msg);
+      } else {
+        setObservabilityTestStatus('error');
+        setObservabilityTestMessage(result.message || 'Connection failed');
+      }
+    } catch (error) {
+      setObservabilityTestStatus('error');
+      setObservabilityTestMessage(error instanceof Error ? error.message : 'Connection test failed');
+    }
+  };
+
+  const handleSaveObservabilityConfig = () => {
+    if (!observabilityConfig.endpoint) {
+      alert('Endpoint URL is required');
+      return;
+    }
+
+    saveObservabilityConfig({
+      endpoint: observabilityConfig.endpoint,
+      username: observabilityConfig.username || undefined,
+      password: observabilityConfig.password || undefined,
+      indexes: {
+        traces: observabilityConfig.tracesIndex || undefined,
+        logs: observabilityConfig.logsIndex || undefined,
+        metrics: observabilityConfig.metricsIndex || undefined,
+      },
+    });
+    setObservabilityTestStatus('idle');
+    setObservabilityTestMessage('Configuration saved');
+    setTimeout(() => setObservabilityTestMessage(''), 3000);
+  };
+
+  const handleClearObservabilityConfig = () => {
+    if (!window.confirm('Clear observability configuration? Will fall back to environment variables.')) {
+      return;
+    }
+    const savedConfig = loadDataSourceConfig();
+    clearDataSourceConfig();
+    // Restore storage config if it existed
+    if (savedConfig?.storage) {
+      saveStorageConfig(savedConfig.storage);
+    }
+    setObservabilityConfigState({
+      endpoint: '',
+      username: '',
+      password: '',
+      tracesIndex: '',
+      logsIndex: '',
+      metricsIndex: '',
+    });
+    setObservabilityTestStatus('idle');
+    setObservabilityTestMessage('Configuration cleared - using environment variables');
+    setTimeout(() => setObservabilityTestMessage(''), 3000);
   };
 
   return (
@@ -480,6 +686,291 @@ export const SettingsPage: React.FC = () => {
               For authentication, use environment variables in the server configuration.
             </AlertDescription>
           </Alert>
+        </CardContent>
+      </Card>
+
+      {/* Evaluation Storage Configuration */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database size={18} />
+            Evaluation Storage
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Test cases, experiments, and run results
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Configure the OpenSearch cluster for storing evaluation data. Leave empty to use environment variables.
+          </p>
+
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="storage-endpoint" className="text-xs">Endpoint URL</Label>
+              <Input
+                id="storage-endpoint"
+                placeholder="https://opensearch.example.com:9200"
+                value={storageConfig.endpoint}
+                onChange={(e) => setStorageConfigState({ ...storageConfig, endpoint: e.target.value })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="storage-username" className="text-xs">Username (optional)</Label>
+                <Input
+                  id="storage-username"
+                  placeholder="Leave blank to use env var"
+                  value={storageConfig.username}
+                  onChange={(e) => setStorageConfigState({ ...storageConfig, username: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="storage-password" className="text-xs">Password (optional)</Label>
+                <div className="relative">
+                  <Input
+                    id="storage-password"
+                    type={showStoragePassword ? 'text' : 'password'}
+                    placeholder="Leave blank to use env var"
+                    value={storageConfig.password}
+                    onChange={(e) => setStorageConfigState({ ...storageConfig, password: e.target.value })}
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowStoragePassword(!showStoragePassword)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showStoragePassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Security warning */}
+          {(storageConfig.username || storageConfig.password) && (
+            <Alert className="bg-amber-900/20 border-amber-700/30">
+              <AlertTriangle className="h-4 w-4 text-amber-400" />
+              <AlertDescription className="text-xs text-amber-400">
+                Credentials stored in browser localStorage are visible to browser extensions and JavaScript.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Test connection status */}
+          {storageTestMessage && (
+            <div className={`flex items-center gap-2 text-sm ${
+              storageTestStatus === 'success' ? 'text-green-400' :
+              storageTestStatus === 'error' ? 'text-red-400' :
+              storageTestStatus === 'testing' ? 'text-blue-400' : 'text-muted-foreground'
+            }`}>
+              {storageTestStatus === 'testing' && <Loader2 size={14} className="animate-spin" />}
+              {storageTestStatus === 'success' && <CheckCircle2 size={14} />}
+              {storageTestStatus === 'error' && <XCircle size={14} />}
+              {storageTestMessage}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleTestStorageConnection}
+              disabled={!storageConfig.endpoint || storageTestStatus === 'testing'}
+            >
+              {storageTestStatus === 'testing' ? (
+                <>
+                  <Loader2 size={14} className="mr-1 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                'Test Connection'
+              )}
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSaveStorageConfig}
+              disabled={!storageConfig.endpoint}
+              className="bg-opensearch-blue hover:bg-blue-600"
+            >
+              <Save size={14} className="mr-1" />
+              Save
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearStorageConfig}
+              disabled={!storageConfig.endpoint}
+            >
+              <Trash2 size={14} className="mr-1" />
+              Clear
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Observability Data Source Configuration */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Server size={18} />
+            Observability Data Source
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            OTEL instrumentation for traces, logs, and metrics
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Configure the OpenSearch cluster for observability data. Can be the same as or different from evaluation storage.
+          </p>
+
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="obs-endpoint" className="text-xs">Endpoint URL</Label>
+              <Input
+                id="obs-endpoint"
+                placeholder="https://opensearch.example.com:9200"
+                value={observabilityConfig.endpoint}
+                onChange={(e) => setObservabilityConfigState({ ...observabilityConfig, endpoint: e.target.value })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="obs-username" className="text-xs">Username (optional)</Label>
+                <Input
+                  id="obs-username"
+                  placeholder="Leave blank to use env var"
+                  value={observabilityConfig.username}
+                  onChange={(e) => setObservabilityConfigState({ ...observabilityConfig, username: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="obs-password" className="text-xs">Password (optional)</Label>
+                <div className="relative">
+                  <Input
+                    id="obs-password"
+                    type={showObservabilityPassword ? 'text' : 'password'}
+                    placeholder="Leave blank to use env var"
+                    value={observabilityConfig.password}
+                    onChange={(e) => setObservabilityConfigState({ ...observabilityConfig, password: e.target.value })}
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowObservabilityPassword(!showObservabilityPassword)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showObservabilityPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Advanced: Index Patterns */}
+            <div className="border-t pt-3 mt-3">
+              <button
+                type="button"
+                onClick={() => setShowAdvancedIndexes(!showAdvancedIndexes)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {showAdvancedIndexes ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                Advanced: Index Patterns
+              </button>
+              {showAdvancedIndexes && (
+                <div className="mt-3 space-y-3 pl-4 border-l-2 border-muted">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="obs-traces-index" className="text-xs">Traces Index</Label>
+                    <Input
+                      id="obs-traces-index"
+                      placeholder="otel-v1-apm-span-* (default)"
+                      value={observabilityConfig.tracesIndex}
+                      onChange={(e) => setObservabilityConfigState({ ...observabilityConfig, tracesIndex: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="obs-logs-index" className="text-xs">Logs Index</Label>
+                    <Input
+                      id="obs-logs-index"
+                      placeholder="ml-commons-logs-* (default)"
+                      value={observabilityConfig.logsIndex}
+                      onChange={(e) => setObservabilityConfigState({ ...observabilityConfig, logsIndex: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="obs-metrics-index" className="text-xs">Metrics Index</Label>
+                    <Input
+                      id="obs-metrics-index"
+                      placeholder="otel-v1-apm-service-map* (default)"
+                      value={observabilityConfig.metricsIndex}
+                      onChange={(e) => setObservabilityConfigState({ ...observabilityConfig, metricsIndex: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Security warning */}
+          {(observabilityConfig.username || observabilityConfig.password) && (
+            <Alert className="bg-amber-900/20 border-amber-700/30">
+              <AlertTriangle className="h-4 w-4 text-amber-400" />
+              <AlertDescription className="text-xs text-amber-400">
+                Credentials stored in browser localStorage are visible to browser extensions and JavaScript.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Test connection status */}
+          {observabilityTestMessage && (
+            <div className={`flex items-center gap-2 text-sm ${
+              observabilityTestStatus === 'success' ? 'text-green-400' :
+              observabilityTestStatus === 'error' ? 'text-red-400' :
+              observabilityTestStatus === 'testing' ? 'text-blue-400' : 'text-muted-foreground'
+            }`}>
+              {observabilityTestStatus === 'testing' && <Loader2 size={14} className="animate-spin" />}
+              {observabilityTestStatus === 'success' && <CheckCircle2 size={14} />}
+              {observabilityTestStatus === 'error' && <XCircle size={14} />}
+              {observabilityTestMessage}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleTestObservabilityConnection}
+              disabled={!observabilityConfig.endpoint || observabilityTestStatus === 'testing'}
+            >
+              {observabilityTestStatus === 'testing' ? (
+                <>
+                  <Loader2 size={14} className="mr-1 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                'Test Connection'
+              )}
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSaveObservabilityConfig}
+              disabled={!observabilityConfig.endpoint}
+              className="bg-opensearch-blue hover:bg-blue-600"
+            >
+              <Save size={14} className="mr-1" />
+              Save
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearObservabilityConfig}
+              disabled={!observabilityConfig.endpoint}
+            >
+              <Trash2 size={14} className="mr-1" />
+              Clear
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

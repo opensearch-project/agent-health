@@ -80,11 +80,15 @@ class AsyncExperimentStorage {
   // ==================== Experiment CRUD Operations ====================
 
   /**
-   * Get all experiments
+   * Get all experiments, sorted by createdAt descending
    */
   async getAll(): Promise<Experiment[]> {
     const stored = await opensearchExperiments.getAll();
-    return stored.map(toExperiment);
+    const experiments = stored.map(toExperiment);
+    // Sort by createdAt descending (most recent first)
+    return experiments.sort((a, b) =>
+      new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
   }
 
   /**
