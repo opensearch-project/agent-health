@@ -10,6 +10,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Added
+- Request-scoped storage client middleware for dynamic data source configuration
 - Comprehensive unit tests for flow transformation and trace polling
 - Unit tests for trace statistics, utility functions, and trajectory diff service
 - Tests for opensearchClient storage module
