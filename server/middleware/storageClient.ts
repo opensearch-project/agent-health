@@ -130,10 +130,11 @@ export function getStorageClient(req: Request): Client | null {
 
 /**
  * Index names for storage (same as opensearchClient.ts for consistency)
+ * Note: benchmarks key uses old index name 'evals_experiments' for data compatibility
  */
 export const INDEXES = {
   testCases: 'evals_test_cases',
-  experiments: 'evals_experiments',
+  benchmarks: 'evals_experiments',
   runs: 'evals_runs',
   analytics: 'evals_analytics',
 } as const;

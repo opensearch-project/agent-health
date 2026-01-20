@@ -13,7 +13,7 @@
  *   npm run dev:server
  *
  * Run tests:
- *   npm test -- --testPathPattern=experimentApi
+ *   npm test -- --testPathPattern=benchmarkApi
  */
 
 const BASE_URL = 'http://localhost:4001';
@@ -113,9 +113,9 @@ const deleteExperiment = async (id: string): Promise<void> => {
 };
 
 /**
- * Implementation of cancelExperimentRun matching the client API
+ * Implementation of cancelBenchmarkRun matching the client API
  */
-const cancelExperimentRun = async (
+const cancelBenchmarkRun = async (
   experimentId: string,
   runId: string
 ): Promise<boolean> => {
@@ -145,7 +145,7 @@ describe('Experiment API Client Integration Tests', () => {
     }
   });
 
-  describe('cancelExperimentRun', () => {
+  describe('cancelBenchmarkRun', () => {
     let testCaseId: string | null = null;
     let experimentId: string | null = null;
 
@@ -157,7 +157,7 @@ describe('Experiment API Client Integration Tests', () => {
       testCaseId = testCase?.id || null;
 
       if (testCaseId) {
-        const experiment = await createExperiment('Cancel API Test Experiment', [testCaseId]);
+        const experiment = await createExperiment('Cancel API Test Benchmark', [testCaseId]);
         experimentId = experiment?.id || null;
       }
     });
@@ -173,7 +173,7 @@ describe('Experiment API Client Integration Tests', () => {
         return;
       }
 
-      await expect(cancelExperimentRun(experimentId, 'non-existent-run-id'))
+      await expect(cancelBenchmarkRun(experimentId, 'non-existent-run-id'))
         .rejects.toThrow('Run not found or already completed');
     });
 
@@ -230,7 +230,7 @@ describe('Experiment API Client Integration Tests', () => {
 
       // Cancel using the client API function
       try {
-        const cancelled = await cancelExperimentRun(experimentId, runId);
+        const cancelled = await cancelBenchmarkRun(experimentId, runId);
         expect(cancelled).toBe(true);
         console.log('[Cancel Client API] Successfully cancelled run');
       } catch (error: any) {
@@ -288,7 +288,7 @@ describe('Experiment API Client Integration Tests', () => {
       }
 
       try {
-        const result = await cancelExperimentRun(experimentId, runId);
+        const result = await cancelBenchmarkRun(experimentId, runId);
         // The result should be a boolean
         expect(typeof result).toBe('boolean');
         if (result) {
@@ -319,7 +319,7 @@ describe('Experiment API Client Integration Tests', () => {
       }
 
       if (testCaseIds.length > 0) {
-        const experiment = await createExperiment('E2E Cancel Test Experiment', testCaseIds);
+        const experiment = await createExperiment('E2E Cancel Test Benchmark', testCaseIds);
         experimentId = experiment?.id || null;
       }
     });
@@ -385,7 +385,7 @@ describe('Experiment API Client Integration Tests', () => {
 
       // Cancel the run
       try {
-        const cancelled = await cancelExperimentRun(experimentId, runId);
+        const cancelled = await cancelBenchmarkRun(experimentId, runId);
         console.log(`[E2E Cancel] Cancellation result: ${cancelled}`);
 
         // Give a moment for cancellation to propagate

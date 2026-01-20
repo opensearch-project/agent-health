@@ -18,11 +18,11 @@ import {
 } from 'recharts';
 import { Loader2, Coins, Clock, Cpu, Wrench } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ExperimentRun, EvaluationReport } from '@/types';
+import { BenchmarkRun, EvaluationReport } from '@/types';
 import { fetchBatchMetrics, formatCost, formatTokens, formatDuration } from '@/services/metrics';
 
-interface ExperimentSummaryChartsProps {
-  runs: ExperimentRun[];
+interface BenchmarkSummaryChartsProps {
+  runs: BenchmarkRun[];
   reports: Record<string, EvaluationReport | null>;
 }
 
@@ -52,7 +52,7 @@ const COLORS = {
   bars: ['#3b82f6', '#015aa3', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4'],
 };
 
-export const ExperimentSummaryCharts: React.FC<ExperimentSummaryChartsProps> = ({
+export const BenchmarkSummaryCharts: React.FC<BenchmarkSummaryChartsProps> = ({
   runs,
   reports,
 }) => {
@@ -140,7 +140,7 @@ export const ExperimentSummaryCharts: React.FC<ExperimentSummaryChartsProps> = (
           error: null,
         });
       } catch (error) {
-        console.warn('[ExperimentSummaryCharts] Failed to fetch trace metrics:', error);
+        console.warn('[BenchmarkSummaryCharts] Failed to fetch trace metrics:', error);
         setTraceMetrics(prev => ({
           ...prev,
           isLoading: false,
@@ -362,3 +362,7 @@ export const ExperimentSummaryCharts: React.FC<ExperimentSummaryChartsProps> = (
     </div>
   );
 };
+
+// Backwards compatibility alias
+/** @deprecated Use BenchmarkSummaryCharts instead */
+export const ExperimentSummaryCharts = BenchmarkSummaryCharts;

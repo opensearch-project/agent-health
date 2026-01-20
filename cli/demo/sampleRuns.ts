@@ -311,18 +311,26 @@ export function getSampleRunsByTestCase(testCaseId: string): TestCaseRun[] {
 }
 
 /**
- * Get sample runs by experiment ID
+ * Get sample runs by benchmark ID
+ * Note: Uses experimentId field internally for data compatibility
  */
-export function getSampleRunsByExperiment(experimentId: string): TestCaseRun[] {
-  return SAMPLE_RUNS.filter(run => run.experimentId === experimentId);
+export function getSampleRunsByBenchmark(benchmarkId: string): TestCaseRun[] {
+  return SAMPLE_RUNS.filter(run => run.experimentId === benchmarkId);
 }
 
 /**
- * Get sample runs by experiment run ID
+ * Get sample runs by benchmark run ID
+ * Note: Uses experimentId/experimentRunId fields internally for data compatibility
  */
-export function getSampleRunsByExperimentRun(experimentId: string, experimentRunId: string): TestCaseRun[] {
-  return SAMPLE_RUNS.filter(run => run.experimentId === experimentId && run.experimentRunId === experimentRunId);
+export function getSampleRunsByBenchmarkRun(benchmarkId: string, benchmarkRunId: string): TestCaseRun[] {
+  return SAMPLE_RUNS.filter(run => run.experimentId === benchmarkId && run.experimentRunId === benchmarkRunId);
 }
+
+// Backwards compatibility aliases
+/** @deprecated Use getSampleRunsByBenchmark instead */
+export const getSampleRunsByExperiment = getSampleRunsByBenchmark;
+/** @deprecated Use getSampleRunsByBenchmarkRun instead */
+export const getSampleRunsByExperimentRun = getSampleRunsByBenchmarkRun;
 
 /**
  * Check if an ID is a sample run

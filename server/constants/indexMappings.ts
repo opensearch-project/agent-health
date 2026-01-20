@@ -65,7 +65,7 @@ export function getIndexMappings(): IndexMappings {
         },
       },
     },
-    [STORAGE_CONFIG.indexes.experiments]: {
+    [STORAGE_CONFIG.indexes.benchmarks]: {
       mappings: {
         properties: {
           id: { type: 'keyword' },

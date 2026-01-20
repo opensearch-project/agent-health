@@ -4,8 +4,8 @@
  */
 
 // @ts-nocheck - Test file uses simplified mock objects
-import { executeExperimentRun, cancelExperimentRun } from '@/services/client/experimentApi';
-import type { RunConfigInput, ExperimentRun, ExperimentProgress, ExperimentStartedEvent } from '@/types';
+import { executeBenchmarkRun, cancelBenchmarkRun } from '@/services/client/benchmarkApi';
+import type { RunConfigInput, BenchmarkRun, ExperimentProgress, ExperimentStartedEvent } from '@/types';
 
 // Helper to create a mock ReadableStream from SSE data chunks
 function createMockSSEStream(chunks: string[]): ReadableStream<Uint8Array> {
@@ -29,7 +29,7 @@ function sseData(data: unknown): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-describe('experimentApi', () => {
+describe('benchmarkApi', () => {
   let originalFetch: typeof global.fetch;
 
   beforeEach(() => {
@@ -41,14 +41,14 @@ describe('experimentApi', () => {
     global.fetch = originalFetch;
   });
 
-  describe('executeExperimentRun', () => {
+  describe('executeBenchmarkRun', () => {
     const mockRunConfig: RunConfigInput = {
       name: 'Test Run',
       agent: { key: 'test-agent', name: 'Test Agent' },
       model: { key: 'test-model', name: 'Test Model' },
     };
 
-    const mockCompletedRun: ExperimentRun = {
+    const mockCompletedRun: BenchmarkRun = {
       id: 'run-123',
       name: 'Test Run',
       createdAt: '2024-01-01T00:00:00Z',
@@ -74,7 +74,7 @@ describe('experimentApi', () => {
       const onProgress = jest.fn();
       const onStarted = jest.fn();
 
-      const result = await executeExperimentRun(
+      const result = await executeBenchmarkRun(
         'exp-123',
         mockRunConfig,
         onProgress,
@@ -82,7 +82,7 @@ describe('experimentApi', () => {
       );
 
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/storage/experiments/exp-123/execute',
+        '/api/storage/benchmarks/exp-123/execute',
         expect.objectContaining({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -108,8 +108,8 @@ describe('experimentApi', () => {
       const onProgress = jest.fn();
 
       await expect(
-        executeExperimentRun('exp-123', mockRunConfig, onProgress)
-      ).rejects.toThrow('Failed to start experiment run: Internal Server Error');
+        executeBenchmarkRun('exp-123', mockRunConfig, onProgress)
+      ).rejects.toThrow('Failed to start benchmark run: Internal Server Error');
     });
 
     it('should throw when no response body', async () => {
@@ -121,7 +121,7 @@ describe('experimentApi', () => {
       const onProgress = jest.fn();
 
       await expect(
-        executeExperimentRun('exp-123', mockRunConfig, onProgress)
+        executeBenchmarkRun('exp-123', mockRunConfig, onProgress)
       ).rejects.toThrow('No response body');
     });
 
@@ -139,7 +139,7 @@ describe('experimentApi', () => {
       const onProgress = jest.fn();
 
       await expect(
-        executeExperimentRun('exp-123', mockRunConfig, onProgress)
+        executeBenchmarkRun('exp-123', mockRunConfig, onProgress)
       ).rejects.toThrow('Test case not found');
     });
 
@@ -158,7 +158,7 @@ describe('experimentApi', () => {
       const onProgress = jest.fn();
 
       await expect(
-        executeExperimentRun('exp-123', mockRunConfig, onProgress)
+        executeBenchmarkRun('exp-123', mockRunConfig, onProgress)
       ).rejects.toThrow('Run completed without returning result');
     });
 
@@ -178,7 +178,7 @@ describe('experimentApi', () => {
 
       const onProgress = jest.fn();
 
-      const result = await executeExperimentRun('exp-123', mockRunConfig, onProgress);
+      const result = await executeBenchmarkRun('exp-123', mockRunConfig, onProgress);
 
       // Should complete successfully despite the split chunk
       expect(result).toEqual(mockCompletedRun);
@@ -198,7 +198,7 @@ describe('experimentApi', () => {
 
       const onProgress = jest.fn();
 
-      const result = await executeExperimentRun('exp-123', mockRunConfig, onProgress);
+      const result = await executeBenchmarkRun('exp-123', mockRunConfig, onProgress);
 
       expect(result).toEqual(mockCompletedRun);
     });
@@ -217,7 +217,7 @@ describe('experimentApi', () => {
       const onProgress = jest.fn();
 
       await expect(
-        executeExperimentRun('exp-123', mockRunConfig, onProgress)
+        executeBenchmarkRun('exp-123', mockRunConfig, onProgress)
       ).rejects.toThrow('Final error');
     });
 
@@ -235,7 +235,7 @@ describe('experimentApi', () => {
       const onProgress = jest.fn();
       const onStarted = jest.fn();
 
-      await executeExperimentRun('exp-123', mockRunConfig, onProgress, onStarted);
+      await executeBenchmarkRun('exp-123', mockRunConfig, onProgress, onStarted);
 
       expect(onStarted).toHaveBeenCalledWith({
         runId: 'run-123',
@@ -257,22 +257,22 @@ describe('experimentApi', () => {
       const onProgress = jest.fn();
 
       // Should not throw even without onStarted callback
-      const result = await executeExperimentRun('exp-123', mockRunConfig, onProgress);
+      const result = await executeBenchmarkRun('exp-123', mockRunConfig, onProgress);
       expect(result).toEqual(mockCompletedRun);
     });
   });
 
-  describe('cancelExperimentRun', () => {
+  describe('cancelBenchmarkRun', () => {
     it('should cancel run and return true on success', async () => {
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue({ cancelled: true }),
       });
 
-      const result = await cancelExperimentRun('exp-123', 'run-456');
+      const result = await cancelBenchmarkRun('exp-123', 'run-456');
 
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/storage/experiments/exp-123/cancel',
+        '/api/storage/benchmarks/exp-123/cancel',
         expect.objectContaining({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -289,7 +289,7 @@ describe('experimentApi', () => {
         json: jest.fn().mockResolvedValue({ cancelled: false }),
       });
 
-      const result = await cancelExperimentRun('exp-123', 'run-456');
+      const result = await cancelBenchmarkRun('exp-123', 'run-456');
 
       expect(result).toBe(false);
     });
@@ -302,7 +302,7 @@ describe('experimentApi', () => {
       });
 
       await expect(
-        cancelExperimentRun('exp-123', 'run-456')
+        cancelBenchmarkRun('exp-123', 'run-456')
       ).rejects.toThrow('Run not found');
     });
 
@@ -314,7 +314,7 @@ describe('experimentApi', () => {
       });
 
       await expect(
-        cancelExperimentRun('exp-123', 'run-456')
+        cancelBenchmarkRun('exp-123', 'run-456')
       ).rejects.toThrow('Internal Server Error');
     });
 
@@ -326,7 +326,7 @@ describe('experimentApi', () => {
       });
 
       await expect(
-        cancelExperimentRun('exp-123', 'run-456')
+        cancelBenchmarkRun('exp-123', 'run-456')
       ).rejects.toThrow('Failed to cancel run');
     });
   });

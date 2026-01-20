@@ -14,11 +14,11 @@ import { Progress } from '@/components/ui/progress';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { asyncExperimentStorage, asyncTestCaseStorage } from '@/services/storage';
-import { executeExperimentRun } from '@/services/client';
-import { Experiment, ExperimentRun, ExperimentProgress, TestCase } from '@/types';
-import { ExperimentEditor, RunConfigForExecution } from './ExperimentEditor';
-import { ExperimentResultsView } from './ExperimentResultsView';
+import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
+import { executeBenchmarkRun } from '@/services/client';
+import { Benchmark, BenchmarkRun, BenchmarkProgress, TestCase } from '@/types';
+import { BenchmarkEditor, RunConfigForExecution } from './BenchmarkEditor';
+import { BenchmarkResultsView } from './BenchmarkResultsView';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate } from '@/lib/utils';
 
@@ -31,15 +31,15 @@ interface UseCaseRunStatus {
 
 const POLL_INTERVAL_MS = 2000; // Poll every 2 seconds when running
 
-export const ExperimentsPage: React.FC = () => {
+export const BenchmarksPage: React.FC = () => {
   const navigate = useNavigate();
-  const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [editingExperiment, setEditingExperiment] = useState<Experiment | null>(null);
-  const [viewingResultsFor, setViewingResultsFor] = useState<Experiment | null>(null);
-  const [runningExperimentId, setRunningExperimentId] = useState<string | null>(null);
-  const [runProgress, setRunProgress] = useState<ExperimentProgress | null>(null);
+  const [editingBenchmark, setEditingBenchmark] = useState<Benchmark | null>(null);
+  const [viewingResultsFor, setViewingResultsFor] = useState<Benchmark | null>(null);
+  const [runningBenchmarkId, setRunningBenchmarkId] = useState<string | null>(null);
+  const [runProgress, setRunProgress] = useState<BenchmarkProgress | null>(null);
   const [useCaseStatuses, setUseCaseStatuses] = useState<UseCaseRunStatus[]>([]);
   const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null);
   const [editingDescriptionValue, setEditingDescriptionValue] = useState('');
@@ -52,7 +52,7 @@ export const ExperimentsPage: React.FC = () => {
 
   // Run configuration dialog state
   const [isRunConfigOpen, setIsRunConfigOpen] = useState(false);
-  const [runConfigExperiment, setRunConfigExperiment] = useState<Experiment | null>(null);
+  const [runConfigBenchmark, setRunConfigBenchmark] = useState<Benchmark | null>(null);
   const [runConfigValues, setRunConfigValues] = useState<RunConfigForExecution>({
     name: '',
     description: '',
@@ -60,30 +60,30 @@ export const ExperimentsPage: React.FC = () => {
     modelId: '',
   });
 
-  const loadExperiments = useCallback(async () => {
-    const exps = await asyncExperimentStorage.getAll();
-    setExperiments(exps);
+  const loadBenchmarks = useCallback(async () => {
+    const benchs = await asyncBenchmarkStorage.getAll();
+    setBenchmarks(benchs);
   }, []);
 
   useEffect(() => {
-    loadExperiments();
-  }, [loadExperiments]);
+    loadBenchmarks();
+  }, [loadBenchmarks]);
 
-  // Check if any experiments have server-side in-progress runs
-  const hasServerInProgressRuns = experiments.some(exp =>
-    exp.runs?.some(run => run.status === 'running')
+  // Check if any benchmarks have server-side in-progress runs
+  const hasServerInProgressRuns = benchmarks.some(bench =>
+    bench.runs?.some(run => run.status === 'running')
   );
 
-  // Polling effect: refresh experiment data when running OR when there are server-side in-progress runs
+  // Polling effect: refresh benchmark data when running OR when there are server-side in-progress runs
   useEffect(() => {
-    const shouldPoll = runningExperimentId || hasServerInProgressRuns;
+    const shouldPoll = runningBenchmarkId || hasServerInProgressRuns;
 
     if (shouldPoll) {
       // Use 5s polling for background sync (SSE disconnected), 2s for active runs
-      const interval = runningExperimentId ? POLL_INTERVAL_MS : 5000;
+      const interval = runningBenchmarkId ? POLL_INTERVAL_MS : 5000;
 
       pollIntervalRef.current = setInterval(() => {
-        loadExperiments();
+        loadBenchmarks();
       }, interval);
 
       // Polling active for background sync scenarios
@@ -100,42 +100,42 @@ export const ExperimentsPage: React.FC = () => {
         clearInterval(pollIntervalRef.current);
       }
     };
-  }, [runningExperimentId, hasServerInProgressRuns, loadExperiments]);
+  }, [runningBenchmarkId, hasServerInProgressRuns, loadBenchmarks]);
 
-  const handleNewExperiment = () => {
-    setEditingExperiment(null);
+  const handleNewBenchmark = () => {
+    setEditingBenchmark(null);
     setIsEditorOpen(true);
   };
 
-  const handleDeleteExperiment = async (exp: Experiment) => {
-    if (window.confirm(`Delete experiment "${exp.name}"? This will also delete all associated runs.`)) {
-      await asyncExperimentStorage.delete(exp.id);
-      loadExperiments();
+  const handleDeleteBenchmark = async (bench: Benchmark) => {
+    if (window.confirm(`Delete benchmark "${bench.name}"? This will also delete all associated runs.`)) {
+      await asyncBenchmarkStorage.delete(bench.id);
+      loadBenchmarks();
     }
   };
 
-  const handleSaveExperiment = async (exp: Experiment) => {
-    await asyncExperimentStorage.save(exp);
-    loadExperiments();
+  const handleSaveBenchmark = async (bench: Benchmark) => {
+    await asyncBenchmarkStorage.save(bench);
+    loadBenchmarks();
     setIsEditorOpen(false);
   };
 
-  // Handle creating and immediately running a new experiment with multiple runs
-  const handleSaveAndRun = async (exp: Experiment, runConfigs: RunConfigForExecution[]) => {
-    // Save the experiment first
-    await asyncExperimentStorage.save(exp);
-    loadExperiments();
+  // Handle creating and immediately running a new benchmark with multiple runs
+  const handleSaveAndRun = async (bench: Benchmark, runConfigs: RunConfigForExecution[]) => {
+    // Save the benchmark first
+    await asyncBenchmarkStorage.save(bench);
+    loadBenchmarks();
     setIsEditorOpen(false);
 
     // Start running
-    setRunningExperimentId(exp.id);
+    setRunningBenchmarkId(bench.id);
 
     // Execute each run sequentially
     for (let runIndex = 0; runIndex < runConfigs.length; runIndex++) {
       const runConfig = runConfigs[runIndex];
 
       // Initialize use case statuses for this run
-      const initialStatuses: UseCaseRunStatus[] = exp.testCaseIds.map(id => {
+      const initialStatuses: UseCaseRunStatus[] = bench.testCaseIds.map(id => {
         const testCase = testCases.find(tc => tc.id === id);
         return {
           id,
@@ -147,7 +147,7 @@ export const ExperimentsPage: React.FC = () => {
       setRunProgress(null);
 
       try {
-        const completedRun = await executeExperimentRun(exp.id, runConfig, (progress: ExperimentProgress) => {
+        const completedRun = await executeBenchmarkRun(bench.id, runConfig, (progress: BenchmarkProgress) => {
           setRunProgress(progress);
           // Update use case statuses based on progress
           setUseCaseStatuses(prev => prev.map((uc, index) => {
@@ -162,9 +162,9 @@ export const ExperimentsPage: React.FC = () => {
 
         // Mark all as completed when this run is done (server already saved the run)
         setUseCaseStatuses(prev => prev.map(uc => ({ ...uc, status: 'completed' as const })));
-        loadExperiments();
+        loadBenchmarks();
       } catch (error) {
-        console.error(`[ExperimentsPage] Error running experiment run ${runIndex + 1}:`, error);
+        console.error(`[BenchmarksPage] Error running benchmark run ${runIndex + 1}:`, error);
         // Mark current and remaining as failed
         setUseCaseStatuses(prev => prev.map(uc =>
           uc.status === 'pending' || uc.status === 'running'
@@ -175,19 +175,19 @@ export const ExperimentsPage: React.FC = () => {
       }
     }
 
-    setRunningExperimentId(null);
+    setRunningBenchmarkId(null);
     setRunProgress(null);
   };
 
-  const handleStartDescriptionEdit = (exp: Experiment) => {
-    setEditingDescriptionId(exp.id);
-    setEditingDescriptionValue(exp.description || '');
+  const handleStartDescriptionEdit = (bench: Benchmark) => {
+    setEditingDescriptionId(bench.id);
+    setEditingDescriptionValue(bench.description || '');
   };
 
-  const handleSaveDescription = async (exp: Experiment) => {
-    const updated = { ...exp, description: editingDescriptionValue || undefined, updatedAt: new Date().toISOString() };
-    await asyncExperimentStorage.save(updated);
-    loadExperiments();
+  const handleSaveDescription = async (bench: Benchmark) => {
+    const updated = { ...bench, description: editingDescriptionValue || undefined, updatedAt: new Date().toISOString() };
+    await asyncBenchmarkStorage.save(updated);
+    loadBenchmarks();
     setEditingDescriptionId(null);
   };
 
@@ -197,14 +197,14 @@ export const ExperimentsPage: React.FC = () => {
   };
 
   // Open run configuration dialog
-  const handleAddRun = (exp: Experiment) => {
-    if (runningExperimentId) {
-      alert('An experiment is already running. Please wait for it to complete.');
+  const handleAddRun = (bench: Benchmark) => {
+    if (runningBenchmarkId) {
+      alert('A benchmark is already running. Please wait for it to complete.');
       return;
     }
 
-    const latestRun = getLatestRun(exp);
-    const runNumber = (exp.runs?.length || 0) + 1;
+    const latestRun = getLatestRun(bench);
+    const runNumber = (bench.runs?.length || 0) + 1;
 
     // Pre-fill with latest run config if available, otherwise use defaults
     setRunConfigValues({
@@ -214,20 +214,20 @@ export const ExperimentsPage: React.FC = () => {
       modelId: latestRun?.modelId || Object.keys(DEFAULT_CONFIG.models)[0] || '',
       headers: latestRun?.headers,
     });
-    setRunConfigExperiment(exp);
+    setRunConfigBenchmark(bench);
     setIsRunConfigOpen(true);
   };
 
   // Execute the run with configured values
   const handleStartRun = async () => {
-    if (!runConfigExperiment) return;
+    if (!runConfigBenchmark) return;
 
-    const exp = runConfigExperiment;
+    const bench = runConfigBenchmark;
     setIsRunConfigOpen(false);
-    setRunConfigExperiment(null);
+    setRunConfigBenchmark(null);
 
     // Initialize use case statuses
-    const initialStatuses: UseCaseRunStatus[] = exp.testCaseIds.map(id => {
+    const initialStatuses: UseCaseRunStatus[] = bench.testCaseIds.map(id => {
       const testCase = testCases.find(tc => tc.id === id);
       return {
         id,
@@ -237,11 +237,11 @@ export const ExperimentsPage: React.FC = () => {
     });
     setUseCaseStatuses(initialStatuses);
 
-    setRunningExperimentId(exp.id);
+    setRunningBenchmarkId(bench.id);
     setRunProgress(null);
 
     try {
-      const completedRun = await executeExperimentRun(exp.id, runConfigValues, (progress: ExperimentProgress) => {
+      const completedRun = await executeBenchmarkRun(bench.id, runConfigValues, (progress: BenchmarkProgress) => {
         setRunProgress(progress);
         // Update use case statuses based on progress
         setUseCaseStatuses(prev => prev.map((uc, index) => {
@@ -256,9 +256,9 @@ export const ExperimentsPage: React.FC = () => {
 
       // Mark all as completed when done (server already saved the run)
       setUseCaseStatuses(prev => prev.map(uc => ({ ...uc, status: 'completed' as const })));
-      loadExperiments();
+      loadBenchmarks();
     } catch (error) {
-      console.error('Error running experiment:', error);
+      console.error('Error running benchmark:', error);
       // Mark current and remaining as failed
       setUseCaseStatuses(prev => prev.map(uc =>
         uc.status === 'pending' || uc.status === 'running'
@@ -266,32 +266,32 @@ export const ExperimentsPage: React.FC = () => {
           : uc
       ));
     } finally {
-      setRunningExperimentId(null);
+      setRunningBenchmarkId(null);
       setRunProgress(null);
     }
   };
 
-  const getUseCaseCount = (exp: Experiment) => {
-    return exp.testCaseIds.length;
+  const getUseCaseCount = (bench: Benchmark) => {
+    return bench.testCaseIds.length;
   };
 
-  const getRunNames = (exp: Experiment) => {
-    if (!exp.runs || exp.runs.length === 0) return 'No runs yet';
-    return exp.runs.map(r => r.name).join(', ');
+  const getRunNames = (bench: Benchmark) => {
+    if (!bench.runs || bench.runs.length === 0) return 'No runs yet';
+    return bench.runs.map(r => r.name).join(', ');
   };
 
-  const getLatestRun = (exp: Experiment): ExperimentRun | null => {
-    if (!exp.runs || exp.runs.length === 0) return null;
-    return exp.runs.reduce((latest, run) =>
+  const getLatestRun = (bench: Benchmark): BenchmarkRun | null => {
+    if (!bench.runs || bench.runs.length === 0) return null;
+    return bench.runs.reduce((latest, run) =>
       new Date(run.createdAt) > new Date(latest.createdAt) ? run : latest
     );
   };
 
-  // Show results view if viewing an experiment
+  // Show results view if viewing a benchmark
   if (viewingResultsFor) {
     return (
-      <ExperimentResultsView
-        experiment={viewingResultsFor}
+      <BenchmarkResultsView
+        benchmark={viewingResultsFor}
         onBack={() => setViewingResultsFor(null)}
       />
     );
@@ -302,44 +302,44 @@ export const ExperimentsPage: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
-          <h2 className="text-2xl font-bold">Experiments</h2>
+          <h2 className="text-2xl font-bold">Benchmarks</h2>
           <p className="text-xs text-muted-foreground mt-1">
-            {experiments.length} experiment{experiments.length !== 1 ? 's' : ''} created
+            {benchmarks.length} benchmark{benchmarks.length !== 1 ? 's' : ''} created
           </p>
         </div>
         <Button
-          onClick={handleNewExperiment}
+          onClick={handleNewBenchmark}
           className="bg-opensearch-blue hover:bg-blue-600 text-white"
         >
           <Plus size={18} className="mr-2" />
-          New Experiment
+          New Benchmark
         </Button>
       </div>
 
-      {/* Experiment List */}
+      {/* Benchmark List */}
       <div className="flex-1 overflow-y-auto space-y-4">
-        {experiments.length === 0 ? (
+        {benchmarks.length === 0 ? (
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <FlaskConical size={48} className="mb-4 opacity-20" />
-              <p className="text-lg font-medium">No experiments yet</p>
-              <p className="text-sm">Create your first experiment to compare agent runs</p>
+              <p className="text-lg font-medium">No benchmarks yet</p>
+              <p className="text-sm">Create your first benchmark to compare agent runs</p>
               <Button
-                onClick={handleNewExperiment}
+                onClick={handleNewBenchmark}
                 variant="outline"
                 className="mt-4"
               >
                 <Plus size={16} className="mr-2" />
-                Create Experiment
+                Create Benchmark
               </Button>
             </CardContent>
           </Card>
         ) : (
-          [...experiments]
+          [...benchmarks]
             .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
-            .map(exp => {
-            const latestRun = getLatestRun(exp);
-            const isRunning = runningExperimentId === exp.id;
+            .map(bench => {
+            const latestRun = getLatestRun(bench);
+            const isRunning = runningBenchmarkId === bench.id;
 
             const completedCount = useCaseStatuses.filter(uc => uc.status === 'completed').length;
             const failedCount = useCaseStatuses.filter(uc => uc.status === 'failed').length;
@@ -347,31 +347,34 @@ export const ExperimentsPage: React.FC = () => {
             const progressPercent = totalCount > 0 ? ((completedCount + failedCount) / totalCount) * 100 : 0;
 
             return (
-              <Card key={exp.id} className={isRunning ? 'border-blue-500/50' : ''}>
+              <Card key={bench.id} className={isRunning ? 'border-blue-500/50' : ''}>
                 <CardContent className="p-4">
                   <div className="flex items-start gap-4">
                     {/* Main Content - Clickable to view runs */}
                     <div
                       className="flex-1 min-w-0 cursor-pointer hover:opacity-80"
-                      onClick={() => navigate(`/experiments/${exp.id}/runs`)}
+                      onClick={() => navigate(`/benchmarks/${bench.id}/runs`)}
                     >
                       <div className="flex items-center gap-2 mb-1">
-                        <h3 className="text-lg font-semibold truncate">{exp.name}</h3>
+                        <h3 className="text-lg font-semibold truncate">{bench.name}</h3>
                         {isRunning && (
                           <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-400 border-blue-500/30">
                             <Loader2 size={10} className="mr-1 animate-spin" />
                             Running
                           </Badge>
                         )}
-                        {!isRunning && exp.runs && exp.runs.length > 0 && (
+                        {!isRunning && bench.runs && bench.runs.length > 0 && (
                           <Badge variant="outline" className="text-xs">
-                            {exp.runs.length} run{exp.runs.length !== 1 ? 's' : ''}
+                            {bench.runs.length} run{bench.runs.length !== 1 ? 's' : ''}
                           </Badge>
                         )}
+                        <Badge variant="outline" className="text-xs text-muted-foreground">
+                          v{bench.currentVersion || 1}
+                        </Badge>
                       </div>
 
                       {/* Inline description editing */}
-                      {editingDescriptionId === exp.id ? (
+                      {editingDescriptionId === bench.id ? (
                         <div className="flex items-center gap-2 mb-2" onClick={e => e.stopPropagation()}>
                           <Input
                             value={editingDescriptionValue}
@@ -380,20 +383,20 @@ export const ExperimentsPage: React.FC = () => {
                             className="h-7 text-sm"
                             autoFocus
                             onKeyDown={e => {
-                              if (e.key === 'Enter') handleSaveDescription(exp);
+                              if (e.key === 'Enter') handleSaveDescription(bench);
                               if (e.key === 'Escape') handleCancelDescriptionEdit();
                             }}
                           />
-                          <Button size="sm" variant="ghost" onClick={() => handleSaveDescription(exp)}>Save</Button>
+                          <Button size="sm" variant="ghost" onClick={() => handleSaveDescription(bench)}>Save</Button>
                           <Button size="sm" variant="ghost" onClick={handleCancelDescriptionEdit}>Cancel</Button>
                         </div>
                       ) : (
                         <p
                           className="text-sm text-muted-foreground mb-2 line-clamp-1 cursor-pointer hover:text-foreground"
-                          onClick={(e) => { e.stopPropagation(); handleStartDescriptionEdit(exp); }}
+                          onClick={(e) => { e.stopPropagation(); handleStartDescriptionEdit(bench); }}
                           title="Click to edit description"
                         >
-                          {exp.description || 'Click to add description...'}
+                          {bench.description || 'Click to add description...'}
                         </p>
                       )}
 
@@ -427,11 +430,11 @@ export const ExperimentsPage: React.FC = () => {
 
                       <div className="flex items-center gap-4 text-xs text-muted-foreground">
                         <span>
-                          {getUseCaseCount(exp)} use case{getUseCaseCount(exp) !== 1 ? 's' : ''}
+                          {getUseCaseCount(bench)} use case{getUseCaseCount(bench) !== 1 ? 's' : ''}
                         </span>
                         <span className="text-muted-foreground/50">·</span>
                         <span>
-                          Runs: {getRunNames(exp)}
+                          Runs: {getRunNames(bench)}
                         </span>
                         {latestRun && (
                           <>
@@ -447,44 +450,35 @@ export const ExperimentsPage: React.FC = () => {
 
                     {/* Actions */}
                     <div className="flex items-center gap-2">
-                      {!isRunning && exp.runs && exp.runs.length > 0 && (
+                      {!isRunning && bench.runs && bench.runs.length > 0 && (
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => setViewingResultsFor(exp)}
+                          onClick={() => setViewingResultsFor(bench)}
                         >
                           <Eye size={14} className="mr-1" />
                           View Latest
                         </Button>
                       )}
-                      {/* Add Run button - creates new run */}
+                      {/* Run button - creates new run */}
                       <Button
-                        variant="outline"
+                        variant="ghost"
                         size="sm"
-                        onClick={() => handleAddRun(exp)}
-                        disabled={runningExperimentId !== null}
+                        onClick={() => handleAddRun(bench)}
+                        disabled={runningBenchmarkId !== null}
+                        title="Run benchmark"
                       >
                         {isRunning ? (
-                          <>
-                            <RefreshCw size={14} className="mr-1 animate-spin" />
-                            {runProgress ? (
-                              `${runProgress.currentTestCaseIndex + 1}/${runProgress.totalTestCases}`
-                            ) : (
-                              'Starting...'
-                            )}
-                          </>
+                          <RefreshCw size={14} className="animate-spin" />
                         ) : (
-                          <>
-                            <Plus size={14} className="mr-1" />
-                            Add Run
-                          </>
+                          <Play size={14} />
                         )}
                       </Button>
                       {!isRunning && (
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => handleDeleteExperiment(exp)}
+                          onClick={() => handleDeleteBenchmark(bench)}
                           className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                         >
                           <Trash2 size={14} />
@@ -499,18 +493,18 @@ export const ExperimentsPage: React.FC = () => {
         )}
       </div>
 
-      {/* Experiment Editor Dialog */}
+      {/* Benchmark Editor Dialog */}
       {isEditorOpen && (
-        <ExperimentEditor
-          experiment={editingExperiment}
-          onSave={handleSaveExperiment}
+        <BenchmarkEditor
+          benchmark={editingBenchmark}
+          onSave={handleSaveBenchmark}
           onSaveAndRun={handleSaveAndRun}
           onCancel={() => setIsEditorOpen(false)}
         />
       )}
 
       {/* Run Configuration Dialog */}
-      {isRunConfigOpen && runConfigExperiment && (
+      {isRunConfigOpen && runConfigBenchmark && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <Card className="w-full max-w-md">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -520,7 +514,7 @@ export const ExperimentsPage: React.FC = () => {
                 size="icon"
                 onClick={() => {
                   setIsRunConfigOpen(false);
-                  setRunConfigExperiment(null);
+                  setRunConfigBenchmark(null);
                 }}
               >
                 <X size={18} />
@@ -593,7 +587,7 @@ export const ExperimentsPage: React.FC = () => {
                   variant="ghost"
                   onClick={() => {
                     setIsRunConfigOpen(false);
-                    setRunConfigExperiment(null);
+                    setRunConfigBenchmark(null);
                   }}
                 >
                   Cancel
@@ -614,3 +608,7 @@ export const ExperimentsPage: React.FC = () => {
     </div>
   );
 };
+
+// Backwards compatibility alias
+/** @deprecated Use BenchmarksPage instead */
+export const ExperimentsPage = BenchmarksPage;

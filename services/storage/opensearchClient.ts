@@ -76,7 +76,7 @@ export interface StorageTestCase {
   updatedAt: string;
 }
 
-export interface StorageExperimentRunConfig {
+export interface StorageBenchmarkRunConfig {
   id: string;
   name: string;
   description?: string;
@@ -88,7 +88,7 @@ export interface StorageExperimentRunConfig {
   results?: Record<string, { reportId: string; status: string }>;
 }
 
-export interface StorageExperiment {
+export interface StorageBenchmark {
   id: string;
   name: string;
   description?: string;
@@ -96,8 +96,14 @@ export interface StorageExperiment {
   createdAt: string;
   llmJudgePrompt?: string;
   testCaseIds: string[];
-  runs: StorageExperimentRunConfig[];
+  runs: StorageBenchmarkRunConfig[];
 }
+
+// Backwards compatibility aliases
+/** @deprecated Use StorageBenchmarkRunConfig instead */
+export type StorageExperimentRunConfig = StorageBenchmarkRunConfig;
+/** @deprecated Use StorageBenchmark instead */
+export type StorageExperiment = StorageBenchmark;
 
 export interface StorageRunAnnotation {
   id: string;
@@ -271,23 +277,23 @@ export const testCaseStorage = {
   },
 };
 
-// ==================== Experiments API ====================
+// ==================== Benchmarks API ====================
 
-export const experimentStorage = {
+export const benchmarkStorage = {
   /**
-   * Get all experiments
+   * Get all benchmarks
    */
-  async getAll(): Promise<StorageExperiment[]> {
-    const result = await request<{ experiments: StorageExperiment[]; total: number }>('GET', '/experiments');
-    return result.experiments;
+  async getAll(): Promise<StorageBenchmark[]> {
+    const result = await request<{ benchmarks: StorageBenchmark[]; total: number }>('GET', '/benchmarks');
+    return result.benchmarks;
   },
 
   /**
-   * Get experiment by ID
+   * Get benchmark by ID
    */
-  async getById(id: string): Promise<StorageExperiment | null> {
+  async getById(id: string): Promise<StorageBenchmark | null> {
     try {
-      return await request<StorageExperiment>('GET', `/experiments/${id}`);
+      return await request<StorageBenchmark>('GET', `/benchmarks/${id}`);
     } catch (error) {
       const msg = (error as Error).message.toLowerCase();
       if (msg.includes('404') || msg.includes('not found')) {
@@ -298,33 +304,37 @@ export const experimentStorage = {
   },
 
   /**
-   * Create experiment
+   * Create benchmark
    */
-  async create(experiment: Omit<StorageExperiment, 'id' | 'createdAt'>): Promise<StorageExperiment> {
-    return request<StorageExperiment>('POST', '/experiments', experiment);
+  async create(benchmark: Omit<StorageBenchmark, 'id' | 'createdAt'>): Promise<StorageBenchmark> {
+    return request<StorageBenchmark>('POST', '/benchmarks', benchmark);
   },
 
   /**
-   * Update experiment (for run management)
+   * Update benchmark (for run management)
    */
-  async update(id: string, experiment: Partial<StorageExperiment>): Promise<StorageExperiment> {
-    return request<StorageExperiment>('PUT', `/experiments/${id}`, experiment);
+  async update(id: string, benchmark: Partial<StorageBenchmark>): Promise<StorageBenchmark> {
+    return request<StorageBenchmark>('PUT', `/benchmarks/${id}`, benchmark);
   },
 
   /**
-   * Delete experiment
+   * Delete benchmark
    */
   async delete(id: string): Promise<{ deleted: boolean }> {
-    return request<{ deleted: boolean }>('DELETE', `/experiments/${id}`);
+    return request<{ deleted: boolean }>('DELETE', `/benchmarks/${id}`);
   },
 
   /**
-   * Bulk create experiments
+   * Bulk create benchmarks
    */
-  async bulkCreate(experiments: Partial<StorageExperiment>[]): Promise<{ created: number; errors: boolean }> {
-    return request<{ created: number; errors: boolean }>('POST', '/experiments/bulk', { experiments });
+  async bulkCreate(benchmarks: Partial<StorageBenchmark>[]): Promise<{ created: number; errors: boolean }> {
+    return request<{ created: number; errors: boolean }>('POST', '/benchmarks/bulk', { benchmarks });
   },
 };
+
+// Backwards compatibility alias
+/** @deprecated Use benchmarkStorage instead */
+export const experimentStorage = benchmarkStorage;
 
 // ==================== Runs API ====================
 
@@ -393,35 +403,46 @@ export const runStorage = {
   },
 
   /**
-   * Get runs by experiment ID
+   * Get runs by benchmark ID
    */
-  async getByExperiment(experimentId: string, size?: number): Promise<StorageRun[]> {
+  async getByBenchmark(benchmarkId: string, size?: number): Promise<StorageRun[]> {
     const query = size ? `?size=${size}` : '';
-    const result = await request<{ runs: StorageRun[]; total: number }>('GET', `/runs/by-experiment/${experimentId}${query}`);
+    const result = await request<{ runs: StorageRun[]; total: number }>('GET', `/runs/by-benchmark/${benchmarkId}${query}`);
     return result.runs;
   },
 
   /**
-   * Get runs by experiment run config ID
+   * Get runs by benchmark run config ID
    */
-  async getByExperimentRun(experimentId: string, runId: string, size?: number): Promise<StorageRun[]> {
+  async getByBenchmarkRun(benchmarkId: string, runId: string, size?: number): Promise<StorageRun[]> {
     const query = size ? `?size=${size}` : '';
-    const result = await request<{ runs: StorageRun[]; total: number }>('GET', `/runs/by-experiment-run/${experimentId}/${runId}${query}`);
+    const result = await request<{ runs: StorageRun[]; total: number }>('GET', `/runs/by-benchmark-run/${benchmarkId}/${runId}${query}`);
     return result.runs;
   },
 
   /**
-   * Get all iterations for a test case in an experiment
+   * Get all iterations for a test case in a benchmark
    */
-  async getIterations(experimentId: string, testCaseId: string, experimentRunId?: string): Promise<{
+  async getIterations(benchmarkId: string, testCaseId: string, benchmarkRunId?: string): Promise<{
     runs: StorageRun[];
     total: number;
     maxIteration: number;
   }> {
     const params = new URLSearchParams();
-    if (experimentRunId) params.append('experimentRunId', experimentRunId);
+    if (benchmarkRunId) params.append('benchmarkRunId', benchmarkRunId);
     const query = params.toString() ? `?${params.toString()}` : '';
-    return request('GET', `/runs/iterations/${experimentId}/${testCaseId}${query}`);
+    return request('GET', `/runs/iterations/${benchmarkId}/${testCaseId}${query}`);
+  },
+
+  // Backwards compatibility aliases
+  /** @deprecated Use getByBenchmark instead */
+  async getByExperiment(experimentId: string, size?: number): Promise<StorageRun[]> {
+    return this.getByBenchmark(experimentId, size);
+  },
+
+  /** @deprecated Use getByBenchmarkRun instead */
+  async getByExperimentRun(experimentId: string, runId: string, size?: number): Promise<StorageRun[]> {
+    return this.getByBenchmarkRun(experimentId, runId, size);
   },
 
   /**
@@ -549,9 +570,12 @@ export const analyticsStorage = {
 export const opensearchStorage = {
   admin: storageAdmin,
   testCases: testCaseStorage,
-  experiments: experimentStorage,
+  benchmarks: benchmarkStorage,
   runs: runStorage,
   analytics: analyticsStorage,
+  // Backwards compatibility alias
+  /** @deprecated Use benchmarks instead */
+  experiments: benchmarkStorage,
 };
 
 export default opensearchStorage;

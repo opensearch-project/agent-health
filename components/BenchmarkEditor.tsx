@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { X, ChevronRight, ChevronLeft, Plus, Trash2, Check, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { X, ChevronRight, ChevronLeft, Plus, Trash2, Check, Loader2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,14 +14,14 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Experiment, TestCase, RunConfigInput } from '@/types';
-import { asyncExperimentStorage, asyncTestCaseStorage } from '@/services/storage';
+import { Benchmark, TestCase, RunConfigInput } from '@/types';
+import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 
-interface ExperimentEditorProps {
-  experiment: Experiment | null;
-  onSave: (experiment: Experiment) => void;
-  onSaveAndRun?: (experiment: Experiment, runConfigs: RunConfigForExecution[]) => void;
+interface BenchmarkEditorProps {
+  benchmark: Benchmark | null;
+  onSave: (benchmark: Benchmark) => void;
+  onSaveAndRun?: (benchmark: Benchmark, runConfigs: RunConfigForExecution[]) => void;
   onCancel: () => void;
 }
 
@@ -40,20 +40,20 @@ interface RunConfig {
   headers?: Record<string, string>;
 }
 
-export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
-  experiment,
+export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
+  benchmark,
   onSave,
   onSaveAndRun,
   onCancel,
 }) => {
   const [step, setStep] = useState<Step>('info');
-  const [name, setName] = useState(experiment?.name || '');
-  const [description, setDescription] = useState(experiment?.description || '');
+  const [name, setName] = useState(benchmark?.name || '');
+  const [description, setDescription] = useState(benchmark?.description || '');
   const [selectedUseCaseIds, setSelectedUseCaseIds] = useState<Set<string>>(
-    new Set(experiment?.testCaseIds || [])
+    new Set(benchmark?.testCaseIds || [])
   );
   const [runs, setRuns] = useState<RunConfig[]>(
-    experiment?.runs?.map(r => ({
+    benchmark?.runs?.map(r => ({
       id: r.id,
       name: r.name,
       description: r.description,
@@ -68,6 +68,23 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
   const [allTestCases, setAllTestCases] = useState<TestCase[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Track if test cases changed from original (will create new version)
+  const testCasesChanged = useMemo(() => {
+    if (!benchmark) return false;
+    const original = new Set(benchmark.testCaseIds);
+    if (original.size !== selectedUseCaseIds.size) return true;
+    for (const id of selectedUseCaseIds) {
+      if (!original.has(id)) return true;
+    }
+    return false;
+  }, [benchmark, selectedUseCaseIds]);
+
+  // Track if only metadata changed (won't create new version)
+  const metadataChanged = useMemo(() => {
+    if (!benchmark) return false;
+    return name !== benchmark.name || description !== (benchmark.description || '');
+  }, [benchmark, name, description]);
 
   useEffect(() => {
     const loadTestCases = async () => {
@@ -88,7 +105,7 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
   function createDefaultRun(): RunConfig {
     const defaultAgent = DEFAULT_CONFIG.agents[1] || DEFAULT_CONFIG.agents[0];
     return {
-      id: asyncExperimentStorage.generateRunId(),
+      id: asyncBenchmarkStorage.generateRunId(),
       name: 'Baseline',
       agentKey: defaultAgent.key,
       modelId: defaultAgent.models[0] || 'claude-sonnet-4.5',
@@ -133,7 +150,7 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
     const runNum = runs.length + 1;
     const defaultAgent = DEFAULT_CONFIG.agents[1] || DEFAULT_CONFIG.agents[0];
     setRuns(prev => [...prev, {
-      id: asyncExperimentStorage.generateRunId(),
+      id: asyncBenchmarkStorage.generateRunId(),
       name: `Run ${runNum}`,
       agentKey: defaultAgent.key,
       modelId: defaultAgent.models[0] || 'claude-sonnet-4.5',
@@ -151,34 +168,53 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
     ));
   };
 
-  const handleSave = () => {
-    // For new experiments, we don't include runs - they'll be created during execution
-    // For existing experiments, we keep the runs
-    const isNewExperiment = !experiment;
+  const handleSave = async () => {
+    // For new benchmarks, we don't include runs - they'll be created during execution
+    // For existing benchmarks, we keep the runs
+    const isNewBenchmark = !benchmark;
 
-    const exp: Experiment = {
-      id: experiment?.id || asyncExperimentStorage.generateExperimentId(),
-      name,
-      description: description || undefined,
-      createdAt: experiment?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      testCaseIds: Array.from(selectedUseCaseIds),
-      runs: isNewExperiment ? [] : (experiment?.runs || []),
-    };
+    if (isNewBenchmark) {
+      // Create new benchmark with initial version
+      const bench: Benchmark = {
+        id: asyncBenchmarkStorage.generateBenchmarkId(),
+        name,
+        description: description || undefined,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        currentVersion: 1,
+        versions: [{
+          version: 1,
+          createdAt: new Date().toISOString(),
+          testCaseIds: Array.from(selectedUseCaseIds),
+        }],
+        testCaseIds: Array.from(selectedUseCaseIds),
+        runs: [],
+      };
 
-    if (isNewExperiment && onSaveAndRun && runs.length > 0) {
-      // For new experiments, save and immediately trigger all configured runs
-      const runConfigs: RunConfigForExecution[] = runs.map(run => ({
-        name: run.name,
-        description: run.description,
-        agentKey: run.agentKey,
-        modelId: run.modelId,
-        headers: run.headers,
-      }));
-      onSaveAndRun(exp, runConfigs);
+      if (onSaveAndRun && runs.length > 0) {
+        // For new benchmarks, save and immediately trigger all configured runs
+        const runConfigs: RunConfigForExecution[] = runs.map(run => ({
+          name: run.name,
+          description: run.description,
+          agentKey: run.agentKey,
+          modelId: run.modelId,
+          headers: run.headers,
+        }));
+        onSaveAndRun(bench, runConfigs);
+      } else {
+        onSave(bench);
+      }
     } else {
-      // For existing experiments, just save
-      onSave(exp);
+      // Update existing benchmark - let backend handle versioning
+      const updated = await asyncBenchmarkStorage.update(benchmark.id, {
+        name,
+        description: description || undefined,
+        testCaseIds: testCasesChanged ? Array.from(selectedUseCaseIds) : undefined,
+      });
+
+      if (updated) {
+        onSave(updated);
+      }
     }
   };
 
@@ -190,9 +226,16 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <Card className="w-full max-w-3xl max-h-[90vh] flex flex-col">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle>
-            {experiment ? 'Edit Experiment' : 'Create Experiment'}
-          </CardTitle>
+          <div className="flex items-center gap-3">
+            <CardTitle>
+              {benchmark ? 'Edit Benchmark' : 'Create Benchmark'}
+            </CardTitle>
+            {benchmark && (
+              <Badge variant="outline" className="text-xs">
+                v{benchmark.currentVersion}
+              </Badge>
+            )}
+          </div>
           <Button variant="ghost" size="icon" onClick={onCancel}>
             <X size={18} />
           </Button>
@@ -230,7 +273,7 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
             {step === 'info' && (
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="name">Experiment Name *</Label>
+                  <Label htmlFor="name">Benchmark Name *</Label>
                   <Input
                     id="name"
                     value={name}
@@ -244,7 +287,7 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
                     id="description"
                     value={description}
                     onChange={e => setDescription(e.target.value)}
-                    placeholder="Describe what this experiment tests..."
+                    placeholder="Describe what this benchmark tests..."
                     rows={3}
                   />
                 </div>
@@ -279,8 +322,16 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
                   </div>
                 </div>
 
-                <div className="text-sm text-muted-foreground">
-                  Selected: {selectedUseCaseIds.size} use case{selectedUseCaseIds.size !== 1 ? 's' : ''}
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Selected: {selectedUseCaseIds.size} use case{selectedUseCaseIds.size !== 1 ? 's' : ''}
+                  </div>
+                  {benchmark && testCasesChanged && (
+                    <div className="flex items-center gap-2 text-sm text-yellow-500">
+                      <AlertTriangle size={14} />
+                      <span>Will create v{benchmark.currentVersion + 1}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -453,7 +504,11 @@ export const ExperimentEditor: React.FC<ExperimentEditorProps> = ({
                 className="bg-opensearch-blue hover:bg-blue-600"
               >
                 <Check size={16} className="mr-1" />
-                {experiment ? 'Save Changes' : 'Create & Run Experiment'}
+                {!benchmark
+                  ? 'Create & Run Benchmark'
+                  : testCasesChanged
+                    ? `Save as v${benchmark.currentVersion + 1}`
+                    : 'Save Changes'}
               </Button>
             )}
           </div>
@@ -481,3 +536,7 @@ const StepIndicator: React.FC<{
     <span className="text-sm font-medium">{label}</span>
   </div>
 );
+
+// Backwards compatibility alias
+/** @deprecated Use BenchmarkEditor instead */
+export const ExperimentEditor = BenchmarkEditor;

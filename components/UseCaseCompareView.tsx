@@ -9,24 +9,24 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Experiment, ExperimentRun, EvaluationReport, TestCase } from '@/types';
+import { Benchmark, BenchmarkRun, EvaluationReport, TestCase } from '@/types';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { TrajectoryCompareView } from './TrajectoryCompareView';
 
 interface UseCaseCompareViewProps {
-  experiment: Experiment;
+  benchmark: Benchmark;
   onClose: () => void;
 }
 
 export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
-  experiment,
+  benchmark,
   onClose,
 }) => {
   const [reports, setReports] = useState<Record<string, EvaluationReport | null>>({});
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [selectedUseCases, setSelectedUseCases] = useState<[string, string] | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string>(
-    experiment.runs?.[0]?.id || ''
+    benchmark.runs?.[0]?.id || ''
   );
   const [showTrajectoryCompare, setShowTrajectoryCompare] = useState(false);
 
@@ -39,7 +39,7 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
   useEffect(() => {
     const loadReports = async () => {
       const reportIds = new Set<string>();
-      experiment.runs?.forEach(run => {
+      benchmark.runs?.forEach(run => {
         Object.values(run.results || {}).forEach(result => {
           if (result.reportId) {
             reportIds.add(result.reportId);
@@ -58,14 +58,14 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
     };
 
     loadReports();
-  }, [experiment]);
+  }, [benchmark]);
 
   const getUseCase = useCallback((useCaseId: string): TestCase | undefined => {
     return testCases.find(tc => tc.id === useCaseId);
   }, [testCases]);
 
   const getReportForUseCase = (useCaseId: string, runId: string): EvaluationReport | null => {
-    const run = experiment.runs?.find(r => r.id === runId);
+    const run = benchmark.runs?.find(r => r.id === runId);
     if (!run) return null;
 
     const result = run.results?.[useCaseId];
@@ -117,7 +117,7 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
     return `There is a ${Math.abs(accDiff)}% accuracy difference between these use cases.`;
   };
 
-  const selectedRun = experiment.runs?.find(r => r.id === selectedRunId);
+  const selectedRun = benchmark.runs?.find(r => r.id === selectedRunId);
 
   return (
     <>
@@ -127,7 +127,7 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
             <div>
               <CardTitle>Compare Use Cases</CardTitle>
               <p className="text-xs text-muted-foreground mt-1">
-                Experiment: {experiment.name}
+                Benchmark: {benchmark.name}
               </p>
             </div>
             <Button variant="ghost" size="icon" onClick={onClose}>
@@ -136,13 +136,13 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
           </CardHeader>
 
           {/* Run Selector */}
-          {experiment.runs && experiment.runs.length > 1 && (
+          {benchmark.runs && benchmark.runs.length > 1 && (
             <div className="px-6 pb-4 border-b">
               <label className="text-xs text-muted-foreground uppercase font-semibold block mb-2">
                 Comparing for Run:
               </label>
               <div className="flex gap-2">
-                {experiment.runs.map(run => (
+                {benchmark.runs.map(run => (
                   <Button
                     key={run.id}
                     variant={selectedRunId === run.id ? 'default' : 'outline'}
@@ -165,7 +165,7 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
                 </h4>
                 <ScrollArea className="h-[50vh]">
                   <div className="space-y-2 pr-4">
-                    {experiment.testCaseIds.map(useCaseId => {
+                    {benchmark.testCaseIds.map(useCaseId => {
                       const useCase = getUseCase(useCaseId);
                       const report = getReportForUseCase(useCaseId, selectedRunId);
                       const isSelected = selectedUseCases?.includes(useCaseId);

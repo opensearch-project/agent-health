@@ -13,7 +13,7 @@
  *   npm test -- --testPathPattern=asyncStorage.integration
  */
 
-import { asyncExperimentStorage } from '@/services/storage/asyncExperimentStorage';
+import { asyncBenchmarkStorage } from '@/services/storage/asyncBenchmarkStorage';
 import { asyncTestCaseStorage } from '@/services/storage/asyncTestCaseStorage';
 import { asyncRunStorage } from '@/services/storage/asyncRunStorage';
 import { storageAdmin } from '@/services/storage/opensearchClient';
@@ -129,14 +129,14 @@ describe('OpenSearch Storage Integration Tests', () => {
     });
   });
 
-  describe('asyncExperimentStorage', () => {
+  describe('asyncBenchmarkStorage', () => {
     let experimentId: string;
 
     afterAll(async () => {
       if (!backendAvailable || !experimentId) return;
       // Cleanup: delete experiment
       try {
-        await asyncExperimentStorage.delete(experimentId);
+        await asyncBenchmarkStorage.delete(experimentId);
       } catch {
         // Ignore cleanup errors
       }
@@ -145,8 +145,8 @@ describe('OpenSearch Storage Integration Tests', () => {
     it('should create an experiment', async () => {
       if (!backendAvailable) return;
 
-      const experiment = await asyncExperimentStorage.create({
-        name: 'Integration Test Experiment',
+      const experiment = await asyncBenchmarkStorage.create({
+        name: 'Integration Test Benchmark',
         description: 'Test experiment',
         testCaseIds: ['tc-001', 'tc-002'],
         runs: [],
@@ -154,14 +154,14 @@ describe('OpenSearch Storage Integration Tests', () => {
 
       expect(experiment).toBeDefined();
       expect(experiment.id).toBeDefined();
-      expect(experiment.name).toBe('Integration Test Experiment');
+      expect(experiment.name).toBe('Integration Test Benchmark');
       experimentId = experiment.id;
     });
 
     it('should get experiment by ID', async () => {
       if (!backendAvailable || !experimentId) return;
 
-      const experiment = await asyncExperimentStorage.getById(experimentId);
+      const experiment = await asyncBenchmarkStorage.getById(experimentId);
       expect(experiment).toBeDefined();
       expect(experiment?.id).toBe(experimentId);
     });
@@ -169,7 +169,7 @@ describe('OpenSearch Storage Integration Tests', () => {
     it('should get all experiments', async () => {
       if (!backendAvailable) return;
 
-      const experiments = await asyncExperimentStorage.getAll();
+      const experiments = await asyncBenchmarkStorage.getAll();
       expect(Array.isArray(experiments)).toBe(true);
     });
 
@@ -178,7 +178,7 @@ describe('OpenSearch Storage Integration Tests', () => {
 
       // First, we need to save an experiment with runs
       // This tests the deleteRun method
-      const result = await asyncExperimentStorage.deleteRun(experimentId, 'non-existent-run');
+      const result = await asyncBenchmarkStorage.deleteRun(experimentId, 'non-existent-run');
       expect(result).toBe(false); // Should return false since run doesn't exist
     });
   });

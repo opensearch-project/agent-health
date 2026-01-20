@@ -12,8 +12,8 @@
 
 import type {
   TestCase,
-  Experiment,
-  ExperimentRun,
+  Benchmark,
+  BenchmarkRun,
   TestCaseRun,
   RunAnnotation,
   OpenSearchLog,
@@ -97,19 +97,23 @@ export interface ITestCaseOperations {
 }
 
 /**
- * Experiment CRUD operations
+ * Benchmark CRUD operations
  */
-export interface IExperimentOperations {
-  getAll(options?: PaginationOptions): Promise<{ items: Experiment[]; total: number }>;
-  getById(id: string): Promise<Experiment | null>;
-  create(experiment: Partial<Experiment>): Promise<Experiment>;
-  update(id: string, updates: Partial<Experiment>): Promise<Experiment>;
+export interface IBenchmarkOperations {
+  getAll(options?: PaginationOptions): Promise<{ items: Benchmark[]; total: number }>;
+  getById(id: string): Promise<Benchmark | null>;
+  create(benchmark: Partial<Benchmark>): Promise<Benchmark>;
+  update(id: string, updates: Partial<Benchmark>): Promise<Benchmark>;
   delete(id: string): Promise<{ deleted: boolean }>;
-  addRun(experimentId: string, run: ExperimentRun): Promise<boolean>;
-  updateRun(experimentId: string, runId: string, updates: Partial<ExperimentRun>): Promise<boolean>;
-  deleteRun(experimentId: string, runId: string): Promise<boolean>;
-  bulkCreate(experiments: Partial<Experiment>[]): Promise<{ created: number; errors: number }>;
+  addRun(benchmarkId: string, run: BenchmarkRun): Promise<boolean>;
+  updateRun(benchmarkId: string, runId: string, updates: Partial<BenchmarkRun>): Promise<boolean>;
+  deleteRun(benchmarkId: string, runId: string): Promise<boolean>;
+  bulkCreate(benchmarks: Partial<Benchmark>[]): Promise<{ created: number; errors: number }>;
 }
+
+// Backwards compatibility alias
+/** @deprecated Use IBenchmarkOperations instead */
+export type IExperimentOperations = IBenchmarkOperations;
 
 /**
  * Run (TestCaseRun/EvaluationReport) CRUD operations
@@ -174,11 +178,11 @@ export interface IMetricsOperations {
 // ============================================================================
 
 /**
- * Storage module - handles test cases, experiments, runs, and analytics
+ * Storage module - handles test cases, benchmarks, runs, and analytics
  */
 export interface IStorageModule {
   testCases: ITestCaseOperations;
-  experiments: IExperimentOperations;
+  benchmarks: IBenchmarkOperations;
   runs: IRunOperations;
   analytics: IAnalyticsOperations;
   health(): Promise<HealthStatus>;
@@ -208,14 +212,14 @@ export interface IObservabilityModule {
  * Data Source Adapter Interface
  *
  * Single adapter with two modules:
- * - storage: test cases, experiments, runs, analytics
+ * - storage: test cases, benchmarks, runs, analytics
  * - observability: logs, traces, metrics
  */
 export interface IDataSourceAdapter {
   /** Adapter type identifier */
   readonly type: DataSourceAdapterType;
 
-  /** Storage module (test cases, experiments, runs, analytics) */
+  /** Storage module (test cases, benchmarks, runs, analytics) */
   storage: IStorageModule;
 
   /** Observability module (logs, traces, metrics) */

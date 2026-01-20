@@ -15,7 +15,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { TestCaseComparisonRow, ExperimentRun, EvaluationReport } from '@/types';
+import { TestCaseComparisonRow, BenchmarkRun, EvaluationReport } from '@/types';
 import { MetricCell } from './MetricCell';
 import { VersionIndicator } from './VersionIndicator';
 import { UseCaseExpandedRow } from './UseCaseExpandedRow';
@@ -24,7 +24,7 @@ import { calculateRowStatus, RowStatus } from '@/services/comparisonService';
 
 interface UseCaseComparisonTableProps {
   rows: TestCaseComparisonRow[];
-  runs: ExperimentRun[];
+  runs: BenchmarkRun[];
   reports: Record<string, EvaluationReport>;
   baselineRunId?: string;
 }

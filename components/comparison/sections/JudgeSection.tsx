@@ -9,11 +9,11 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
-import { EvaluationReport, ExperimentRun, ImprovementStrategy } from '@/types';
+import { EvaluationReport, BenchmarkRun, ImprovementStrategy } from '@/types';
 import { cn } from '@/lib/utils';
 
 interface JudgeSectionProps {
-  runs: ExperimentRun[];
+  runs: BenchmarkRun[];
   reports: Record<string, EvaluationReport>;
   useCaseId: string;
 }
@@ -45,7 +45,7 @@ const ImprovementItem: React.FC<{ strategy: ImprovementStrategy }> = ({ strategy
 };
 
 const RunJudgeCard: React.FC<{
-  run: ExperimentRun;
+  run: BenchmarkRun;
   report: EvaluationReport | null;
 }> = ({ run, report }) => {
   const [reasoningOpen, setReasoningOpen] = useState(false);

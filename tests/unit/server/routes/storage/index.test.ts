@@ -22,7 +22,7 @@ jest.mock('express', () => ({
 // Mock all storage route modules
 jest.mock('@/server/routes/storage/admin', () => ({ default: 'adminRoutes' }));
 jest.mock('@/server/routes/storage/testCases', () => ({ default: 'testCasesRoutes' }));
-jest.mock('@/server/routes/storage/experiments', () => ({ default: 'experimentsRoutes' }));
+jest.mock('@/server/routes/storage/benchmarks', () => ({ default: 'benchmarksRoutes' }));
 jest.mock('@/server/routes/storage/runs', () => ({ default: 'runsRoutes' }));
 jest.mock('@/server/routes/storage/analytics', () => ({ default: 'analyticsRoutes' }));
 
@@ -41,7 +41,7 @@ describe('Storage Routes Aggregator', () => {
     // Verify all routes were mounted
     expect(mockUse).toHaveBeenCalledWith('adminRoutes');
     expect(mockUse).toHaveBeenCalledWith('testCasesRoutes');
-    expect(mockUse).toHaveBeenCalledWith('experimentsRoutes');
+    expect(mockUse).toHaveBeenCalledWith('benchmarksRoutes');
     expect(mockUse).toHaveBeenCalledWith('runsRoutes');
     expect(mockUse).toHaveBeenCalledWith('analyticsRoutes');
   });
@@ -57,7 +57,7 @@ describe('Storage Routes Aggregator', () => {
     expect(calls).toEqual([
       'adminRoutes',
       'testCasesRoutes',
-      'experimentsRoutes',
+      'benchmarksRoutes',
       'runsRoutes',
       'analyticsRoutes',
     ]);

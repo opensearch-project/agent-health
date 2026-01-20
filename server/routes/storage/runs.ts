@@ -16,8 +16,8 @@ import {
   SAMPLE_RUNS,
   getSampleRun,
   getSampleRunsByTestCase,
-  getSampleRunsByExperiment,
-  getSampleRunsByExperimentRun,
+  getSampleRunsByBenchmark,
+  getSampleRunsByBenchmarkRun,
 } from '../../../cli/demo/sampleRuns.js';
 import { createRunWithClient, getRunByIdWithClient, updateRunWithClient } from '../../services/storage/index.js';
 import type { TestCaseRun } from '../../../types/index.js';
@@ -306,18 +306,19 @@ router.get('/api/storage/runs/by-test-case/:testCaseId', async (req: Request, re
   }
 });
 
-// GET /api/storage/runs/by-experiment/:experimentId
-router.get('/api/storage/runs/by-experiment/:experimentId', async (req: Request, res: Response) => {
+// GET /api/storage/runs/by-benchmark/:benchmarkId
+router.get('/api/storage/runs/by-benchmark/:benchmarkId', async (req: Request, res: Response) => {
   try {
-    const { experimentId } = req.params;
+    const { benchmarkId } = req.params;
     const { size = '1000' } = req.query;
 
-    // Get sample runs for this experiment
-    const sampleResults = getSampleRunsByExperiment(experimentId);
+    // Get sample runs for this benchmark
+    const sampleResults = getSampleRunsByBenchmark(benchmarkId);
 
     let realData: TestCaseRun[] = [];
 
     // Fetch from OpenSearch if configured
+    // Note: Query uses experimentId field name (OpenSearch field preserved for data compatibility)
     if (isStorageAvailable(req)) {
       try {
         const client = requireStorageClient(req);
@@ -326,7 +327,7 @@ router.get('/api/storage/runs/by-experiment/:experimentId', async (req: Request,
           body: {
             size: parseInt(size as string),
             sort: [{ createdAt: { order: 'desc' } }],
-            query: { term: { experimentId } },
+            query: { term: { experimentId: benchmarkId } },
           },
         });
         realData = result.body.hits?.hits?.map((hit: any) => hit._source) || [];
@@ -344,23 +345,24 @@ router.get('/api/storage/runs/by-experiment/:experimentId', async (req: Request,
     const allData = [...realData, ...sortedSampleResults];
     res.json({ runs: allData, total: allData.length });
   } catch (error: any) {
-    console.error('[StorageAPI] Get runs by experiment failed:', error.message);
+    console.error('[StorageAPI] Get runs by benchmark failed:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/storage/runs/by-experiment-run/:experimentId/:runId
-router.get('/api/storage/runs/by-experiment-run/:experimentId/:runId', async (req: Request, res: Response) => {
+// GET /api/storage/runs/by-benchmark-run/:benchmarkId/:runId
+router.get('/api/storage/runs/by-benchmark-run/:benchmarkId/:runId', async (req: Request, res: Response) => {
   try {
-    const { experimentId, runId } = req.params;
+    const { benchmarkId, runId } = req.params;
     const { size = '1000' } = req.query;
 
-    // Get sample runs for this experiment run
-    const sampleResults = getSampleRunsByExperimentRun(experimentId, runId);
+    // Get sample runs for this benchmark run
+    const sampleResults = getSampleRunsByBenchmarkRun(benchmarkId, runId);
 
     let realData: TestCaseRun[] = [];
 
     // Fetch from OpenSearch if configured
+    // Note: Query uses experimentId/experimentRunId field names (OpenSearch fields preserved for data compatibility)
     if (isStorageAvailable(req)) {
       try {
         const client = requireStorageClient(req);
@@ -371,7 +373,7 @@ router.get('/api/storage/runs/by-experiment-run/:experimentId/:runId', async (re
             sort: [{ createdAt: { order: 'desc' } }],
             query: {
               bool: {
-                must: [{ term: { experimentId } }, { term: { experimentRunId: runId } }],
+                must: [{ term: { experimentId: benchmarkId } }, { term: { experimentRunId: runId } }],
               },
             },
           },
@@ -391,32 +393,34 @@ router.get('/api/storage/runs/by-experiment-run/:experimentId/:runId', async (re
     const allData = [...realData, ...sortedSampleResults];
     res.json({ runs: allData, total: allData.length });
   } catch (error: any) {
-    console.error('[StorageAPI] Get runs by experiment run failed:', error.message);
+    console.error('[StorageAPI] Get runs by benchmark run failed:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/storage/runs/iterations/:experimentId/:testCaseId
-router.get('/api/storage/runs/iterations/:experimentId/:testCaseId', async (req: Request, res: Response) => {
+// GET /api/storage/runs/iterations/:benchmarkId/:testCaseId
+router.get('/api/storage/runs/iterations/:benchmarkId/:testCaseId', async (req: Request, res: Response) => {
   try {
-    const { experimentId, testCaseId } = req.params;
-    const { experimentRunId, size = '100' } = req.query;
+    const { benchmarkId, testCaseId } = req.params;
+    const { benchmarkRunId, size = '100' } = req.query;
 
     // Filter sample data
+    // Note: Sample data still uses experimentId/experimentRunId field names for compatibility
     let sampleResults = SAMPLE_RUNS.filter(
-      r => r.experimentId === experimentId && r.testCaseId === testCaseId
+      r => r.experimentId === benchmarkId && r.testCaseId === testCaseId
     );
-    if (experimentRunId) {
-      sampleResults = sampleResults.filter(r => r.experimentRunId === experimentRunId);
+    if (benchmarkRunId) {
+      sampleResults = sampleResults.filter(r => r.experimentRunId === benchmarkRunId);
     }
 
     let realData: TestCaseRun[] = [];
 
     // Fetch from OpenSearch if configured
+    // Note: Query uses experimentId/experimentRunId field names (OpenSearch fields preserved for data compatibility)
     if (isStorageAvailable(req)) {
       try {
-        const must: any[] = [{ term: { experimentId } }, { term: { testCaseId } }];
-        if (experimentRunId) must.push({ term: { experimentRunId } });
+        const must: any[] = [{ term: { experimentId: benchmarkId } }, { term: { testCaseId } }];
+        if (benchmarkRunId) must.push({ term: { experimentRunId: benchmarkRunId } });
 
         const client = requireStorageClient(req);
         const result = await client.search({

@@ -85,9 +85,21 @@ jest.mock('@/cli/demo/sampleRuns', () => ({
     }
     return [];
   },
-  getSampleRunsByExperimentRun: (experimentId: string, runId: string) => {
-    if (experimentId === 'demo-experiment-1' && runId === 'demo-exp-run-1') {
-      return [{ id: 'demo-run-1', experimentId, experimentRunId: runId }];
+  getSampleRunsByBenchmark: (benchmarkId: string) => {
+    if (benchmarkId === 'demo-experiment-1') {
+      return [
+        { id: 'demo-run-1', experimentId: 'demo-experiment-1' },
+        { id: 'demo-run-2', experimentId: 'demo-experiment-1' },
+      ];
+    }
+    return [];
+  },
+  getSampleRunsByBenchmarkRun: (benchmarkId: string, runId: string) => {
+    if (benchmarkId === 'demo-experiment-1' && runId === 'demo-exp-run-1') {
+      return [
+        { id: 'demo-run-1', experimentId: 'demo-experiment-1', experimentRunId: 'demo-exp-run-1' },
+        { id: 'demo-run-2', experimentId: 'demo-experiment-1', experimentRunId: 'demo-exp-run-1' },
+      ];
     }
     return [];
   },
@@ -392,7 +404,7 @@ describe('Runs Storage Routes', () => {
       });
 
       const { req, res } = createMocks({}, {
-        experimentId: 'exp-123',
+        benchmarkId: 'exp-123',
         status: 'completed',
         passFailStatus: 'passed',
       });
@@ -495,20 +507,20 @@ describe('Runs Storage Routes', () => {
     });
   });
 
-  describe('GET /api/storage/runs/by-experiment/:experimentId', () => {
+  describe('GET /api/storage/runs/by-benchmark/:benchmarkId', () => {
     it('should return runs for experiment', async () => {
       mockSearch.mockResolvedValue({
         body: {
           hits: {
             hits: [
-              { _source: { id: 'run-123', experimentId: 'exp-123' } },
+              { _source: { id: 'run-123', benchmarkId: 'exp-123' } },
             ],
           },
         },
       });
 
-      const { req, res } = createMocks({ experimentId: 'exp-123' });
-      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/by-experiment/:experimentId');
+      const { req, res } = createMocks({ benchmarkId: 'exp-123' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/by-benchmark/:benchmarkId');
 
       await handler(req, res);
 
@@ -523,8 +535,8 @@ describe('Runs Storage Routes', () => {
     it('should return sample runs for demo experiment', async () => {
       mockSearch.mockRejectedValue(new Error('Connection refused'));
 
-      const { req, res } = createMocks({ experimentId: 'demo-experiment-1' });
-      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/by-experiment/:experimentId');
+      const { req, res } = createMocks({ benchmarkId: 'demo-experiment-1' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/by-benchmark/:benchmarkId');
 
       await handler(req, res);
 
@@ -538,20 +550,20 @@ describe('Runs Storage Routes', () => {
     });
   });
 
-  describe('GET /api/storage/runs/by-experiment-run/:experimentId/:runId', () => {
+  describe('GET /api/storage/runs/by-benchmark-run/:benchmarkId/:runId', () => {
     it('should return runs for experiment run', async () => {
       mockSearch.mockResolvedValue({
         body: {
           hits: {
             hits: [
-              { _source: { id: 'run-123', experimentId: 'exp-123', experimentRunId: 'run-1' } },
+              { _source: { id: 'run-123', benchmarkId: 'exp-123', experimentRunId: 'run-1' } },
             ],
           },
         },
       });
 
-      const { req, res } = createMocks({ experimentId: 'exp-123', runId: 'run-1' });
-      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/by-experiment-run/:experimentId/:runId');
+      const { req, res } = createMocks({ benchmarkId: 'exp-123', runId: 'run-1' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/by-benchmark-run/:benchmarkId/:runId');
 
       await handler(req, res);
 
@@ -564,7 +576,7 @@ describe('Runs Storage Routes', () => {
     });
   });
 
-  describe('GET /api/storage/runs/iterations/:experimentId/:testCaseId', () => {
+  describe('GET /api/storage/runs/iterations/:benchmarkId/:testCaseId', () => {
     it('should return iterations', async () => {
       mockSearch.mockResolvedValue({
         body: {
@@ -578,11 +590,11 @@ describe('Runs Storage Routes', () => {
       });
 
       const { req, res } = createMocks(
-        { experimentId: 'exp-123', testCaseId: 'tc-123' },
+        { benchmarkId: 'exp-123', testCaseId: 'tc-123' },
         {},
         {}
       );
-      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/iterations/:experimentId/:testCaseId');
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/iterations/:benchmarkId/:testCaseId');
 
       await handler(req, res);
 
@@ -601,15 +613,16 @@ describe('Runs Storage Routes', () => {
       });
 
       const { req, res } = createMocks(
-        { experimentId: 'exp-123', testCaseId: 'tc-123' },
+        { benchmarkId: 'exp-123', testCaseId: 'tc-123' },
         {},
-        { experimentRunId: 'run-1' }
+        { benchmarkRunId: 'run-1' }
       );
-      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/iterations/:experimentId/:testCaseId');
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/iterations/:benchmarkId/:testCaseId');
 
       await handler(req, res);
 
       const searchBody = mockSearch.mock.calls[0][0].body;
+      // Note: Query uses experimentRunId (legacy field name in OpenSearch) while API parameter is benchmarkRunId
       expect(searchBody.query.bool.must).toContainEqual({ term: { experimentRunId: 'run-1' } });
     });
   });

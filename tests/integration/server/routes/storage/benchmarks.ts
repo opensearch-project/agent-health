@@ -106,7 +106,7 @@ describe('Experiment Execution API Integration Tests', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: 'Execute API Test Experiment',
+        name: 'Execute API Test Benchmark',
         description: 'Experiment for testing execute API',
         testCaseIds: testCaseId ? [testCaseId] : [],
         runs: [],
@@ -270,7 +270,7 @@ describe('Experiment Execution API Integration Tests', () => {
 
       const experiment = await response.json();
       expect(experiment.id).toBe(testExperimentId);
-      expect(experiment.name).toBe('Execute API Test Experiment');
+      expect(experiment.name).toBe('Execute API Test Benchmark');
     });
 
     it('should list all experiments', async () => {

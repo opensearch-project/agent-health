@@ -10,9 +10,9 @@
  * (test cases, experiments, reports) from browser localStorage to OpenSearch.
  */
 
-import type { TestCase, Experiment, EvaluationReport } from '@/types';
+import type { TestCase, Benchmark, Experiment, EvaluationReport } from '@/types';
 import { asyncTestCaseStorage } from './asyncTestCaseStorage';
-import { asyncExperimentStorage } from './asyncExperimentStorage';
+import { asyncBenchmarkStorage } from './asyncBenchmarkStorage';
 import { asyncRunStorage } from './asyncRunStorage';
 
 // localStorage keys used by the old storage system
@@ -216,7 +216,7 @@ export async function migrateToOpenSearch(
     let existingByName = new Map<string, string>();
     if (skipExisting && !dryRun) {
       try {
-        const existing = await asyncExperimentStorage.getAll();
+        const existing = await asyncBenchmarkStorage.getAll();
         existing.forEach(e => existingByName.set(e.name, e.id));
       } catch {
         // If we can't fetch existing, continue anyway
@@ -249,7 +249,7 @@ export async function migrateToOpenSearch(
           };
 
           // Save experiment with its embedded runs
-          await asyncExperimentStorage.save(migratedExperiment);
+          await asyncBenchmarkStorage.save(migratedExperiment);
         }
 
         stats.experiments.migrated++;

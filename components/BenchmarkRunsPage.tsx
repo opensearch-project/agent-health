@@ -15,12 +15,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { asyncExperimentStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
-import { executeExperimentRun, cancelExperimentRun } from '@/services/client';
-import { Experiment, ExperimentRun, EvaluationReport, TestCase, ExperimentProgress, ExperimentStartedEvent } from '@/types';
+import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
+import { executeBenchmarkRun, cancelBenchmarkRun } from '@/services/client';
+import { Benchmark, BenchmarkRun, EvaluationReport, TestCase, BenchmarkProgress, BenchmarkStartedEvent } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getLabelColor, formatDate, getModelName } from '@/lib/utils';
-import { RunConfigForExecution } from './ExperimentEditor';
+import { RunConfigForExecution } from './BenchmarkEditor';
 
 // Track individual use case status during run
 interface UseCaseRunStatus {
@@ -35,7 +35,7 @@ const POLL_INTERVAL_MS = 2000;
  * Get effective run status - normalizes legacy data (status: undefined) to proper enum values.
  * Returns: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
  */
-const getEffectiveRunStatus = (run: ExperimentRun): ExperimentRun['status'] => {
+const getEffectiveRunStatus = (run: BenchmarkRun): BenchmarkRun['status'] => {
   // If status is explicitly set, use it (modern data - backend always sets this now)
   if (run.status) {
     return run.status;
@@ -67,11 +67,11 @@ const getEffectiveRunStatus = (run: ExperimentRun): ExperimentRun['status'] => {
   return 'failed';
 };
 
-export const ExperimentRunsPage: React.FC = () => {
-  const { experimentId } = useParams<{ experimentId: string }>();
+export const BenchmarkRunsPage: React.FC = () => {
+  const { benchmarkId } = useParams<{ benchmarkId: string }>();
   const navigate = useNavigate();
 
-  const [experiment, setExperiment] = useState<Experiment | null>(null);
+  const [benchmark, setBenchmark] = useState<Benchmark | null>(null);
   const [reports, setReports] = useState<Record<string, EvaluationReport | null>>({});
   const [testCases, setTestCases] = useState<TestCase[]>([]);
 
@@ -86,7 +86,7 @@ export const ExperimentRunsPage: React.FC = () => {
 
   // Running state
   const [isRunning, setIsRunning] = useState(false);
-  const [runProgress, setRunProgress] = useState<ExperimentProgress | null>(null);
+  const [runProgress, setRunProgress] = useState<BenchmarkProgress | null>(null);
   const [useCaseStatuses, setUseCaseStatuses] = useState<UseCaseRunStatus[]>([]);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -98,48 +98,48 @@ export const ExperimentRunsPage: React.FC = () => {
     asyncTestCaseStorage.getAll().then(setTestCases);
   }, []);
 
-  const loadExperiment = useCallback(async () => {
-    if (!experimentId) return;
+  const loadBenchmark = useCallback(async () => {
+    if (!benchmarkId) return;
 
-    const exp = await asyncExperimentStorage.getById(experimentId);
+    const exp = await asyncBenchmarkStorage.getById(benchmarkId);
     if (!exp) {
-      navigate('/experiments');
+      navigate('/benchmarks');
       return;
     }
 
-    setExperiment(exp);
+    setBenchmark(exp);
 
-    // Load all reports for this experiment in a single batch request
+    // Load all reports for this benchmark in a single batch request
     // (avoids ERR_INSUFFICIENT_RESOURCES from too many concurrent fetches)
-    const allReports = await asyncRunStorage.getByExperiment(experimentId);
+    const allReports = await asyncRunStorage.getByBenchmark(benchmarkId);
     const loadedReports: Record<string, EvaluationReport | null> = {};
     allReports.forEach(report => {
       loadedReports[report.id] = report;
     });
     setReports(loadedReports);
-  }, [experimentId, navigate]);
+  }, [benchmarkId, navigate]);
 
   useEffect(() => {
-    loadExperiment();
-  }, [loadExperiment]);
+    loadBenchmark();
+  }, [loadBenchmark]);
 
-  // Filter test cases to only those in this experiment
-  const experimentTestCases = useMemo(() =>
-    testCases.filter(tc => experiment?.testCaseIds.includes(tc.id)),
-    [testCases, experiment]
+  // Filter test cases to only those in this benchmark
+  const benchmarkTestCases = useMemo(() =>
+    testCases.filter(tc => benchmark?.testCaseIds.includes(tc.id)),
+    [testCases, benchmark]
   );
 
-  const handleDeleteRun = async (run: ExperimentRun) => {
-    if (!experimentId) return;
+  const handleDeleteRun = async (run: BenchmarkRun) => {
+    if (!benchmarkId) return;
 
     if (window.confirm(`Delete run "${run.name}"? This cannot be undone.`)) {
-      await asyncExperimentStorage.deleteRun(experimentId, run.id);
-      // Reload experiment to get updated runs
-      loadExperiment();
+      await asyncBenchmarkStorage.deleteRun(benchmarkId, run.id);
+      // Reload benchmark to get updated runs
+      loadBenchmark();
     }
   };
 
-  const getRunStats = (run: ExperimentRun) => {
+  const getRunStats = (run: BenchmarkRun) => {
     let passed = 0;
     let failed = 0;
     let pending = 0;
@@ -185,11 +185,11 @@ export const ExperimentRunsPage: React.FC = () => {
   // Check if any runs are still executing on the server
   // This catches runs that are in-progress even if our SSE connection was lost
   const hasServerInProgressRuns = useMemo(() => {
-    if (!experiment?.runs) return false;
-    return experiment.runs.some(run => getEffectiveRunStatus(run) === 'running');
-  }, [experiment?.runs]);
+    if (!benchmark?.runs) return false;
+    return benchmark.runs.some(run => getEffectiveRunStatus(run) === 'running');
+  }, [benchmark?.runs]);
 
-  // Polling effect: refresh experiment data when running OR when there are pending evaluations/in-progress runs
+  // Polling effect: refresh benchmark data when running OR when there are pending evaluations/in-progress runs
   useEffect(() => {
     const shouldPoll = isRunning || hasPendingEvaluations || hasServerInProgressRuns;
 
@@ -199,7 +199,7 @@ export const ExperimentRunsPage: React.FC = () => {
       const interval = isRunning ? POLL_INTERVAL_MS : 5000;
 
       pollIntervalRef.current = setInterval(() => {
-        loadExperiment();
+        loadBenchmark();
       }, interval);
 
       // Polling active for background sync scenarios
@@ -215,9 +215,9 @@ export const ExperimentRunsPage: React.FC = () => {
         clearInterval(pollIntervalRef.current);
       }
     };
-  }, [isRunning, hasPendingEvaluations, hasServerInProgressRuns, loadExperiment]);
+  }, [isRunning, hasPendingEvaluations, hasServerInProgressRuns, loadBenchmark]);
 
-  const getLatestRun = (exp: Experiment): ExperimentRun | null => {
+  const getLatestRun = (exp: Benchmark): BenchmarkRun | null => {
     if (!exp.runs || exp.runs.length === 0) return null;
     return exp.runs.reduce((latest, run) =>
       new Date(run.createdAt) > new Date(latest.createdAt) ? run : latest
@@ -226,14 +226,14 @@ export const ExperimentRunsPage: React.FC = () => {
 
   // Open run configuration dialog
   const handleAddRun = () => {
-    if (!experiment) return;
+    if (!benchmark) return;
     if (isRunning) {
       alert('A run is already in progress. Please wait for it to complete.');
       return;
     }
 
-    const latestRun = getLatestRun(experiment);
-    const runNumber = (experiment.runs?.length || 0) + 1;
+    const latestRun = getLatestRun(benchmark);
+    const runNumber = (benchmark.runs?.length || 0) + 1;
 
     // Pre-fill with latest run config if available, otherwise use defaults
     setRunConfigValues({
@@ -248,12 +248,12 @@ export const ExperimentRunsPage: React.FC = () => {
 
   // Execute the run with configured values
   const handleStartRun = async () => {
-    if (!experiment) return;
+    if (!benchmark) return;
 
     setIsRunConfigOpen(false);
 
     // Initialize use case statuses
-    const initialStatuses: UseCaseRunStatus[] = experiment.testCaseIds.map(id => {
+    const initialStatuses: UseCaseRunStatus[] = benchmark.testCaseIds.map(id => {
       const testCase = testCases.find(tc => tc.id === id);
       return {
         id,
@@ -267,10 +267,10 @@ export const ExperimentRunsPage: React.FC = () => {
     setRunProgress(null);
 
     try {
-      const completedRun = await executeExperimentRun(
-        experiment.id,
+      const completedRun = await executeBenchmarkRun(
+        benchmark.id,
         runConfigValues,
-        (progress: ExperimentProgress) => {
+        (progress: BenchmarkProgress) => {
           setRunProgress(progress);
           // Update use case statuses based on progress
           setUseCaseStatuses(prev => prev.map((uc, index) => {
@@ -282,7 +282,7 @@ export const ExperimentRunsPage: React.FC = () => {
             return uc;
           }));
         },
-        (startedEvent: ExperimentStartedEvent) => {
+        (startedEvent: BenchmarkStartedEvent) => {
           // Initialize use case statuses from server response (ensures consistency)
           setUseCaseStatuses(startedEvent.testCases.map(tc => ({
             id: tc.id,
@@ -294,9 +294,9 @@ export const ExperimentRunsPage: React.FC = () => {
 
       // Mark all as completed when done (server already saved the run)
       setUseCaseStatuses(prev => prev.map(uc => ({ ...uc, status: 'completed' as const })));
-      loadExperiment();
+      loadBenchmark();
     } catch (error) {
-      console.error('Error running experiment:', error);
+      console.error('Error running benchmark:', error);
       // Mark current and remaining as failed
       setUseCaseStatuses(prev => prev.map(uc =>
         uc.status === 'pending' || uc.status === 'running'
@@ -320,7 +320,7 @@ export const ExperimentRunsPage: React.FC = () => {
 
   // Toggle select all / deselect all
   const handleToggleSelectAll = () => {
-    const allRunIds = (experiment?.runs || []).map(r => r.id);
+    const allRunIds = (benchmark?.runs || []).map(r => r.id);
     if (selectedRunIds.length === allRunIds.length) {
       setSelectedRunIds([]);
     } else {
@@ -331,11 +331,11 @@ export const ExperimentRunsPage: React.FC = () => {
   // Navigate to comparison with selected runs
   const handleCompareSelected = () => {
     if (selectedRunIds.length >= 2) {
-      navigate(`/compare/${experimentId}?runs=${selectedRunIds.join(',')}`);
+      navigate(`/compare/${benchmarkId}?runs=${selectedRunIds.join(',')}`);
     }
   };
 
-  if (!experiment) {
+  if (!benchmark) {
     return (
       <div className="p-6 flex items-center justify-center h-full">
         <p className="text-muted-foreground">Loading...</p>
@@ -343,7 +343,7 @@ export const ExperimentRunsPage: React.FC = () => {
     );
   }
 
-  const runs = experiment.runs || [];
+  const runs = benchmark.runs || [];
   const hasMultipleRuns = runs.length >= 2;
 
   return (
@@ -351,14 +351,14 @@ export const ExperimentRunsPage: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/experiments')}>
+          <Button variant="ghost" size="icon" onClick={() => navigate('/benchmarks')}>
             <ArrowLeft size={18} />
           </Button>
           <div>
-            <h2 className="text-2xl font-bold">{experiment.name}</h2>
+            <h2 className="text-2xl font-bold">{benchmark.name}</h2>
             <p className="text-xs text-muted-foreground">
               {runs.length} run{runs.length !== 1 ? 's' : ''}
-              {experiment.description && ` · ${experiment.description}`}
+              {benchmark.description && ` · ${benchmark.description}`}
             </p>
           </div>
         </div>
@@ -419,19 +419,19 @@ export const ExperimentRunsPage: React.FC = () => {
           <div className="space-y-2 mb-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Calendar size={12} />
-              <span>Created {formatDate(experiment.createdAt)}</span>
+              <span>Created {formatDate(benchmark.createdAt)}</span>
             </div>
             <div className="text-sm font-medium">
-              {experimentTestCases.length} test case{experimentTestCases.length !== 1 ? 's' : ''}
+              {benchmarkTestCases.length} test case{benchmarkTestCases.length !== 1 ? 's' : ''}
             </div>
           </div>
 
           {/* Test Cases List */}
           <div className="space-y-2">
-            {experimentTestCases.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No test cases in this experiment</p>
+            {benchmarkTestCases.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No test cases in this benchmark</p>
             ) : (
-              experimentTestCases.map(tc => (
+              benchmarkTestCases.map(tc => (
                 <Card
                   key={tc.id}
                   className="cursor-pointer hover:border-primary/50 transition-colors"
@@ -506,7 +506,7 @@ export const ExperimentRunsPage: React.FC = () => {
             <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <Play size={48} className="mb-4 opacity-20" />
               <p className="text-lg font-medium">No runs yet</p>
-              <p className="text-sm">Run this experiment to see results here</p>
+              <p className="text-sm">Run this benchmark to see results here</p>
             </CardContent>
           </Card>
         ) : (
@@ -526,8 +526,8 @@ export const ExperimentRunsPage: React.FC = () => {
                       : 'hover:border-primary/50'
                   }`}
                   onClick={() => {
-                    // Navigate with ExperimentRun.id - RunDetailsPage handles all states
-                    navigate(`/experiments/${experimentId}/runs/${run.id}`);
+                    // Navigate with BenchmarkRun.id - RunDetailsPage handles all states
+                    navigate(`/benchmarks/${benchmarkId}/runs/${run.id}`);
                   }}
                 >
                   <CardContent className="p-4">
@@ -560,6 +560,23 @@ export const ExperimentRunsPage: React.FC = () => {
                             {isLatest && (
                               <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-400 border-blue-500/30">
                                 Latest
+                              </Badge>
+                            )}
+                            {/* Version badge - show which benchmark version was used */}
+                            {run.benchmarkVersion && benchmark && (
+                              <Badge
+                                variant="outline"
+                                className={`text-xs ${
+                                  run.benchmarkVersion < benchmark.currentVersion
+                                    ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30'
+                                    : 'text-muted-foreground'
+                                }`}
+                                title={run.benchmarkVersion < (benchmark.currentVersion || 1)
+                                  ? `Run used v${run.benchmarkVersion}, current is v${benchmark.currentVersion}`
+                                  : `Run used v${run.benchmarkVersion}`}
+                              >
+                                v{run.benchmarkVersion}
+                                {run.benchmarkVersion < (benchmark.currentVersion || 1) && ' (outdated)'}
                               </Badge>
                             )}
                           </div>
@@ -617,8 +634,8 @@ export const ExperimentRunsPage: React.FC = () => {
                             onClick={async (e) => {
                               e.stopPropagation();
                               try {
-                                await cancelExperimentRun(experimentId!, run.id);
-                                loadExperiment();
+                                await cancelBenchmarkRun(benchmarkId!, run.id);
+                                loadBenchmark();
                               } catch (error) {
                                 console.error('Failed to cancel run:', error);
                               }

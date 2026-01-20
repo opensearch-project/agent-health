@@ -6,14 +6,14 @@
 import React from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { GitBranch, Scale, Activity } from 'lucide-react';
-import { EvaluationReport, ExperimentRun } from '@/types';
+import { EvaluationReport, BenchmarkRun } from '@/types';
 import { TrajectorySection } from './sections/TrajectorySection';
 import { JudgeSection } from './sections/JudgeSection';
 import { TraceFlowComparison } from './sections/TraceFlowComparison';
 
 interface UseCaseExpandedRowProps {
   useCaseId: string;
-  runs: ExperimentRun[];
+  runs: BenchmarkRun[];
   reports: Record<string, EvaluationReport>;
 }
 

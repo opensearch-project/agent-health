@@ -23,7 +23,7 @@ import { AggregateMetricsChart } from './AggregateMetricsChart';
 import { MetricsTimeSeriesChart } from './MetricsTimeSeriesChart';
 import { UseCaseComparisonTable } from './UseCaseComparisonTable';
 import { ComparisonSummaryBanner } from './ComparisonSummaryBanner';
-import { asyncExperimentStorage, asyncRunStorage } from '@/services/storage';
+import { asyncBenchmarkStorage, asyncRunStorage } from '@/services/storage';
 import {
   calculateRunAggregates,
   buildTestCaseComparisonRows,
@@ -36,18 +36,18 @@ import {
   RowStatus,
 } from '@/services/comparisonService';
 import { fetchBatchMetrics } from '@/services/metrics';
-import { Category, Experiment, ExperimentRun, EvaluationReport, RunAggregateMetrics, TestCaseComparisonRow, TraceMetrics } from '@/types';
+import { Category, Benchmark, BenchmarkRun, EvaluationReport, RunAggregateMetrics, TestCaseComparisonRow, TraceMetrics } from '@/types';
 
 type StatusFilter = 'all' | 'passed' | 'failed' | 'mixed';
 
 export const ComparisonPage: React.FC = () => {
-  const { experimentId } = useParams<{ experimentId: string }>();
+  const { benchmarkId } = useParams<{ benchmarkId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  // State for experiment and data
-  const [experiment, setExperiment] = useState<Experiment | null>(null);
-  const [allRuns, setAllRuns] = useState<ExperimentRun[]>([]);
+  // State for benchmark and data
+  const [benchmark, setBenchmark] = useState<Benchmark | null>(null);
+  const [allRuns, setAllRuns] = useState<BenchmarkRun[]>([]);
   const [reports, setReports] = useState<Record<string, EvaluationReport>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [traceMetricsMap, setTraceMetricsMap] = useState<Map<string, TraceMetrics>>(new Map());
@@ -63,22 +63,22 @@ export const ComparisonPage: React.FC = () => {
   // State for baseline selection
   const [baselineRunId, setBaselineRunId] = useState<string>('');
 
-  // Load experiment data
+  // Load benchmark data
   useEffect(() => {
-    const loadExperiment = async () => {
-      if (!experimentId) {
-        navigate('/experiments');
+    const loadBenchmark = async () => {
+      if (!benchmarkId) {
+        navigate('/benchmarks');
         return;
       }
 
-      const exp = await asyncExperimentStorage.getById(experimentId);
-      if (!exp) {
-        navigate('/experiments');
+      const bench = await asyncBenchmarkStorage.getById(benchmarkId);
+      if (!bench) {
+        navigate('/benchmarks');
         return;
       }
 
-      setExperiment(exp);
-      const runs = exp.runs || [];
+      setBenchmark(bench);
+      const runs = bench.runs || [];
       setAllRuns(runs);
 
       // Build reports map
@@ -116,8 +116,8 @@ export const ComparisonPage: React.FC = () => {
       setIsLoading(false);
     };
 
-    loadExperiment();
-  }, [experimentId, navigate]); // Note: removed searchParams from deps to avoid re-running on URL update
+    loadBenchmark();
+  }, [benchmarkId, navigate]); // Note: removed searchParams from deps to avoid re-running on URL update
 
   // Fetch trace metrics for all reports
   useEffect(() => {
@@ -160,7 +160,7 @@ export const ComparisonPage: React.FC = () => {
   };
 
   // Get selected runs
-  const selectedRuns = useMemo((): ExperimentRun[] => {
+  const selectedRuns = useMemo((): BenchmarkRun[] => {
     return allRuns.filter(r => selectedRunIds.includes(r.id));
   }, [allRuns, selectedRunIds]);
 
@@ -266,10 +266,10 @@ export const ComparisonPage: React.FC = () => {
     );
   }
 
-  if (!experiment) {
+  if (!benchmark) {
     return (
       <div className="p-6 flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Experiment not found</p>
+        <p className="text-muted-foreground">Benchmark not found</p>
       </div>
     );
   }
@@ -282,14 +282,14 @@ export const ComparisonPage: React.FC = () => {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => navigate(`/experiments/${experimentId}/runs`)}
+            onClick={() => navigate(`/benchmarks/${benchmarkId}/runs`)}
           >
             <ArrowLeft size={18} />
           </Button>
           <GitCompare className="h-6 w-6 text-primary" />
           <div>
             <h1 className="text-2xl font-semibold">Compare Runs</h1>
-            <p className="text-xs text-muted-foreground">{experiment.name}</p>
+            <p className="text-xs text-muted-foreground">{benchmark.name}</p>
           </div>
         </div>
         <Badge variant="outline" className="text-xs">

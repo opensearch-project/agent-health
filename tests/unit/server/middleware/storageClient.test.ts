@@ -232,7 +232,7 @@ describe('getStorageClient', () => {
 describe('INDEXES', () => {
   it('should export correct index names', () => {
     expect(INDEXES.testCases).toBe('evals_test_cases');
-    expect(INDEXES.experiments).toBe('evals_experiments');
+    expect(INDEXES.benchmarks).toBe('evals_experiments');
     expect(INDEXES.runs).toBe('evals_runs');
     expect(INDEXES.analytics).toBe('evals_analytics');
   });

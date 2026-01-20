@@ -466,24 +466,38 @@ export interface IntentNode {
   totalDuration: number;         // Combined duration of all spans in this node (ms)
 }
 
-// ============ Experiment Types ============
+// ============ Benchmark Types ============
 
 // Result status for a single use case within a run
 export type RunResultStatus = 'pending' | 'running' | 'completed' | 'failed';
 
-// Overall status for an experiment run (tracks server-side execution state)
-export type ExperimentRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+// Overall status for a benchmark run (tracks server-side execution state)
+export type BenchmarkRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+// Version snapshot - immutable record of benchmark test case list at a point in time
+export interface BenchmarkVersion {
+  version: number;
+  createdAt: string;
+  testCaseIds: string[];
+}
+
+// Test case snapshot captured at run execution time (for reproducibility)
+export interface TestCaseSnapshot {
+  id: string;
+  version: number;  // Which version of the test case was used
+  name: string;     // Captured at run time for display
+}
 
 // Point-in-time snapshot (renamed from ExperimentVariant)
 // Each run captures config + results at a moment in time
-export interface ExperimentRun {
+export interface BenchmarkRun {
   id: string;
   name: string;                    // e.g., "Baseline", "With Fix v1", "Claude 4 Test"
   description?: string;            // Optional description of what this run tests
   createdAt: string;               // When this run was created
 
   // Execution status (tracks server-side execution progress)
-  status?: ExperimentRunStatus;    // Overall run status (undefined = legacy data, treat as completed)
+  status?: BenchmarkRunStatus;     // Overall run status (undefined = legacy data, treat as completed)
   error?: string;                  // Error message if status is 'failed'
 
   // Configuration snapshot
@@ -492,6 +506,10 @@ export interface ExperimentRun {
   modelId: string;                 // Model to use (also determines judge provider)
   headers?: Record<string, string>; // Custom headers
 
+  // Version tracking (for reproducibility)
+  benchmarkVersion?: number;       // Which benchmark version was executed (undefined = legacy data)
+  testCaseSnapshots?: TestCaseSnapshot[];  // Snapshot of each test case at execution time
+
   // Results (directly embedded, no separate VariantRun type)
   results: Record<string, {        // testCaseId → result
     reportId: string;              // References EvaluationReport.id
@@ -499,19 +517,25 @@ export interface ExperimentRun {
   }>;
 }
 
-// Parent entity - persisted to localStorage['experiments']
-export interface Experiment {
+// Parent entity - persisted to localStorage['benchmarks']
+export interface Benchmark {
   id: string;
   name: string;
   description?: string;
   createdAt: string;
   updatedAt: string;
+
+  // Versioning (test case list changes create new versions; metadata edits don't)
+  currentVersion: number;          // Latest version number (1-indexed)
+  versions: BenchmarkVersion[];    // All versions (immutable history)
+
+  // Current version content (convenience accessor - mirrors latest version)
   testCaseIds: string[];           // Selected test case IDs (TestCase.id)
-  runs: ExperimentRun[];           // Point-in-time snapshots (can add more anytime)
+  runs: BenchmarkRun[];            // Point-in-time snapshots (can add more anytime)
 }
 
-// Progress callback for experiment runner
-export interface ExperimentProgress {
+// Progress callback for benchmark runner
+export interface BenchmarkProgress {
   currentTestCaseIndex: number;
   totalTestCases: number;
   currentRunId: string;
@@ -519,11 +543,23 @@ export interface ExperimentProgress {
   status: 'running' | 'completed' | 'failed' | 'cancelled';
 }
 
-// SSE event payload when experiment run starts
-export interface ExperimentStartedEvent {
+// SSE event payload when benchmark run starts
+export interface BenchmarkStartedEvent {
   runId: string;
   testCases: Array<{ id: string; name: string; status: 'pending' }>;
 }
+
+// Backwards compatibility aliases
+/** @deprecated Use BenchmarkRunStatus instead */
+export type ExperimentRunStatus = BenchmarkRunStatus;
+/** @deprecated Use BenchmarkRun instead */
+export type ExperimentRun = BenchmarkRun;
+/** @deprecated Use Benchmark instead */
+export type Experiment = Benchmark;
+/** @deprecated Use BenchmarkProgress instead */
+export type ExperimentProgress = BenchmarkProgress;
+/** @deprecated Use BenchmarkStartedEvent instead */
+export type ExperimentStartedEvent = BenchmarkStartedEvent;
 
 // ============ Comparison Types ============
 
@@ -583,8 +619,8 @@ export interface TestCaseComparisonRow {
 
 // ============ Derived Types ============
 
-// Derived type for creating new experiment runs - stays in sync with ExperimentRun
-export type RunConfigInput = Pick<ExperimentRun,
+// Derived type for creating new benchmark runs - stays in sync with BenchmarkRun
+export type RunConfigInput = Pick<BenchmarkRun,
   'name' | 'description' | 'agentKey' | 'modelId' | 'agentEndpoint' | 'headers'
 >;
 
@@ -634,7 +670,7 @@ export interface StorageConfig {
   password?: string;
   indexes: {
     testCases: string;
-    experiments: string;
+    benchmarks: string;
     runs: string;
     analytics: string;
   };

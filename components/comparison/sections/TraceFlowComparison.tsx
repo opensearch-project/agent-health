@@ -37,7 +37,7 @@ import {
 } from '@/components/ui/fullscreen-dialog';
 import {
   EvaluationReport,
-  ExperimentRun,
+  BenchmarkRun,
   Span,
   CategorizedSpan,
   AlignedSpanPair,
@@ -60,7 +60,7 @@ type ComparisonMode = 'side-by-side' | 'merged';
 type DiffType = 'matched' | 'added' | 'removed' | 'modified';
 
 interface TraceFlowComparisonProps {
-  runs: ExperimentRun[];
+  runs: BenchmarkRun[];
   reports: Record<string, EvaluationReport>;
   useCaseId: string;
 }

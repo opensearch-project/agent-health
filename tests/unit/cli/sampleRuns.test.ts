@@ -12,8 +12,8 @@ import {
   getSampleRun,
   getAllSampleRuns,
   getSampleRunsByTestCase,
-  getSampleRunsByExperiment,
-  getSampleRunsByExperimentRun,
+  getSampleRunsByBenchmark,
+  getSampleRunsByBenchmarkRun,
   isSampleRunId,
 } from '@/cli/demo/sampleRuns';
 
@@ -132,31 +132,31 @@ describe('Sample Runs', () => {
     });
   });
 
-  describe('getSampleRunsByExperiment', () => {
+  describe('getSampleRunsByBenchmark', () => {
     it('should return all runs for demo experiment', () => {
-      const runs = getSampleRunsByExperiment('demo-exp-001');
+      const runs = getSampleRunsByBenchmark('demo-exp-001');
       expect(runs.length).toBe(5);
     });
 
     it('should return empty array for unknown experiment', () => {
-      const runs = getSampleRunsByExperiment('unknown-exp');
+      const runs = getSampleRunsByBenchmark('unknown-exp');
       expect(runs).toEqual([]);
     });
   });
 
-  describe('getSampleRunsByExperimentRun', () => {
+  describe('getSampleRunsByBenchmarkRun', () => {
     it('should return runs for specific experiment run', () => {
-      const runs = getSampleRunsByExperimentRun('demo-exp-001', 'demo-run-001');
+      const runs = getSampleRunsByBenchmarkRun('demo-exp-001', 'demo-run-001');
       expect(runs.length).toBe(5);
     });
 
     it('should return empty array for mismatched experiment', () => {
-      const runs = getSampleRunsByExperimentRun('unknown-exp', 'demo-run-001');
+      const runs = getSampleRunsByBenchmarkRun('unknown-exp', 'demo-run-001');
       expect(runs).toEqual([]);
     });
 
     it('should return empty array for mismatched run', () => {
-      const runs = getSampleRunsByExperimentRun('demo-exp-001', 'unknown-run');
+      const runs = getSampleRunsByBenchmarkRun('demo-exp-001', 'unknown-run');
       expect(runs).toEqual([]);
     });
   });

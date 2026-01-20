@@ -10,19 +10,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Experiment, ExperimentRun, EvaluationReport, TestCase } from '@/types';
+import { Benchmark, BenchmarkRun, EvaluationReport, TestCase } from '@/types';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { UseCaseCompareView } from './UseCaseCompareView';
-import { ExperimentSummaryCharts } from './experiments/ExperimentSummaryCharts';
+import { BenchmarkSummaryCharts } from './benchmarks/BenchmarkSummaryCharts';
 import { formatDate } from '@/lib/utils';
 
-interface ExperimentResultsViewProps {
-  experiment: Experiment;
+interface BenchmarkResultsViewProps {
+  benchmark: Benchmark;
   onBack: () => void;
 }
 
-export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
-  experiment,
+export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
+  benchmark,
   onBack,
 }) => {
   const navigate = useNavigate();
@@ -42,7 +42,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
       setIsLoading(true);
       try {
         const reportIds = new Set<string>();
-        experiment.runs?.forEach(run => {
+        benchmark.runs?.forEach(run => {
           Object.values(run.results || {}).forEach(result => {
             if (result.reportId) {
               reportIds.add(result.reportId);
@@ -64,7 +64,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
     };
 
     loadReports();
-  }, [experiment]);
+  }, [benchmark]);
 
   const getUseCaseName = useCallback((useCaseId: string) => {
     const tc = testCases.find(t => t.id === useCaseId);
@@ -72,7 +72,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
   }, [testCases]);
 
   // Calculate summary stats per run
-  const calculateRunStats = (run: ExperimentRun) => {
+  const calculateRunStats = (run: BenchmarkRun) => {
     let totalAccuracy = 0;
     let passCount = 0;
     let totalCount = 0;
@@ -98,8 +98,8 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
     };
   };
 
-  const hasMultipleRuns = experiment.runs && experiment.runs.length > 1;
-  const hasAnyResults = experiment.runs?.some(run =>
+  const hasMultipleRuns = benchmark.runs && benchmark.runs.length > 1;
+  const hasAnyResults = benchmark.runs?.some(run =>
     Object.values(run.results || {}).some(r => r.status === 'completed')
   );
 
@@ -111,14 +111,14 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
             <ArrowLeft size={18} />
           </Button>
           <div>
-            <h2 className="text-2xl font-bold">{experiment.name}</h2>
+            <h2 className="text-2xl font-bold">{benchmark.name}</h2>
             <p className="text-xs text-muted-foreground">No results yet</p>
           </div>
         </div>
         <Card className="flex-1">
           <CardContent className="flex flex-col items-center justify-center h-full text-muted-foreground py-12">
             <p className="text-lg">No results available</p>
-            <p className="text-sm">Run this experiment to see results</p>
+            <p className="text-sm">Run this benchmark to see results</p>
           </CardContent>
         </Card>
       </div>
@@ -126,10 +126,10 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
   }
 
   // Get the most recent run with results
-  const latestRun = experiment.runs?.reduce((latest, run) => {
+  const latestRun = benchmark.runs?.reduce((latest, run) => {
     if (!latest) return run;
     return new Date(run.createdAt) > new Date(latest.createdAt) ? run : latest;
-  }, null as ExperimentRun | null);
+  }, null as BenchmarkRun | null);
 
   return (
     <>
@@ -141,15 +141,15 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
             <ArrowLeft size={18} />
           </Button>
           <div>
-            <h2 className="text-2xl font-bold">{experiment.name}</h2>
+            <h2 className="text-2xl font-bold">{benchmark.name}</h2>
             <p className="text-xs text-muted-foreground">
-              {experiment.runs?.length || 0} run{experiment.runs?.length !== 1 ? 's' : ''}
+              {benchmark.runs?.length || 0} run{benchmark.runs?.length !== 1 ? 's' : ''}
               {latestRun && ` · Latest: ${formatDate(latestRun.createdAt)}`}
             </p>
           </div>
         </div>
         {hasMultipleRuns && (
-          <Button variant="outline" onClick={() => navigate(`/compare/${experiment.id}`)}>
+          <Button variant="outline" onClick={() => navigate(`/compare/${benchmark.id}`)}>
             <GitCompare size={16} className="mr-2" />
             Compare Runs
           </Button>
@@ -159,9 +159,9 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
       <ScrollArea className="flex-1">
         <div className="space-y-6 pr-4">
           {/* Visual Summary Charts */}
-          {experiment.runs && experiment.runs.length > 0 && (
-            <ExperimentSummaryCharts
-              runs={experiment.runs}
+          {benchmark.runs && benchmark.runs.length > 0 && (
+            <BenchmarkSummaryCharts
+              runs={benchmark.runs}
               reports={reports}
             />
           )}
@@ -178,12 +178,12 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                     <thead>
                       <tr className="border-b">
                         <th className="text-left py-2 pr-4"></th>
-                        {experiment.runs?.map(run => (
+                        {benchmark.runs?.map(run => (
                           <th key={run.id} className="text-center py-2 px-4">
                             {run.name}
                           </th>
                         ))}
-                        {experiment.runs?.length === 2 && (
+                        {benchmark.runs?.length === 2 && (
                           <th className="text-center py-2 px-4">Diff</th>
                         )}
                       </tr>
@@ -191,7 +191,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                     <tbody>
                       <tr className="border-b">
                         <td className="py-2 pr-4 text-muted-foreground">Avg Accuracy</td>
-                        {experiment.runs?.map(run => {
+                        {benchmark.runs?.map(run => {
                           const stats = calculateRunStats(run);
                           return (
                             <td key={run.id} className="text-center py-2 px-4 font-medium">
@@ -199,11 +199,11 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                             </td>
                           );
                         })}
-                        {experiment.runs?.length === 2 && (
+                        {benchmark.runs?.length === 2 && (
                           <td className="text-center py-2 px-4">
                             {(() => {
-                              const s1 = calculateRunStats(experiment.runs[0]);
-                              const s2 = calculateRunStats(experiment.runs[1]);
+                              const s1 = calculateRunStats(benchmark.runs[0]);
+                              const s2 = calculateRunStats(benchmark.runs[1]);
                               const diff = s2.avgAccuracy - s1.avgAccuracy;
                               return (
                                 <span className={diff > 0 ? 'text-opensearch-blue' : diff < 0 ? 'text-red-400' : ''}>
@@ -216,7 +216,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                       </tr>
                       <tr className="border-b">
                         <td className="py-2 pr-4 text-muted-foreground">Pass Rate</td>
-                        {experiment.runs?.map(run => {
+                        {benchmark.runs?.map(run => {
                           const stats = calculateRunStats(run);
                           return (
                             <td key={run.id} className="text-center py-2 px-4 font-medium">
@@ -224,11 +224,11 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                             </td>
                           );
                         })}
-                        {experiment.runs?.length === 2 && (
+                        {benchmark.runs?.length === 2 && (
                           <td className="text-center py-2 px-4">
                             {(() => {
-                              const s1 = calculateRunStats(experiment.runs[0]);
-                              const s2 = calculateRunStats(experiment.runs[1]);
+                              const s1 = calculateRunStats(benchmark.runs[0]);
+                              const s2 = calculateRunStats(benchmark.runs[1]);
                               const diff = s2.passRatePercent - s1.passRatePercent;
                               return (
                                 <span className={diff > 0 ? 'text-opensearch-blue' : diff < 0 ? 'text-red-400' : ''}>
@@ -252,7 +252,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
               Per Use Case Breakdown
             </h3>
 
-            {experiment.testCaseIds.map(useCaseId => {
+            {benchmark.testCaseIds.map(useCaseId => {
               const useCase = testCases.find(t => t.id === useCaseId);
 
               return (
@@ -292,7 +292,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                         <thead>
                           <tr className="border-b">
                             <th className="text-left py-2 pr-4"></th>
-                            {experiment.runs?.map(run => (
+                            {benchmark.runs?.map(run => (
                               <th key={run.id} className="text-center py-2 px-4">
                                 {run.name}
                               </th>
@@ -302,7 +302,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                         <tbody>
                           <tr className="border-b">
                             <td className="py-2 pr-4 text-muted-foreground">Status</td>
-                            {experiment.runs?.map(run => {
+                            {benchmark.runs?.map(run => {
                               const result = run.results?.[useCaseId];
                               const report = result?.reportId ? reports[result.reportId] : null;
                               return (
@@ -326,7 +326,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                           </tr>
                           <tr className="border-b">
                             <td className="py-2 pr-4 text-muted-foreground">Accuracy</td>
-                            {experiment.runs?.map(run => {
+                            {benchmark.runs?.map(run => {
                               const result = run.results?.[useCaseId];
                               const report = result?.reportId ? reports[result.reportId] : null;
                               return (
@@ -338,7 +338,7 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
                           </tr>
                           <tr>
                             <td className="py-2 pr-4 text-muted-foreground">Steps</td>
-                            {experiment.runs?.map(run => {
+                            {benchmark.runs?.map(run => {
                               const result = run.results?.[useCaseId];
                               const report = result?.reportId ? reports[result.reportId] : null;
                               return (
@@ -363,10 +363,14 @@ export const ExperimentResultsView: React.FC<ExperimentResultsViewProps> = ({
     {/* Use Case Compare Modal */}
     {showUseCaseCompare && (
       <UseCaseCompareView
-        experiment={experiment}
+        benchmark={benchmark}
         onClose={() => setShowUseCaseCompare(false)}
       />
     )}
     </>
   );
 };
+
+// Backwards compatibility alias
+/** @deprecated Use BenchmarkResultsView instead */
+export const ExperimentResultsView = BenchmarkResultsView;

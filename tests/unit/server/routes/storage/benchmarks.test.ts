@@ -4,7 +4,7 @@
  */
 
 import { Request, Response } from 'express';
-import experimentsRoutes from '@/server/routes/storage/experiments';
+import benchmarksRoutes from '@/server/routes/storage/benchmarks';
 
 // Mock client methods
 const mockSearch = jest.fn();
@@ -28,7 +28,7 @@ const mockClient = {
 jest.mock('@/server/middleware/storageClient', () => ({
   isStorageAvailable: jest.fn(),
   requireStorageClient: jest.fn(),
-  INDEXES: { experiments: 'experiments-index', testCases: 'test-cases-index' },
+  INDEXES: { benchmarks: 'experiments-index', testCases: 'test-cases-index' },
 }));
 
 // Import mocked functions
@@ -37,12 +37,12 @@ import {
   requireStorageClient,
 } from '@/server/middleware/storageClient';
 
-// Mock sample experiments
-jest.mock('@/cli/demo/sampleExperiments', () => ({
-  SAMPLE_EXPERIMENTS: [
+// Mock sample benchmarks
+jest.mock('@/cli/demo/sampleBenchmarks', () => ({
+  SAMPLE_BENCHMARKS: [
     {
       id: 'demo-experiment-1',
-      name: 'Sample Experiment',
+      name: 'Sample Benchmark',
       description: 'A sample experiment',
       testCaseIds: ['demo-test-case-1'],
       runs: [
@@ -72,14 +72,14 @@ jest.mock('@/cli/demo/sampleTestCases', () => ({
   ],
 }));
 
-// Mock experimentRunner
+// Mock benchmarkRunner
 const mockExecuteRun = jest.fn();
 const mockCreateCancellationToken = jest.fn(() => ({
   isCancelled: false,
   cancel: jest.fn(),
 }));
 
-jest.mock('@/services/experimentRunner', () => ({
+jest.mock('@/services/benchmarkRunner', () => ({
   executeRun: (...args: any[]) => mockExecuteRun(...args),
   createCancellationToken: () => mockCreateCancellationToken(),
 }));
@@ -136,7 +136,7 @@ describe('Experiments Storage Routes', () => {
     (requireStorageClient as jest.Mock).mockReturnValue(mockClient);
   });
 
-  describe('GET /api/storage/experiments', () => {
+  describe('GET /api/storage/benchmarks', () => {
     it('should return combined sample and real experiments', async () => {
       mockSearch.mockResolvedValue({
         body: {
@@ -145,7 +145,7 @@ describe('Experiments Storage Routes', () => {
               {
                 _source: {
                   id: 'exp-123',
-                  name: 'Real Experiment',
+                  name: 'Real Benchmark',
                   createdAt: '2024-02-01T00:00:00Z',
                 },
               },
@@ -155,13 +155,13 @@ describe('Experiments Storage Routes', () => {
       });
 
       const { req, res } = createMocks();
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks');
 
       await handler(req, res);
 
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          experiments: expect.arrayContaining([
+          benchmarks: expect.arrayContaining([
             expect.objectContaining({ id: 'exp-123' }),
             expect.objectContaining({ id: 'demo-experiment-1' }),
           ]),
@@ -173,13 +173,13 @@ describe('Experiments Storage Routes', () => {
       mockSearch.mockRejectedValue(new Error('Connection refused'));
 
       const { req, res } = createMocks();
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks');
 
       await handler(req, res);
 
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          experiments: expect.arrayContaining([
+          benchmarks: expect.arrayContaining([
             expect.objectContaining({ id: 'demo-experiment-1' }),
           ]),
         })
@@ -187,29 +187,29 @@ describe('Experiments Storage Routes', () => {
     });
   });
 
-  describe('GET /api/storage/experiments/:id', () => {
+  describe('GET /api/storage/benchmarks/:id', () => {
     it('should return sample experiment for demo ID', async () => {
       const { req, res } = createMocks({ id: 'demo-experiment-1' });
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           id: 'demo-experiment-1',
-          name: 'Sample Experiment',
+          name: 'Sample Benchmark',
         })
       );
     });
 
     it('should return 404 for non-existent sample ID', async () => {
       const { req, res } = createMocks({ id: 'demo-nonexistent' });
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
       expect(res.status).toHaveBeenCalledWith(404);
-      expect(res.json).toHaveBeenCalledWith({ error: 'Experiment not found' });
+      expect(res.json).toHaveBeenCalledWith({ error: 'Benchmark not found' });
     });
 
     it('should fetch from OpenSearch for non-sample ID', async () => {
@@ -218,13 +218,13 @@ describe('Experiments Storage Routes', () => {
           found: true,
           _source: {
             id: 'exp-123',
-            name: 'Real Experiment',
+            name: 'Real Benchmark',
           },
         },
       });
 
       const { req, res } = createMocks({ id: 'exp-123' });
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -240,7 +240,7 @@ describe('Experiments Storage Routes', () => {
       });
 
       const { req, res } = createMocks({ id: 'exp-nonexistent' });
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -253,7 +253,7 @@ describe('Experiments Storage Routes', () => {
       mockGet.mockRejectedValue(error);
 
       const { req, res } = createMocks({ id: 'exp-123' });
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -261,13 +261,13 @@ describe('Experiments Storage Routes', () => {
     });
   });
 
-  describe('POST /api/storage/experiments', () => {
+  describe('POST /api/storage/benchmarks', () => {
     it('should reject creating experiment with demo prefix', async () => {
       const { req, res } = createMocks(
         {},
-        { id: 'demo-new-exp', name: 'Invalid Experiment' }
+        { id: 'demo-new-exp', name: 'Invalid Benchmark' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks');
 
       await handler(req, res);
 
@@ -284,9 +284,9 @@ describe('Experiments Storage Routes', () => {
 
       const { req, res } = createMocks(
         {},
-        { name: 'New Experiment', testCaseIds: ['tc-1'] }
+        { name: 'New Benchmark', testCaseIds: ['tc-1'] }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks');
 
       await handler(req, res);
 
@@ -294,7 +294,7 @@ describe('Experiments Storage Routes', () => {
       expect(res.status).toHaveBeenCalledWith(201);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'New Experiment',
+          name: 'New Benchmark',
         })
       );
     });
@@ -304,9 +304,9 @@ describe('Experiments Storage Routes', () => {
 
       const { req, res } = createMocks(
         {},
-        { id: 'custom-exp-123', name: 'New Experiment' }
+        { id: 'custom-exp-123', name: 'New Benchmark' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks');
 
       await handler(req, res);
 
@@ -321,11 +321,11 @@ describe('Experiments Storage Routes', () => {
       const { req, res } = createMocks(
         {},
         {
-          name: 'New Experiment',
+          name: 'New Benchmark',
           runs: [{ name: 'Run 1', agentKey: 'agent', modelId: 'model' }],
         }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks');
 
       await handler(req, res);
 
@@ -335,13 +335,13 @@ describe('Experiments Storage Routes', () => {
     });
   });
 
-  describe('PUT /api/storage/experiments/:id', () => {
+  describe('PUT /api/storage/benchmarks/:id', () => {
     it('should reject modifying sample data', async () => {
       const { req, res } = createMocks(
         { id: 'demo-experiment-1' },
         { runs: [] }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'put', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -353,26 +353,33 @@ describe('Experiments Storage Routes', () => {
       );
     });
 
-    it('should reject request without runs', async () => {
+    it('should update metadata without runs', async () => {
+      mockGet.mockResolvedValue({
+        body: {
+          found: true,
+          _source: { id: 'exp-123', name: 'Benchmark', testCaseIds: [], runs: [] },
+        },
+      });
+      mockIndex.mockResolvedValue({ body: { result: 'updated' } });
+
       const { req, res } = createMocks(
         { id: 'exp-123' },
-        { name: 'Updated' }
+        { name: 'Updated Name' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'put', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({
-        error: 'Only runs can be updated. Provide { runs: [...] }',
-      });
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Updated Name' })
+      );
     });
 
     it('should update runs', async () => {
       mockGet.mockResolvedValue({
         body: {
           found: true,
-          _source: { id: 'exp-123', name: 'Experiment', runs: [] },
+          _source: { id: 'exp-123', name: 'Benchmark', runs: [] },
         },
       });
       mockIndex.mockResolvedValue({ body: { result: 'updated' } });
@@ -385,7 +392,7 @@ describe('Experiments Storage Routes', () => {
           ],
         }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'put', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -407,7 +414,7 @@ describe('Experiments Storage Routes', () => {
         { id: 'exp-nonexistent' },
         { runs: [] }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'put', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -415,10 +422,10 @@ describe('Experiments Storage Routes', () => {
     });
   });
 
-  describe('DELETE /api/storage/experiments/:id', () => {
+  describe('DELETE /api/storage/benchmarks/:id', () => {
     it('should reject deleting sample data', async () => {
       const { req, res } = createMocks({ id: 'demo-experiment-1' });
-      const handler = getRouteHandler(experimentsRoutes, 'delete', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'delete', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -434,7 +441,7 @@ describe('Experiments Storage Routes', () => {
       mockDelete.mockResolvedValue({ body: {} });
 
       const { req, res } = createMocks({ id: 'exp-123' });
-      const handler = getRouteHandler(experimentsRoutes, 'delete', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'delete', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -448,7 +455,7 @@ describe('Experiments Storage Routes', () => {
       mockDelete.mockRejectedValue(error);
 
       const { req, res } = createMocks({ id: 'exp-nonexistent' });
-      const handler = getRouteHandler(experimentsRoutes, 'delete', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'delete', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -456,25 +463,25 @@ describe('Experiments Storage Routes', () => {
     });
   });
 
-  describe('POST /api/storage/experiments/bulk', () => {
+  describe('POST /api/storage/benchmarks/bulk', () => {
     it('should reject non-array input', async () => {
-      const { req, res } = createMocks({}, { experiments: 'not-an-array' });
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/bulk');
+      const { req, res } = createMocks({}, { benchmarks: 'not-an-array' });
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/bulk');
 
       await handler(req, res);
 
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith({
-        error: 'experiments must be an array',
+        error: 'benchmarks must be an array',
       });
     });
 
     it('should reject experiments with demo prefix', async () => {
       const { req, res } = createMocks(
         {},
-        { experiments: [{ id: 'demo-new', name: 'Invalid' }] }
+        { benchmarks: [{ id: 'demo-new', name: 'Invalid' }] }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/bulk');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/bulk');
 
       await handler(req, res);
 
@@ -494,13 +501,13 @@ describe('Experiments Storage Routes', () => {
       const { req, res } = createMocks(
         {},
         {
-          experiments: [
-            { name: 'Experiment 1', testCaseIds: [] },
-            { name: 'Experiment 2', testCaseIds: [] },
+          benchmarks: [
+            { name: 'Benchmark 1', testCaseIds: [] },
+            { name: 'Benchmark 2', testCaseIds: [] },
           ],
         }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/bulk');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/bulk');
 
       await handler(req, res);
 
@@ -514,20 +521,20 @@ describe('Experiments Storage Routes', () => {
     });
   });
 
-  describe('POST /api/storage/experiments/:id/execute', () => {
-    it('should reject executing sample experiments', async () => {
+  describe('POST /api/storage/benchmarks/:id/execute', () => {
+    it('should reject executing sample benchmarks', async () => {
       const { req, res } = createMocks(
         { id: 'demo-experiment-1' },
         { name: 'Run', agentKey: 'agent', modelId: 'model' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
       await handler(req, res);
 
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: expect.stringContaining('sample experiments'),
+          error: expect.stringContaining('sample benchmarks'),
         })
       );
     });
@@ -537,7 +544,7 @@ describe('Experiments Storage Routes', () => {
         { id: 'exp-123' },
         { agentKey: 'agent', modelId: 'model' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
       await handler(req, res);
 
@@ -554,7 +561,7 @@ describe('Experiments Storage Routes', () => {
         { id: 'exp-123' },
         { name: 'Run', modelId: 'model' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
       await handler(req, res);
 
@@ -571,7 +578,7 @@ describe('Experiments Storage Routes', () => {
         { id: 'exp-123' },
         { name: 'Run', agentKey: 'agent' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
       await handler(req, res);
 
@@ -592,7 +599,7 @@ describe('Experiments Storage Routes', () => {
         { id: 'exp-nonexistent' },
         { name: 'Run', agentKey: 'agent', modelId: 'model' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
       await handler(req, res);
 
@@ -605,7 +612,7 @@ describe('Experiments Storage Routes', () => {
           found: true,
           _source: {
             id: 'exp-123',
-            name: 'Test Experiment',
+            name: 'Test Benchmark',
             testCaseIds: ['demo-test-case-1'],
             runs: [],
           },
@@ -631,7 +638,7 @@ describe('Experiments Storage Routes', () => {
         { id: 'exp-123' },
         { name: 'Run', agentKey: 'agent', modelId: 'model' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
       await handler(req, res);
 
@@ -644,10 +651,10 @@ describe('Experiments Storage Routes', () => {
     });
   });
 
-  describe('POST /api/storage/experiments/:id/cancel', () => {
+  describe('POST /api/storage/benchmarks/:id/cancel', () => {
     it('should return error when runId not provided', async () => {
       const { req, res } = createMocks({ id: 'exp-123' }, {});
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/cancel');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/cancel');
 
       await handler(req, res);
 
@@ -660,7 +667,7 @@ describe('Experiments Storage Routes', () => {
         { id: 'exp-123' },
         { runId: 'nonexistent-run' }
       );
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/cancel');
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/cancel');
 
       await handler(req, res);
 
@@ -683,18 +690,18 @@ describe('Experiments Storage Routes - OpenSearch not configured', () => {
     (requireStorageClient as jest.Mock).mockReturnValue(mockClient);
   });
 
-  it('GET /api/storage/experiments/:id should return 404 for non-sample ID when not configured', async () => {
+  it('GET /api/storage/benchmarks/:id should return 404 for non-sample ID when not configured', async () => {
     const { req, res } = createMocks({ id: 'exp-123' });
-    const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments/:id');
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
 
     await handler(req, res);
 
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
-  it('POST /api/storage/experiments should return error when not configured', async () => {
+  it('POST /api/storage/benchmarks should return error when not configured', async () => {
     const { req, res } = createMocks({}, { name: 'Test' });
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks');
 
     await handler(req, res);
 
@@ -706,9 +713,9 @@ describe('Experiments Storage Routes - OpenSearch not configured', () => {
     );
   });
 
-  it('PUT /api/storage/experiments/:id should return error when not configured', async () => {
+  it('PUT /api/storage/benchmarks/:id should return error when not configured', async () => {
     const { req, res } = createMocks({ id: 'exp-123' }, { runs: [] });
-    const handler = getRouteHandler(experimentsRoutes, 'put', '/api/storage/experiments/:id');
+    const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
 
     await handler(req, res);
 
@@ -720,9 +727,9 @@ describe('Experiments Storage Routes - OpenSearch not configured', () => {
     );
   });
 
-  it('DELETE /api/storage/experiments/:id should return error when not configured', async () => {
+  it('DELETE /api/storage/benchmarks/:id should return error when not configured', async () => {
     const { req, res } = createMocks({ id: 'exp-123' });
-    const handler = getRouteHandler(experimentsRoutes, 'delete', '/api/storage/experiments/:id');
+    const handler = getRouteHandler(benchmarksRoutes, 'delete', '/api/storage/benchmarks/:id');
 
     await handler(req, res);
 
@@ -734,9 +741,9 @@ describe('Experiments Storage Routes - OpenSearch not configured', () => {
     );
   });
 
-  it('POST /api/storage/experiments/bulk should return error when not configured', async () => {
-    const { req, res } = createMocks({}, { experiments: [] });
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/bulk');
+  it('POST /api/storage/benchmarks/bulk should return error when not configured', async () => {
+    const { req, res } = createMocks({}, { benchmarks: [] });
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/bulk');
 
     await handler(req, res);
 
@@ -748,12 +755,12 @@ describe('Experiments Storage Routes - OpenSearch not configured', () => {
     );
   });
 
-  it('POST /api/storage/experiments/:id/execute should return error when not configured', async () => {
+  it('POST /api/storage/benchmarks/:id/execute should return error when not configured', async () => {
     const { req, res } = createMocks(
       { id: 'exp-123' },
       { name: 'Run', agentKey: 'agent', modelId: 'model' }
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 
@@ -771,7 +778,7 @@ describe('Experiments Storage Routes - Error Handling', () => {
     jest.clearAllMocks();
   });
 
-  describe('GET /api/storage/experiments - Error cases', () => {
+  describe('GET /api/storage/benchmarks - Error cases', () => {
     it('should handle unexpected errors and return 500', async () => {
       // Mock isStorageAvailable to throw
       (isStorageAvailable as jest.Mock).mockImplementation(() => {
@@ -779,7 +786,7 @@ describe('Experiments Storage Routes - Error Handling', () => {
       });
 
       const { req, res } = createMocks();
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks');
 
       await handler(req, res);
 
@@ -792,12 +799,12 @@ describe('Experiments Storage Routes - Error Handling', () => {
     });
   });
 
-  describe('GET /api/storage/experiments/:id - Error cases', () => {
+  describe('GET /api/storage/benchmarks/:id - Error cases', () => {
     it('should handle unexpected errors and return 500', async () => {
       mockGet.mockRejectedValue(new Error('Database connection lost'));
 
       const { req, res } = createMocks({ id: 'exp-123' });
-      const handler = getRouteHandler(experimentsRoutes, 'get', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -806,12 +813,12 @@ describe('Experiments Storage Routes - Error Handling', () => {
     });
   });
 
-  describe('POST /api/storage/experiments - Error cases', () => {
+  describe('POST /api/storage/benchmarks - Error cases', () => {
     it('should handle unexpected errors and return 500', async () => {
       mockIndex.mockRejectedValue(new Error('Index write failed'));
 
-      const { req, res } = createMocks({}, { name: 'Test Experiment' });
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments');
+      const { req, res } = createMocks({}, { name: 'Test Benchmark' });
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks');
 
       await handler(req, res);
 
@@ -820,19 +827,19 @@ describe('Experiments Storage Routes - Error Handling', () => {
     });
   });
 
-  describe('PUT /api/storage/experiments/:id - Error cases', () => {
+  describe('PUT /api/storage/benchmarks/:id - Error cases', () => {
     it('should handle 404 from OpenSearch get', async () => {
       const error: any = new Error('Not found');
       error.meta = { statusCode: 404 };
       mockGet.mockRejectedValue(error);
 
       const { req, res } = createMocks({ id: 'exp-123' }, { runs: [] });
-      const handler = getRouteHandler(experimentsRoutes, 'put', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
       expect(res.status).toHaveBeenCalledWith(404);
-      expect(res.json).toHaveBeenCalledWith({ error: 'Experiment not found' });
+      expect(res.json).toHaveBeenCalledWith({ error: 'Benchmark not found' });
     });
 
     it('should handle unexpected errors and return 500', async () => {
@@ -840,7 +847,7 @@ describe('Experiments Storage Routes - Error Handling', () => {
       mockIndex.mockRejectedValue(new Error('Update failed'));
 
       const { req, res } = createMocks({ id: 'exp-123' }, { runs: [] });
-      const handler = getRouteHandler(experimentsRoutes, 'put', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -849,12 +856,12 @@ describe('Experiments Storage Routes - Error Handling', () => {
     });
   });
 
-  describe('DELETE /api/storage/experiments/:id - Error cases', () => {
+  describe('DELETE /api/storage/benchmarks/:id - Error cases', () => {
     it('should handle unexpected errors and return 500', async () => {
       mockDelete.mockRejectedValue(new Error('Delete failed'));
 
       const { req, res } = createMocks({ id: 'exp-123' });
-      const handler = getRouteHandler(experimentsRoutes, 'delete', '/api/storage/experiments/:id');
+      const handler = getRouteHandler(benchmarksRoutes, 'delete', '/api/storage/benchmarks/:id');
 
       await handler(req, res);
 
@@ -863,12 +870,12 @@ describe('Experiments Storage Routes - Error Handling', () => {
     });
   });
 
-  describe('POST /api/storage/experiments/bulk - Error cases', () => {
+  describe('POST /api/storage/benchmarks/bulk - Error cases', () => {
     it('should handle unexpected errors and return 500', async () => {
       mockBulk.mockRejectedValue(new Error('Bulk insert failed'));
 
-      const { req, res } = createMocks({}, { experiments: [{ name: 'Exp1' }] });
-      const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/bulk');
+      const { req, res } = createMocks({}, { benchmarks: [{ name: 'Benchmark1' }] });
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/bulk');
 
       await handler(req, res);
 
@@ -892,12 +899,12 @@ describe('Experiments Storage Routes - Execute Error Handling', () => {
       { id: 'exp-nonexistent' },
       { name: 'Run', agentKey: 'agent', modelId: 'model' }
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 
     expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Experiment not found' });
+    expect(res.json).toHaveBeenCalledWith({ error: 'Benchmark not found' });
   });
 
   it('should handle unexpected errors during execute', async () => {
@@ -907,7 +914,7 @@ describe('Experiments Storage Routes - Execute Error Handling', () => {
       { id: 'exp-123' },
       { name: 'Run', agentKey: 'agent', modelId: 'model' }
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 
@@ -921,7 +928,7 @@ describe('Experiments Storage Routes - Execute Error Handling', () => {
         found: true,
         _source: {
           id: 'exp-123',
-          name: 'Test Experiment',
+          name: 'Test Benchmark',
           testCaseIds: ['tc-1'],
           runs: [],
         },
@@ -935,7 +942,7 @@ describe('Experiments Storage Routes - Execute Error Handling', () => {
       { id: 'exp-123' },
       { name: 'Run', agentKey: 'agent', modelId: 'model' }
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 
@@ -952,7 +959,7 @@ describe('Experiments Storage Routes - Execute Error Handling', () => {
         found: true,
         _source: {
           id: 'exp-123',
-          name: 'Test Experiment',
+          name: 'Test Benchmark',
           testCaseIds: ['tc-1', 'tc-2'],
           runs: [],
         },
@@ -983,7 +990,7 @@ describe('Experiments Storage Routes - Execute Error Handling', () => {
       { id: 'exp-123' },
       { name: 'Run', agentKey: 'agent', modelId: 'model' }
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 
@@ -1010,7 +1017,7 @@ describe('Experiments Storage Routes - Validation', () => {
       { id: 'exp-123' },
       null // null body
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 
@@ -1025,7 +1032,7 @@ describe('Experiments Storage Routes - Validation', () => {
       { id: 'exp-123' },
       { name: '   ', agentKey: 'agent', modelId: 'model' }
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 
@@ -1040,7 +1047,7 @@ describe('Experiments Storage Routes - Validation', () => {
       { id: 'exp-123' },
       { name: 'Run', modelId: 'model' }
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 
@@ -1055,7 +1062,7 @@ describe('Experiments Storage Routes - Validation', () => {
       { id: 'exp-123' },
       { name: 'Run', agentKey: 'agent' }
     );
-    const handler = getRouteHandler(experimentsRoutes, 'post', '/api/storage/experiments/:id/execute');
+    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
     await handler(req, res);
 

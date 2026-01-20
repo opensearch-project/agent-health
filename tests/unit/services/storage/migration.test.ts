@@ -11,7 +11,7 @@ import {
   clearLocalStorageData,
   exportLocalStorageData,
 } from '@/services/storage/migration';
-import type { TestCase, Experiment, EvaluationReport } from '@/types';
+import type { TestCase, Benchmark, EvaluationReport } from '@/types';
 
 // Mock asyncTestCaseStorage
 jest.mock('@/services/storage/asyncTestCaseStorage', () => ({
@@ -21,9 +21,9 @@ jest.mock('@/services/storage/asyncTestCaseStorage', () => ({
   },
 }));
 
-// Mock asyncExperimentStorage
-jest.mock('@/services/storage/asyncExperimentStorage', () => ({
-  asyncExperimentStorage: {
+// Mock asyncBenchmarkStorage
+jest.mock('@/services/storage/asyncBenchmarkStorage', () => ({
+  asyncBenchmarkStorage: {
     getAll: jest.fn().mockResolvedValue([]),
     save: jest.fn().mockResolvedValue(undefined),
   },
@@ -76,9 +76,9 @@ describe('Migration Service', () => {
     updatedAt: '2024-01-01T00:00:00Z',
   };
 
-  const mockExperiment: Experiment = {
+  const mockExperiment: Benchmark = {
     id: 'exp-1',
-    name: 'Test Experiment',
+    name: 'Test Benchmark',
     description: 'Test description',
     testCaseIds: ['tc-1'],
     runs: [],
@@ -244,13 +244,13 @@ describe('Migration Service', () => {
         experiments: JSON.stringify({ 'exp-1': mockExperiment }),
       });
 
-      const { asyncExperimentStorage } = require('@/services/storage/asyncExperimentStorage');
+      const { asyncBenchmarkStorage } = require('@/services/storage/asyncBenchmarkStorage');
 
       const stats = await migrateToOpenSearch();
 
       expect(stats.experiments.total).toBe(1);
       expect(stats.experiments.migrated).toBe(1);
-      expect(asyncExperimentStorage.save).toHaveBeenCalled();
+      expect(asyncBenchmarkStorage.save).toHaveBeenCalled();
     });
 
     it('should migrate reports to OpenSearch', async () => {
@@ -323,8 +323,8 @@ describe('Migration Service', () => {
         experiments: JSON.stringify({ 'exp-1': mockExperiment }),
       });
 
-      const { asyncExperimentStorage } = require('@/services/storage/asyncExperimentStorage');
-      asyncExperimentStorage.save.mockRejectedValue(new Error('Save failed'));
+      const { asyncBenchmarkStorage } = require('@/services/storage/asyncBenchmarkStorage');
+      asyncBenchmarkStorage.save.mockRejectedValue(new Error('Save failed'));
 
       const stats = await migrateToOpenSearch();
 
@@ -351,16 +351,16 @@ describe('Migration Service', () => {
       });
 
       const { asyncTestCaseStorage } = require('@/services/storage/asyncTestCaseStorage');
-      const { asyncExperimentStorage } = require('@/services/storage/asyncExperimentStorage');
+      const { asyncBenchmarkStorage } = require('@/services/storage/asyncBenchmarkStorage');
 
       // Ensure no existing test cases so new ones are created
       asyncTestCaseStorage.getAll.mockResolvedValue([]);
-      asyncExperimentStorage.getAll.mockResolvedValue([]);
+      asyncBenchmarkStorage.getAll.mockResolvedValue([]);
 
       await migrateToOpenSearch({ skipExisting: false });
 
       // Check that the experiment was saved with remapped test case ID
-      expect(asyncExperimentStorage.save).toHaveBeenCalledWith(
+      expect(asyncBenchmarkStorage.save).toHaveBeenCalledWith(
         expect.objectContaining({
           testCaseIds: expect.arrayContaining([expect.stringContaining('new-')]),
         })

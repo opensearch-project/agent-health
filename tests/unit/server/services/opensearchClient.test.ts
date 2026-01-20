@@ -135,7 +135,7 @@ describe('OpenSearch Client Service', () => {
 
       expect(INDEXES).toEqual({
         testCases: 'evals_test_cases',
-        experiments: 'evals_experiments',
+        benchmarks: 'evals_experiments',
         runs: 'evals_runs',
         analytics: 'evals_analytics',
       });
@@ -145,7 +145,7 @@ describe('OpenSearch Client Service', () => {
       const { INDEXES } = require('@/server/services/opensearchClient');
 
       expect(INDEXES.testCases).toBeDefined();
-      expect(INDEXES.experiments).toBeDefined();
+      expect(INDEXES.benchmarks).toBeDefined();
       expect(INDEXES.runs).toBeDefined();
       expect(INDEXES.analytics).toBeDefined();
     });

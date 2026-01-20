@@ -26,8 +26,9 @@ describe('indexMappings', () => {
       expect(testCasesMapping.mappings.properties.category.type).toBe('keyword');
     });
 
-    it('should have experiments index mapping', () => {
+    it('should have benchmarks index mapping', () => {
       const mappings = getIndexMappings();
+      // Note: index name is 'evals_experiments' for backwards compatibility
       const experimentsKey = Object.keys(mappings).find((k) => k.includes('experiments'));
       expect(experimentsKey).toBeDefined();
 
@@ -102,9 +103,10 @@ describe('indexMappings', () => {
     });
   });
 
-  describe('Experiments Index Schema', () => {
+  describe('Benchmarks Index Schema', () => {
     it('should have nested runs mapping', () => {
       const mappings = getIndexMappings();
+      // Note: index name is 'evals_experiments' for backwards compatibility
       const key = Object.keys(mappings).find((k) => k.includes('experiments'))!;
       const runsMapping = mappings[key].mappings.properties.runs;
 

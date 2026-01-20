@@ -37,7 +37,7 @@ interface LayoutProps {
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/test-cases", icon: ClipboardList, label: "Test Cases" },
-  { to: "/experiments", icon: FlaskConical, label: "Experiments" },
+  { to: "/benchmarks", icon: FlaskConical, label: "Benchmarks" },
   { to: "/traces", icon: Activity, label: "Live Traces" },
 ];
 

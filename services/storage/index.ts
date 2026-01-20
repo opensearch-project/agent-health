@@ -14,12 +14,15 @@ export {
   opensearchStorage,
   storageAdmin,
   testCaseStorage,
-  experimentStorage,
+  benchmarkStorage,
+  experimentStorage, // Backwards compatibility alias
   runStorage,
   analyticsStorage,
   type StorageTestCase,
-  type StorageExperiment,
-  type StorageExperimentRunConfig,
+  type StorageBenchmark,
+  type StorageBenchmarkRunConfig,
+  type StorageExperiment, // Backwards compatibility alias
+  type StorageExperimentRunConfig, // Backwards compatibility alias
   type StorageRun,
   type StorageRunAnnotation,
   type StorageAnalyticsRecord,
@@ -31,7 +34,7 @@ export { default } from './opensearchClient';
 export { asyncTestCaseStorage } from './asyncTestCaseStorage';
 export type { CreateTestCaseInput, UpdateTestCaseInput } from './asyncTestCaseStorage';
 
-export { asyncExperimentStorage } from './asyncExperimentStorage';
+export { asyncBenchmarkStorage, asyncExperimentStorage } from './asyncBenchmarkStorage';
 
 export { asyncRunStorage, asyncReportStorage } from './asyncRunStorage';
 export type { SearchQuery, GetReportsOptions } from './asyncRunStorage';

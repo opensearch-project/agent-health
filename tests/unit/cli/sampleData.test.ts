@@ -15,10 +15,10 @@ import {
 
 import {
   SAMPLE_EXPERIMENTS,
-  getSampleExperiment,
+  getSampleBenchmark,
   getAllSampleExperiments,
   isSampleExperimentId,
-} from '@/cli/demo/sampleExperiments';
+} from '@/cli/demo/sampleBenchmarks';
 
 describe('Sample Test Cases', () => {
   describe('SAMPLE_TEST_CASES', () => {
@@ -127,15 +127,15 @@ describe('Sample Experiments', () => {
     });
   });
 
-  describe('getSampleExperiment', () => {
+  describe('getSampleBenchmark', () => {
     it('should return experiment by ID', () => {
-      const exp = getSampleExperiment('demo-exp-001');
+      const exp = getSampleBenchmark('demo-exp-001');
       expect(exp).toBeDefined();
       expect(exp?.name).toBe('RCA Agent Evaluation - Demo');
     });
 
     it('should return undefined for unknown ID', () => {
-      const exp = getSampleExperiment('unknown-id');
+      const exp = getSampleBenchmark('unknown-id');
       expect(exp).toBeUndefined();
     });
   });

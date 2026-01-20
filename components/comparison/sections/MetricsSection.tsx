@@ -4,10 +4,10 @@
  */
 
 import React from 'react';
-import { EvaluationReport, ExperimentRun } from '@/types';
+import { EvaluationReport, BenchmarkRun } from '@/types';
 
 interface MetricsSectionProps {
-  runs: ExperimentRun[];
+  runs: BenchmarkRun[];
   reports: Record<string, EvaluationReport>;
   useCaseId: string;
 }

@@ -6,12 +6,12 @@
 import {
   storageAdmin,
   testCaseStorage,
-  experimentStorage,
+  benchmarkStorage,
   runStorage,
   analyticsStorage,
   opensearchStorage,
   StorageTestCase,
-  StorageExperiment,
+  StorageBenchmark,
   StorageRun,
   StorageAnalyticsRecord,
 } from '@/services/storage/opensearchClient';
@@ -305,12 +305,12 @@ describe('OpenSearch Storage Client', () => {
     });
   });
 
-  // ==================== experimentStorage Tests ====================
+  // ==================== benchmarkStorage Tests ====================
 
-  describe('experimentStorage', () => {
-    const mockExperiment: StorageExperiment = {
+  describe('benchmarkStorage', () => {
+    const mockExperiment: StorageBenchmark = {
       id: 'exp-123',
-      name: 'Test Experiment',
+      name: 'Test Benchmark',
       description: 'Test description',
       createdAt: '2024-01-01T00:00:00Z',
       testCaseIds: ['tc-1', 'tc-2'],
@@ -320,14 +320,14 @@ describe('OpenSearch Storage Client', () => {
     describe('getAll', () => {
       it('should return all experiments', async () => {
         mockFetch.mockResolvedValue(
-          mockSuccessResponse({ experiments: [mockExperiment], total: 1 })
+          mockSuccessResponse({ benchmarks: [mockExperiment], total: 1 })
         );
 
-        const result = await experimentStorage.getAll();
+        const result = await benchmarkStorage.getAll();
 
         expect(result).toEqual([mockExperiment]);
         expect(mockFetch).toHaveBeenCalledWith(
-          'http://localhost:4001/api/storage/experiments',
+          'http://localhost:4001/api/storage/benchmarks',
           expect.objectContaining({ method: 'GET' })
         );
       });
@@ -337,7 +337,7 @@ describe('OpenSearch Storage Client', () => {
       it('should return experiment by ID', async () => {
         mockFetch.mockResolvedValue(mockSuccessResponse(mockExperiment));
 
-        const result = await experimentStorage.getById('exp-123');
+        const result = await benchmarkStorage.getById('exp-123');
 
         expect(result).toEqual(mockExperiment);
       });
@@ -345,7 +345,7 @@ describe('OpenSearch Storage Client', () => {
       it('should return null for 404 error', async () => {
         mockFetch.mockResolvedValue(mockErrorResponse(404, 'Not found'));
 
-        const result = await experimentStorage.getById('nonexistent');
+        const result = await benchmarkStorage.getById('nonexistent');
 
         expect(result).toBeNull();
       });
@@ -353,7 +353,7 @@ describe('OpenSearch Storage Client', () => {
       it('should throw for other errors', async () => {
         mockFetch.mockResolvedValue(mockErrorResponse(500, 'Server error'));
 
-        await expect(experimentStorage.getById('exp-123')).rejects.toThrow('Server error');
+        await expect(benchmarkStorage.getById('exp-123')).rejects.toThrow('Server error');
       });
     });
 
@@ -362,17 +362,17 @@ describe('OpenSearch Storage Client', () => {
         mockFetch.mockResolvedValue(mockSuccessResponse(mockExperiment));
 
         const input = {
-          name: 'Test Experiment',
+          name: 'Test Benchmark',
           description: 'Test description',
           testCaseIds: ['tc-1', 'tc-2'],
           runs: [],
         };
 
-        const result = await experimentStorage.create(input);
+        const result = await benchmarkStorage.create(input);
 
         expect(result).toEqual(mockExperiment);
         expect(mockFetch).toHaveBeenCalledWith(
-          'http://localhost:4001/api/storage/experiments',
+          'http://localhost:4001/api/storage/benchmarks',
           expect.objectContaining({
             method: 'POST',
             body: JSON.stringify(input),
@@ -385,11 +385,11 @@ describe('OpenSearch Storage Client', () => {
       it('should update an experiment', async () => {
         mockFetch.mockResolvedValue(mockSuccessResponse(mockExperiment));
 
-        const result = await experimentStorage.update('exp-123', { name: 'Updated' });
+        const result = await benchmarkStorage.update('exp-123', { name: 'Updated' });
 
         expect(result).toEqual(mockExperiment);
         expect(mockFetch).toHaveBeenCalledWith(
-          'http://localhost:4001/api/storage/experiments/exp-123',
+          'http://localhost:4001/api/storage/benchmarks/exp-123',
           expect.objectContaining({
             method: 'PUT',
             body: JSON.stringify({ name: 'Updated' }),
@@ -402,7 +402,7 @@ describe('OpenSearch Storage Client', () => {
       it('should delete an experiment', async () => {
         mockFetch.mockResolvedValue(mockSuccessResponse({ deleted: true }));
 
-        const result = await experimentStorage.delete('exp-123');
+        const result = await benchmarkStorage.delete('exp-123');
 
         expect(result).toEqual({ deleted: true });
       });
@@ -417,7 +417,7 @@ describe('OpenSearch Storage Client', () => {
           { name: 'Exp2', testCaseIds: [], runs: [] },
         ];
 
-        const result = await experimentStorage.bulkCreate(experiments);
+        const result = await benchmarkStorage.bulkCreate(experiments);
 
         expect(result).toEqual({ created: 2, errors: false });
       });
@@ -600,13 +600,13 @@ describe('OpenSearch Storage Client', () => {
       });
     });
 
-    describe('getByExperiment', () => {
+    describe('getByBenchmark', () => {
       it('should get runs by experiment ID', async () => {
         mockFetch.mockResolvedValue(
           mockSuccessResponse({ runs: [mockRun], total: 1 })
         );
 
-        const result = await runStorage.getByExperiment('exp-123');
+        const result = await runStorage.getByBenchmark('exp-123');
 
         expect(result).toEqual([mockRun]);
       });
@@ -616,26 +616,26 @@ describe('OpenSearch Storage Client', () => {
           mockSuccessResponse({ runs: [], total: 0 })
         );
 
-        await runStorage.getByExperiment('exp-123', 25);
+        await runStorage.getByBenchmark('exp-123', 25);
 
         expect(mockFetch).toHaveBeenCalledWith(
-          'http://localhost:4001/api/storage/runs/by-experiment/exp-123?size=25',
+          'http://localhost:4001/api/storage/runs/by-benchmark/exp-123?size=25',
           expect.any(Object)
         );
       });
     });
 
-    describe('getByExperimentRun', () => {
+    describe('getByBenchmarkRun', () => {
       it('should get runs by experiment run', async () => {
         mockFetch.mockResolvedValue(
           mockSuccessResponse({ runs: [mockRun], total: 1 })
         );
 
-        const result = await runStorage.getByExperimentRun('exp-123', 'er-123');
+        const result = await runStorage.getByBenchmarkRun('exp-123', 'er-123');
 
         expect(result).toEqual([mockRun]);
         expect(mockFetch).toHaveBeenCalledWith(
-          'http://localhost:4001/api/storage/runs/by-experiment-run/exp-123/er-123',
+          'http://localhost:4001/api/storage/runs/by-benchmark-run/exp-123/er-123',
           expect.any(Object)
         );
       });
@@ -645,10 +645,10 @@ describe('OpenSearch Storage Client', () => {
           mockSuccessResponse({ runs: [], total: 0 })
         );
 
-        await runStorage.getByExperimentRun('exp-123', 'er-123', 10);
+        await runStorage.getByBenchmarkRun('exp-123', 'er-123', 10);
 
         expect(mockFetch).toHaveBeenCalledWith(
-          'http://localhost:4001/api/storage/runs/by-experiment-run/exp-123/er-123?size=10',
+          'http://localhost:4001/api/storage/runs/by-benchmark-run/exp-123/er-123?size=10',
           expect.any(Object)
         );
       });
@@ -666,7 +666,7 @@ describe('OpenSearch Storage Client', () => {
         expect(result.maxIteration).toBe(3);
       });
 
-      it('should include experimentRunId when provided', async () => {
+      it('should include benchmarkRunId when provided', async () => {
         mockFetch.mockResolvedValue(
           mockSuccessResponse({ runs: [], total: 0, maxIteration: 0 })
         );
@@ -674,7 +674,7 @@ describe('OpenSearch Storage Client', () => {
         await runStorage.getIterations('exp-123', 'tc-123', 'er-456');
 
         expect(mockFetch).toHaveBeenCalledWith(
-          'http://localhost:4001/api/storage/runs/iterations/exp-123/tc-123?experimentRunId=er-456',
+          'http://localhost:4001/api/storage/runs/iterations/exp-123/tc-123?benchmarkRunId=er-456',
           expect.any(Object)
         );
       });
@@ -934,7 +934,7 @@ describe('OpenSearch Storage Client', () => {
     it('should export all storage modules', () => {
       expect(opensearchStorage.admin).toBe(storageAdmin);
       expect(opensearchStorage.testCases).toBe(testCaseStorage);
-      expect(opensearchStorage.experiments).toBe(experimentStorage);
+      expect(opensearchStorage.experiments).toBe(benchmarkStorage);
       expect(opensearchStorage.runs).toBe(runStorage);
       expect(opensearchStorage.analytics).toBe(analyticsStorage);
     });

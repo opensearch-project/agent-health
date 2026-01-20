@@ -67,7 +67,7 @@ describe('RunDetailsPage Integration Tests', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: 'RunDetails Test Experiment',
+        name: 'RunDetails Test Benchmark',
         description: 'Experiment for testing RunDetailsPage navigation',
         testCaseIds: testCaseIds,
         runs: [],
@@ -375,8 +375,8 @@ describe('RunDetailsPage Integration Tests', () => {
     });
   });
 
-  describe('Navigation support - ExperimentRun.id based routing', () => {
-    it('should support navigation to pending run by ExperimentRun.id', async () => {
+  describe('Navigation support - BenchmarkRun.id based routing', () => {
+    it('should support navigation to pending run by BenchmarkRun.id', async () => {
       if (!backendAvailable || !testExperimentId || testCaseIds.length === 0) {
         console.warn('Skipping: backend not available or no test data');
         return;
@@ -417,7 +417,7 @@ describe('RunDetailsPage Integration Tests', () => {
       expect(hasReportIds).toBe(false);
     });
 
-    it('should support navigation to completed run by ExperimentRun.id', async () => {
+    it('should support navigation to completed run by BenchmarkRun.id', async () => {
       if (!backendAvailable || !testExperimentId || testCaseIds.length === 0) {
         console.warn('Skipping: backend not available or no test data');
         return;

@@ -45,7 +45,9 @@ export const STORAGE_CONFIG: StorageConfig = {
   password: process.env.OPENSEARCH_STORAGE_PASSWORD,
   indexes: {
     testCases: 'evals_test_cases',
-    experiments: 'evals_experiments',
+    // Note: Using old index name 'evals_experiments' for data compatibility
+    // Will be renamed to 'evals_benchmarks' in a future migration
+    benchmarks: 'evals_experiments',
     runs: 'evals_runs',
     analytics: 'evals_analytics',
   },

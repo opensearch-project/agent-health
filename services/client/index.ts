@@ -9,4 +9,10 @@
  * Services that run in the browser and communicate with the backend API.
  */
 
-export { executeExperimentRun, cancelExperimentRun } from './experimentApi';
+export {
+  executeBenchmarkRun,
+  cancelBenchmarkRun,
+  // Backwards compatibility aliases
+  executeExperimentRun,
+  cancelExperimentRun,
+} from './benchmarkApi';

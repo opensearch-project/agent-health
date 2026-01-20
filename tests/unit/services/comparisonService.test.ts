@@ -19,7 +19,7 @@ import {
   getRealTestCaseMeta,
 } from '@/services/comparisonService';
 import {
-  ExperimentRun,
+  BenchmarkRun,
   EvaluationReport,
   TestCaseComparisonRow,
   TestCaseRunResult,
@@ -42,7 +42,7 @@ describe('comparisonService', () => {
   });
 
   describe('calculateRunAggregates', () => {
-    const mockRun: ExperimentRun = {
+    const mockRun: BenchmarkRun = {
       id: 'run-1',
       name: 'Test Run',
       createdAt: '2024-01-01T00:00:00Z',
@@ -90,7 +90,7 @@ describe('comparisonService', () => {
     });
 
     it('should handle empty results', () => {
-      const emptyRun: ExperimentRun = {
+      const emptyRun: BenchmarkRun = {
         ...mockRun,
         results: {},
       };
@@ -104,7 +104,7 @@ describe('comparisonService', () => {
     });
 
     it('should handle missing reports', () => {
-      const runWithMissingReports: ExperimentRun = {
+      const runWithMissingReports: BenchmarkRun = {
         ...mockRun,
         results: {
           'tc-1': { reportId: 'missing-report', status: 'completed' },
@@ -120,7 +120,7 @@ describe('comparisonService', () => {
 
   describe('collectRunIdsFromReports', () => {
     it('should collect unique runIds from reports', () => {
-      const runs: ExperimentRun[] = [
+      const runs: BenchmarkRun[] = [
         {
           id: 'exp-run-1',
           name: 'Run 1',
@@ -148,7 +148,7 @@ describe('comparisonService', () => {
     });
 
     it('should deduplicate runIds', () => {
-      const runs: ExperimentRun[] = [
+      const runs: BenchmarkRun[] = [
         {
           id: 'exp-run-1',
           name: 'Run 1',
@@ -175,7 +175,7 @@ describe('comparisonService', () => {
   });
 
   describe('buildTestCaseComparisonRows', () => {
-    const mockRuns: ExperimentRun[] = [
+    const mockRuns: BenchmarkRun[] = [
       {
         id: 'run-1',
         name: 'Run 1',
@@ -245,7 +245,7 @@ describe('comparisonService', () => {
     });
 
     it('should mark missing test cases', () => {
-      const runsWithMissing: ExperimentRun[] = [
+      const runsWithMissing: BenchmarkRun[] = [
         {
           id: 'run-1',
           name: 'Run 1',
@@ -274,7 +274,7 @@ describe('comparisonService', () => {
     });
 
     it('should mark missing when report not found', () => {
-      const runsWithMissingReport: ExperimentRun[] = [
+      const runsWithMissingReport: BenchmarkRun[] = [
         {
           id: 'run-1',
           name: 'Run 1',
@@ -295,7 +295,7 @@ describe('comparisonService', () => {
     });
 
     it('should sort rows by category then name', () => {
-      const multiCategoryRuns: ExperimentRun[] = [
+      const multiCategoryRuns: BenchmarkRun[] = [
         {
           id: 'run-1',
           name: 'Run 1',

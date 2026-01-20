@@ -82,7 +82,7 @@ describe('server/config', () => {
     it('should have default index names', async () => {
       const config = await import('@/server/config');
       expect(config.STORAGE_CONFIG.indexes.testCases).toBe('evals_test_cases');
-      expect(config.STORAGE_CONFIG.indexes.experiments).toBe('evals_experiments');
+      expect(config.STORAGE_CONFIG.indexes.benchmarks).toBe('evals_experiments');
       expect(config.STORAGE_CONFIG.indexes.runs).toBe('evals_runs');
       expect(config.STORAGE_CONFIG.indexes.analytics).toBe('evals_analytics');
     });

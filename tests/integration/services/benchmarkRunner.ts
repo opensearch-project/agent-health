@@ -14,7 +14,7 @@
  *   npm run dev:server
  *
  * Run tests:
- *   npm test -- --testPathPattern=experimentRunner
+ *   npm test -- --testPathPattern=benchmarkRunner
  */
 
 const BASE_URL = 'http://localhost:4001';
@@ -226,7 +226,7 @@ describe('Experiment Runner Integration Tests', () => {
       testCaseId = testCase?.id || null;
 
       if (testCaseId) {
-        const experiment = await createExperiment('Background Run Test Experiment', [testCaseId]);
+        const experiment = await createExperiment('Background Run Test Benchmark', [testCaseId]);
         experimentId = experiment?.id || null;
       }
     });

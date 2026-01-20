@@ -21,9 +21,10 @@ export const DEFAULT_OTEL_INDEXES = {
 } as const;
 
 // Default storage index names (not configurable)
+// Note: benchmarks key uses old index name 'evals_experiments' for data compatibility
 export const STORAGE_INDEXES = {
   testCases: 'evals_test_cases',
-  experiments: 'evals_experiments',
+  benchmarks: 'evals_experiments',
   runs: 'evals_runs',
   analytics: 'evals_analytics',
 } as const;

@@ -9,12 +9,12 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ChevronDown, ChevronRight, Wrench, Brain, MessageSquare, CheckCircle2, XCircle } from 'lucide-react';
-import { EvaluationReport, ExperimentRun, TrajectoryStep, ToolCallStatus } from '@/types';
+import { EvaluationReport, BenchmarkRun, TrajectoryStep, ToolCallStatus } from '@/types';
 import { calculateTotalLatency } from '@/data/mockComparisonData';
 import { cn } from '@/lib/utils';
 
 interface TrajectorySectionProps {
-  runs: ExperimentRun[];
+  runs: BenchmarkRun[];
   reports: Record<string, EvaluationReport>;
   useCaseId: string;
 }
@@ -97,7 +97,7 @@ const TrajectoryStepItem: React.FC<{ step: TrajectoryStep }> = ({ step }) => {
 };
 
 const RunTrajectory: React.FC<{
-  run: ExperimentRun;
+  run: BenchmarkRun;
   report: EvaluationReport | null;
 }> = ({ run, report }) => {
   const trajectory = report?.trajectory || [];

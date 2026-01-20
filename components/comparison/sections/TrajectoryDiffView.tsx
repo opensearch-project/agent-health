@@ -20,7 +20,7 @@ import {
   MessageSquare,
   CheckCircle2,
 } from 'lucide-react';
-import { EvaluationReport, ExperimentRun, TrajectoryStep } from '@/types';
+import { EvaluationReport, BenchmarkRun, TrajectoryStep } from '@/types';
 import {
   alignTrajectories,
   calculateDiffStats,
@@ -31,7 +31,7 @@ import {
 import { cn } from '@/lib/utils';
 
 interface TrajectoryDiffViewProps {
-  runs: ExperimentRun[];
+  runs: BenchmarkRun[];
   reports: Record<string, EvaluationReport>;
   useCaseId: string;
 }

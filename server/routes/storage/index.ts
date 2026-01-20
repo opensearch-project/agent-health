@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import adminRoutes from './admin';
 import testCasesRoutes from './testCases';
-import experimentsRoutes from './experiments';
+import benchmarksRoutes from './benchmarks';
 import runsRoutes from './runs';
 import analyticsRoutes from './analytics';
 
@@ -19,7 +19,7 @@ const router = Router();
 
 router.use(adminRoutes);
 router.use(testCasesRoutes);
-router.use(experimentsRoutes);
+router.use(benchmarksRoutes);
 router.use(runsRoutes);
 router.use(analyticsRoutes);
 

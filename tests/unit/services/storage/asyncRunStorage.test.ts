@@ -22,8 +22,8 @@ jest.mock('@/services/storage/opensearchClient', () => ({
     addAnnotation: jest.fn(),
     updateAnnotation: jest.fn(),
     deleteAnnotation: jest.fn(),
-    getByExperimentRun: jest.fn(),
-    getByExperiment: jest.fn(),
+    getByBenchmarkRun: jest.fn(),
+    getByBenchmark: jest.fn(),
     getIterations: jest.fn(),
     bulkCreate: jest.fn(),
     deleteMany: jest.fn(),
@@ -352,43 +352,43 @@ describe('AsyncRunStorage', () => {
     });
   });
 
-  describe('getByExperiment', () => {
+  describe('getByBenchmark', () => {
     it('returns runs for an experiment', async () => {
       const mockRuns = [createMockStorageRun('run-1'), createMockStorageRun('run-2')];
-      mockOsRuns.getByExperiment.mockResolvedValue(mockRuns);
+      mockOsRuns.getByBenchmark.mockResolvedValue(mockRuns);
 
       const result = await asyncRunStorage.getByExperiment('exp-1');
 
-      expect(mockOsRuns.getByExperiment).toHaveBeenCalledWith('exp-1', undefined);
+      expect(mockOsRuns.getByBenchmark).toHaveBeenCalledWith('exp-1', undefined);
       expect(result).toHaveLength(2);
     });
 
     it('respects size option', async () => {
-      mockOsRuns.getByExperiment.mockResolvedValue([]);
+      mockOsRuns.getByBenchmark.mockResolvedValue([]);
 
       await asyncRunStorage.getByExperiment('exp-1', 50);
 
-      expect(mockOsRuns.getByExperiment).toHaveBeenCalledWith('exp-1', 50);
+      expect(mockOsRuns.getByBenchmark).toHaveBeenCalledWith('exp-1', 50);
     });
   });
 
-  describe('getByExperimentRun', () => {
+  describe('getByBenchmarkRun', () => {
     it('returns runs for a specific experiment run', async () => {
       const mockRuns = [createMockStorageRun('run-1')];
-      mockOsRuns.getByExperimentRun.mockResolvedValue(mockRuns);
+      mockOsRuns.getByBenchmarkRun.mockResolvedValue(mockRuns);
 
-      const result = await asyncRunStorage.getByExperimentRun('exp-1', 'run-1');
+      const result = await asyncRunStorage.getByBenchmarkRun('exp-1', 'run-1');
 
-      expect(mockOsRuns.getByExperimentRun).toHaveBeenCalledWith('exp-1', 'run-1', undefined);
+      expect(mockOsRuns.getByBenchmarkRun).toHaveBeenCalledWith('exp-1', 'run-1', undefined);
       expect(result).toHaveLength(1);
     });
 
     it('respects size option', async () => {
-      mockOsRuns.getByExperimentRun.mockResolvedValue([]);
+      mockOsRuns.getByBenchmarkRun.mockResolvedValue([]);
 
-      await asyncRunStorage.getByExperimentRun('exp-1', 'run-1', 25);
+      await asyncRunStorage.getByBenchmarkRun('exp-1', 'run-1', 25);
 
-      expect(mockOsRuns.getByExperimentRun).toHaveBeenCalledWith('exp-1', 'run-1', 25);
+      expect(mockOsRuns.getByBenchmarkRun).toHaveBeenCalledWith('exp-1', 'run-1', 25);
     });
   });
 
