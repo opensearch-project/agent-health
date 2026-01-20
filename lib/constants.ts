@@ -4,7 +4,7 @@
  */
 
 import { AppConfig } from '@/types';
-import { ENV_CONFIG, buildMLCommonsHeaders } from './config';
+import { ENV_CONFIG, buildMLCommonsHeaders } from '@/lib/config';
 
 // Model pricing per 1M tokens (USD)
 export const MODEL_PRICING: Record<string, { input: number; output: number }> = {

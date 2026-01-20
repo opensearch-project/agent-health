@@ -1,5 +1,9 @@
 # AgentEval
 
+[![CI](https://github.com/opensearch-project/dashboards-traces/actions/workflows/ci.yml/badge.svg)](https://github.com/opensearch-project/dashboards-traces/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.txt)
+[![Coverage](https://img.shields.io/badge/coverage->90%25-brightgreen.svg)](https://github.com/opensearch-project/dashboards-traces/actions/workflows/ci.yml)
+
 An evaluation framework for Root Cause Analysis (RCA) agents. Uses "Golden Path" trajectory comparison where an LLM Judge evaluates agent actions against expected outcomes.
 
 ## Features
@@ -101,7 +105,12 @@ See `.env.example` for all available options.
 | `npm run dev` | Start frontend dev server (port 4000) |
 | `npm run dev:server` | Start backend server (port 4001) |
 | `npm run build` | TypeScript compile + Vite production build |
-| `npm run test` | Run Jest test suite |
+| `npm test` | Run all tests |
+| `npm run test:unit` | Run unit tests only |
+| `npm run test:integration` | Run integration tests only |
+| `npm test -- --coverage` | Run tests with coverage report |
+| `npm run build:all` | Build UI + server + CLI |
+| `npm run build:cli` | Build CLI only |
 
 ### Production Mode
 
@@ -146,6 +155,24 @@ Agent Endpoint --> Tools --> OpenSearch Data
 | Cannot connect to backend | Run `npm run dev:server`, check `curl http://localhost:4001/health` |
 | AWS credentials expired | Refresh credentials in `.env` |
 | Storage/Traces not working | Check OpenSearch endpoint and credentials in `.env` |
+
+---
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
+### Development Workflow
+
+1. Fork and clone the repository
+2. Install dependencies: `npm install`
+3. Create a feature branch: `git checkout -b feature/your-feature`
+4. Make changes and add tests
+5. Run tests: `npm test`
+6. Commit with DCO signoff: `git commit -s -m "feat: your message"`
+7. Push and create a Pull Request
+
+All commits require DCO signoff and all PRs must pass CI checks (tests, coverage, linting).
 
 ---
 

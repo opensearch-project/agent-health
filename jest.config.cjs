@@ -7,11 +7,21 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/services', '<rootDir>/server', '<rootDir>/tests', '<rootDir>/cli', '<rootDir>/lib'],
-  testMatch: ['**/__tests__/**/*.test.ts', '**/*.test.ts', '**/tests/**/*.ts'],
+  roots: ['<rootDir>/tests'],
+  testMatch: ['**/tests/**/*.test.ts'],
   moduleNameMapper: {
     '^@/lib/config$': '<rootDir>/__mocks__/@/lib/config.ts',
+    // Mock data files to avoid JSON import issues in tests
+    '^@/data/testCases$': '<rootDir>/__mocks__/@/data/testCases.ts',
+    '^@/data/mockComparisonData$': '<rootDir>/__mocks__/@/data/mockComparisonData.ts',
     '^@/(.*)$': '<rootDir>/$1',
+    // Mock browser-only modules
+    '^dagre$': '<rootDir>/__mocks__/dagre.ts',
+    '^@xyflow/react$': '<rootDir>/__mocks__/xyflow-react.ts',
+    // Mock OpenTelemetry incubating module (not installed by default)
+    '^@opentelemetry/semantic-conventions/incubating$': '<rootDir>/__mocks__/@opentelemetry/semantic-conventions/incubating.ts',
+    // Handle .js imports resolving to .ts files (ESM compatibility)
+    '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
@@ -28,4 +38,27 @@ module.exports = {
   verbose: true,
   // Force exit after tests complete (for integration tests with SSE streams)
   forceExit: true,
+  // Coverage configuration
+  collectCoverageFrom: [
+    'services/**/*.ts',
+    'server/**/*.ts',
+    'lib/**/*.ts',
+    'cli/**/*.ts',
+    'types/**/*.ts',
+    '!**/__tests__/**',
+    '!**/*.test.ts',
+    '!**/dist/**',
+    '!**/node_modules/**',
+  ],
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text', 'lcov', 'html', 'json-summary'],
+  coverageThreshold: {
+    global: {
+      // Enforce 90% coverage for production quality
+      branches: 80,
+      functions: 80,
+      lines: 90,
+      statements: 90,
+    },
+  },
 };

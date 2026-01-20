@@ -27,17 +27,19 @@ npm test -- path/to/file.test.ts  # Single test file
 
 Copy `.env.example` to `.env`. Key variables:
 
-- `VITE_BACKEND_PORT` - Backend port (default: 3002)
+- `PORT` - Backend port (default: 4001)
 - `MLCOMMONS_ENDPOINT` - ML-Commons agent streaming endpoint
 - `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` - Bedrock credentials
+- `OPENSEARCH_STORAGE_*` - OpenSearch cluster for persistence
 - `OPENSEARCH_LOGS_*` - OpenSearch cluster for logs/traces
 
 ## Architecture
 
 ### Two-Server Architecture
 
-- **Frontend (Vite + React)**: Port 3001 - UI for running evaluations
-- **Backend (Express)**: Port 3002 - Proxy for Bedrock API calls (browser cannot call Bedrock directly)
+- **Frontend (Vite + React)**: Port 4000 (development) - UI for running evaluations
+- **Backend (Express)**: Port 4001 - Proxy for Bedrock API calls (browser cannot call Bedrock directly)
+- **Production**: Port 4001 serves both frontend and backend
 
 ### Core Data Flow
 
@@ -109,8 +111,53 @@ Tests use Jest with ts-jest. Test files are in `__tests__/` directories or named
 
 ```bash
 npm test                                    # All tests
+npm run test:unit                           # Unit tests only
+npm run test:integration                    # Integration tests only
+npm test -- --coverage                      # With coverage report
 npm test -- services/storage/__tests__/     # Directory
 npm test -- --testNamePattern="pattern"     # By name
+```
+
+### Coverage
+
+Coverage reports are generated in the `coverage/` directory. HTML report available at `coverage/lcov-report/index.html`.
+
+CI enforces minimum coverage thresholds configured in `jest.config.cjs`:
+- **Lines**: 90%
+- **Statements**: 90%
+- **Functions**: 80%
+- **Branches**: 80%
+
+## CI/CD
+
+GitHub Actions workflows are configured in `.github/workflows/`:
+
+| Workflow | Purpose |
+|----------|---------|
+| `ci.yml` | Main CI - builds, tests, coverage, security scan |
+| `dco.yml` | DCO signoff verification |
+| `npm-publish.yml` | Publish to npm registry |
+| `backport.yml` | Backport PRs to older branches |
+| `stale.yml` | Mark and close stale issues/PRs |
+| `dependency-review.yml` | Review dependency changes |
+| `links-checker.yml` | Check for broken links |
+
+### Required Checks
+
+All PRs must pass:
+1. **Build and Tests** - Builds successfully on Node 18, 20, 22
+2. **Coverage Threshold** - Minimum 90% line coverage
+3. **License Headers** - All source files must have SPDX headers
+4. **Security Scan** - No high/critical vulnerabilities (npm audit)
+5. **DCO Signoff** - All commits signed with DCO
+
+### Commit Guidelines
+
+Use conventional commits with DCO signoff:
+```bash
+git commit -s -m "feat: add new feature"
+git commit -s -m "fix: resolve bug in trace view"
+git commit -s -m "test: add tests for storage service"
 ```
 
 ## UI Components

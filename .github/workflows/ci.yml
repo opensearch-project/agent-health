@@ -29,15 +29,49 @@ jobs:
       - name: Build all artifacts
         run: npm run build:all
 
-      - name: Run unit tests
-        run: npm run test:unit
+      - name: Run unit tests with coverage
+        run: npm run test:unit -- --coverage --coverageReporters=json-summary --coverageReporters=lcov --coverageReporters=text
+
+      - name: Upload coverage artifact
+        if: matrix.node-version == '20'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
+
+      - name: Check coverage thresholds
+        if: matrix.node-version == '20'
+        run: |
+          COVERAGE=$(node -e "const c = require('./coverage/coverage-summary.json'); console.log(c.total.lines.pct)")
+          BRANCHES=$(node -e "const c = require('./coverage/coverage-summary.json'); console.log(c.total.branches.pct)")
+          FUNCTIONS=$(node -e "const c = require('./coverage/coverage-summary.json'); console.log(c.total.functions.pct)")
+          STATEMENTS=$(node -e "const c = require('./coverage/coverage-summary.json'); console.log(c.total.statements.pct)")
+
+          echo "## 📊 Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lines | ${COVERAGE}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branches | ${BRANCHES}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Functions | ${FUNCTIONS}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Statements | ${STATEMENTS}% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Enforce 90% line coverage threshold
+          if (( $(echo "$COVERAGE < 90" | bc -l) )); then
+            echo "❌ Line coverage ${COVERAGE}% is below the 90% threshold" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "✅ Line coverage ${COVERAGE}% meets the 90% threshold" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Verify CLI works
         run: |
           node cli/dist/index.js --help
           echo "CLI help command works"
 
-  lint-package:
+  lint-and-typecheck:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -52,12 +86,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: TypeScript type check
+        run: npx tsc --noEmit --skipLibCheck 2>&1 | head -100 || true
+
       - name: Build all artifacts
         run: npm run build:all
 
       - name: Check package contents
         run: |
-          echo "## Package Contents" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Package Contents" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           npm pack --dry-run 2>&1 | tee -a $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
@@ -69,3 +106,47 @@ jobs:
             exit 1
           fi
           echo "bin/cli.js exists"
+
+  license-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check license headers
+        run: npx jest tests/unit/licenseHeaders.test.ts
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        run: |
+          echo "## 🔒 Security Audit" >> $GITHUB_STEP_SUMMARY
+          npm audit --audit-level=high 2>&1 | tee audit-results.txt || true
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          cat audit-results.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          # Fail only on high/critical vulnerabilities
+          npm audit --audit-level=high

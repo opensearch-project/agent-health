@@ -311,21 +311,251 @@ services/
 
 ## Testing
 
-Tests are located in `tests/` (integration) and `__tests__/` or `*.test.ts` (unit). Jest config in [jest.config.cjs](jest.config.cjs).
+All tests are centralized in the `tests/` folder, mirroring the source structure. Jest config in [jest.config.cjs](jest.config.cjs).
 
-**Key settings:**
-- Test timeout: 30s (for integration tests with SSE streams)
-- Force exit enabled (prevents hanging on SSE connections)
-- Path alias `@/*` configured for imports
+### Test Directory Structure
 
-**Test structure:**
-- `tests/integration/` - Integration tests requiring real services
-- `tests/unit/` - Unit tests for individual functions
-- Service tests in `services/*/(__tests__|*.test.ts)` - Colocated with implementation
+```
+tests/
+├── unit/                    # Unit tests (mock all dependencies)
+│   ├── cli/                 # CLI command tests
+│   ├── lib/                 # Library utility tests
+│   ├── server/              # Backend server tests
+│   │   ├── config/
+│   │   ├── constants/
+│   │   ├── prompts/
+│   │   ├── routes/
+│   │   │   └── storage/
+│   │   └── services/
+│   │       └── storage/
+│   └── services/            # Frontend service tests
+│       ├── agent/
+│       ├── client/
+│       ├── evaluation/
+│       ├── opensearch/
+│       ├── storage/
+│       └── traces/
+└── integration/             # Integration tests (real services)
+    └── services/
+        ├── storage/
+        └── traces/
+```
 
-**Mocking:**
-- Config mock at `__mocks__/@/lib/config.ts` - auto-loaded by Jest for `@/lib/config` imports
-- Use this pattern for mocking other shared modules
+### Writing Tests
+
+**File naming:** `<module-name>.test.ts` - place in `tests/unit/<path-mirroring-source>/`
+
+**Required header:**
+```typescript
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+```
+
+**Basic test structure:**
+```typescript
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { functionToTest } from '@/path/to/module';
+
+// Mock dependencies - use @/ path alias
+jest.mock('@/services/storage/opensearchClient', () => ({
+  experimentStorage: {
+    getAll: jest.fn(),
+    getById: jest.fn(),
+  },
+}));
+
+describe('ModuleName', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('functionToTest', () => {
+    it('should handle normal case', () => {
+      // Arrange
+      const input = 'test';
+
+      // Act
+      const result = functionToTest(input);
+
+      // Assert
+      expect(result).toBe('expected');
+    });
+
+    it('should handle edge case', () => {
+      // Test edge cases, error handling, etc.
+    });
+  });
+});
+```
+
+### Import Conventions
+
+**Always use `@/` path alias** - never relative paths like `../`:
+
+```typescript
+// ✅ Correct - use @/ alias
+import { myFunction } from '@/services/storage/asyncRunStorage';
+jest.mock('@/server/services/opensearchClient');
+
+// ❌ Wrong - relative paths break when tests move
+import { myFunction } from '../asyncRunStorage';
+jest.mock('../../../services/opensearchClient');
+```
+
+**Common import paths:**
+| Module | Import Path |
+|--------|-------------|
+| Types | `@/types` |
+| Server routes | `@/server/routes/<name>` |
+| Server services | `@/server/services/<name>` |
+| Frontend services | `@/services/<category>/<name>` |
+| Lib utilities | `@/lib/<name>` |
+| CLI commands | `@/cli/commands/<name>` |
+
+### Mocking Patterns
+
+**Mock external modules:**
+```typescript
+jest.mock('@/services/storage/opensearchClient', () => ({
+  experimentStorage: {
+    getAll: jest.fn().mockResolvedValue([]),
+    getById: jest.fn().mockResolvedValue(null),
+  },
+  isStorageConfigured: true,
+}));
+```
+
+**Mock with type safety:**
+```typescript
+import { experimentStorage } from '@/services/storage/opensearchClient';
+
+const mockStorage = experimentStorage as jest.Mocked<typeof experimentStorage>;
+mockStorage.getAll.mockResolvedValue([mockExperiment]);
+```
+
+**Dynamic require for module re-import:**
+```typescript
+it('should handle config changes', () => {
+  jest.resetModules();
+  process.env.MY_VAR = 'new-value';
+
+  const { myConfig } = require('@/lib/config');
+  expect(myConfig).toBe('new-value');
+});
+```
+
+**Suppress console output:**
+```typescript
+beforeEach(() => {
+  jest.spyOn(console, 'log').mockImplementation(() => {});
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+});
+```
+
+### Testing Async Code
+
+**Async/await pattern:**
+```typescript
+it('should fetch data', async () => {
+  mockFetch.mockResolvedValue({ data: 'test' });
+
+  const result = await fetchData();
+
+  expect(result.data).toBe('test');
+});
+
+it('should handle errors', async () => {
+  mockFetch.mockRejectedValue(new Error('Network error'));
+
+  await expect(fetchData()).rejects.toThrow('Network error');
+});
+```
+
+**SSE stream testing:**
+```typescript
+it('should handle SSE stream', async () => {
+  const mockReader = {
+    read: jest.fn()
+      .mockResolvedValueOnce({ done: false, value: encoder.encode('data: {"type":"start"}\n\n') })
+      .mockResolvedValueOnce({ done: true }),
+  };
+
+  // Test stream consumption
+});
+```
+
+### Coverage Thresholds
+
+CI enforces these minimums (configured in `jest.config.cjs`):
+- **Lines: 90%**
+- **Statements: 90%**
+- **Functions: 80%**
+- **Branches: 80%**
+
+**Check coverage locally:**
+```bash
+npm test -- --coverage
+open coverage/lcov-report/index.html  # View HTML report
+```
+
+### Running Tests
+
+```bash
+npm test                              # All tests
+npm run test:unit                     # Unit tests only
+npm run test:integration              # Integration tests only
+npm test -- --coverage                # With coverage report
+npm test -- tests/unit/services/      # Specific directory
+npm test -- --testNamePattern="fetch" # By test name
+npm test -- --watch                   # Watch mode
+```
+
+### Test Categories
+
+**Unit tests** (`tests/unit/`):
+- Mock ALL external dependencies
+- Test one function/class at a time
+- Fast execution (<100ms per test)
+- No network/file system access
+
+**Integration tests** (`tests/integration/`):
+- Test multiple modules together
+- May use real services (OpenSearch, etc.)
+- Name files `*.integration.test.ts`
+- Longer timeout allowed (30s)
+
+## CI/CD Workflows
+
+GitHub Actions workflows in `.github/workflows/`:
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `ci.yml` | Push/PR to main | Run tests, coverage, linting |
+| `npm-publish.yml` | Tag push (v*) | Build and publish to npm |
+| `stale.yml` | Scheduled daily | Mark stale issues/PRs |
+| `dco.yml` | PR | Enforce DCO signoff |
+| `add-untriaged.yml` | Issues | Add untriaged label |
+| `backport.yml` | PR merge | Create backport PRs |
+| `changelog.yml` | PR | Validate changelog |
+| `dependency-review.yml` | PR | Review dependency changes |
+| `links-checker.yml` | Push/Scheduled | Check for broken links |
+
+### Running Tests Locally
+
+```bash
+npm test                        # All tests
+npm run test:unit               # Unit tests only
+npm run test:integration        # Integration tests only
+npm test -- --coverage          # Generate coverage report
+```
+
+Coverage reports are generated in `coverage/` directory with HTML report at `coverage/lcov-report/index.html`.
 
 ## OpenSearch Project Compliance
 

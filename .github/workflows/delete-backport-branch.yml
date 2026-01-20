@@ -1,0 +1,27 @@
+name: Delete merged backport branch
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  delete-branch:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'backport/')
+    permissions:
+      contents: write
+    steps:
+      - name: Delete backport branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `heads/${context.payload.pull_request.head.ref}`
+              });
+              console.log(`Deleted branch: ${context.payload.pull_request.head.ref}`);
+            } catch (error) {
+              console.log(`Failed to delete branch: ${error.message}`);
+            }

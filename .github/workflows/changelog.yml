@@ -1,0 +1,35 @@
+name: Changelog Verification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  check-changelog:
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changelog entry
+        run: |
+          # Check if CHANGELOG.md was modified
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+
+          if echo "$CHANGED_FILES" | grep -q "CHANGELOG.md"; then
+            echo "✅ CHANGELOG.md was updated"
+            exit 0
+          fi
+
+          # Check if this is a docs-only change
+          if echo "$CHANGED_FILES" | grep -qE "^(docs/|.*\.md$)" && ! echo "$CHANGED_FILES" | grep -qvE "^(docs/|.*\.md$)"; then
+            echo "ℹ️ Documentation-only change, no changelog entry required"
+            exit 0
+          fi
+
+          echo "❌ Please add a CHANGELOG.md entry for this PR"
+          echo "Add the 'skip-changelog' label if this change doesn't need a changelog entry"
+          exit 1

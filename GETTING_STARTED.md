@@ -468,6 +468,6 @@ npx clear-npx-cache  # Clear npx cache
 
 ### Related Documentation
 
-- [CLAUDE.md](../CLAUDE.md) - Development guide and architecture
-- [ML-COMMONS-SETUP.md](./ML-COMMONS-SETUP.md) - ML Commons agent configuration
-- [.env.example](../.env.example) - Environment variable reference
+- [CLAUDE.md](./CLAUDE.md) - Development guide and architecture
+- [ML-COMMONS-SETUP.md](./docs/ML-COMMONS-SETUP.md) - ML Commons agent configuration
+- [.env.example](./.env.example) - Environment variable reference

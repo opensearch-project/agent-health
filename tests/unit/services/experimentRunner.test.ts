@@ -1,0 +1,609 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import {
+  createCancellationToken,
+  executeRun,
+  runExperiment,
+  runSingleUseCase,
+} from '@/services/experimentRunner';
+import { Experiment, ExperimentRun, TestCase, ExperimentProgress } from '@/types';
+
+// Mock dependencies
+const mockGetAllTestCases = jest.fn();
+const mockSaveReport = jest.fn();
+const mockUpdateRun = jest.fn();
+
+jest.mock('@/server/services/storage', () => ({
+  getAllTestCases: () => mockGetAllTestCases(),
+  saveReport: (...args: any[]) => mockSaveReport(...args),
+  updateRun: (...args: any[]) => mockUpdateRun(...args),
+}));
+
+const mockRunEvaluation = jest.fn();
+const mockCallBedrockJudge = jest.fn();
+
+jest.mock('@/services/evaluation', () => ({
+  runEvaluation: (...args: any[]) => mockRunEvaluation(...args),
+  callBedrockJudge: (...args: any[]) => mockCallBedrockJudge(...args),
+}));
+
+const mockStartPolling = jest.fn();
+
+jest.mock('@/services/traces/tracePoller', () => ({
+  tracePollingManager: {
+    startPolling: (...args: any[]) => mockStartPolling(...args),
+  },
+}));
+
+jest.mock('@/lib/constants', () => ({
+  DEFAULT_CONFIG: {
+    agents: [
+      {
+        key: 'test-agent',
+        name: 'Test Agent',
+        endpoint: 'http://test-agent.example.com',
+        headers: { 'X-Agent': 'test' },
+      },
+      {
+        key: 'other-agent',
+        name: 'Other Agent',
+        endpoint: 'http://other-agent.example.com',
+        headers: {},
+      },
+    ],
+    models: {
+      'claude-sonnet': {
+        model_id: 'anthropic.claude-3-sonnet-20240229-v1:0',
+        display_name: 'Claude Sonnet',
+      },
+      'claude-haiku': {
+        model_id: 'anthropic.claude-3-haiku-20240307-v1:0',
+        display_name: 'Claude Haiku',
+      },
+    },
+  },
+}));
+
+// Silence console output
+beforeAll(() => {
+  jest.spyOn(console, 'log').mockImplementation(() => {});
+  jest.spyOn(console, 'info').mockImplementation(() => {});
+  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  jest.spyOn(console, 'debug').mockImplementation(() => {});
+});
+
+afterAll(() => {
+  jest.restoreAllMocks();
+});
+
+// Test data
+const createTestCase = (id: string): TestCase => ({
+  id,
+  name: `Test Case ${id}`,
+  description: 'Test description',
+  initialPrompt: 'Test prompt',
+  context: [],
+  expectedOutcomes: ['Expected outcome 1'],
+  createdAt: '2024-01-01T00:00:00.000Z',
+  updatedAt: '2024-01-01T00:00:00.000Z',
+  currentVersion: 1,
+  versions: [{
+    version: 1,
+    createdAt: '2024-01-01T00:00:00.000Z',
+    initialPrompt: 'Test prompt',
+    context: [],
+    expectedOutcomes: ['Expected outcome 1'],
+  }],
+  labels: [],
+  category: 'RCA',
+  difficulty: 'Medium',
+  isPromoted: true,
+});
+
+const createExperiment = (testCaseIds: string[]): Experiment => ({
+  id: 'exp-1',
+  name: 'Test Experiment',
+  description: 'Test experiment description',
+  testCaseIds,
+  runs: [],
+  createdAt: '2024-01-01T00:00:00.000Z',
+  updatedAt: '2024-01-01T00:00:00.000Z',
+});
+
+const createExperimentRun = (id: string): ExperimentRun => ({
+  id,
+  name: 'Test Run',
+  agentKey: 'test-agent',
+  modelId: 'claude-sonnet',
+  createdAt: '2024-01-01T00:00:00.000Z',
+  results: {},
+});
+
+describe('Experiment Runner', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('createCancellationToken', () => {
+    it('should create a token with isCancelled = false', () => {
+      const token = createCancellationToken();
+      expect(token.isCancelled).toBe(false);
+    });
+
+    it('should set isCancelled to true when cancel() is called', () => {
+      const token = createCancellationToken();
+      token.cancel();
+      expect(token.isCancelled).toBe(true);
+    });
+  });
+
+  describe('executeRun', () => {
+    it('should execute all test cases in an experiment', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const testCase2 = createTestCase('tc-2');
+      const experiment = createExperiment(['tc-1', 'tc-2']);
+      const run = createExperimentRun('run-1');
+
+      mockGetAllTestCases.mockResolvedValue([testCase1, testCase2]);
+      mockRunEvaluation.mockResolvedValue({
+        id: 'report-1',
+        trajectory: [],
+        metrics: { accuracy: 0.9 },
+      });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const progressUpdates: ExperimentProgress[] = [];
+      const onProgress = (progress: ExperimentProgress) => progressUpdates.push(progress);
+
+      const result = await executeRun(experiment, run, onProgress);
+
+      expect(mockGetAllTestCases).toHaveBeenCalled();
+      expect(mockRunEvaluation).toHaveBeenCalledTimes(2);
+      expect(mockSaveReport).toHaveBeenCalledTimes(2);
+      expect(result.results['tc-1'].status).toBe('completed');
+      expect(result.results['tc-2'].status).toBe('completed');
+      expect(progressUpdates.length).toBeGreaterThan(0);
+    });
+
+    it('should handle cancellation', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const testCase2 = createTestCase('tc-2');
+      const experiment = createExperiment(['tc-1', 'tc-2']);
+      const run = createExperimentRun('run-1');
+      const cancellationToken = createCancellationToken();
+
+      mockGetAllTestCases.mockResolvedValue([testCase1, testCase2]);
+      mockRunEvaluation.mockImplementation(async () => {
+        cancellationToken.cancel(); // Cancel after first evaluation starts
+        return { id: 'report-1', trajectory: [], metrics: {} };
+      });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const progressUpdates: ExperimentProgress[] = [];
+      const onProgress = (progress: ExperimentProgress) => progressUpdates.push(progress);
+
+      await executeRun(experiment, run, onProgress, { cancellationToken });
+
+      // Should have at least one cancelled progress update
+      const cancelledProgress = progressUpdates.find(p => p.status === 'cancelled');
+      expect(cancelledProgress).toBeDefined();
+    });
+
+    it('should handle missing test cases', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1', 'tc-missing']);
+      const run = createExperimentRun('run-1');
+
+      mockGetAllTestCases.mockResolvedValue([testCase1]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const onProgress = jest.fn();
+
+      const result = await executeRun(experiment, run, onProgress);
+
+      expect(result.results['tc-1'].status).toBe('completed');
+      expect(result.results['tc-missing'].status).toBe('failed');
+    });
+
+    it('should handle evaluation errors', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createExperimentRun('run-1');
+
+      mockGetAllTestCases.mockResolvedValue([testCase1]);
+      mockRunEvaluation.mockRejectedValue(new Error('Evaluation failed'));
+
+      const onProgress = jest.fn();
+
+      const result = await executeRun(experiment, run, onProgress);
+
+      expect(result.results['tc-1'].status).toBe('failed');
+    });
+
+    it('should apply agent endpoint overrides', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run: ExperimentRun = {
+        ...createExperimentRun('run-1'),
+        agentEndpoint: 'http://custom-endpoint.example.com',
+        headers: { 'X-Custom': 'value' },
+      };
+
+      mockGetAllTestCases.mockResolvedValue([testCase1]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      await executeRun(experiment, run, jest.fn());
+
+      const agentConfigArg = mockRunEvaluation.mock.calls[0][0];
+      expect(agentConfigArg.endpoint).toBe('http://custom-endpoint.example.com');
+      expect(agentConfigArg.headers).toEqual({ 'X-Agent': 'test', 'X-Custom': 'value' });
+    });
+
+    it('should throw error for unknown agent', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run: ExperimentRun = {
+        ...createExperimentRun('run-1'),
+        agentKey: 'unknown-agent',
+      };
+
+      mockGetAllTestCases.mockResolvedValue([testCase1]);
+
+      const result = await executeRun(experiment, run, jest.fn());
+
+      // The error is caught and the test case is marked as failed
+      expect(result.results['tc-1'].status).toBe('failed');
+    });
+
+    it('should start trace polling for pending reports', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createExperimentRun('run-1');
+
+      mockGetAllTestCases.mockResolvedValue([testCase1]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({
+        id: 'saved-report-1',
+        runId: 'trace-run-id',
+        metricsStatus: 'pending',
+      });
+
+      await executeRun(experiment, run, jest.fn());
+
+      expect(mockStartPolling).toHaveBeenCalledWith(
+        'saved-report-1',
+        'trace-run-id',
+        expect.objectContaining({
+          onTracesFound: expect.any(Function),
+          onAttempt: expect.any(Function),
+          onError: expect.any(Function),
+        })
+      );
+    });
+
+    it('should initialize results if empty', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run: ExperimentRun = {
+        id: 'run-1',
+        name: 'Test Run',
+        agentKey: 'test-agent',
+        modelId: 'claude-sonnet',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        // results is undefined
+      } as ExperimentRun;
+
+      mockGetAllTestCases.mockResolvedValue([testCase1]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const result = await executeRun(experiment, run, jest.fn());
+
+      expect(result.results).toBeDefined();
+      expect(result.results['tc-1'].status).toBe('completed');
+    });
+  });
+
+  describe('runExperiment', () => {
+    it('should create and execute a new run', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const runConfig = {
+        name: 'New Run',
+        agentKey: 'test-agent',
+        modelId: 'claude-sonnet',
+      };
+
+      mockGetAllTestCases.mockResolvedValue([testCase1]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const onProgress = jest.fn();
+
+      const result = await runExperiment(experiment, runConfig, onProgress);
+
+      expect(result.id).toMatch(/^run-\d+-[a-z0-9]+$/);
+      expect(result.name).toBe('New Run');
+      expect(result.createdAt).toBeDefined();
+      expect(result.results['tc-1']).toBeDefined();
+    });
+
+    it('should initialize all test cases as pending', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const testCase2 = createTestCase('tc-2');
+      const experiment = createExperiment(['tc-1', 'tc-2']);
+      const runConfig = {
+        name: 'New Run',
+        agentKey: 'test-agent',
+        modelId: 'claude-sonnet',
+      };
+
+      mockGetAllTestCases.mockResolvedValue([testCase1, testCase2]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const onProgress = jest.fn();
+
+      // We need to check initial state before execution completes
+      // The function initializes all as pending, then executes
+      await runExperiment(experiment, runConfig, onProgress);
+
+      // Check that execution happened for both
+      expect(mockRunEvaluation).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('runSingleUseCase', () => {
+    it('should run a single test case and return report ID', async () => {
+      const testCase = createTestCase('tc-1');
+      const run = createExperimentRun('run-1');
+
+      mockRunEvaluation.mockResolvedValue({
+        id: 'report-1',
+        trajectory: [{ type: 'response', content: 'Test' }],
+        metrics: { accuracy: 0.95 },
+      });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const onStep = jest.fn();
+      const reportId = await runSingleUseCase(run, testCase, onStep);
+
+      expect(reportId).toBe('saved-report-1');
+      expect(mockRunEvaluation).toHaveBeenCalledWith(
+        expect.objectContaining({ endpoint: 'http://test-agent.example.com' }),
+        'anthropic.claude-3-sonnet-20240229-v1:0',
+        testCase,
+        onStep
+      );
+    });
+
+    it('should use empty callback when onStep is not provided', async () => {
+      const testCase = createTestCase('tc-1');
+      const run = createExperimentRun('run-1');
+
+      mockRunEvaluation.mockResolvedValue({
+        id: 'report-1',
+        trajectory: [],
+        metrics: {},
+      });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const reportId = await runSingleUseCase(run, testCase);
+
+      expect(reportId).toBe('saved-report-1');
+      // The callback should be a no-op function
+      const callbackArg = mockRunEvaluation.mock.calls[0][3];
+      expect(typeof callbackArg).toBe('function');
+    });
+
+    it('should start trace polling for pending reports', async () => {
+      const testCase = createTestCase('tc-1');
+      const run = createExperimentRun('run-1');
+
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({
+        id: 'saved-report-1',
+        runId: 'trace-run-id',
+        metricsStatus: 'pending',
+      });
+
+      await runSingleUseCase(run, testCase);
+
+      expect(mockStartPolling).toHaveBeenCalled();
+    });
+
+    it('should resolve model key to model ID', async () => {
+      const testCase = createTestCase('tc-1');
+      const run: ExperimentRun = {
+        ...createExperimentRun('run-1'),
+        modelId: 'claude-haiku',
+      };
+
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      await runSingleUseCase(run, testCase);
+
+      expect(mockRunEvaluation).toHaveBeenCalledWith(
+        expect.any(Object),
+        'anthropic.claude-3-haiku-20240307-v1:0',
+        expect.any(Object),
+        expect.any(Function)
+      );
+    });
+
+    it('should use raw model key if not found in config', async () => {
+      const testCase = createTestCase('tc-1');
+      const run: ExperimentRun = {
+        ...createExperimentRun('run-1'),
+        modelId: 'unknown-model-key',
+      };
+
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReport.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      await runSingleUseCase(run, testCase);
+
+      expect(mockRunEvaluation).toHaveBeenCalledWith(
+        expect.any(Object),
+        'unknown-model-key', // Falls back to raw key
+        expect.any(Object),
+        expect.any(Function)
+      );
+    });
+  });
+
+  describe('trace polling callbacks', () => {
+    it('should call Bedrock judge when traces are found', async () => {
+      const testCase = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createExperimentRun('run-1');
+
+      mockGetAllTestCases.mockResolvedValue([testCase]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [], modelId: 'claude-sonnet' });
+      mockSaveReport.mockResolvedValue({
+        id: 'saved-report-1',
+        runId: 'trace-run-id',
+        metricsStatus: 'pending',
+        modelId: 'claude-sonnet',
+      });
+      mockCallBedrockJudge.mockResolvedValue({
+        passFailStatus: 'passed',
+        metrics: { accuracy: 95 },
+        llmJudgeReasoning: 'Test passed',
+        improvementStrategies: [],
+      });
+
+      await executeRun(experiment, run, jest.fn());
+
+      // Get the callbacks passed to startPolling
+      const startPollingCall = mockStartPolling.mock.calls[0];
+      const callbacks = startPollingCall[2];
+
+      // Simulate traces being found
+      const spans = [{ traceId: 'trace-1', name: 'test-span' }];
+      const updatedReport = {
+        id: 'saved-report-1',
+        trajectory: [{ type: 'response', content: 'Traced response' }],
+      };
+
+      await callbacks.onTracesFound(spans, updatedReport);
+
+      expect(mockCallBedrockJudge).toHaveBeenCalledWith(
+        updatedReport.trajectory,
+        expect.objectContaining({
+          expectedOutcomes: testCase.expectedOutcomes,
+        }),
+        [],
+        expect.any(Function),
+        'anthropic.claude-3-sonnet-20240229-v1:0'
+      );
+
+      expect(mockUpdateRun).toHaveBeenCalledWith('saved-report-1', expect.objectContaining({
+        metricsStatus: 'ready',
+        passFailStatus: 'passed',
+      }));
+    });
+
+    it('should handle judge errors gracefully', async () => {
+      const testCase = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createExperimentRun('run-1');
+
+      mockGetAllTestCases.mockResolvedValue([testCase]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [] });
+      mockSaveReport.mockResolvedValue({
+        id: 'saved-report-1',
+        runId: 'trace-run-id',
+        metricsStatus: 'pending',
+      });
+      mockCallBedrockJudge.mockRejectedValue(new Error('Judge failed'));
+
+      await executeRun(experiment, run, jest.fn());
+
+      // Get the callbacks
+      const callbacks = mockStartPolling.mock.calls[0][2];
+
+      // Simulate traces being found
+      await callbacks.onTracesFound([], { id: 'saved-report-1', trajectory: [] });
+
+      expect(mockUpdateRun).toHaveBeenCalledWith('saved-report-1', expect.objectContaining({
+        metricsStatus: 'error',
+        traceError: expect.stringContaining('Judge evaluation failed'),
+      }));
+    });
+
+    it('should not start polling if runId is missing', async () => {
+      const testCase = createTestCase('tc-1');
+      const run = createExperimentRun('run-1');
+
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [] });
+      mockSaveReport.mockResolvedValue({
+        id: 'saved-report-1',
+        metricsStatus: 'pending',
+        // runId is missing
+      });
+
+      await runSingleUseCase(run, testCase);
+
+      expect(mockStartPolling).not.toHaveBeenCalled();
+    });
+
+    it('should call onAttempt callback during polling', async () => {
+      const testCase = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createExperimentRun('run-1');
+
+      mockGetAllTestCases.mockResolvedValue([testCase]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [] });
+      mockSaveReport.mockResolvedValue({
+        id: 'saved-report-1',
+        runId: 'trace-run-id',
+        metricsStatus: 'pending',
+      });
+
+      await executeRun(experiment, run, jest.fn());
+
+      // Get the callbacks
+      const callbacks = mockStartPolling.mock.calls[0][2];
+
+      // Simulate attempt callback
+      callbacks.onAttempt(1, 10);
+
+      // Verify console.info was called (indirectly test the callback)
+      expect(console.info).toHaveBeenCalled();
+    });
+
+    it('should call onError callback when polling fails', async () => {
+      const testCase = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createExperimentRun('run-1');
+
+      mockGetAllTestCases.mockResolvedValue([testCase]);
+      mockRunEvaluation.mockResolvedValue({ id: 'report-1', trajectory: [] });
+      mockSaveReport.mockResolvedValue({
+        id: 'saved-report-1',
+        runId: 'trace-run-id',
+        metricsStatus: 'pending',
+      });
+
+      await executeRun(experiment, run, jest.fn());
+
+      // Get the callbacks
+      const callbacks = mockStartPolling.mock.calls[0][2];
+
+      // Simulate error callback
+      callbacks.onError(new Error('Polling failed'));
+
+      // Verify console.error was called
+      expect(console.error).toHaveBeenCalled();
+    });
+  });
+
+});

@@ -1,0 +1,14 @@
+name: DCO Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  dco-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check DCO signoff
+        uses: tisonkun/actions-dco@v1.1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}

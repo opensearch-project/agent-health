@@ -1,0 +1,22 @@
+name: Add untriaged label
+
+on:
+  issues:
+    types: [opened, reopened]
+
+jobs:
+  add-untriaged-label:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Add untriaged label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['untriaged']
+            })
