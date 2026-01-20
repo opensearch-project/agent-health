@@ -125,6 +125,65 @@ jobs:
       - name: Check license headers
         run: npx jest tests/unit/licenseHeaders.test.ts
 
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build server
+        run: npm run build:server
+
+      - name: Start backend server
+        run: |
+          node server/dist/index.js &
+          echo $! > server.pid
+          echo "Server PID: $(cat server.pid)"
+
+      - name: Wait for server to be healthy
+        run: |
+          echo "Waiting for server to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:4001/health | grep -q '"status":"ok"'; then
+              echo "Server is healthy!"
+              curl -s http://localhost:4001/health | jq .
+              exit 0
+            fi
+            echo "Attempt $i: Server not ready yet..."
+            sleep 1
+          done
+          echo "Server failed to start within 30 seconds"
+          exit 1
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          TEST_BACKEND_URL: http://localhost:4001
+
+      - name: Stop backend server
+        if: always()
+        run: |
+          if [ -f server.pid ]; then
+            kill $(cat server.pid) || true
+            rm server.pid
+          fi
+
+      - name: Integration test summary
+        if: always()
+        run: |
+          echo "## 🧪 Integration Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Integration tests completed. Check the test output above for details." >> $GITHUB_STEP_SUMMARY
+
   security-scan:
     runs-on: ubuntu-latest
     steps:
