@@ -113,8 +113,8 @@ export interface TestCaseRun {
   timestamp: string;
   testCaseId: string;
   testCaseVersion?: number;          // Which version was run (optional for backwards compatibility)
-  experimentId?: string;             // ID of the experiment this run belongs to
-  experimentRunId?: string;          // ID of the experiment run config this run belongs to
+  experimentId?: string;             // ID of the benchmark (field name preserved for storage compatibility)
+  experimentRunId?: string;          // ID of the benchmark run (field name preserved for storage compatibility)
 
   // Execution context
   agentName: string;

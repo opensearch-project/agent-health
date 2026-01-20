@@ -37,6 +37,15 @@ function isSampleId(id: string): boolean {
   return id.startsWith('demo-');
 }
 
+/**
+ * Get timestamp in milliseconds for sorting, using createdAt as fallback
+ * Fixes bug where missing timestamps defaulted to epoch (1970)
+ */
+function getTimestampMs(run: { timestamp?: string; createdAt?: string }): number {
+  const ts = run.timestamp || run.createdAt;
+  return ts ? new Date(ts).getTime() : 0;
+}
+
 // GET /api/storage/runs - List all (paginated)
 router.get('/api/storage/runs', async (req: Request, res: Response) => {
   try {
@@ -64,7 +73,7 @@ router.get('/api/storage/runs', async (req: Request, res: Response) => {
 
     // Sort sample data by timestamp descending (newest first)
     const sortedSampleData = [...SAMPLE_RUNS].sort((a, b) =>
-      new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+      getTimestampMs(b) - getTimestampMs(a)
     );
 
     // User data first, then sample data
@@ -251,7 +260,7 @@ router.post('/api/storage/runs/search', async (req: Request, res: Response) => {
 
     // Sort sample results by timestamp descending (newest first)
     const sortedSampleResults = sampleResults.sort((a, b) =>
-      new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+      getTimestampMs(b) - getTimestampMs(a)
     );
 
     // User data first, then sample data
@@ -294,7 +303,7 @@ router.get('/api/storage/runs/by-test-case/:testCaseId', async (req: Request, re
 
     // Sort sample results by timestamp descending (newest first)
     const sortedSampleResults = sampleResults.sort((a, b) =>
-      new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+      getTimestampMs(b) - getTimestampMs(a)
     );
 
     // User data first, then sample data
@@ -338,7 +347,7 @@ router.get('/api/storage/runs/by-benchmark/:benchmarkId', async (req: Request, r
 
     // Sort sample results by timestamp descending (newest first)
     const sortedSampleResults = sampleResults.sort((a, b) =>
-      new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+      getTimestampMs(b) - getTimestampMs(a)
     );
 
     // User data first, then sample data
@@ -386,7 +395,7 @@ router.get('/api/storage/runs/by-benchmark-run/:benchmarkId/:runId', async (req:
 
     // Sort sample results by timestamp descending (newest first)
     const sortedSampleResults = sampleResults.sort((a, b) =>
-      new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+      getTimestampMs(b) - getTimestampMs(a)
     );
 
     // User data first, then sample data

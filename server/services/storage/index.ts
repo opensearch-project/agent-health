@@ -23,15 +23,10 @@ export { isStorageConfigured };
 // ==================== Test Cases ====================
 
 /**
- * Get all test cases (latest versions)
- * Throws if storage is not configured
+ * Get all test cases (latest versions) with an explicit client
+ * Used by code that has the client from middleware or passed as parameter
  */
-export async function getAllTestCases(): Promise<any[]> {
-  const client = getOpenSearchClient();
-  if (!client) {
-    throw new Error('Storage not configured');
-  }
-
+export async function getAllTestCasesWithClient(client: Client): Promise<any[]> {
   const result = await client.search({
     index: INDEXES.testCases,
     body: {
@@ -54,6 +49,19 @@ export async function getAllTestCases(): Promise<any[]> {
       (bucket: any) => bucket.latest.hits.hits[0]._source
     ) || []
   );
+}
+
+/**
+ * Get all test cases (latest versions)
+ * Throws if storage is not configured
+ * @deprecated Use getAllTestCasesWithClient with request-scoped client
+ */
+export async function getAllTestCases(): Promise<any[]> {
+  const client = getOpenSearchClient();
+  if (!client) {
+    throw new Error('Storage not configured');
+  }
+  return getAllTestCasesWithClient(client);
 }
 
 /**
@@ -182,10 +190,11 @@ export async function updateRun(id: string, updates: any): Promise<any> {
 }
 
 /**
- * Save an evaluation report (converts from app format to storage format)
- * Throws if storage is not configured
+ * Save an evaluation report with an explicit client
+ * Used by code that has the client from middleware or passed as parameter
  */
-export async function saveReport(
+export async function saveReportWithClient(
+  client: Client,
   report: any,
   options?: { experimentId?: string; experimentRunId?: string; iteration?: number }
 ): Promise<any> {
@@ -217,7 +226,7 @@ export async function saveReport(
   if (report.traceError !== undefined) storageData.traceError = report.traceError;
   if (report.spans !== undefined) storageData.spans = report.spans;
 
-  const created = await createRun(storageData);
+  const created = await createRunWithClient(client, storageData);
 
   // Return in app format
   return {
@@ -227,6 +236,22 @@ export async function saveReport(
     experimentId: created.experimentId || undefined,
     experimentRunId: created.experimentRunId || undefined,
   };
+}
+
+/**
+ * Save an evaluation report (converts from app format to storage format)
+ * Throws if storage is not configured
+ * @deprecated Use saveReportWithClient with request-scoped client
+ */
+export async function saveReport(
+  report: any,
+  options?: { experimentId?: string; experimentRunId?: string; iteration?: number }
+): Promise<any> {
+  const client = getOpenSearchClient();
+  if (!client) {
+    throw new Error('Storage not configured');
+  }
+  return saveReportWithClient(client, report, options);
 }
 
 // ==================== Helpers ====================

@@ -18,6 +18,7 @@ interface IndexMapping {
   settings?: {
     number_of_shards?: number;
     number_of_replicas?: number;
+    'index.mapping.total_fields.limit'?: number;
   };
   mappings: {
     dynamic_templates?: Array<{
@@ -66,6 +67,11 @@ export function getIndexMappings(): IndexMappings {
       },
     },
     [STORAGE_CONFIG.indexes.benchmarks]: {
+      settings: {
+        number_of_shards: 1,
+        number_of_replicas: 1,
+        'index.mapping.total_fields.limit': 5000, // Increased for dynamic testCaseSnapshots and results fields
+      },
       mappings: {
         properties: {
           id: { type: 'keyword' },
@@ -92,11 +98,18 @@ export function getIndexMappings(): IndexMappings {
       },
     },
     [STORAGE_CONFIG.indexes.runs]: {
+      settings: {
+        number_of_shards: 1,
+        number_of_replicas: 1,
+        'index.mapping.total_fields.limit': 2000, // Increase from default 1000 for complex reports
+      },
       mappings: {
         properties: {
           id: { type: 'keyword' },
           name: { type: 'text', fields: { keyword: { type: 'keyword' } } },
           description: { type: 'text' },
+          // Note: Field names experimentId and experimentRunId preserved for data compatibility.
+          // These store benchmark/benchmarkRun IDs but use legacy field names in OpenSearch.
           experimentId: { type: 'keyword' },
           experimentRunId: { type: 'keyword' },
           testCaseId: { type: 'keyword' },
@@ -134,6 +147,12 @@ export function getIndexMappings(): IndexMappings {
           trajectory: { type: 'object', enabled: false },
           logs: { type: 'object', enabled: false },
           rawEvents: { type: 'object', enabled: false },
+          improvementStrategies: { type: 'object', enabled: false },
+          spans: { type: 'object', enabled: false },
+          metricsStatus: { type: 'keyword' },
+          traceFetchAttempts: { type: 'integer' },
+          lastTraceFetchAt: { type: 'date' },
+          traceError: { type: 'text' },
         },
       },
     },

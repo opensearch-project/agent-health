@@ -31,10 +31,16 @@ function generateMockEvaluation(trajectory: any[], expectedOutcomes: string[]): 
 
   const passFailStatus = accuracy >= 0.7 ? 'passed' : 'failed';
 
+  const accuracyPct = Math.round(accuracy * 100);
   return {
     passFailStatus,
-    accuracy: Math.round(accuracy * 100) / 100,
-    reasoning: `**Mock Evaluation Result**
+    metrics: {
+      accuracy: accuracyPct,
+      faithfulness: Math.round((accuracy - 0.05 + Math.random() * 0.1) * 100),
+      latency_score: Math.round((0.8 + Math.random() * 0.2) * 100),
+      trajectory_alignment_score: Math.round((accuracy - 0.1 + Math.random() * 0.2) * 100),
+    },
+    llmJudgeReasoning: `**Mock Evaluation Result**
 
 The agent demonstrated ${passFailStatus === 'passed' ? 'appropriate' : 'incomplete'} RCA methodology:
 

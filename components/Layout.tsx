@@ -51,8 +51,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { status, version, loading } = useServerStatus();
 
   return (
-    <SidebarProvider>
-      <Sidebar collapsible="none" className="h-screen">
+    <SidebarProvider className="h-screen overflow-hidden">
+      <Sidebar collapsible="none" className="h-screen flex-shrink-0">
         <SidebarHeader className="p-4 border-b border-sidebar-border">
           <div className="flex items-center space-x-3">
             <img src={OpenSearchLogo} alt="OpenSearch" className="w-8 h-8" />
@@ -111,7 +111,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
           </SidebarGroup>
         </SidebarContent>
 
-        <SidebarFooter className="p-3 border-t border-sidebar-border">
+        <SidebarFooter className="p-3 border-t border-sidebar-border sticky bottom-0 bg-sidebar">
           <Card className="bg-sidebar-accent/50 border-sidebar-border">
             <CardContent className="p-3">
               <h4 className="text-xs font-semibold text-sidebar-foreground/70 uppercase mb-2">
@@ -137,7 +137,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         </SidebarFooter>
       </Sidebar>
 
-      <SidebarInset>{children}</SidebarInset>
+      <SidebarInset className="overflow-y-auto">{children}</SidebarInset>
     </SidebarProvider>
   );
 };

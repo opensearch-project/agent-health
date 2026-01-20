@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Eye, Calendar, FlaskConical, RefreshCw, CheckCircle, XCircle, Loader2, Circle, X, Play } from 'lucide-react';
+import { Plus, Trash2, Eye, Calendar, FlaskConical, RefreshCw, CheckCircle, XCircle, Loader2, Circle, X, Play, Pencil } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -104,6 +104,11 @@ export const BenchmarksPage: React.FC = () => {
 
   const handleNewBenchmark = () => {
     setEditingBenchmark(null);
+    setIsEditorOpen(true);
+  };
+
+  const handleEditBenchmark = (bench: Benchmark) => {
+    setEditingBenchmark(bench);
     setIsEditorOpen(true);
   };
 
@@ -335,9 +340,7 @@ export const BenchmarksPage: React.FC = () => {
             </CardContent>
           </Card>
         ) : (
-          [...benchmarks]
-            .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
-            .map(bench => {
+          benchmarks.map(bench => {
             const latestRun = getLatestRun(bench);
             const isRunning = runningBenchmarkId === bench.id;
 
@@ -458,6 +461,17 @@ export const BenchmarksPage: React.FC = () => {
                         >
                           <Eye size={14} className="mr-1" />
                           View Latest
+                        </Button>
+                      )}
+                      {/* Edit button - opens editor to modify test cases */}
+                      {!isRunning && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleEditBenchmark(bench)}
+                          title="Edit benchmark"
+                        >
+                          <Pencil size={14} />
                         </Button>
                       )}
                       {/* Run button - creates new run */}

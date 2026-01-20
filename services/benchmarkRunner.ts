@@ -12,7 +12,12 @@ import {
   EvaluationReport,
   RunConfigInput,
 } from '@/types';
-import { getAllTestCases, saveReport, updateRun } from '@/server/services/storage';
+import {
+  getAllTestCasesWithClient,
+  saveReportWithClient,
+  updateRunWithClient,
+} from '@/server/services/storage';
+import type { Client } from '@opensearch-project/opensearch';
 import { runEvaluation, callBedrockJudge } from './evaluation';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { tracePollingManager } from './traces/tracePoller';
@@ -43,6 +48,8 @@ export function createCancellationToken(): CancellationToken {
  */
 export interface ExecuteRunOptions {
   cancellationToken?: CancellationToken;
+  /** OpenSearch client for storage operations (required) */
+  client: Client;
 }
 
 /**
@@ -85,10 +92,10 @@ export async function executeRun(
   benchmark: Benchmark,
   run: BenchmarkRun,
   onProgress: (progress: BenchmarkProgress) => void,
-  options?: ExecuteRunOptions
+  options: ExecuteRunOptions
 ): Promise<BenchmarkRun> {
   const totalTestCases = benchmark.testCaseIds.length;
-  const cancellationToken = options?.cancellationToken;
+  const { cancellationToken, client } = options;
 
   // Initialize results if empty
   if (!run.results) {
@@ -96,7 +103,7 @@ export async function executeRun(
   }
 
   // Fetch all test cases upfront for this benchmark
-  const allTestCases = await getAllTestCases();
+  const allTestCases = await getAllTestCasesWithClient(client);
   const testCaseMap = new Map(allTestCases.map((tc: any) => [tc.id, tc]));
 
   try {
@@ -149,7 +156,7 @@ export async function executeRun(
         );
 
         // Save the report to OpenSearch and get the actual stored ID
-        const savedReport = await saveReport(report, {
+        const savedReport = await saveReportWithClient(client, report, {
           experimentId: benchmark.id,
           experimentRunId: run.id,
         });
@@ -157,7 +164,7 @@ export async function executeRun(
         // Start trace polling for trace-mode runs (metricsStatus: 'pending')
         if (savedReport.metricsStatus === 'pending' && savedReport.runId) {
           console.info(`[BenchmarkRunner] Starting trace polling for report ${savedReport.id}`);
-          startTracePollingForReport(savedReport, testCase);
+          startTracePollingForReport(savedReport, testCase, client);
         }
 
         // Update result with success - use the actual stored ID
@@ -209,7 +216,8 @@ function generateRunId(): string {
 export async function runBenchmark(
   benchmark: Benchmark,
   runConfig: RunConfigInput,
-  onProgress: (progress: BenchmarkProgress) => void
+  onProgress: (progress: BenchmarkProgress) => void,
+  client: Client
 ): Promise<BenchmarkRun> {
   // Create a new run - spread runConfig to include all fields (name, description, etc.)
   const run: BenchmarkRun = {
@@ -224,7 +232,7 @@ export async function runBenchmark(
     run.results[testCaseId] = { reportId: '', status: 'pending' };
   });
 
-  return executeRun(benchmark, run, onProgress);
+  return executeRun(benchmark, run, onProgress, { client });
 }
 
 /**
@@ -233,6 +241,7 @@ export async function runBenchmark(
 export async function runSingleUseCase(
   run: BenchmarkRun,
   testCase: TestCase,
+  client: Client,
   onStep?: (step: any) => void
 ): Promise<string> {
   const agentConfig = buildAgentConfigForRun(run);
@@ -245,12 +254,12 @@ export async function runSingleUseCase(
     onStep || (() => {})
   );
 
-  const savedReport = await saveReport(report);
+  const savedReport = await saveReportWithClient(client, report);
 
   // Start trace polling for trace-mode runs
   if (savedReport.metricsStatus === 'pending' && savedReport.runId) {
     console.info(`[BenchmarkRunner] Starting trace polling for report ${savedReport.id}`);
-    startTracePollingForReport(savedReport, testCase);
+    startTracePollingForReport(savedReport, testCase, client);
   }
 
   return savedReport.id;
@@ -262,7 +271,7 @@ export async function runSingleUseCase(
  * When traces are found, calls the Bedrock judge with the trajectory
  * and test case's expectedOutcomes to get the final evaluation.
  */
-function startTracePollingForReport(report: EvaluationReport, testCase: TestCase): void {
+function startTracePollingForReport(report: EvaluationReport, testCase: TestCase, client: Client): void {
   if (!report.runId) {
     console.warn(`[BenchmarkRunner] No runId for report ${report.id}, cannot start trace polling`);
     return;
@@ -295,7 +304,7 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
           console.info(`[BenchmarkRunner] Judge result for report ${report.id}: ${judgment.passFailStatus}, accuracy: ${judgment.metrics.accuracy}%`);
 
           // Update report with judge results
-          await updateRun(report.id, {
+          await updateRunWithClient(client, report.id, {
             metricsStatus: 'ready',
             passFailStatus: judgment.passFailStatus,
             metrics: judgment.metrics,
@@ -308,7 +317,7 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
         } catch (error) {
           console.error(`[BenchmarkRunner] Failed to judge report ${report.id}:`, error);
           // Still mark as ready but with error info
-          await updateRun(report.id, {
+          await updateRunWithClient(client, report.id, {
             metricsStatus: 'error',
             traceError: `Judge evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
           });

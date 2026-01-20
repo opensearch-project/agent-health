@@ -283,12 +283,11 @@ export const BenchmarkRunsPage: React.FC = () => {
           }));
         },
         (startedEvent: BenchmarkStartedEvent) => {
-          // Initialize use case statuses from server response (ensures consistency)
-          setUseCaseStatuses(startedEvent.testCases.map(tc => ({
-            id: tc.id,
-            name: tc.name,
-            status: 'pending' as const,
-          })));
+          // Update use case names from server response (without resetting status to avoid race condition)
+          setUseCaseStatuses(prev => prev.map(uc => {
+            const serverTc = startedEvent.testCases.find(tc => tc.id === uc.id);
+            return serverTc ? { ...uc, name: serverTc.name } : uc;
+          }));
         }
       );
 
@@ -633,8 +632,9 @@ export const BenchmarkRunsPage: React.FC = () => {
                             size="sm"
                             onClick={async (e) => {
                               e.stopPropagation();
+                              if (!benchmarkId) return;
                               try {
-                                await cancelBenchmarkRun(benchmarkId!, run.id);
+                                await cancelBenchmarkRun(benchmarkId, run.id);
                                 loadBenchmark();
                               } catch (error) {
                                 console.error('Failed to cancel run:', error);

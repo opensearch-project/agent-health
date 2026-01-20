@@ -7,7 +7,7 @@
  * Integration tests for async storage services
  *
  * These tests require the backend server to be running:
- *   npm run dev:judge
+ *   npm run dev:server
  *
  * Run tests:
  *   npm test -- --testPathPattern=asyncStorage.integration
@@ -130,55 +130,61 @@ describe('OpenSearch Storage Integration Tests', () => {
   });
 
   describe('asyncBenchmarkStorage', () => {
-    let experimentId: string;
+    let benchmarkId: string;
 
     afterAll(async () => {
-      if (!backendAvailable || !experimentId) return;
-      // Cleanup: delete experiment
+      if (!backendAvailable || !benchmarkId) return;
+      // Cleanup: delete benchmark
       try {
-        await asyncBenchmarkStorage.delete(experimentId);
+        await asyncBenchmarkStorage.delete(benchmarkId);
       } catch {
         // Ignore cleanup errors
       }
     });
 
-    it('should create an experiment', async () => {
+    it('should create a benchmark', async () => {
       if (!backendAvailable) return;
 
-      const experiment = await asyncBenchmarkStorage.create({
+      const benchmark = await asyncBenchmarkStorage.create({
         name: 'Integration Test Benchmark',
-        description: 'Test experiment',
+        description: 'Test benchmark',
         testCaseIds: ['tc-001', 'tc-002'],
         runs: [],
+        currentVersion: 1,
+        versions: [{
+          version: 1,
+          createdAt: new Date().toISOString(),
+          testCaseIds: ['tc-001', 'tc-002'],
+        }],
       });
 
-      expect(experiment).toBeDefined();
-      expect(experiment.id).toBeDefined();
-      expect(experiment.name).toBe('Integration Test Benchmark');
-      experimentId = experiment.id;
+      expect(benchmark).toBeDefined();
+      expect(benchmark.id).toBeDefined();
+      expect(benchmark.name).toBe('Integration Test Benchmark');
+      benchmarkId = benchmark.id;
     });
 
-    it('should get experiment by ID', async () => {
-      if (!backendAvailable || !experimentId) return;
+    it('should get benchmark by ID', async () => {
+      if (!backendAvailable || !benchmarkId) return;
 
-      const experiment = await asyncBenchmarkStorage.getById(experimentId);
-      expect(experiment).toBeDefined();
-      expect(experiment?.id).toBe(experimentId);
+      const benchmark = await asyncBenchmarkStorage.getById(benchmarkId);
+      expect(benchmark).toBeDefined();
+      expect(benchmark?.id).toBe(benchmarkId);
     });
 
-    it('should get all experiments', async () => {
+    it('should get all benchmarks', async () => {
       if (!backendAvailable) return;
 
-      const experiments = await asyncBenchmarkStorage.getAll();
-      expect(Array.isArray(experiments)).toBe(true);
+      const benchmarks = await asyncBenchmarkStorage.getAll();
+      expect(Array.isArray(benchmarks)).toBe(true);
     });
 
-    it('should delete run from experiment', async () => {
-      if (!backendAvailable || !experimentId) return;
+    it('should delete run from benchmark', async () => {
+      if (!backendAvailable || !benchmarkId) return;
 
-      // First, we need to save an experiment with runs
+      // First, we need to save a benchmark with runs
       // This tests the deleteRun method
-      const result = await asyncBenchmarkStorage.deleteRun(experimentId, 'non-existent-run');
+      const result = await asyncBenchmarkStorage.deleteRun(benchmarkId, 'non-existent-run');
       expect(result).toBe(false); // Should return false since run doesn't exist
     });
   });

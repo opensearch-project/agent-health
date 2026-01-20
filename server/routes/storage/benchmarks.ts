@@ -27,6 +27,14 @@ import {
  */
 function normalizeBenchmark(doc: any): Benchmark {
   const version = doc.currentVersion ?? doc.version ?? 1;
+  // Normalize and sort runs by createdAt descending (newest first)
+  const normalizedRuns = (doc.runs || [])
+    .map(normalizeBenchmarkRun)
+    .sort((a: BenchmarkRun, b: BenchmarkRun) => {
+      const aTime = new Date(a.createdAt || 0).getTime();
+      const bTime = new Date(b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
   return {
     ...doc,
     updatedAt: doc.updatedAt ?? doc.createdAt,
@@ -36,7 +44,7 @@ function normalizeBenchmark(doc: any): Benchmark {
       createdAt: doc.createdAt,
       testCaseIds: doc.testCaseIds || [],
     }],
-    runs: (doc.runs || []).map(normalizeBenchmarkRun),
+    runs: normalizedRuns,
   };
 }
 
@@ -131,7 +139,7 @@ router.get('/api/storage/benchmarks', async (req: Request, res: Response) => {
           index: INDEX,
           body: {
             size: 1000,
-            sort: [{ createdAt: { order: 'desc' } }],
+            sort: [{ updatedAt: { order: 'desc' } }],
             query: { match_all: {} },
           },
         });
@@ -141,16 +149,20 @@ router.get('/api/storage/benchmarks', async (req: Request, res: Response) => {
       }
     }
 
-    // Sort real data by createdAt descending (newest first)
-    // OpenSearch query already sorts, but ensure consistency
-    const sortedRealData = realData.sort((a, b) =>
-      new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
+    // Sort real data by updatedAt descending (most recently modified first)
+    // Falls back to createdAt if updatedAt is missing
+    const sortedRealData = realData.sort((a, b) => {
+      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
 
-    // Sort and normalize sample data by createdAt descending
-    const sortedSampleData = [...SAMPLE_BENCHMARKS].map(normalizeBenchmark).sort((a, b) =>
-      new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
+    // Sort and normalize sample data by updatedAt descending
+    const sortedSampleData = [...SAMPLE_BENCHMARKS].map(normalizeBenchmark).sort((a, b) => {
+      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
 
     // User data first, then sample data
     const allData = [...sortedRealData, ...sortedSampleData];
@@ -636,11 +648,12 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
     res.flushHeaders();
 
     // Save run to benchmark immediately so it persists across page refreshes
+    // Also update updatedAt so benchmark appears at top of list (sorted by recent activity)
     const initialRuns = [...(benchmark.runs || []), run];
     await client.update({
       index: INDEX,
       id,
-      body: { doc: { runs: initialRuns } },
+      body: { doc: { runs: initialRuns, updatedAt: run.createdAt } },
       refresh: true,
     });
 
@@ -673,7 +686,7 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
           // Stream progress to client
           res.write(`data: ${JSON.stringify({ type: 'progress', ...progress })}\n\n`);
         },
-        { cancellationToken }
+        { cancellationToken, client }
       );
 
       // Determine final status - check if cancelled

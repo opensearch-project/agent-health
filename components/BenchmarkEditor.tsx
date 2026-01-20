@@ -52,16 +52,9 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
   const [selectedUseCaseIds, setSelectedUseCaseIds] = useState<Set<string>>(
     new Set(benchmark?.testCaseIds || [])
   );
-  const [runs, setRuns] = useState<RunConfig[]>(
-    benchmark?.runs?.map(r => ({
-      id: r.id,
-      name: r.name,
-      description: r.description,
-      agentKey: r.agentKey,
-      modelId: r.modelId,
-      headers: r.headers,
-    })) || [createDefaultRun()]
-  );
+  // Always start with a fresh default run - the Runs step is for defining NEW runs to execute,
+  // not for viewing historical runs (which are shown on the BenchmarkRunsPage)
+  const [runs, setRuns] = useState<RunConfig[]>([createDefaultRun()]);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
   // Load all test cases from storage (previously only promoted, but TestCasesPage doesn't have promotion)
@@ -348,6 +341,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
                       <div className="flex items-center gap-3">
                         <Checkbox
                           checked={selectedUseCaseIds.has(tc.id)}
+                          onClick={(e) => e.stopPropagation()}
                           onCheckedChange={() => handleToggleUseCase(tc.id)}
                         />
                         <div className="flex-1 min-w-0">

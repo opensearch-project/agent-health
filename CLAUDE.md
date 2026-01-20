@@ -8,8 +8,8 @@ AgentEval is an evaluation framework for Root Cause Analysis (RCA) agents. It us
 
 **Key concepts:**
 - **Test Case** (UI: "Use Case"): A scenario with prompt, context, and expected outcomes
-- **Experiment**: Collection of test cases with multiple runs to compare configurations
-- **Experiment Run**: Point-in-time snapshot with agent/model config and results
+- **Benchmark**: Collection of test cases with multiple runs to compare configurations
+- **Benchmark Run**: Point-in-time snapshot with agent/model config and results
 - **Trajectory**: Sequence of agent steps (thinking → action → tool_result → response)
 
 ## Development Commands
@@ -86,7 +86,7 @@ npx @opensearch-project/agent-health --env-file .env
 **Storage Services** (`services/storage/`):
 - `opensearchClient.ts`: OpenSearch client for persistence
 - `asyncTestCaseStorage.ts`: Test case CRUD operations
-- `asyncExperimentStorage.ts`: Experiment management
+- `asyncBenchmarkStorage.ts`: Benchmark management
 - `asyncRunStorage.ts`: Evaluation run persistence
 - Data stored in OpenSearch indexes (configured via `OPENSEARCH_STORAGE_*` env vars)
 
@@ -96,7 +96,7 @@ npx @opensearch-project/agent-health --env-file .env
 
 **Other Services**:
 - `comparisonService.ts`: Aggregate metrics and side-by-side comparison logic
-- `experimentRunner.ts`: Batch execution of test cases across runs
+- `benchmarkRunner.ts`: Batch execution of test cases across runs
 - `metrics.ts`: Token/cost calculations from trace data
 
 ### Configuration (`lib/`)
@@ -111,7 +111,7 @@ npx @opensearch-project/agent-health --env-file .env
 Key interfaces:
 - `TestCase`: Versioned use case with prompt, context, expectedOutcomes, labels
 - `TestCaseRun` (alias: `EvaluationReport`): Single evaluation result with trajectory and metrics
-- `Experiment` / `ExperimentRun`: Batch evaluation configurations and results
+- `Benchmark` / `BenchmarkRun`: Batch evaluation configurations and results
 - `TrajectoryStep`: Agent step (thinking/action/tool_result/response)
 - `AgentConfig` / `ModelConfig`: Agent and model configuration schemas
 
@@ -126,7 +126,7 @@ import { getConfig } from '@/lib/config';
 ### CLI (`cli/`)
 
 Entry point for NPX package (`bin/cli.js` → `cli/index.ts`):
-- `demo/sample*.ts`: Sample test cases, experiments, runs, traces
+- `demo/sample*.ts`: Sample test cases, benchmarks, runs, traces
 - `utils/startServer.ts`: Server bootstrap for CLI context
 
 ### Directory Structure
@@ -203,7 +203,7 @@ Express server on port 4001 provides:
 - `/api/logs/*` - OpenSearch log queries
 - `/api/traces/*` - OTel trace queries
 - `/api/metrics/*` - Token/cost metrics from traces
-- `/api/storage/*` - Test case, experiment, run persistence
+- `/api/storage/*` - Test case, benchmark, run persistence
 
 ### Environment Variables
 
@@ -212,7 +212,7 @@ Express server on port 4001 provides:
 
 **Optional** (all have sensible defaults):
 - `LANGGRAPH_ENDPOINT` / `HOLMESGPT_ENDPOINT` / `MLCOMMONS_ENDPOINT`: Agent endpoints
-- `OPENSEARCH_STORAGE_*`: Storage cluster for test cases/experiments (features degrade if missing)
+- `OPENSEARCH_STORAGE_*`: Storage cluster for test cases/benchmarks (features degrade if missing)
 - `OPENSEARCH_LOGS_*`: Logs cluster for agent execution logs (features degrade if missing)
 - `MLCOMMONS_HEADER_*`: Headers for ML-Commons agent data source access (see [docs/ML-COMMONS-SETUP.md](docs/ML-COMMONS-SETUP.md))
 
@@ -221,7 +221,7 @@ Express server on port 4001 provides:
 ### Backend Patterns
 
 **SSE Streaming for Long-Running Operations**
-- Use Server-Sent Events for operations that take time (experiment execution, agent streaming)
+- Use Server-Sent Events for operations that take time (benchmark execution, agent streaming)
 - Set headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`, then `res.flushHeaders()`
 - Send structured events: `{ type: 'started' | 'progress' | 'completed' | 'cancelled' | 'error', ... }`
 - Backend continues execution even if client disconnects - persist state immediately after starting
@@ -287,11 +287,11 @@ Express server on port 4001 provides:
 
 **Config Input vs Full Entity**
 - `RunConfigInput`: user-provided fields only
-- `ExperimentRun`: full entity with system-added id, createdAt, status, results
+- `BenchmarkRun`: full entity with system-added id, createdAt, status, results
 
 **Event Types with Discriminator**
 - Include `type` field in event interfaces for switch statements
-- Separate types: `ExperimentProgress`, `ExperimentStartedEvent`
+- Separate types: `BenchmarkProgress`, `BenchmarkStartedEvent`
 
 ### Module Organization
 
@@ -307,7 +307,7 @@ services/
 
 **Exports**
 - Barrel exports via `index.ts` with named functions
-- `export { executeExperimentRun, cancelExperimentRun }` not namespace objects
+- `export { executeBenchmarkRun, cancelBenchmarkRun }` not namespace objects
 
 ## Testing
 
@@ -364,7 +364,7 @@ import { functionToTest } from '@/path/to/module';
 
 // Mock dependencies - use @/ path alias
 jest.mock('@/services/storage/opensearchClient', () => ({
-  experimentStorage: {
+  benchmarkStorage: {
     getAll: jest.fn(),
     getById: jest.fn(),
   },
@@ -423,7 +423,7 @@ jest.mock('../../../services/opensearchClient');
 **Mock external modules:**
 ```typescript
 jest.mock('@/services/storage/opensearchClient', () => ({
-  experimentStorage: {
+  benchmarkStorage: {
     getAll: jest.fn().mockResolvedValue([]),
     getById: jest.fn().mockResolvedValue(null),
   },
@@ -433,10 +433,10 @@ jest.mock('@/services/storage/opensearchClient', () => ({
 
 **Mock with type safety:**
 ```typescript
-import { experimentStorage } from '@/services/storage/opensearchClient';
+import { benchmarkStorage } from '@/services/storage/opensearchClient';
 
-const mockStorage = experimentStorage as jest.Mocked<typeof experimentStorage>;
-mockStorage.getAll.mockResolvedValue([mockExperiment]);
+const mockStorage = benchmarkStorage as jest.Mocked<typeof benchmarkStorage>;
+mockStorage.getAll.mockResolvedValue([mockBenchmark]);
 ```
 
 **Dynamic require for module re-import:**

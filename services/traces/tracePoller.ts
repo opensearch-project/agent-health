@@ -173,14 +173,14 @@ class TracePollingManager {
 
           callbacks?.onError(new Error(`Traces not available after ${state.maxAttempts} attempts`));
 
-          // Update report with error status (non-critical if this fails)
+          // Update report with error status - critical as report will remain stuck otherwise
           try {
             await asyncRunStorage.updateReport(reportId, {
               metricsStatus: 'error',
               traceError: `Traces not available after ${state.maxAttempts} attempts (${state.maxAttempts * state.intervalMs / 60000} minutes)`,
             });
           } catch (updateErr) {
-            console.warn(`[TracePoller] Failed to update report error status:`, updateErr);
+            console.error(`[TracePoller] CRITICAL: Failed to update report ${reportId} error status. Report may be stuck in pending state.`, updateErr);
           }
 
           this.callbacks.delete(reportId);
@@ -196,14 +196,14 @@ class TracePollingManager {
         state.running = false;
         callbacks?.onError(error as Error);
 
-        // Update report with error status (non-critical if this fails)
+        // Update report with error status - critical as report will remain stuck otherwise
         try {
           await asyncRunStorage.updateReport(reportId, {
             metricsStatus: 'error',
             traceError: (error as Error).message,
           });
         } catch (updateErr) {
-          console.warn(`[TracePoller] Failed to update report error status:`, updateErr);
+          console.error(`[TracePoller] CRITICAL: Failed to update report ${reportId} error status. Report may be stuck in pending state.`, updateErr);
         }
 
         this.callbacks.delete(reportId);

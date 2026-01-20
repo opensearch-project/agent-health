@@ -46,6 +46,18 @@ export interface GetReportsOptions {
 }
 
 /**
+ * Optional fields for trace-mode runs (when useTraces: true)
+ * These fields are dynamically added and not part of the base StorageRun schema
+ */
+interface TraceModeFields {
+  metricsStatus?: string;
+  traceFetchAttempts?: number;
+  lastTraceFetchAt?: string;
+  traceError?: string;
+  spans?: unknown[];
+}
+
+/**
  * Convert OpenSearch storage format to app TestCaseRun format
  */
 function toTestCaseRun(stored: StorageRun): TestCaseRun {
@@ -103,10 +115,10 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
 /**
  * Convert app TestCaseRun format to OpenSearch storage format
  */
-function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'createdAt' | 'annotations'> & Record<string, unknown> {
-  const base: Omit<StorageRun, 'id' | 'createdAt' | 'annotations'> & Record<string, unknown> = {
-    experimentId: '', // Set by caller if part of experiment
-    experimentRunId: '', // Set by caller if part of experiment
+function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'createdAt' | 'annotations'> & Partial<TraceModeFields> {
+  const base: Omit<StorageRun, 'id' | 'createdAt' | 'annotations'> & Partial<TraceModeFields> = {
+    experimentId: '', // Storage field for benchmarkId (name preserved for data compatibility)
+    experimentRunId: '', // Storage field for benchmarkRunId (name preserved for data compatibility)
     testCaseId: report.testCaseId,
     testCaseVersionId: `${report.testCaseId}-v${report.testCaseVersion || 1}`,
     agentId: report.agentKey || report.agentName,

@@ -122,14 +122,14 @@ class AsyncBenchmarkStorage {
   // ==================== Benchmark CRUD Operations ====================
 
   /**
-   * Get all benchmarks, sorted by createdAt descending
+   * Get all benchmarks, sorted by updatedAt descending (most recently active first)
    */
   async getAll(): Promise<Benchmark[]> {
     const stored = await opensearchBenchmarks.getAll();
     const benchmarks = stored.map(toBenchmark);
-    // Sort by createdAt descending (most recent first)
+    // Sort by updatedAt descending (most recently active first), fallback to createdAt
     return benchmarks.sort((a, b) =>
-      new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
     );
   }
 

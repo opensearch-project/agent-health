@@ -119,6 +119,17 @@ export const ComparisonPage: React.FC = () => {
     loadBenchmark();
   }, [benchmarkId, navigate]); // Note: removed searchParams from deps to avoid re-running on URL update
 
+  // Sync selectedRunIds when URL changes externally (e.g., browser back/forward navigation)
+  useEffect(() => {
+    const urlRunIds = searchParams.get('runs')?.split(',').filter(Boolean) || [];
+    if (urlRunIds.length > 0 && allRuns.length > 0) {
+      const validRunIds = urlRunIds.filter(id => allRuns.some(r => r.id === id));
+      if (validRunIds.length > 0 && validRunIds.join(',') !== selectedRunIds.join(',')) {
+        setSelectedRunIds(validRunIds);
+      }
+    }
+  }, [searchParams, allRuns, selectedRunIds]);
+
   // Fetch trace metrics for all reports
   useEffect(() => {
     const loadTraceMetrics = async () => {
