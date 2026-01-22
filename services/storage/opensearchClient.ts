@@ -11,13 +11,12 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
-import { getStorageConfigHeaders } from '@/lib/dataSourceConfig';
 
 const STORAGE_BASE_URL = ENV_CONFIG.storageApiUrl;
 
 /**
  * Generic HTTP client for storage API
- * Includes storage config headers from localStorage when available
+ * Backend handles config resolution (file or env vars) - no headers needed from frontend
  */
 async function request<T>(
   method: string,
@@ -26,14 +25,10 @@ async function request<T>(
 ): Promise<T> {
   const url = `${STORAGE_BASE_URL}${endpoint}`;
 
-  // Get storage config headers from localStorage (if configured)
-  const storageHeaders = getStorageConfigHeaders();
-
   const options: RequestInit = {
     method,
     headers: {
       'Content-Type': 'application/json',
-      ...storageHeaders,
     },
   };
 
@@ -329,6 +324,27 @@ export const benchmarkStorage = {
    */
   async bulkCreate(benchmarks: Partial<StorageBenchmark>[]): Promise<{ created: number; errors: boolean }> {
     return request<{ created: number; errors: boolean }>('POST', '/benchmarks/bulk', { benchmarks });
+  },
+
+  /**
+   * Update benchmark metadata only (name, description)
+   */
+  async updateMetadata(id: string, updates: { name?: string; description?: string }): Promise<StorageBenchmark> {
+    return request<StorageBenchmark>('PATCH', `/benchmarks/${id}/metadata`, updates);
+  },
+
+  /**
+   * Get all versions of a benchmark
+   */
+  async getVersions(id: string): Promise<{ versions: any[]; total: number }> {
+    return request<{ versions: any[]; total: number }>('GET', `/benchmarks/${id}/versions`);
+  },
+
+  /**
+   * Get specific version of a benchmark
+   */
+  async getVersion(id: string, version: number): Promise<any> {
+    return request<any>('GET', `/benchmarks/${id}/versions/${version}`);
   },
 };
 

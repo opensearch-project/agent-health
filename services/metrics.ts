@@ -9,20 +9,18 @@
 
 import { TraceMetrics } from '@/types';
 import { ENV_CONFIG } from '@/lib/config';
-import { getObservabilityConfigHeaders } from '@/lib/dataSourceConfig';
 
 const API_BASE = ENV_CONFIG.backendUrl;
 
 /**
  * Fetch metrics for a single run from OpenSearch traces
+ * Backend handles config resolution (file or env vars) - no headers needed from frontend
  *
  * @param runId - The agent run ID (gen_ai@request@id from traces)
  * @returns Computed metrics including tokens, cost, duration, tool calls
  */
 export async function fetchRunMetrics(runId: string): Promise<TraceMetrics> {
-  const response = await fetch(`${API_BASE}/api/metrics/${encodeURIComponent(runId)}`, {
-    headers: getObservabilityConfigHeaders(),
-  });
+  const response = await fetch(`${API_BASE}/api/metrics/${encodeURIComponent(runId)}`);
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
@@ -34,6 +32,7 @@ export async function fetchRunMetrics(runId: string): Promise<TraceMetrics> {
 
 /**
  * Fetch metrics for multiple runs in batch
+ * Backend handles config resolution (file or env vars) - no headers needed from frontend
  *
  * @param runIds - Array of run IDs to fetch metrics for
  * @returns Object containing individual metrics and aggregate statistics
@@ -59,7 +58,6 @@ export async function fetchBatchMetrics(runIds: string[]): Promise<{
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...getObservabilityConfigHeaders(),
     },
     body: JSON.stringify({ runIds })
   });

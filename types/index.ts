@@ -469,7 +469,7 @@ export interface IntentNode {
 // ============ Benchmark Types ============
 
 // Result status for a single use case within a run
-export type RunResultStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type RunResultStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 // Overall status for a benchmark run (tracks server-side execution state)
 export type BenchmarkRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';

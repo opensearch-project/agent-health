@@ -39,7 +39,7 @@ export const SAMPLE_RUNS: TestCaseRun[] = [
     timestamp: '2024-01-15T10:05:00.000Z',
     testCaseId: 'demo-otel-001',
     testCaseVersion: 1,
-    experimentId: 'demo-exp-001',
+    experimentId: 'demo-benchmark-001',
     experimentRunId: 'demo-run-001',
     agentName: 'ML Commons Agent',
     agentKey: 'ml-commons',
@@ -95,7 +95,7 @@ export const SAMPLE_RUNS: TestCaseRun[] = [
     timestamp: '2024-01-15T10:08:00.000Z',
     testCaseId: 'demo-otel-002',
     testCaseVersion: 1,
-    experimentId: 'demo-exp-001',
+    experimentId: 'demo-benchmark-001',
     experimentRunId: 'demo-run-001',
     agentName: 'ML Commons Agent',
     agentKey: 'ml-commons',
@@ -136,7 +136,7 @@ export const SAMPLE_RUNS: TestCaseRun[] = [
     timestamp: '2024-01-15T10:12:00.000Z',
     testCaseId: 'demo-otel-003',
     testCaseVersion: 1,
-    experimentId: 'demo-exp-001',
+    experimentId: 'demo-benchmark-001',
     experimentRunId: 'demo-run-001',
     agentName: 'ML Commons Agent',
     agentKey: 'ml-commons',
@@ -184,7 +184,7 @@ export const SAMPLE_RUNS: TestCaseRun[] = [
     timestamp: '2024-01-15T10:16:00.000Z',
     testCaseId: 'demo-otel-004',
     testCaseVersion: 1,
-    experimentId: 'demo-exp-001',
+    experimentId: 'demo-benchmark-001',
     experimentRunId: 'demo-run-001',
     agentName: 'ML Commons Agent',
     agentKey: 'ml-commons',
@@ -232,7 +232,7 @@ export const SAMPLE_RUNS: TestCaseRun[] = [
     timestamp: '2024-01-15T10:20:00.000Z',
     testCaseId: 'demo-otel-005',
     testCaseVersion: 1,
-    experimentId: 'demo-exp-001',
+    experimentId: 'demo-benchmark-001',
     experimentRunId: 'demo-run-001',
     agentName: 'ML Commons Agent',
     agentKey: 'ml-commons',
@@ -312,7 +312,6 @@ export function getSampleRunsByTestCase(testCaseId: string): TestCaseRun[] {
 
 /**
  * Get sample runs by benchmark ID
- * Note: Uses experimentId field internally for data compatibility
  */
 export function getSampleRunsByBenchmark(benchmarkId: string): TestCaseRun[] {
   return SAMPLE_RUNS.filter(run => run.experimentId === benchmarkId);
@@ -320,7 +319,6 @@ export function getSampleRunsByBenchmark(benchmarkId: string): TestCaseRun[] {
 
 /**
  * Get sample runs by benchmark run ID
- * Note: Uses experimentId/experimentRunId fields internally for data compatibility
  */
 export function getSampleRunsByBenchmarkRun(benchmarkId: string, benchmarkRunId: string): TestCaseRun[] {
   return SAMPLE_RUNS.filter(run => run.experimentId === benchmarkId && run.experimentRunId === benchmarkRunId);

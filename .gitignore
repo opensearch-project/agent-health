@@ -11,6 +11,9 @@ build
 !.env.example
 judge.log
 
+# Configuration file with credentials (use agent-health.example.yaml as template)
+agent-health.yaml
+
 /cli/dist
 
 # macOS

@@ -61,6 +61,8 @@ npx @opensearch-project/agent-health --port 8080
 npx @opensearch-project/agent-health --env-file .env
 ```
 
+**IMPORTANT:** Do not modify the `name` or `version` fields in `package.json`. These are used for publishing the tool via NPX.
+
 ### Setup (first time)
 ```bash
 ./scripts/setup.sh              # Quick start (assumes ML-Commons running)

@@ -287,11 +287,7 @@ export const TestCasesPage: React.FC = () => {
 
   // Import state
   const [isImporting, setIsImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{
-    type: 'success' | 'error';
-    message: string;
-    benchmarkId?: string;
-  } | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load data
@@ -434,7 +430,7 @@ export const TestCasesPage: React.FC = () => {
     if (!file) return;
 
     setIsImporting(true);
-    setImportResult(null);
+    setImportError(null);
 
     try {
       const text = await file.text();
@@ -442,10 +438,7 @@ export const TestCasesPage: React.FC = () => {
       const validation = validateTestCasesArrayJson(json);
 
       if (!validation.valid || !validation.data) {
-        setImportResult({
-          type: 'error',
-          message: `Validation failed: ${validation.errors[0]?.message || 'Invalid format'}`,
-        });
+        setImportError(`Validation failed: ${validation.errors[0]?.message || 'Invalid format'}`);
         return;
       }
 
@@ -453,10 +446,7 @@ export const TestCasesPage: React.FC = () => {
       const result = await asyncTestCaseStorage.bulkCreate(validation.data);
 
       if (result.created === 0) {
-        setImportResult({
-          type: 'error',
-          message: 'No test cases were created. They may already exist.',
-        });
+        setImportError('No test cases were created. They may already exist.');
         return;
       }
 
@@ -483,18 +473,11 @@ export const TestCasesPage: React.FC = () => {
         runs: [],
       });
 
-      setImportResult({
-        type: 'success',
-        message: `Imported ${result.created} test case(s) and created benchmark "${benchmark.name}"`,
-        benchmarkId: benchmark.id,
-      });
-      await loadData();
+      // Navigate directly to the benchmark page
+      navigate(`/benchmarks/${benchmark.id}`);
     } catch (error) {
       console.error('Failed to import test cases:', error);
-      setImportResult({
-        type: 'error',
-        message: `Import failed: ${(error as Error).message}`,
-      });
+      setImportError(`Import failed: ${(error as Error).message}`);
     } finally {
       setIsImporting(false);
       event.target.value = ''; // Reset for re-upload
@@ -655,30 +638,15 @@ export const TestCasesPage: React.FC = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Import Result Dialog */}
-      <AlertDialog open={!!importResult} onOpenChange={() => setImportResult(null)}>
+      {/* Import Error Dialog */}
+      <AlertDialog open={!!importError} onOpenChange={() => setImportError(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {importResult?.type === 'success' ? 'Import Successful' : 'Import Failed'}
-            </AlertDialogTitle>
-            <AlertDialogDescription>{importResult?.message}</AlertDialogDescription>
+            <AlertDialogTitle>Import Failed</AlertDialogTitle>
+            <AlertDialogDescription>{importError}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            {importResult?.type === 'success' && importResult.benchmarkId && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  navigate(`/benchmarks/${importResult.benchmarkId}`);
-                  setImportResult(null);
-                }}
-              >
-                Go to Benchmark
-              </Button>
-            )}
-            <AlertDialogAction onClick={() => setImportResult(null)}>
-              {importResult?.type === 'success' ? 'Stay Here' : 'OK'}
-            </AlertDialogAction>
+            <AlertDialogAction onClick={() => setImportError(null)}>OK</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

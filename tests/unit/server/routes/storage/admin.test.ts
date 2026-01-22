@@ -45,8 +45,32 @@ jest.mock('@/server/adapters/index', () => ({
   testStorageConnection: jest.fn(),
 }));
 
+// Mock configService
+jest.mock('@/server/services/configService', () => ({
+  getConfigStatus: jest.fn(),
+  saveStorageConfig: jest.fn(),
+  saveObservabilityConfig: jest.fn(),
+  clearStorageConfig: jest.fn(),
+  clearObservabilityConfig: jest.fn(),
+}));
+
 // Import mocked adapter functions
 import { testStorageConnection } from '@/server/adapters/index';
+
+// Import mocked configService functions
+import {
+  getConfigStatus,
+  saveStorageConfig,
+  saveObservabilityConfig,
+  clearStorageConfig,
+  clearObservabilityConfig,
+} from '@/server/services/configService';
+
+const mockGetConfigStatus = getConfigStatus as jest.Mock;
+const mockSaveStorageConfig = saveStorageConfig as jest.Mock;
+const mockSaveObservabilityConfig = saveObservabilityConfig as jest.Mock;
+const mockClearStorageConfig = clearStorageConfig as jest.Mock;
+const mockClearObservabilityConfig = clearObservabilityConfig as jest.Mock;
 import { resolveStorageConfig } from '@/server/middleware/dataSourceConfig';
 
 const mockTestStorageConnection = testStorageConnection as jest.Mock;
@@ -385,6 +409,154 @@ describe('Admin Storage Routes', () => {
       const indexCall = mockIndex.mock.calls[0][0];
       expect(indexCall.body.metric_accuracy).toBe(0.9);
       expect(indexCall.body.metric_faithfulness).toBe(0.85);
+    });
+  });
+
+  // ============================================================================
+  // Configuration Management Tests
+  // ============================================================================
+
+  describe('GET /api/storage/config/status', () => {
+    it('should return config status', async () => {
+      mockGetConfigStatus.mockReturnValue({
+        storage: { configured: true, source: 'file', endpoint: 'https://storage.com' },
+        observability: { configured: true, source: 'environment', endpoint: 'https://obs.com' },
+      });
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(adminRoutes, 'get', '/api/storage/config/status');
+
+      await handler(req, res);
+
+      expect(mockGetConfigStatus).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith({
+        storage: { configured: true, source: 'file', endpoint: 'https://storage.com' },
+        observability: { configured: true, source: 'environment', endpoint: 'https://obs.com' },
+      });
+    });
+
+    it('should handle errors', async () => {
+      mockGetConfigStatus.mockImplementation(() => {
+        throw new Error('Config read failed');
+      });
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(adminRoutes, 'get', '/api/storage/config/status');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Config read failed' });
+    });
+  });
+
+  describe('POST /api/storage/config/storage', () => {
+    it('should save storage config', async () => {
+      const { req, res } = createMocks({}, {
+        endpoint: 'https://new-storage.com',
+        username: 'user',
+        password: 'pass',
+      });
+      const handler = getRouteHandler(adminRoutes, 'post', '/api/storage/config/storage');
+
+      await handler(req, res);
+
+      expect(mockSaveStorageConfig).toHaveBeenCalledWith({
+        endpoint: 'https://new-storage.com',
+        username: 'user',
+        password: 'pass',
+      });
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Storage configuration saved',
+      });
+    });
+
+    it('should require endpoint', async () => {
+      const { req, res } = createMocks({}, { username: 'user' });
+      const handler = getRouteHandler(adminRoutes, 'post', '/api/storage/config/storage');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Endpoint is required' });
+    });
+  });
+
+  describe('POST /api/storage/config/observability', () => {
+    it('should save observability config', async () => {
+      const { req, res } = createMocks({}, {
+        endpoint: 'https://new-obs.com',
+        username: 'user',
+        indexes: { traces: 'traces-*' },
+      });
+      const handler = getRouteHandler(adminRoutes, 'post', '/api/storage/config/observability');
+
+      await handler(req, res);
+
+      expect(mockSaveObservabilityConfig).toHaveBeenCalledWith({
+        endpoint: 'https://new-obs.com',
+        username: 'user',
+        indexes: { traces: 'traces-*' },
+      });
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Observability configuration saved',
+      });
+    });
+
+    it('should require endpoint', async () => {
+      const { req, res } = createMocks({}, { indexes: { traces: 'traces-*' } });
+      const handler = getRouteHandler(adminRoutes, 'post', '/api/storage/config/observability');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Endpoint is required' });
+    });
+  });
+
+  describe('DELETE /api/storage/config/storage', () => {
+    it('should clear storage config', async () => {
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(adminRoutes, 'delete', '/api/storage/config/storage');
+
+      await handler(req, res);
+
+      expect(mockClearStorageConfig).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Storage configuration cleared',
+      });
+    });
+
+    it('should handle clear errors', async () => {
+      mockClearStorageConfig.mockImplementation(() => {
+        throw new Error('Clear failed');
+      });
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(adminRoutes, 'delete', '/api/storage/config/storage');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Clear failed' });
+    });
+  });
+
+  describe('DELETE /api/storage/config/observability', () => {
+    it('should clear observability config', async () => {
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(adminRoutes, 'delete', '/api/storage/config/observability');
+
+      await handler(req, res);
+
+      expect(mockClearObservabilityConfig).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Observability configuration cleared',
+      });
     });
   });
 });

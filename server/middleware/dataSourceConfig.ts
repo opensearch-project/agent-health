@@ -6,12 +6,19 @@
 /**
  * Data Source Configuration Resolution
  *
- * Extracts data source configuration from request headers.
- * Falls back to environment variables when headers are not provided.
+ * Resolves data source configuration from:
+ * 1. File (agent-health.yaml) - highest priority
+ * 2. Environment variables - fallback
+ *
+ * NO HEADERS - credentials are never sent from browser for security.
  */
 
 import { Request } from 'express';
 import type { StorageClusterConfig, ObservabilityClusterConfig } from '../../types/index.js';
+import {
+  getStorageConfigFromFile,
+  getObservabilityConfigFromFile,
+} from '../services/configService.js';
 
 // Default OTEL index patterns
 export const DEFAULT_OTEL_INDEXES = {
@@ -30,27 +37,21 @@ export const STORAGE_INDEXES = {
 } as const;
 
 /**
- * Resolve storage cluster configuration from request headers or environment variables
+ * Resolve storage cluster configuration
  *
  * Priority:
- * 1. Request headers (X-Storage-*)
+ * 1. File config (agent-health.yaml)
  * 2. Environment variables (OPENSEARCH_STORAGE_*)
  * 3. null (not configured)
  */
 export function resolveStorageConfig(req: Request): StorageClusterConfig | null {
-  // Check for headers first
-  const headerEndpoint = req.headers['x-storage-endpoint'] as string | undefined;
-
-  if (headerEndpoint) {
-    // Use header-based config
-    return {
-      endpoint: headerEndpoint,
-      username: req.headers['x-storage-username'] as string | undefined,
-      password: req.headers['x-storage-password'] as string | undefined,
-    };
+  // 1. Check file config first
+  const fileConfig = getStorageConfigFromFile();
+  if (fileConfig) {
+    return fileConfig;
   }
 
-  // Fall back to environment variables
+  // 2. Fall back to environment variables
   const envEndpoint = process.env.OPENSEARCH_STORAGE_ENDPOINT;
 
   if (envEndpoint) {
@@ -66,34 +67,32 @@ export function resolveStorageConfig(req: Request): StorageClusterConfig | null 
 }
 
 /**
- * Resolve observability cluster configuration from request headers or environment variables
+ * Resolve observability cluster configuration
  *
  * Priority:
- * 1. Request headers (X-Observability-*)
+ * 1. File config (agent-health.yaml)
  * 2. Environment variables (OPENSEARCH_LOGS_*)
  * 3. null (not configured)
  *
- * Index patterns use defaults if not specified in headers or env vars.
+ * Index patterns use defaults if not specified in file or env vars.
  */
 export function resolveObservabilityConfig(req: Request): ObservabilityClusterConfig | null {
-  // Check for headers first
-  const headerEndpoint = req.headers['x-observability-endpoint'] as string | undefined;
-
-  if (headerEndpoint) {
-    // Use header-based config
+  // 1. Check file config first
+  const fileConfig = getObservabilityConfigFromFile();
+  if (fileConfig) {
     return {
-      endpoint: headerEndpoint,
-      username: req.headers['x-observability-username'] as string | undefined,
-      password: req.headers['x-observability-password'] as string | undefined,
+      endpoint: fileConfig.endpoint,
+      username: fileConfig.username,
+      password: fileConfig.password,
       indexes: {
-        traces: (req.headers['x-observability-traces-index'] as string) || DEFAULT_OTEL_INDEXES.traces,
-        logs: (req.headers['x-observability-logs-index'] as string) || DEFAULT_OTEL_INDEXES.logs,
-        metrics: (req.headers['x-observability-metrics-index'] as string) || DEFAULT_OTEL_INDEXES.metrics,
+        traces: fileConfig.indexes?.traces || DEFAULT_OTEL_INDEXES.traces,
+        logs: fileConfig.indexes?.logs || DEFAULT_OTEL_INDEXES.logs,
+        metrics: fileConfig.indexes?.metrics || DEFAULT_OTEL_INDEXES.metrics,
       },
     };
   }
 
-  // Fall back to environment variables
+  // 2. Fall back to environment variables
   const envEndpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;
 
   if (envEndpoint) {
@@ -114,14 +113,14 @@ export function resolveObservabilityConfig(req: Request): ObservabilityClusterCo
 }
 
 /**
- * Check if storage is configured (either via headers or env vars)
+ * Check if storage is configured (either via file or env vars)
  */
 export function isStorageConfigured(req: Request): boolean {
   return resolveStorageConfig(req) !== null;
 }
 
 /**
- * Check if observability is configured (either via headers or env vars)
+ * Check if observability is configured (either via file or env vars)
  */
 export function isObservabilityConfigured(req: Request): boolean {
   return resolveObservabilityConfig(req) !== null;
@@ -129,7 +128,7 @@ export function isObservabilityConfigured(req: Request): boolean {
 
 /**
  * Get storage config from environment variables only (for backwards compatibility)
- * Used by routes that don't yet support header-based config
+ * Used by routes that don't yet support file-based config
  */
 export function getStorageConfigFromEnv(): StorageClusterConfig | null {
   const endpoint = process.env.OPENSEARCH_STORAGE_ENDPOINT;
@@ -147,7 +146,7 @@ export function getStorageConfigFromEnv(): StorageClusterConfig | null {
 
 /**
  * Get observability config from environment variables only
- * Used by routes that don't yet support header-based config
+ * Used by routes that don't yet support file-based config
  */
 export function getObservabilityConfigFromEnv(): ObservabilityClusterConfig | null {
   const endpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;

@@ -94,6 +94,7 @@ class TracePollingManager {
       console.log(`[TracePoller] Stopped polling for report ${reportId}`);
     }
     this.callbacks.delete(reportId);
+    this.polls.delete(reportId);
   }
 
   /**
@@ -164,6 +165,7 @@ class TracePollingManager {
 
         await callbacks?.onTracesFound(result.spans, report);
         this.callbacks.delete(reportId);
+        this.polls.delete(reportId);
       } else {
         // No traces yet
         if (state.attempts >= state.maxAttempts) {
@@ -184,6 +186,7 @@ class TracePollingManager {
           }
 
           this.callbacks.delete(reportId);
+          this.polls.delete(reportId);
         } else {
           // Schedule next poll
           state.timerId = setTimeout(() => this.poll(reportId), state.intervalMs);
@@ -207,6 +210,7 @@ class TracePollingManager {
         }
 
         this.callbacks.delete(reportId);
+        this.polls.delete(reportId);
       } else {
         // Schedule retry
         state.timerId = setTimeout(() => this.poll(reportId), state.intervalMs);

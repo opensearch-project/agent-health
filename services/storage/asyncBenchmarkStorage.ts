@@ -318,21 +318,12 @@ class AsyncBenchmarkStorage {
 
   /**
    * Update benchmark metadata only (name, description) - no version change
+   * Uses centralized opensearchClient for consistent API handling
    */
   async updateMetadata(id: string, updates: { name?: string; description?: string }): Promise<Benchmark | null> {
     try {
-      const response = await fetch(`/api/storage/benchmarks/${id}/metadata`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to update benchmark metadata');
-      }
-
-      return await response.json();
+      const result = await opensearchBenchmarks.updateMetadata(id, updates);
+      return toBenchmark(result);
     } catch (error) {
       console.error('[asyncBenchmarkStorage] updateMetadata failed:', error);
       return null;
@@ -341,21 +332,12 @@ class AsyncBenchmarkStorage {
 
   /**
    * Update test case list - creates a new version
+   * Uses centralized opensearchClient for consistent API handling
    */
   async updateTestCases(id: string, testCaseIds: string[]): Promise<Benchmark | null> {
     try {
-      const response = await fetch(`/api/storage/benchmarks/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testCaseIds }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to update benchmark test cases');
-      }
-
-      return await response.json();
+      const result = await opensearchBenchmarks.update(id, { testCaseIds });
+      return toBenchmark(result);
     } catch (error) {
       console.error('[asyncBenchmarkStorage] updateTestCases failed:', error);
       return null;
@@ -364,20 +346,17 @@ class AsyncBenchmarkStorage {
 
   /**
    * Get all versions of a benchmark
+   * Uses centralized opensearchClient for consistent API handling
    */
   async getVersions(benchmarkId: string): Promise<BenchmarkVersion[]> {
     try {
-      const response = await fetch(`/api/storage/benchmarks/${benchmarkId}/versions`);
-
-      if (!response.ok) {
-        if (response.status === 404) return [];
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to get benchmark versions');
-      }
-
-      const result: VersionListResponse = await response.json();
+      const result = await opensearchBenchmarks.getVersions(benchmarkId);
       return result.versions;
-    } catch (error) {
+    } catch (error: any) {
+      // Handle 404 gracefully
+      if (error.message?.includes('404') || error.message?.includes('not found')) {
+        return [];
+      }
       console.error('[asyncBenchmarkStorage] getVersions failed:', error);
       return [];
     }
@@ -385,19 +364,16 @@ class AsyncBenchmarkStorage {
 
   /**
    * Get a specific version of a benchmark
+   * Uses centralized opensearchClient for consistent API handling
    */
   async getVersion(benchmarkId: string, version: number): Promise<BenchmarkVersion | null> {
     try {
-      const response = await fetch(`/api/storage/benchmarks/${benchmarkId}/versions/${version}`);
-
-      if (!response.ok) {
-        if (response.status === 404) return null;
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to get benchmark version');
+      return await opensearchBenchmarks.getVersion(benchmarkId, version);
+    } catch (error: any) {
+      // Handle 404 gracefully
+      if (error.message?.includes('404') || error.message?.includes('not found')) {
+        return null;
       }
-
-      return await response.json();
-    } catch (error) {
       console.error('[asyncBenchmarkStorage] getVersion failed:', error);
       return null;
     }
@@ -406,21 +382,12 @@ class AsyncBenchmarkStorage {
   /**
    * Update a benchmark (name, description, or testCaseIds).
    * If testCaseIds changed, creates a new version.
+   * Uses centralized opensearchClient for consistent API handling
    */
   async update(id: string, updates: { name?: string; description?: string; testCaseIds?: string[] }): Promise<Benchmark | null> {
     try {
-      const response = await fetch(`/api/storage/benchmarks/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to update benchmark');
-      }
-
-      return await response.json();
+      const result = await opensearchBenchmarks.update(id, updates);
+      return toBenchmark(result);
     } catch (error) {
       console.error('[asyncBenchmarkStorage] update failed:', error);
       return null;

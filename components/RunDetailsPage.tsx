@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Calendar, CheckCircle2, XCircle, BarChart3, PanelLeftClose, PanelLeft, Clock, Loader2, StopCircle } from 'lucide-react';
+import { ArrowLeft, Calendar, CheckCircle2, XCircle, BarChart3, PanelLeftClose, PanelLeft, Clock, Loader2, StopCircle, Ban } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -153,7 +153,10 @@ const Sidebar = ({ context, selectedItem, onSelectItem, onToggleCollapse, isColl
                     {!isPassed && !isFailed && result.status === 'pending' && (
                       <Clock size={18} className="text-yellow-400" />
                     )}
-                    {!isPassed && !isFailed && result.status !== 'running' && result.status !== 'pending' && (
+                    {!isPassed && !isFailed && result.status === 'cancelled' && (
+                      <Ban size={18} className="text-orange-400" />
+                    )}
+                    {!isPassed && !isFailed && result.status !== 'running' && result.status !== 'pending' && result.status !== 'cancelled' && (
                       <div className="w-[18px] h-[18px] rounded-full border-2 border-muted-foreground/30" />
                     )}
                   </div>

@@ -115,11 +115,9 @@ describe('metrics API functions', () => {
       const { fetchRunMetrics } = await import('@/services/metrics');
       const result = await fetchRunMetrics('test-run-123');
 
+      // Backend handles config resolution - no headers needed from frontend
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/metrics/test-run-123'),
-        expect.objectContaining({
-          headers: expect.any(Object),
-        })
+        expect.stringContaining('/api/metrics/test-run-123')
       );
       expect(result).toEqual(mockMetrics);
     });
@@ -134,8 +132,7 @@ describe('metrics API functions', () => {
       await fetchRunMetrics('run/with/slashes');
 
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('run%2Fwith%2Fslashes'),
-        expect.any(Object)
+        expect.stringContaining('run%2Fwith%2Fslashes')
       );
     });
 

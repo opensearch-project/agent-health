@@ -22,10 +22,12 @@ import {
   MigrationStats,
 } from '@/services/storage';
 import {
-  loadDataSourceConfig,
+  getConfigStatus,
   saveStorageConfig,
   saveObservabilityConfig,
-  clearDataSourceConfig,
+  clearStorageConfig,
+  clearObservabilityConfig,
+  type ConfigStatus,
 } from '@/lib/dataSourceConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
@@ -81,7 +83,7 @@ export const SettingsPage: React.FC = () => {
   const [newEndpointUrl, setNewEndpointUrl] = useState('');
   const [endpointUrlError, setEndpointUrlError] = useState<string | null>(null);
 
-  // Data source configuration state
+  // Data source configuration state (form inputs - not stored values)
   const [storageConfig, setStorageConfigState] = useState({
     endpoint: '',
     username: '',
@@ -95,6 +97,8 @@ export const SettingsPage: React.FC = () => {
     logsIndex: '',
     metricsIndex: '',
   });
+  // Server-side config status (source of truth - no credentials)
+  const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);
   const [showStoragePassword, setShowStoragePassword] = useState(false);
   const [showObservabilityPassword, setShowObservabilityPassword] = useState(false);
   const [showAdvancedIndexes, setShowAdvancedIndexes] = useState(false);
@@ -130,9 +134,36 @@ export const SettingsPage: React.FC = () => {
     }
   }, []);
 
+  // Load config status from server
+  const loadConfigStatus = useCallback(async () => {
+    try {
+      const status = await getConfigStatus();
+      setConfigStatus(status);
+      // Pre-fill form with current endpoint (but never passwords)
+      if (status.storage.endpoint) {
+        setStorageConfigState(prev => ({
+          ...prev,
+          endpoint: status.storage.endpoint || '',
+        }));
+      }
+      if (status.observability.endpoint) {
+        setObservabilityConfigState(prev => ({
+          ...prev,
+          endpoint: status.observability.endpoint || '',
+          tracesIndex: status.observability.indexes?.traces || '',
+          logsIndex: status.observability.indexes?.logs || '',
+          metricsIndex: status.observability.indexes?.metrics || '',
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to load config status:', error);
+    }
+  }, []);
+
   useEffect(() => {
     setDebugMode(isDebugEnabled());
     loadStorageStats();
+    loadConfigStatus();
 
     // Check for localStorage data to migrate
     const hasData = hasLocalStorageData();
@@ -143,27 +174,7 @@ export const SettingsPage: React.FC = () => {
 
     // Load custom agent endpoints
     setCustomEndpoints(loadCustomEndpoints());
-
-    // Load data source configuration from localStorage
-    const savedConfig = loadDataSourceConfig();
-    if (savedConfig?.storage) {
-      setStorageConfigState({
-        endpoint: savedConfig.storage.endpoint || '',
-        username: savedConfig.storage.username || '',
-        password: savedConfig.storage.password || '',
-      });
-    }
-    if (savedConfig?.observability) {
-      setObservabilityConfigState({
-        endpoint: savedConfig.observability.endpoint || '',
-        username: savedConfig.observability.username || '',
-        password: savedConfig.observability.password || '',
-        tracesIndex: savedConfig.observability.indexes?.traces || '',
-        logsIndex: savedConfig.observability.indexes?.logs || '',
-        metricsIndex: savedConfig.observability.indexes?.metrics || '',
-      });
-    }
-  }, [loadStorageStats]);
+  }, [loadStorageStats, loadConfigStatus]);
 
   // Validate URL format
   const validateEndpointUrl = (url: string): string | null => {
@@ -343,38 +354,47 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleSaveStorageConfig = () => {
+  const handleSaveStorageConfig = async () => {
     if (!storageConfig.endpoint) {
       alert('Endpoint URL is required');
       return;
     }
 
-    saveStorageConfig({
-      endpoint: storageConfig.endpoint,
-      username: storageConfig.username || undefined,
-      password: storageConfig.password || undefined,
-    });
-    setStorageTestStatus('idle');
-    setStorageTestMessage('Configuration saved');
-    setTimeout(() => setStorageTestMessage(''), 3000);
-    loadStorageStats(); // Refresh stats with new config
+    try {
+      await saveStorageConfig({
+        endpoint: storageConfig.endpoint,
+        username: storageConfig.username || undefined,
+        password: storageConfig.password || undefined,
+      });
+      setStorageTestStatus('idle');
+      setStorageTestMessage('Configuration saved to server');
+      // Clear password field after save (never keep passwords in form state)
+      setStorageConfigState(prev => ({ ...prev, password: '' }));
+      setTimeout(() => setStorageTestMessage(''), 3000);
+      loadStorageStats();
+      loadConfigStatus();
+    } catch (error) {
+      setStorageTestStatus('error');
+      setStorageTestMessage(error instanceof Error ? error.message : 'Failed to save configuration');
+    }
   };
 
-  const handleClearStorageConfig = () => {
+  const handleClearStorageConfig = async () => {
     if (!window.confirm('Clear storage configuration? Will fall back to environment variables.')) {
       return;
     }
-    const savedConfig = loadDataSourceConfig();
-    clearDataSourceConfig();
-    // Restore observability config if it existed
-    if (savedConfig?.observability) {
-      saveObservabilityConfig(savedConfig.observability);
+    try {
+      await clearStorageConfig();
+      setStorageConfigState({ endpoint: '', username: '', password: '' });
+      setStorageTestStatus('idle');
+      setStorageTestMessage('Configuration cleared - using environment variables');
+      setTimeout(() => setStorageTestMessage(''), 3000);
+      loadStorageStats();
+      loadConfigStatus();
+    } catch (error) {
+      setStorageTestStatus('error');
+      setStorageTestMessage(error instanceof Error ? error.message : 'Failed to clear configuration');
     }
-    setStorageConfigState({ endpoint: '', username: '', password: '' });
-    setStorageTestStatus('idle');
-    setStorageTestMessage('Configuration cleared - using environment variables');
-    setTimeout(() => setStorageTestMessage(''), 3000);
-    loadStorageStats();
   };
 
   const handleTestObservabilityConnection = async () => {
@@ -420,48 +440,57 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleSaveObservabilityConfig = () => {
+  const handleSaveObservabilityConfig = async () => {
     if (!observabilityConfig.endpoint) {
       alert('Endpoint URL is required');
       return;
     }
 
-    saveObservabilityConfig({
-      endpoint: observabilityConfig.endpoint,
-      username: observabilityConfig.username || undefined,
-      password: observabilityConfig.password || undefined,
-      indexes: {
-        traces: observabilityConfig.tracesIndex || undefined,
-        logs: observabilityConfig.logsIndex || undefined,
-        metrics: observabilityConfig.metricsIndex || undefined,
-      },
-    });
-    setObservabilityTestStatus('idle');
-    setObservabilityTestMessage('Configuration saved');
-    setTimeout(() => setObservabilityTestMessage(''), 3000);
+    try {
+      await saveObservabilityConfig({
+        endpoint: observabilityConfig.endpoint,
+        username: observabilityConfig.username || undefined,
+        password: observabilityConfig.password || undefined,
+        indexes: {
+          traces: observabilityConfig.tracesIndex || undefined,
+          logs: observabilityConfig.logsIndex || undefined,
+          metrics: observabilityConfig.metricsIndex || undefined,
+        },
+      });
+      setObservabilityTestStatus('idle');
+      setObservabilityTestMessage('Configuration saved to server');
+      // Clear password field after save (never keep passwords in form state)
+      setObservabilityConfigState(prev => ({ ...prev, password: '' }));
+      setTimeout(() => setObservabilityTestMessage(''), 3000);
+      loadConfigStatus();
+    } catch (error) {
+      setObservabilityTestStatus('error');
+      setObservabilityTestMessage(error instanceof Error ? error.message : 'Failed to save configuration');
+    }
   };
 
-  const handleClearObservabilityConfig = () => {
+  const handleClearObservabilityConfig = async () => {
     if (!window.confirm('Clear observability configuration? Will fall back to environment variables.')) {
       return;
     }
-    const savedConfig = loadDataSourceConfig();
-    clearDataSourceConfig();
-    // Restore storage config if it existed
-    if (savedConfig?.storage) {
-      saveStorageConfig(savedConfig.storage);
+    try {
+      await clearObservabilityConfig();
+      setObservabilityConfigState({
+        endpoint: '',
+        username: '',
+        password: '',
+        tracesIndex: '',
+        logsIndex: '',
+        metricsIndex: '',
+      });
+      setObservabilityTestStatus('idle');
+      setObservabilityTestMessage('Configuration cleared - using environment variables');
+      setTimeout(() => setObservabilityTestMessage(''), 3000);
+      loadConfigStatus();
+    } catch (error) {
+      setObservabilityTestStatus('error');
+      setObservabilityTestMessage(error instanceof Error ? error.message : 'Failed to clear configuration');
     }
-    setObservabilityConfigState({
-      endpoint: '',
-      username: '',
-      password: '',
-      tracesIndex: '',
-      logsIndex: '',
-      metricsIndex: '',
-    });
-    setObservabilityTestStatus('idle');
-    setObservabilityTestMessage('Configuration cleared - using environment variables');
-    setTimeout(() => setObservabilityTestMessage(''), 3000);
   };
 
   return (
@@ -702,7 +731,7 @@ export const SettingsPage: React.FC = () => {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Configure the OpenSearch cluster for storing evaluation data. Leave empty to use environment variables.
+            Configure the OpenSearch cluster for storing evaluation data. Credentials are stored securely on the server (in agent-health.yaml), not in your browser.
           </p>
 
           <div className="space-y-3">
@@ -748,14 +777,20 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Security warning */}
-          {(storageConfig.username || storageConfig.password) && (
-            <Alert className="bg-amber-900/20 border-amber-700/30">
-              <AlertTriangle className="h-4 w-4 text-amber-400" />
-              <AlertDescription className="text-xs text-amber-400">
-                Credentials stored in browser localStorage are visible to browser extensions and JavaScript.
-              </AlertDescription>
-            </Alert>
+          {/* Config source indicator */}
+          {configStatus?.storage && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Currently configured via:</span>
+              <span className={`px-2 py-0.5 rounded ${
+                configStatus.storage.source === 'file' ? 'bg-green-500/20 text-green-400' :
+                configStatus.storage.source === 'environment' ? 'bg-blue-500/20 text-blue-400' :
+                'bg-gray-500/20 text-gray-400'
+              }`}>
+                {configStatus.storage.source === 'file' ? 'Server file (agent-health.yaml)' :
+                 configStatus.storage.source === 'environment' ? 'Environment variables' :
+                 'Not configured'}
+              </span>
+            </div>
           )}
 
           {/* Test connection status */}
@@ -891,7 +926,7 @@ export const SettingsPage: React.FC = () => {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Configure the OpenSearch cluster for observability data. Can be the same as or different from evaluation storage.
+            Configure the OpenSearch cluster for observability data. Credentials are stored securely on the server (in agent-health.yaml), not in your browser.
           </p>
 
           <div className="space-y-3">
@@ -980,14 +1015,20 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Security warning */}
-          {(observabilityConfig.username || observabilityConfig.password) && (
-            <Alert className="bg-amber-900/20 border-amber-700/30">
-              <AlertTriangle className="h-4 w-4 text-amber-400" />
-              <AlertDescription className="text-xs text-amber-400">
-                Credentials stored in browser localStorage are visible to browser extensions and JavaScript.
-              </AlertDescription>
-            </Alert>
+          {/* Config source indicator */}
+          {configStatus?.observability && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Currently configured via:</span>
+              <span className={`px-2 py-0.5 rounded ${
+                configStatus.observability.source === 'file' ? 'bg-green-500/20 text-green-400' :
+                configStatus.observability.source === 'environment' ? 'bg-blue-500/20 text-blue-400' :
+                'bg-gray-500/20 text-gray-400'
+              }`}>
+                {configStatus.observability.source === 'file' ? 'Server file (agent-health.yaml)' :
+                 configStatus.observability.source === 'environment' ? 'Environment variables' :
+                 'Not configured'}
+              </span>
+            </div>
           )}
 
           {/* Test connection status */}

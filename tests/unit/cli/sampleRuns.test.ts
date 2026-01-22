@@ -70,9 +70,9 @@ describe('Sample Runs', () => {
       });
     });
 
-    it('should reference demo experiment and run IDs', () => {
+    it('should reference demo benchmark and run IDs', () => {
       SAMPLE_RUNS.forEach((run) => {
-        expect(run.experimentId).toBe('demo-exp-001');
+        expect(run.experimentId).toBe('demo-benchmark-001');
         expect(run.experimentRunId).toBe('demo-run-001');
       });
     });
@@ -103,7 +103,7 @@ describe('Sample Runs', () => {
         timestamp: '2024-01-01T00:00:00Z',
         testCaseId: 'test',
         testCaseVersion: 1,
-        experimentId: 'exp',
+        experimentId: 'benchmark',
         experimentRunId: 'run',
         agentName: 'test',
         agentKey: 'test',
@@ -133,30 +133,30 @@ describe('Sample Runs', () => {
   });
 
   describe('getSampleRunsByBenchmark', () => {
-    it('should return all runs for demo experiment', () => {
-      const runs = getSampleRunsByBenchmark('demo-exp-001');
+    it('should return all runs for demo benchmark', () => {
+      const runs = getSampleRunsByBenchmark('demo-benchmark-001');
       expect(runs.length).toBe(5);
     });
 
-    it('should return empty array for unknown experiment', () => {
-      const runs = getSampleRunsByBenchmark('unknown-exp');
+    it('should return empty array for unknown benchmark', () => {
+      const runs = getSampleRunsByBenchmark('unknown-benchmark');
       expect(runs).toEqual([]);
     });
   });
 
   describe('getSampleRunsByBenchmarkRun', () => {
-    it('should return runs for specific experiment run', () => {
-      const runs = getSampleRunsByBenchmarkRun('demo-exp-001', 'demo-run-001');
+    it('should return runs for specific benchmark run', () => {
+      const runs = getSampleRunsByBenchmarkRun('demo-benchmark-001', 'demo-run-001');
       expect(runs.length).toBe(5);
     });
 
-    it('should return empty array for mismatched experiment', () => {
-      const runs = getSampleRunsByBenchmarkRun('unknown-exp', 'demo-run-001');
+    it('should return empty array for mismatched benchmark', () => {
+      const runs = getSampleRunsByBenchmarkRun('unknown-benchmark', 'demo-run-001');
       expect(runs).toEqual([]);
     });
 
     it('should return empty array for mismatched run', () => {
-      const runs = getSampleRunsByBenchmarkRun('demo-exp-001', 'unknown-run');
+      const runs = getSampleRunsByBenchmarkRun('demo-benchmark-001', 'unknown-run');
       expect(runs).toEqual([]);
     });
   });

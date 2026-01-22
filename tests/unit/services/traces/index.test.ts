@@ -397,11 +397,9 @@ describe('Traces Service Index', () => {
 
       const result = await checkTracesHealth();
 
+      // Backend handles config resolution - no headers needed from frontend
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/traces/health'),
-        expect.objectContaining({
-          headers: expect.any(Object),
-        })
+        expect.stringContaining('/api/traces/health')
       );
       expect(result).toEqual(mockResponse);
     });

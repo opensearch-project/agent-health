@@ -116,13 +116,32 @@ describe('TracePollingManager', () => {
       expect(tracePollingManager.getState('report-3')?.running).toBe(true);
 
       tracePollingManager.stopPolling('report-3');
-      expect(tracePollingManager.getState('report-3')?.running).toBe(false);
+      // After stopPolling, state should be completely removed (memory cleanup)
+      expect(tracePollingManager.getState('report-3')).toBeUndefined();
     });
 
     it('handles stopping non-existent poll gracefully', () => {
       expect(() => {
         tracePollingManager.stopPolling('non-existent');
       }).not.toThrow();
+    });
+
+    it('cleans up memory after manual stop', () => {
+      const callbacks: PollCallbacks = {
+        onTracesFound: jest.fn(),
+        onError: jest.fn(),
+      };
+
+      mockFetchTracesByRunIds.mockResolvedValue({ spans: [], total: 0 });
+      mockUpdateReport.mockResolvedValue(undefined);
+
+      tracePollingManager.startPolling('report-mem-1', 'run-mem-1', callbacks);
+      expect(tracePollingManager.getState('report-mem-1')).toBeDefined();
+
+      tracePollingManager.stopPolling('report-mem-1');
+
+      // Verify complete cleanup - getState should return undefined
+      expect(tracePollingManager.getState('report-mem-1')).toBeUndefined();
     });
   });
 
@@ -321,6 +340,100 @@ describe('TracePollingManager', () => {
           traceError: expect.stringContaining('not available'),
         })
       );
+    });
+
+    it('cleans up memory when traces are found', async () => {
+      const mockSpans: Span[] = [
+        {
+          traceId: 'trace-mem',
+          spanId: 'span-mem',
+          name: 'test-span',
+          startTime: '2024-01-01T00:00:00Z',
+          endTime: '2024-01-01T00:00:01Z',
+          duration: 1000,
+          status: 'OK',
+          attributes: {},
+        },
+      ];
+
+      const mockReport: EvaluationReport = {
+        id: 'report-mem-traces',
+        timestamp: '2024-01-01T00:00:00Z',
+        testCaseId: 'test-1',
+        status: 'completed',
+        passFailStatus: 'passed',
+        agentName: 'Test Agent',
+        agentKey: 'test-agent',
+        modelName: 'Test Model',
+        modelId: 'test-model',
+        trajectory: [],
+        metrics: { accuracy: 0.95 },
+        llmJudgeReasoning: 'Test reasoning',
+      };
+
+      const callbacks: PollCallbacks = {
+        onTracesFound: jest.fn(),
+        onError: jest.fn(),
+      };
+
+      mockFetchTracesByRunIds.mockResolvedValueOnce({ spans: mockSpans, total: mockSpans.length });
+      mockUpdateReport.mockResolvedValue(undefined);
+      mockGetReportById.mockResolvedValueOnce(mockReport);
+
+      tracePollingManager.startPolling('report-mem-traces', 'run-mem-traces', callbacks);
+      expect(tracePollingManager.getState('report-mem-traces')).toBeDefined();
+
+      // Wait for the async poll to complete
+      await jest.runAllTimersAsync();
+
+      // Verify complete cleanup after traces found
+      expect(tracePollingManager.getState('report-mem-traces')).toBeUndefined();
+    });
+
+    it('cleans up memory when max attempts reached', async () => {
+      const callbacks: PollCallbacks = {
+        onTracesFound: jest.fn(),
+        onError: jest.fn(),
+      };
+
+      mockFetchTracesByRunIds.mockResolvedValue({ spans: [], total: 0 });
+      mockUpdateReport.mockResolvedValue(undefined);
+
+      tracePollingManager.startPolling('report-mem-max', 'run-mem-max', callbacks, {
+        intervalMs: 1000,
+        maxAttempts: 1,
+      });
+
+      expect(tracePollingManager.getState('report-mem-max')).toBeDefined();
+
+      // Run through max attempts
+      await jest.advanceTimersByTimeAsync(0);
+
+      // Verify complete cleanup after max attempts
+      expect(tracePollingManager.getState('report-mem-max')).toBeUndefined();
+    });
+
+    it('cleans up memory when error occurs at max attempts', async () => {
+      const callbacks: PollCallbacks = {
+        onTracesFound: jest.fn(),
+        onError: jest.fn(),
+      };
+
+      mockFetchTracesByRunIds.mockRejectedValue(new Error('Network error'));
+      mockUpdateReport.mockResolvedValue(undefined);
+
+      tracePollingManager.startPolling('report-mem-error', 'run-mem-error', callbacks, {
+        intervalMs: 1000,
+        maxAttempts: 1,
+      });
+
+      expect(tracePollingManager.getState('report-mem-error')).toBeDefined();
+
+      // First attempt - error at max attempts
+      await jest.advanceTimersByTimeAsync(0);
+
+      // Verify complete cleanup after error at max attempts
+      expect(tracePollingManager.getState('report-mem-error')).toBeUndefined();
     });
   });
 });

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, GitCompare, Calendar, CheckCircle2, XCircle, Play, Trash2, Plus, X, Loader2, Circle, Check, ChevronRight, Clock, StopCircle } from 'lucide-react';
+import { ArrowLeft, GitCompare, Calendar, CheckCircle2, XCircle, Play, Trash2, Plus, X, Loader2, Circle, Check, ChevronRight, Clock, StopCircle, Ban } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -26,7 +26,7 @@ import { RunConfigForExecution } from './BenchmarkEditor';
 interface UseCaseRunStatus {
   id: string;
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 }
 
 const POLL_INTERVAL_MS = 2000;
@@ -277,7 +277,14 @@ export const BenchmarkRunsPage: React.FC = () => {
             if (index < progress.currentTestCaseIndex) {
               return { ...uc, status: 'completed' as const };
             } else if (index === progress.currentTestCaseIndex) {
-              return { ...uc, status: progress.status === 'completed' ? 'completed' : 'running' as const };
+              // Map progress status to use case status
+              const statusMap: Record<BenchmarkProgress['status'], UseCaseRunStatus['status']> = {
+                'running': 'running',
+                'completed': 'completed',
+                'failed': 'failed',
+                'cancelled': 'cancelled',
+              };
+              return { ...uc, status: statusMap[progress.status] };
             }
             return uc;
           }));
@@ -478,7 +485,7 @@ export const BenchmarkRunsPage: React.FC = () => {
                   </span>
                 </div>
                 <Progress
-                  value={(useCaseStatuses.filter(uc => uc.status === 'completed' || uc.status === 'failed').length / useCaseStatuses.length) * 100}
+                  value={(useCaseStatuses.filter(uc => uc.status === 'completed' || uc.status === 'failed' || uc.status === 'cancelled').length / useCaseStatuses.length) * 100}
                   className="h-2 mb-3"
                 />
                 <div className="space-y-1 max-h-32 overflow-y-auto">
@@ -488,7 +495,8 @@ export const BenchmarkRunsPage: React.FC = () => {
                       {uc.status === 'running' && <Loader2 size={12} className="text-blue-400 animate-spin" />}
                       {uc.status === 'completed' && <CheckCircle2 size={12} className="text-opensearch-blue" />}
                       {uc.status === 'failed' && <XCircle size={12} className="text-red-400" />}
-                      <span className={uc.status === 'running' ? 'text-blue-400' : 'text-muted-foreground'}>
+                      {uc.status === 'cancelled' && <Ban size={12} className="text-orange-400" />}
+                      <span className={uc.status === 'running' ? 'text-blue-400' : uc.status === 'cancelled' ? 'text-orange-400' : 'text-muted-foreground'}>
                         {uc.name}
                       </span>
                     </div>

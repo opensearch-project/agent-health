@@ -73,7 +73,7 @@ export async function executeBenchmarkRun(
               onStarted?.({ runId: data.runId, testCases: data.testCases || [] });
             } else if (data.type === 'progress') {
               onProgress(data as BenchmarkProgress);
-            } else if (data.type === 'completed') {
+            } else if (data.type === 'completed' || data.type === 'cancelled') {
               completedRun = data.run;
             } else if (data.type === 'error') {
               throw new Error(data.error);
@@ -97,7 +97,7 @@ export async function executeBenchmarkRun(
       if (line.startsWith('data: ')) {
         try {
           const data = JSON.parse(line.slice(6));
-          if (data.type === 'completed') {
+          if (data.type === 'completed' || data.type === 'cancelled') {
             completedRun = data.run;
           } else if (data.type === 'error') {
             throw new Error(data.error);

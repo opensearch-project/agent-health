@@ -13,6 +13,13 @@ import { isStorageAvailable, requireStorageClient, INDEXES } from '../../middlew
 import { INDEX_MAPPINGS } from '../../constants/indexMappings';
 import { testStorageConnection } from '../../adapters/index.js';
 import { resolveStorageConfig } from '../../middleware/dataSourceConfig.js';
+import {
+  getConfigStatus,
+  saveStorageConfig,
+  saveObservabilityConfig,
+  clearStorageConfig,
+  clearObservabilityConfig,
+} from '../../services/configService.js';
 
 const router = Router();
 
@@ -217,5 +224,93 @@ router.post(
     res.json({ backfilled, errors, total: runs.length });
   })
 );
+
+// ============================================================================
+// Configuration Management
+// ============================================================================
+
+/**
+ * GET /api/storage/config/status
+ * Get configuration status (no credentials returned)
+ */
+router.get('/api/storage/config/status', (req: Request, res: Response) => {
+  try {
+    const status = getConfigStatus();
+    res.json(status);
+  } catch (error: any) {
+    console.error('[StorageAPI] Failed to get config status:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/storage/config/storage
+ * Save storage configuration to file
+ * Body: { endpoint, username?, password? }
+ */
+router.post('/api/storage/config/storage', (req: Request, res: Response) => {
+  try {
+    const { endpoint, username, password } = req.body;
+
+    if (!endpoint) {
+      return res.status(400).json({ error: 'Endpoint is required' });
+    }
+
+    saveStorageConfig({ endpoint, username, password });
+    res.json({ success: true, message: 'Storage configuration saved' });
+  } catch (error: any) {
+    console.error('[StorageAPI] Failed to save storage config:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/storage/config/observability
+ * Save observability configuration to file
+ * Body: { endpoint, username?, password?, indexes?: { traces?, logs?, metrics? } }
+ */
+router.post('/api/storage/config/observability', (req: Request, res: Response) => {
+  try {
+    const { endpoint, username, password, indexes } = req.body;
+
+    if (!endpoint) {
+      return res.status(400).json({ error: 'Endpoint is required' });
+    }
+
+    saveObservabilityConfig({ endpoint, username, password, indexes });
+    res.json({ success: true, message: 'Observability configuration saved' });
+  } catch (error: any) {
+    console.error('[StorageAPI] Failed to save observability config:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/storage/config/storage
+ * Clear storage configuration from file
+ */
+router.delete('/api/storage/config/storage', (req: Request, res: Response) => {
+  try {
+    clearStorageConfig();
+    res.json({ success: true, message: 'Storage configuration cleared' });
+  } catch (error: any) {
+    console.error('[StorageAPI] Failed to clear storage config:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/storage/config/observability
+ * Clear observability configuration from file
+ */
+router.delete('/api/storage/config/observability', (req: Request, res: Response) => {
+  try {
+    clearObservabilityConfig();
+    res.json({ success: true, message: 'Observability configuration cleared' });
+  } catch (error: any) {
+    console.error('[StorageAPI] Failed to clear observability config:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 export default router;
