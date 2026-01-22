@@ -93,7 +93,7 @@ export const BenchmarkRunsPage: React.FC = () => {
   // Selected runs for comparison
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
 
-  // Load test cases on mount
+  // Load evals on mount
   useEffect(() => {
     asyncTestCaseStorage.getAll().then(setTestCases);
   }, []);
@@ -123,7 +123,7 @@ export const BenchmarkRunsPage: React.FC = () => {
     loadBenchmark();
   }, [loadBenchmark]);
 
-  // Filter test cases to only those in this benchmark
+  // Filter evals to only those in this benchmark
   const benchmarkTestCases = useMemo(() =>
     testCases.filter(tc => benchmark?.testCaseIds.includes(tc.id)),
     [testCases, benchmark]
@@ -412,7 +412,7 @@ export const BenchmarkRunsPage: React.FC = () => {
 
       {/* Main Content - Side by Side Layout */}
       <div className="flex gap-4 flex-1 overflow-hidden">
-        {/* Left Panel - Test Cases (30%) */}
+        {/* Left Panel - Evals (30%) */}
         <div className="w-[30%] flex-shrink-0 overflow-y-auto border-r border-border pr-4">
           {/* Metadata */}
           <div className="space-y-2 mb-4">
@@ -421,14 +421,14 @@ export const BenchmarkRunsPage: React.FC = () => {
               <span>Created {formatDate(benchmark.createdAt)}</span>
             </div>
             <div className="text-sm font-medium">
-              {benchmarkTestCases.length} test case{benchmarkTestCases.length !== 1 ? 's' : ''}
+              {benchmarkTestCases.length} eval{benchmarkTestCases.length !== 1 ? 's' : ''}
             </div>
           </div>
 
-          {/* Test Cases List */}
+          {/* Evals List */}
           <div className="space-y-2">
             {benchmarkTestCases.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No test cases in this benchmark</p>
+              <p className="text-sm text-muted-foreground">No evals in this benchmark</p>
             ) : (
               benchmarkTestCases.map(tc => (
                 <Card

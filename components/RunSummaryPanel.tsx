@@ -150,7 +150,7 @@ export const RunSummaryPanel: React.FC<RunSummaryPanelProps> = ({
                       <XCircle size={16} className="text-red-400" />
                       <span className="text-red-400 font-medium">{stats.failed} failed</span>
                     </div>
-                    <span className="text-sm text-muted-foreground">{stats.total} total test cases</span>
+                    <span className="text-sm text-muted-foreground">{stats.total} total evals</span>
                   </div>
                 </div>
               </div>
@@ -241,7 +241,7 @@ export const RunSummaryPanel: React.FC<RunSummaryPanelProps> = ({
             </Card>
             <Card>
               <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground mb-1">Test Cases</div>
+                <div className="text-xs text-muted-foreground mb-1">Evals</div>
                 <div className="text-sm">{stats.total} total</div>
               </CardContent>
             </Card>

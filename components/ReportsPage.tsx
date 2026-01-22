@@ -51,7 +51,7 @@ export const ReportsPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [metricsMap, setMetricsMap] = useState<Map<string, TraceMetrics>>(new Map());
 
-  // Load test cases on mount
+  // Load evals on mount
   useEffect(() => {
     const loadTestCases = async () => {
       const tcs = await asyncTestCaseStorage.getAll();
@@ -113,7 +113,7 @@ export const ReportsPage: React.FC = () => {
     }
   }, [reports]);
 
-  // Load test case stats
+  // Load eval stats
   useEffect(() => {
     const loadStats = async () => {
       const count = await asyncRunStorage.getReportCount();
@@ -145,7 +145,7 @@ export const ReportsPage: React.FC = () => {
     }
   }, [selectedTestCase, setSearchParams]);
 
-  // Reset selected test case when category filter changes
+  // Reset selected eval when category filter changes
   useEffect(() => {
     if (filterCategory !== 'all' && selectedTestCase) {
       const testCase = testCases.find(tc => tc.id === selectedTestCase);
@@ -187,12 +187,12 @@ export const ReportsPage: React.FC = () => {
 
   return (
     <div className="h-full flex">
-      {/* Sidebar: Test Case List */}
+      {/* Sidebar: Eval List */}
       <Card className="w-80 rounded-none border-0 border-r flex flex-col">
         <CardHeader className="border-b pb-3">
           <CardTitle className="flex items-center text-lg">
             <FileText size={18} className="mr-2" />
-            Test Cases
+            Evals
           </CardTitle>
           <p className="text-xs text-muted-foreground mb-2">{totalReports} total reports</p>
           <Select value={filterCategory} onValueChange={setFilterCategory}>
@@ -221,12 +221,12 @@ export const ReportsPage: React.FC = () => {
             }`}
           >
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">All Test Cases</span>
+              <span className="text-sm font-medium">All Evals</span>
               <span className="text-xs text-muted-foreground">{totalReports}</span>
             </div>
           </button>
 
-          {/* Individual Test Cases */}
+          {/* Individual Evals */}
           {testCaseStats.map(({ testCase, count, reports: latestReports }) => (
             <button
               key={testCase.id}
@@ -339,7 +339,7 @@ export const ReportsPage: React.FC = () => {
               <p className="text-lg">No reports found</p>
               <p className="text-sm mt-1">
                 {selectedTestCase
-                  ? 'No evaluation runs for this test case yet'
+                  ? 'No evaluation runs for this eval yet'
                   : 'Run an evaluation to see reports here'}
               </p>
               <Button asChild className="mt-4 bg-opensearch-blue hover:bg-blue-600">
@@ -352,7 +352,7 @@ export const ReportsPage: React.FC = () => {
                 <TableRow>
                   <TableHead className="w-12"></TableHead>
                   <TableHead>Timestamp</TableHead>
-                  <TableHead>Test Case</TableHead>
+                  <TableHead>Eval</TableHead>
                   <TableHead>Agent</TableHead>
                   <TableHead>Model</TableHead>
                   <TableHead>Status</TableHead>

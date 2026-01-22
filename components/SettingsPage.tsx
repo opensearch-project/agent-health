@@ -842,7 +842,7 @@ export const SettingsPage: React.FC = () => {
                 {storageStats.isConnected && (
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="p-3 bg-muted/30 rounded-lg">
-                      <div className="text-muted-foreground text-xs uppercase mb-1">Test Cases</div>
+                      <div className="text-muted-foreground text-xs uppercase mb-1">Evals</div>
                       <div className="text-lg font-semibold">{storageStats.testCases}</div>
                     </div>
                     <div className="p-3 bg-muted/30 rounded-lg">
@@ -1060,7 +1060,7 @@ export const SettingsPage: React.FC = () => {
             {localCounts && (
               <div className="grid grid-cols-3 gap-4 text-sm">
                 <div className="p-3 bg-muted/30 rounded-lg">
-                  <div className="text-muted-foreground text-xs uppercase mb-1">Test Cases</div>
+                  <div className="text-muted-foreground text-xs uppercase mb-1">Evals</div>
                   <div className="text-lg font-semibold">{localCounts.testCases}</div>
                 </div>
                 <div className="p-3 bg-muted/30 rounded-lg">
@@ -1088,7 +1088,7 @@ export const SettingsPage: React.FC = () => {
             {migrationResult && (
               <div className="p-3 bg-muted/30 rounded-lg text-sm space-y-1">
                 <div className="font-medium mb-2">Migration Results:</div>
-                <div>Test Cases: {migrationResult.testCases.migrated} migrated, {migrationResult.testCases.skipped} skipped</div>
+                <div>Evals: {migrationResult.testCases.migrated} migrated, {migrationResult.testCases.skipped} skipped</div>
                 <div>Experiments: {migrationResult.experiments.migrated} migrated, {migrationResult.experiments.skipped} skipped</div>
                 <div>Reports: {migrationResult.reports.migrated} migrated, {migrationResult.reports.skipped} skipped</div>
                 {(migrationResult.testCases.errors.length > 0 ||

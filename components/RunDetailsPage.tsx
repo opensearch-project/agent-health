@@ -119,7 +119,7 @@ const Sidebar = ({ context, selectedItem, onSelectItem, onToggleCollapse, isColl
           </Badge>
         </div>
 
-        {/* Test Cases */}
+        {/* Evals */}
         {testCaseIds.map(testCaseId => {
           const result = experimentRun.results[testCaseId];
           const report = result.reportId ? reportsMap[result.reportId] : null;
@@ -256,7 +256,7 @@ export const RunDetailsPage: React.FC = () => {
         // Load all reports for this experiment run
         const siblingReports = await asyncRunStorage.getByExperimentRun(routeExperimentId, runId);
 
-        // Load all test cases referenced in this run
+        // Load all evals referenced in this run
         const allTestCases = await asyncTestCaseStorage.getAll();
         const relevantTestCases = allTestCases.filter(tc =>
           Object.keys(expRun.results || {}).includes(tc.id)
@@ -279,12 +279,12 @@ export const RunDetailsPage: React.FC = () => {
           reportsMap,
         });
 
-        // Check URL param for selected test case, default to summary
+        // Check URL param for selected eval, default to summary
         const testCaseFromUrl = searchParams.get('testCase');
         const testCaseIds = Object.keys(expRun.results || {});
         if (testCaseFromUrl && testCaseIds.includes(testCaseFromUrl)) {
           setSelectedItem(testCaseFromUrl);
-          // Collapse main sidebar when loading with a test case selected
+          // Collapse main sidebar when loading with an eval selected
           setMainSidebarOpen(false);
         } else {
           setSelectedItem('summary');
@@ -318,7 +318,7 @@ export const RunDetailsPage: React.FC = () => {
         setReport(standaloneReport);
         setExperimentContext(null);
 
-        // Load the test case for this report
+        // Load the eval for this report
         const tc = await asyncTestCaseStorage.getById(standaloneReport.testCaseId);
         setTestCase(tc);
       }
@@ -359,11 +359,11 @@ export const RunDetailsPage: React.FC = () => {
   const handleSelectItem = (item: string) => {
     setSelectedItem(item);
 
-    // Update URL with selected test case
+    // Update URL with selected eval
     if (item && item !== 'summary') {
       searchParams.set('testCase', item);
       setSearchParams(searchParams, { replace: true });
-      // Collapse main sidebar when selecting a specific test case run
+      // Collapse main sidebar when selecting a specific eval run
       setMainSidebarOpen(false);
     } else {
       searchParams.delete('testCase');
@@ -627,20 +627,20 @@ export const RunDetailsPage: React.FC = () => {
                         {isRunning ? (
                           <>
                             <Loader2 size={48} className="mx-auto mb-4 text-blue-400 animate-spin" />
-                            <p className="text-lg font-medium">Test case running</p>
-                            <p className="text-sm mt-1">Executing test case...</p>
+                            <p className="text-lg font-medium">Eval running</p>
+                            <p className="text-sm mt-1">Executing eval...</p>
                           </>
                         ) : isPending ? (
                           <>
                             <Clock size={48} className="mx-auto mb-4 text-yellow-400 animate-pulse" />
-                            <p className="text-lg font-medium">Test case pending</p>
+                            <p className="text-lg font-medium">Eval pending</p>
                             <p className="text-sm mt-1">Waiting for execution...</p>
                           </>
                         ) : (
                           <>
                             <XCircle size={48} className="mx-auto mb-4 opacity-20" />
-                            <p>No report available for this test case</p>
-                            <p className="text-sm mt-1">The test may have failed to execute</p>
+                            <p>No report available for this eval</p>
+                            <p className="text-sm mt-1">The eval may have failed to execute</p>
                           </>
                         )}
                       </div>
@@ -652,7 +652,7 @@ export const RunDetailsPage: React.FC = () => {
           </ResizablePanel>
         </ResizablePanelGroup>
       ) : (
-        /* Full-width layout for single test case or collapsed sidebar */
+        /* Full-width layout for single eval or collapsed sidebar */
         <div className="flex-1 overflow-hidden">
           {displayReport ? (
             <RunDetailsContent
@@ -674,13 +674,13 @@ export const RunDetailsPage: React.FC = () => {
                     {isRunning ? (
                       <>
                         <Loader2 size={48} className="mx-auto mb-4 text-blue-400 animate-spin" />
-                        <p className="text-lg font-medium">Test case running</p>
-                        <p className="text-sm mt-1">Executing test case...</p>
+                        <p className="text-lg font-medium">Eval running</p>
+                        <p className="text-sm mt-1">Executing eval...</p>
                       </>
                     ) : isPending ? (
                       <>
                         <Clock size={48} className="mx-auto mb-4 text-yellow-400 animate-pulse" />
-                        <p className="text-lg font-medium">Test case pending</p>
+                        <p className="text-lg font-medium">Eval pending</p>
                         <p className="text-sm mt-1">Waiting for execution...</p>
                       </>
                     ) : (

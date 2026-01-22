@@ -34,7 +34,7 @@ export const VersionIndicator: React.FC<VersionIndicatorProps> = ({
           </Badge>
         </TooltipTrigger>
         <TooltipContent>
-          <p className="text-xs">Test case version changed: {versionText}</p>
+          <p className="text-xs">Eval version changed: {versionText}</p>
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

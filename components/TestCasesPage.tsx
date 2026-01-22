@@ -61,7 +61,7 @@ const groupByCategory = (testCases: TestCase[]): Record<string, TestCase[]> => {
     }
     grouped[category].push(tc);
   });
-  // Sort categories alphabetically and sort test cases within each category by newest first
+  // Sort categories alphabetically and sort evals within each category by newest first
   return Object.keys(grouped)
     .sort()
     .reduce((acc, key) => {
@@ -123,7 +123,7 @@ const TestCaseCard = ({ testCase, runCount, onClick, onRun, onEdit, onDelete }: 
               variant="ghost"
               size="sm"
               onClick={(e) => { e.stopPropagation(); onRun(); }}
-              title="Run test case"
+              title="Run eval"
             >
               <Play size={14} />
             </Button>
@@ -131,7 +131,7 @@ const TestCaseCard = ({ testCase, runCount, onClick, onRun, onEdit, onDelete }: 
               variant="ghost"
               size="sm"
               onClick={(e) => { e.stopPropagation(); onEdit(); }}
-              title="Edit test case"
+              title="Edit eval"
             >
               <Pencil size={14} />
             </Button>
@@ -140,7 +140,7 @@ const TestCaseCard = ({ testCase, runCount, onClick, onRun, onEdit, onDelete }: 
               size="sm"
               onClick={(e) => { e.stopPropagation(); onDelete(); }}
               className="text-destructive hover:text-destructive"
-              title="Delete test case"
+              title="Delete eval"
             >
               <Trash2 size={14} />
             </Button>
@@ -218,11 +218,11 @@ const EmptyState = ({ onCreateNew }: { onCreateNew: () => void }) => (
   <Card className="border-dashed">
     <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
       <FileText size={48} className="mb-4 opacity-20" />
-      <p className="text-lg font-medium">No test cases yet</p>
-      <p className="text-sm mb-4">Create your first test case to start evaluating agents</p>
+      <p className="text-lg font-medium">No evals yet</p>
+      <p className="text-sm mb-4">Create your first eval to start evaluating agents</p>
       <Button onClick={onCreateNew}>
         <Plus size={16} className="mr-2" />
-        Create Test Case
+        Create Eval
       </Button>
     </CardContent>
   </Card>
@@ -232,7 +232,7 @@ const NoResultsState = ({ onClearFilters }: { onClearFilters: () => void }) => (
   <Card className="border-dashed">
     <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
       <Filter size={48} className="mb-4 opacity-20" />
-      <p className="text-lg font-medium">No test cases match your filters</p>
+      <p className="text-lg font-medium">No evals match your filters</p>
       <p className="text-sm mb-4">Try adjusting your search or filter criteria</p>
       <Button variant="outline" onClick={onClearFilters}>
         Clear Filters
@@ -306,7 +306,7 @@ export const TestCasesPage: React.FC = () => {
       );
       setRunCounts(counts);
     } catch (error) {
-      console.error('Failed to load test cases:', error);
+      console.error('Failed to load evals:', error);
     } finally {
       setIsLoading(false);
     }
@@ -381,7 +381,7 @@ export const TestCasesPage: React.FC = () => {
   };
 
   const handleSaveAsTestCase = () => {
-    // Reload data after saving a new test case from QuickRunModal
+    // Reload data after saving a new eval from QuickRunModal
     loadData();
     setRunningTestCase(null);
   };
@@ -392,7 +392,7 @@ export const TestCasesPage: React.FC = () => {
       await asyncTestCaseStorage.delete(deleteTarget.id);
       await loadData();
     } catch (error) {
-      console.error('Failed to delete test case:', error);
+      console.error('Failed to delete eval:', error);
     } finally {
       setDeleteTarget(null);
     }
@@ -422,14 +422,14 @@ export const TestCasesPage: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold">Test Cases</h2>
+          <h2 className="text-2xl font-bold">Evals</h2>
           <p className="text-muted-foreground">
-            Manage your test case library ({testCases.length} total)
+            Manage your eval library ({testCases.length} total)
           </p>
         </div>
         <Button onClick={handleCreateNew}>
           <Plus size={16} className="mr-2" />
-          New Test Case
+          New Eval
         </Button>
       </div>
 
@@ -447,7 +447,7 @@ export const TestCasesPage: React.FC = () => {
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
               />
               <Input
-                placeholder="Search test cases..."
+                placeholder="Search evals..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9"
@@ -487,7 +487,7 @@ export const TestCasesPage: React.FC = () => {
             )}
           </div>
 
-          {/* Test Cases List */}
+          {/* Evals List */}
           {filteredTestCases.length === 0 ? (
             <NoResultsState onClearFilters={clearFilters} />
           ) : (
@@ -537,7 +537,7 @@ export const TestCasesPage: React.FC = () => {
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Test Case</AlertDialogTitle>
+            <AlertDialogTitle>Delete Eval</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete "{deleteTarget?.name}"? This action cannot be undone.
             </AlertDialogDescription>

@@ -31,7 +31,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
   const [showUseCaseCompare, setShowUseCaseCompare] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load test cases on mount
+  // Load evals on mount
   useEffect(() => {
     asyncTestCaseStorage.getAll().then(setTestCases);
   }, []);

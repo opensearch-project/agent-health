@@ -245,7 +245,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   const agentConfig = DEFAULT_CONFIG.agents.find(a => a.key === report.agentKey || a.name === report.agentName);
   const isTraceMode = agentConfig?.useTraces ?? true;
 
-  // Load test case and annotations on mount
+  // Load eval and annotations on mount
   useEffect(() => {
     asyncTestCaseStorage.getById(report.testCaseId).then(tc => setTestCase(tc));
     asyncRunStorage.getAnnotationsByReport(report.id).then(setAnnotations);
@@ -267,7 +267,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     }
   }, [report.runId, isTraceMode]);
 
-  // Reset trace state when report changes (switching test cases)
+  // Reset trace state when report changes (switching evals)
   // If already on Traces tab, auto-fetch new traces
   useEffect(() => {
     setTraceSpans([]);
@@ -367,7 +367,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
       <div className="bg-card border-b p-4">
         <div className="flex items-start justify-between">
           <div>
-            <h2 className="text-xl font-semibold">{testCase?.name || 'Unknown Test Case'}</h2>
+            <h2 className="text-xl font-semibold">{testCase?.name || 'Unknown Eval'}</h2>
             <p className="text-sm text-muted-foreground mt-1">
               Report ID: <span className="font-mono">{report.id}</span>
             </p>
@@ -662,11 +662,11 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
               )}
             </div>
 
-            {/* Test Case Info */}
+            {/* Eval Info */}
             {testCase && (
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-lg font-semibold">Test Case Details</h3>
+                  <h3 className="text-lg font-semibold">Eval Details</h3>
                   {onEditTestCase && (
                     <Button
                       variant="outline"
@@ -675,7 +675,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                       className="gap-1.5"
                     >
                       <Pencil size={14} />
-                      Edit Test Case
+                      Edit Eval
                     </Button>
                   )}
                 </div>
@@ -925,7 +925,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 <TraceFullScreenView
                   open={traceFullscreenOpen}
                   onOpenChange={setTraceFullscreenOpen}
-                  title={`Traces: ${testCase?.name || 'Unknown Test Case'}`}
+                  title={`Traces: ${testCase?.name || 'Unknown Eval'}`}
                   subtitle={`Run ID: ${report.runId}`}
                   spanTree={spanTree}
                   timeRange={timeRange}

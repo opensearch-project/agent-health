@@ -62,7 +62,7 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
   if (rows.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
-        No test cases to compare
+        No evals to compare
       </div>
     );
   }

@@ -39,7 +39,7 @@ export const EvalsPage: React.FC = () => {
       setTestCases(tcs);
       setCategories(cats);
 
-      // Load run counts for each test case
+      // Load run counts for each eval
       const counts: Record<string, number> = {};
       await Promise.all(
         tcs.map(async (tc) => {
@@ -49,7 +49,7 @@ export const EvalsPage: React.FC = () => {
       );
       setRunCounts(counts);
     } catch (error) {
-      console.error('Failed to load test cases:', error);
+      console.error('Failed to load evals:', error);
     } finally {
       setIsLoading(false);
     }
@@ -74,7 +74,7 @@ export const EvalsPage: React.FC = () => {
   };
 
   const handleDeleteTestCase = async (testCase: TestCase) => {
-    if (window.confirm(`Delete test case "${testCase.name}"? This cannot be undone.`)) {
+    if (window.confirm(`Delete eval "${testCase.name}"? This cannot be undone.`)) {
       await asyncTestCaseStorage.delete(testCase.id);
       loadTestCases();
     }
@@ -97,7 +97,7 @@ export const EvalsPage: React.FC = () => {
   };
 
   const handleQuickRun = () => {
-    // Ad-hoc quick run without a test case
+    // Ad-hoc quick run without an eval
     setRunningTestCase(null);
     setIsQuickRunOpen(true);
   };
@@ -113,7 +113,7 @@ export const EvalsPage: React.FC = () => {
         <div>
           <h2 className="text-2xl font-bold">Evals</h2>
           <p className="text-xs text-muted-foreground mt-1">
-            {testCases.length} test case{testCases.length !== 1 ? 's' : ''}
+            {testCases.length} eval{testCases.length !== 1 ? 's' : ''}
             {testCases.filter(tc => tc.isPromoted).length > 0 && (
               <span> · {testCases.filter(tc => tc.isPromoted).length} saved</span>
             )}
@@ -132,7 +132,7 @@ export const EvalsPage: React.FC = () => {
             className="bg-opensearch-blue hover:bg-blue-600 text-white"
           >
             <Plus size={18} className="mr-2" />
-            New Test Case
+            New Eval
           </Button>
         </div>
       </div>
@@ -155,21 +155,21 @@ export const EvalsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Test Case List */}
+      {/* Eval List */}
       <ScrollArea className="flex-1">
         <div className="space-y-3 pr-4">
           {filteredTestCases.length === 0 ? (
             <Card className="border-dashed">
               <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <p className="text-lg font-medium">No test cases yet</p>
-                <p className="text-sm">Create your first test case to get started</p>
+                <p className="text-lg font-medium">No evals yet</p>
+                <p className="text-sm">Create your first eval to get started</p>
                 <Button
                   onClick={handleNewTestCase}
                   variant="outline"
                   className="mt-4"
                 >
                   <Plus size={16} className="mr-2" />
-                  Create Test Case
+                  Create Eval
                 </Button>
               </CardContent>
             </Card>
@@ -250,7 +250,7 @@ export const EvalsPage: React.FC = () => {
                           variant="ghost"
                           size="icon"
                           onClick={() => handleTogglePromoted(testCase)}
-                          title={testCase.isPromoted ? "Remove from My Test Cases" : "Save to My Test Cases"}
+                          title={testCase.isPromoted ? "Remove from My Evals" : "Save to My Evals"}
                           className={testCase.isPromoted ? "text-opensearch-blue" : ""}
                         >
                           <CheckCircle size={14} className={testCase.isPromoted ? "" : "opacity-50"} />
@@ -274,7 +274,7 @@ export const EvalsPage: React.FC = () => {
         </div>
       </ScrollArea>
 
-      {/* Test Case Editor Modal */}
+      {/* Eval Editor Modal */}
       {isEditorOpen && (
         <TestCaseEditor
           testCase={editingTestCase}

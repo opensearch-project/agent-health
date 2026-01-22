@@ -45,7 +45,7 @@ export const BenchmarksPage: React.FC = () => {
   const [editingDescriptionValue, setEditingDescriptionValue] = useState('');
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load test cases on mount
+  // Load evals on mount
   useEffect(() => {
     asyncTestCaseStorage.getAll().then(setTestCases);
   }, []);
@@ -463,7 +463,7 @@ export const BenchmarksPage: React.FC = () => {
                           View Latest
                         </Button>
                       )}
-                      {/* Edit button - opens editor to modify test cases */}
+                      {/* Edit button - opens editor to modify evals */}
                       {!isRunning && (
                         <Button
                           variant="ghost"

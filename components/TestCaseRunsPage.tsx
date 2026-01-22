@@ -126,7 +126,7 @@ const EmptyState = ({ onRun }: { onRun: () => void }) => (
     <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
       <FileText size={48} className="mb-4 opacity-20" />
       <p className="text-lg font-medium">No runs yet</p>
-      <p className="text-sm mb-4">Run this test case to see results here</p>
+      <p className="text-sm mb-4">Run this eval to see results here</p>
       <Button onClick={onRun} className="bg-opensearch-blue hover:bg-blue-600">
         <Play size={16} className="mr-2" />
         Run Test
@@ -171,7 +171,7 @@ export const TestCaseRunsPage: React.FC = () => {
         )
       );
     } catch (error) {
-      console.error('Failed to load test case runs:', error);
+      console.error('Failed to load eval runs:', error);
     } finally {
       setIsLoading(false);
     }
@@ -243,7 +243,7 @@ export const TestCaseRunsPage: React.FC = () => {
 
       {/* Main Content - Side by Side Layout */}
       <div className="flex gap-4 flex-1 overflow-hidden">
-        {/* Left Panel - Test Case Details (30%) */}
+        {/* Left Panel - Eval Details (30%) */}
         <div className="w-[30%] flex-shrink-0 overflow-y-auto border-r border-border pr-4 space-y-4">
           {/* Labels */}
           {(testCase.labels || []).length > 0 && (

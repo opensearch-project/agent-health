@@ -311,7 +311,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
       <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle>
-            {testCase ? 'Edit Test Case' : 'Create Test Case'}
+            {testCase ? 'Edit Eval' : 'Create Eval'}
           </CardTitle>
           <Button variant="ghost" size="icon" onClick={onCancel}>
             <X size={18} />
@@ -356,7 +356,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
                     id="description"
                     value={description}
                     onChange={e => setDescription(e.target.value)}
-                    placeholder="Describe what this test case validates..."
+                    placeholder="Describe what this eval validates..."
                     rows={2}
                   />
                 </div>
@@ -493,7 +493,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
                 value={jsonContent}
                 onChange={(e) => handleJsonChange(e.target.value)}
                 className="flex-1 font-mono text-sm resize-none"
-                placeholder={'{\n  "name": "Test Case Name",\n  "category": "RCA",\n  "difficulty": "Medium",\n  "initialPrompt": "Your prompt here",\n  "expectedOutcomes": ["Expected outcome 1"]\n}'}
+                placeholder={'{\n  "name": "Eval Name",\n  "category": "RCA",\n  "difficulty": "Medium",\n  "initialPrompt": "Your prompt here",\n  "expectedOutcomes": ["Expected outcome 1"]\n}'}
               />
 
               {/* Validation Errors */}

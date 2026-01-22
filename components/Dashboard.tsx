@@ -31,7 +31,7 @@ const QuickActions = () => (
             <Beaker className="h-5 w-5" />
           </div>
           <div>
-            <CardTitle className="text-base">Test Cases</CardTitle>
+            <CardTitle className="text-base">Evals</CardTitle>
             <CardDescription>Create and organize tests</CardDescription>
           </div>
         </div>
@@ -81,7 +81,7 @@ const EmptyState = () => (
       <div className="space-y-3 mb-4">
         <div className="flex items-center gap-3">
           <Badge variant="outline" className="rounded-full h-6 w-6 p-0 justify-center shrink-0">1</Badge>
-          <span className="text-sm">Create a test case to define what you want to test</span>
+          <span className="text-sm">Create an eval to define what you want to test</span>
         </div>
         <div className="flex items-center gap-3">
           <Badge variant="outline" className="rounded-full h-6 w-6 p-0 justify-center shrink-0">2</Badge>
@@ -94,7 +94,7 @@ const EmptyState = () => (
       </div>
       <div className="flex gap-2">
         <Button asChild size="sm">
-          <Link to="/test-cases">Create Test Case</Link>
+          <Link to="/test-cases">Create Eval</Link>
         </Button>
         <Button asChild variant="outline" size="sm">
           <Link to="/experiments">Create Experiment</Link>
@@ -216,7 +216,7 @@ const ExperimentCard = ({ experiment }: ExperimentCardProps) => {
           ) : (
             <div className="text-xs text-muted-foreground flex items-center gap-1">
               <Clock size={10} />
-              Never run · {experiment.testCaseIds.length} test case{experiment.testCaseIds.length !== 1 ? 's' : ''} configured
+              Never run · {experiment.testCaseIds.length} eval{experiment.testCaseIds.length !== 1 ? 's' : ''} configured
             </div>
           )}
         </CardContent>
@@ -333,7 +333,7 @@ const QuickStats = ({ experiments, recentReports, testCaseCount, aggregateMetric
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-3">
         <StatItem icon={FlaskConical} label="Experiments" value={experiments.length} />
-        <StatItem icon={Beaker} label="Test Cases" value={testCaseCount} />
+        <StatItem icon={Beaker} label="Evals" value={testCaseCount} />
         <StatItem
           icon={CheckCircle2}
           label="Avg Pass Rate"
@@ -384,7 +384,7 @@ export const Dashboard: React.FC = () => {
         const allReports = await asyncRunStorage.getAllReports({ sortBy: 'timestamp', order: 'desc' });
         setRecentReports(allReports.slice(0, 10));
 
-        // Get test case count for quick stats
+        // Get eval count for quick stats
         const allTestCases = await asyncTestCaseStorage.getAll();
         setTestCaseCount(allTestCases.length);
 
@@ -426,7 +426,7 @@ export const Dashboard: React.FC = () => {
               const currentPassRate = total > 0 ? (passed / total) * 100 : 0;
               delta = currentPassRate - previousPassRate;
 
-              // Count regressions and improvements per test case
+              // Count regressions and improvements per eval
               exp.testCaseIds.forEach((testCaseId) => {
                 const latestResult = latestRunReports.find((r) => r.testCaseId === testCaseId);
                 const prevResult = previousRunReports.find((r) => r.testCaseId === testCaseId);

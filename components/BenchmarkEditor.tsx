@@ -57,12 +57,12 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
   const [runs, setRuns] = useState<RunConfig[]>([createDefaultRun()]);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
-  // Load all test cases from storage (previously only promoted, but TestCasesPage doesn't have promotion)
+  // Load all evals from storage (previously only promoted, but TestCasesPage doesn't have promotion)
   const [allTestCases, setAllTestCases] = useState<TestCase[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Track if test cases changed from original (will create new version)
+  // Track if evals changed from original (will create new version)
   const testCasesChanged = useMemo(() => {
     if (!benchmark) return false;
     const original = new Set(benchmark.testCaseIds);

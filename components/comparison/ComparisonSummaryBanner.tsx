@@ -71,7 +71,7 @@ export const ComparisonSummaryBanner: React.FC<ComparisonSummaryBannerProps> = (
           <div className="flex items-center gap-4">
             <span className="text-sm font-medium">Summary</span>
             <span className="text-xs text-muted-foreground">
-              {total} test case{total !== 1 ? 's' : ''}
+              {total} eval{total !== 1 ? 's' : ''}
             </span>
           </div>
           <div className="flex items-center gap-2">

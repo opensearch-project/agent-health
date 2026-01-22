@@ -83,7 +83,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
     setReport(null);
 
     try {
-      // Create a temporary test case for ad-hoc runs
+      // Create a temporary eval for ad-hoc runs
       const runTestCase: TestCase = testCase || {
         id: `adhoc-${Date.now()}`,
         name: effectiveName,
@@ -372,7 +372,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                       disabled={!canSave}
                     >
                       <Save size={14} className="mr-1" />
-                      Save as Test Case
+                      Save as Eval
                     </Button>
                     <Button
                       onClick={handlePromoteForExperiments}
