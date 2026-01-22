@@ -267,7 +267,7 @@ const ExperimentCardSkeleton = () => (
   </Card>
 );
 
-const DashboardSkeleton = () => (
+const OverviewSkeleton = () => (
   <div className="space-y-6">
     <QuickActionsSkeleton />
     <Separator />
@@ -359,7 +359,7 @@ const QuickStats = ({ experiments, recentReports, testCaseCount, aggregateMetric
   );
 };
 
-// ==================== Main Dashboard Component ====================
+// ==================== Main Overview Component ====================
 
 export const Dashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
@@ -374,7 +374,7 @@ export const Dashboard: React.FC = () => {
   const [trendMetric, setTrendMetric] = useState<'tokens' | 'cost' | 'duration'>('cost');
 
   useEffect(() => {
-    const loadDashboardData = async () => {
+    const loadOverviewData = async () => {
       setIsLoading(true);
       try {
         // Load experiments
@@ -478,7 +478,7 @@ export const Dashboard: React.FC = () => {
               avgTokens: aggregate.avgTokens,
             });
           } catch (error) {
-            console.warn('[Dashboard] Failed to fetch aggregate metrics:', error);
+            console.warn('[Overview] Failed to fetch aggregate metrics:', error);
           }
         }
 
@@ -512,13 +512,13 @@ export const Dashboard: React.FC = () => {
         // Reverse to show oldest first (left to right)
         setTrendData(trendDataPoints.reverse());
       } catch (error) {
-        console.error('Failed to load dashboard data:', error);
+        console.error('Failed to load overview data:', error);
       } finally {
         setIsLoading(false);
       }
     };
 
-    loadDashboardData();
+    loadOverviewData();
   }, []);
 
   const hasNoData = experiments.length === 0 && recentReports.length === 0;
@@ -526,12 +526,12 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       <div>
-        <h2 className="text-2xl font-bold">Agent Evaluation Dashboard</h2>
+        <h2 className="text-2xl font-bold">Agent Evaluation Overview</h2>
         <p className="text-muted-foreground">Monitor agent performance and run evaluations</p>
       </div>
 
       {isLoading ? (
-        <DashboardSkeleton />
+        <OverviewSkeleton />
       ) : (
         <>
           <QuickActions />
