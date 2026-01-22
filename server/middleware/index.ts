@@ -22,14 +22,12 @@ const __dirname = path.dirname(__filename);
 
 /**
  * Setup CORS middleware
- * - Production: same-origin only
- * - Development: allow localhost:4000
+ * - Same-origin only in both dev and production
+ * - Dev mode uses Vite proxy (vite.config.ts) to forward /api requests
  */
 function setupCors(app: Express): void {
   app.use(cors({
-    origin: process.env.NODE_ENV === 'production'
-      ? false  // Same origin in production (frontend served from same server)
-      : true,  // Dev mode - allow any origin for testing/sharing
+    origin: false,  // Same-origin only - dev uses Vite proxy, prod serves from same server
     credentials: true
   }));
 }

@@ -120,6 +120,27 @@ npm run server  # Build UI + start single server on port 4001
 
 Open http://localhost:4001
 
+### NPX Usage
+
+After publishing, run directly with npx:
+
+```bash
+npx @opensearch-project/agent-health           # Start server on port 4001
+npx @opensearch-project/agent-health --port 8080
+npx @opensearch-project/agent-health --env-file .env
+```
+
+### Ports Summary
+
+| Mode | Command | Port(s) |
+|------|---------|---------|
+| **Dev (frontend)** | `npm run dev` | 4000 |
+| **Dev (backend)** | `npm run dev:server` | 4001 |
+| **Production** | `npm run server` | 4001 |
+| **NPX** | `npx @opensearch-project/agent-health` | 4001 (default) |
+
+In development, the Vite dev server (4000) proxies `/api` requests to the backend (4001).
+
 ---
 
 ## Agent Setup
