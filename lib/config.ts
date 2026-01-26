@@ -20,7 +20,7 @@ const isServerSide = typeof window === 'undefined';
 
 // Empty string = relative URLs (works in browser)
 // Full URL needed for server-side (Node.js) since fetch() has no base URL context
-const SERVER_PORT = isServerSide ? (process.env?.PORT || '4001') : '4001';
+const SERVER_PORT = isServerSide ? (process.env?.VITE_BACKEND_PORT || process.env?.PORT || '4001') : '4001';
 const BACKEND_URL = isServerSide ? `http://localhost:${SERVER_PORT}` : '';
 
 export interface EnvConfig {

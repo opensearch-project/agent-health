@@ -204,6 +204,8 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
         <div className="p-4 space-y-4">
           <SummaryStatsGrid categoryStats={categoryStats} toolStats={toolStats} />
           <ToolsUsedSection toolStats={toolStats} />
+          {/* Time Distribution (above flow) */}
+          <TimeDistributionBar stats={categoryStats} totalDuration={timeRange.duration} />
         </div>
       </div>
 
@@ -259,10 +261,6 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
         )}
       </div>
 
-      {/* Time Distribution (below flow) */}
-      <div className="shrink-0 p-4 border-t">
-        <TimeDistributionBar stats={categoryStats} totalDuration={timeRange.duration} />
-      </div>
     </div>
   );
 };

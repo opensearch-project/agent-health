@@ -60,7 +60,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   // Determine if evals section should be open based on current path
   const isEvalsPath = location.pathname.startsWith("/test-cases") ||
                       location.pathname.startsWith("/benchmarks");
-  const [evalsOpen, setEvalsOpen] = useState(isEvalsPath);
+  // Keep evals dropdown always open
+  const [evalsOpen, setEvalsOpen] = useState(true);
 
   const handleEvalsClick = () => {
     setEvalsOpen(true);

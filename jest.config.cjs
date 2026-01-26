@@ -16,6 +16,10 @@ module.exports = {
     '^@/server/services/configService$': '<rootDir>/__mocks__/@/server/services/configService.ts',
     '^\\.\\./services/configService\\.js$': '<rootDir>/__mocks__/@/server/services/configService.ts',
     '^\\.\\./\\.\\./services/configService\\.js$': '<rootDir>/__mocks__/@/server/services/configService.ts',
+    // Mock version utility to avoid import.meta.url issues in Jest
+    '^@/server/utils/version$': '<rootDir>/__mocks__/@/server/utils/version.ts',
+    '^\\.\\./utils/version$': '<rootDir>/__mocks__/@/server/utils/version.ts',
+    '^\\.\\./utils/version\\.js$': '<rootDir>/__mocks__/@/server/utils/version.ts',
     // Mock data files to avoid JSON import issues in tests
     '^@/data/testCases$': '<rootDir>/__mocks__/@/data/testCases.ts',
     '^@/data/mockComparisonData$': '<rootDir>/__mocks__/@/data/mockComparisonData.ts',

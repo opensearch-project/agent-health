@@ -6,7 +6,7 @@
 /**
  * ViewToggle
  *
- * Toggle between Timeline and Flow view modes.
+ * Toggle between Timeline and Intent view modes.
  */
 
 import React from 'react';
@@ -51,7 +51,7 @@ const ViewToggle: React.FC<ViewToggleProps> = ({
         onClick={() => onChange('flow')}
       >
         <GitBranch size={14} />
-        Flow
+        Intent
       </Button>
     </div>
   );

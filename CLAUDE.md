@@ -210,7 +210,8 @@ Express server on port 4001 provides:
 ### Environment Variables
 
 **Required** (see [.env.example](.env.example)):
-- `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`: Bedrock credentials for LLM judge
+- `AWS_PROFILE`, `AWS_REGION`: AWS profile for Bedrock LLM judge (recommended)
+- Or explicit credentials: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
 
 **Optional** (all have sensible defaults):
 - `LANGGRAPH_ENDPOINT` / `HOLMESGPT_ENDPOINT` / `MLCOMMONS_ENDPOINT`: Agent endpoints
@@ -584,17 +585,6 @@ GitHub Actions workflows in `.github/workflows/`:
 | `changelog.yml` | PR | Validate changelog |
 | `dependency-review.yml` | PR | Review dependency changes |
 | `links-checker.yml` | Push/Scheduled | Check for broken links |
-
-### Running Tests Locally
-
-```bash
-npm test                        # All tests
-npm run test:unit               # Unit tests only
-npm run test:integration        # Integration tests only
-npm test -- --coverage          # Generate coverage report
-```
-
-Coverage reports are generated in `coverage/` directory with HTML report at `coverage/lcov-report/index.html`.
 
 ## PR Workflow
 
