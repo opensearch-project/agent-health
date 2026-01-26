@@ -157,11 +157,12 @@ describe('AsyncBenchmarkStorage', () => {
         runs: [createMockBenchmarkRun()],
       });
 
+      // Storage format now uses agentKey consistently (not agentId)
       expect(mockOsExperiments.create).toHaveBeenCalledWith(
         expect.objectContaining({
           runs: expect.arrayContaining([
             expect.objectContaining({
-              agentId: 'agent-1',
+              agentKey: 'agent-1',
             }),
           ]),
         })
@@ -392,37 +393,65 @@ describe('AsyncBenchmarkStorage', () => {
   });
 
   describe('deleteRun', () => {
-    it('deletes a run from experiment', async () => {
-      mockOsExperiments.getById.mockResolvedValue(createMockStorageExperiment());
-      mockOsExperiments.update.mockResolvedValue(undefined);
+    // deleteRun uses fetch to call the API endpoint for atomic server-side deletion
+    let mockFetch: jest.SpyInstance;
+
+    beforeEach(() => {
+      mockFetch = jest.spyOn(global, 'fetch');
+    });
+
+    afterEach(() => {
+      mockFetch.mockRestore();
+    });
+
+    it('deletes a run from experiment via API', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+      });
 
       const result = await asyncBenchmarkStorage.deleteRun('exp-1', 'run-1');
 
       expect(result).toBe(true);
-      expect(mockOsExperiments.update).toHaveBeenCalledWith(
-        'exp-1',
-        expect.objectContaining({
-          runs: [],
-        })
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/storage/benchmarks/exp-1/runs/run-1',
+        { method: 'DELETE' }
       );
     });
 
-    it('returns false when experiment not found', async () => {
-      mockOsExperiments.getById.mockResolvedValue(null);
+    it('returns false when API returns 404', async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 404,
+      });
 
       const result = await asyncBenchmarkStorage.deleteRun('non-existent', 'run-1');
 
       expect(result).toBe(false);
-      expect(mockOsExperiments.update).not.toHaveBeenCalled();
     });
 
-    it('returns false when run not found', async () => {
-      mockOsExperiments.getById.mockResolvedValue(createMockStorageExperiment());
+    it('returns false when API returns error', async () => {
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: jest.fn().mockResolvedValue({ error: 'Internal server error' }),
+      });
 
-      const result = await asyncBenchmarkStorage.deleteRun('exp-1', 'non-existent-run');
+      const result = await asyncBenchmarkStorage.deleteRun('exp-1', 'run-1');
 
       expect(result).toBe(false);
-      expect(mockOsExperiments.update).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    it('returns false when fetch throws an error', async () => {
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      const result = await asyncBenchmarkStorage.deleteRun('exp-1', 'run-1');
+
+      expect(result).toBe(false);
+      consoleSpy.mockRestore();
     });
   });
 
