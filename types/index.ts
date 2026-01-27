@@ -288,7 +288,7 @@ export interface Span {
   endTime: string;
   duration?: number;
   status: 'OK' | 'ERROR' | 'UNSET';
-  attributes: Record<string, any>;
+  attributes?: Record<string, any>;
   events?: SpanEvent[];
   children?: Span[];
   depth?: number;
