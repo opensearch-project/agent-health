@@ -10,6 +10,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Added
+- AgentTrendChart and MetricsTable components for dashboard visualization ([#23](https://github.com/opensearch-project/dashboards-traces/pull/23))
+- Benchmark run cancellation hook with state management ([#23](https://github.com/opensearch-project/dashboards-traces/pull/23))
+- js-yaml dependency for YAML support ([#23](https://github.com/opensearch-project/dashboards-traces/pull/23))
 - JSON import functionality for test cases with automatic benchmark creation ([#20](https://github.com/opensearch-project/dashboards-traces/pull/20))
 - Benchmark run cancellation with state management and status transitions ([#20](https://github.com/opensearch-project/dashboards-traces/pull/20))
 - Integration tests for benchmark cancellation and JSON import workflows ([#20](https://github.com/opensearch-project/dashboards-traces/pull/20))

@@ -1,10 +1,11 @@
-# AgentEval
+# Agent Health
 
 [![CI](https://github.com/opensearch-project/dashboards-traces/actions/workflows/ci.yml/badge.svg)](https://github.com/opensearch-project/dashboards-traces/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.txt)
 [![Coverage](https://img.shields.io/badge/coverage->90%25-brightgreen.svg)](https://github.com/opensearch-project/dashboards-traces/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@opensearch-project/agent-health.svg)](https://www.npmjs.com/package/@opensearch-project/agent-health)
 
-An evaluation framework for Root Cause Analysis (RCA) agents. Uses "Golden Path" trajectory comparison where an LLM Judge evaluates agent actions against expected outcomes.
+An evaluation and observability framework for AI agents. Features real-time trace visualization, "Golden Path" trajectory comparison, and LLM-based evaluation scoring.
 
 ## Features
 
@@ -145,7 +146,7 @@ In development, the Vite dev server (4000) proxies `/api` requests to the backen
 
 ## Agent Setup
 
-AgentEval supports multiple agent types:
+Agent Health supports multiple agent types:
 
 | Agent | Endpoint Variable | Setup |
 |-------|-------------------|-------|
