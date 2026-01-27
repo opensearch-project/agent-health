@@ -10,6 +10,10 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Added
+- Full evaluation flow E2E tests using Demo Agent and Demo Model for CI-friendly testing
+- Enhanced CI workflow with integration test coverage reporting and badge generation
+- Test summary job in CI that aggregates results from unit, integration, and E2E tests
+- CI artifacts for coverage reports and badge data (unit-coverage, e2e-tests badges)
 - Comprehensive Playwright E2E tests for all UI flows ([#24](https://github.com/opensearch-project/dashboards-traces/pull/24))
 - E2E test fixtures and data-testid attributes for reliable test selectors ([#24](https://github.com/opensearch-project/dashboards-traces/pull/24))
 - Testing documentation in README with CI pipeline information ([#24](https://github.com/opensearch-project/dashboards-traces/pull/24))

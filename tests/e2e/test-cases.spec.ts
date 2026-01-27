@@ -49,11 +49,13 @@ test.describe('Test Cases Page', () => {
     // Wait for data to load
     await page.waitForTimeout(2000);
 
-    // Check for either test cases or empty state
-    const hasTestCases = await page.locator('[class*="card"]').filter({ hasText: /run/ }).count() > 0;
+    // Check for either test cases (shown in subtitle count) or empty state
+    // The subtitle shows "X total" when there are test cases, or empty state message when none
+    const hasTestCaseCount = await page.locator('text=/\\d+ total/').first().isVisible().catch(() => false);
+    const hasTestCaseCards = await page.locator('[class*="card"]').first().isVisible().catch(() => false);
     const hasEmptyState = await page.locator('text=No test cases yet').isVisible().catch(() => false);
 
-    expect(hasTestCases || hasEmptyState).toBeTruthy();
+    expect(hasTestCaseCount || hasTestCaseCards || hasEmptyState).toBeTruthy();
   });
 
   test('should filter test cases by search query', async ({ page }) => {

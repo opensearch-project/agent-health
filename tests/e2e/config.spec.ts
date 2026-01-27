@@ -7,12 +7,13 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Config/Agents & Models Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/config');
+    // /config redirects to /settings, so navigate there directly
+    await page.goto('/#/settings');
     await page.waitForTimeout(3000);
   });
 
   test('should display Agents & Models page', async ({ page }) => {
-    await expect(page).toHaveURL(/#\/config/);
+    await expect(page).toHaveURL(/#\/settings/);
   });
 
   test('should show available agents', async ({ page }) => {

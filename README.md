@@ -214,14 +214,40 @@ All PRs must pass these CI checks:
 | `build-and-test` | Build + unit tests + 90% coverage |
 | `lint-and-typecheck` | TypeScript compilation |
 | `license-check` | SPDX headers on all source files |
-| `integration-tests` | Backend integration tests |
-| `e2e-tests` | Playwright browser tests |
+| `integration-tests` | Backend integration tests with coverage |
+| `e2e-tests` | Playwright browser tests with pass/fail tracking |
 | `security-scan` | npm audit for vulnerabilities |
+| `test-summary` | Consolidated test results summary |
 
-### Coverage Requirements
+### Coverage Thresholds
 
-- **90% line coverage** required for unit tests
-- Coverage report uploaded as artifact on each PR
+| Test Type | Metric | Threshold |
+|-----------|--------|-----------|
+| Unit | Lines | ≥ 90% |
+| Unit | Branches | ≥ 80% |
+| Unit | Functions | ≥ 80% |
+| Unit | Statements | ≥ 90% |
+| Integration | Lines | Informational (no threshold) |
+| E2E | Pass Rate | 100% |
+
+### CI Artifacts
+
+Each CI run produces these artifacts (downloadable from Actions tab):
+
+| Artifact | Contents |
+|----------|----------|
+| `coverage-report` | Unit test coverage (HTML, LCOV) |
+| `integration-coverage-report` | Integration test coverage |
+| `playwright-report` | E2E test report with screenshots/traces |
+| `test-badges` | Badge data JSON for coverage visualization |
+
+### Full Evaluation Flow E2E Tests
+
+The E2E test suite includes tests for the complete evaluation flow using mock modes:
+- **Demo Agent** (`mock://demo`) - Simulated AG-UI streaming responses
+- **Demo Model** (`provider: "demo"`) - Simulated LLM judge evaluation
+
+This allows testing the full Create Test Case → Create Benchmark → Run Evaluation → View Results flow without requiring AWS credentials or a live agent in CI.
 
 ---
 

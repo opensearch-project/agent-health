@@ -140,10 +140,12 @@ test.describe('Benchmark Card Actions', () => {
       // Wait for navigation and page load
       await page.waitForTimeout(2000);
       // Should show benchmark details page with stats
-      const hasPassRate = await page.locator('text=Pass Rate').isVisible().catch(() => false);
-      const hasAccuracy = await page.locator('text=Accuracy').isVisible().catch(() => false);
-      const hasRun = await page.locator('text=run').isVisible().catch(() => false);
-      expect(hasPassRate || hasAccuracy || hasRun).toBeTruthy();
+      // Use .first() to handle multiple matches and count() > 0 for reliable detection
+      const hasPassRate = await page.locator('text=Pass Rate').first().isVisible().catch(() => false);
+      const hasAccuracy = await page.locator('text=Accuracy').first().isVisible().catch(() => false);
+      const hasAvgAccuracy = await page.locator('text=Avg Accuracy').first().isVisible().catch(() => false);
+      const hasRuns = await page.locator('text=/\\d+ runs/').first().isVisible().catch(() => false);
+      expect(hasPassRate || hasAccuracy || hasAvgAccuracy || hasRuns).toBeTruthy();
     } else {
       // If no View Latest button, the test passes (no runs yet)
       expect(true).toBeTruthy();

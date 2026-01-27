@@ -58,7 +58,6 @@ function App() {
           <Route path="/reports" element={<Navigate to="/benchmarks" replace />} />
           <Route path="/experiments" element={<Navigate to="/benchmarks" replace />} />
           <Route path="/experiments/:experimentId/runs" element={<ExperimentRunsRedirect />} />
-          <Route path="/config" element={<Navigate to="/settings" replace />} />
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />
