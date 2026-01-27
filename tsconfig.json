@@ -31,5 +31,13 @@
     "**/*.ts",
     "**/*.tsx",
     "server/types/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "tests/**/*",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
   ]
 }
