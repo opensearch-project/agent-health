@@ -56,3 +56,5 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Security
 - Updated @modelcontextprotocol/sdk to address GHSA-8r9q-7v3j-jr4g
+- Updated lodash from 4.17.21 to 4.17.23 to fix CVE-2025-13465 prototype pollution vulnerability
+- Updated lycheeverse/lychee-action from v1 to v2.0.2 in CI workflow
