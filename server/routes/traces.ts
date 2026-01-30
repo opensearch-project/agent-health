@@ -69,7 +69,8 @@ router.post('/api/traces', async (req: Request, res: Response) => {
             endpoint: config.endpoint,
             username: config.username,
             password: config.password,
-            indexPattern
+            indexPattern,
+            tlsSkipVerify: config.tlsSkipVerify
           }
         );
 

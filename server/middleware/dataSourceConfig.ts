@@ -59,6 +59,7 @@ export function resolveStorageConfig(req: Request): StorageClusterConfig | null 
       endpoint: envEndpoint,
       username: process.env.OPENSEARCH_STORAGE_USERNAME,
       password: process.env.OPENSEARCH_STORAGE_PASSWORD,
+      tlsSkipVerify: process.env.OPENSEARCH_STORAGE_TLS_SKIP_VERIFY === 'true',
     };
   }
 
@@ -79,11 +80,13 @@ export function resolveStorageConfig(req: Request): StorageClusterConfig | null 
 export function resolveObservabilityConfig(req: Request): ObservabilityClusterConfig | null {
   // 1. Check file config first
   const fileConfig = getObservabilityConfigFromFile();
+  
   if (fileConfig) {
     return {
       endpoint: fileConfig.endpoint,
       username: fileConfig.username,
       password: fileConfig.password,
+      tlsSkipVerify: fileConfig.tlsSkipVerify,
       indexes: {
         traces: fileConfig.indexes?.traces || DEFAULT_OTEL_INDEXES.traces,
         logs: fileConfig.indexes?.logs || DEFAULT_OTEL_INDEXES.logs,
@@ -100,15 +103,15 @@ export function resolveObservabilityConfig(req: Request): ObservabilityClusterCo
       endpoint: envEndpoint,
       username: process.env.OPENSEARCH_LOGS_USERNAME,
       password: process.env.OPENSEARCH_LOGS_PASSWORD,
+      tlsSkipVerify: process.env.OPENSEARCH_LOGS_TLS_SKIP_VERIFY === 'true',
       indexes: {
         traces: process.env.OPENSEARCH_LOGS_TRACES_INDEX || DEFAULT_OTEL_INDEXES.traces,
         logs: process.env.OPENSEARCH_LOGS_INDEX || DEFAULT_OTEL_INDEXES.logs,
-        metrics: DEFAULT_OTEL_INDEXES.metrics, // No env var for metrics index currently
+        metrics: DEFAULT_OTEL_INDEXES.metrics,
       },
     };
   }
 
-  // Not configured
   return null;
 }
 

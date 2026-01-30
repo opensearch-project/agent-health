@@ -743,6 +743,7 @@ export interface ClusterConfig {
   endpoint: string;
   username?: string;
   password?: string;
+  tlsSkipVerify?: boolean; // default: false (verify certs)
 }
 
 /**

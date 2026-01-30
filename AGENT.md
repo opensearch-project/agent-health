@@ -23,6 +23,20 @@ npm test -- --watch   # Watch mode
 npm test -- path/to/file.test.ts  # Single test file
 ```
 
+## Before Committing
+
+Always run tests before committing changes:
+
+```bash
+npm test              # Run all tests - must pass before pushing
+```
+
+Update `CHANGELOG.md` under `## [Unreleased]` with your changes:
+- `### Added` - New features
+- `### Changed` - Changes to existing functionality  
+- `### Fixed` - Bug fixes
+- `### Security` - Security fixes
+
 ## Environment Setup
 
 Copy `.env.example` to `.env`. Key variables:

@@ -29,11 +29,13 @@ interface ConfigFile {
     endpoint: string;
     username?: string;
     password?: string;
+    tlsSkipVerify?: boolean;
   };
   observability?: {
     endpoint: string;
     username?: string;
     password?: string;
+    tlsSkipVerify?: boolean;
     indexes?: {
       traces?: string;
       logs?: string;
@@ -142,6 +144,7 @@ export function getStorageConfigFromFile(): StorageClusterConfig | null {
     endpoint: config.storage.endpoint,
     username: config.storage.username,
     password: config.storage.password,
+    tlsSkipVerify: config.storage.tlsSkipVerify,
   };
 }
 
@@ -157,6 +160,7 @@ export function saveStorageConfig(storageConfig: StorageClusterConfig): void {
       endpoint: storageConfig.endpoint,
       ...(storageConfig.username && { username: storageConfig.username }),
       ...(storageConfig.password && { password: storageConfig.password }),
+      ...(storageConfig.tlsSkipVerify !== undefined && { tlsSkipVerify: storageConfig.tlsSkipVerify }),
     },
   };
 
@@ -206,6 +210,7 @@ export function getObservabilityConfigFromFile(): ObservabilityClusterConfig | n
     endpoint: config.observability.endpoint,
     username: config.observability.username,
     password: config.observability.password,
+    tlsSkipVerify: config.observability.tlsSkipVerify,
     indexes: config.observability.indexes,
   };
 }
@@ -222,6 +227,7 @@ export function saveObservabilityConfig(obsConfig: ObservabilityClusterConfig): 
       endpoint: obsConfig.endpoint,
       ...(obsConfig.username && { username: obsConfig.username }),
       ...(obsConfig.password && { password: obsConfig.password }),
+      ...(obsConfig.tlsSkipVerify !== undefined && { tlsSkipVerify: obsConfig.tlsSkipVerify }),
       ...(obsConfig.indexes && Object.keys(obsConfig.indexes).length > 0 && {
         indexes: obsConfig.indexes,
       }),

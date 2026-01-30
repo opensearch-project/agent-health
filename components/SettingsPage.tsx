@@ -88,11 +88,13 @@ export const SettingsPage: React.FC = () => {
     endpoint: '',
     username: '',
     password: '',
+    tlsSkipVerify: false,
   });
   const [observabilityConfig, setObservabilityConfigState] = useState({
     endpoint: '',
     username: '',
     password: '',
+    tlsSkipVerify: false,
     tracesIndex: '',
     logsIndex: '',
     metricsIndex: '',
@@ -337,6 +339,7 @@ export const SettingsPage: React.FC = () => {
           endpoint: storageConfig.endpoint,
           username: storageConfig.username || undefined,
           password: storageConfig.password || undefined,
+          tlsSkipVerify: storageConfig.tlsSkipVerify || undefined,
         }),
       });
 
@@ -365,6 +368,7 @@ export const SettingsPage: React.FC = () => {
         endpoint: storageConfig.endpoint,
         username: storageConfig.username || undefined,
         password: storageConfig.password || undefined,
+        tlsSkipVerify: storageConfig.tlsSkipVerify,
       });
       setStorageTestStatus('idle');
       setStorageTestMessage('Configuration saved to server');
@@ -385,7 +389,7 @@ export const SettingsPage: React.FC = () => {
     }
     try {
       await clearStorageConfig();
-      setStorageConfigState({ endpoint: '', username: '', password: '' });
+      setStorageConfigState({ endpoint: '', username: '', password: '', tlsSkipVerify: false });
       setStorageTestStatus('idle');
       setStorageTestMessage('Configuration cleared - using environment variables');
       setTimeout(() => setStorageTestMessage(''), 3000);
@@ -415,6 +419,7 @@ export const SettingsPage: React.FC = () => {
           endpoint: observabilityConfig.endpoint,
           username: observabilityConfig.username || undefined,
           password: observabilityConfig.password || undefined,
+          tlsSkipVerify: observabilityConfig.tlsSkipVerify || undefined,
           indexes: {
             traces: observabilityConfig.tracesIndex || undefined,
             logs: observabilityConfig.logsIndex || undefined,
@@ -451,6 +456,7 @@ export const SettingsPage: React.FC = () => {
         endpoint: observabilityConfig.endpoint,
         username: observabilityConfig.username || undefined,
         password: observabilityConfig.password || undefined,
+        tlsSkipVerify: observabilityConfig.tlsSkipVerify,
         indexes: {
           traces: observabilityConfig.tracesIndex || undefined,
           logs: observabilityConfig.logsIndex || undefined,
@@ -479,6 +485,7 @@ export const SettingsPage: React.FC = () => {
         endpoint: '',
         username: '',
         password: '',
+        tlsSkipVerify: false,
         tracesIndex: '',
         logsIndex: '',
         metricsIndex: '',
@@ -775,6 +782,19 @@ export const SettingsPage: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* TLS Verification Toggle */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="storage-tls-skip" className="text-xs">Skip TLS Verification</Label>
+                <p className="text-xs text-muted-foreground">Enable for self-signed certificates</p>
+              </div>
+              <Switch
+                id="storage-tls-skip"
+                checked={storageConfig.tlsSkipVerify}
+                onCheckedChange={(checked) => setStorageConfigState({ ...storageConfig, tlsSkipVerify: checked })}
+              />
+            </div>
           </div>
 
           {/* Config source indicator */}
@@ -969,6 +989,19 @@ export const SettingsPage: React.FC = () => {
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* TLS Verification Toggle */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="obs-tls-skip" className="text-xs">Skip TLS Verification</Label>
+                <p className="text-xs text-muted-foreground">Enable for self-signed certificates</p>
+              </div>
+              <Switch
+                id="obs-tls-skip"
+                checked={observabilityConfig.tlsSkipVerify}
+                onCheckedChange={(checked) => setObservabilityConfigState({ ...observabilityConfig, tlsSkipVerify: checked })}
+              />
             </div>
 
             {/* Advanced: Index Patterns */}

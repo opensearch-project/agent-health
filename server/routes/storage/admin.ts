@@ -68,17 +68,23 @@ router.get('/api/storage/health', async (req: Request, res: Response) => {
 /**
  * POST /api/storage/test-connection
  * Test connection to a storage cluster with provided credentials
- * Body: { endpoint, username?, password? }
+ * Falls back to env vars for any missing fields
+ * Body: { endpoint, username?, password?, tlsSkipVerify? }
  */
 router.post('/api/storage/test-connection', async (req: Request, res: Response) => {
   try {
-    const { endpoint, username, password } = req.body;
+    const { endpoint, username, password, tlsSkipVerify } = req.body;
 
     if (!endpoint) {
       return res.status(400).json({ status: 'error', message: 'Endpoint is required' });
     }
 
-    const result = await testStorageConnection({ endpoint, username, password });
+    const result = await testStorageConnection({
+      endpoint,
+      username: username ?? process.env.OPENSEARCH_STORAGE_USERNAME,
+      password: password ?? process.env.OPENSEARCH_STORAGE_PASSWORD,
+      tlsSkipVerify: tlsSkipVerify ?? (process.env.OPENSEARCH_STORAGE_TLS_SKIP_VERIFY === 'true'),
+    });
     res.json(result);
   } catch (error: any) {
     console.error('[StorageAPI] Test connection failed:', error.message);
@@ -246,17 +252,17 @@ router.get('/api/storage/config/status', (req: Request, res: Response) => {
 /**
  * POST /api/storage/config/storage
  * Save storage configuration to file
- * Body: { endpoint, username?, password? }
+ * Body: { endpoint, username?, password?, tlsSkipVerify? }
  */
 router.post('/api/storage/config/storage', (req: Request, res: Response) => {
   try {
-    const { endpoint, username, password } = req.body;
+    const { endpoint, username, password, tlsSkipVerify } = req.body;
 
     if (!endpoint) {
       return res.status(400).json({ error: 'Endpoint is required' });
     }
 
-    saveStorageConfig({ endpoint, username, password });
+    saveStorageConfig({ endpoint, username, password, tlsSkipVerify });
     res.json({ success: true, message: 'Storage configuration saved' });
   } catch (error: any) {
     console.error('[StorageAPI] Failed to save storage config:', error.message);
@@ -267,17 +273,17 @@ router.post('/api/storage/config/storage', (req: Request, res: Response) => {
 /**
  * POST /api/storage/config/observability
  * Save observability configuration to file
- * Body: { endpoint, username?, password?, indexes?: { traces?, logs?, metrics? } }
+ * Body: { endpoint, username?, password?, tlsSkipVerify?, indexes?: { traces?, logs?, metrics? } }
  */
 router.post('/api/storage/config/observability', (req: Request, res: Response) => {
   try {
-    const { endpoint, username, password, indexes } = req.body;
+    const { endpoint, username, password, tlsSkipVerify, indexes } = req.body;
 
     if (!endpoint) {
       return res.status(400).json({ error: 'Endpoint is required' });
     }
 
-    saveObservabilityConfig({ endpoint, username, password, indexes });
+    saveObservabilityConfig({ endpoint, username, password, tlsSkipVerify, indexes });
     res.json({ success: true, message: 'Observability configuration saved' });
   } catch (error: any) {
     console.error('[StorageAPI] Failed to save observability config:', error.message);

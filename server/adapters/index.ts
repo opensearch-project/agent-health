@@ -28,7 +28,7 @@ import { STORAGE_INDEXES, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceC
 function createClient(config: StorageClusterConfig | ObservabilityClusterConfig): Client {
   const clientConfig: any = {
     node: config.endpoint,
-    ssl: { rejectUnauthorized: false },
+    ssl: { rejectUnauthorized: !config.tlsSkipVerify },
   };
 
   if (config.username && config.password) {
@@ -141,9 +141,10 @@ export async function testObservabilityConnection(config: ObservabilityClusterCo
       ...(indexWarning && { message: indexWarning }),
     };
   } catch (error: any) {
+    console.error('[testObservabilityConnection] Connection failed:', error.message);
     return {
       status: 'error',
-      message: error.message || 'Connection failed',
+      message: error.meta?.body?.error?.reason || error.message || 'Connection failed',
       latencyMs: Date.now() - startTime,
     };
   } finally {

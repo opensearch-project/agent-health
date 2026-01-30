@@ -83,6 +83,7 @@ For persisting test cases, experiments, and runs. Features gracefully degrade if
 OPENSEARCH_STORAGE_ENDPOINT=https://your-cluster.opensearch.amazonaws.com
 OPENSEARCH_STORAGE_USERNAME=admin
 OPENSEARCH_STORAGE_PASSWORD=your_password
+OPENSEARCH_STORAGE_TLS_SKIP_VERIFY=false  # Set to true for self-signed certificates
 ```
 
 ### Traces (Observability)
@@ -93,6 +94,7 @@ For agent execution traces. Features gracefully degrade if not configured.
 OPENSEARCH_LOGS_ENDPOINT=https://your-logs-cluster.opensearch.amazonaws.com
 OPENSEARCH_LOGS_USERNAME=admin
 OPENSEARCH_LOGS_PASSWORD=your_password
+OPENSEARCH_LOGS_TLS_SKIP_VERIFY=false  # Set to true for self-signed certificates
 ```
 
 See `.env.example` for all available options.

@@ -83,6 +83,7 @@ export async function saveStorageConfig(config: StorageClusterConfig): Promise<v
       endpoint: config.endpoint,
       username: config.username || undefined,
       password: config.password || undefined,
+      tlsSkipVerify: config.tlsSkipVerify,
     }),
   });
 
@@ -121,6 +122,7 @@ export async function saveObservabilityConfig(config: ObservabilityClusterConfig
       endpoint: config.endpoint,
       username: config.username || undefined,
       password: config.password || undefined,
+      tlsSkipVerify: config.tlsSkipVerify,
       indexes: config.indexes,
     }),
   });

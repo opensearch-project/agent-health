@@ -7,6 +7,46 @@
  * Traces Service - Fetch and transform OpenSearch trace data
  */
 
+import https from 'https';
+import http from 'http';
+
+/**
+ * Make HTTP/HTTPS request with configurable TLS verification
+ */
+function makeRequest(url: string, options: { method?: string; headers?: Record<string, string>; body?: string; tlsSkipVerify?: boolean }): Promise<{ ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }> {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const isHttps = parsedUrl.protocol === 'https:';
+    const lib = isHttps ? https : http;
+
+    const reqOptions: https.RequestOptions = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: options.method || 'GET',
+      headers: options.headers,
+      rejectUnauthorized: !options.tlsSkipVerify,
+    };
+
+    const req = lib.request(reqOptions, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        resolve({
+          ok: res.statusCode! >= 200 && res.statusCode! < 300,
+          status: res.statusCode!,
+          json: () => Promise.resolve(JSON.parse(data)),
+          text: () => Promise.resolve(data),
+        });
+      });
+    });
+
+    req.on('error', reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -74,6 +114,7 @@ export interface OpenSearchConfig {
   username: string;
   password: string;
   indexPattern?: string;
+  tlsSkipVerify?: boolean;
 }
 
 // ============================================================================
@@ -82,12 +123,12 @@ export interface OpenSearchConfig {
 
 /**
  * Transform OpenSearch span document to normalized format
- * Converts @ notation to dot notation and processes events
+ * Handles both flattened (@ notation) and nested attribute structures
  */
 export function transformSpan(source: OpenSearchSpanSource): NormalizedSpan {
   const attributes: Record<string, any> = {};
 
-  // Extract span.attributes.* fields (convert @ to . notation)
+  // Handle flattened span.attributes.* fields (convert @ to . notation)
   for (const [key, value] of Object.entries(source)) {
     if (key.startsWith('span.attributes.')) {
       const attrName = key.replace('span.attributes.', '').replace(/@/g, '.');
@@ -95,6 +136,22 @@ export function transformSpan(source: OpenSearchSpanSource): NormalizedSpan {
     } else if (key.startsWith('resource.attributes.')) {
       const attrName = key.replace('resource.attributes.', '').replace(/@/g, '.');
       attributes[attrName] = value;
+    }
+  }
+
+  // Handle nested attributes object (OTel standard format)
+  const attrs = (source as any).attributes;
+  if (attrs && typeof attrs === 'object') {
+    for (const [key, value] of Object.entries(attrs)) {
+      attributes[key] = value;
+    }
+  }
+
+  // Handle nested resource.attributes object (OTel standard format)
+  const resource = (source as any).resource;
+  if (resource?.attributes && typeof resource.attributes === 'object') {
+    for (const [key, value] of Object.entries(resource.attributes)) {
+      attributes[key] = value;
     }
   }
 
@@ -110,10 +167,17 @@ export function transformSpan(source: OpenSearchSpanSource): NormalizedSpan {
     )
   }));
 
-  // Add instrumentation scope
+  // Add instrumentation scope (handle both flattened and nested)
   if (source['instrumentationScope.name']) {
     attributes['instrumentation.scope.name'] = source['instrumentationScope.name'];
   }
+  const instrScope = (source as any).instrumentationScope;
+  if (instrScope?.name) {
+    attributes['instrumentation.scope.name'] = instrScope.name;
+  }
+
+  // Get status code (handle both flattened and nested)
+  const statusCode = source['status.code'] ?? (source as any).status?.code;
 
   return {
     traceId: source.traceId,
@@ -123,7 +187,7 @@ export function transformSpan(source: OpenSearchSpanSource): NormalizedSpan {
     startTime: source.startTime,
     endTime: source.endTime,
     duration: source.durationInNanos ? source.durationInNanos / 1000000 : null,
-    status: source['status.code'] === 2 ? 'ERROR' : (source['status.code'] === 1 ? 'OK' : 'UNSET'),
+    status: statusCode === 2 ? 'ERROR' : (statusCode === 1 ? 'OK' : 'UNSET'),
     attributes,
     events
   };
@@ -141,7 +205,7 @@ export async function fetchTraces(
   config: OpenSearchConfig
 ): Promise<TracesResponse> {
   const { traceId, runIds, startTime, endTime, size = 500, serviceName, textSearch } = options;
-  const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = config;
+  const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*', tlsSkipVerify } = config;
 
   // For live tailing, we allow queries with just time range + optional filters
   const hasTimeRange = startTime || endTime;
@@ -204,17 +268,15 @@ export async function fetchTraces(
   };
 
   // Query OpenSearch traces index
-  const response = await fetch(
-    `${endpoint}/${indexPattern}/_search`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
-      },
-      body: JSON.stringify(query)
-    }
-  );
+  const response = await makeRequest(`${endpoint}/${indexPattern}/_search`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+    },
+    body: JSON.stringify(query),
+    tlsSkipVerify
+  });
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -239,19 +301,20 @@ export async function fetchTraces(
  * Check traces index availability
  */
 export async function checkTracesHealth(config: OpenSearchConfig): Promise<HealthStatus> {
-  const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = config;
+  const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*', tlsSkipVerify } = config;
 
   if (!endpoint || !username || !password) {
     return { status: 'error', error: 'OpenSearch not configured' };
   }
 
   try {
-    const response = await fetch(
+    const response = await makeRequest(
       `${endpoint}/_cat/indices/${indexPattern}?format=json`,
       {
         headers: {
           'Authorization': `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
-        }
+        },
+        tlsSkipVerify
       }
     );
 

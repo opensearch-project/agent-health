@@ -10,6 +10,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Added
+- TLS skip verify option for OpenSearch connections (`OPENSEARCH_STORAGE_TLS_SKIP_VERIFY`, `OPENSEARCH_LOGS_TLS_SKIP_VERIFY`)
 - Full evaluation flow E2E tests using Demo Agent and Demo Model for CI-friendly testing
 - Enhanced CI workflow with integration test coverage reporting and badge generation
 - Test summary job in CI that aggregates results from unit, integration, and E2E tests
@@ -49,6 +50,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Updated judge routes to use demo-model provider detection
 
 ### Fixed
+- Support for nested OTel attribute format in trace data (backwards compatible with flattened format)
 - Fixed server default port to 4001 to match documentation ([#25](https://github.com/opensearch-project/dashboards-traces/pull/25))
 - Fixed Span interface to make attributes optional, matching actual API data ([#25](https://github.com/opensearch-project/dashboards-traces/pull/25))
 - Fixed broken documentation links in GETTING_STARTED.md

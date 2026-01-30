@@ -47,7 +47,7 @@ router.get('/api/observability/health', async (req: Request, res: Response) => {
  */
 router.post('/api/observability/test-connection', async (req: Request, res: Response) => {
   try {
-    const { endpoint, username, password, indexes } = req.body;
+    const { endpoint, username, password, tlsSkipVerify, indexes } = req.body;
 
     if (!endpoint) {
       return res.status(400).json({ status: 'error', message: 'Endpoint is required' });
@@ -55,8 +55,9 @@ router.post('/api/observability/test-connection', async (req: Request, res: Resp
 
     const result = await testObservabilityConnection({
       endpoint,
-      username,
-      password,
+      username: username ?? process.env.OPENSEARCH_LOGS_USERNAME,
+      password: password ?? process.env.OPENSEARCH_LOGS_PASSWORD,
+      tlsSkipVerify: tlsSkipVerify ?? (process.env.OPENSEARCH_LOGS_TLS_SKIP_VERIFY === 'true'),
       indexes: {
         traces: indexes?.traces || DEFAULT_OTEL_INDEXES.traces,
         logs: indexes?.logs || DEFAULT_OTEL_INDEXES.logs,
