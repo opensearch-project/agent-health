@@ -18,6 +18,13 @@ import { config as loadDotenv } from 'dotenv';
 import open from 'open';
 import ora from 'ora';
 import { startServer } from './utils/startServer.js';
+import {
+  createListCommand,
+  createRunCommand,
+  createBenchmarkCommand,
+  createDoctorCommand,
+  createInitCommand,
+} from './commands/index.js';
 
 // Get package.json for version
 const __filename = fileURLToPath(import.meta.url);
@@ -55,6 +62,12 @@ function loadEnvFile(envPath: string): void {
   console.log(chalk.gray(`  Loaded environment from: ${envPath}`));
 }
 
+// Auto-load .env file BEFORE parsing commands (so all subcommands get env vars)
+const defaultEnvPath = resolve(process.cwd(), '.env');
+if (existsSync(defaultEnvPath)) {
+  loadDotenv({ path: defaultEnvPath });
+}
+
 // Create the CLI program
 const program = new Command();
 
@@ -76,16 +89,11 @@ program.action(async (options) => {
   console.log(chalk.gray(`  Working directory: ${process.cwd()}`));
   console.log(chalk.gray(`  Package directory: ${__dirname}`));
 
-  // Load environment file if specified
+  // Load explicit env file if specified (override auto-loaded)
   if (options.envFile) {
     loadEnvFile(options.envFile);
-  } else {
-    // Auto-detect .env file in current directory
-    const defaultEnvPath = resolve(process.cwd(), '.env');
-    if (existsSync(defaultEnvPath)) {
-      loadDotenv({ path: defaultEnvPath });
-      console.log(chalk.gray('  Auto-loaded .env from current directory'));
-    }
+  } else if (existsSync(defaultEnvPath)) {
+    console.log(chalk.gray('  Auto-loaded .env from current directory'));
   }
 
   const port = parseInt(options.port, 10);
@@ -117,6 +125,45 @@ program.action(async (options) => {
     process.exit(1);
   }
 });
+
+// Register subcommands
+program.addCommand(createListCommand());
+program.addCommand(createRunCommand());
+program.addCommand(createBenchmarkCommand());
+program.addCommand(createDoctorCommand());
+program.addCommand(createInitCommand());
+
+// Add serve command as an alias for the default action
+program
+  .command('serve')
+  .description('Start the Agent Health server (same as default action)')
+  .option('-p, --port <number>', 'Server port', '4001')
+  .option('--no-browser', 'Do not open browser automatically')
+  .action(async (options) => {
+    console.log(chalk.cyan.bold(`\n  Agent Health v${version} - AI Agent Evaluation Framework\n`));
+
+    const port = parseInt(options.port, 10);
+    const spinner = ora('Starting server...').start();
+
+    try {
+      await startServer({ port });
+      spinner.succeed('Server started');
+
+      const url = `http://localhost:${port}`;
+      console.log(chalk.green(`  Server running at ${chalk.bold(url)}\n`));
+
+      if (options.browser !== false) {
+        console.log(chalk.gray('  Opening browser...'));
+        await open(url);
+      }
+
+      console.log(chalk.gray('  Press Ctrl+C to stop\n'));
+    } catch (error) {
+      spinner.fail('Failed to start server');
+      console.error(chalk.red(`\n  Error: ${error instanceof Error ? error.message : error}\n`));
+      process.exit(1);
+    }
+  });
 
 // Parse command line arguments
 program.parse();

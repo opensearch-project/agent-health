@@ -16,6 +16,7 @@ const router = Router();
  * GET /health - Simple health check endpoint
  */
 router.get('/health', (req: Request, res: Response) => {
+  console.log('[Health] Health check requested');
   res.json({
     status: 'ok',
     version: getVersion(),

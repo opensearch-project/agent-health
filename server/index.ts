@@ -13,6 +13,10 @@ import config from './config/index.js';
 import { createApp } from './app.js';
 import { isStorageConfigured } from './services/opensearchClient.js';
 
+// Register server-side connectors (subprocess, claude-code)
+// This import has side effects that register connectors with the registry
+import '@/services/connectors/server';
+
 // Re-export createApp for CLI usage
 export { createApp } from './app.js';
 

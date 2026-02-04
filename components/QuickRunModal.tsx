@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Play, Save, Star, CheckCircle2, XCircle, Loader2, ExternalLink, Clock } from 'lucide-react';
+import { X, Play, Save, Star, CheckCircle2, XCircle, Loader2, ExternalLink, Clock, Terminal } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,9 +13,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { TestCase, TrajectoryStep, EvaluationReport } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { parseLabels } from '@/lib/labels';
+import { isBrowserCompatible, getFirstBrowserCompatibleAgent } from '@/lib/agentUtils';
 import { runEvaluation } from '@/services/evaluation';
 import { asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { TrajectoryView } from './TrajectoryView';
@@ -33,8 +35,10 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
 }) => {
   const navigate = useNavigate();
 
-  // Agent/Model selection
-  const [selectedAgentKey, setSelectedAgentKey] = useState(DEFAULT_CONFIG.agents[1]?.key || DEFAULT_CONFIG.agents[0]?.key);
+  // Agent/Model selection - default to first browser-compatible agent
+  const [selectedAgentKey, setSelectedAgentKey] = useState(
+    () => getFirstBrowserCompatibleAgent(DEFAULT_CONFIG.agents)?.key || DEFAULT_CONFIG.agents[0]?.key
+  );
   const [selectedModelId, setSelectedModelId] = useState('claude-sonnet-4.5');
 
   // Ad-hoc run fields (when no testCase)
@@ -230,11 +234,19 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {DEFAULT_CONFIG.agents.map(agent => (
-                      <SelectItem key={agent.key} value={agent.key}>
-                        {agent.name}
-                      </SelectItem>
-                    ))}
+                    {DEFAULT_CONFIG.agents.map(agent => {
+                      const isAvailable = isBrowserCompatible(agent);
+                      return (
+                        <SelectItem
+                          key={agent.key}
+                          value={agent.key}
+                          disabled={!isAvailable}
+                        >
+                          {agent.name}
+                          {!isAvailable && <span className="text-xs text-muted-foreground ml-1">(CLI only)</span>}
+                        </SelectItem>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
               </div>
@@ -264,7 +276,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
               {/* Run Button */}
               <Button
                 onClick={handleRun}
-                disabled={!canRun}
+                disabled={!canRun || (selectedAgent && !isBrowserCompatible(selectedAgent))}
                 className="bg-opensearch-blue hover:bg-blue-600 h-8"
               >
                 {isRunning ? (
@@ -280,6 +292,18 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                 )}
               </Button>
             </div>
+
+            {/* CLI-only agent warning */}
+            {selectedAgent && !isBrowserCompatible(selectedAgent) && (
+              <div className="px-4 pb-2">
+                <Alert className="bg-amber-900/20 border-amber-700/30">
+                  <Terminal className="h-4 w-4 text-amber-400" />
+                  <AlertDescription className="text-amber-400">
+                    {selectedAgent.name} requires the CLI. Run: <code className="bg-amber-900/30 px-1 py-0.5 rounded text-xs">npx @opensearch-project/agent-health run -a {selectedAgent.key} -t &quot;{testCase?.name || 'test-case-name'}&quot;</code>
+                  </AlertDescription>
+                </Alert>
+              </div>
+            )}
 
             {/* Results Area */}
             <div className="flex-1 min-h-0 overflow-y-auto p-4">

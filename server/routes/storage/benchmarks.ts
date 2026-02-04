@@ -14,7 +14,7 @@ import { Router, Request, Response } from 'express';
 import { isStorageAvailable, requireStorageClient, INDEXES } from '../../middleware/storageClient.js';
 import { SAMPLE_BENCHMARKS, isSampleBenchmarkId } from '../../../cli/demo/sampleBenchmarks.js';
 import { SAMPLE_TEST_CASES } from '../../../cli/demo/sampleTestCases.js';
-import { Benchmark, BenchmarkRun, BenchmarkProgress, RunConfigInput, TestCase, BenchmarkVersion, TestCaseSnapshot } from '../../../types/index.js';
+import { Benchmark, BenchmarkRun, BenchmarkProgress, RunConfigInput, TestCase, BenchmarkVersion, TestCaseSnapshot, StorageMetadata } from '../../../types/index.js';
 import {
   executeRun,
   createCancellationToken,
@@ -61,6 +61,40 @@ function normalizeBenchmarkRun(run: any): BenchmarkRun {
 
 const router = Router();
 const INDEX = INDEXES.benchmarks;
+
+/**
+ * Atomically update a single test case result within a benchmark run.
+ * Used for persisting intermediate progress during benchmark execution.
+ */
+async function updateTestCaseResult(
+  client: any,
+  benchmarkId: string,
+  runId: string,
+  testCaseId: string,
+  result: { reportId: string; status: string }
+): Promise<void> {
+  await client.update({
+    index: INDEX,
+    id: benchmarkId,
+    body: {
+      script: {
+        source: `
+          for (int i = 0; i < ctx._source.runs.size(); i++) {
+            if (ctx._source.runs[i].id == params.runId) {
+              if (ctx._source.runs[i].results == null) {
+                ctx._source.runs[i].results = new HashMap();
+              }
+              ctx._source.runs[i].results[params.testCaseId] = params.result;
+              break;
+            }
+          }
+        `,
+        params: { runId, testCaseId, result },
+      },
+    },
+    refresh: false, // Don't wait for refresh on intermediate updates
+  });
+}
 
 // Registry of active cancellation tokens for in-progress runs
 const activeRuns = new Map<string, CancellationToken>();
@@ -130,9 +164,12 @@ async function getAllTestCases(req: Request): Promise<TestCase[]> {
 router.get('/api/storage/benchmarks', async (req: Request, res: Response) => {
   try {
     let realData: Benchmark[] = [];
+    const warnings: string[] = [];
+    let storageReachable = false;
+    const storageConfigured = isStorageAvailable(req);
 
     // Fetch from OpenSearch if configured
-    if (isStorageAvailable(req)) {
+    if (storageConfigured) {
       try {
         const client = requireStorageClient(req);
         const result = await client.search({
@@ -144,8 +181,10 @@ router.get('/api/storage/benchmarks', async (req: Request, res: Response) => {
           },
         });
         realData = result.body.hits?.hits?.map((hit: any) => normalizeBenchmark(hit._source)) || [];
+        storageReachable = true;
       } catch (e: any) {
         console.warn('[StorageAPI] OpenSearch unavailable, returning sample data only:', e.message);
+        warnings.push(`OpenSearch unavailable: ${e.message}`);
       }
     }
 
@@ -166,7 +205,17 @@ router.get('/api/storage/benchmarks', async (req: Request, res: Response) => {
 
     // User data first, then sample data
     const allData = [...sortedRealData, ...sortedSampleData];
-    res.json({ benchmarks: allData, total: allData.length });
+
+    // Build metadata
+    const meta: StorageMetadata = {
+      storageConfigured,
+      storageReachable,
+      realDataCount: realData.length,
+      sampleDataCount: sortedSampleData.length,
+      ...(warnings.length > 0 && { warnings }),
+    };
+
+    res.json({ benchmarks: allData, total: allData.length, meta });
   } catch (error: any) {
     console.error('[StorageAPI] List benchmarks failed:', error.message);
     res.status(500).json({ error: error.message });
@@ -579,6 +628,10 @@ router.post('/api/storage/benchmarks/bulk', async (req: Request, res: Response) 
 
 // POST /api/storage/benchmarks/:id/execute - Execute benchmark and stream progress via SSE
 router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Response) => {
+  console.log('[Execute] ========== BENCHMARK EXECUTION STARTED ==========');
+  console.log('[Execute] Request params:', req.params);
+  console.log('[Execute] Request body:', JSON.stringify(req.body, null, 2));
+
   const { id } = req.params;
   const runConfig: RunConfigInput = req.body;
 
@@ -610,9 +663,13 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
     }
 
     const benchmark = normalizeBenchmark(getResult.body._source);
+    console.log('[Execute] Benchmark loaded:', benchmark.id, benchmark.name);
+    console.log('[Execute] Test case IDs:', benchmark.testCaseIds);
 
     // Fetch test cases for progress display and version snapshots
+    console.log('[Execute] Fetching test cases...');
     const allTestCases = await getAllTestCases(req);
+    console.log('[Execute] Found', allTestCases.length, 'test cases');
     const testCaseMap = new Map(allTestCases.map((tc: any) => [tc.id, tc]));
 
     // Capture test case snapshots at execution time (for reproducibility)
@@ -679,15 +736,30 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
 
     try {
       // Execute the run
+      console.log('[Execute] Starting executeRun for run:', run.id);
+      console.log('[Execute] Run config:', { agentKey: run.agentKey, modelId: run.modelId });
       const completedRun = await executeRun(
         benchmark,
         run,
         (progress: BenchmarkProgress) => {
           // Stream progress to client
+          console.log('[Execute] Progress:', progress.currentTestCaseIndex + 1, '/', progress.totalTestCases, 'status:', progress.status);
           res.write(`data: ${JSON.stringify({ type: 'progress', ...progress })}\n\n`);
         },
-        { cancellationToken, client }
+        {
+          cancellationToken,
+          client,
+          onTestCaseComplete: async (testCaseId, result) => {
+            // Persist intermediate progress to OpenSearch for real-time polling
+            try {
+              await updateTestCaseResult(client, id, run.id, testCaseId, result);
+            } catch (err: any) {
+              console.warn(`[Execute] Failed to persist ${testCaseId}:`, err.message);
+            }
+          },
+        }
       );
+      console.log('[Execute] executeRun completed');
 
       // Determine final status - check if cancelled
       const wasCancelled = cancellationToken.isCancelled;

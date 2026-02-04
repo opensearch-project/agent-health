@@ -21,7 +21,9 @@ import { executeBenchmarkRun } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
 import { Benchmark, BenchmarkRun, EvaluationReport, TestCase, BenchmarkProgress, BenchmarkStartedEvent } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { isBrowserCompatible } from '@/lib/agentUtils';
 import { getLabelColor, formatDate, getModelName } from '@/lib/utils';
+import { calculateRunStats } from '@/lib/runStats';
 import {
   computeVersionData,
   getSelectedVersionData,
@@ -123,15 +125,16 @@ export const BenchmarkRunsPage: React.FC = () => {
       return;
     }
 
-    setBenchmark(exp);
-
-    // Load all reports for this benchmark in a single batch request
-    // (avoids ERR_INSUFFICIENT_RESOURCES from too many concurrent fetches)
+    // Load all reports BEFORE setting any state to avoid intermediate render
+    // where benchmark is set but reports are still empty (causes all pending flash)
     const allReports = await asyncRunStorage.getByBenchmark(benchmarkId);
     const loadedReports: Record<string, EvaluationReport | null> = {};
     allReports.forEach(report => {
       loadedReports[report.id] = report;
     });
+
+    // Set both states together - React 18+ batches these automatically
+    setBenchmark(exp);
     setReports(loadedReports);
   }, [benchmarkId, navigate]);
 
@@ -182,41 +185,28 @@ export const BenchmarkRunsPage: React.FC = () => {
     }
   };
 
-  const getRunStats = (run: BenchmarkRun) => {
-    let passed = 0;
-    let failed = 0;
-    let pending = 0;
+  // Use shared utility for stats calculation with additional running state
+  const getRunStats = useCallback((run: BenchmarkRun) => {
+    // Use shared utility for core stats
+    const stats = calculateRunStats(run, reports);
+
+    // Count running separately (shared utility treats running as pending)
     let running = 0;
-    let total = 0;
-
-    Object.entries(run.results || {}).forEach(([testCaseId, result]) => {
-      total++;  // Count ALL results
-
-      if (result.status === 'pending') {
-        pending++;
-      } else if (result.status === 'running') {
+    Object.values(run.results || {}).forEach((result) => {
+      if (result.status === 'running') {
         running++;
-      } else if (result.status === 'completed' && result.reportId) {
-        const report = reports[result.reportId];
-        if (report) {
-          // Check if evaluation is still pending (trace mode)
-          if (report.metricsStatus === 'pending' || report.metricsStatus === 'calculating') {
-            pending++;
-          } else if (report.passFailStatus === 'passed') {
-            passed++;
-          } else {
-            failed++;
-          }
-        } else {
-          pending++;  // Report not loaded yet
-        }
-      } else if (result.status === 'failed') {
-        failed++;
       }
     });
 
-    return { passed, failed, pending, running, total };
-  };
+    // Adjust pending to exclude running (shared utility counts running as pending)
+    return {
+      passed: stats.passed,
+      failed: stats.failed,
+      pending: stats.pending - running,
+      running,
+      total: stats.total,
+    };
+  }, [reports]);
 
   // Check if any reports have pending evaluations (trace mode)
   const hasPendingEvaluations = useMemo(() => {
@@ -868,11 +858,19 @@ export const BenchmarkRunsPage: React.FC = () => {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {DEFAULT_CONFIG.agents.map(agent => (
-                        <SelectItem key={agent.key} value={agent.key}>
-                          {agent.name}
-                        </SelectItem>
-                      ))}
+                      {DEFAULT_CONFIG.agents.map(agent => {
+                        const isAvailable = isBrowserCompatible(agent);
+                        return (
+                          <SelectItem
+                            key={agent.key}
+                            value={agent.key}
+                            disabled={!isAvailable}
+                          >
+                            {agent.name}
+                            {!isAvailable && <span className="text-xs text-muted-foreground ml-1">(CLI only)</span>}
+                          </SelectItem>
+                        );
+                      })}
                     </SelectContent>
                   </Select>
                 </div>

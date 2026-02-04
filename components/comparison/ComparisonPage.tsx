@@ -77,11 +77,10 @@ export const ComparisonPage: React.FC = () => {
         return;
       }
 
-      setBenchmark(bench);
       const runs = bench.runs || [];
-      setAllRuns(runs);
 
-      // Build reports map
+      // Build reports map BEFORE setting state to avoid intermediate render
+      // where benchmark is set but reports are still empty
       const reportIds = new Set<string>();
       runs.forEach(run => {
         Object.values(run.results || {}).forEach(result => {
@@ -100,6 +99,10 @@ export const ComparisonPage: React.FC = () => {
           }
         })
       );
+
+      // Set all states together - React 18+ batches these automatically
+      setBenchmark(bench);
+      setAllRuns(runs);
       setReports(reportsMap);
 
       // Initialize selected runs from URL or default to all

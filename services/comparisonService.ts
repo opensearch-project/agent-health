@@ -71,6 +71,7 @@ export function calculateRunAggregates(
     runName: run.name,
     createdAt: run.createdAt,
     modelId: run.modelId,
+    agentKey: run.agentKey,
     totalTestCases: testCaseIds.length,
     passedCount,
     failedCount,

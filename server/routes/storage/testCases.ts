@@ -13,7 +13,7 @@
 import { Router, Request, Response } from 'express';
 import { isStorageAvailable, requireStorageClient, INDEXES } from '../../middleware/storageClient.js';
 import { SAMPLE_TEST_CASES } from '../../../cli/demo/sampleTestCases.js';
-import type { TestCase } from '../../../types/index.js';
+import type { TestCase, StorageMetadata } from '../../../types/index.js';
 
 const router = Router();
 const INDEX = INDEXES.testCases;
@@ -69,9 +69,12 @@ function getSampleTestCases(): TestCase[] {
 router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
   try {
     let realData: TestCase[] = [];
+    const warnings: string[] = [];
+    let storageReachable = false;
+    const storageConfigured = isStorageAvailable(req);
 
     // Fetch from OpenSearch if configured
-    if (isStorageAvailable(req)) {
+    if (storageConfigured) {
       try {
         const client = requireStorageClient(req);
 
@@ -98,8 +101,10 @@ router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
 
         const buckets = (result.body.aggregations?.by_id as any)?.buckets || [];
         realData = buckets.map((b: any) => b.latest.hits.hits[0]._source);
+        storageReachable = true;
       } catch (e: any) {
         console.warn('[StorageAPI] OpenSearch unavailable, returning sample data only:', e.message);
+        warnings.push(`OpenSearch unavailable: ${e.message}`);
       }
     }
 
@@ -116,7 +121,16 @@ router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
     // User data first, then sample data
     const allData = [...sortedRealData, ...sampleData];
 
-    res.json({ testCases: allData, total: allData.length });
+    // Build metadata
+    const meta: StorageMetadata = {
+      storageConfigured,
+      storageReachable,
+      realDataCount: realData.length,
+      sampleDataCount: sampleData.length,
+      ...(warnings.length > 0 && { warnings }),
+    };
+
+    res.json({ testCases: allData, total: allData.length, meta });
   } catch (error: any) {
     console.error('[StorageAPI] List test cases failed:', error.message);
     res.status(500).json({ error: error.message });

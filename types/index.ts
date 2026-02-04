@@ -14,6 +14,9 @@ export type DateFormatVariant = 'date' | 'datetime' | 'detailed';
 // Judge provider determines which backend service handles evaluation
 export type JudgeProvider = 'demo' | 'bedrock' | 'ollama' | 'openai';
 
+// Connector protocol for agent communication
+export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'subprocess' | 'claude-code' | 'mock';
+
 export interface ModelConfig {
   model_id: string;
   display_name: string;
@@ -31,6 +34,8 @@ export interface AgentConfig {
   models: string[]; // Keys referring to ModelConfig
   headers?: Record<string, string>; // Custom headers for agent endpoint (e.g., AWS credentials)
   useTraces?: boolean; // When true, fetch traces instead of logs for evaluation
+  connectorType?: ConnectorProtocol; // Connector protocol (defaults to 'agui-streaming')
+  connectorConfig?: Record<string, any>; // Connector-specific configuration
 }
 
 export interface AppConfig {
@@ -136,6 +141,7 @@ export interface TestCaseRun {
   runId?: string; // Agent's run ID from AG UI events (for log correlation)
   logs?: OpenSearchLog[]; // OpenSearch logs for the run (master version)
   rawEvents?: any[]; // Raw AG UI events for debugging
+  connectorProtocol?: ConnectorProtocol; // Protocol used to execute this run (for trajectory parsing)
 
   // Trace mode fields (for agents with useTraces: true)
   metricsStatus?: MetricsStatus; // Status of deferred metrics/judge calculation
@@ -466,6 +472,34 @@ export interface IntentNode {
   totalDuration: number;         // Combined duration of all spans in this node (ms)
 }
 
+// ============ Storage Metadata Types ============
+
+/**
+ * Metadata about storage availability and data source
+ * Included in list responses to inform clients about data provenance
+ */
+export interface StorageMetadata {
+  /** Whether storage backend is configured (env vars set) */
+  storageConfigured: boolean;
+  /** Whether storage backend was reachable on this request */
+  storageReachable: boolean;
+  /** Count of items from persistent storage */
+  realDataCount: number;
+  /** Count of items from built-in sample data */
+  sampleDataCount: number;
+  /** Optional warning messages (e.g., connection errors) */
+  warnings?: string[];
+}
+
+/**
+ * Generic list response wrapper with metadata
+ */
+export interface ListResponse<T> {
+  data: T[];
+  total: number;
+  meta: StorageMetadata;
+}
+
 // ============ Benchmark Types ============
 
 // Result status for a single use case within a run
@@ -576,6 +610,7 @@ export interface RunAggregateMetrics {
   runName: string;
   createdAt: string;
   modelId: string;
+  agentKey: string;
   totalTestCases: number;
   passedCount: number;
   failedCount: number;

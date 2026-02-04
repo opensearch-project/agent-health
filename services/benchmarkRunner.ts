@@ -18,9 +18,20 @@ import {
   updateRunWithClient,
 } from '@/server/services/storage';
 import type { Client } from '@opensearch-project/opensearch';
-import { runEvaluation, callBedrockJudge } from './evaluation';
-import { DEFAULT_CONFIG } from '@/lib/constants';
+import { runEvaluation, runEvaluationWithConnector, callBedrockJudge } from './evaluation';
+import { connectorRegistry } from '@/services/connectors/server';
+import { loadConfigSync } from '@/lib/config/index';
 import { tracePollingManager } from './traces/tracePoller';
+import { RunResultStatus } from '@/types';
+
+/**
+ * Callback invoked after each test case completes during benchmark execution.
+ * Used to persist intermediate progress to OpenSearch for real-time polling.
+ */
+export type OnTestCaseCompleteCallback = (
+  testCaseId: string,
+  result: { reportId: string; status: RunResultStatus }
+) => Promise<void>;
 
 /**
  * Cancellation token for stopping execution
@@ -50,6 +61,8 @@ export interface ExecuteRunOptions {
   cancellationToken?: CancellationToken;
   /** OpenSearch client for storage operations (required) */
   client: Client;
+  /** Callback invoked after each test case completes (for persisting intermediate progress) */
+  onTestCaseComplete?: OnTestCaseCompleteCallback;
 }
 
 /**
@@ -57,7 +70,8 @@ export interface ExecuteRunOptions {
  */
 function buildAgentConfigForRun(run: BenchmarkRun): AgentConfig {
   // Find the base agent config
-  const baseAgent = DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey);
+  const config = loadConfigSync();
+  const baseAgent = config.agents.find(a => a.key === run.agentKey);
 
   if (!baseAgent) {
     throw new Error(`Agent not found: ${run.agentKey}`);
@@ -78,7 +92,8 @@ function buildAgentConfigForRun(run: BenchmarkRun): AgentConfig {
  * Get the Bedrock model ID from a model key
  */
 function getBedrockModelId(modelKey: string): string {
-  const modelConfig = DEFAULT_CONFIG.models[modelKey];
+  const config = loadConfigSync();
+  const modelConfig = config.models[modelKey];
   return modelConfig?.model_id || modelKey;
 }
 
@@ -94,8 +109,15 @@ export async function executeRun(
   onProgress: (progress: BenchmarkProgress) => void,
   options: ExecuteRunOptions
 ): Promise<BenchmarkRun> {
+  console.log('[BenchmarkRunner] ========== executeRun STARTED ==========');
+  console.log('[BenchmarkRunner] Benchmark:', benchmark.id);
+  console.log('[BenchmarkRunner] Run:', run.id);
+  console.log('[BenchmarkRunner] Agent:', run.agentKey);
+  console.log('[BenchmarkRunner] Model:', run.modelId);
+
   const totalTestCases = benchmark.testCaseIds.length;
-  const { cancellationToken, client } = options;
+  console.log('[BenchmarkRunner] Total test cases:', totalTestCases);
+  const { cancellationToken, client, onTestCaseComplete } = options;
 
   // Initialize results if empty
   if (!run.results) {
@@ -103,14 +125,20 @@ export async function executeRun(
   }
 
   // Fetch all test cases upfront for this benchmark
+  console.log('[BenchmarkRunner] Fetching test cases from OpenSearch...');
   const allTestCases = await getAllTestCasesWithClient(client);
+  console.log('[BenchmarkRunner] Fetched', allTestCases.length, 'test cases');
   const testCaseMap = new Map(allTestCases.map((tc: any) => [tc.id, tc]));
 
   try {
+    console.log('[BenchmarkRunner] Starting test case iteration loop');
     // Iterate through each test case
     for (let testCaseIndex = 0; testCaseIndex < totalTestCases; testCaseIndex++) {
+      console.log('[BenchmarkRunner] -------- Test case', testCaseIndex + 1, 'of', totalTestCases, '--------');
+
       // Check for cancellation before each test case
       if (cancellationToken?.isCancelled) {
+        console.log('[BenchmarkRunner] Cancellation detected, breaking loop');
         onProgress({
           currentTestCaseIndex: testCaseIndex,
           totalTestCases,
@@ -122,13 +150,15 @@ export async function executeRun(
       }
 
       const testCaseId = benchmark.testCaseIds[testCaseIndex];
+      console.log('[BenchmarkRunner] Test case ID:', testCaseId);
       const testCase = testCaseMap.get(testCaseId);
 
       if (!testCase) {
-        console.warn(`Test case not found: ${testCaseId}`);
+        console.warn(`[BenchmarkRunner] Test case not found: ${testCaseId}`);
         run.results[testCaseId] = { reportId: '', status: 'failed' };
         continue;
       }
+      console.log('[BenchmarkRunner] Test case found:', testCase.name);
 
       // Report progress
       onProgress({
@@ -144,16 +174,36 @@ export async function executeRun(
 
       try {
         // Build agent config from run configuration
+        console.log('[BenchmarkRunner] Building agent config for:', run.agentKey);
         const agentConfig = buildAgentConfigForRun(run);
-        const bedrockModelId = getBedrockModelId(run.modelId);
+        console.log('[BenchmarkRunner] Agent config:', {
+          key: agentConfig.key,
+          name: agentConfig.name,
+          endpoint: agentConfig.endpoint,
+          connectorType: agentConfig.connectorType,
+        });
 
-        // Run the evaluation
-        const report = await runEvaluation(
-          agentConfig,
-          bedrockModelId,
-          testCase,
-          () => {} // No step callback needed here
-        );
+        const bedrockModelId = getBedrockModelId(run.modelId);
+        console.log('[BenchmarkRunner] Bedrock model ID:', bedrockModelId);
+
+        // Run the evaluation - use connector for connector-based agents (e.g., claude-code)
+        // Otherwise use the SSE stream approach for AG-UI protocol agents
+        console.log('[BenchmarkRunner] Using connector?', !!agentConfig.connectorType, '- type:', agentConfig.connectorType);
+        const report = agentConfig.connectorType
+          ? await runEvaluationWithConnector(
+              agentConfig,
+              bedrockModelId,
+              testCase,
+              (step) => console.log('[BenchmarkRunner] Step received:', step.type), // Debug callback
+              { registry: connectorRegistry }
+            )
+          : await runEvaluation(
+              agentConfig,
+              bedrockModelId,
+              testCase,
+              (step) => console.log('[BenchmarkRunner] Step received:', step.type) // Debug callback
+            );
+        console.log('[BenchmarkRunner] Evaluation completed, report status:', report.status);
 
         // Save the report to OpenSearch and get the actual stored ID
         const savedReport = await saveReportWithClient(client, report, {
@@ -172,11 +222,26 @@ export async function executeRun(
           reportId: savedReport.id,
           status: 'completed',
         };
+
+        // Persist progress to OpenSearch (fire-and-forget with logging)
+        if (onTestCaseComplete) {
+          onTestCaseComplete(testCaseId, run.results[testCaseId])
+            .catch(err => console.warn(`[BenchmarkRunner] Failed to persist progress for ${testCaseId}:`, err.message));
+        }
       } catch (error) {
-        console.error(`Error running test case ${testCaseId}:`, error);
+        console.error(`[BenchmarkRunner] ERROR in test case ${testCaseId}:`, error);
+        console.error('[BenchmarkRunner] Error stack:', error instanceof Error ? error.stack : 'N/A');
         run.results[testCaseId] = { reportId: '', status: 'failed' };
+
+        // Persist failure progress to OpenSearch (fire-and-forget with logging)
+        if (onTestCaseComplete) {
+          onTestCaseComplete(testCaseId, run.results[testCaseId])
+            .catch(err => console.warn(`[BenchmarkRunner] Failed to persist failure progress for ${testCaseId}:`, err.message));
+        }
       }
+      console.log('[BenchmarkRunner] Test case', testCaseIndex + 1, 'completed with status:', run.results[testCaseId]?.status);
     }
+    console.log('[BenchmarkRunner] Test case loop completed');
 
     // Report final progress
     onProgress({
@@ -247,12 +312,22 @@ export async function runSingleUseCase(
   const agentConfig = buildAgentConfigForRun(run);
   const bedrockModelId = getBedrockModelId(run.modelId);
 
-  const report = await runEvaluation(
-    agentConfig,
-    bedrockModelId,
-    testCase,
-    onStep || (() => {})
-  );
+  // Use connector for connector-based agents (e.g., claude-code)
+  // Otherwise use the SSE stream approach for AG-UI protocol agents
+  const report = agentConfig.connectorType
+    ? await runEvaluationWithConnector(
+        agentConfig,
+        bedrockModelId,
+        testCase,
+        onStep || (() => {}),
+        { registry: connectorRegistry }
+      )
+    : await runEvaluation(
+        agentConfig,
+        bedrockModelId,
+        testCase,
+        onStep || (() => {})
+      );
 
   const savedReport = await saveReportWithClient(client, report);
 

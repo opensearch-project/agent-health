@@ -67,6 +67,32 @@ export const SAMPLE_BENCHMARKS: Benchmark[] = [
       },
     ],
   },
+  // Alias benchmark with simpler name for CLI usage
+  {
+    id: 'demo-baseline',
+    name: 'Baseline',
+    description: 'Quick baseline benchmark with 3 core RCA scenarios for agent comparison.',
+    createdAt: '2024-01-15T10:00:00.000Z',
+    updatedAt: '2024-01-15T10:00:00.000Z',
+    currentVersion: 1,
+    versions: [
+      {
+        version: 1,
+        createdAt: '2024-01-15T10:00:00.000Z',
+        testCaseIds: [
+          'demo-otel-001',
+          'demo-otel-002',
+          'demo-otel-003',
+        ],
+      },
+    ],
+    testCaseIds: [
+      'demo-otel-001',
+      'demo-otel-002',
+      'demo-otel-003',
+    ],
+    runs: [],
+  },
 ];
 
 /**

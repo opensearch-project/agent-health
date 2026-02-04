@@ -84,8 +84,8 @@ describe('Sample Test Cases', () => {
 
 describe('Sample Experiments', () => {
   describe('SAMPLE_EXPERIMENTS', () => {
-    it('should have 1 sample experiment', () => {
-      expect(SAMPLE_EXPERIMENTS.length).toBe(1);
+    it('should have 2 sample experiments', () => {
+      expect(SAMPLE_EXPERIMENTS.length).toBe(2);
     });
 
     it('should have correct experiment structure', () => {
@@ -143,7 +143,7 @@ describe('Sample Experiments', () => {
   describe('getAllSampleExperiments', () => {
     it('should return a copy of all experiments', () => {
       const experiments = getAllSampleExperiments();
-      expect(experiments.length).toBe(1);
+      expect(experiments.length).toBe(2);
     });
   });
 

@@ -6,10 +6,17 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle2, XCircle, Calendar, Cpu } from 'lucide-react';
+import { CheckCircle2, XCircle, Calendar, Cpu, Bot } from 'lucide-react';
 import { RunAggregateMetrics } from '@/types';
 import { cn, formatDate } from '@/lib/utils';
 import { formatTokens, formatCost, formatDuration } from '@/services/metrics';
+import { DEFAULT_CONFIG } from '@/lib/constants';
+
+// Helper to get agent display name from key
+const getAgentName = (agentKey: string): string => {
+  const agent = DEFAULT_CONFIG.agents.find(a => a.key === agentKey);
+  return agent?.name || agentKey;
+};
 
 interface RunSummaryCardsProps {
   runs: RunAggregateMetrics[];
@@ -86,11 +93,15 @@ export const RunSummaryCards: React.FC<RunSummaryCardsProps> = ({
                 {run.runName}
               </CardTitle>
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Calendar size={10} />
-                <span>{formatDate(run.createdAt)}</span>
-                <span className="mx-1">·</span>
+                <Bot size={10} />
+                <span className="truncate">{getAgentName(run.agentKey)}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Cpu size={10} />
                 <span className="truncate">{run.modelId}</span>
+                <span className="mx-1">·</span>
+                <Calendar size={10} />
+                <span>{formatDate(run.createdAt)}</span>
               </div>
             </CardHeader>
             <CardContent className="space-y-2 pt-0">

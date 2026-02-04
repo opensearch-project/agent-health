@@ -15,6 +15,7 @@ import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { UseCaseCompareView } from './UseCaseCompareView';
 import { BenchmarkSummaryCharts } from './benchmarks/BenchmarkSummaryCharts';
 import { formatDate } from '@/lib/utils';
+import { calculateRunStats } from '@/lib/runStats';
 
 interface BenchmarkResultsViewProps {
   benchmark: Benchmark;
@@ -71,32 +72,34 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
     return tc?.name || useCaseId;
   }, [testCases]);
 
-  // Calculate summary stats per run
-  const calculateRunStats = (run: BenchmarkRun) => {
-    let totalAccuracy = 0;
-    let passCount = 0;
-    let totalCount = 0;
+  // Calculate summary stats per run using shared utility
+  const getRunStatsWithAccuracy = useCallback((run: BenchmarkRun) => {
+    // Use shared utility for pass/fail counting
+    const stats = calculateRunStats(run, reports);
 
-    Object.entries(run.results || {}).forEach(([useCaseId, result]) => {
+    // Calculate average accuracy (UI-specific metric not in shared utility)
+    let totalAccuracy = 0;
+    let accuracyCount = 0;
+
+    Object.entries(run.results || {}).forEach(([, result]) => {
       if (result.reportId && result.status === 'completed') {
         const report = reports[result.reportId];
         if (report && report.status === 'completed') {
           totalAccuracy += report.metrics?.accuracy ?? 0;
-          if (report.passFailStatus === 'passed') passCount++;
-          totalCount++;
+          accuracyCount++;
         }
       }
     });
 
     return {
-      avgAccuracy: totalCount > 0 ? Math.round(totalAccuracy / totalCount) : 0,
-      passCount,
-      failCount: totalCount - passCount,
-      totalCount,
-      passRate: `${passCount}/${totalCount}`,
-      passRatePercent: totalCount > 0 ? Math.round((passCount / totalCount) * 100) : 0,
+      avgAccuracy: accuracyCount > 0 ? Math.round(totalAccuracy / accuracyCount) : 0,
+      passCount: stats.passed,
+      failCount: stats.failed,
+      totalCount: stats.total,
+      passRate: `${stats.passed}/${stats.total}`,
+      passRatePercent: stats.passRate,
     };
-  };
+  }, [reports]);
 
   const hasMultipleRuns = benchmark.runs && benchmark.runs.length > 1;
   const hasAnyResults = benchmark.runs?.some(run =>
@@ -230,7 +233,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                       <tr className="border-b">
                         <td className="py-2 pr-4 text-muted-foreground">Avg Accuracy</td>
                         {sortedRuns.map((run, index) => {
-                          const stats = calculateRunStats(run);
+                          const stats = getRunStatsWithAccuracy(run);
                           return (
                             <td
                               key={run.id}
@@ -245,8 +248,8 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                         {sortedRuns.length === 2 && (
                           <td className="text-center py-2 px-4">
                             {(() => {
-                              const s1 = calculateRunStats(sortedRuns[0]);
-                              const s2 = calculateRunStats(sortedRuns[1]);
+                              const s1 = getRunStatsWithAccuracy(sortedRuns[0]);
+                              const s2 = getRunStatsWithAccuracy(sortedRuns[1]);
                               const diff = s2.avgAccuracy - s1.avgAccuracy;
                               return (
                                 <span className={diff > 0 ? 'text-opensearch-blue' : diff < 0 ? 'text-red-400' : ''}>
@@ -260,7 +263,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                       <tr className="border-b">
                         <td className="py-2 pr-4 text-muted-foreground">Pass Rate</td>
                         {sortedRuns.map((run, index) => {
-                          const stats = calculateRunStats(run);
+                          const stats = getRunStatsWithAccuracy(run);
                           return (
                             <td
                               key={run.id}
@@ -275,8 +278,8 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                         {sortedRuns.length === 2 && (
                           <td className="text-center py-2 px-4">
                             {(() => {
-                              const s1 = calculateRunStats(sortedRuns[0]);
-                              const s2 = calculateRunStats(sortedRuns[1]);
+                              const s1 = getRunStatsWithAccuracy(sortedRuns[0]);
+                              const s2 = getRunStatsWithAccuracy(sortedRuns[1]);
                               const diff = s2.passRatePercent - s1.passRatePercent;
                               return (
                                 <span className={diff > 0 ? 'text-opensearch-blue' : diff < 0 ? 'text-red-400' : ''}>

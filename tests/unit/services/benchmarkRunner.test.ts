@@ -321,6 +321,109 @@ describe('Experiment Runner', () => {
       expect(result.results).toBeDefined();
       expect(result.results['tc-1'].status).toBe('completed');
     });
+
+    it('should call onTestCaseComplete after each test case', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const testCase2 = createTestCase('tc-2');
+      const experiment = createExperiment(['tc-1', 'tc-2']);
+      const run = createBenchmarkRun('run-1');
+
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1, testCase2]);
+      mockRunEvaluation.mockResolvedValue({
+        id: 'report-1',
+        trajectory: [],
+        metrics: { accuracy: 0.9 },
+      });
+      mockSaveReportWithClient.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const onTestCaseComplete = jest.fn().mockResolvedValue(undefined);
+      const onProgress = jest.fn();
+
+      await executeRun(experiment, run, onProgress, {
+        client: mockClient,
+        onTestCaseComplete,
+      });
+
+      // Should be called once per test case
+      expect(onTestCaseComplete).toHaveBeenCalledTimes(2);
+      expect(onTestCaseComplete).toHaveBeenCalledWith('tc-1', { reportId: 'saved-report-1', status: 'completed' });
+      expect(onTestCaseComplete).toHaveBeenCalledWith('tc-2', { reportId: 'saved-report-1', status: 'completed' });
+    });
+
+    it('should continue execution if onTestCaseComplete fails', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const testCase2 = createTestCase('tc-2');
+      const experiment = createExperiment(['tc-1', 'tc-2']);
+      const run = createBenchmarkRun('run-1');
+
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1, testCase2]);
+      mockRunEvaluation.mockResolvedValue({
+        id: 'report-1',
+        trajectory: [],
+        metrics: { accuracy: 0.9 },
+      });
+      mockSaveReportWithClient.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      // First call fails, second succeeds
+      const onTestCaseComplete = jest.fn()
+        .mockRejectedValueOnce(new Error('Persist failed'))
+        .mockResolvedValueOnce(undefined);
+      const onProgress = jest.fn();
+
+      // Should not throw
+      const result = await executeRun(experiment, run, onProgress, {
+        client: mockClient,
+        onTestCaseComplete,
+      });
+
+      // Execution should complete normally
+      expect(result.results['tc-1'].status).toBe('completed');
+      expect(result.results['tc-2'].status).toBe('completed');
+      expect(onTestCaseComplete).toHaveBeenCalledTimes(2);
+    });
+
+    it('should call onTestCaseComplete for failed test cases', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createBenchmarkRun('run-1');
+
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1]);
+      mockRunEvaluation.mockRejectedValue(new Error('Evaluation failed'));
+
+      const onTestCaseComplete = jest.fn().mockResolvedValue(undefined);
+      const onProgress = jest.fn();
+
+      const result = await executeRun(experiment, run, onProgress, {
+        client: mockClient,
+        onTestCaseComplete,
+      });
+
+      // Should still call onTestCaseComplete with failed status
+      expect(onTestCaseComplete).toHaveBeenCalledTimes(1);
+      expect(onTestCaseComplete).toHaveBeenCalledWith('tc-1', { reportId: '', status: 'failed' });
+      expect(result.results['tc-1'].status).toBe('failed');
+    });
+
+    it('should not call onTestCaseComplete if not provided', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createBenchmarkRun('run-1');
+
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1]);
+      mockRunEvaluation.mockResolvedValue({
+        id: 'report-1',
+        trajectory: [],
+        metrics: { accuracy: 0.9 },
+      });
+      mockSaveReportWithClient.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const onProgress = jest.fn();
+
+      // Should not throw when onTestCaseComplete is not provided
+      const result = await executeRun(experiment, run, onProgress, { client: mockClient });
+
+      expect(result.results['tc-1'].status).toBe('completed');
+    });
   });
 
   describe('runBenchmark', () => {

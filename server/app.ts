@@ -12,6 +12,10 @@ import express, { Express } from 'express';
 import routes from './routes/index.js';
 import { setupMiddleware } from './middleware/index.js';
 
+// Register server-side connectors (subprocess, claude-code)
+// This import has side effects that register connectors with the registry
+import '@/services/connectors/server';
+
 /**
  * Create and configure the Express application
  * @returns Configured Express app

@@ -214,7 +214,7 @@ export async function saveReportWithClient(
     llmJudgeReasoning: report.llmJudgeReasoning,
     metrics: report.metrics,
     trajectory: report.trajectory,
-    rawEvents: report.rawEvents,
+    rawEvents: report.rawEvents || [], // Ensure empty array if null/undefined
     logs: report.logs || report.openSearchLogs,
     improvementStrategies: report.improvementStrategies,
   };
@@ -225,6 +225,7 @@ export async function saveReportWithClient(
   if (report.lastTraceFetchAt !== undefined) storageData.lastTraceFetchAt = report.lastTraceFetchAt;
   if (report.traceError !== undefined) storageData.traceError = report.traceError;
   if (report.spans !== undefined) storageData.spans = report.spans;
+  if (report.connectorProtocol !== undefined) storageData.connectorProtocol = report.connectorProtocol;
 
   const created = await createRunWithClient(client, storageData);
 

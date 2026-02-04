@@ -9,7 +9,7 @@
 
 import { Request, Response, Router } from 'express';
 import { evaluateTrajectory, parseBedrockError } from '../services/bedrockService';
-import { DEFAULT_CONFIG } from '../../lib/constants';
+import { loadConfigSync } from '../../lib/config/index';
 
 const router = Router();
 
@@ -90,10 +90,11 @@ router.post('/api/judge', async (req: Request, res: Response) => {
 
     // Determine provider from model config
     // Look up by model key first, then by model_id for full Bedrock model IDs
-    let modelConfig = DEFAULT_CONFIG.models[modelId];
+    const config = loadConfigSync();
+    let modelConfig = config.models[modelId];
     if (!modelConfig) {
       // Try to find by model_id (in case full Bedrock ID was passed)
-      modelConfig = Object.values(DEFAULT_CONFIG.models).find(m => m.model_id === modelId);
+      modelConfig = Object.values(config.models).find(m => m.model_id === modelId);
     }
     const provider = modelConfig?.provider || 'bedrock';
 

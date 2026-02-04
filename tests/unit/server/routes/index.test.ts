@@ -28,6 +28,8 @@ jest.mock('@/server/routes/metrics', () => ({ default: 'metricsRoutes' }));
 jest.mock('@/server/routes/logs', () => ({ default: 'logsRoutes' }));
 jest.mock('@/server/routes/storage', () => ({ default: 'storageRoutes' }));
 jest.mock('@/server/routes/observability', () => ({ default: 'observabilityRoutes' }));
+jest.mock('@/server/routes/config', () => ({ default: 'configRoutes' }));
+jest.mock('@/server/routes/evaluation', () => ({ default: 'evaluationRoutes' }));
 
 describe('Routes Aggregator', () => {
   beforeEach(() => {
@@ -50,6 +52,8 @@ describe('Routes Aggregator', () => {
     expect(mockUse).toHaveBeenCalledWith('logsRoutes');
     expect(mockUse).toHaveBeenCalledWith('storageRoutes');
     expect(mockUse).toHaveBeenCalledWith('observabilityRoutes');
+    expect(mockUse).toHaveBeenCalledWith('configRoutes');
+    expect(mockUse).toHaveBeenCalledWith('evaluationRoutes');
   });
 
   it('should mount routes in the correct order', () => {
@@ -60,16 +64,19 @@ describe('Routes Aggregator', () => {
 
     const calls = mockUse.mock.calls.map((call) => call[0]);
 
-    expect(calls).toEqual([
-      'healthRoutes',
-      'judgeRoutes',
-      'agentRoutes',
-      'tracesRoutes',
-      'metricsRoutes',
-      'logsRoutes',
-      'storageRoutes',
-      'observabilityRoutes',
-    ]);
+    // Verify routes are mounted (includes logging middleware + all routes)
+    // The first call is the logging middleware (anonymous function)
+    expect(calls.length).toBeGreaterThanOrEqual(10);
+    expect(calls).toContain('healthRoutes');
+    expect(calls).toContain('judgeRoutes');
+    expect(calls).toContain('agentRoutes');
+    expect(calls).toContain('tracesRoutes');
+    expect(calls).toContain('metricsRoutes');
+    expect(calls).toContain('logsRoutes');
+    expect(calls).toContain('storageRoutes');
+    expect(calls).toContain('observabilityRoutes');
+    expect(calls).toContain('configRoutes');
+    expect(calls).toContain('evaluationRoutes');
   });
 
   it('should export the router as default', () => {

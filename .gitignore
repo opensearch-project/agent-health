@@ -2,6 +2,7 @@
 /dist
 server/dist
 cli/dist
+lib/dist/
 build
 
 # Environment variables

@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { HashRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { BenchmarksPage } from './components/BenchmarksPage';
@@ -59,7 +59,9 @@ function App() {
           <Route path="/experiments" element={<Navigate to="/benchmarks" replace />} />
           <Route path="/experiments/:experimentId/runs" element={<ExperimentRunsRedirect />} />
 
-          {/* Catch-all */}
+          {/* Catch-all: redirect unknown sub-paths to their parent list pages */}
+          <Route path="/benchmarks/*" element={<Navigate to="/benchmarks" replace />} />
+          <Route path="/test-cases/*" element={<Navigate to="/test-cases" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

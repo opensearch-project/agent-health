@@ -231,19 +231,41 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
 
   // Compute trajectory from rawEvents if available (source of truth)
   // Fall back to stored trajectory for backward compatibility
+  // NOTE: Only AG-UI protocol rawEvents can be converted to trajectory;
+  // subprocess/claude-code rawEvents are stdout/stderr and should use report.trajectory directly
   const trajectory = useMemo(() => {
-    if (report.rawEvents && report.rawEvents.length > 0) {
-      return computeTrajectoryFromRawEvents(report.rawEvents);
+    // Determine if this is AG-UI protocol (which has convertible rawEvents)
+    const isAguiProtocol = (() => {
+      // Explicit connector protocol (new reports)
+      if (report.connectorProtocol) {
+        return report.connectorProtocol === 'agui-streaming';
+      }
+      // Infer from rawEvents structure (legacy reports without connectorProtocol)
+      if (report.rawEvents && report.rawEvents.length > 0) {
+        const firstEvent = report.rawEvents[0];
+        // Subprocess/claude-code rawEvents have type: 'stdout' | 'stderr'
+        // AG-UI rawEvents have different event types (e.g., 'RUN_STARTED', 'TEXT_MESSAGE_CONTENT', etc.)
+        return firstEvent.type !== 'stdout' && firstEvent.type !== 'stderr';
+      }
+      return false;
+    })();
+
+    // Only compute trajectory from rawEvents for AG-UI protocol
+    if (isAguiProtocol && report.rawEvents && report.rawEvents.length > 0) {
+      const computed = computeTrajectoryFromRawEvents(report.rawEvents);
+      // Fall back to stored trajectory if computation returns empty (e.g., malformed events)
+      return computed.length > 0 ? computed : report.trajectory;
     }
+
+    // Use stored trajectory directly for subprocess/claude-code/other protocols
     return report.trajectory;
-  }, [report.rawEvents, report.trajectory]);
+  }, [report.rawEvents, report.trajectory, report.connectorProtocol]);
 
   const modelDisplayName = DEFAULT_CONFIG.models[report.modelName]?.display_name || report.modelName;
 
-  // Check if this agent uses trace mode
-  // Default to true since all configured agents use traces
-  const agentConfig = DEFAULT_CONFIG.agents.find(a => a.key === report.agentKey || a.name === report.agentName);
-  const isTraceMode = agentConfig?.useTraces ?? true;
+  // Always use trace-based UI layout for consistency
+  // The useTraces flag only affects backend judge execution, not UI display
+  const isTraceMode = true;
 
   // Load test case and annotations on mount
   useEffect(() => {

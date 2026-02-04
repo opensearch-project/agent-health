@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, Trash2, Database, CheckCircle2, XCircle, Upload, Download, Loader2, Server, Plus, Edit2, X, Save, ExternalLink, Eye, EyeOff, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Trash2, Database, CheckCircle2, XCircle, Upload, Download, Loader2, Server, Plus, Edit2, X, Save, ExternalLink, Eye, EyeOff, ChevronDown, ChevronRight, RefreshCw, Info, Terminal } from 'lucide-react';
 import { isDebugEnabled, setDebugEnabled } from '@/lib/debug';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
@@ -31,6 +31,7 @@ import {
 } from '@/lib/dataSourceConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
+import { isBrowserCompatible } from '@/lib/agentUtils';
 
 interface StorageStats {
   testCases: number;
@@ -550,26 +551,45 @@ export const SettingsPage: React.FC = () => {
           {/* Built-in Agents */}
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground uppercase tracking-wide">Built-in Agents</Label>
-            {DEFAULT_CONFIG.agents.map((agent) => (
-              <div
-                key={agent.key}
-                className="p-3 border rounded-lg bg-muted/5 flex items-start justify-between gap-3"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm flex items-center gap-2">
-                    {agent.name}
-                    <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">built-in</span>
+
+            {/* Info alert about CLI-only agents */}
+            <Alert className="bg-blue-900/10 border-blue-700/20">
+              <Info className="h-4 w-4 text-blue-400" />
+              <AlertDescription className="text-sm text-blue-300">
+                Some agents (like Claude Code) require CLI execution because they spawn local processes.
+                Use the CLI to run these agents: <code className="bg-blue-900/30 px-1 py-0.5 rounded text-xs">npx @opensearch-project/agent-health run -a &lt;agent&gt; -t &lt;test-case&gt;</code>
+              </AlertDescription>
+            </Alert>
+
+            {DEFAULT_CONFIG.agents.map((agent) => {
+              const isCliOnly = !isBrowserCompatible(agent);
+              return (
+                <div
+                  key={agent.key}
+                  className="p-3 border rounded-lg bg-muted/5 flex items-start justify-between gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm flex items-center gap-2">
+                      {agent.name}
+                      <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">built-in</span>
+                      {isCliOnly && (
+                        <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded flex items-center gap-1">
+                          <Terminal size={10} />
+                          CLI only
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-1">
+                      <ExternalLink size={10} />
+                      {agent.endpoint || <span className="italic">Not configured</span>}
+                    </div>
+                    {agent.description && (
+                      <div className="text-xs text-muted-foreground mt-1">{agent.description}</div>
+                    )}
                   </div>
-                  <div className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-1">
-                    <ExternalLink size={10} />
-                    {agent.endpoint || <span className="italic">Not configured</span>}
-                  </div>
-                  {agent.description && (
-                    <div className="text-xs text-muted-foreground mt-1">{agent.description}</div>
-                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Custom Endpoints Section */}

@@ -16,29 +16,57 @@ An evaluation and observability framework for AI agents. Features real-time trac
 - **Live Traces**: Real-time trace monitoring with auto-refresh and filtering
 - **Trace Views**: Timeline and Flow visualizations for debugging
 - **Reports**: Evaluation reports with LLM judge reasoning
+- **Connectors**: Pluggable protocol adapters for different agent types
 
 For a detailed walkthrough, see [Getting Started](./GETTING_STARTED.md).
+
+### Supported Connectors
+
+| Connector | Protocol | Description |
+|-----------|----------|-------------|
+| `agui-streaming` | AG-UI SSE | ML-Commons agents (default) |
+| `rest` | HTTP POST | Non-streaming REST APIs |
+| `subprocess` | CLI | Command-line tools |
+| `claude-code` | Claude CLI | Claude Code agent comparison |
+| `mock` | In-memory | Demo and testing |
+
+For creating custom connectors, see [docs/CONNECTORS.md](./docs/CONNECTORS.md).
 
 ---
 
 ## Quick Start
 
 ```bash
-# Install dependencies
-npm install
+# Start the web UI
+npx @opensearch-project/agent-health
 
-# Option 1: Production mode (single server)
-npm run server   # Builds frontend + starts server on port 4001
-
-# Option 2: Development mode (two terminals)
-# Terminal 1 - Backend server (port 4001)
-npm run dev:server
-
-# Terminal 2 - Frontend dev server (port 4000)
-npm run dev
+# Open http://localhost:4001
 ```
 
-Open http://localhost:4000
+### CLI Commands
+
+```bash
+# Check configuration
+npx @opensearch-project/agent-health doctor
+
+# List available agents and connectors
+npx @opensearch-project/agent-health list agents
+npx @opensearch-project/agent-health list connectors
+
+# Run a test case against an agent
+npx @opensearch-project/agent-health run -t demo-otel-001 -a demo
+
+# Initialize a new project
+npx @opensearch-project/agent-health init
+```
+
+For full CLI documentation, see [docs/CLI.md](./docs/CLI.md).
+
+---
+
+## Architecture
+
+
 
 ---
 

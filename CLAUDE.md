@@ -63,6 +63,14 @@ npm run demo                # Build all + run server
 npx @opensearch-project/agent-health           # Start server
 npx @opensearch-project/agent-health --port 8080
 npx @opensearch-project/agent-health --env-file .env
+
+# CLI subcommands
+npx @opensearch-project/agent-health list agents    # List configured agents
+npx @opensearch-project/agent-health list connectors # List available connectors
+npx @opensearch-project/agent-health list test-cases # List sample test cases
+npx @opensearch-project/agent-health run -t <test-case> -a <agent>  # Run test case
+npx @opensearch-project/agent-health doctor         # Check configuration
+npx @opensearch-project/agent-health init           # Initialize config files
 ```
 
 **IMPORTANT:** Do not modify the `name` or `version` fields in `package.json`. These are used for publishing the tool via NPX.
@@ -76,6 +84,12 @@ npx @opensearch-project/agent-health --env-file .env
 ```
 
 ## Architecture
+
+> **Full documentation:** See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture patterns, including the server-mediated CLI design and Playwright-style server lifecycle.
+
+### Key Architecture Principle
+
+**All clients (CLI, UI) access OpenSearch through the server HTTP API.** Never bypass the server to access OpenSearch directly from CLI commands. This ensures consistent behavior and single source of truth. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ### Service Layer (`services/`)
 
@@ -107,6 +121,59 @@ npx @opensearch-project/agent-health --env-file .env
 - `benchmarkRunner.ts`: Batch execution of test cases across runs
 - `metrics.ts`: Token/cost calculations from trace data
 
+**Connector Services** (`services/connectors/`):
+- `types.ts`: Connector interfaces (`AgentConnector`, `ConnectorRequest`, `ConnectorResponse`)
+- `registry.ts`: Singleton registry for connector lookup (`connectorRegistry.get()`, `getForAgent()`)
+- `base/BaseConnector.ts`: Abstract base class with auth header building
+- `agui/AGUIStreamingConnector.ts`: AG-UI SSE streaming protocol
+- `rest/RESTConnector.ts`: Non-streaming REST API calls
+- `subprocess/SubprocessConnector.ts`: CLI tool invocation via child process
+- `claude-code/ClaudeCodeConnector.ts`: Claude Code CLI (specialized subprocess connector)
+- `mock/MockConnector.ts`: Demo agent for testing
+- `index.ts`: Browser-safe exports (no Node.js dependencies)
+- `server.ts`: All connectors including Node.js-only (subprocess, claude-code)
+
+### Connector System
+
+The connector system provides a pluggable abstraction for different agent communication protocols:
+
+**Built-in Connectors:**
+| Connector | Protocol | Use Case |
+|-----------|----------|----------|
+| `agui-streaming` | AG-UI SSE | ML-Commons agents (default) |
+| `rest` | HTTP POST | Non-streaming REST APIs |
+| `subprocess` | CLI | Command-line tools |
+| `claude-code` | Claude CLI | Claude Code agent comparison |
+| `mock` | In-memory | Demo and testing |
+
+**Using Connectors:**
+```typescript
+// Get connector for an agent
+import { connectorRegistry } from '@/services/connectors';
+const connector = connectorRegistry.getForAgent(agentConfig);
+
+// Execute evaluation
+const response = await connector.execute(endpoint, request, auth, onProgress);
+```
+
+**Creating Custom Connectors:**
+```typescript
+import { BaseConnector } from '@/services/connectors';
+
+class CustomConnector extends BaseConnector {
+  readonly type = 'custom' as const;
+  readonly name = 'My Custom Agent';
+  readonly supportsStreaming = true;
+
+  async execute(endpoint, request, auth, onProgress) {
+    // Your protocol implementation
+  }
+}
+
+// Register connector
+connectorRegistry.register(new CustomConnector());
+```
+
 ### Configuration (`lib/`)
 
 - `constants.ts`: Agent configs, model configs, tool definitions
@@ -134,6 +201,10 @@ import { getConfig } from '@/lib/config';
 ### CLI (`cli/`)
 
 Entry point for NPX package (`bin/cli.js` → `cli/index.ts`):
+- `commands/list.ts`: List agents, test cases, benchmarks, connectors
+- `commands/run.ts`: Run test cases against agents
+- `commands/doctor.ts`: Check configuration and system requirements
+- `commands/init.ts`: Initialize configuration files
 - `demo/sample*.ts`: Sample test cases, benchmarks, runs, traces
 - `utils/startServer.ts`: Server bootstrap for CLI context
 
@@ -705,4 +776,37 @@ git commit --amend -s --no-edit
 # Rebase and signoff all commits (interactive)
 git rebase -i HEAD~N  # then use 'edit' and run: git commit --amend -s --no-edit && git rebase --continue
 ```
+
+## Pending Features
+
+The following features are planned but not yet implemented:
+
+### Config File Support (TS + YAML)
+- TypeScript config: `agent-health.config.ts` with full type safety
+- YAML config: `agent-health.yaml` with JSON Schema validation
+- Config loader with priority: TS > JS > YAML > YML
+- Environment variable interpolation in YAML (`${VAR}`, `${VAR:default}`)
+
+### CLI Enhancements
+- `benchmark` command: Run full benchmark across multiple test cases
+- `compare` command: Side-by-side comparison of agent results
+- JSON/Table/Markdown output formats for all commands
+- Parallel test case execution with `--parallel` flag
+
+### Connector SDK
+- Python connector SDK (similar to Playwright's Python support)
+- Subprocess protocol for language-agnostic connectors
+- WebSocket connector for bidirectional streaming
+- gRPC connector for high-performance scenarios
+
+### Agent Comparison Features
+- Automated A/B testing between agent versions
+- Cost estimation and comparison across agents
+- Latency distribution analysis
+- Trajectory similarity scoring
+
+### Observability
+- OpenTelemetry integration for connector spans
+- Prometheus metrics export
+- Structured logging with correlation IDs
 

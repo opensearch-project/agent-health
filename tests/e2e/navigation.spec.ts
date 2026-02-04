@@ -51,7 +51,7 @@ test.describe('Navigation', () => {
   test('should navigate to Agent Traces page', async ({ page }) => {
     await page.click('[data-testid="nav-agent-traces"]');
     // Check that the URL changed to agent-traces
-    await expect(page).toHaveURL(/.*#\/agent-traces/);
+    await expect(page).toHaveURL(/.*\/agent-traces/);
   });
 
   test('should show server status in sidebar footer', async ({ page }) => {
@@ -73,20 +73,20 @@ test.describe('URL-based Navigation', () => {
     await expect(page.locator('[data-testid="dashboard-title"]')).toBeVisible();
   });
 
-  test('should load Test Cases from hash URL', async ({ page }) => {
-    await page.goto('/#/test-cases');
+  test('should load Test Cases from direct URL', async ({ page }) => {
+    await page.goto('/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]');
     await expect(page.locator('[data-testid="test-cases-title"]')).toBeVisible();
   });
 
-  test('should load Benchmarks from hash URL', async ({ page }) => {
-    await page.goto('/#/benchmarks');
+  test('should load Benchmarks from direct URL', async ({ page }) => {
+    await page.goto('/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]');
     await expect(page.locator('[data-testid="benchmarks-title"]')).toBeVisible();
   });
 
-  test('should load Settings from hash URL', async ({ page }) => {
-    await page.goto('/#/settings');
+  test('should load Settings from direct URL', async ({ page }) => {
+    await page.goto('/settings');
     await page.waitForSelector('[data-testid="settings-page"]');
     await expect(page.locator('[data-testid="settings-title"]')).toBeVisible();
   });

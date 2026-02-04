@@ -21,6 +21,13 @@ import { VersionIndicator } from './VersionIndicator';
 import { UseCaseExpandedRow } from './UseCaseExpandedRow';
 import { cn, getLabelColor } from '@/lib/utils';
 import { calculateRowStatus, RowStatus } from '@/services/comparisonService';
+import { DEFAULT_CONFIG } from '@/lib/constants';
+
+// Helper to get agent display name from key
+const getAgentName = (agentKey: string): string => {
+  const agent = DEFAULT_CONFIG.agents.find(a => a.key === agentKey);
+  return agent?.name || agentKey;
+};
 
 interface UseCaseComparisonTableProps {
   rows: TestCaseComparisonRow[];
@@ -81,6 +88,9 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
               {runs.map((run) => (
                 <TableHead key={run.id} className="text-center min-w-32">
                   <div className="truncate">{run.name}</div>
+                  <div className="text-xs text-muted-foreground font-normal truncate">
+                    {getAgentName(run.agentKey)}
+                  </div>
                   {run.id === baselineRunId && (
                     <div className="text-xs text-muted-foreground font-normal">(baseline)</div>
                   )}
