@@ -23,6 +23,7 @@ jobs:
         uses: lycheeverse/lychee-action@v2.0.2
         with:
           fail: true
+          output: ./lychee-report.md
           args: |
             --verbose
             --no-progress
@@ -41,3 +42,10 @@ jobs:
             '**/*.md'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload link check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lychee-report
+          path: ./lychee-report.md
