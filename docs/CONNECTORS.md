@@ -308,6 +308,134 @@ describe('MyConnector', () => {
 });
 ```
 
+## Custom Payload Mapping
+
+Some agents require specific payload structures beyond the standard `prompt` + `context` format. For example, agents may need:
+- Custom system prompts
+- Template overrides (planner prompts, reflection prompts)
+- Agent-specific configuration fields
+
+### Use Case: Agent with Custom Prompts
+
+For an agent like PER (Planner-Executor-Reflector) that expects this payload:
+
+```json
+{
+  "parameters": {
+    "context": "# Investigation Context...",
+    "question": "Why the train ticket website is abnormal...",
+    "system_prompt": "# Investigation Planner Agent...",
+    "planner_prompt_template": "## AVAILABLE TOOLS...",
+    "planner_with_history_template": "...",
+    "reflect_prompt_template": "..."
+  }
+}
+```
+
+**Solution:** Create a custom connector that extracts special fields from context items by description:
+
+```typescript
+export class PERAgentConnector extends BaseConnector {
+  readonly type = 'per-agent' as const;
+  readonly name = 'PER Investigation Agent';
+  readonly supportsStreaming = false;
+
+  // Map context item descriptions to payload field names
+  private readonly FIELD_MAPPINGS: Record<string, string> = {
+    'system_prompt': 'system_prompt',
+    'planner_prompt_template': 'planner_prompt_template',
+    'planner_with_history_template': 'planner_with_history_template',
+    'reflect_prompt_template': 'reflect_prompt_template',
+    'context': 'context',  // Main investigation context
+  };
+
+  buildPayload(request: ConnectorRequest): any {
+    const { testCase } = request;
+    const payload: Record<string, any> = {
+      parameters: {
+        question: testCase.initialPrompt,
+      },
+    };
+
+    // Extract special fields from context items
+    for (const item of testCase.context) {
+      const fieldName = this.FIELD_MAPPINGS[item.description];
+      if (fieldName) {
+        payload.parameters[fieldName] = item.value;
+      }
+    }
+
+    return payload;
+  }
+
+  async execute(endpoint, request, auth, onProgress, onRawEvent) {
+    const payload = this.buildPayload(request);
+    const headers = this.buildAuthHeaders(auth);
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    onRawEvent?.(data);
+
+    return {
+      trajectory: this.parseResponse(data),
+      runId: data.run_id || null,
+      rawEvents: [data],
+    };
+  }
+
+  parseResponse(data: any): TrajectoryStep[] {
+    // Parse PER agent response format
+    const steps: TrajectoryStep[] = [];
+
+    if (data.response) {
+      steps.push(this.createStep('response', data.response));
+    }
+
+    return steps;
+  }
+}
+```
+
+### Setting Up Test Cases for Custom Payloads
+
+When creating test cases in the UI, use context items with descriptions matching your field mappings:
+
+| Context Description | Mapped To |
+|---------------------|-----------|
+| `system_prompt` | `parameters.system_prompt` |
+| `planner_prompt_template` | `parameters.planner_prompt_template` |
+| `context` | `parameters.context` |
+
+**Example Test Case Configuration:**
+
+```json
+{
+  "name": "Investigation: Train Ticket Website",
+  "initialPrompt": "Why the train ticket website is abnormal?",
+  "context": [
+    {
+      "description": "context",
+      "value": "# Investigation Context\n\nService: train-ticket-frontend..."
+    },
+    {
+      "description": "system_prompt",
+      "value": "# Investigation Planner Agent\n\nYou are an expert..."
+    },
+    {
+      "description": "planner_prompt_template",
+      "value": "## AVAILABLE TOOLS\n{{tools}}\n\n## TASK..."
+    }
+  ]
+}
+```
+
+This pattern allows you to pass arbitrary agent-specific fields through the standard test case schema by using context item descriptions as field identifiers.
+
 ## Examples
 
 ### REST API Connector
