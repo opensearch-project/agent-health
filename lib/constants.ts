@@ -6,6 +6,22 @@
 import { AppConfig } from '@/types';
 import { ENV_CONFIG, buildMLCommonsHeaders } from '@/lib/config';
 
+/**
+ * Get Claude Code connector environment variables at runtime.
+ * This ensures environment variables are evaluated when needed,
+ * not at module load time.
+ */
+function getClaudeCodeConnectorEnv(): Record<string, string> {
+  return {
+    AWS_PROFILE: process.env.AWS_PROFILE || "Bedrock",
+    CLAUDE_CODE_USE_BEDROCK: "1",
+    AWS_REGION: process.env.AWS_REGION || "us-west-2",
+    DISABLE_PROMPT_CACHING: "1",
+    DISABLE_ERROR_REPORTING: "1",
+    DISABLE_TELEMETRY: "1",
+  };
+}
+
 // Model pricing per 1M tokens (USD)
 export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   // Claude 4.x models (with inference profile prefix)
@@ -80,15 +96,11 @@ export const DEFAULT_CONFIG: AppConfig = {
       models: ["claude-sonnet-4"],
       headers: {},
       useTraces: false,
-      connectorConfig: {
-        env: {
-          AWS_PROFILE: process.env.AWS_PROFILE || "Bedrock",
-          CLAUDE_CODE_USE_BEDROCK: "1",
-          AWS_REGION: process.env.AWS_REGION || "us-west-2",
-          DISABLE_PROMPT_CACHING: "1",
-          DISABLE_ERROR_REPORTING: "1",
-          DISABLE_TELEMETRY: "1",
-        },
+      // connectorConfig env vars are evaluated at runtime by getClaudeCodeConnectorEnv()
+      get connectorConfig() {
+        return {
+          env: getClaudeCodeConnectorEnv(),
+        };
       },
     },
   ],

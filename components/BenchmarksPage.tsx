@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Eye, Calendar, FlaskConical, RefreshCw, CheckCircle, XCircle, Loader2, Circle, X, Play, Pencil, StopCircle, Ban } from 'lucide-react';
+import { Plus, Trash2, Eye, Calendar, FlaskConical, RefreshCw, CheckCircle, CheckCircle2, XCircle, Loader2, Circle, X, Play, Pencil, StopCircle, Ban } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -47,6 +47,14 @@ export const BenchmarksPage: React.FC = () => {
   const { cancellingRunId, handleCancelRun: cancelRun } = useBenchmarkCancellation();
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Delete operation state
+  const [deleteState, setDeleteState] = useState<{
+    isDeleting: boolean;
+    deletingId: string | null;
+    status: 'idle' | 'success' | 'error';
+    message: string;
+  }>({ isDeleting: false, deletingId: null, status: 'idle', message: '' });
+
   // Load test cases on mount
   useEffect(() => {
     asyncTestCaseStorage.getAll().then(setTestCases);
@@ -80,6 +88,12 @@ export const BenchmarksPage: React.FC = () => {
   useEffect(() => {
     const shouldPoll = runningBenchmarkId || hasServerInProgressRuns;
 
+    // Always clear existing interval first to prevent stacking
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+
     if (shouldPoll) {
       // Use 5s polling for background sync (SSE disconnected), 2s for active runs
       const interval = runningBenchmarkId ? POLL_INTERVAL_MS : 5000;
@@ -87,19 +101,12 @@ export const BenchmarksPage: React.FC = () => {
       pollIntervalRef.current = setInterval(() => {
         loadBenchmarks();
       }, interval);
-
-      // Polling active for background sync scenarios
-    } else {
-      // Stop polling
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
     }
 
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
       }
     };
   }, [runningBenchmarkId, hasServerInProgressRuns, loadBenchmarks]);
@@ -115,9 +122,26 @@ export const BenchmarksPage: React.FC = () => {
   };
 
   const handleDeleteBenchmark = async (bench: Benchmark) => {
-    if (window.confirm(`Delete benchmark "${bench.name}"? This will also delete all associated runs.`)) {
-      await asyncBenchmarkStorage.delete(bench.id);
-      loadBenchmarks();
+    if (!window.confirm(`Delete benchmark "${bench.name}"? This will also delete all associated runs.`)) return;
+
+    setDeleteState({ isDeleting: true, deletingId: bench.id, status: 'idle', message: '' });
+
+    try {
+      const success = await asyncBenchmarkStorage.delete(bench.id);
+      if (success) {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'success', message: `"${bench.name}" deleted` });
+        setTimeout(() => setDeleteState(s => ({ ...s, status: 'idle', message: '' })), 3000);
+        loadBenchmarks();
+      } else {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'error', message: `Failed to delete "${bench.name}"` });
+      }
+    } catch (error) {
+      setDeleteState({
+        isDeleting: false,
+        deletingId: null,
+        status: 'error',
+        message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
     }
   };
 
@@ -377,6 +401,28 @@ export const BenchmarksPage: React.FC = () => {
         </Button>
       </div>
 
+      {/* Delete Feedback */}
+      {deleteState.message && (
+        <div className={`flex items-center gap-2 text-sm p-3 rounded-lg ${
+          deleteState.status === 'success'
+            ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+            : 'bg-red-500/10 text-red-400 border border-red-500/20'
+        }`}>
+          {deleteState.status === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+          <span>{deleteState.message}</span>
+          {deleteState.status === 'error' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setDeleteState(s => ({ ...s, status: 'idle', message: '' }))}
+              className="ml-auto h-6 px-2"
+            >
+              <X size={14} />
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Benchmark List */}
       <div className="flex-1 overflow-y-auto space-y-4">
         {benchmarks.length === 0 ? (
@@ -579,9 +625,14 @@ export const BenchmarksPage: React.FC = () => {
                           variant="ghost"
                           size="icon"
                           onClick={() => handleDeleteBenchmark(bench)}
+                          disabled={deleteState.isDeleting && deleteState.deletingId === bench.id}
                           className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                         >
-                          <Trash2 size={14} />
+                          {deleteState.isDeleting && deleteState.deletingId === bench.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <Trash2 size={14} />
+                          )}
                         </Button>
                       )}
                     </div>

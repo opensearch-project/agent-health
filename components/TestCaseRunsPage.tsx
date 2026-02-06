@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Calendar, CheckCircle2, XCircle, Trash2, FileText, Pencil } from 'lucide-react';
+import { ArrowLeft, Play, Calendar, CheckCircle2, XCircle, Trash2, FileText, Pencil, Loader2, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -24,9 +24,10 @@ interface RunCardProps {
   isLatest: boolean;
   onClick: () => void;
   onDelete: () => void;
+  isDeleting?: boolean;
 }
 
-const RunCard = ({ run, isLatest, onClick, onDelete }: RunCardProps) => {
+const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps) => {
   const isPassed = run.passFailStatus === 'passed';
   const modelDisplayName = DEFAULT_CONFIG.models[run.modelName]?.display_name || run.modelName;
 
@@ -90,10 +91,11 @@ const RunCard = ({ run, isLatest, onClick, onDelete }: RunCardProps) => {
               e.stopPropagation();
               onDelete();
             }}
-            className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 hover:bg-red-500/10 ml-2"
+            disabled={isDeleting}
+            className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 hover:bg-red-500/10 ml-2 disabled:opacity-100"
             title="Delete run"
           >
-            <Trash2 size={14} />
+            {isDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
           </Button>
         </div>
       </CardContent>
@@ -149,6 +151,14 @@ export const TestCaseRunsPage: React.FC = () => {
   const [runningTestCase, setRunningTestCase] = useState<TestCase | null>(null);
   const [showEditor, setShowEditor] = useState(false);
 
+  // Delete operation state
+  const [deleteState, setDeleteState] = useState<{
+    isDeleting: boolean;
+    deletingId: string | null;
+    status: 'idle' | 'success' | 'error';
+    message: string;
+  }>({ isDeleting: false, deletingId: null, status: 'idle', message: '' });
+
   const loadData = useCallback(async () => {
     if (!testCaseId) return;
 
@@ -186,9 +196,26 @@ export const TestCaseRunsPage: React.FC = () => {
   };
 
   const handleDeleteRun = async (run: EvaluationReport) => {
-    if (window.confirm(`Delete this run from ${formatDate(run.timestamp)}? This cannot be undone.`)) {
-      await asyncRunStorage.deleteReport(run.id);
-      loadData();
+    if (!window.confirm(`Delete this run from ${formatDate(run.timestamp)}? This cannot be undone.`)) return;
+
+    setDeleteState({ isDeleting: true, deletingId: run.id, status: 'idle', message: '' });
+
+    try {
+      const success = await asyncRunStorage.deleteReport(run.id);
+      if (success) {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'success', message: 'Run deleted successfully' });
+        setTimeout(() => setDeleteState(s => ({ ...s, status: 'idle', message: '' })), 3000);
+        loadData();
+      } else {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'error', message: 'Failed to delete run' });
+      }
+    } catch (error) {
+      setDeleteState({
+        isDeleting: false,
+        deletingId: null,
+        status: 'error',
+        message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
     }
   };
 
@@ -350,6 +377,28 @@ export const TestCaseRunsPage: React.FC = () => {
 
         {/* Right Panel - Runs (70%) */}
         <div className="flex-1 overflow-y-auto space-y-3">
+          {/* Delete Feedback */}
+          {deleteState.message && (
+            <div className={`flex items-center gap-2 text-sm p-3 rounded-lg ${
+              deleteState.status === 'success'
+                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                : 'bg-red-500/10 text-red-400 border border-red-500/20'
+            }`}>
+              {deleteState.status === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+              <span>{deleteState.message}</span>
+              {deleteState.status === 'error' && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDeleteState(s => ({ ...s, status: 'idle', message: '' }))}
+                  className="ml-auto h-6 px-2"
+                >
+                  <X size={14} />
+                </Button>
+              )}
+            </div>
+          )}
+
           {runs.length === 0 ? (
             <EmptyState onRun={() => setRunningTestCase(testCase)} />
           ) : (
@@ -360,6 +409,7 @@ export const TestCaseRunsPage: React.FC = () => {
                 isLatest={index === 0}
                 onClick={() => handleRunClick(run)}
                 onDelete={() => handleDeleteRun(run)}
+                isDeleting={deleteState.isDeleting && deleteState.deletingId === run.id}
               />
             ))
           )}

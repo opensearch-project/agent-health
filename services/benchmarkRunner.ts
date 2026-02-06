@@ -18,7 +18,7 @@ import {
   updateRunWithClient,
 } from '@/server/services/storage';
 import type { Client } from '@opensearch-project/opensearch';
-import { runEvaluation, runEvaluationWithConnector, callBedrockJudge } from './evaluation';
+import { runEvaluationWithConnector, callBedrockJudge } from './evaluation';
 import { connectorRegistry } from '@/services/connectors/server';
 import { loadConfigSync } from '@/lib/config/index';
 import { tracePollingManager } from './traces/tracePoller';
@@ -109,14 +109,7 @@ export async function executeRun(
   onProgress: (progress: BenchmarkProgress) => void,
   options: ExecuteRunOptions
 ): Promise<BenchmarkRun> {
-  console.log('[BenchmarkRunner] ========== executeRun STARTED ==========');
-  console.log('[BenchmarkRunner] Benchmark:', benchmark.id);
-  console.log('[BenchmarkRunner] Run:', run.id);
-  console.log('[BenchmarkRunner] Agent:', run.agentKey);
-  console.log('[BenchmarkRunner] Model:', run.modelId);
-
   const totalTestCases = benchmark.testCaseIds.length;
-  console.log('[BenchmarkRunner] Total test cases:', totalTestCases);
   const { cancellationToken, client, onTestCaseComplete } = options;
 
   // Initialize results if empty
@@ -125,20 +118,14 @@ export async function executeRun(
   }
 
   // Fetch all test cases upfront for this benchmark
-  console.log('[BenchmarkRunner] Fetching test cases from OpenSearch...');
   const allTestCases = await getAllTestCasesWithClient(client);
-  console.log('[BenchmarkRunner] Fetched', allTestCases.length, 'test cases');
   const testCaseMap = new Map(allTestCases.map((tc: any) => [tc.id, tc]));
 
   try {
-    console.log('[BenchmarkRunner] Starting test case iteration loop');
     // Iterate through each test case
     for (let testCaseIndex = 0; testCaseIndex < totalTestCases; testCaseIndex++) {
-      console.log('[BenchmarkRunner] -------- Test case', testCaseIndex + 1, 'of', totalTestCases, '--------');
-
       // Check for cancellation before each test case
       if (cancellationToken?.isCancelled) {
-        console.log('[BenchmarkRunner] Cancellation detected, breaking loop');
         onProgress({
           currentTestCaseIndex: testCaseIndex,
           totalTestCases,
@@ -150,7 +137,6 @@ export async function executeRun(
       }
 
       const testCaseId = benchmark.testCaseIds[testCaseIndex];
-      console.log('[BenchmarkRunner] Test case ID:', testCaseId);
       const testCase = testCaseMap.get(testCaseId);
 
       if (!testCase) {
@@ -158,7 +144,6 @@ export async function executeRun(
         run.results[testCaseId] = { reportId: '', status: 'failed' };
         continue;
       }
-      console.log('[BenchmarkRunner] Test case found:', testCase.name);
 
       // Report progress
       onProgress({
@@ -174,36 +159,17 @@ export async function executeRun(
 
       try {
         // Build agent config from run configuration
-        console.log('[BenchmarkRunner] Building agent config for:', run.agentKey);
         const agentConfig = buildAgentConfigForRun(run);
-        console.log('[BenchmarkRunner] Agent config:', {
-          key: agentConfig.key,
-          name: agentConfig.name,
-          endpoint: agentConfig.endpoint,
-          connectorType: agentConfig.connectorType,
-        });
-
         const bedrockModelId = getBedrockModelId(run.modelId);
-        console.log('[BenchmarkRunner] Bedrock model ID:', bedrockModelId);
 
-        // Run the evaluation - use connector for connector-based agents (e.g., claude-code)
-        // Otherwise use the SSE stream approach for AG-UI protocol agents
-        console.log('[BenchmarkRunner] Using connector?', !!agentConfig.connectorType, '- type:', agentConfig.connectorType);
-        const report = agentConfig.connectorType
-          ? await runEvaluationWithConnector(
-              agentConfig,
-              bedrockModelId,
-              testCase,
-              (step) => console.log('[BenchmarkRunner] Step received:', step.type), // Debug callback
-              { registry: connectorRegistry }
-            )
-          : await runEvaluation(
-              agentConfig,
-              bedrockModelId,
-              testCase,
-              (step) => console.log('[BenchmarkRunner] Step received:', step.type) // Debug callback
-            );
-        console.log('[BenchmarkRunner] Evaluation completed, report status:', report.status);
+        // Run the evaluation using connector
+        const report = await runEvaluationWithConnector(
+          agentConfig,
+          bedrockModelId,
+          testCase,
+          () => {}, // No debug callback needed
+          { registry: connectorRegistry }
+        );
 
         // Save the report to OpenSearch and get the actual stored ID
         const savedReport = await saveReportWithClient(client, report, {
@@ -213,7 +179,6 @@ export async function executeRun(
 
         // Start trace polling for trace-mode runs (metricsStatus: 'pending')
         if (savedReport.metricsStatus === 'pending' && savedReport.runId) {
-          console.info(`[BenchmarkRunner] Starting trace polling for report ${savedReport.id}`);
           startTracePollingForReport(savedReport, testCase, client);
         }
 
@@ -229,8 +194,7 @@ export async function executeRun(
             .catch(err => console.warn(`[BenchmarkRunner] Failed to persist progress for ${testCaseId}:`, err.message));
         }
       } catch (error) {
-        console.error(`[BenchmarkRunner] ERROR in test case ${testCaseId}:`, error);
-        console.error('[BenchmarkRunner] Error stack:', error instanceof Error ? error.stack : 'N/A');
+        console.error(`[BenchmarkRunner] Error in test case ${testCaseId}:`, error instanceof Error ? error.message : error);
         run.results[testCaseId] = { reportId: '', status: 'failed' };
 
         // Persist failure progress to OpenSearch (fire-and-forget with logging)
@@ -239,9 +203,7 @@ export async function executeRun(
             .catch(err => console.warn(`[BenchmarkRunner] Failed to persist failure progress for ${testCaseId}:`, err.message));
         }
       }
-      console.log('[BenchmarkRunner] Test case', testCaseIndex + 1, 'completed with status:', run.results[testCaseId]?.status);
     }
-    console.log('[BenchmarkRunner] Test case loop completed');
 
     // Report final progress
     onProgress({
@@ -312,28 +274,19 @@ export async function runSingleUseCase(
   const agentConfig = buildAgentConfigForRun(run);
   const bedrockModelId = getBedrockModelId(run.modelId);
 
-  // Use connector for connector-based agents (e.g., claude-code)
-  // Otherwise use the SSE stream approach for AG-UI protocol agents
-  const report = agentConfig.connectorType
-    ? await runEvaluationWithConnector(
-        agentConfig,
-        bedrockModelId,
-        testCase,
-        onStep || (() => {}),
-        { registry: connectorRegistry }
-      )
-    : await runEvaluation(
-        agentConfig,
-        bedrockModelId,
-        testCase,
-        onStep || (() => {})
-      );
+  // Run the evaluation using connector
+  const report = await runEvaluationWithConnector(
+    agentConfig,
+    bedrockModelId,
+    testCase,
+    onStep || (() => {}),
+    { registry: connectorRegistry }
+  );
 
   const savedReport = await saveReportWithClient(client, report);
 
   // Start trace polling for trace-mode runs
   if (savedReport.metricsStatus === 'pending' && savedReport.runId) {
-    console.info(`[BenchmarkRunner] Starting trace polling for report ${savedReport.id}`);
     startTracePollingForReport(savedReport, testCase, client);
   }
 
@@ -357,13 +310,9 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
     report.runId,
     {
       onTracesFound: async (spans, updatedReport) => {
-        console.info(`[BenchmarkRunner] Traces found for report ${report.id}: ${spans.length} spans`);
-
         try {
           // Call the Bedrock judge with the trajectory and expectedOutcomes
-          // Use the model from the report (which was used for the agent evaluation)
           const judgeModelId = report.modelId ? getBedrockModelId(report.modelId) : undefined;
-          console.info(`[BenchmarkRunner] Calling Bedrock judge for report ${report.id} with model: ${judgeModelId || '(default)'}`);
 
           const judgment = await callBedrockJudge(
             updatedReport.trajectory,
@@ -372,11 +321,9 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
               expectedTrajectory: testCase.expectedTrajectory,
             },
             [], // No logs for trace-mode - traces are the source of truth
-            (chunk) => console.debug('[BenchmarkRunner] Judge progress:', chunk.slice(0, 100)),
+            () => {}, // No progress callback needed
             judgeModelId
           );
-
-          console.info(`[BenchmarkRunner] Judge result for report ${report.id}: ${judgment.passFailStatus}, accuracy: ${judgment.metrics.accuracy}%`);
 
           // Update report with judge results
           await updateRunWithClient(client, report.id, {
@@ -385,12 +332,9 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
             metrics: judgment.metrics,
             llmJudgeReasoning: judgment.llmJudgeReasoning,
             improvementStrategies: judgment.improvementStrategies,
-            // Note: Not storing spans - fetch on-demand using report.runId
           });
-
-          console.info(`[BenchmarkRunner] Report ${report.id} updated with judge results`);
         } catch (error) {
-          console.error(`[BenchmarkRunner] Failed to judge report ${report.id}:`, error);
+          console.error(`[BenchmarkRunner] Failed to judge report ${report.id}:`, error instanceof Error ? error.message : error);
           // Still mark as ready but with error info
           await updateRunWithClient(client, report.id, {
             metricsStatus: 'error',
@@ -398,11 +342,9 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
           });
         }
       },
-      onAttempt: (attempt, maxAttempts) => {
-        console.info(`[BenchmarkRunner] Polling attempt ${attempt}/${maxAttempts} for report ${report.id}`);
-      },
+      onAttempt: () => {}, // No verbose logging
       onError: (error) => {
-        console.error(`[BenchmarkRunner] Trace polling failed for report ${report.id}:`, error);
+        console.error(`[BenchmarkRunner] Trace polling failed for report ${report.id}:`, error instanceof Error ? error.message : error);
       },
     }
   );

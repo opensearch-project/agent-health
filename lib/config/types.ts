@@ -8,8 +8,8 @@
  * Type definitions for agent-health.config.ts files
  */
 
-import type { AgentConfig, ModelConfig, ConnectorProtocol } from '../../types/index.js';
-import type { AgentConnector } from '../../services/connectors/types.js';
+import type { AgentConfig, ModelConfig, ConnectorProtocol } from '@/types/index.js';
+import type { AgentConnector } from '@/services/connectors/types.js';
 
 /**
  * Agent configuration for user config files

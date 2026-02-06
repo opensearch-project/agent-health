@@ -49,11 +49,13 @@ function getDefaultModel(agent: AgentConfig): string {
 
 /**
  * Check if a command exists in PATH
+ * Uses 'where' on Windows, 'which' on Unix
  */
 async function commandExists(command: string): Promise<boolean> {
   const { execSync } = await import('child_process');
+  const checkCommand = process.platform === 'win32' ? `where ${command}` : `which ${command}`;
   try {
-    execSync(`which ${command}`, { stdio: 'ignore' });
+    execSync(checkCommand, { stdio: 'ignore' });
     return true;
   } catch {
     return false;

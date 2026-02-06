@@ -9,14 +9,14 @@
  */
 
 import type { TrajectoryStep, ToolCallStatus } from '@/types';
-import { BaseConnector } from '../base/BaseConnector';
+import { BaseConnector } from '@/services/connectors/base/BaseConnector';
 import type {
   ConnectorAuth,
   ConnectorRequest,
   ConnectorResponse,
   ConnectorProgressCallback,
   ConnectorRawEventCallback,
-} from '../types';
+} from '@/services/connectors/types';
 
 /**
  * Mock Connector for demo and testing

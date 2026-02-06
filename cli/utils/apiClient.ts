@@ -173,7 +173,10 @@ export class ApiClient {
     }
 
     // Parse SSE stream
-    const reader = res.body!.getReader();
+    if (!res.body) {
+      throw new Error('Response body is missing');
+    }
+    const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let finalRun: BenchmarkRun | null = null;
@@ -242,6 +245,12 @@ export class ApiClient {
 
       // Re-throw if we couldn't recover
       throw streamError;
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // Ignore cancellation errors
+      }
     }
 
     if (!finalRun) {
@@ -503,36 +512,47 @@ export class ApiClient {
     }
 
     // Parse SSE stream
-    const reader = res.body!.getReader();
+    if (!res.body) {
+      throw new Error('Response body is missing');
+    }
+    const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let result: EvaluationResult | null = null;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n\n');
-      buffer = lines.pop() || '';
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const event = JSON.parse(line.slice(6));
-            onProgress?.(event);
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6));
+              onProgress?.(event);
 
-            if (event.type === 'completed') {
-              result = event.report;
-            } else if (event.type === 'error') {
-              throw new Error(event.error);
+              if (event.type === 'completed') {
+                result = event.report;
+              } else if (event.type === 'error') {
+                throw new Error(event.error);
+              }
+            } catch (e) {
+              // Skip non-JSON lines (incomplete chunks)
+              if (e instanceof SyntaxError) continue;
+              throw e;
             }
-          } catch (e) {
-            // Skip non-JSON lines (incomplete chunks)
-            if (e instanceof SyntaxError) continue;
-            throw e;
           }
         }
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // Ignore cancellation errors
       }
     }
 

@@ -116,13 +116,6 @@ export async function runEvaluationWithConnector(
   onStep: (step: TrajectoryStep) => void,
   options: RunEvaluationWithConnectorOptions
 ): Promise<EvaluationReport> {
-  console.log('[Eval] ========== runEvaluationWithConnector STARTED ==========');
-  console.log('[Eval] Agent:', agent.name, '(', agent.key, ')');
-  console.log('[Eval] Agent endpoint:', agent.endpoint);
-  console.log('[Eval] Agent connectorType:', agent.connectorType);
-  console.log('[Eval] Model:', modelId);
-  console.log('[Eval] Test case:', testCase.name, '(', testCase.id, ')');
-
   const { registry: connectorRegistry, onRawEvent } = options;
 
   const reportId = uuidv4();
@@ -130,19 +123,14 @@ export async function runEvaluationWithConnector(
   let rawEvents: any[] = [];
   let agentRunId: string | null = null;
 
-  console.info('[Eval] Starting evaluation with connector:', testCase.name);
   debug('Eval', 'Config:', { agent: agent.name, model: modelId, testCase: testCase.id });
 
   const evalStartTime = Date.now();
 
   try {
     // Get connector for this agent
-    console.log('[Eval] Getting connector from registry...');
-    console.log('[Eval] Registered connectors:', connectorRegistry.getRegisteredTypes());
     const agentWithConnector = agent as AgentConfigWithConnector;
     const connector = connectorRegistry.getForAgent(agentWithConnector);
-
-    console.info('[Eval] Using connector:', connector.name, `(${connector.type})`);
 
     // Build connector request
     const request: ConnectorRequest = {
@@ -152,12 +140,8 @@ export async function runEvaluationWithConnector(
 
     // Build auth from agent config
     const auth = buildConnectorAuth(agent);
-    console.log('[Eval] Auth type:', auth.type);
 
     // Execute via connector
-    console.log('[Eval] Calling connector.execute()...');
-    console.log('[Eval] Endpoint:', agent.endpoint);
-    console.log('[Eval] Request test case:', request.testCase.name);
     const result = await connector.execute(
       agent.endpoint,
       request,
@@ -165,26 +149,16 @@ export async function runEvaluationWithConnector(
       onStep,
       onRawEvent
     );
-    console.log('[Eval] connector.execute() returned');
 
     fullTrajectory = result.trajectory;
     agentRunId = result.runId;
     rawEvents = result.rawEvents || [];
-    console.log('[Eval] Result trajectory steps:', fullTrajectory.length);
-    console.log('[Eval] Result runId:', agentRunId);
 
-    // Log summary
-    const stepCounts = fullTrajectory.reduce((acc, step) => {
-      acc[step.type] = (acc[step.type] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    console.info('[Eval] Trajectory captured:', fullTrajectory.length, 'steps', stepCounts);
+    debug('Eval', 'Trajectory captured:', fullTrajectory.length, 'steps');
     debug('Eval', 'Raw events captured:', rawEvents.length);
-    console.info('[Eval] Agent run ID:', agentRunId || 'NOT CAPTURED');
 
     // TRACE MODE: Skip logs fetch and judge, return pending report
     if (agent.useTraces) {
-      console.info('[Eval] TRACE MODE: Skipping logs/judge, will poll for traces');
       return {
         id: reportId,
         timestamp: new Date().toISOString(),
@@ -215,8 +189,6 @@ export async function runEvaluationWithConnector(
     const models = getModels();
     const modelConfig = models[modelId];
     const judgeModelId = modelConfig?.model_id || modelId;
-    const provider = modelConfig?.provider || 'bedrock';
-    console.info('[Eval] Calling judge with model:', judgeModelId, 'provider:', provider);
     const judgeStartTime = Date.now();
     const judgment = await callBedrockJudge(
       fullTrajectory,
@@ -229,9 +201,7 @@ export async function runEvaluationWithConnector(
       judgeModelId
     );
     const judgeLatencyMs = Date.now() - judgeStartTime;
-    const totalEvalTime = Date.now() - evalStartTime;
 
-    console.info('[Eval] Complete:', judgment.passFailStatus?.toUpperCase(), `(${totalEvalTime}ms)`);
     debug('Eval', 'Metrics:', judgment.metrics);
 
     const llmJudgeResponse: LLMJudgeResponse = {
@@ -271,7 +241,7 @@ export async function runEvaluationWithConnector(
       connectorProtocol: connector.type as ConnectorProtocol,
     };
   } catch (error) {
-    console.error('[Eval] Error:', error);
+    console.error('[Eval] Error:', error instanceof Error ? error.message : error);
 
     // Get connector type for error case (may not be available if error was in getting connector)
     let connectorType: ConnectorProtocol | undefined;
@@ -373,14 +343,12 @@ export async function runEvaluation(
   let rawEvents: AGUIEvent[] = [];
   let agentRunId: string | null = null;
 
-  console.info('[Eval] Starting evaluation:', testCase.name);
   debug('Eval', 'Config:', { agent: agent.name, model: modelId, testCase: testCase.id });
 
   const evalStartTime = Date.now();
 
   try {
     if (USE_MOCK_AGENT) {
-      console.info('[Eval] Using mock agent');
       fullTrajectory = await generateMockTrajectory(testCase);
       for (const step of fullTrajectory) {
         onStep(step);
@@ -393,20 +361,12 @@ export async function runEvaluation(
       rawEvents = result.rawEvents;
     }
 
-    // Log summary
-    const stepCounts = fullTrajectory.reduce((acc, step) => {
-      acc[step.type] = (acc[step.type] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    console.info('[Eval] Trajectory captured:', fullTrajectory.length, 'steps', stepCounts);
+    debug('Eval', 'Trajectory captured:', fullTrajectory.length, 'steps');
     debug('Eval', 'Raw events captured:', rawEvents.length);
-    console.info('[Eval] Agent run ID:', agentRunId || 'NOT CAPTURED');
 
     // TRACE MODE: Skip logs fetch and judge, return pending report
     // Traces take ~5 minutes to propagate, so we'll poll for them later
     if (agent.useTraces) {
-      console.info('[Eval] TRACE MODE: Skipping logs/judge, will poll for traces');
-
       return {
         id: reportId,
         timestamp: new Date().toISOString(),
@@ -436,23 +396,16 @@ export async function runEvaluation(
     let logs: OpenSearchLog[] | undefined;
     if (agentRunId) {
       try {
-        console.info('[Eval] Fetching logs from OpenSearch for runId:', agentRunId);
         logs = await openSearchClient.fetchLogsForRun(agentRunId);
-        console.info('[Eval] OpenSearch logs fetched:', logs?.length || 0);
       } catch (error) {
-        console.error('[Eval] Failed to fetch logs:', error);
+        console.error('[Eval] Failed to fetch logs:', error instanceof Error ? error.message : error);
       }
-    } else {
-      console.warn('[Eval] No runId captured from agent - skipping log fetch');
     }
 
     // Call judge
-    // Resolve model key to full Bedrock model ID and get provider
     const models = getModels();
     const modelConfig = models[modelId];
     const judgeModelId = modelConfig?.model_id || modelId;
-    const provider = modelConfig?.provider || 'bedrock';
-    console.info('[Eval] Calling judge with model:', judgeModelId, 'provider:', provider);
     const judgeStartTime = Date.now();
     const judgment = await callBedrockJudge(
       fullTrajectory,
@@ -465,9 +418,7 @@ export async function runEvaluation(
       judgeModelId
     );
     const judgeLatencyMs = Date.now() - judgeStartTime;
-    const totalEvalTime = Date.now() - evalStartTime;
 
-    console.info('[Eval] Complete:', judgment.passFailStatus?.toUpperCase(), `(${totalEvalTime}ms)`);
     debug('Eval', 'Metrics:', judgment.metrics);
 
     const llmJudgeResponse: LLMJudgeResponse = {
@@ -505,10 +456,10 @@ export async function runEvaluation(
       openSearchLogs: logs,
       runId: agentRunId || undefined,
       logs: logs || undefined,
-      rawEvents, // Include raw events for debugging
+      rawEvents,
     };
   } catch (error) {
-    console.error('[Eval] Error:', error);
+    console.error('[Eval] Error:', error instanceof Error ? error.message : error);
 
     return {
       id: reportId,

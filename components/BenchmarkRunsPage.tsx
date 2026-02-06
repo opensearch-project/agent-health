@@ -104,6 +104,14 @@ export const BenchmarkRunsPage: React.FC = () => {
   // Selected runs for comparison
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
 
+  // Delete operation state
+  const [deleteState, setDeleteState] = useState<{
+    isDeleting: boolean;
+    deletingId: string | null;
+    status: 'idle' | 'success' | 'error';
+    message: string;
+  }>({ isDeleting: false, deletingId: null, status: 'idle', message: '' });
+
   // Version panel state
   const [testCaseVersion, setTestCaseVersion] = useState<number | null>(null); // null = latest
   const [runVersionFilter, setRunVersionFilter] = useState<number | 'all'>('all');
@@ -119,23 +127,34 @@ export const BenchmarkRunsPage: React.FC = () => {
   const loadBenchmark = useCallback(async () => {
     if (!benchmarkId) return;
 
-    const exp = await asyncBenchmarkStorage.getById(benchmarkId);
-    if (!exp) {
+    try {
+      const exp = await asyncBenchmarkStorage.getById(benchmarkId);
+      if (!exp) {
+        navigate('/benchmarks');
+        return;
+      }
+
+      // Load reports with error handling to prevent stuck loading state
+      let allReports: EvaluationReport[] = [];
+      try {
+        allReports = await asyncRunStorage.getByBenchmark(benchmarkId);
+      } catch (error) {
+        console.error('Failed to load reports:', error);
+        // Continue with empty reports to avoid stuck loading state
+      }
+
+      const loadedReports: Record<string, EvaluationReport | null> = {};
+      allReports.forEach(report => {
+        loadedReports[report.id] = report;
+      });
+
+      // Set both states together - React 18+ batches these automatically
+      setBenchmark(exp);
+      setReports(loadedReports);
+    } catch (error) {
+      console.error('Failed to load benchmark:', error);
       navigate('/benchmarks');
-      return;
     }
-
-    // Load all reports BEFORE setting any state to avoid intermediate render
-    // where benchmark is set but reports are still empty (causes all pending flash)
-    const allReports = await asyncRunStorage.getByBenchmark(benchmarkId);
-    const loadedReports: Record<string, EvaluationReport | null> = {};
-    allReports.forEach(report => {
-      loadedReports[report.id] = report;
-    });
-
-    // Set both states together - React 18+ batches these automatically
-    setBenchmark(exp);
-    setReports(loadedReports);
   }, [benchmarkId, navigate]);
 
   useEffect(() => {
@@ -177,11 +196,26 @@ export const BenchmarkRunsPage: React.FC = () => {
 
   const handleDeleteRun = async (run: BenchmarkRun) => {
     if (!benchmarkId) return;
+    if (!window.confirm(`Delete run "${run.name}"? This cannot be undone.`)) return;
 
-    if (window.confirm(`Delete run "${run.name}"? This cannot be undone.`)) {
-      await asyncBenchmarkStorage.deleteRun(benchmarkId, run.id);
-      // Reload benchmark to get updated runs
-      loadBenchmark();
+    setDeleteState({ isDeleting: true, deletingId: run.id, status: 'idle', message: '' });
+
+    try {
+      const success = await asyncBenchmarkStorage.deleteRun(benchmarkId, run.id);
+      if (success) {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'success', message: `"${run.name}" deleted` });
+        setTimeout(() => setDeleteState(s => ({ ...s, status: 'idle', message: '' })), 3000);
+        loadBenchmark();
+      } else {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'error', message: `Failed to delete "${run.name}"` });
+      }
+    } catch (error) {
+      setDeleteState({
+        isDeleting: false,
+        deletingId: null,
+        status: 'error',
+        message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
     }
   };
 
@@ -226,6 +260,12 @@ export const BenchmarkRunsPage: React.FC = () => {
   useEffect(() => {
     const shouldPoll = isRunning || hasPendingEvaluations || hasServerInProgressRuns;
 
+    // Always clear existing interval first to prevent stacking
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+
     if (shouldPoll) {
       // Use 5s polling for background sync scenarios (SSE disconnected, pending evaluations)
       // Use faster polling (2s) only when actively running with SSE connected
@@ -234,18 +274,12 @@ export const BenchmarkRunsPage: React.FC = () => {
       pollIntervalRef.current = setInterval(() => {
         loadBenchmark();
       }, interval);
-
-      // Polling active for background sync scenarios
-    } else {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
     }
 
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
       }
     };
   }, [isRunning, hasPendingEvaluations, hasServerInProgressRuns, loadBenchmark]);
@@ -634,6 +668,28 @@ export const BenchmarkRunsPage: React.FC = () => {
               </Card>
             )}
 
+            {/* Delete Feedback */}
+            {deleteState.message && (
+              <div className={`flex items-center gap-2 text-sm mb-4 p-3 rounded-lg ${
+                deleteState.status === 'success'
+                  ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                  : 'bg-red-500/10 text-red-400 border border-red-500/20'
+              }`}>
+                {deleteState.status === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+                <span>{deleteState.message}</span>
+                {deleteState.status === 'error' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setDeleteState(s => ({ ...s, status: 'idle', message: '' }))}
+                    className="ml-auto h-6 px-2"
+                  >
+                    <X size={14} />
+                  </Button>
+                )}
+              </div>
+            )}
+
             {/* Runs List */}
             <div className="flex-1 space-y-3">
               {filteredRuns.length === 0 ? (
@@ -787,10 +843,15 @@ export const BenchmarkRunsPage: React.FC = () => {
                                 e.stopPropagation();
                                 handleDeleteRun(run);
                               }}
+                              disabled={deleteState.isDeleting && deleteState.deletingId === run.id}
                               className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                               title="Delete run"
                             >
-                              <Trash2 size={14} />
+                              {deleteState.isDeleting && deleteState.deletingId === run.id ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <Trash2 size={14} />
+                              )}
                             </Button>
                           </div>
                         </div>

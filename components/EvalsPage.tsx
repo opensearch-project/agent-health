@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Play, Pencil, Trash2, CheckCircle, History, Filter, Loader2 } from 'lucide-react';
+import { Plus, Play, Pencil, Trash2, CheckCircle, CheckCircle2, History, Filter, Loader2, XCircle, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +28,14 @@ export const EvalsPage: React.FC = () => {
   const [isQuickRunOpen, setIsQuickRunOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [runCounts, setRunCounts] = useState<Record<string, number>>({});
+
+  // Delete operation state
+  const [deleteState, setDeleteState] = useState<{
+    isDeleting: boolean;
+    deletingId: string | null;
+    status: 'idle' | 'success' | 'error';
+    message: string;
+  }>({ isDeleting: false, deletingId: null, status: 'idle', message: '' });
 
   const loadTestCases = useCallback(async () => {
     setIsLoading(true);
@@ -74,9 +82,26 @@ export const EvalsPage: React.FC = () => {
   };
 
   const handleDeleteTestCase = async (testCase: TestCase) => {
-    if (window.confirm(`Delete test case "${testCase.name}"? This cannot be undone.`)) {
-      await asyncTestCaseStorage.delete(testCase.id);
-      loadTestCases();
+    if (!window.confirm(`Delete test case "${testCase.name}"? This cannot be undone.`)) return;
+
+    setDeleteState({ isDeleting: true, deletingId: testCase.id, status: 'idle', message: '' });
+
+    try {
+      const success = await asyncTestCaseStorage.delete(testCase.id);
+      if (success) {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'success', message: `"${testCase.name}" deleted` });
+        setTimeout(() => setDeleteState(s => ({ ...s, status: 'idle', message: '' })), 3000);
+        loadTestCases();
+      } else {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'error', message: `Failed to delete "${testCase.name}"` });
+      }
+    } catch (error) {
+      setDeleteState({
+        isDeleting: false,
+        deletingId: null,
+        status: 'error',
+        message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
     }
   };
 
@@ -154,6 +179,28 @@ export const EvalsPage: React.FC = () => {
           </Select>
         </div>
       </div>
+
+      {/* Delete Feedback */}
+      {deleteState.message && (
+        <div className={`flex items-center gap-2 text-sm p-3 rounded-lg mb-4 ${
+          deleteState.status === 'success'
+            ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+            : 'bg-red-500/10 text-red-400 border border-red-500/20'
+        }`}>
+          {deleteState.status === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+          <span>{deleteState.message}</span>
+          {deleteState.status === 'error' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setDeleteState(s => ({ ...s, status: 'idle', message: '' }))}
+              className="ml-auto h-6 px-2"
+            >
+              <X size={14} />
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Test Case List */}
       <ScrollArea className="flex-1">
@@ -259,10 +306,15 @@ export const EvalsPage: React.FC = () => {
                           variant="ghost"
                           size="icon"
                           onClick={() => handleDeleteTestCase(testCase)}
+                          disabled={deleteState.isDeleting && deleteState.deletingId === testCase.id}
                           className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                           title="Delete"
                         >
-                          <Trash2 size={14} />
+                          {deleteState.isDeleting && deleteState.deletingId === testCase.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <Trash2 size={14} />
+                          )}
                         </Button>
                       </div>
                     </div>

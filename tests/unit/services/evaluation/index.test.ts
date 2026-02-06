@@ -193,10 +193,8 @@ describe('Evaluation Service Index', () => {
       const onStepMock = jest.fn();
       await runEvaluation(mockAgent, 'claude-3-sonnet', mockTestCase, onStepMock);
 
+      // When no runId, log fetch should be skipped (no warning logged)
       expect(openSearchClient.fetchLogsForRun).not.toHaveBeenCalled();
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('No runId captured')
-      );
     });
 
     it('should handle log fetch errors gracefully', async () => {
@@ -218,7 +216,7 @@ describe('Evaluation Service Index', () => {
       expect(result.status).toBe('completed');
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('Failed to fetch logs'),
-        expect.any(Error)
+        'OpenSearch unavailable'
       );
     });
 

@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Comparison Page', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to benchmarks first
-    await page.goto('/#/benchmarks');
+    await page.goto('/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
   });
@@ -142,7 +142,7 @@ test.describe('Comparison Page', () => {
 
 test.describe('Comparison Page - Metrics', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/benchmarks');
+    await page.goto('/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
   });
@@ -200,7 +200,7 @@ test.describe('Comparison Page - Metrics', () => {
 
 test.describe('Comparison Page - Filters', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/benchmarks');
+    await page.goto('/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
   });

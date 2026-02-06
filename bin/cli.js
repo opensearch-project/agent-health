@@ -17,7 +17,7 @@ import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const cliSourcePath = join(__dirname, '..', 'cli', 'index.ts');
-const isInNodeModules = import.meta.url.includes('node_modules');
+const isInNodeModules = import.meta.url.split('/').includes('node_modules');
 
 // Development mode: TypeScript source exists and not running from node_modules
 const isDev = existsSync(cliSourcePath) && !isInNodeModules;

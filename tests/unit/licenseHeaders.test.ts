@@ -17,7 +17,7 @@ import * as path from 'path';
 const ROOT_DIR = path.resolve(__dirname, '../..');
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.cjs', '.mjs', '.css'];
-const EXCLUDED_DIRS = ['node_modules', 'dist', 'build', 'coverage', '.git', 'server/dist', 'cli/dist'];
+const EXCLUDED_DIRS = ['node_modules', 'dist', 'build', 'coverage', '.git', 'server/dist', 'cli/dist', 'lib/dist'];
 
 const SPDX_IDENTIFIER = 'SPDX-License-Identifier: Apache-2.0';
 const COPYRIGHT_NOTICE = 'Copyright OpenSearch Contributors';

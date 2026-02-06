@@ -10,13 +10,13 @@
 
 import type { TrajectoryStep } from '@/types';
 import { ToolCallStatus } from '@/types';
-import { SubprocessConnector } from '../subprocess/SubprocessConnector';
+import { SubprocessConnector } from '@/services/connectors/subprocess/SubprocessConnector';
 import type {
   ConnectorAuth,
   ConnectorRequest,
   ConnectorProgressCallback,
   SubprocessConfig,
-} from '../types';
+} from '@/services/connectors/types';
 
 /**
  * Default Claude Code configuration

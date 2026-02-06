@@ -12,7 +12,7 @@ import type {
   ConnectorResponse,
   ConnectorProgressCallback,
   ConnectorRawEventCallback,
-} from '../types';
+} from '@/services/connectors/types';
 
 /**
  * Abstract base class for connectors

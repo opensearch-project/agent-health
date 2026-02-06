@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Settings Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/settings');
+    await page.goto('/settings');
     await page.waitForSelector('[data-testid="settings-page"]', { timeout: 30000 });
   });
 
@@ -56,7 +56,7 @@ test.describe('Settings Page', () => {
 
 test.describe('Agent Endpoints Section', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/settings');
+    await page.goto('/settings');
     await page.waitForSelector('[data-testid="settings-page"]', { timeout: 30000 });
   });
 
@@ -70,6 +70,33 @@ test.describe('Agent Endpoints Section', () => {
     // Should show at least one built-in agent
     const builtInBadge = page.locator('text=built-in').first();
     await expect(builtInBadge).toBeVisible();
+  });
+
+  test('should show CLI-only info alert', async ({ page }) => {
+    // The info alert about CLI-only agents should be visible
+    const infoAlert = page.locator('text=Some agents (like Claude Code) require CLI execution');
+    await expect(infoAlert).toBeVisible();
+  });
+
+  test('should show CLI-only badge for Claude Code', async ({ page }) => {
+    // Claude Code should have a "CLI only" badge
+    const cliBadge = page.locator('span').filter({ hasText: 'CLI only' }).first();
+    await expect(cliBadge).toBeVisible();
+  });
+
+  test('should show both built-in and CLI-only badges where appropriate', async ({ page }) => {
+    // Verify that agents have appropriate badges
+    // Demo Agent: built-in only (browser-compatible)
+    // Claude Code: built-in AND CLI only
+
+    // First, check Claude Code has both badges
+    const claudeCodeEntry = page.locator('div').filter({ hasText: /Claude Code/ });
+    if (await claudeCodeEntry.first().isVisible().catch(() => false)) {
+      // Should have built-in badge
+      await expect(page.locator('text=built-in').first()).toBeVisible();
+      // Should have CLI only badge
+      await expect(page.locator('text=CLI only').first()).toBeVisible();
+    }
   });
 
   test('should show Custom Endpoints section', async ({ page }) => {
@@ -132,7 +159,7 @@ test.describe('Agent Endpoints Section', () => {
 
 test.describe('Evaluation Storage Section', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/settings');
+    await page.goto('/settings');
     await page.waitForSelector('[data-testid="settings-page"]', { timeout: 30000 });
   });
 
@@ -214,7 +241,7 @@ test.describe('Evaluation Storage Section', () => {
 
 test.describe('Observability Data Source Section', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/settings');
+    await page.goto('/settings');
     await page.waitForSelector('[data-testid="settings-page"]', { timeout: 30000 });
   });
 
@@ -254,7 +281,7 @@ test.describe('Observability Data Source Section', () => {
 
 test.describe('Data Migration Section', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/settings');
+    await page.goto('/settings');
     await page.waitForSelector('[data-testid="settings-page"]', { timeout: 30000 });
   });
 

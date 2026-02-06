@@ -7,13 +7,13 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Traces Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/traces');
+    await page.goto('/agent-traces');
     await page.waitForTimeout(3000); // Give time for the page to fully load
   });
 
   test('should display Live Traces page', async ({ page }) => {
     // Check that we navigated to traces
-    await expect(page).toHaveURL(/#\/traces/);
+    await expect(page).toHaveURL(/\/agent-traces/);
   });
 
   test('should show view toggle (Flow/Timeline)', async ({ page }) => {
@@ -66,7 +66,7 @@ test.describe('Traces Page', () => {
 
 test.describe('Trace Visualization', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/traces');
+    await page.goto('/agent-traces');
     await page.waitForTimeout(3000);
   });
 
@@ -127,7 +127,7 @@ test.describe('Trace Visualization', () => {
 
 test.describe('Trace Filtering', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/traces');
+    await page.goto('/agent-traces');
     await page.waitForTimeout(3000);
   });
 
@@ -139,7 +139,7 @@ test.describe('Trace Filtering', () => {
       await page.waitForTimeout(1000);
 
       // Page should still be functional
-      await expect(page).toHaveURL(/#\/traces/);
+      await expect(page).toHaveURL(/\/agent-traces/);
     }
   });
 

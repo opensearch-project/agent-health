@@ -14,6 +14,7 @@
 
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import net from 'net';
+import path from 'path';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -80,22 +81,21 @@ export interface EnsureServerResult {
  */
 export async function isServerRunning(port: number): Promise<boolean> {
   // First try HTTP health check (most reliable)
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
 
+  try {
     const response = await fetch(`http://localhost:${port}/health`, {
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (response.ok) {
-      console.log(`[ServerLifecycle] Health check passed on port ${port}`);
       return true;
     }
-  } catch (error) {
+  } catch {
     // Health check failed, fall back to TCP check
-    console.log(`[ServerLifecycle] Health check failed on port ${port}:`, error instanceof Error ? error.message : error);
+  } finally {
+    clearTimeout(timeout);
   }
 
   // Fall back to TCP socket check
@@ -104,19 +104,16 @@ export async function isServerRunning(port: number): Promise<boolean> {
     socket.setTimeout(1000);
 
     socket.on('connect', () => {
-      console.log(`[ServerLifecycle] TCP connection succeeded on port ${port}`);
       socket.destroy();
       resolve(true);
     });
 
     socket.on('timeout', () => {
-      console.log(`[ServerLifecycle] TCP connection timed out on port ${port}`);
       socket.destroy();
       resolve(false);
     });
 
-    socket.on('error', (err) => {
-      console.log(`[ServerLifecycle] TCP connection error on port ${port}:`, err.message);
+    socket.on('error', () => {
       resolve(false);
     });
 
@@ -129,25 +126,25 @@ export async function isServerRunning(port: number): Promise<boolean> {
  * Returns running status and version from /health endpoint
  */
 export async function checkServerStatus(port: number): Promise<ServerStatus> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
 
+  try {
     const response = await fetch(`http://localhost:${port}/health`, {
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (response.ok) {
       const data = await response.json();
-      console.log(`[ServerLifecycle] Server status: running=${true}, version=${data.version}`);
       return {
         running: true,
         version: data.version,
       };
     }
-  } catch (error) {
-    console.log(`[ServerLifecycle] Server status check failed:`, error instanceof Error ? error.message : error);
+  } catch {
+    // Server status check failed
+  } finally {
+    clearTimeout(timeout);
   }
 
   return { running: false };
@@ -158,7 +155,6 @@ export async function checkServerStatus(port: number): Promise<ServerStatus> {
  * Cross-platform: uses lsof on Unix, netstat on Windows
  */
 export async function killServerOnPort(port: number): Promise<void> {
-  console.log(`[ServerLifecycle] Killing process on port ${port}...`);
 
   try {
     if (process.platform !== 'win32') {
@@ -189,12 +185,19 @@ export async function killServerOnPort(port: number): Promise<void> {
       }
     }
 
-    // Wait for port to be free
-    await new Promise(r => setTimeout(r, 1000));
-    console.log(`[ServerLifecycle] Port ${port} should now be free`);
+    // Wait for port to be free with retry loop
+    const maxRetries = 10;
+    const retryDelay = 500;
+    for (let i = 0; i < maxRetries; i++) {
+      await new Promise(r => setTimeout(r, retryDelay));
+      const stillRunning = await isServerRunning(port);
+      if (!stillRunning) {
+        return;
+      }
+    }
+    console.warn(`[ServerLifecycle] Port ${port} may still be in use after ${maxRetries} retries`);
   } catch {
     // Ignore errors during cleanup
-    console.log(`[ServerLifecycle] Failed to kill process on port ${port} (may not exist)`);
   }
 }
 
@@ -204,20 +207,14 @@ export async function killServerOnPort(port: number): Promise<void> {
 async function waitForServer(port: number, timeout: number): Promise<boolean> {
   const startTime = Date.now();
   const pollInterval = 500;
-  let attempts = 0;
-
-  console.log(`[ServerLifecycle] Waiting for server on port ${port} (timeout: ${timeout}ms)`);
 
   while (Date.now() - startTime < timeout) {
-    attempts++;
     if (await isServerRunning(port)) {
-      console.log(`[ServerLifecycle] Server ready after ${attempts} attempts (${Date.now() - startTime}ms)`);
       return true;
     }
     await new Promise((r) => setTimeout(r, pollInterval));
   }
 
-  console.log(`[ServerLifecycle] Server not ready after ${attempts} attempts (${timeout}ms timeout)`);
   return false;
 }
 
@@ -230,7 +227,9 @@ export async function startServer(
 ): Promise<ChildProcess> {
   // Spawn server process
   // Use the serve command which is the standard way to start the server
-  const child = spawn('node', ['bin/cli.js', 'serve', '-p', String(port), '--no-browser'], {
+  // Use path.join for cross-platform compatibility
+  const cliPath = path.join('bin', 'cli.js');
+  const child = spawn('node', [cliPath, 'serve', '-p', String(port), '--no-browser'], {
     detached: true,
     stdio: 'ignore',
     env: {

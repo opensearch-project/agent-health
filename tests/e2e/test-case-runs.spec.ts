@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Test Case Runs Page', () => {
   test.beforeEach(async ({ page }) => {
     // First navigate to test cases to find a test case
-    await page.goto('/#/test-cases');
+    await page.goto('/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
   });
@@ -163,7 +163,7 @@ test.describe('Test Case Runs Page', () => {
 
 test.describe('Test Case Runs - Run Actions', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/test-cases');
+    await page.goto('/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
   });
@@ -225,7 +225,7 @@ test.describe('Test Case Runs - Run Actions', () => {
 
 test.describe('Test Case Runs - Run Cards', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/test-cases');
+    await page.goto('/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
   });

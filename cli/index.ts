@@ -74,9 +74,12 @@ const program = new Command();
 program
   .name('agent-health')
   .description('Agent Health Evaluation Framework - Evaluate and monitor AI agent performance')
-  .version(version);
+  .version(version)
+  // Enable subcommands to handle their own options (prevents parent options from shadowing)
+  .enablePositionalOptions()
+  .passThroughOptions();
 
-// CLI options
+// CLI options for default action (when no subcommand is specified)
 program
   .option('-p, --port <number>', 'Server port', '4001')
   .option('-e, --env-file <path>', 'Load environment variables from file (e.g., .env)')

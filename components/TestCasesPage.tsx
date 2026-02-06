@@ -17,6 +17,10 @@ import {
   Filter,
   Calendar,
   Upload,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  X,
 } from 'lucide-react';
 import { asyncTestCaseStorage, asyncRunStorage, asyncBenchmarkStorage } from '@/services/storage';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
@@ -85,9 +89,10 @@ interface TestCaseCardProps {
   onRun: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  isDeleting?: boolean;
 }
 
-const TestCaseCard = ({ testCase, runCount, onClick, onRun, onEdit, onDelete }: TestCaseCardProps) => {
+const TestCaseCard = ({ testCase, runCount, onClick, onRun, onEdit, onDelete, isDeleting }: TestCaseCardProps) => {
   // Show first 3 labels
   const displayLabels = (testCase.labels || []).slice(0, 3);
 
@@ -141,10 +146,11 @@ const TestCaseCard = ({ testCase, runCount, onClick, onRun, onEdit, onDelete }: 
               variant="ghost"
               size="sm"
               onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              disabled={isDeleting}
               className="text-destructive hover:text-destructive"
               title="Delete test case"
             >
-              <Trash2 size={14} />
+              {isDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
             </Button>
           </div>
         </div>
@@ -168,6 +174,7 @@ interface CategorySectionProps {
   onRun: (tc: TestCase) => void;
   onEdit: (tc: TestCase) => void;
   onDelete: (tc: TestCase) => void;
+  deletingId: string | null;
 }
 
 const CategorySection = ({
@@ -180,6 +187,7 @@ const CategorySection = ({
   onRun,
   onEdit,
   onDelete,
+  deletingId,
 }: CategorySectionProps) => {
   return (
     <Collapsible open={isOpen} onOpenChange={onToggle}>
@@ -208,6 +216,7 @@ const CategorySection = ({
               onRun={() => onRun(tc)}
               onEdit={() => onEdit(tc)}
               onDelete={() => onDelete(tc)}
+              isDeleting={deletingId === tc.id}
             />
           ))}
         </div>
@@ -289,6 +298,14 @@ export const TestCasesPage: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Delete operation state
+  const [deleteState, setDeleteState] = useState<{
+    isDeleting: boolean;
+    deletingId: string | null;
+    status: 'idle' | 'success' | 'error';
+    message: string;
+  }>({ isDeleting: false, deletingId: null, status: 'idle', message: '' });
 
   // Load data
   const loadData = async () => {
@@ -395,13 +412,29 @@ export const TestCasesPage: React.FC = () => {
 
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
+
+    const targetName = deleteTarget.name;
+    const targetId = deleteTarget.id;
+    setDeleteTarget(null);
+    setDeleteState({ isDeleting: true, deletingId: targetId, status: 'idle', message: '' });
+
     try {
-      await asyncTestCaseStorage.delete(deleteTarget.id);
-      await loadData();
+      const success = await asyncTestCaseStorage.delete(targetId);
+      if (success) {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'success', message: `"${targetName}" deleted` });
+        setTimeout(() => setDeleteState(s => ({ ...s, status: 'idle', message: '' })), 3000);
+        await loadData();
+      } else {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'error', message: `Failed to delete "${targetName}"` });
+      }
     } catch (error) {
       console.error('Failed to delete test case:', error);
-    } finally {
-      setDeleteTarget(null);
+      setDeleteState({
+        isDeleting: false,
+        deletingId: null,
+        status: 'error',
+        message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
     }
   };
 
@@ -573,6 +606,28 @@ export const TestCasesPage: React.FC = () => {
             )}
           </div>
 
+          {/* Delete Feedback */}
+          {deleteState.message && (
+            <div className={`flex items-center gap-2 text-sm p-3 rounded-lg mb-4 ${
+              deleteState.status === 'success'
+                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                : 'bg-red-500/10 text-red-400 border border-red-500/20'
+            }`}>
+              {deleteState.status === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+              <span>{deleteState.message}</span>
+              {deleteState.status === 'error' && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDeleteState(s => ({ ...s, status: 'idle', message: '' }))}
+                  className="ml-auto h-6 px-2"
+                >
+                  <X size={14} />
+                </Button>
+              )}
+            </div>
+          )}
+
           {/* Test Cases List */}
           {filteredTestCases.length === 0 ? (
             <NoResultsState onClearFilters={clearFilters} />
@@ -590,6 +645,7 @@ export const TestCasesPage: React.FC = () => {
                   onRun={handleRun}
                   onEdit={handleEdit}
                   onDelete={(tc) => setDeleteTarget(tc)}
+                  deletingId={deleteState.isDeleting ? deleteState.deletingId : null}
                 />
               ))}
             </div>

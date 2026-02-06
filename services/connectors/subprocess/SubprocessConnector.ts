@@ -10,7 +10,7 @@
 
 import { spawn, ChildProcess } from 'child_process';
 import type { TrajectoryStep } from '@/types';
-import { BaseConnector } from '../base/BaseConnector';
+import { BaseConnector } from '@/services/connectors/base/BaseConnector';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -19,7 +19,7 @@ import type {
   ConnectorRawEventCallback,
   SubprocessConfig,
   ConnectorProtocol,
-} from '../types';
+} from '@/services/connectors/types';
 
 /**
  * Default subprocess configuration

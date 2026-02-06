@@ -10,14 +10,14 @@
 
 import type { TrajectoryStep } from '@/types';
 import type { AGUIEvent } from '@/types/agui';
-import { BaseConnector } from '../base/BaseConnector';
+import { BaseConnector } from '@/services/connectors/base/BaseConnector';
 import type {
   ConnectorAuth,
   ConnectorRequest,
   ConnectorResponse,
   ConnectorProgressCallback,
   ConnectorRawEventCallback,
-} from '../types';
+} from '@/services/connectors/types';
 import { consumeSSEStream } from '@/services/agent/sseStream';
 import { buildAgentPayload, AgentRequestPayload } from '@/services/agent/payloadBuilder';
 import { AGUIToTrajectoryConverter, computeTrajectoryFromRawEvents } from '@/services/agent/aguiConverter';
