@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AppConfig } from '@/types';
+import { AppConfig, ModelConfig } from '@/types';
 import { ENV_CONFIG, buildMLCommonsHeaders } from '@/lib/config';
 
 /**
@@ -150,3 +150,31 @@ export const MOCK_TOOLS = [
   { name: 'opensearch_cluster_allocation_explain', description: 'Explain shard allocation' },
   { name: 'opensearch_list_indices', description: 'List all indices with detailed information' },
 ];
+
+/**
+ * Fetch agent and model config from the server and update DEFAULT_CONFIG in place.
+ * All components already read DEFAULT_CONFIG at render time, so mutating it
+ * before a re-render is sufficient — no prop drilling or context needed.
+ */
+export async function refreshConfig(): Promise<void> {
+  try {
+    const [agentsRes, modelsRes] = await Promise.all([
+      fetch('/api/agents'),
+      fetch('/api/models'),
+    ]);
+    if (agentsRes.ok) {
+      const { agents } = await agentsRes.json();
+      DEFAULT_CONFIG.agents = agents;
+    }
+    if (modelsRes.ok) {
+      const { models: modelsArray } = await modelsRes.json();
+      const modelsRecord: Record<string, ModelConfig> = {};
+      for (const { key, ...cfg } of modelsArray) {
+        modelsRecord[key] = cfg;
+      }
+      DEFAULT_CONFIG.models = modelsRecord;
+    }
+  } catch {
+    // Server unreachable — keep hardcoded defaults
+  }
+}

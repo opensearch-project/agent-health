@@ -76,6 +76,7 @@ async function updateTestCaseResult(
   await client.update({
     index: INDEX,
     id: benchmarkId,
+    retry_on_conflict: 3,
     body: {
       script: {
         source: `
@@ -782,6 +783,7 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
       await client.update({
         index: INDEX,
         id,
+        retry_on_conflict: 3,
         body: {
           script: {
             source: `
@@ -810,6 +812,7 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
         await client.update({
           index: INDEX,
           id,
+          retry_on_conflict: 3,
           body: {
             script: {
               source: `

@@ -12,8 +12,11 @@ build
 !.env.example
 judge.log
 
-# Configuration file with credentials (use agent-health.example.yaml as template)
+# Configuration files (may contain credentials)
 agent-health.yaml
+agent-health.config.ts
+agent-health.config.js
+agent-health.config.mjs
 
 /cli/dist
 
