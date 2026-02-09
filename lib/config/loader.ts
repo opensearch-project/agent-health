@@ -73,6 +73,7 @@ function toAgentConfig(userAgent: UserAgentConfig): AgentConfig {
     useTraces: userAgent.useTraces ?? false,
     connectorType: userAgent.connectorType,
     connectorConfig: userAgent.connectorConfig,
+    hooks: userAgent.hooks,
   };
 }
 

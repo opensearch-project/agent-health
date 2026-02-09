@@ -21,6 +21,9 @@ export type {
   ResolvedServerConfig,
 } from './types';
 
+// Re-export hook types for consumer convenience (e.g., in agent-health.config.ts)
+export type { AgentHooks, BeforeRequestContext } from '@/types';
+
 // Function exports
 export { defineConfig } from './defineConfig';
 export {

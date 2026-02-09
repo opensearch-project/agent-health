@@ -31,6 +31,27 @@ export default {
       models: ["claude-sonnet-4.5", "claude-sonnet-4"],
       useTraces: false,          // Set to true to fetch OTel traces for this agent
       headers: {},               // Custom headers sent with every request
+
+      // Lifecycle hooks for custom setup/transform logic.
+      // Use hooks when your agent deviates from the standard AG-UI protocol.
+      // hooks: {
+      //   // Called before each request. Use it to create resources, modify the
+      //   // endpoint/payload/headers, or perform any async setup your agent needs.
+      //   // Must return { endpoint, payload, headers }.
+      //   beforeRequest: async ({ endpoint, payload, headers }) => {
+      //     // Example: pre-create a thread (e.g., Pulsar's Coral backend)
+      //     const baseUrl = new URL(endpoint).origin;
+      //     await fetch(`${baseUrl}/api/threads`, {
+      //       method: 'POST',
+      //       headers: { ...headers, 'Content-Type': 'application/json' },
+      //       body: JSON.stringify({
+      //         id: payload.threadId,
+      //         title: payload.messages?.[0]?.content?.slice(0, 100) || 'Evaluation',
+      //       }),
+      //     });
+      //     return { endpoint, payload, headers };
+      //   },
+      // },
     },
   ],
 

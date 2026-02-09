@@ -9,7 +9,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { AgentConfig, EvaluationReport, TestCase, TrajectoryStep, OpenSearchLog, LLMJudgeResponse, ConnectorProtocol } from '@/types';
+import { AgentConfig, EvaluationReport, TestCase, TrajectoryStep, OpenSearchLog, LLMJudgeResponse, ConnectorProtocol, BeforeRequestContext } from '@/types';
+import { executeBeforeRequestHook } from '@/lib/hooks';
 import { AGUIToTrajectoryConverter, consumeSSEStream, buildAgentPayload } from '@/services/agent';
 import { AGUIEvent } from '@/types/agui';
 import { generateMockTrajectory } from './mockTrajectory';
@@ -141,9 +142,26 @@ export async function runEvaluationWithConnector(
     // Build auth from agent config
     const auth = buildConnectorAuth(agent);
 
+    // Execute beforeRequest hook if defined
+    let effectiveEndpoint = agent.endpoint;
+    if (agent.hooks?.beforeRequest) {
+      const previewPayload = connector.buildPayload(request);
+      const hookContext: BeforeRequestContext = {
+        endpoint: agent.endpoint,
+        payload: previewPayload,
+        headers: auth.headers || agent.headers || {},
+      };
+      const hookResult = await executeBeforeRequestHook(agent.hooks, hookContext, agent.key);
+      effectiveEndpoint = hookResult.endpoint;
+      // Merge any hook-modified headers into auth
+      if (hookResult.headers) {
+        auth.headers = { ...auth.headers, ...hookResult.headers };
+      }
+    }
+
     // Execute via connector
     const result = await connector.execute(
-      agent.endpoint,
+      effectiveEndpoint,
       request,
       auth,
       onStep,
@@ -301,6 +319,7 @@ async function runRealAgentEvaluation(
     endpoint: agent.endpoint,
     payload: agentPayload,
     headers: agent.headers,
+    agentKey: agent.key,
   };
 
   debug('Eval', 'Using proxy:', ENV_CONFIG.agentProxyUrl);

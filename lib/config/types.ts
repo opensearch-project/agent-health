@@ -8,7 +8,7 @@
  * Type definitions for agent-health.config.ts files
  */
 
-import type { AgentConfig, ModelConfig, ConnectorProtocol } from '@/types/index.js';
+import type { AgentConfig, ModelConfig, ConnectorProtocol, AgentHooks } from '@/types/index.js';
 import type { AgentConnector } from '@/services/connectors/types.js';
 
 /**
@@ -26,6 +26,7 @@ export interface UserAgentConfig {
   useTraces?: boolean;
   connectorType?: ConnectorProtocol;
   connectorConfig?: Record<string, any>;
+  hooks?: AgentHooks;
 }
 
 /**

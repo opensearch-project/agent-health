@@ -25,6 +25,18 @@ export interface ModelConfig {
   max_output_tokens: number;
 }
 
+// ============ Agent Lifecycle Hook Types ============
+
+export interface BeforeRequestContext {
+  endpoint: string;
+  payload: any;
+  headers: Record<string, string>;
+}
+
+export interface AgentHooks {
+  beforeRequest?: (context: BeforeRequestContext) => Promise<BeforeRequestContext>;
+}
+
 export interface AgentConfig {
   key: string; // Unique identifier for the agent (used for env var prefix)
   name: string;
@@ -36,6 +48,7 @@ export interface AgentConfig {
   useTraces?: boolean; // When true, fetch traces instead of logs for evaluation
   connectorType?: ConnectorProtocol; // Connector protocol (defaults to 'agui-streaming')
   connectorConfig?: Record<string, any>; // Connector-specific configuration
+  hooks?: AgentHooks; // Lifecycle hooks for custom setup/transform logic
 }
 
 export interface AppConfig {

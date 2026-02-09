@@ -26,9 +26,11 @@ const router = Router();
 router.get('/api/agents', (req: Request, res: Response) => {
   try {
     const config = loadConfigSync();
+    // Strip hooks (functions can't be serialized to JSON)
+    const agents = config.agents.map(({ hooks, ...rest }) => rest);
     res.json({
-      agents: config.agents,
-      total: config.agents.length,
+      agents,
+      total: agents.length,
       meta: { source: 'config' },
     });
   } catch (error: any) {

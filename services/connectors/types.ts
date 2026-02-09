@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TestCase, TrajectoryStep } from '@/types';
+import type { TestCase, TrajectoryStep, AgentHooks } from '@/types';
 
 // ============ Connector Protocol Types ============
 
@@ -178,6 +178,9 @@ export interface AgentConfigWithConnector {
 
   /** Authentication configuration */
   auth?: ConnectorAuth;
+
+  /** Lifecycle hooks for custom setup/transform logic */
+  hooks?: AgentHooks;
 }
 
 // ============ Registry Types ============
