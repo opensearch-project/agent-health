@@ -56,7 +56,9 @@ function setupStaticServing(app: Express): void {
 
   if (indexExists) {
     console.log('[StaticServer] Serving frontend from dist/ folder');
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      index: false,  // Don't serve index.html for directory requests — let SPA fallback handle it
+    }));
   } else {
     console.log('[StaticServer] dist/index.html not found - API-only mode');
   }
