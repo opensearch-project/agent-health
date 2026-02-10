@@ -14,6 +14,7 @@
 import { writeFileSync } from 'fs';
 import type { BenchmarkRun, EvaluationReport, Benchmark, AgentConfig } from '@/types';
 import { calculateRunStats, getReportIdsFromRun } from '@/lib/runStats';
+import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 
 // Mock fs
 jest.mock('fs', () => ({
@@ -424,6 +425,113 @@ describe('Benchmark Command - Helper Functions', () => {
       expect(stats.pending).toBe(1); // tc-4
       expect(stats.total).toBe(4);
       expect(stats.passRate).toBe(33); // 1/3 completed (excluding pending) = 33%
+    });
+  });
+
+  // Test isFilePath helper (inlined, matching the implementation in benchmark.ts)
+  describe('isFilePath', () => {
+    function isFilePath(value: string): boolean {
+      return value.toLowerCase().endsWith('.json');
+    }
+
+    it('should detect .json extension', () => {
+      expect(isFilePath('test-cases.json')).toBe(true);
+    });
+
+    it('should detect .JSON extension (case-insensitive)', () => {
+      expect(isFilePath('test-cases.JSON')).toBe(true);
+    });
+
+    it('should detect path with .json extension', () => {
+      expect(isFilePath('./path/to/test-cases.json')).toBe(true);
+    });
+
+    it('should return false for benchmark names', () => {
+      expect(isFilePath('My Benchmark')).toBe(false);
+    });
+
+    it('should return false for benchmark IDs', () => {
+      expect(isFilePath('bench-123456')).toBe(false);
+    });
+
+    it('should return false for strings containing json but not ending with .json', () => {
+      expect(isFilePath('json-benchmark')).toBe(false);
+    });
+  });
+
+  // Test file validation using validateTestCasesArrayJson (the core of loadAndValidateTestCasesFile)
+  describe('file mode validation (validateTestCasesArrayJson)', () => {
+    it('should validate a well-formed test cases array', () => {
+      const validTestCases = [
+        {
+          name: 'Test Case 1',
+          category: 'RCA',
+          difficulty: 'Easy',
+          initialPrompt: 'Investigate the issue',
+          expectedOutcomes: ['Find root cause'],
+        },
+      ];
+
+      const result = validateTestCasesArrayJson(validTestCases);
+
+      expect(result.valid).toBe(true);
+      expect(result.data).toHaveLength(1);
+      expect(result.data![0].name).toBe('Test Case 1');
+    });
+
+    it('should auto-wrap a single object into an array', () => {
+      const singleTestCase = {
+        name: 'Single Test',
+        category: 'RCA',
+        difficulty: 'Medium',
+        initialPrompt: 'Check this',
+        expectedOutcomes: ['Expected result'],
+      };
+
+      const result = validateTestCasesArrayJson(singleTestCase);
+
+      expect(result.valid).toBe(true);
+      expect(result.data).toHaveLength(1);
+      expect(result.data![0].name).toBe('Single Test');
+    });
+
+    it('should reject invalid test cases (missing required fields)', () => {
+      const invalidTestCases = [{ name: '' }];
+
+      const result = validateTestCasesArrayJson(invalidTestCases);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('should reject an empty array', () => {
+      const result = validateTestCasesArrayJson([]);
+
+      expect(result.valid).toBe(false);
+    });
+
+    it('should validate multiple test cases', () => {
+      const testCases = [
+        {
+          name: 'Test 1',
+          category: 'RCA',
+          difficulty: 'Easy',
+          initialPrompt: 'prompt 1',
+          expectedOutcomes: ['outcome 1'],
+        },
+        {
+          name: 'Test 2',
+          category: 'Performance',
+          difficulty: 'Hard',
+          initialPrompt: 'prompt 2',
+          expectedOutcomes: ['outcome 2', 'outcome 3'],
+        },
+      ];
+
+      const result = validateTestCasesArrayJson(testCases);
+
+      expect(result.valid).toBe(true);
+      expect(result.data).toHaveLength(2);
     });
   });
 

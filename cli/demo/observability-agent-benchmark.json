@@ -1,0 +1,144 @@
+[
+  {
+    "name": "Log Anomaly: Spike in 5xx Errors on API Gateway",
+    "description": "Investigate a sudden increase in HTTP 500 errors across the API gateway service",
+    "category": "RCA",
+    "difficulty": "Easy",
+    "initialPrompt": "Our API gateway has been returning a high number of HTTP 500 errors in the past 30 minutes. The error rate jumped from 0.5% to 12%. Can you investigate the traces and logs stored in OpenSearch to identify which downstream service is causing the failures?",
+    "context": [
+      {
+        "description": "Service Architecture",
+        "value": "API Gateway routes to:\n- user-service (authentication, profiles)\n- order-service (order management, CRUD)\n- inventory-service (stock checks, reservations)\n- notification-service (email, SMS)\nAll services emit OpenTelemetry traces to OpenSearch index: otel-v1-apm-span-*"
+      },
+      {
+        "description": "Available Indices",
+        "value": "Indices for investigation:\n- otel-v1-apm-span-*: Distributed traces\n- logs-gateway-*: API gateway access logs with status codes\n- logs-app-*: Application logs from all services\nKey fields: traceId, serviceName, status.code, http.status_code, duration"
+      },
+      {
+        "description": "Recent Observations",
+        "value": "- 5xx rate: 12% (baseline: 0.5%)\n- Affected endpoints: /api/orders/*, /api/inventory/*\n- Unaffected: /api/users/*, /api/notifications/*\n- order-service response time p99 jumped to 8s (baseline: 200ms)\n- inventory-service returning 503 intermittently"
+      }
+    ],
+    "expectedOutcomes": [
+      "Query otel-v1-apm-span-* for error spans with status.code = 2 in the last 30 minutes",
+      "Identify that inventory-service is the root cause of cascading 500 errors",
+      "Show correlation between inventory-service failures and order-service timeouts",
+      "Find evidence in traces that inventory-service is returning 503 responses",
+      "Recommend checking inventory-service health, database connections, or resource limits"
+    ]
+  },
+  {
+    "name": "Trace Analysis: Distributed Transaction Timeout",
+    "description": "Debug a distributed transaction that spans multiple microservices and times out intermittently",
+    "category": "RCA",
+    "difficulty": "Medium",
+    "initialPrompt": "Customers report that placing orders sometimes takes over 30 seconds and then fails with a timeout. This happens about 20% of the time. Use the distributed traces in OpenSearch to trace the full request lifecycle and identify where the delay is introduced.",
+    "context": [
+      {
+        "description": "Order Placement Flow",
+        "value": "Order flow spans 5 services:\n1. api-gateway → 2. order-service.CreateOrder\n   → 3. inventory-service.ReserveStock\n   → 4. payment-service.ProcessPayment\n   → 5. notification-service.SendConfirmation\nEach service has its own timeout: gateway=60s, order=45s, inventory=10s, payment=30s, notification=5s"
+      },
+      {
+        "description": "OpenSearch Trace Fields",
+        "value": "Key span attributes:\n- serviceName: service that generated the span\n- operationName: specific operation (e.g., CreateOrder, ReserveStock)\n- duration: span duration in microseconds\n- status.code: 0=OK, 2=ERROR\n- parentSpanId: for building trace tree\n- attributes.retry.count: number of retries attempted"
+      },
+      {
+        "description": "Observed Pattern",
+        "value": "Failing traces show:\n- Total duration: 30-45 seconds\n- payment-service.ProcessPayment spans: 25-30 seconds on failures\n- Successful traces: payment-service completes in 200ms\n- No errors in inventory-service or notification-service\n- payment-service logs show 'connection pool exhausted' warnings"
+      }
+    ],
+    "expectedOutcomes": [
+      "Query traces with duration > 30 seconds to find slow transactions",
+      "Build trace waterfall showing time spent in each service",
+      "Identify payment-service as the bottleneck with 25-30s spans",
+      "Find evidence of connection pool exhaustion in payment-service spans",
+      "Recommend: increase connection pool size, add circuit breaker to payment-service, or investigate upstream load"
+    ]
+  },
+  {
+    "name": "Metric Correlation: Memory Leak Detection via Traces",
+    "description": "Correlate increasing response times with memory growth to detect a memory leak in a service",
+    "category": "RCA",
+    "difficulty": "Hard",
+    "initialPrompt": "The recommendation-service has been experiencing gradually degrading performance over the past 48 hours. Response times have gone from a p50 of 50ms to 800ms. The service gets restarted every 6 hours by Kubernetes due to OOMKill. Analyze the OpenTelemetry traces and resource metrics in OpenSearch to identify the memory leak pattern and its likely cause.",
+    "context": [
+      {
+        "description": "Service Details",
+        "value": "recommendation-service:\n- Language: Python (FastAPI)\n- Memory limit: 512MB\n- Instances: 3 replicas\n- Dependencies: product-catalog-service, user-preference-service, ML model cache\n- Traces in: otel-v1-apm-span-*\n- Resource metrics in: otel-v1-apm-resource-*"
+      },
+      {
+        "description": "Available Telemetry",
+        "value": "Trace data:\n- Spans with serviceName='recommendation-service'\n- Custom attributes: cache.hit_rate, cache.size_mb, model.inference_time_ms\n- Resource attributes: process.runtime.memory (RSS in bytes), host.name\n\nMetric indices:\n- otel-v1-apm-resource-*: process memory, GC stats, thread counts\n- Fields: resource.process.runtime.memory, resource.process.runtime.gc_count"
+      },
+      {
+        "description": "Pattern from Monitoring",
+        "value": "Observed after each restart:\n- Hour 0: memory=120MB, p50=50ms, cache.size_mb=20\n- Hour 2: memory=280MB, p50=150ms, cache.size_mb=180\n- Hour 4: memory=420MB, p50=500ms, cache.size_mb=350\n- Hour 6: OOMKill at 512MB\n- cache.hit_rate remains at 95% throughout\n- GC frequency increases 10x between hour 0 and hour 5"
+      }
+    ],
+    "expectedOutcomes": [
+      "Query traces to show p50/p95 latency degradation over time for recommendation-service",
+      "Correlate latency increase with memory growth using resource metrics",
+      "Identify ML model cache (cache.size_mb) as growing unbounded from trace attributes",
+      "Find that cache.hit_rate is 95% but cache.size_mb grows without eviction",
+      "Determine root cause: ML model cache has no eviction policy or max size limit",
+      "Recommend: implement LRU cache eviction, set max cache size, add memory-based alerts"
+    ]
+  },
+  {
+    "name": "Service Map Analysis: Circular Dependency Detection",
+    "description": "Use service map and trace data to identify a circular dependency causing request amplification",
+    "category": "RCA",
+    "difficulty": "Hard",
+    "initialPrompt": "Our observability platform shows that request volume to service-A has tripled in the last hour without any increase in external traffic. The service map shows an unusual pattern. Analyze the service map data and distributed traces in OpenSearch to find out why internal request volume is amplifying.",
+    "context": [
+      {
+        "description": "Service Map Data",
+        "value": "Service map in otel-v1-apm-service-map index:\n- service-A → service-B (via HTTP)\n- service-B → service-C (via gRPC)\n- service-C → service-A (via HTTP) ← UNEXPECTED\n- service-A → service-D (via HTTP)\n- External traffic enters only through service-A\nEach edge has: source, destination, request_count, error_count, avg_duration"
+      },
+      {
+        "description": "Trace Investigation Hints",
+        "value": "Useful queries:\n- Find traces where service-A appears more than once: group by traceId, count spans where serviceName='service-A'\n- Look at span depth: traces should have max depth 3 but some show depth 9+\n- Check operationName patterns: service-A.handleWebhook → service-B.process → service-C.notify → service-A.handleWebhook (loop)\n- Recent deployment: service-C added a 'notification callback' feature 2 hours ago"
+      },
+      {
+        "description": "Impact Metrics",
+        "value": "Current state:\n- service-A: 3x normal request volume, CPU at 85%\n- service-B: 3x normal volume, response time degrading\n- service-C: 3x normal volume, new 'notify' operation visible in traces\n- Looping traces show 3-5 cycles before timeout\n- External user latency: 5s (normally 200ms)"
+      }
+    ],
+    "expectedOutcomes": [
+      "Query service map to identify the circular dependency: A → B → C → A",
+      "Find traces with recursive call patterns (service-A appearing multiple times)",
+      "Identify that service-C's new 'notify' operation calls back to service-A",
+      "Correlate the start of amplification with service-C's recent deployment",
+      "Quantify the amplification: each external request generates 3-5 internal cycles",
+      "Recommend: break circular dependency, add request deduplication, or implement loop detection middleware"
+    ]
+  },
+  {
+    "name": "Alert Triage: Noisy Alerts from Flapping Service",
+    "description": "Investigate repeated health check failures that trigger false alerts for a service that is actually healthy",
+    "category": "RCA",
+    "difficulty": "Medium",
+    "initialPrompt": "Our alerting system has fired 47 critical alerts for cart-service in the last 2 hours, but users report no issues. Each alert triggers for 2-3 minutes then auto-resolves. Investigate the traces and health check data in OpenSearch to determine why the service appears to be flapping and whether this is a real issue or a monitoring problem.",
+    "context": [
+      {
+        "description": "Health Check Setup",
+        "value": "cart-service health monitoring:\n- Kubernetes liveness probe: GET /healthz every 10s, timeout 3s, threshold 3\n- External monitor: GET /health every 30s from 3 regions\n- Internal synthetic: POST /api/cart/validate every 60s\n- Health check traces tagged with: span.kind=CLIENT, http.url contains 'health'"
+      },
+      {
+        "description": "Alert Configuration",
+        "value": "Alert rule: 'cart-service error rate > 5% for 2 minutes'\n- Evaluates against: otel-v1-apm-span-* where serviceName='cart-service'\n- Does NOT filter out health check spans\n- Aggregation window: 2 minutes\n- Alert history in: alerts-history-* index"
+      },
+      {
+        "description": "Trace Evidence",
+        "value": "From span data:\n- cart-service handles ~500 req/min from real users (0.1% error rate)\n- Health check probes: ~200 req/min combined\n- During flap windows: 80% of health check spans from region us-west-2 show timeouts\n- User-facing spans remain healthy throughout\n- us-west-2 health check probe has network latency spikes every 15-20 minutes"
+      }
+    ],
+    "expectedOutcomes": [
+      "Separate health check traffic from user traffic in trace analysis",
+      "Identify that only us-west-2 health checks are failing intermittently",
+      "Show that user-facing requests maintain 99.9% success rate throughout",
+      "Find that alert rule incorrectly includes health check spans in error rate calculation",
+      "Recommend: exclude health check spans from alert rule, fix us-west-2 network path, or adjust alert thresholds"
+    ]
+  }
+]
