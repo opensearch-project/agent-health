@@ -76,7 +76,7 @@ const mockConfig = {
 };
 
 jest.mock('@/lib/constants', () => ({
-  DEFAULT_CONFIG: mockConfig,
+  get DEFAULT_CONFIG() { return mockConfig; },
 }));
 
 jest.mock('@/lib/config/index', () => ({

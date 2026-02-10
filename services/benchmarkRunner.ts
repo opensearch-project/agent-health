@@ -21,8 +21,21 @@ import type { Client } from '@opensearch-project/opensearch';
 import { runEvaluationWithConnector, callBedrockJudge } from './evaluation';
 import { connectorRegistry } from '@/services/connectors/server';
 import { loadConfigSync } from '@/lib/config/index';
+import { DEFAULT_CONFIG } from '@/lib/constants';
 import { tracePollingManager } from './traces/tracePoller';
 import { RunResultStatus } from '@/types';
+
+/**
+ * Safely load config with fallback to defaults.
+ * Matches the defensive pattern used in services/evaluation/index.ts.
+ */
+function getConfig() {
+  try {
+    return loadConfigSync();
+  } catch {
+    return DEFAULT_CONFIG;
+  }
+}
 
 /**
  * Callback invoked after each test case completes during benchmark execution.
@@ -70,7 +83,7 @@ export interface ExecuteRunOptions {
  */
 function buildAgentConfigForRun(run: BenchmarkRun): AgentConfig {
   // Find the base agent config
-  const config = loadConfigSync();
+  const config = getConfig();
   const baseAgent = config.agents.find(a => a.key === run.agentKey);
 
   if (!baseAgent) {
@@ -92,7 +105,7 @@ function buildAgentConfigForRun(run: BenchmarkRun): AgentConfig {
  * Get the Bedrock model ID from a model key
  */
 function getBedrockModelId(modelKey: string): string {
-  const config = loadConfigSync();
+  const config = getConfig();
   const modelConfig = config.models[modelKey];
   return modelConfig?.model_id || modelKey;
 }

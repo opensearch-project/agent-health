@@ -423,6 +423,31 @@ describe('SubprocessConnector', () => {
 
       expect(mockProcess.kill).toHaveBeenCalledWith('SIGTERM');
     });
+
+    it('should not resolve after timeout when close event fires', async () => {
+      // Verify the settled flag prevents double-settlement:
+      // timeout rejects first, then close event should be ignored.
+      const timeoutConnector = new SubprocessConnector({
+        timeout: 50,
+        command: 'slow-cmd',
+      });
+
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+
+      // After timeout fires (~50ms), emit close with exit code 0.
+      // Without the settled guard, the promise would resolve (not reject).
+      setTimeout(() => {
+        mockProcess.stdout.emit('data', Buffer.from('late output'));
+        mockProcess.emit('close', 0, null);
+      }, 100);
+
+      await expect(
+        timeoutConnector.execute('slow-cmd', request, mockAuth)
+      ).rejects.toThrow(/timed out/);
+    });
   });
 
   describe('signal handling', () => {

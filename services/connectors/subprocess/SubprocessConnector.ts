@@ -108,6 +108,7 @@ export class SubprocessConnector extends BaseConnector {
       const rawOutput: Array<{ type: string; data: string; timestamp: number }> = [];
       let stdout = '';
       let stderr = '';
+      let settled = false;
 
       // Build final args (add input as argument if inputMode is 'arg')
       const finalArgs = this.config.inputMode === 'arg'
@@ -125,6 +126,8 @@ export class SubprocessConnector extends BaseConnector {
 
       // Set timeout
       const timeoutId = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         console.log('[Subprocess] TIMEOUT reached, killing process');
         proc.kill('SIGTERM');
         reject(new Error(`Subprocess timed out after ${this.config.timeout}ms`));
@@ -167,6 +170,8 @@ export class SubprocessConnector extends BaseConnector {
       proc.on('close', (code: number, signal: string) => {
         console.log('[Subprocess] Process closed with code:', code, 'signal:', signal);
         clearTimeout(timeoutId);
+        if (settled) return;
+        settled = true;
 
         if (code !== 0) {
           // Non-zero exit code - create error response but don't reject
@@ -203,6 +208,8 @@ export class SubprocessConnector extends BaseConnector {
       proc.on('error', (error: Error) => {
         console.log('[Subprocess] ERROR event:', error.message);
         clearTimeout(timeoutId);
+        if (settled) return;
+        settled = true;
 
         // Provide more helpful error messages for common failures
         let errorMsg = `Failed to spawn subprocess: ${error.message}`;

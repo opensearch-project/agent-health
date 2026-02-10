@@ -12,7 +12,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ### Added
 - CLI commands (`run`, `list`, `benchmark`, `doctor`, `init`) for headless agent evaluation ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
 - Pluggable connector architecture supporting AG-UI, REST, subprocess, and Claude Code agents ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
-- YAML/TypeScript configuration file support with `defineConfig()` helper ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
+- TypeScript configuration file support with `defineConfig()` helper ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
 - Server lifecycle management with Playwright-style auto-start for CLI ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
 - CLI documentation (`docs/CLI.md`, `docs/CONFIGURATION.md`, `docs/CONNECTORS.md`) ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
 - Delete operation feedback UI with success/error messages ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
