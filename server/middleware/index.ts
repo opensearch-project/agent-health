@@ -74,6 +74,9 @@ export function setupSpaFallback(app: Express): void {
 
   if (!fs.existsSync(indexPath)) return;
 
+  // Read index.html once at startup — avoids sendFile issues in esbuild bundles
+  const indexHtml = fs.readFileSync(indexPath, 'utf-8');
+
   app.use((req: Request, res: Response, next: NextFunction) => {
     // Skip API routes and health checks
     if (req.path.startsWith('/api/') || req.path === '/health') {
@@ -83,14 +86,7 @@ export function setupSpaFallback(app: Express): void {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       return next();
     }
-    res.sendFile(indexPath, (err) => {
-      if (err) {
-        console.error('[SpaFallback] Error serving index.html:', err.message);
-        if (!res.headersSent) {
-          res.status(500).send('Failed to load application');
-        }
-      }
-    });
+    res.type('html').send(indexHtml);
   });
 }
 
