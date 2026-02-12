@@ -48,6 +48,11 @@ jest.mock('@/services/traces/tracePoller', () => ({
   },
 }));
 
+const mockGetCustomAgents = jest.fn().mockReturnValue([]);
+jest.mock('@/server/services/customAgentStore', () => ({
+  getCustomAgents: (...args: any[]) => mockGetCustomAgents(...args),
+}));
+
 const mockConfig = {
   agents: [
     {
@@ -152,6 +157,7 @@ describe('Experiment Runner', () => {
     mockGetAllTestCasesWithClient.mockReset();
     mockSaveReportWithClient.mockReset();
     mockUpdateRunWithClient.mockReset();
+    mockGetCustomAgents.mockReturnValue([]);
   });
 
   describe('createCancellationToken', () => {
@@ -269,6 +275,34 @@ describe('Experiment Runner', () => {
       const agentConfigArg = mockRunEvaluationWithConnector.mock.calls[0][0];
       expect(agentConfigArg.endpoint).toBe('http://custom-endpoint.example.com');
       expect(agentConfigArg.headers).toEqual({ 'X-Agent': 'test', 'X-Custom': 'value' });
+    });
+
+    it('should resolve custom agents in benchmark execution', async () => {
+      const customAgent = {
+        key: 'custom-holmes',
+        name: 'Holmes Agent',
+        endpoint: 'http://holmes.example.com',
+        headers: {},
+      };
+      mockGetCustomAgents.mockReturnValue([customAgent]);
+
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run: BenchmarkRun = {
+        ...createBenchmarkRun('run-1'),
+        agentKey: 'custom-holmes',
+      };
+
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1]);
+      mockRunEvaluationWithConnector.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReportWithClient.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const result = await executeRun(experiment, run, jest.fn(), { client: mockClient });
+
+      expect(result.results['tc-1'].status).toBe('completed');
+      const agentConfigArg = mockRunEvaluationWithConnector.mock.calls[0][0];
+      expect(agentConfigArg.key).toBe('custom-holmes');
+      expect(agentConfigArg.endpoint).toBe('http://holmes.example.com');
     });
 
     it('should throw error for unknown agent', async () => {
@@ -597,6 +631,58 @@ describe('Experiment Runner', () => {
 
       // Restore original agent config
       mockConfig.agents[0] = originalAgent;
+    });
+
+    it('should resolve custom agents from customAgentStore', async () => {
+      const customAgent = {
+        key: 'custom-holmes',
+        name: 'Holmes Agent',
+        endpoint: 'http://holmes.example.com',
+        headers: { 'X-Holmes': 'true' },
+      };
+      mockGetCustomAgents.mockReturnValue([customAgent]);
+
+      const testCase = createTestCase('tc-1');
+      const run: BenchmarkRun = {
+        ...createBenchmarkRun('run-1'),
+        agentKey: 'custom-holmes',
+      };
+
+      mockRunEvaluationWithConnector.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReportWithClient.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      const reportId = await runSingleUseCase(run, testCase, mockClient);
+
+      expect(reportId).toBe('saved-report-1');
+      const agentConfigArg = mockRunEvaluationWithConnector.mock.calls[0][0];
+      expect(agentConfigArg.key).toBe('custom-holmes');
+      expect(agentConfigArg.endpoint).toBe('http://holmes.example.com');
+      expect(agentConfigArg.headers).toEqual({ 'X-Holmes': 'true' });
+    });
+
+    it('should apply endpoint override for custom agents', async () => {
+      const customAgent = {
+        key: 'custom-holmes',
+        name: 'Holmes Agent',
+        endpoint: 'http://holmes.example.com',
+        headers: {},
+      };
+      mockGetCustomAgents.mockReturnValue([customAgent]);
+
+      const testCase = createTestCase('tc-1');
+      const run: BenchmarkRun = {
+        ...createBenchmarkRun('run-1'),
+        agentKey: 'custom-holmes',
+        agentEndpoint: 'http://override.example.com',
+      };
+
+      mockRunEvaluationWithConnector.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReportWithClient.mockResolvedValue({ id: 'saved-report-1', metricsStatus: 'ready' });
+
+      await runSingleUseCase(run, testCase, mockClient);
+
+      const agentConfigArg = mockRunEvaluationWithConnector.mock.calls[0][0];
+      expect(agentConfigArg.endpoint).toBe('http://override.example.com');
     });
 
     it('should use raw model key if not found in config', async () => {

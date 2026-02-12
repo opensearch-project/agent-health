@@ -23,6 +23,7 @@ import { connectorRegistry } from '@/services/connectors/server';
 import { loadConfigSync } from '@/lib/config/index';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { tracePollingManager } from './traces/tracePoller';
+import { getCustomAgents } from '@/server/services/customAgentStore';
 import { RunResultStatus } from '@/types';
 
 /**
@@ -82,9 +83,10 @@ export interface ExecuteRunOptions {
  * Build an agent config from a run's configuration
  */
 function buildAgentConfigForRun(run: BenchmarkRun): AgentConfig {
-  // Find the base agent config
+  // Find the base agent config (includes custom agents from JSON-backed store)
   const config = getConfig();
-  const baseAgent = config.agents.find(a => a.key === run.agentKey);
+  const allAgents = [...config.agents, ...getCustomAgents()];
+  const baseAgent = allAgents.find(a => a.key === run.agentKey);
 
   if (!baseAgent) {
     throw new Error(`Agent not found: ${run.agentKey}`);
