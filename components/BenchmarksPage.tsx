@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Eye, Calendar, FlaskConical, RefreshCw, CheckCircle, CheckCircle2, XCircle, Loader2, Circle, X, Play, Pencil, StopCircle, Ban } from 'lucide-react';
+import { Plus, Trash2, Eye, Calendar, FlaskConical, RefreshCw, CheckCircle, CheckCircle2, XCircle, Loader2, Circle, X, Play, Pencil, StopCircle, Ban, Upload } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -14,7 +14,17 @@ import { Progress } from '@/components/ui/progress';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
+import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 import { executeBenchmarkRun } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
 import { Benchmark, BenchmarkRun, BenchmarkProgress, TestCase } from '@/types';
@@ -46,6 +56,9 @@ export const BenchmarksPage: React.FC = () => {
   const [editingDescriptionValue, setEditingDescriptionValue] = useState('');
   const { cancellingRunId, handleCancelRun: cancelRun } = useBenchmarkCancellation();
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // Delete operation state
   const [deleteState, setDeleteState] = useState<{
@@ -114,6 +127,65 @@ export const BenchmarksPage: React.FC = () => {
   const handleNewBenchmark = () => {
     setEditingBenchmark(null);
     setIsEditorOpen(true);
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    setImportError(null);
+
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const validation = validateTestCasesArrayJson(json);
+
+      if (!validation.valid || !validation.data) {
+        setImportError(`Validation failed: ${validation.errors[0]?.message || 'Invalid format'}`);
+        return;
+      }
+
+      // Step 1: Create test cases
+      const result = await asyncTestCaseStorage.bulkCreate(validation.data);
+
+      if (result.created === 0) {
+        setImportError('No test cases were created. They may already exist.');
+        return;
+      }
+
+      // Step 2: Get IDs of created test cases (fetch latest to get generated IDs)
+      const allTestCases = await asyncTestCaseStorage.getAll();
+      const createdTestCaseIds = allTestCases
+        .filter((tc) => validation.data!.some((d) => d.name === tc.name))
+        .map((tc) => tc.id);
+
+      // Step 3: Auto-create benchmark with imported test cases
+      const benchmarkName = file.name.replace(/\.json$/i, '') || 'Imported Benchmark';
+      const benchmark = await asyncBenchmarkStorage.create({
+        name: benchmarkName,
+        description: `Auto-created from import of ${result.created} test case(s)`,
+        currentVersion: 1,
+        versions: [
+          {
+            version: 1,
+            createdAt: new Date().toISOString(),
+            testCaseIds: createdTestCaseIds,
+          },
+        ],
+        testCaseIds: createdTestCaseIds,
+        runs: [],
+      });
+
+      // Navigate directly to the benchmark runs page
+      navigate(`/benchmarks/${benchmark.id}/runs`);
+    } catch (error) {
+      console.error('Failed to import test cases:', error);
+      setImportError(`Import failed: ${(error as Error).message}`);
+    } finally {
+      setIsImporting(false);
+      event.target.value = ''; // Reset for re-upload
+    }
   };
 
   const handleEditBenchmark = (bench: Benchmark) => {
@@ -391,14 +463,32 @@ export const BenchmarksPage: React.FC = () => {
             {benchmarks.length} benchmark{benchmarks.length !== 1 ? 's' : ''} created
           </p>
         </div>
-        <Button
-          onClick={handleNewBenchmark}
-          className="bg-opensearch-blue hover:bg-blue-600 text-white"
-          data-testid="new-benchmark-button"
-        >
-          <Plus size={18} className="mr-2" />
-          New Benchmark
-        </Button>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={handleImportFile}
+          />
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isImporting}
+            data-testid="import-json-button"
+          >
+            <Upload size={16} className="mr-2" />
+            {isImporting ? 'Importing...' : 'Import JSON'}
+          </Button>
+          <Button
+            onClick={handleNewBenchmark}
+            className="bg-opensearch-blue hover:bg-blue-600 text-white"
+            data-testid="new-benchmark-button"
+          >
+            <Plus size={18} className="mr-2" />
+            New Benchmark
+          </Button>
+        </div>
       </div>
 
       {/* Delete Feedback */}
@@ -653,6 +743,19 @@ export const BenchmarksPage: React.FC = () => {
           onCancel={() => setIsEditorOpen(false)}
         />
       )}
+
+      {/* Import Error Dialog */}
+      <AlertDialog open={!!importError} onOpenChange={() => setImportError(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Import Failed</AlertDialogTitle>
+            <AlertDialogDescription>{importError}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setImportError(null)}>OK</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Run Configuration Dialog */}
       {isRunConfigOpen && runConfigBenchmark && (
