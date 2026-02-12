@@ -200,9 +200,32 @@ export const storageAdmin = {
 export const testCaseStorage = {
   /**
    * Get all test cases (latest versions only)
+   * @param options.fields - 'summary' for lightweight list-view payload
+   * @param options.size - page size for pagination
+   * @param options.after - cursor token for next page
    */
-  async getAll(): Promise<StorageTestCase[]> {
-    const result = await request<{ testCases: StorageTestCase[]; total: number }>('GET', '/test-cases');
+  async getAll(options?: { fields?: 'summary'; size?: number; after?: string }): Promise<{
+    testCases: StorageTestCase[];
+    total: number;
+    after?: string | null;
+    hasMore?: boolean;
+  }> {
+    const params = new URLSearchParams();
+    if (options?.fields) params.append('fields', options.fields);
+    if (options?.size) params.append('size', options.size.toString());
+    if (options?.after) params.append('after', options.after);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request('GET', `/test-cases${query}`);
+  },
+
+  /**
+   * Get test cases by specific IDs (latest versions only)
+   * Used for efficient filtered fetching (e.g., only test cases in a benchmark)
+   */
+  async getByIds(ids: string[]): Promise<StorageTestCase[]> {
+    if (ids.length === 0) return [];
+    const idsParam = ids.join(',');
+    const result = await request<{ testCases: StorageTestCase[]; total: number }>('GET', `/test-cases?ids=${idsParam}`);
     return result.testCases;
   },
 
@@ -286,10 +309,18 @@ export const benchmarkStorage = {
 
   /**
    * Get benchmark by ID
+   * @param options.fields - 'polling' for lightweight payload (excludes versions, testCaseSnapshots, headers)
+   * @param options.runsSize - max number of runs to return
+   * @param options.runsOffset - offset into runs array for pagination
    */
-  async getById(id: string): Promise<StorageBenchmark | null> {
+  async getById(id: string, options?: { fields?: 'polling'; runsSize?: number; runsOffset?: number }): Promise<StorageBenchmark | null> {
     try {
-      return await request<StorageBenchmark>('GET', `/benchmarks/${id}`);
+      const params = new URLSearchParams();
+      if (options?.fields) params.append('fields', options.fields);
+      if (options?.runsSize !== undefined) params.append('runsSize', options.runsSize.toString());
+      if (options?.runsOffset !== undefined) params.append('runsOffset', options.runsOffset.toString());
+      const query = params.toString() ? `?${params.toString()}` : '';
+      return await request<StorageBenchmark>('GET', `/benchmarks/${id}${query}`);
     } catch (error) {
       const msg = (error as Error).message.toLowerCase();
       if (msg.includes('404') || msg.includes('not found')) {
@@ -408,6 +439,14 @@ export const runStorage = {
    */
   async partialUpdate(id: string, updates: Partial<StorageRun>): Promise<StorageRun> {
     return request<StorageRun>('PATCH', `/runs/${id}`, updates);
+  },
+
+  /**
+   * Get run counts grouped by test case ID (single aggregation query)
+   */
+  async getCountsByTestCase(): Promise<Record<string, number>> {
+    const result = await request<{ counts: Record<string, number> }>('GET', '/runs/counts-by-test-case');
+    return result.counts;
   },
 
   /**

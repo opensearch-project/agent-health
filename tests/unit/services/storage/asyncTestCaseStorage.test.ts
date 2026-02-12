@@ -23,6 +23,11 @@ jest.mock('@/services/storage/opensearchClient', () => ({
 
 const mockOsTestCases = opensearchTestCases as jest.Mocked<typeof opensearchTestCases>;
 
+/** Wrap array in the paginated response format that getAll() now returns */
+function mockGetAllResult(testCases: any[]) {
+  return { testCases, total: testCases.length };
+}
+
 describe('AsyncTestCaseStorage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -74,7 +79,7 @@ describe('AsyncTestCaseStorage', () => {
         createMockStorageTestCase('tc-1'),
         createMockStorageTestCase('tc-2'),
       ];
-      mockOsTestCases.getAll.mockResolvedValue(mockStorageTestCases);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult(mockStorageTestCases));
 
       const result = await asyncTestCaseStorage.getAll();
 
@@ -85,7 +90,7 @@ describe('AsyncTestCaseStorage', () => {
     });
 
     it('converts labels and legacy fields correctly', async () => {
-      mockOsTestCases.getAll.mockResolvedValue([createMockStorageTestCase()]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([createMockStorageTestCase()]));
 
       const result = await asyncTestCaseStorage.getAll();
 
@@ -101,7 +106,7 @@ describe('AsyncTestCaseStorage', () => {
         category: 'Alerts',
         difficulty: 'Hard' as const,
       };
-      mockOsTestCases.getAll.mockResolvedValue([tcWithNoLabels]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([tcWithNoLabels]));
 
       const result = await asyncTestCaseStorage.getAll();
 
@@ -115,7 +120,7 @@ describe('AsyncTestCaseStorage', () => {
         context: undefined,
         expectedTrajectory: undefined,
       };
-      mockOsTestCases.getAll.mockResolvedValue([tcWithEmptyArrays]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([tcWithEmptyArrays]));
 
       const result = await asyncTestCaseStorage.getAll();
 
@@ -124,7 +129,7 @@ describe('AsyncTestCaseStorage', () => {
     });
 
     it('handles isPromoted from tags', async () => {
-      mockOsTestCases.getAll.mockResolvedValue([createMockStorageTestCase()]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([createMockStorageTestCase()]));
 
       const result = await asyncTestCaseStorage.getAll();
 
@@ -133,7 +138,7 @@ describe('AsyncTestCaseStorage', () => {
 
     it('handles non-promoted test cases', async () => {
       const notPromoted = { ...createMockStorageTestCase(), tags: [] };
-      mockOsTestCases.getAll.mockResolvedValue([notPromoted]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([notPromoted]));
 
       const result = await asyncTestCaseStorage.getAll();
 
@@ -145,7 +150,7 @@ describe('AsyncTestCaseStorage', () => {
     it('returns only promoted test cases', async () => {
       const promoted = createMockStorageTestCase('tc-1');
       const notPromoted = { ...createMockStorageTestCase('tc-2'), tags: [] };
-      mockOsTestCases.getAll.mockResolvedValue([promoted, notPromoted]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([promoted, notPromoted]));
 
       const result = await asyncTestCaseStorage.getPromoted();
 
@@ -403,7 +408,7 @@ describe('AsyncTestCaseStorage', () => {
         { ...createMockStorageTestCase('tc-2'), category: 'Alerts', labels: ['category:Alerts'] },
         { ...createMockStorageTestCase('tc-3'), category: 'RCA', labels: ['category:RCA'] },
       ];
-      mockOsTestCases.getAll.mockResolvedValue(testCases);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult(testCases));
 
       const result = await asyncTestCaseStorage.getCategories();
 
@@ -417,7 +422,7 @@ describe('AsyncTestCaseStorage', () => {
         { ...createMockStorageTestCase('tc-1'), category: 'Zebra', labels: ['category:Zebra'] },
         { ...createMockStorageTestCase('tc-2'), category: 'Alpha', labels: ['category:Alpha'] },
       ];
-      mockOsTestCases.getAll.mockResolvedValue(testCases);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult(testCases));
 
       const result = await asyncTestCaseStorage.getCategories();
 
@@ -431,7 +436,7 @@ describe('AsyncTestCaseStorage', () => {
         { ...createMockStorageTestCase('tc-1'), labels: ['category:RCA', 'difficulty:Easy'] },
         { ...createMockStorageTestCase('tc-2'), labels: ['category:Alerts', 'difficulty:Easy'] },
       ];
-      mockOsTestCases.getAll.mockResolvedValue(testCases);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult(testCases));
 
       const result = await asyncTestCaseStorage.getLabels();
 
@@ -451,7 +456,7 @@ describe('AsyncTestCaseStorage', () => {
           difficulty: undefined,
         },
       ];
-      mockOsTestCases.getAll.mockResolvedValue(testCases);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult(testCases));
 
       const result = await asyncTestCaseStorage.getLabels();
 
@@ -461,10 +466,10 @@ describe('AsyncTestCaseStorage', () => {
 
   describe('getCount', () => {
     it('returns the count of test cases', async () => {
-      mockOsTestCases.getAll.mockResolvedValue([
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([
         createMockStorageTestCase('tc-1'),
         createMockStorageTestCase('tc-2'),
-      ]);
+      ]));
 
       const result = await asyncTestCaseStorage.getCount();
 
@@ -477,7 +482,7 @@ describe('AsyncTestCaseStorage', () => {
       const promoted1 = createMockStorageTestCase('tc-1');
       const promoted2 = createMockStorageTestCase('tc-2');
       const notPromoted = { ...createMockStorageTestCase('tc-3'), tags: [] };
-      mockOsTestCases.getAll.mockResolvedValue([promoted1, promoted2, notPromoted]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([promoted1, promoted2, notPromoted]));
 
       const result = await asyncTestCaseStorage.getPromotedCount();
 
@@ -504,7 +509,7 @@ describe('AsyncTestCaseStorage', () => {
   describe('format conversion edge cases', () => {
     it('handles test case with undefined tags', async () => {
       const tcWithNoTags = { ...createMockStorageTestCase(), tags: undefined };
-      mockOsTestCases.getAll.mockResolvedValue([tcWithNoTags]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([tcWithNoTags]));
 
       const result = await asyncTestCaseStorage.getAll();
 
@@ -519,7 +524,7 @@ describe('AsyncTestCaseStorage', () => {
         subcategory: undefined,
         difficulty: undefined,
       };
-      mockOsTestCases.getAll.mockResolvedValue([tcWithNothing]);
+      mockOsTestCases.getAll.mockResolvedValue(mockGetAllResult([tcWithNothing]));
 
       const result = await asyncTestCaseStorage.getAll();
 

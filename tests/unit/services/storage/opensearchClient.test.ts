@@ -140,9 +140,23 @@ describe('OpenSearch Storage Client', () => {
 
         const result = await testCaseStorage.getAll();
 
-        expect(result).toEqual([mockTestCase]);
+        expect(result).toEqual({ testCases: [mockTestCase], total: 1 });
         expect(mockFetch).toHaveBeenCalledWith(
           'http://localhost:4001/api/storage/test-cases',
+          expect.objectContaining({ method: 'GET' })
+        );
+      });
+
+      it('should pass query params for summary and pagination', async () => {
+        mockFetch.mockResolvedValue(
+          mockSuccessResponse({ testCases: [mockTestCase], total: 1, after: 'tc-123', hasMore: true })
+        );
+
+        const result = await testCaseStorage.getAll({ fields: 'summary', size: 50, after: 'tc-100' });
+
+        expect(result).toEqual({ testCases: [mockTestCase], total: 1, after: 'tc-123', hasMore: true });
+        expect(mockFetch).toHaveBeenCalledWith(
+          'http://localhost:4001/api/storage/test-cases?fields=summary&size=50&after=tc-100',
           expect.objectContaining({ method: 'GET' })
         );
       });
@@ -354,6 +368,17 @@ describe('OpenSearch Storage Client', () => {
         mockFetch.mockResolvedValue(mockErrorResponse(500, 'Server error'));
 
         await expect(benchmarkStorage.getById('exp-123')).rejects.toThrow('Server error');
+      });
+
+      it('should pass query params for polling and run pagination', async () => {
+        mockFetch.mockResolvedValue(mockSuccessResponse(mockExperiment));
+
+        await benchmarkStorage.getById('exp-123', { fields: 'polling', runsSize: 100, runsOffset: 50 });
+
+        expect(mockFetch).toHaveBeenCalledWith(
+          'http://localhost:4001/api/storage/benchmarks/exp-123?fields=polling&runsSize=100&runsOffset=50',
+          expect.objectContaining({ method: 'GET' })
+        );
       });
     });
 

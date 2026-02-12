@@ -282,6 +282,11 @@ export const TestCasesPage: React.FC = () => {
   const [runCounts, setRunCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
 
+  // Pagination state
+  const [afterCursor, setAfterCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
@@ -307,32 +312,56 @@ export const TestCasesPage: React.FC = () => {
     message: string;
   }>({ isDeleting: false, deletingId: null, status: 'idle', message: '' });
 
-  // Load data
+  // Load data (first page with summary mode)
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [allTestCases, allCategories] = await Promise.all([
-        asyncTestCaseStorage.getAll(),
-        asyncTestCaseStorage.getCategories(),
+      // Fetch test cases (summary, paginated) and run counts in parallel
+      // Run counts use .catch() so test cases still render if the counts endpoint fails
+      const [page, counts] = await Promise.all([
+        asyncTestCaseStorage.getAll({ summary: true, size: 100 }),
+        asyncRunStorage.getRunCountsByTestCase().catch(() => ({} as Record<string, number>)),
       ]);
-      setTestCases(allTestCases);
-      setCategories(allCategories);
-      // Open all categories by default
-      setOpenCategories(new Set(allCategories));
-
-      // Load run counts for each test case
-      const counts: Record<string, number> = {};
-      await Promise.all(
-        allTestCases.map(async (tc) => {
-          const runs = await asyncRunStorage.getReportsByTestCase(tc.id, { limit: 1000 });
-          counts[tc.id] = runs.length;
-        })
-      );
+      setTestCases(page.testCases);
+      setAfterCursor(page.after ?? null);
+      setHasMore(page.hasMore ?? false);
       setRunCounts(counts);
+
+      // Derive categories from already-fetched test cases (no extra API call)
+      const allCategories = Array.from(new Set(page.testCases.map(tc => tc.category))).sort();
+      setCategories(allCategories);
+      setOpenCategories(new Set(allCategories));
     } catch (error) {
       console.error('Failed to load test cases:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Load next page of test cases
+  const loadMore = async () => {
+    if (!afterCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const page = await asyncTestCaseStorage.getAll({ summary: true, size: 100, after: afterCursor });
+      setTestCases(prev => [...prev, ...page.testCases]);
+      setAfterCursor(page.after ?? null);
+      setHasMore(page.hasMore ?? false);
+
+      // Update categories from newly loaded test cases
+      setCategories(prev => {
+        const newCategories = new Set([...prev, ...page.testCases.map(tc => tc.category)]);
+        return Array.from(newCategories).sort();
+      });
+      setOpenCategories(prev => {
+        const next = new Set(prev);
+        page.testCases.forEach(tc => next.add(tc.category));
+        return next;
+      });
+    } catch (error) {
+      console.error('Failed to load more test cases:', error);
+    } finally {
+      setIsLoadingMore(false);
     }
   };
 
@@ -648,6 +677,20 @@ export const TestCasesPage: React.FC = () => {
                   deletingId={deleteState.isDeleting ? deleteState.deletingId : null}
                 />
               ))}
+
+              {/* Load More button */}
+              {hasMore && !isLoadingMore && (
+                <div className="flex justify-center pt-4">
+                  <Button variant="outline" onClick={loadMore}>
+                    Load More
+                  </Button>
+                </div>
+              )}
+              {isLoadingMore && (
+                <div className="flex justify-center pt-4">
+                  <Loader2 size={20} className="animate-spin text-muted-foreground" />
+                </div>
+              )}
             </div>
           )}
         </>

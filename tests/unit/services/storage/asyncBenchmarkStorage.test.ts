@@ -107,7 +107,7 @@ describe('AsyncBenchmarkStorage', () => {
 
       const result = await asyncBenchmarkStorage.getById('exp-1');
 
-      expect(mockOsExperiments.getById).toHaveBeenCalledWith('exp-1');
+      expect(mockOsExperiments.getById).toHaveBeenCalledWith('exp-1', undefined);
       expect(result).not.toBeNull();
       expect(result?.id).toBe('exp-1');
       expect(result?.name).toBe('Test Benchmark');

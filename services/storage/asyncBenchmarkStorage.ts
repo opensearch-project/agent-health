@@ -137,10 +137,21 @@ class AsyncBenchmarkStorage {
 
   /**
    * Get a single benchmark by ID
+   * @param options.fields - 'polling' for lightweight payload (excludes versions, testCaseSnapshots, headers)
+   * @param options.runsSize - max number of runs to return
+   * @param options.runsOffset - offset into runs array for pagination
    */
-  async getById(id: string): Promise<Benchmark | null> {
-    const stored = await opensearchBenchmarks.getById(id);
-    return stored ? toBenchmark(stored) : null;
+  async getById(id: string, options?: { fields?: 'polling'; runsSize?: number; runsOffset?: number }): Promise<Benchmark | null> {
+    const stored = await opensearchBenchmarks.getById(id, options);
+    if (!stored) return null;
+    const benchmark = toBenchmark(stored);
+    // Pass through pagination metadata from server response
+    const storedAny = stored as any;
+    if (storedAny.totalRuns !== undefined) {
+      (benchmark as any).totalRuns = storedAny.totalRuns;
+      (benchmark as any).hasMoreRuns = storedAny.hasMoreRuns;
+    }
+    return benchmark;
   }
 
   /**

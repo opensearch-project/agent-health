@@ -180,6 +180,13 @@ class AsyncRunStorage {
   }
 
   /**
+   * Get run counts grouped by test case ID (single bulk query)
+   */
+  async getRunCountsByTestCase(): Promise<Record<string, number>> {
+    return opensearchRuns.getCountsByTestCase();
+  }
+
+  /**
    * Get all reports for a specific test case
    */
   async getReportsByTestCase(

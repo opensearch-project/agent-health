@@ -18,6 +18,28 @@ import type { TestCase, StorageMetadata } from '../../../types/index.js';
 const router = Router();
 const INDEX = INDEXES.testCases;
 
+/** Fields included in summary mode (list view) */
+const SUMMARY_SOURCE_INCLUDES = [
+  'id', 'name', 'labels', 'category', 'difficulty',
+  'createdAt', 'updatedAt', 'initialPrompt', 'description', 'version', 'tags',
+];
+
+/**
+ * Convert a full test case to a lightweight summary for list views.
+ * Truncates initialPrompt to 200 chars and strips heavy fields.
+ */
+function toSummary(doc: any): any {
+  return {
+    ...doc,
+    initialPrompt: doc.initialPrompt?.length > 200
+      ? doc.initialPrompt.slice(0, 200) + '...'
+      : doc.initialPrompt,
+    context: [],
+    expectedOutcomes: [],
+    versions: [],
+  };
+}
+
 function generateId(): string {
   return `tc-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
@@ -65,42 +87,126 @@ function getSampleTestCases(): TestCase[] {
   return SAMPLE_TEST_CASES.map(toTestCase);
 }
 
-// GET /api/storage/test-cases - List all (latest versions)
+// GET /api/storage/test-cases - List all (latest versions) or filter by IDs
+// Query params:
+//   ids       - comma-separated IDs to filter by
+//   fields    - 'summary' for lightweight list-view payload
+//   size      - page size (default: all results)
+//   after     - cursor token for pagination (composite aggregation key)
 router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
   try {
+    const { ids, fields, size: sizeParam, after } = req.query;
+    const filterIds = ids ? (ids as string).split(',').filter(Boolean) : null;
+    const isSummary = fields === 'summary';
+    const pageSize = sizeParam ? parseInt(sizeParam as string, 10) : null;
+    const afterCursor = after as string | undefined;
+
     let realData: TestCase[] = [];
     const warnings: string[] = [];
     let storageReachable = false;
     const storageConfigured = isStorageAvailable(req);
+    let totalCount: number | null = null;
+    let nextAfter: string | null = null;
+
+    // Build top_hits options (with optional _source filtering)
+    const topHitsOptions: any = {
+      size: 1,
+      sort: [{ version: { order: 'desc' } }],
+    };
+    if (isSummary) {
+      topHitsOptions._source = { includes: SUMMARY_SOURCE_INCLUDES };
+    }
 
     // Fetch from OpenSearch if configured
     if (storageConfigured) {
       try {
         const client = requireStorageClient(req);
 
-        // Get latest version of each test case using aggregation
-        const result = await client.search({
-          index: INDEX,
-          body: {
-            size: 0,
-            aggs: {
-              by_id: {
-                terms: { field: 'id', size: 10000 },
+        if (filterIds) {
+          // Filter by specific IDs - get latest version of each
+          const nonSampleIds = filterIds.filter(id => !isSampleId(id));
+          if (nonSampleIds.length > 0) {
+            const result = await client.search({
+              index: INDEX,
+              body: {
+                size: 0,
                 aggs: {
-                  latest: {
-                    top_hits: {
-                      size: 1,
-                      sort: [{ version: { order: 'desc' } }],
+                  by_id: {
+                    terms: { field: 'id', size: nonSampleIds.length },
+                    aggs: {
+                      latest: { top_hits: topHitsOptions },
                     },
+                  },
+                },
+                query: {
+                  terms: { id: nonSampleIds },
+                },
+              },
+            });
+
+            const buckets = (result.body.aggregations?.by_id as any)?.buckets || [];
+            realData = buckets.map((b: any) => b.latest.hits.hits[0]._source);
+          }
+        } else if (pageSize) {
+          // Paginated mode: use composite aggregation with cursor
+          const compositeAggs: any = {
+            size: pageSize,
+            sources: [{ id: { terms: { field: 'id' } } }],
+          };
+          if (afterCursor) {
+            compositeAggs.after = { id: afterCursor };
+          }
+
+          const aggs: any = {
+            by_id: {
+              composite: compositeAggs,
+              aggs: {
+                latest: { top_hits: topHitsOptions },
+              },
+            },
+          };
+
+          // Add cardinality aggregation for total count
+          aggs.total_count = {
+            cardinality: { field: 'id' },
+          };
+
+          const result = await client.search({
+            index: INDEX,
+            body: { size: 0, aggs },
+          });
+
+          const buckets = (result.body.aggregations?.by_id as any)?.buckets || [];
+          realData = buckets.map((b: any) => b.latest.hits.hits[0]._source);
+
+          // Extract next cursor from last bucket
+          const afterKey = (result.body.aggregations?.by_id as any)?.after_key;
+          if (afterKey && buckets.length === pageSize) {
+            nextAfter = afterKey.id;
+          }
+
+          // Get total unique test case count
+          totalCount = (result.body.aggregations?.total_count as any)?.value || 0;
+        } else {
+          // Unpaginated mode: return all results (backward compat)
+          const result = await client.search({
+            index: INDEX,
+            body: {
+              size: 0,
+              aggs: {
+                by_id: {
+                  terms: { field: 'id', size: 10000 },
+                  aggs: {
+                    latest: { top_hits: topHitsOptions },
                   },
                 },
               },
             },
-          },
-        });
+          });
 
-        const buckets = (result.body.aggregations?.by_id as any)?.buckets || [];
-        realData = buckets.map((b: any) => b.latest.hits.hits[0]._source);
+          const buckets = (result.body.aggregations?.by_id as any)?.buckets || [];
+          realData = buckets.map((b: any) => b.latest.hits.hits[0]._source);
+        }
         storageReachable = true;
       } catch (e: any) {
         console.warn('[StorageAPI] OpenSearch unavailable, returning sample data only:', e.message);
@@ -108,18 +214,49 @@ router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
       }
     }
 
+    // Apply summary transformation to real data
+    if (isSummary) {
+      realData = realData.map(toSummary);
+    }
+
     // Sort real data by createdAt descending (newest first)
     const sortedRealData = realData.sort((a, b) =>
       new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
     );
 
+    // Get sample data (filtered by IDs if specified)
+    let sampleData = getSampleTestCases();
+    if (filterIds) {
+      const sampleIds = filterIds.filter(id => isSampleId(id));
+      sampleData = sampleData.filter(tc => sampleIds.includes(tc.id));
+    }
+    // Apply summary transformation to sample data
+    if (isSummary) {
+      sampleData = sampleData.map(toSummary);
+    }
     // Sort sample data by createdAt descending
-    const sampleData = getSampleTestCases().sort((a, b) =>
+    sampleData = sampleData.sort((a, b) =>
       new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
     );
 
     // User data first, then sample data
-    const allData = [...sortedRealData, ...sampleData];
+    let allData = [...sortedRealData, ...sampleData];
+
+    // For paginated mode without cursor (first page), also handle sample data pagination
+    if (pageSize && !afterCursor) {
+      // First page: include sample data, cap to pageSize
+      if (allData.length > pageSize) {
+        allData = allData.slice(0, pageSize);
+        // There are more results
+        if (!nextAfter && allData.length === pageSize) {
+          nextAfter = '__sample__';
+        }
+      }
+    } else if (pageSize && afterCursor) {
+      // Subsequent pages: sample data already included in first page or not at all
+      // Just use real data from composite aggregation
+      allData = sortedRealData;
+    }
 
     // Build metadata
     const meta: StorageMetadata = {
@@ -130,7 +267,19 @@ router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
       ...(warnings.length > 0 && { warnings }),
     };
 
-    res.json({ testCases: allData, total: allData.length, meta });
+    const response: any = {
+      testCases: allData,
+      total: totalCount !== null ? totalCount + sampleData.length : allData.length,
+      meta,
+    };
+
+    // Include pagination info when paginating
+    if (pageSize) {
+      response.after = nextAfter;
+      response.hasMore = !!nextAfter;
+    }
+
+    res.json(response);
   } catch (error: any) {
     console.error('[StorageAPI] List test cases failed:', error.message);
     res.status(500).json({ error: error.message });

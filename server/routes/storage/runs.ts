@@ -87,6 +87,59 @@ router.get('/api/storage/runs', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/storage/runs/counts-by-test-case - Bulk run counts per test case (single aggregation query)
+// NOTE: This route MUST be registered before /api/storage/runs/:id to avoid Express matching
+// "counts-by-test-case" as a :id parameter.
+router.get('/api/storage/runs/counts-by-test-case', async (req: Request, res: Response) => {
+  try {
+    // Build sample counts
+    const sampleCounts: Record<string, number> = {};
+    for (const run of SAMPLE_RUNS) {
+      sampleCounts[run.testCaseId] = (sampleCounts[run.testCaseId] || 0) + 1;
+    }
+
+    let realCounts: Record<string, number> = {};
+
+    // Fetch from OpenSearch if configured - use terms aggregation for efficiency
+    if (isStorageAvailable(req)) {
+      try {
+        const client = requireStorageClient(req);
+        const result = await client.search({
+          index: INDEX,
+          body: {
+            size: 0, // No documents needed, only aggregation
+            aggs: {
+              by_test_case: {
+                terms: {
+                  field: 'testCaseId',
+                  size: 10000, // Max buckets
+                },
+              },
+            },
+          },
+        });
+        const buckets = (result.body.aggregations?.by_test_case as any)?.buckets || [];
+        for (const bucket of buckets) {
+          realCounts[bucket.key as string] = bucket.doc_count as number;
+        }
+      } catch (e: any) {
+        console.warn('[StorageAPI] OpenSearch unavailable for count aggregation:', e.message);
+      }
+    }
+
+    // Merge counts (real + sample)
+    const counts: Record<string, number> = { ...sampleCounts };
+    for (const [testCaseId, count] of Object.entries(realCounts)) {
+      counts[testCaseId] = (counts[testCaseId] || 0) + count;
+    }
+
+    res.json({ counts });
+  } catch (error: any) {
+    console.error('[StorageAPI] Counts by test case failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET /api/storage/runs/:id - Get by ID
 router.get('/api/storage/runs/:id', async (req: Request, res: Response) => {
   try {

@@ -16,13 +16,12 @@ import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
-import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
+import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
 import { executeBenchmarkRun } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
-import { Benchmark, BenchmarkRun, EvaluationReport, TestCase, BenchmarkProgress, BenchmarkStartedEvent } from '@/types';
+import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getLabelColor, formatDate, getModelName } from '@/lib/utils';
-import { calculateRunStats } from '@/lib/runStats';
 import {
   computeVersionData,
   getSelectedVersionData,
@@ -82,8 +81,16 @@ export const BenchmarkRunsPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [benchmark, setBenchmark] = useState<Benchmark | null>(null);
-  const [reports, setReports] = useState<Record<string, EvaluationReport | null>>({});
   const [testCases, setTestCases] = useState<TestCase[]>([]);
+
+  // Run pagination state
+  const [totalRuns, setTotalRuns] = useState<number>(0);
+  const [hasMoreRuns, setHasMoreRuns] = useState(false);
+  const [isLoadingMoreRuns, setIsLoadingMoreRuns] = useState(false);
+  const isInitialLoadDone = useRef(false);
+
+  // Cache for static fields excluded during polling
+  const cachedVersions = useRef<Benchmark['versions'] | null>(null);
 
   // Run configuration dialog state
   const [isRunConfigOpen, setIsRunConfigOpen] = useState(false);
@@ -118,43 +125,85 @@ export const BenchmarkRunsPage: React.FC = () => {
   // Cancellation hook
   const { isCancelling, handleCancelRun } = useBenchmarkCancellation();
 
-  // Load test cases on mount
-  useEffect(() => {
-    asyncTestCaseStorage.getAll().then(setTestCases);
-  }, []);
-
   const loadBenchmark = useCallback(async () => {
     if (!benchmarkId) return;
 
     try {
-      const exp = await asyncBenchmarkStorage.getById(benchmarkId);
+      // Use lightweight polling mode after initial load
+      const isPolling = isInitialLoadDone.current;
+      const options = isPolling
+        ? { fields: 'polling' as const, runsSize: 100 }
+        : { runsSize: 100 };
+
+      const exp = await asyncBenchmarkStorage.getById(benchmarkId, options);
       if (!exp) {
         navigate('/benchmarks');
         return;
       }
 
-      // Load reports with error handling to prevent stuck loading state
-      let allReports: EvaluationReport[] = [];
-      try {
-        allReports = await asyncRunStorage.getByBenchmark(benchmarkId);
-      } catch (error) {
-        console.error('Failed to load reports:', error);
-        // Continue with empty reports to avoid stuck loading state
+      // Track run pagination metadata
+      const expAny = exp as any;
+      if (expAny.totalRuns !== undefined) {
+        setTotalRuns(expAny.totalRuns);
+        setHasMoreRuns(expAny.hasMoreRuns ?? false);
       }
 
-      const loadedReports: Record<string, EvaluationReport | null> = {};
-      allReports.forEach(report => {
-        loadedReports[report.id] = report;
-      });
+      // In polling mode, restore cached static fields
+      if (isPolling && cachedVersions.current) {
+        exp.versions = cachedVersions.current;
+      } else {
+        // Cache static fields on initial load
+        cachedVersions.current = exp.versions;
+      }
 
-      // Set both states together - React 18+ batches these automatically
       setBenchmark(exp);
-      setReports(loadedReports);
+
+      // Only fetch test cases on initial load
+      if (!isPolling) {
+        try {
+          const benchmarkTcs = await asyncTestCaseStorage.getByIds(exp.testCaseIds);
+          setTestCases(benchmarkTcs);
+        } catch (error) {
+          console.error('Failed to load test cases:', error);
+        }
+        isInitialLoadDone.current = true;
+      }
     } catch (error) {
       console.error('Failed to load benchmark:', error);
       navigate('/benchmarks');
     }
   }, [benchmarkId, navigate]);
+
+  // Load more (older) runs
+  const loadMoreRuns = useCallback(async () => {
+    if (!benchmarkId || !benchmark || isLoadingMoreRuns) return;
+    setIsLoadingMoreRuns(true);
+    try {
+      const currentRunCount = benchmark.runs?.length || 0;
+      const exp = await asyncBenchmarkStorage.getById(benchmarkId, {
+        runsSize: 100,
+        runsOffset: currentRunCount,
+      });
+      if (exp) {
+        setBenchmark(prev => {
+          if (!prev) return exp;
+          return {
+            ...prev,
+            runs: [...(prev.runs || []), ...(exp.runs || [])],
+          };
+        });
+        const expAny = exp as any;
+        if (expAny.totalRuns !== undefined) {
+          setTotalRuns(expAny.totalRuns);
+          setHasMoreRuns(expAny.hasMoreRuns ?? false);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load more runs:', error);
+    } finally {
+      setIsLoadingMoreRuns(false);
+    }
+  }, [benchmarkId, benchmark, isLoadingMoreRuns]);
 
   useEffect(() => {
     loadBenchmark();
@@ -218,12 +267,10 @@ export const BenchmarkRunsPage: React.FC = () => {
     }
   };
 
-  // Use shared utility for stats calculation with additional running state
-  const getRunStats = useCallback((run: BenchmarkRun) => {
-    // Use shared utility for core stats
-    const stats = calculateRunStats(run, reports);
-
-    // Count running separately (shared utility treats running as pending)
+  // Get run stats - use denormalized run.stats if available (fast path),
+  // otherwise compute from result statuses (fallback for old data)
+  const getRunStats = useCallback((run: BenchmarkRun): RunStats & { running: number } => {
+    // Count running separately (always needed for UI display)
     let running = 0;
     Object.values(run.results || {}).forEach((result) => {
       if (result.status === 'running') {
@@ -231,22 +278,54 @@ export const BenchmarkRunsPage: React.FC = () => {
       }
     });
 
-    // Adjust pending to exclude running (shared utility counts running as pending)
-    return {
-      passed: stats.passed,
-      failed: stats.failed,
-      pending: stats.pending - running,
-      running,
-      total: stats.total,
-    };
-  }, [reports]);
+    // Fast path: use denormalized stats if available
+    if (run.stats && typeof run.stats.passed === 'number') {
+      return {
+        passed: run.stats.passed,
+        failed: run.stats.failed,
+        pending: run.stats.pending - running, // Adjust pending to exclude running
+        running,
+        total: run.stats.total,
+      };
+    }
 
-  // Check if any reports have pending evaluations (trace mode)
+    // Fallback: compute from result statuses (for old data before migration)
+    let passed = 0;
+    let failed = 0;
+    let pending = 0;
+
+    Object.values(run.results || {}).forEach((result) => {
+      if (result.status === 'running') {
+        // Already counted in 'running'
+        return;
+      } else if (result.status === 'completed') {
+        // Without the full report, we can't know if it passed or failed
+        // Count as pending until migration runs
+        pending++;
+      } else if (result.status === 'failed' || result.status === 'cancelled') {
+        failed++;
+      } else {
+        pending++;
+      }
+    });
+
+    return {
+      passed,
+      failed,
+      pending,
+      running,
+      total: Object.keys(run.results || {}).length,
+    };
+  }, []);
+
+  // Check if any runs have pending stats (stats.pending > 0)
+  // This replaces the old report-based pending evaluation check
   const hasPendingEvaluations = useMemo(() => {
-    return Object.values(reports).some(
-      report => report && (report.metricsStatus === 'pending' || report.metricsStatus === 'calculating')
+    if (!benchmark?.runs) return false;
+    return benchmark.runs.some(run =>
+      run.stats?.pending && run.stats.pending > 0
     );
-  }, [reports]);
+  }, [benchmark?.runs]);
 
   // Check if any runs are still executing on the server
   // This catches runs that are in-progress even if our SSE connection was lost
@@ -860,6 +939,20 @@ export const BenchmarkRunsPage: React.FC = () => {
                 })
               )}
             </div>
+
+            {/* Load More Runs button */}
+            {hasMoreRuns && !isLoadingMoreRuns && (
+              <div className="flex justify-center pt-4 flex-shrink-0">
+                <Button variant="outline" onClick={loadMoreRuns}>
+                  Load More Runs
+                </Button>
+              </div>
+            )}
+            {isLoadingMoreRuns && (
+              <div className="flex justify-center pt-4 flex-shrink-0">
+                <Loader2 size={20} className="animate-spin text-muted-foreground" />
+              </div>
+            )}
 
             {/* Footer hint */}
             {runs.length === 1 && (

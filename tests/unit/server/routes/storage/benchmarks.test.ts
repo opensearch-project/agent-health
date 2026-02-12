@@ -96,10 +96,11 @@ afterAll(() => {
 });
 
 // Helper to create mock request/response
-function createMocks(params: any = {}, body: any = {}) {
+function createMocks(params: any = {}, body: any = {}, query: any = {}) {
   const req = {
     params,
     body,
+    query,
     on: jest.fn(),
     storageClient: mockClient,
     storageConfig: { endpoint: 'https://localhost:9200' },
@@ -1070,5 +1071,177 @@ describe('Experiments Storage Routes - Validation', () => {
     expect(res.json).toHaveBeenCalledWith({
       error: 'modelId is required and must be a string',
     });
+  });
+});
+
+describe('Benchmark Polling Mode (fields=polling)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (isStorageAvailable as jest.Mock).mockReturnValue(true);
+    (requireStorageClient as jest.Mock).mockReturnValue(mockClient);
+  });
+
+  it('should apply _source_excludes when fields=polling', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-123',
+          name: 'Test Benchmark',
+          runs: [],
+        },
+      },
+    });
+
+    const { req, res } = createMocks({ id: 'exp-123' }, {}, { fields: 'polling' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    expect(mockGet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _source_excludes: 'versions,runs.testCaseSnapshots,runs.headers',
+      })
+    );
+  });
+
+  it('should strip versions, testCaseSnapshots, headers from sample data in polling mode', async () => {
+    const { req, res } = createMocks({ id: 'demo-experiment-1' }, {}, { fields: 'polling' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    expect(response.versions).toEqual([]);
+    if (response.runs?.length > 0) {
+      response.runs.forEach((run: any) => {
+        expect(run.testCaseSnapshots).toEqual([]);
+        expect(run.headers).toBeUndefined();
+      });
+    }
+  });
+
+  it('should not apply _source_excludes without fields param (backward compat)', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-123',
+          name: 'Test Benchmark',
+          runs: [],
+        },
+      },
+    });
+
+    const { req, res } = createMocks({ id: 'exp-123' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    expect(mockGet).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        _source_excludes: expect.anything(),
+      })
+    );
+  });
+});
+
+describe('Benchmark Run Pagination (runsSize + runsOffset)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (isStorageAvailable as jest.Mock).mockReturnValue(true);
+    (requireStorageClient as jest.Mock).mockReturnValue(mockClient);
+  });
+
+  it('should return sliced runs with totalRuns and hasMoreRuns', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-123',
+          name: 'Test Benchmark',
+          runs: [
+            { id: 'run-1', name: 'Run 1', agentKey: 'a', modelId: 'm', createdAt: '2024-03-01T00:00:00Z', results: {} },
+            { id: 'run-2', name: 'Run 2', agentKey: 'a', modelId: 'm', createdAt: '2024-02-01T00:00:00Z', results: {} },
+            { id: 'run-3', name: 'Run 3', agentKey: 'a', modelId: 'm', createdAt: '2024-01-01T00:00:00Z', results: {} },
+          ],
+        },
+      },
+    });
+
+    const { req, res } = createMocks({ id: 'exp-123' }, {}, { runsSize: '2' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    expect(response.runs).toHaveLength(2);
+    expect(response.totalRuns).toBe(3);
+    expect(response.hasMoreRuns).toBe(true);
+  });
+
+  it('should support runsOffset for loading older runs', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-123',
+          name: 'Test Benchmark',
+          runs: [
+            { id: 'run-1', name: 'Run 1', agentKey: 'a', modelId: 'm', createdAt: '2024-03-01T00:00:00Z', results: {} },
+            { id: 'run-2', name: 'Run 2', agentKey: 'a', modelId: 'm', createdAt: '2024-02-01T00:00:00Z', results: {} },
+            { id: 'run-3', name: 'Run 3', agentKey: 'a', modelId: 'm', createdAt: '2024-01-01T00:00:00Z', results: {} },
+          ],
+        },
+      },
+    });
+
+    const { req, res } = createMocks({ id: 'exp-123' }, {}, { runsSize: '2', runsOffset: '2' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    expect(response.runs).toHaveLength(1); // Only 1 run remaining at offset 2
+    expect(response.totalRuns).toBe(3);
+    expect(response.hasMoreRuns).toBe(false);
+  });
+
+  it('should return all runs without runsSize param (backward compat)', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-123',
+          name: 'Test Benchmark',
+          runs: [
+            { id: 'run-1', name: 'Run 1', agentKey: 'a', modelId: 'm', createdAt: '2024-03-01T00:00:00Z', results: {} },
+            { id: 'run-2', name: 'Run 2', agentKey: 'a', modelId: 'm', createdAt: '2024-02-01T00:00:00Z', results: {} },
+          ],
+        },
+      },
+    });
+
+    const { req, res } = createMocks({ id: 'exp-123' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    expect(response.runs).toHaveLength(2);
+    expect(response.totalRuns).toBeUndefined();
+    expect(response.hasMoreRuns).toBeUndefined();
+  });
+
+  it('should apply run pagination to sample data', async () => {
+    const { req, res } = createMocks({ id: 'demo-experiment-1' }, {}, { runsSize: '1' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    expect(response.runs.length).toBeLessThanOrEqual(1);
+    expect(response.totalRuns).toBeDefined();
+    expect(typeof response.hasMoreRuns).toBe('boolean');
   });
 });

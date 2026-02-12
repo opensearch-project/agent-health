@@ -159,19 +159,47 @@ function toStorageFormat(testCase: CreateTestCaseInput | UpdateTestCaseInput): P
   };
 }
 
+/** Paginated response from getAll with summary/pagination options */
+export interface TestCasePage {
+  testCases: TestCase[];
+  total: number;
+  after?: string | null;
+  hasMore?: boolean;
+}
+
 class AsyncTestCaseStorage {
   // ==================== Core CRUD Operations ====================
 
   /**
    * Get all test cases (latest versions), sorted by updatedAt descending
+   * @param options.summary - true to fetch lightweight summary (no context/expectedOutcomes)
+   * @param options.size - page size for pagination
+   * @param options.after - cursor token for next page
    */
-  async getAll(): Promise<TestCase[]> {
-    const stored = await opensearchTestCases.getAll();
-    const testCases = stored.map(toTestCase);
+  async getAll(options: { summary?: boolean; size: number; after?: string }): Promise<TestCasePage>;
+  async getAll(options?: { summary?: boolean; size?: number; after?: string }): Promise<TestCase[]>;
+  async getAll(options?: { summary?: boolean; size?: number; after?: string }): Promise<TestCase[] | TestCasePage> {
+    const isPaginated = options?.size !== undefined;
+    const result = await opensearchTestCases.getAll({
+      fields: options?.summary ? 'summary' : undefined,
+      size: options?.size,
+      after: options?.after,
+    });
+    const testCases = result.testCases.map(toTestCase);
     // Sort by updatedAt descending (most recent first)
-    return testCases.sort((a, b) =>
+    const sorted = testCases.sort((a, b) =>
       new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
     );
+
+    if (isPaginated) {
+      return {
+        testCases: sorted,
+        total: result.total,
+        after: result.after,
+        hasMore: result.hasMore,
+      };
+    }
+    return sorted;
   }
 
   /**
@@ -180,6 +208,22 @@ class AsyncTestCaseStorage {
   async getPromoted(): Promise<TestCase[]> {
     const all = await this.getAll();
     return all.filter(tc => tc.isPromoted);
+  }
+
+  /**
+   * Get test cases by specific IDs (for efficient filtered fetching)
+   * Used when you only need test cases for a specific benchmark
+   */
+  async getByIds(ids: string[]): Promise<TestCase[]> {
+    if (ids.length === 0) return [];
+
+    const stored = await opensearchTestCases.getByIds(ids);
+    const testCases = stored.map(toTestCase);
+    // Maintain order of requested IDs
+    const idOrder = new Map(ids.map((id, index) => [id, index]));
+    return testCases.sort((a, b) =>
+      (idOrder.get(a.id) ?? Infinity) - (idOrder.get(b.id) ?? Infinity)
+    );
   }
 
   /**

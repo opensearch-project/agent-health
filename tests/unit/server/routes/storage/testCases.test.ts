@@ -41,7 +41,7 @@ jest.mock('@/cli/demo/sampleTestCases', () => ({
       name: 'Sample Test Case 1',
       description: 'A sample test case',
       labels: ['category:RCA', 'difficulty:Medium'],
-      initialPrompt: 'Test prompt',
+      initialPrompt: 'Test prompt that is short enough to not be truncated in summary mode',
       context: [{ type: 'incident', content: { title: 'Test incident' } }],
       expectedOutcomes: ['Expected outcome 1'],
       tags: ['promoted'],
@@ -61,10 +61,11 @@ afterAll(() => {
 });
 
 // Helper to create mock request/response
-function createMocks(params: any = {}, body: any = {}) {
+function createMocks(params: any = {}, body: any = {}, query: any = {}) {
   const req = {
     params,
     body,
+    query,
     storageClient: mockClient,
     storageConfig: { endpoint: 'https://localhost:9200' },
   } as unknown as Request;
@@ -726,6 +727,353 @@ describe('Test Cases Storage Routes', () => {
 
       expect(res.status).toHaveBeenCalledWith(404);
       expect(res.json).toHaveBeenCalledWith({ error: 'Test case version not found' });
+    });
+  });
+
+  describe('Summary mode (fields=summary)', () => {
+    it('should apply _source.includes to OpenSearch query when fields=summary', async () => {
+      mockSearch.mockResolvedValue({
+        body: {
+          aggregations: {
+            by_id: {
+              buckets: [
+                {
+                  key: 'tc-123',
+                  latest: {
+                    hits: {
+                      hits: [
+                        {
+                          _source: {
+                            id: 'tc-123',
+                            name: 'Real Test Case',
+                            initialPrompt: 'Short prompt',
+                            createdAt: '2024-01-01T00:00:00Z',
+                            context: [{ type: 'big' }],
+                            expectedOutcomes: ['outcome1'],
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const { req, res } = createMocks({}, {}, { fields: 'summary' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      // Verify _source.includes was added to top_hits
+      const searchCall = mockSearch.mock.calls[0][0];
+      const topHits = searchCall.body.aggs.by_id.aggs.latest.top_hits;
+      expect(topHits._source).toEqual({
+        includes: expect.arrayContaining(['id', 'name', 'labels', 'initialPrompt']),
+      });
+
+      // Verify response has summary transformations
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      const realTc = response.testCases.find((tc: any) => tc.id === 'tc-123');
+      expect(realTc.context).toEqual([]);
+      expect(realTc.expectedOutcomes).toEqual([]);
+    });
+
+    it('should truncate initialPrompt to 200 chars in summary mode', async () => {
+      const longPrompt = 'A'.repeat(300);
+      mockSearch.mockResolvedValue({
+        body: {
+          aggregations: {
+            by_id: {
+              buckets: [
+                {
+                  key: 'tc-long',
+                  latest: {
+                    hits: {
+                      hits: [
+                        {
+                          _source: {
+                            id: 'tc-long',
+                            name: 'Long Prompt TC',
+                            initialPrompt: longPrompt,
+                            createdAt: '2024-01-01T00:00:00Z',
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const { req, res } = createMocks({}, {}, { fields: 'summary' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      const tc = response.testCases.find((tc: any) => tc.id === 'tc-long');
+      expect(tc.initialPrompt.length).toBeLessThanOrEqual(203); // 200 + '...'
+      expect(tc.initialPrompt).toMatch(/\.\.\.$/);
+    });
+
+    it('should strip heavy fields from sample data in summary mode', async () => {
+      (isStorageAvailable as jest.Mock).mockReturnValue(false);
+
+      const { req, res } = createMocks({}, {}, { fields: 'summary' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      const sampleTc = response.testCases.find((tc: any) => tc.id === 'demo-test-case-1');
+      expect(sampleTc.context).toEqual([]);
+      expect(sampleTc.expectedOutcomes).toEqual([]);
+      expect(sampleTc.versions).toEqual([]);
+    });
+
+    it('should work with ids filter in summary mode', async () => {
+      mockSearch.mockResolvedValue({
+        body: {
+          aggregations: {
+            by_id: {
+              buckets: [
+                {
+                  key: 'tc-123',
+                  latest: {
+                    hits: {
+                      hits: [
+                        {
+                          _source: {
+                            id: 'tc-123',
+                            name: 'Real Test Case',
+                            initialPrompt: 'Short prompt',
+                            createdAt: '2024-01-01T00:00:00Z',
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const { req, res } = createMocks({}, {}, { fields: 'summary', ids: 'tc-123,demo-test-case-1' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      expect(response.testCases).toHaveLength(2);
+
+      // Verify _source includes was applied
+      const searchCall = mockSearch.mock.calls[0][0];
+      const topHits = searchCall.body.aggs.by_id.aggs.latest.top_hits;
+      expect(topHits._source).toBeDefined();
+    });
+
+    it('should return full data when no fields param (backward compat)', async () => {
+      mockSearch.mockResolvedValue({
+        body: {
+          aggregations: {
+            by_id: {
+              buckets: [
+                {
+                  key: 'tc-123',
+                  latest: {
+                    hits: {
+                      hits: [
+                        {
+                          _source: {
+                            id: 'tc-123',
+                            name: 'Real Test Case',
+                            initialPrompt: 'Short prompt',
+                            createdAt: '2024-01-01T00:00:00Z',
+                            context: [{ type: 'big' }],
+                            expectedOutcomes: ['outcome1'],
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      // Verify no _source filtering applied
+      const searchCall = mockSearch.mock.calls[0][0];
+      const topHits = searchCall.body.aggs.by_id.aggs.latest.top_hits;
+      expect(topHits._source).toBeUndefined();
+
+      // Verify context/expectedOutcomes are NOT stripped
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      const tc = response.testCases.find((tc: any) => tc.id === 'tc-123');
+      expect(tc.context).toEqual([{ type: 'big' }]);
+      expect(tc.expectedOutcomes).toEqual(['outcome1']);
+    });
+  });
+
+  describe('Pagination (size + after)', () => {
+    it('should use composite aggregation when size param provided', async () => {
+      mockSearch.mockResolvedValue({
+        body: {
+          aggregations: {
+            by_id: {
+              buckets: [
+                {
+                  key: { id: 'tc-1' },
+                  latest: {
+                    hits: {
+                      hits: [{ _source: { id: 'tc-1', name: 'TC 1', createdAt: '2024-01-01T00:00:00Z' } }],
+                    },
+                  },
+                },
+                {
+                  key: { id: 'tc-2' },
+                  latest: {
+                    hits: {
+                      hits: [{ _source: { id: 'tc-2', name: 'TC 2', createdAt: '2024-01-02T00:00:00Z' } }],
+                    },
+                  },
+                },
+              ],
+              after_key: { id: 'tc-2' },
+            },
+            total_count: { value: 5 },
+          },
+        },
+      });
+
+      const { req, res } = createMocks({}, {}, { size: '2' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      // Verify composite aggregation was used
+      const searchCall = mockSearch.mock.calls[0][0];
+      expect(searchCall.body.aggs.by_id.composite).toBeDefined();
+      expect(searchCall.body.aggs.by_id.composite.size).toBe(2);
+
+      // Verify response includes pagination info
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      expect(response.after).toBeDefined();
+      expect(response.hasMore).toBe(true);
+    });
+
+    it('should pass after cursor to composite aggregation', async () => {
+      mockSearch.mockResolvedValue({
+        body: {
+          aggregations: {
+            by_id: {
+              buckets: [
+                {
+                  key: { id: 'tc-3' },
+                  latest: {
+                    hits: {
+                      hits: [{ _source: { id: 'tc-3', name: 'TC 3', createdAt: '2024-01-03T00:00:00Z' } }],
+                    },
+                  },
+                },
+              ],
+              after_key: { id: 'tc-3' },
+            },
+            total_count: { value: 5 },
+          },
+        },
+      });
+
+      const { req, res } = createMocks({}, {}, { size: '2', after: 'tc-2' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      // Verify after cursor was passed
+      const searchCall = mockSearch.mock.calls[0][0];
+      expect(searchCall.body.aggs.by_id.composite.after).toEqual({ id: 'tc-2' });
+    });
+
+    it('should not include hasMore when fewer results than page size', async () => {
+      mockSearch.mockResolvedValue({
+        body: {
+          aggregations: {
+            by_id: {
+              buckets: [
+                {
+                  key: { id: 'tc-1' },
+                  latest: {
+                    hits: {
+                      hits: [{ _source: { id: 'tc-1', name: 'TC 1', createdAt: '2024-01-01T00:00:00Z' } }],
+                    },
+                  },
+                },
+              ],
+              after_key: { id: 'tc-1' },
+            },
+            total_count: { value: 1 },
+          },
+        },
+      });
+
+      const { req, res } = createMocks({}, {}, { size: '10' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      expect(response.hasMore).toBe(false);
+      expect(response.after).toBeNull();
+    });
+
+    it('should use terms aggregation when no size param (backward compat)', async () => {
+      mockSearch.mockResolvedValue({
+        body: {
+          aggregations: {
+            by_id: {
+              buckets: [
+                {
+                  key: 'tc-1',
+                  latest: {
+                    hits: {
+                      hits: [{ _source: { id: 'tc-1', name: 'TC 1', createdAt: '2024-01-01T00:00:00Z' } }],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      // Verify terms aggregation (not composite) was used
+      const searchCall = mockSearch.mock.calls[0][0];
+      expect(searchCall.body.aggs.by_id.terms).toBeDefined();
+      expect(searchCall.body.aggs.by_id.composite).toBeUndefined();
+
+      // No pagination fields in response
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      expect(response.after).toBeUndefined();
+      expect(response.hasMore).toBeUndefined();
     });
   });
 });
