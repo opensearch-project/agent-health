@@ -28,7 +28,7 @@ const mockClient = {
 jest.mock('@/server/middleware/storageClient', () => ({
   isStorageAvailable: jest.fn(),
   requireStorageClient: jest.fn(),
-  INDEXES: { benchmarks: 'experiments-index', testCases: 'test-cases-index' },
+  INDEXES: { benchmarks: 'experiments-index', testCases: 'test-cases-index', runs: 'runs-index' },
 }));
 
 // Import mocked functions
@@ -1421,5 +1421,300 @@ describe('Benchmark Run Pagination (runsSize + runsOffset)', () => {
     expect(response.runs.length).toBeLessThanOrEqual(1);
     expect(response.totalRuns).toBeDefined();
     expect(typeof response.hasMoreRuns).toBe('boolean');
+  });
+});
+
+describe('Lazy Stats Backfill', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (isStorageAvailable as jest.Mock).mockReturnValue(true);
+    (requireStorageClient as jest.Mock).mockReturnValue(mockClient);
+  });
+
+  it('should backfill stats for completed runs missing stats', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-backfill',
+          name: 'Backfill Test',
+          runs: [
+            {
+              id: 'run-old',
+              name: 'Old Run',
+              agentKey: 'agent',
+              modelId: 'model',
+              status: 'completed',
+              createdAt: '2024-01-01T00:00:00Z',
+              results: {
+                'tc-1': { reportId: 'report-1', status: 'completed' },
+                'tc-2': { reportId: 'report-2', status: 'completed' },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    // Mock report search for computeStatsForRun
+    mockSearch.mockResolvedValue({
+      body: {
+        hits: {
+          hits: [
+            { _source: { id: 'report-1', passFailStatus: 'passed' } },
+            { _source: { id: 'report-2', passFailStatus: 'failed' } },
+          ],
+        },
+      },
+    });
+
+    // Mock update for fire-and-forget persistence
+    mockUpdate.mockResolvedValue({ body: {} });
+
+    const { req, res } = createMocks({ id: 'exp-backfill' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    // Stats should be backfilled on the run
+    expect(response.runs[0].stats).toBeDefined();
+    expect(response.runs[0].stats.passed).toBe(1);
+    expect(response.runs[0].stats.failed).toBe(1);
+    expect(response.runs[0].stats.total).toBe(2);
+
+    // Should have persisted stats back to OpenSearch
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        index: 'experiments-index',
+        id: 'exp-backfill',
+        body: expect.objectContaining({
+          script: expect.objectContaining({
+            params: expect.objectContaining({
+              runId: 'run-old',
+              stats: expect.objectContaining({ passed: 1, failed: 1, total: 2 }),
+            }),
+          }),
+        }),
+      })
+    );
+  });
+
+  it('should not backfill runs that already have stats', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-with-stats',
+          name: 'Has Stats',
+          runs: [
+            {
+              id: 'run-with-stats',
+              name: 'Run With Stats',
+              agentKey: 'agent',
+              modelId: 'model',
+              status: 'completed',
+              createdAt: '2024-01-01T00:00:00Z',
+              stats: { passed: 3, failed: 0, pending: 0, total: 3 },
+              results: {
+                'tc-1': { reportId: 'report-1', status: 'completed' },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const { req, res } = createMocks({ id: 'exp-with-stats' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    // Should not have searched for reports (no backfill needed)
+    expect(mockSearch).not.toHaveBeenCalled();
+    // Should not have called update to persist stats
+    expect(mockUpdate).not.toHaveBeenCalled();
+
+    // Should still return the existing stats
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    expect(response.runs[0].stats).toEqual({ passed: 3, failed: 0, pending: 0, total: 3 });
+  });
+
+  it('should not backfill runs that are still running', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-running',
+          name: 'Running Test',
+          runs: [
+            {
+              id: 'run-running',
+              name: 'Running Run',
+              agentKey: 'agent',
+              modelId: 'model',
+              status: 'running',
+              createdAt: '2024-01-01T00:00:00Z',
+              results: {
+                'tc-1': { reportId: 'report-1', status: 'completed' },
+                'tc-2': { reportId: '', status: 'pending' },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const { req, res } = createMocks({ id: 'exp-running' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    // Should not have searched for reports (run is still running)
+    expect(mockSearch).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('should handle backfill failures gracefully without breaking the response', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-fail',
+          name: 'Fail Test',
+          runs: [
+            {
+              id: 'run-fail',
+              name: 'Failing Run',
+              agentKey: 'agent',
+              modelId: 'model',
+              status: 'completed',
+              createdAt: '2024-01-01T00:00:00Z',
+              results: {
+                'tc-1': { reportId: 'report-1', status: 'completed' },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    // Mock report search to fail
+    mockSearch.mockRejectedValue(new Error('Search failed'));
+
+    const { req, res } = createMocks({ id: 'exp-fail' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    // Response should still be returned (backfill failure is non-fatal)
+    expect(res.json).toHaveBeenCalled();
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    expect(response.id).toBe('exp-fail');
+  });
+
+  it('should backfill stats in paginated mode', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-paginated',
+          name: 'Paginated Test',
+          runs: [
+            {
+              id: 'run-1',
+              name: 'Run 1',
+              agentKey: 'agent',
+              modelId: 'model',
+              status: 'completed',
+              createdAt: '2024-02-01T00:00:00Z',
+              results: {
+                'tc-1': { reportId: 'report-1', status: 'completed' },
+              },
+            },
+            {
+              id: 'run-2',
+              name: 'Run 2',
+              agentKey: 'agent',
+              modelId: 'model',
+              status: 'completed',
+              createdAt: '2024-01-01T00:00:00Z',
+              results: {
+                'tc-1': { reportId: 'report-2', status: 'completed' },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    // Mock report search for computeStatsForRun
+    mockSearch.mockResolvedValue({
+      body: {
+        hits: {
+          hits: [
+            { _source: { id: 'report-1', passFailStatus: 'passed' } },
+          ],
+        },
+      },
+    });
+    mockUpdate.mockResolvedValue({ body: {} });
+
+    const { req, res } = createMocks({ id: 'exp-paginated' }, {}, { runsSize: '1' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    // Should have backfilled stats on all runs (before pagination slicing)
+    expect(response.totalRuns).toBe(2);
+    // The returned paginated run should have stats
+    expect(response.runs[0].stats).toBeDefined();
+  });
+
+  it('should backfill stats for cancelled runs', async () => {
+    mockGet.mockResolvedValue({
+      body: {
+        found: true,
+        _source: {
+          id: 'exp-cancelled',
+          name: 'Cancelled Test',
+          runs: [
+            {
+              id: 'run-cancelled',
+              name: 'Cancelled Run',
+              agentKey: 'agent',
+              modelId: 'model',
+              status: 'cancelled',
+              createdAt: '2024-01-01T00:00:00Z',
+              results: {
+                'tc-1': { reportId: 'report-1', status: 'completed' },
+                'tc-2': { reportId: '', status: 'failed' },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    mockSearch.mockResolvedValue({
+      body: {
+        hits: {
+          hits: [
+            { _source: { id: 'report-1', passFailStatus: 'passed' } },
+          ],
+        },
+      },
+    });
+    mockUpdate.mockResolvedValue({ body: {} });
+
+    const { req, res } = createMocks({ id: 'exp-cancelled' });
+    const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+    await handler(req, res);
+
+    const response = (res.json as jest.Mock).mock.calls[0][0];
+    expect(response.runs[0].stats).toBeDefined();
+    expect(response.runs[0].stats.total).toBe(2);
   });
 });

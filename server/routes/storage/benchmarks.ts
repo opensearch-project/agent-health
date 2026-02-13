@@ -64,6 +64,54 @@ const router = Router();
 const INDEX = INDEXES.benchmarks;
 
 /**
+ * Lazy backfill stats for completed runs that are missing them.
+ * Computes stats from reports and mutates the runs in place.
+ * Persists updated stats back to OpenSearch (fire-and-forget).
+ */
+async function backfillRunStats(
+  client: any,
+  benchmarkId: string,
+  runs: BenchmarkRun[]
+): Promise<void> {
+  const runsNeedingStats = runs.filter(
+    (r) => !r.stats && (r.status === 'completed' || r.status === 'cancelled')
+  );
+
+  if (runsNeedingStats.length === 0) return;
+
+  await Promise.all(runsNeedingStats.map(async (run) => {
+    try {
+      const stats = await computeStatsForRun(client, run);
+      run.stats = stats;
+
+      // Persist back to OpenSearch (fire-and-forget)
+      client.update({
+        index: INDEX,
+        id: benchmarkId,
+        retry_on_conflict: 3,
+        body: {
+          script: {
+            source: `
+              for (int i = 0; i < ctx._source.runs.size(); i++) {
+                if (ctx._source.runs[i].id == params.runId) {
+                  ctx._source.runs[i].stats = params.stats;
+                  break;
+                }
+              }
+            `,
+            params: { runId: run.id, stats },
+          },
+        },
+      }).catch((e: any) => {
+        console.warn('[StorageAPI] Failed to persist backfilled stats:', e.message);
+      });
+    } catch (e: any) {
+      console.warn('[StorageAPI] Failed to compute stats for run:', run.id, e.message);
+    }
+  }));
+}
+
+/**
  * Compute stats for a benchmark run by fetching its reports
  */
 async function computeStatsForRun(
@@ -393,6 +441,9 @@ router.get('/api/storage/benchmarks/:id', async (req: Request, res: Response) =>
     }
 
     const normalized = normalizeBenchmark(result.body._source);
+
+    // Lazy backfill: compute stats for completed runs missing them
+    await backfillRunStats(client, id, normalized.runs);
 
     // Paginate runs
     if (runsSize !== null) {

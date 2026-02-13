@@ -82,6 +82,8 @@ export interface StorageBenchmarkRunConfig {
   iterationCount?: number;
   createdAt: string;
   results?: Record<string, { reportId: string; status: string }>;
+  status?: string;
+  stats?: { passed: number; failed: number; pending: number; total: number };
 }
 
 export interface StorageBenchmark {

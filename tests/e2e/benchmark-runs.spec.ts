@@ -106,6 +106,52 @@ test.describe('Benchmark Runs Page', () => {
     }
   });
 
+  test('completed runs should show passed or failed counts, not all pending', async ({ page }) => {
+    const viewLatestButton = page.locator('button:has-text("View Latest")').first();
+
+    if (await viewLatestButton.isVisible().catch(() => false)) {
+      await viewLatestButton.click();
+      await page.waitForTimeout(3000);
+
+      // Find stats containers that show "/ N" (total count indicator)
+      const statsContainers = page.locator('span.text-muted-foreground:has-text("/")');
+      const statsCount = await statsContainers.count();
+
+      if (statsCount > 0) {
+        // For runs with stats, the passed count (text-opensearch-blue) or failed count (text-red-400)
+        // should have at least one non-zero value. If all results are "pending", it means
+        // stats are not being passed through from the backend.
+        const passedSpans = page.locator('span.text-opensearch-blue, [class*="text-opensearch-blue"]');
+        const failedSpans = page.locator('span.text-red-400, [class*="text-red-400"]');
+
+        let hasNonZeroPassedOrFailed = false;
+
+        const passedCount = await passedSpans.count();
+        for (let i = 0; i < passedCount; i++) {
+          const text = await passedSpans.nth(i).textContent();
+          if (text && parseInt(text.trim(), 10) > 0) {
+            hasNonZeroPassedOrFailed = true;
+            break;
+          }
+        }
+
+        if (!hasNonZeroPassedOrFailed) {
+          const failedCount = await failedSpans.count();
+          for (let i = 0; i < failedCount; i++) {
+            const text = await failedSpans.nth(i).textContent();
+            if (text && parseInt(text.trim(), 10) > 0) {
+              hasNonZeroPassedOrFailed = true;
+              break;
+            }
+          }
+        }
+
+        // At least one completed run should show non-zero passed or failed
+        expect(hasNonZeroPassedOrFailed).toBeTruthy();
+      }
+    }
+  });
+
   test('should show Compare button when multiple runs exist', async ({ page }) => {
     const viewLatestButton = page.locator('button:has-text("View Latest")').first();
 

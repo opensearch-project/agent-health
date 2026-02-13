@@ -11,7 +11,7 @@
  */
 
 import { benchmarkStorage as opensearchBenchmarks, StorageBenchmark, StorageBenchmarkRunConfig } from './opensearchClient';
-import type { Benchmark, BenchmarkRun, BenchmarkVersion, TestCaseSnapshot, RunResultStatus } from '@/types';
+import type { Benchmark, BenchmarkRun, BenchmarkRunStatus, BenchmarkVersion, TestCaseSnapshot, RunResultStatus, RunStats } from '@/types';
 
 /** API response for benchmark list */
 interface BenchmarkListResponse {
@@ -75,6 +75,8 @@ function toBenchmarkRun(stored: StorageBenchmarkRunConfig): BenchmarkRun {
     headers: stored.headers,
     benchmarkVersion: (stored as any).benchmarkVersion ?? 1,
     testCaseSnapshots: (stored as any).testCaseSnapshots ?? [],
+    status: stored.status as BenchmarkRunStatus | undefined,
+    stats: stored.stats as RunStats | undefined,
     results,
   };
 }
