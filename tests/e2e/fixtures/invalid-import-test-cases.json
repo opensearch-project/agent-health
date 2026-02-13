@@ -1,0 +1,6 @@
+[
+  {
+    "name": "Missing Required Fields",
+    "description": "This test case is missing category, difficulty, initialPrompt, and expectedOutcomes"
+  }
+]

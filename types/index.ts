@@ -516,6 +516,18 @@ export interface ListResponse<T> {
 
 // ============ Benchmark Types ============
 
+// Denormalized stats for a benchmark run (computed from reports, stored on run for fast access)
+export interface RunStats {
+  /** Number of test cases that passed (passFailStatus === 'passed') */
+  passed: number;
+  /** Number of test cases that failed (passFailStatus === 'failed' or execution failed) */
+  failed: number;
+  /** Number of test cases still pending (running, or report not yet available) */
+  pending: number;
+  /** Total number of test cases in the run */
+  total: number;
+}
+
 // Result status for a single use case within a run
 export type RunResultStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -563,6 +575,10 @@ export interface BenchmarkRun {
     reportId: string;              // References EvaluationReport.id
     status: RunResultStatus;
   }>;
+
+  // Denormalized stats (computed from reports, stored for fast list display)
+  // Optional during migration period - will be populated by migration CLI or on next run completion
+  stats?: RunStats;
 }
 
 // Parent entity - persisted to localStorage['benchmarks']

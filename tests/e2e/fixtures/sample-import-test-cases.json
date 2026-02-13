@@ -1,0 +1,30 @@
+[
+  {
+    "name": "E2E Import Test: High CPU Usage",
+    "description": "Test case for E2E import testing on Benchmarks page",
+    "category": "RCA",
+    "difficulty": "Easy",
+    "initialPrompt": "Investigate high CPU usage on the web server",
+    "context": [
+      {
+        "description": "Server Metrics",
+        "value": "CPU usage at 95% on web-server-01"
+      }
+    ],
+    "expectedOutcomes": [
+      "Identify the process causing high CPU",
+      "Suggest remediation steps"
+    ]
+  },
+  {
+    "name": "E2E Import Test: Latency Spike",
+    "description": "Test case for E2E import testing on Benchmarks page",
+    "category": "RCA",
+    "difficulty": "Medium",
+    "initialPrompt": "Investigate latency spike on the API gateway",
+    "context": [],
+    "expectedOutcomes": [
+      "Identify the root cause of latency spike"
+    ]
+  }
+]
