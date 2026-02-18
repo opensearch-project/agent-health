@@ -104,6 +104,19 @@ export function getIndexMappings(): IndexMappings {
         'index.mapping.total_fields.limit': 2000, // Increase from default 1000 for complex reports
       },
       mappings: {
+        dynamic_templates: [
+          {
+            timestamp_fields: {
+              match_pattern: 'regex',
+              match: '.*(Time|time|timestamp|Timestamp|date|Date|At)$',
+              mapping: {
+                type: 'date',
+                format: 'strict_date_optional_time||epoch_millis',
+                ignore_malformed: true,
+              },
+            },
+          },
+        ],
         properties: {
           id: { type: 'keyword' },
           name: { type: 'text', fields: { keyword: { type: 'keyword' } } },

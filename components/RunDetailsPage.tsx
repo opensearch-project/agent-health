@@ -287,13 +287,16 @@ export const RunDetailsPage: React.FC = () => {
           reportsMap,
         });
 
-        // Check URL param for selected test case, default to summary
+        // Check URL param for selected test case, default to summary or first test case
         const testCaseFromUrl = searchParams.get('testCase');
         const testCaseIds = Object.keys(expRun.results || {});
         if (testCaseFromUrl && testCaseIds.includes(testCaseFromUrl)) {
           setSelectedItem(testCaseFromUrl);
           // Collapse main sidebar when loading with a test case selected
           setMainSidebarOpen(false);
+        } else if (testCaseIds.length === 1) {
+          // Auto-select the only test case if there's just one
+          setSelectedItem(testCaseIds[0]);
         } else {
           setSelectedItem('summary');
         }

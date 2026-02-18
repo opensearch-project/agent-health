@@ -26,6 +26,23 @@ import { DEFAULT_CONFIG } from '@/lib/constants';
 const USE_MOCK_AGENT = false;
 
 /**
+ * Build question with context for ML-Commons agents
+ */
+function buildQuestionWithContext(testCase: TestCase): string {
+  let question = testCase.initialPrompt;
+  
+  if (testCase.context && testCase.context.length > 0) {
+    const contextText = testCase.context
+      .map(ctx => `${ctx.description}:\n${ctx.value}`)
+      .join('\n\n');
+    
+    question = `${contextText}\n\n${question}`;
+  }
+  
+  return question;
+}
+
+/**
  * Run real agent evaluation by streaming AG UI events
  */
 async function runRealAgentEvaluation(
@@ -43,9 +60,14 @@ async function runRealAgentEvaluation(
   const isStreaming = agent.endpoint.endsWith('/stream');
   const agentPayload = isStreaming
     ? buildAgentPayload(testCase, modelId)
-    : { parameters: { question: testCase.initialPrompt } };
+    : {
+        parameters: {
+          question: buildQuestionWithContext(testCase),
+        }
+      };
 
-  debug('Eval', 'Agent payload:', JSON.stringify(agentPayload).substring(0, 500));
+  console.log('[Eval] Agent payload:', JSON.stringify(agentPayload));
+  
 
   // Use proxy to avoid CORS issues when calling agent endpoint
   const proxyPayload = {
@@ -76,10 +98,12 @@ async function runRealAgentEvaluation(
     );
   } else {
     // Non-streaming: fetch JSON response
+    const timeoutMs = parseInt(process.env.UNDICI_HEADERS_TIMEOUT || '300000', 10);
     const response = await fetch(ENV_CONFIG.agentProxyUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(proxyPayload),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!response.ok) {

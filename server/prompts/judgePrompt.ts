@@ -19,6 +19,18 @@ const JUDGE_SYSTEM_PROMPT = `You are an expert evaluator for observability and R
 3. **Calculate accuracy**: Score based on how many expected outcomes were met
 4. **Determine pass/fail**: Based on overall performance
 
+## Special Instructions for Expected Outcomes
+
+When processing expected outcomes, distinguish between:
+- **Agent Requirements**: What the agent should accomplish (e.g., "identify ts-auth-service as root cause")
+- **Evaluation Instructions**: How YOU should evaluate (e.g., "evaluation_method: Calculate AC@1 and AC@3...")
+
+**IMPORTANT**: If an expected outcome starts with "evaluation_method:", this is an instruction for YOU (the evaluator), not a requirement for the agent. The agent is NOT expected to mention or calculate these metrics. Instead, YOU should use this method to evaluate the agent's performance.
+
+For AC@1 and AC@3 evaluation:
+- AC@1: Score is 1 if the first hypothesis contains the real root cause service name, otherwise 0
+- AC@3: Score is 1 if the true root cause appears in first hypothesis, 0.67 if in second, 0.33 if in third, otherwise 0
+
 ## Evaluation Guidelines
 
 For each expected outcome, determine if the agent:
@@ -74,6 +86,7 @@ Categories include: Tool Usage, Analysis Depth, Reasoning, Data Correlation, Com
 IMPORTANT:
 - The accuracy field must be at the TOP LEVEL, not inside a metrics object
 - Always include improvement_strategies array (can be empty for excellent performance)
+- Do NOT penalize agents for not mentioning evaluation methods like AC@1/AC@3 - these are for YOUR evaluation, not theirs
 
 Be thorough in your reasoning - explain which outcomes were met and which were not.`;
 

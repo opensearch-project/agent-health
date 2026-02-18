@@ -303,8 +303,9 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
 
           console.info(`[BenchmarkRunner] Judge result for report ${report.id}: ${judgment.passFailStatus}, accuracy: ${judgment.metrics.accuracy}%`);
 
-          // Update report with judge results
+          // Update report with judge results and trajectory
           await updateRunWithClient(client, report.id, {
+            trajectory: updatedReport.trajectory,
             metricsStatus: 'ready',
             passFailStatus: judgment.passFailStatus,
             metrics: judgment.metrics,

@@ -100,7 +100,7 @@ export async function computeMetrics(
   // Query spans by run ID
   const query = {
     size: 500,
-    sort: [{ startTime: { order: 'asc' } }],
+    sort: [{ start_time: { order: 'asc' } }],
     query: {
       bool: {
         must: [

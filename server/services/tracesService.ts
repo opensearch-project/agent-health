@@ -19,6 +19,7 @@ export interface OpenSearchSpanSource {
   startTime?: string;
   endTime?: string;
   durationInNanos?: number;
+  duration_ms?: number;
   kind?: string;
   serviceName?: string;
   'status.code'?: number;
@@ -127,7 +128,7 @@ export function transformSpan(source: OpenSearchSpanSource): NormalizedSpan {
     name: source.name,
     startTime: source.start_time,
     endTime: source.end_time,
-    duration: source.durationInNanos ? source.durationInNanos / 1000000 : null,
+    duration: source.duration_ms || (source.durationInNanos ? source.durationInNanos / 1000000 : null),
     status: source['status.code'] === 2 ? 'ERROR' : (source['status.code'] === 1 ? 'OK' : 'UNSET'),
     attributes,
     events
@@ -215,9 +216,9 @@ export async function fetchTraces(
   }
 
   if (startTime || endTime) {
-    const range: any = { 'startTime': {} };
-    if (startTime) range['startTime'].gte = new Date(startTime).toISOString();
-    if (endTime) range['startTime'].lte = new Date(endTime).toISOString();
+    const range: any = { 'start_time': {} };
+    if (startTime) range['start_time'].gte = new Date(startTime).toISOString();
+    if (endTime) range['start_time'].lte = new Date(endTime).toISOString();
     must.push({ range });
   }
 
@@ -247,9 +248,11 @@ export async function fetchTraces(
 
   const query = {
     size,
-    sort: [{ 'start_time': { order: 'desc' } }],  // Most recent first for live tailing
+    sort: [{ 'start_time': { order: 'asc' } }],  // Chronological order for trajectory building
     query: { bool: { must } }
   };
+
+  console.log('[TracesService] Final query:', JSON.stringify(query, null, 2));
 
   // Query OpenSearch traces index
   const response = await fetch(

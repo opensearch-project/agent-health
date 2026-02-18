@@ -13,6 +13,7 @@
 import { Span, EvaluationReport } from '@/types';
 import { fetchTracesByRunIds } from './index';
 import { asyncRunStorage } from '../storage/asyncRunStorage';
+import { buildTrajectoryFromSpans } from '../../server/services/trajectoryService.js';
 
 // Polling configuration
 const DEFAULT_POLL_INTERVAL_MS = 10000; // 10 seconds
@@ -158,6 +159,22 @@ class TracePollingManager {
         const report = await asyncRunStorage.getReportById(reportId);
         if (!report) {
           throw new Error(`Report ${reportId} not found`);
+        }
+
+        // Build trajectory from trace spans
+        const traceId = result.spans[0]?.traceId;
+        if (traceId) {
+          try {
+            console.log(`[TracePoller] Building trajectory for trace ${traceId}`);
+            const trajectory = buildTrajectoryFromSpans(result.spans);
+            report.trajectory = trajectory;
+            console.log(`[TracePoller] Built trajectory with ${trajectory.length} steps for report ${reportId}`);
+            console.log(`[TracePoller] Trajectory types:`, trajectory.map((s: any) => s.type).join(', '));
+          } catch (err) {
+            console.error(`[TracePoller] Failed to build trajectory for ${traceId}:`, err);
+          }
+        } else {
+          console.warn(`[TracePoller] No traceId found in spans`);
         }
 
         // Stop polling and notify success

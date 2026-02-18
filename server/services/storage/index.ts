@@ -27,28 +27,35 @@ export { isStorageConfigured };
  * Used by code that has the client from middleware or passed as parameter
  */
 export async function getAllTestCasesWithClient(client: Client): Promise<any[]> {
-  const result = await client.search({
-    index: INDEXES.testCases,
-    body: {
-      size: 0,
-      aggs: {
-        test_cases: {
-          terms: { field: 'id.keyword', size: 10000 },
-          aggs: {
-            latest: {
-              top_hits: { size: 1, sort: [{ version: { order: 'desc' } }] },
+  try {
+    console.log(`[StorageService] Querying index: ${INDEXES.testCases}`);
+    const result = await client.search({
+      index: INDEXES.testCases,
+      body: {
+        size: 0,
+        aggs: {
+          test_cases: {
+            terms: { field: 'id.keyword', size: 10000 },
+            aggs: {
+              latest: {
+                top_hits: { size: 1, sort: [{ version: { order: 'desc' } }] },
+              },
             },
           },
         },
       },
-    },
-  });
+    });
 
-  return (
-    (result.body.aggregations?.test_cases as any)?.buckets?.map(
-      (bucket: any) => bucket.latest.hits.hits[0]._source
-    ) || []
-  );
+    const buckets = (result.body.aggregations?.test_cases as any)?.buckets || [];
+    console.log(`[StorageService] Found ${buckets.length} unique test case IDs:`, buckets.map((b: any) => b.key));
+    
+    const testCases = buckets.map((bucket: any) => bucket.latest.hits.hits[0]._source);
+    console.log(`[StorageService] getAllTestCasesWithClient returned ${testCases.length} test cases`);
+    return testCases;
+  } catch (error) {
+    console.error('[StorageService] getAllTestCasesWithClient failed:', error);
+    return [];
+  }
 }
 
 /**
@@ -79,7 +86,7 @@ export async function getTestCaseById(id: string): Promise<any | null> {
     body: {
       size: 1,
       sort: [{ version: { order: 'desc' } }],
-      query: { term: { id } },
+      query: { term: { 'id.keyword': id } },
     },
   });
 

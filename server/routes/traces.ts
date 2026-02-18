@@ -124,3 +124,48 @@ router.get('/api/traces/health', async (req: Request, res: Response) => {
 });
 
 export default router;
+
+/**
+ * GET /api/traces/:traceId/trajectory - Get trajectory from trace
+ */
+router.get('/api/traces/:traceId/trajectory', async (req: Request, res: Response) => {
+  try {
+    const { traceId } = req.params;
+
+    // Get observability configuration
+    const config = resolveObservabilityConfig(req);
+
+    if (!config) {
+      return res.status(400).json({ error: 'Observability data source not configured' });
+    }
+
+    const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
+
+    // Fetch all spans for this trace
+    const result = await fetchTraces(
+      { traceId, size: 1000 },
+      {
+        endpoint: config.endpoint,
+        username: config.username,
+        password: config.password,
+        indexPattern
+      }
+    );
+
+    // Import trajectory service
+    const { buildTrajectoryFromSpans } = await import('../services/trajectoryService.js');
+    
+    // Build trajectory
+    const trajectory = buildTrajectoryFromSpans(result.spans as any);
+
+    res.json({ 
+      traceId,
+      trajectory,
+      spanCount: result.spans.length
+    });
+
+  } catch (error: any) {
+    console.error('[TracesAPI] Trajectory error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});

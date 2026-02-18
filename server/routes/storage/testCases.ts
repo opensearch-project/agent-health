@@ -148,7 +148,7 @@ router.get('/api/storage/test-cases/:id', async (req: Request, res: Response) =>
       body: {
         size: 1,
         sort: [{ version: { order: 'desc' } }],
-        query: { term: { id } },
+        query: { term: { 'id.keyword': id } },
       },
     });
 
@@ -188,7 +188,7 @@ router.get('/api/storage/test-cases/:id/versions', async (req: Request, res: Res
       body: {
         size: 1000,
         sort: [{ version: { order: 'desc' } }],
-        query: { term: { id } },
+        query: { term: { 'id.keyword': id } },
       },
     });
 
@@ -227,7 +227,7 @@ router.get('/api/storage/test-cases/:id/versions/:version', async (req: Request,
         size: 1,
         query: {
           bool: {
-            must: [{ term: { id } }, { term: { version: parseInt(version) } }],
+            must: [{ term: { 'id.keyword': id } }, { term: { version: parseInt(version) } }],
           },
         },
       },
@@ -300,7 +300,7 @@ router.put('/api/storage/test-cases/:id', async (req: Request, res: Response) =>
       body: {
         size: 1,
         sort: [{ version: { order: 'desc' } }],
-        query: { term: { id } },
+        query: { term: { 'id.keyword': id } },
       },
     });
     const currentVersion = searchResult.body.hits?.hits?.[0]?._source?.version || 0;
@@ -344,7 +344,7 @@ router.delete('/api/storage/test-cases/:id', async (req: Request, res: Response)
 
     const result = await client.deleteByQuery({
       index: INDEX,
-      body: { query: { term: { id } } },
+      body: { query: { term: { 'id.keyword': id } } },
       refresh: true,
     });
 
