@@ -228,7 +228,7 @@ export const BenchmarkSummaryCharts: React.FC<BenchmarkSummaryChartsProps> = ({
                   <Clock size={12} />
                   Avg Duration
                 </div>
-                <div className="text-2xl font-bold text-purple-400">
+                <div className="text-2xl font-bold text-purple-700 dark:text-purple-400">
                   {formatDuration(traceMetrics.avgDurationMs)}
                 </div>
                 <div className="text-xs text-muted-foreground">

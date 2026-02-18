@@ -91,17 +91,17 @@ const TraceRow: React.FC<TraceRowProps> = ({ trace, onSelect, isSelected }) => {
       <TableCell className="font-mono text-xs">
         <div className="flex items-center gap-2">
           {trace.hasErrors ? (
-            <XCircle size={14} className="text-red-400" />
+            <XCircle size={14} className="text-red-700 dark:text-red-400" />
           ) : (
-            <CheckCircle2 size={14} className="text-green-400" />
+            <CheckCircle2 size={14} className="text-green-700 dark:text-green-400" />
           )}
-          <span className="truncate max-w-[200px]" title={trace.traceId}>
-            {trace.traceId.slice(0, 16)}...
+          <span title={trace.traceId}>
+            {trace.traceId}
           </span>
         </div>
       </TableCell>
       <TableCell>
-        <span className="truncate block max-w-[250px]" title={trace.rootSpanName}>
+        <span title={trace.rootSpanName}>
           {trace.rootSpanName}
         </span>
       </TableCell>
@@ -114,7 +114,7 @@ const TraceRow: React.FC<TraceRowProps> = ({ trace, onSelect, isSelected }) => {
         {trace.startTime.toLocaleString()}
       </TableCell>
       <TableCell>
-        <span className={`font-mono text-xs ${trace.duration > 5000 ? 'text-amber-400' : 'text-muted-foreground'}`}>
+        <span className={`font-mono text-xs ${trace.duration > 5000 ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}>
           {formatDuration(trace.duration)}
         </span>
       </TableCell>
@@ -146,12 +146,21 @@ export const AgentTracesPage: React.FC = () => {
 
   // Trace data
   const [spans, setSpans] = useState<Span[]>([]);
-  const [traces, setTraces] = useState<TraceTableRow[]>([]);
+  const [allTraces, setAllTraces] = useState<TraceTableRow[]>([]); // All fetched traces
+  const [displayedTraces, setDisplayedTraces] = useState<TraceTableRow[]>([]); // Currently displayed traces
+  const [displayCount, setDisplayCount] = useState(100); // Number of traces to display
 
   // Flyout state
-  const [selectedTrace, setSelectedTrace] = useState<TraceTableRow | null>(null);
   const [flyoutOpen, setFlyoutOpen] = useState(false);
+  const [selectedTrace, setSelectedTrace] = useState<TraceTableRow | null>(null);
   const [traceViewMode, setTraceViewMode] = useState<ViewMode>('timeline');
+  
+  // Flyout resize state
+  const [flyoutWidth, setFlyoutWidth] = useState(800);
+  const [isResizing, setIsResizing] = useState(false);
+
+  // Intersection observer ref for lazy loading
+  const loadMoreRef = React.useRef<HTMLTableRowElement>(null);
 
   // Get unique service names from agents config (no memo — recomputes when
   // parent App re-renders after refreshConfig(), keeping custom agents visible)
@@ -229,7 +238,10 @@ export const AgentTracesPage: React.FC = () => {
       }
 
       setSpans(result.spans);
-      setTraces(processSpansToTraces(result.spans));
+      const processedTraces = processSpansToTraces(result.spans);
+      setAllTraces(processedTraces);
+      setDisplayedTraces(processedTraces.slice(0, 100)); // Initially show first 100
+      setDisplayCount(100);
       setLastRefresh(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch traces');
@@ -243,6 +255,35 @@ export const AgentTracesPage: React.FC = () => {
     fetchTraces();
   }, [fetchTraces]);
 
+  // Lazy loading with intersection observer
+  useEffect(() => {
+    const currentRef = loadMoreRef.current;
+    if (!currentRef || displayCount >= allTraces.length) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const target = entries[0];
+        if (target.isIntersecting && displayCount < allTraces.length) {
+          // Load next 100 traces
+          const nextCount = Math.min(displayCount + 100, allTraces.length);
+          setDisplayedTraces(allTraces.slice(0, nextCount));
+          setDisplayCount(nextCount);
+        }
+      },
+      {
+        root: null,
+        rootMargin: '200px', // Start loading 200px before reaching the bottom
+        threshold: 0.1,
+      }
+    );
+
+    observer.observe(currentRef);
+
+    return () => {
+      observer.unobserve(currentRef);
+    };
+  }, [displayCount, allTraces]);
+
   // Handle trace selection
   const handleSelectTrace = (trace: TraceTableRow) => {
     setSelectedTrace(trace);
@@ -255,9 +296,45 @@ export const AgentTracesPage: React.FC = () => {
     setSelectedTrace(null);
   };
 
+  // Resize handlers for flyout
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      
+      const newWidth = window.innerWidth - e.clientX;
+      // Constrain width between 400px and 90% of window width
+      const minWidth = 400;
+      const maxWidth = window.innerWidth * 0.9;
+      setFlyoutWidth(Math.max(minWidth, Math.min(newWidth, maxWidth)));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
+
   // Calculate latency distribution for histogram
   const latencyDistribution = useMemo(() => {
-    if (traces.length === 0) return [];
+    if (allTraces.length === 0) return [];
 
     // Create buckets for histogram
     const buckets = [
@@ -269,27 +346,27 @@ export const AgentTracesPage: React.FC = () => {
       { label: '>10s', min: 10000, max: Infinity, count: 0 },
     ];
 
-    traces.forEach(trace => {
+    allTraces.forEach(trace => {
       const bucket = buckets.find(b => trace.duration >= b.min && trace.duration < b.max);
       if (bucket) bucket.count++;
     });
 
     return buckets;
-  }, [traces]);
+  }, [allTraces]);
 
   // Calculate stats
   const stats = useMemo(() => {
-    if (traces.length === 0) return { total: 0, errors: 0, avgDuration: 0 };
+    if (allTraces.length === 0) return { total: 0, errors: 0, avgDuration: 0 };
 
-    const errors = traces.filter(t => t.hasErrors).length;
-    const avgDuration = traces.reduce((sum, t) => sum + t.duration, 0) / traces.length;
+    const errors = allTraces.filter(t => t.hasErrors).length;
+    const avgDuration = allTraces.reduce((sum, t) => sum + t.duration, 0) / allTraces.length;
 
     return {
-      total: traces.length,
+      total: allTraces.length,
       errors,
       avgDuration,
     };
-  }, [traces]);
+  }, [allTraces]);
 
   return (
     <div className="p-6 h-full flex flex-col">
@@ -336,11 +413,11 @@ export const AgentTracesPage: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Error Rate</p>
-                <p className="text-2xl font-bold text-red-400">
+                <p className="text-2xl font-bold text-red-700 dark:text-red-400">
                   {stats.total > 0 ? ((stats.errors / stats.total) * 100).toFixed(1) : 0}%
                 </p>
               </div>
-              <AlertCircle className="text-red-400" size={24} />
+              <AlertCircle className="text-red-700 dark:text-red-400" size={24} />
             </div>
           </CardContent>
         </Card>
@@ -349,11 +426,11 @@ export const AgentTracesPage: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Avg Duration</p>
-                <p className="text-2xl font-bold text-amber-400">
+                <p className="text-2xl font-bold text-amber-700 dark:text-amber-400">
                   {formatDuration(stats.avgDuration)}
                 </p>
               </div>
-              <Clock className="text-amber-400" size={24} />
+              <Clock className="text-amber-700 dark:text-amber-400" size={24} />
             </div>
           </CardContent>
         </Card>
@@ -362,9 +439,9 @@ export const AgentTracesPage: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Total Spans</p>
-                <p className="text-2xl font-bold text-purple-400">{spans.length}</p>
+                <p className="text-2xl font-bold text-purple-700 dark:text-purple-400">{spans.length}</p>
               </div>
-              <BarChart3 className="text-purple-400" size={24} />
+              <BarChart3 className="text-purple-700 dark:text-purple-400" size={24} />
             </div>
           </CardContent>
         </Card>
@@ -426,7 +503,7 @@ export const AgentTracesPage: React.FC = () => {
       </Card>
 
       {/* Latency Histogram */}
-      {traces.length > 0 && (
+      {allTraces.length > 0 && (
         <Card className="mb-4">
           <CardHeader className="py-3 px-4">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -455,11 +532,16 @@ export const AgentTracesPage: React.FC = () => {
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <Activity size={14} />
             Traces
-            <Badge variant="secondary" className="ml-2">{traces.length}</Badge>
+            <Badge variant="secondary" className="ml-2">{allTraces.length}</Badge>
+            {displayedTraces.length < allTraces.length && (
+              <span className="text-xs text-muted-foreground ml-2">
+                (showing {displayedTraces.length})
+              </span>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent className="flex-1 p-0 overflow-auto">
-          {traces.length === 0 && !isLoading ? (
+          {allTraces.length === 0 && !isLoading ? (
             <div className="h-full flex flex-col items-center justify-center text-muted-foreground py-12">
               <Activity size={48} className="mb-4 opacity-20" />
               <p>No traces found</p>
@@ -473,17 +555,17 @@ export const AgentTracesPage: React.FC = () => {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[200px]">Trace ID</TableHead>
+                  <TableHead>Trace ID</TableHead>
                   <TableHead>Root Span</TableHead>
-                  <TableHead className="w-[120px]">Service</TableHead>
-                  <TableHead className="w-[180px]">Start Time</TableHead>
-                  <TableHead className="w-[100px]">Duration</TableHead>
-                  <TableHead className="w-[80px] text-center">Spans</TableHead>
-                  <TableHead className="w-[40px]"></TableHead>
+                  <TableHead>Service</TableHead>
+                  <TableHead>Start Time</TableHead>
+                  <TableHead>Duration</TableHead>
+                  <TableHead className="text-center">Spans</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {traces.map(trace => (
+                {displayedTraces.map((trace, index) => (
                   <TraceRow
                     key={trace.traceId}
                     trace={trace}
@@ -491,6 +573,17 @@ export const AgentTracesPage: React.FC = () => {
                     isSelected={selectedTrace?.traceId === trace.traceId}
                   />
                 ))}
+                {/* Intersection observer target for lazy loading */}
+                {displayedTraces.length < allTraces.length && (
+                  <TableRow ref={loadMoreRef} className="hover:bg-transparent">
+                    <TableCell colSpan={7} className="text-center py-8">
+                      <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                        <RefreshCw size={16} className="animate-spin" />
+                        <span className="text-sm">Loading more traces...</span>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           )}
@@ -499,7 +592,22 @@ export const AgentTracesPage: React.FC = () => {
 
       {/* Trace Detail Flyout */}
       <Sheet open={flyoutOpen} onOpenChange={setFlyoutOpen}>
-        <SheetContent side="right" className="w-[800px] sm:max-w-[800px] p-0 overflow-hidden">
+        <SheetContent 
+          side="right" 
+          className="p-0 overflow-hidden"
+          style={{ width: `${flyoutWidth}px`, maxWidth: `${flyoutWidth}px` }}
+        >
+          {/* Resize Handle */}
+          <div
+            onMouseDown={handleMouseDown}
+            className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-opensearch-blue/50 active:bg-opensearch-blue transition-colors z-50"
+            style={{
+              background: isResizing ? 'hsl(var(--primary))' : 'transparent',
+            }}
+          >
+            <div className="absolute left-0 top-0 bottom-0 w-4 -translate-x-1.5" />
+          </div>
+          
           {selectedTrace && (
             <TraceFlyoutContent
               trace={selectedTrace}

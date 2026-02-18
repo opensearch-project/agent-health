@@ -76,14 +76,23 @@ export default {
   			}
   		},
   		fontFamily: {
+  			sans: [
+  				'Rubik',
+  				'-apple-system',
+  				'BlinkMacSystemFont',
+  				'Segoe UI',
+  				'Helvetica',
+  				'Arial',
+  				'sans-serif',
+  				'Apple Color Emoji',
+  				'Segoe UI Emoji',
+  				'Segoe UI Symbol'
+  			],
   			mono: [
-  				'ui-monospace',
-  				'SFMono-Regular',
-  				'Menlo',
-  				'Monaco',
+  				'Source Code Pro',
   				'Consolas',
-  				'Liberation Mono',
-  				'Courier New',
+  				'Menlo',
+  				'Courier',
   				'monospace'
   			]
   		},

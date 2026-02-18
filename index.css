@@ -3,11 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/* Import OpenSearch UI fonts */
+@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Markdown prose styles for dark theme */
+/* Markdown prose styles */
 .prose {
   max-width: none;
 }
@@ -17,8 +21,9 @@
   margin-bottom: 0.75em;
 }
 
+/* Light mode prose headings */
 .prose h1 {
-  color: #f3f4f6;
+  color: #1a1a1a;
   font-weight: 700;
   font-size: 1.5em;
   margin-top: 0;
@@ -27,7 +32,7 @@
 }
 
 .prose h2 {
-  color: #f3f4f6;
+  color: #1a1a1a;
   font-weight: 600;
   font-size: 1.25em;
   margin-top: 1.5em;
@@ -36,7 +41,7 @@
 }
 
 .prose h3 {
-  color: #f3f4f6;
+  color: #1a1a1a;
   font-weight: 600;
   font-size: 1.125em;
   margin-top: 1.25em;
@@ -45,8 +50,25 @@
 }
 
 .prose strong {
-  color: #f9fafb;
+  color: #000000;
   font-weight: 600;
+}
+
+/* Dark mode prose headings */
+.dark .prose h1 {
+  color: #f3f4f6;
+}
+
+.dark .prose h2 {
+  color: #f3f4f6;
+}
+
+.dark .prose h3 {
+  color: #f3f4f6;
+}
+
+.dark .prose strong {
+  color: #f9fafb;
 }
 
 .prose em {
@@ -60,17 +82,27 @@
   background-color: rgba(1, 90, 163, 0.1);
   padding: 0.125rem 0.25rem;
   border-radius: 0.25rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family: 'Source Code Pro', Consolas, Menlo, Courier, monospace;
+}
+
+.dark .prose code {
+  color: #00A3E0;
+  background-color: rgba(0, 163, 224, 0.15);
 }
 
 .prose pre {
-  background-color: #0d1117;
-  border: 1px solid #374151;
+  background-color: #F5F7FA;
+  border: 1px solid #D3DAE6;
   border-radius: 0.5rem;
   padding: 0.75rem 1rem;
   overflow-x: auto;
   margin-top: 1em;
   margin-bottom: 1em;
+}
+
+.dark .prose pre {
+  background-color: #0d1117;
+  border: 1px solid #374151;
 }
 
 .prose pre code {
@@ -79,6 +111,10 @@
   font-size: 0.875em;
   color: #015aa3;
   font-weight: 400;
+}
+
+.dark .prose pre code {
+  color: #00A3E0;
 }
 
 .prose ul {
@@ -102,26 +138,43 @@
 
 .prose blockquote {
   font-style: italic;
-  border-left: 3px solid #4b5563;
+  border-left: 3px solid #D3DAE6;
   padding-left: 1em;
-  color: #9ca3af;
+  color: #69707D;
   margin-top: 1em;
   margin-bottom: 1em;
 }
 
+.dark .prose blockquote {
+  border-left-color: #4b5563;
+  color: #9ca3af;
+}
+
 .prose a {
-  color: #3b82f6;
+  color: #006BB4;
   text-decoration: underline;
 }
 
 .prose a:hover {
+  color: #0079C1;
+}
+
+.dark .prose a {
+  color: #3b82f6;
+}
+
+.dark .prose a:hover {
   color: #60a5fa;
 }
 
 .prose hr {
-  border-color: #374151;
+  border-color: #D3DAE6;
   margin-top: 1.5em;
   margin-bottom: 1.5em;
+}
+
+.dark .prose hr {
+  border-color: #374151;
 }
 
 .prose table {
@@ -132,20 +185,34 @@
 }
 
 .prose th {
-  background-color: #1f2937;
-  border: 1px solid #374151;
+  background-color: #F5F7FA;
+  border: 1px solid #D3DAE6;
   padding: 0.5em;
   text-align: left;
   font-weight: 600;
+  color: #343741;
+}
+
+.dark .prose th {
+  background-color: #1f2937;
+  border: 1px solid #374151;
   color: #f3f4f6;
 }
 
 .prose td {
-  border: 1px solid #374151;
+  border: 1px solid #D3DAE6;
   padding: 0.5em;
 }
 
+.dark .prose td {
+  border: 1px solid #374151;
+}
+
 .prose tr:nth-child(even) {
+  background-color: rgba(245, 247, 250, 0.5);
+}
+
+.dark .prose tr:nth-child(even) {
   background-color: rgba(31, 41, 55, 0.3);
 }
 
@@ -210,9 +277,9 @@
     --accent-foreground: 0 0% 100%;
     --destructive: 0 62.8% 50%;
     --destructive-foreground: 0 0% 98%;
-    --border: 222 47% 14%;
-    --input: 222 47% 14%;
-    --ring: 207 99% 32%;
+    --border: 222 47% 20%;
+    --input: 222 47% 25%;
+    --ring: 174 100% 35%;
     --chart-1: 207 99% 32%;
     --chart-2: 217 91% 60%;
     --chart-3: 280 65% 60%;
@@ -235,5 +302,131 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: 'Rubik', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+    font-weight: 400;
+    font-size: 14px;
+    -webkit-font-kerning: normal;
+    font-kerning: normal;
   }
+  code, pre {
+    font-family: 'Source Code Pro', Consolas, Menlo, Courier, monospace;
+  }
+}
+
+/* OUI M3 Left Nav Styling */
+.oui-sidebar {
+  width: 270px !important;
+  --sidebar-width: 270px !important;
+}
+
+/* Light Mode Sidebar */
+.oui-sidebar [data-sidebar="sidebar"] {
+  background: #FFFFFF !important;
+  border-right: 1px solid #D3DAE6 !important;
+  box-shadow: 0px 0px 12px rgba(0, 0, 0, 0.05), 
+              0px 0px 4px rgba(0, 0, 0, 0.05), 
+              0px 0px 2px rgba(0, 0, 0, 0.05) !important;
+  border-radius: 0px 24px 24px 0px !important;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 37px;
+  padding: 0;
+}
+
+/* Light mode sidebar content colors */
+.oui-sidebar [data-sidebar="sidebar"] * {
+  color: #343741 !important;
+}
+
+.oui-sidebar [data-sidebar="menu-button"]:hover {
+  background-color: #F5F7FA !important;
+}
+
+.oui-sidebar [data-sidebar="menu-button"][data-active="true"] {
+  background-color: #E6F1F7 !important;
+  color: #006BB4 !important;
+  font-weight: 500 !important;
+}
+
+.oui-sidebar [data-sidebar="menu-button"][data-active="true"] * {
+  color: #006BB4 !important;
+}
+
+/* Dark Mode Sidebar */
+.dark .oui-sidebar [data-sidebar="sidebar"] {
+  background: #1D1E24 !important;
+  border-right: 1px solid #343741 !important;
+}
+
+/* Dark mode sidebar content colors */
+.dark .oui-sidebar [data-sidebar="sidebar"] * {
+  color: #DFE5EF !important;
+}
+
+.dark .oui-sidebar [data-sidebar="menu-button"]:hover {
+  background-color: #25262E !important;
+}
+
+/* Improved dark mode active menu item - brighter teal background with better contrast */
+.dark .oui-sidebar [data-sidebar="menu-button"][data-active="true"] {
+  background-color: rgba(0, 179, 164, 0.15) !important;
+  color: #00B3A4 !important;
+  font-weight: 500 !important;
+  border-left: 3px solid #00B3A4 !important;
+}
+
+.dark .oui-sidebar [data-sidebar="menu-button"][data-active="true"] * {
+  color: #00B3A4 !important;
+}
+
+/* Apply border radius to sidebar */
+[data-sidebar="sidebar"] {
+  border-top-right-radius: 24px !important;
+  border-bottom-right-radius: 24px !important;
+  overflow: hidden;
+}
+
+/* Enhanced Input Borders for Dark Mode */
+.dark input[type="text"],
+.dark input[type="search"],
+.dark input[type="email"],
+.dark input[type="password"],
+.dark input[type="number"],
+.dark textarea,
+.dark select {
+  border-color: #52575C !important;
+}
+
+.dark input[type="text"]:hover,
+.dark input[type="search"]:hover,
+.dark input[type="email"]:hover,
+.dark input[type="password"]:hover,
+.dark input[type="number"]:hover,
+.dark textarea:hover,
+.dark select:hover {
+  border-color: #69707D !important;
+}
+
+.dark input[type="text"]:focus,
+.dark input[type="search"]:focus,
+.dark input[type="email"]:focus,
+.dark input[type="password"]:focus,
+.dark input[type="number"]:focus,
+.dark textarea:focus,
+.dark select:focus {
+  border-color: #00B3A4 !important;
+  box-shadow: 0 0 0 1px #00B3A4 !important;
+}
+
+/* Light mode focus states for consistency */
+input[type="text"]:focus,
+input[type="search"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+textarea:focus,
+select:focus {
+  border-color: #006BB4 !important;
+  box-shadow: 0 0 0 1px #006BB4 !important;
 }

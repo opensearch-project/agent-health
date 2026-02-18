@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, Trash2, Database, CheckCircle2, XCircle, Upload, Download, Loader2, Server, Plus, Edit2, X, Save, ExternalLink, Eye, EyeOff, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Trash2, Database, CheckCircle2, XCircle, Upload, Download, Loader2, Server, Plus, Edit2, X, Save, ExternalLink, Eye, EyeOff, ChevronDown, ChevronRight, RefreshCw, Palette } from 'lucide-react';
 import { isDebugEnabled, setDebugEnabled } from '@/lib/debug';
+import { getTheme, setTheme, type Theme } from '@/lib/theme';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
@@ -59,6 +60,7 @@ function getCustomEndpointsFromConfig(): AgentEndpoint[] {
 
 export const SettingsPage: React.FC = () => {
   const [debugMode, setDebugMode] = useState(false);
+  const [currentTheme, setCurrentTheme] = useState<Theme>('dark');
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -158,6 +160,7 @@ export const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     setDebugMode(isDebugEnabled());
+    setCurrentTheme(getTheme());
     loadStorageStats();
     loadConfigStatus();
 
@@ -320,6 +323,11 @@ export const SettingsPage: React.FC = () => {
     } catch {
       // Best effort - server may not be running
     }
+  };
+
+  const handleThemeChange = (theme: Theme) => {
+    setTheme(theme);
+    setCurrentTheme(theme);
   };
 
   const handleMigrate = async () => {
@@ -558,6 +566,40 @@ export const SettingsPage: React.FC = () => {
     <div className="p-6 max-w-4xl mx-auto" data-testid="settings-page">
       <h2 className="text-2xl font-bold mb-6" data-testid="settings-title">Settings</h2>
 
+      {/* Preferences */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Palette size={18} />
+            Preferences
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-3">
+            <Label className="text-sm font-medium">Theme</Label>
+            <div className="flex gap-3">
+              <Button
+                variant={currentTheme === 'light' ? 'default' : 'outline'}
+                onClick={() => handleThemeChange('light')}
+                className="flex-1"
+              >
+                Light Mode
+              </Button>
+              <Button
+                variant={currentTheme === 'dark' ? 'default' : 'outline'}
+                onClick={() => handleThemeChange('dark')}
+                className="flex-1"
+              >
+                Dark Mode
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Choose your preferred color theme for the interface
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Debug Settings */}
       <Card className="mb-6">
         <CardHeader>
@@ -613,7 +655,7 @@ export const SettingsPage: React.FC = () => {
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-sm flex items-center gap-2">
                       {agent.name}
-                      <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">built-in</span>
+                      <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800 rounded">built-in</span>
                     </div>
                     <div className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-1">
                       <ExternalLink size={10} />
@@ -858,9 +900,9 @@ export const SettingsPage: React.FC = () => {
             <div className="flex items-center gap-2 text-xs">
               <span className="text-muted-foreground">Currently configured via:</span>
               <span className={`px-2 py-0.5 rounded ${
-                configStatus.storage.source === 'file' ? 'bg-green-500/20 text-green-400' :
-                configStatus.storage.source === 'environment' ? 'bg-blue-500/20 text-blue-400' :
-                'bg-gray-500/20 text-gray-400'
+                configStatus.storage.source === 'file' ? 'bg-green-50 text-green-700 border border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' :
+                configStatus.storage.source === 'environment' ? 'bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' :
+                'bg-gray-50 text-gray-700 border border-gray-200 dark:bg-gray-800/30 dark:text-gray-400 dark:border-gray-700'
               }`}>
                 {configStatus.storage.source === 'file' ? 'Server file (agent-health.yaml)' :
                  configStatus.storage.source === 'environment' ? 'Environment variables' :
@@ -1109,9 +1151,9 @@ export const SettingsPage: React.FC = () => {
             <div className="flex items-center gap-2 text-xs">
               <span className="text-muted-foreground">Currently configured via:</span>
               <span className={`px-2 py-0.5 rounded ${
-                configStatus.observability.source === 'file' ? 'bg-green-500/20 text-green-400' :
-                configStatus.observability.source === 'environment' ? 'bg-blue-500/20 text-blue-400' :
-                'bg-gray-500/20 text-gray-400'
+                configStatus.observability.source === 'file' ? 'bg-green-50 text-green-700 border border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' :
+                configStatus.observability.source === 'environment' ? 'bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' :
+                'bg-gray-50 text-gray-700 border border-gray-200 dark:bg-gray-800/30 dark:text-gray-400 dark:border-gray-700'
               }`}>
                 {configStatus.observability.source === 'file' ? 'Server file (agent-health.yaml)' :
                  configStatus.observability.source === 'environment' ? 'Environment variables' :

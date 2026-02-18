@@ -142,109 +142,95 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="p-4 border-b bg-card">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              {trace.hasErrors ? (
-                <XCircle size={18} className="text-red-400" />
-              ) : (
-                <CheckCircle2 size={18} className="text-green-400" />
-              )}
-              <h2 className="text-lg font-semibold truncate">{trace.rootSpanName}</h2>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="font-mono flex items-center gap-1">
-                <Hash size={12} />
-                {trace.traceId.slice(0, 16)}...
-              </span>
+      {/* Compact Header */}
+      <div className="px-4 py-3 border-b bg-card">
+        {/* Title Row with Trace ID */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            {trace.hasErrors ? (
+              <XCircle size={18} className="text-red-700 dark:text-red-400 flex-shrink-0" />
+            ) : (
+              <CheckCircle2 size={18} className="text-green-700 dark:text-green-400 flex-shrink-0" />
+            )}
+            <h2 className="text-base font-semibold truncate">{trace.rootSpanName}</h2>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="font-mono">trace-{trace.traceId.slice(0, 8)}</span>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="icon"
-                className="h-5 w-5"
+                className="h-6 w-6 border-border hover:bg-muted hover:border-muted-foreground/30"
                 onClick={handleCopyTraceId}
-                title="Copy trace ID"
+                title="Copy full trace ID"
               >
-                {copiedTraceId ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                {copiedTraceId ? (
+                  <Check size={12} className="text-green-700 dark:text-green-400" />
+                ) : (
+                  <Copy size={12} />
+                )}
               </Button>
             </div>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose}>
-            <X size={18} />
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button 
+              variant="outline" 
+              size="icon" 
+              className="h-8 w-8 border-border hover:bg-muted hover:border-muted-foreground/30" 
+              onClick={() => setFullscreenOpen(true)}
+              title="Fullscreen"
+            >
+              <Maximize2 size={14} />
+            </Button>
+            <Button 
+              variant="outline" 
+              size="icon" 
+              className="h-8 w-8 border-border hover:bg-muted hover:border-muted-foreground/30" 
+              onClick={onClose}
+              title="Close"
+            >
+              <X size={14} />
+            </Button>
+          </div>
         </div>
 
-        {/* Metrics Row */}
-        <div className="grid grid-cols-4 gap-3">
-          <Card className="bg-muted/50">
-            <CardContent className="p-3">
-              <div className="text-xs text-muted-foreground mb-1">Duration</div>
-              <div className="text-sm font-semibold text-amber-400">
-                {formatDuration(trace.duration)}
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-muted/50">
-            <CardContent className="p-3">
-              <div className="text-xs text-muted-foreground mb-1">Spans</div>
-              <div className="text-sm font-semibold text-purple-400">
-                {trace.spanCount}
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-muted/50">
-            <CardContent className="p-3">
-              <div className="text-xs text-muted-foreground mb-1">Service</div>
-              <div className="text-sm font-semibold truncate" title={trace.serviceName}>
-                {trace.serviceName}
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-muted/50">
-            <CardContent className="p-3">
-              <div className="text-xs text-muted-foreground mb-1">Start Time</div>
-              <div className="text-sm font-semibold">
-                {trace.startTime.toLocaleTimeString()}
-              </div>
-            </CardContent>
-          </Card>
+        {/* Primary Metrics Row */}
+        <div className="flex items-center gap-4 text-sm mb-3">
+          <Badge 
+            variant="outline" 
+            className={trace.hasErrors 
+              ? "bg-red-100 text-red-800 border-red-300 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800" 
+              : "bg-green-100 text-green-800 border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800"
+            }
+          >
+            {trace.hasErrors ? 'ERROR' : 'OK'}: {spanStats.byStatus.error > 0 ? spanStats.byStatus.error : spanStats.byStatus.ok}
+          </Badge>
+          <span className="font-semibold">{trace.spanCount} spans</span>
+          <span className="font-semibold text-amber-700 dark:text-amber-400">{formatDuration(trace.duration)}</span>
+          <span className="text-muted-foreground">duration</span>
+          <span className="font-medium">{trace.serviceName}</span>
+          <span className="text-muted-foreground">{trace.startTime.toLocaleString()}</span>
         </div>
 
-        {/* Span Stats */}
-        <div className="flex items-center gap-4 mt-3 text-xs">
-          <div className="flex items-center gap-4">
-            <span className="text-muted-foreground">Status:</span>
-            <Badge variant="outline" className="bg-green-500/10 text-green-400 border-green-500/30">
-              OK: {spanStats.byStatus.ok}
+        {/* Secondary Info: Categories */}
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Categories:</span>
+          {spanStats.byCategory.agent > 0 && (
+            <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800">
+              <Bot size={10} className="mr-1" />
+              Agent: {spanStats.byCategory.agent}
             </Badge>
-            {spanStats.byStatus.error > 0 && (
-              <Badge variant="outline" className="bg-red-500/10 text-red-400 border-red-500/30">
-                Error: {spanStats.byStatus.error}
-              </Badge>
-            )}
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-muted-foreground">Categories:</span>
-            {spanStats.byCategory.agent > 0 && (
-              <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/30">
-                <Bot size={10} className="mr-1" />
-                Agent: {spanStats.byCategory.agent}
-              </Badge>
-            )}
-            {spanStats.byCategory.llm > 0 && (
-              <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/30">
-                <Cpu size={10} className="mr-1" />
-                LLM: {spanStats.byCategory.llm}
-              </Badge>
-            )}
-            {spanStats.byCategory.tool > 0 && (
-              <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/30">
-                <Wrench size={10} className="mr-1" />
-                Tool: {spanStats.byCategory.tool}
-              </Badge>
-            )}
-          </div>
+          )}
+          {spanStats.byCategory.llm > 0 && (
+            <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800">
+              <MessageSquare size={10} className="mr-1" />
+              LLM: {spanStats.byCategory.llm}
+            </Badge>
+          )}
+          {spanStats.byCategory.tool > 0 && (
+            <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800">
+              <Wrench size={10} className="mr-1" />
+              Tool: {spanStats.byCategory.tool}
+            </Badge>
+          )}
         </div>
       </div>
 

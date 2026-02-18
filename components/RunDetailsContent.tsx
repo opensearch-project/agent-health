@@ -41,7 +41,7 @@ import TraceFullScreenView from './traces/TraceFullScreenView';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
 import { fetchTracesByRunIds, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { formatDate } from '@/lib/utils';
+import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { callBedrockJudge } from '@/services/evaluation';
 import { tracePollingManager } from '@/services/traces/tracePoller';
@@ -704,20 +704,14 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 <Card><CardContent className="p-4 space-y-4">
                   {/* Header with badges */}
                   <div className="flex items-center gap-3 flex-wrap">
-                    <Badge variant="outline" className={
-                      testCase.difficulty === 'Easy'
-                        ? 'bg-blue-900/30 text-blue-400 border-blue-800'
-                        : testCase.difficulty === 'Medium'
-                        ? 'bg-yellow-900/30 text-yellow-400 border-yellow-800'
-                        : 'bg-red-900/30 text-red-400 border-red-800'
-                    }>
+                    <Badge variant="outline" className={getDifficultyColor(testCase.difficulty)}>
                       {testCase.difficulty}
                     </Badge>
-                    <Badge variant="outline" className="bg-blue-900/30 text-blue-400 border-blue-800">
+                    <Badge variant="outline" className={getLabelColor(`category:${testCase.category}`)}>
                       {testCase.category}
                     </Badge>
                     {testCase.subcategory && (
-                      <Badge variant="outline" className="bg-purple-900/30 text-purple-400 border-purple-800">
+                      <Badge variant="outline" className={getLabelColor(`subcategory:${testCase.subcategory}`)}>
                         {testCase.subcategory}
                       </Badge>
                     )}

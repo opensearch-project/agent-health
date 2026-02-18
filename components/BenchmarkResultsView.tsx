@@ -14,7 +14,7 @@ import { Benchmark, BenchmarkRun, EvaluationReport, TestCase } from '@/types';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { UseCaseCompareView } from './UseCaseCompareView';
 import { BenchmarkSummaryCharts } from './benchmarks/BenchmarkSummaryCharts';
-import { formatDate } from '@/lib/utils';
+import { formatDate, getPassRateColor } from '@/lib/utils';
 import { calculateRunStats } from '@/lib/runStats';
 
 interface BenchmarkResultsViewProps {
@@ -267,11 +267,13 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                           return (
                             <td
                               key={run.id}
-                              className={`text-center py-2 px-4 font-medium ${
+                              className={`text-center py-2 px-4 ${
                                 getVersionBoundary(index) ? 'border-l-2 border-l-muted-foreground/30' : ''
                               }`}
                             >
-                              {stats.passRatePercent}%
+                              <Badge className={`${getPassRateColor(stats.passRatePercent)} border font-medium`}>
+                                {stats.passRatePercent}%
+                              </Badge>
                             </td>
                           );
                         })}
@@ -282,7 +284,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                               const s2 = getRunStatsWithAccuracy(sortedRuns[1]);
                               const diff = s2.passRatePercent - s1.passRatePercent;
                               return (
-                                <span className={diff > 0 ? 'text-opensearch-blue' : diff < 0 ? 'text-red-400' : ''}>
+                                <span className={diff > 0 ? 'text-green-600 dark:text-green-400' : diff < 0 ? 'text-red-600 dark:text-red-400' : ''}>
                                   {diff > 0 ? '+' : ''}{diff}%
                                 </span>
                               );

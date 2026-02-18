@@ -16,10 +16,11 @@ import { CategorizedSpan, TimeRange } from '@/types';
 import { CategoryStats, ToolInfo } from '@/services/traces/traceStats';
 import { formatDuration } from '@/services/traces/utils';
 import { getCategoryColors } from '@/services/traces';
-import { cn } from '@/lib/utils';
+import { cn, getMetricTextColor } from '@/lib/utils';
 
 /**
- * Stat card component - displays a single metric
+ * Stat card component - compact design for smaller widths
+ * Icon and label on left, value and subtext on right
  */
 export const StatCard: React.FC<{
   icon: React.ReactNode;
@@ -28,13 +29,15 @@ export const StatCard: React.FC<{
   subtext?: string;
   colorClass?: string;
 }> = ({ icon, label, value, subtext, colorClass = 'text-muted-foreground' }) => (
-  <div className="bg-muted/30 rounded-lg p-4 flex flex-col gap-1">
-    <div className={cn('flex items-center gap-2 text-sm', colorClass)}>
-      {icon}
-      <span>{label}</span>
+  <div className="bg-card border rounded-lg p-3 flex items-center justify-between gap-3">
+    <div className={cn('flex items-center gap-2 text-sm font-medium min-w-0', colorClass)}>
+      <div className="flex-shrink-0">{icon}</div>
+      <span className="truncate">{label}</span>
     </div>
-    <div className="text-2xl font-bold">{value}</div>
-    {subtext && <div className="text-xs text-muted-foreground">{subtext}</div>}
+    <div className="flex flex-col items-end flex-shrink-0">
+      <div className="text-2xl font-semibold">{value}</div>
+      {subtext && <div className="text-xs text-muted-foreground whitespace-nowrap">{subtext}</div>}
+    </div>
   </div>
 );
 
@@ -52,32 +55,32 @@ export const SummaryStatsGrid: React.FC<{
   const toolDuration = categoryStats.find(s => s.category === 'TOOL')?.totalDuration || 0;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       <StatCard
         icon={<Zap size={16} />}
         label="LLM Calls"
         value={llmCount}
         subtext={formatDuration(llmDuration)}
-        colorClass="text-purple-400"
+        colorClass={getMetricTextColor('info')}
       />
       <StatCard
         icon={<Wrench size={16} />}
         label="Tool Calls"
         value={toolCount}
         subtext={formatDuration(toolDuration)}
-        colorClass="text-amber-400"
+        colorClass={getMetricTextColor('warning')}
       />
       <StatCard
         icon={<Wrench size={16} />}
         label="Unique Tools"
         value={toolStats.length}
-        colorClass="text-amber-400"
+        colorClass={getMetricTextColor('warning')}
       />
       <StatCard
         icon={<AlertCircle size={16} />}
         label="Errors"
         value={errorCount}
-        colorClass={errorCount > 0 ? 'text-red-400' : 'text-muted-foreground'}
+        colorClass={errorCount > 0 ? getMetricTextColor('error') : 'text-muted-foreground'}
       />
     </div>
   );

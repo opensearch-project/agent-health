@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { refreshConfig, subscribeConfigChange } from '@/lib/constants';
+import { initializeTheme } from '@/lib/theme';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { BenchmarksPage } from './components/BenchmarksPage';
@@ -24,6 +25,11 @@ function ExperimentRunsRedirect() {
 }
 
 function App() {
+  // Initialize theme on mount
+  useEffect(() => {
+    initializeTheme();
+  }, []);
+
   // Fetch server config on mount so custom agents/models appear in the UI.
   // Subscribe to config changes so that any later refreshConfig() call
   // (e.g., from SettingsPage after adding a custom endpoint) re-renders

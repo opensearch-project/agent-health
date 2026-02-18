@@ -17,7 +17,7 @@
  * Uses dagre for automatic layout positioning with TB (top-to-bottom) direction.
  */
 
-import React, { useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -29,6 +29,13 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { 
+  ZoomIn, 
+  ZoomOut,
+  PanelRightClose,
+  PanelRightOpen,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 import { Span, TimeRange, CategorizedSpan, SpanNodeData } from '@/types';
 import { categorizeSpanTree } from '@/services/traces/spanCategorization';
@@ -42,7 +49,6 @@ import {
 import { nodeTypes } from './flow/nodeTypes';
 import SpanDetailsPanel from './SpanDetailsPanel';
 import {
-  TraceSummaryHeader,
   SummaryStatsGrid,
   ToolsUsedSection,
   TimeDistributionBar,
@@ -85,6 +91,11 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const reactFlowInstance = useRef<ReactFlowInstance | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [flowWidth, setFlowWidth] = useState(600); // Default width in pixels for service map
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartX = useRef(0);
+  const resizeStartWidth = useRef(0);
 
   // Categorize spans and convert to flow
   const categorizedTree = useMemo(
@@ -166,6 +177,60 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
     onSelectSpan(null);
   }, [onSelectSpan]);
 
+  // Zoom controls
+  const handleZoomIn = useCallback(() => {
+    reactFlowInstance.current?.zoomIn();
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    reactFlowInstance.current?.zoomOut();
+  }, []);
+
+  const handleFitView = useCallback(() => {
+    reactFlowInstance.current?.fitView({ padding: 0.1, maxZoom: 1 });
+  }, []);
+
+  // Resize handlers for horizontal resize
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizing(true);
+    resizeStartX.current = e.clientX;
+    resizeStartWidth.current = flowWidth;
+    
+    // Prevent text selection during resize
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ew-resize';
+  }, [flowWidth]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      e.preventDefault();
+      const deltaX = resizeStartX.current - e.clientX;
+      // Dragging left increases width, dragging right decreases
+      const newWidth = Math.max(400, Math.min(1200, resizeStartWidth.current + deltaX));
+      setFlowWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isResizing]);
+
   // Find selected span in categorized tree for details panel
   const selectedCategorizedSpan = useMemo(() => {
     if (!selectedSpan) return null;
@@ -193,26 +258,76 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
   }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Summary section (above flow) */}
-      <div className="shrink-0 border-b">
-        <TraceSummaryHeader
-          rootContainer={rootContainer}
-          spanCount={allSpans.length}
-          totalDuration={timeRange.duration}
-        />
+    <div className="h-full flex">
+      {/* Left side: Summary stats, tools, time distribution */}
+      <div className="flex-1 overflow-y-auto border-r" style={{ minWidth: '300px' }}>
         <div className="p-4 space-y-4">
           <SummaryStatsGrid categoryStats={categoryStats} toolStats={toolStats} />
           <ToolsUsedSection toolStats={toolStats} />
-          {/* Time Distribution (above flow) */}
           <TimeDistributionBar stats={categoryStats} totalDuration={timeRange.duration} />
         </div>
       </div>
 
-      {/* Flow canvas (middle) */}
-      <div className="flex-1 flex min-h-0">
-        <div className="flex-1 relative">
-          <ReactFlow
+      {/* Resize handle between stats and service map */}
+      {!isCollapsed && (
+        <div
+          className={`w-2 bg-border hover:bg-opensearch-blue cursor-ew-resize transition-colors flex items-center justify-center flex-shrink-0 ${
+            isResizing ? 'bg-opensearch-blue' : ''
+          }`}
+          onMouseDown={handleResizeStart}
+        >
+          <div className="h-12 w-0.5 bg-muted-foreground/50 rounded-full" />
+        </div>
+      )}
+
+      {/* Right side: Service Map */}
+      {!isCollapsed && (
+        <div 
+          className="flex flex-col flex-shrink-0"
+          style={{ width: `${flowWidth}px`, minWidth: '400px' }}
+        >
+            {/* Flow header with collapse control */}
+            <div className="flex items-center justify-between px-3 py-2 border-b bg-card">
+              <div className="text-sm font-medium">Service Map</div>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => setIsCollapsed(true)}
+                  title="Collapse service map"
+                >
+                  <PanelRightClose size={16} />
+                </Button>
+              </div>
+            </div>
+
+            {/* Flow canvas */}
+            <div className="flex-1 flex min-h-0 relative">
+              <div className="flex-1 relative">
+                {/* Floating controls inside the map */}
+                <div className="absolute top-3 right-3 z-10 flex flex-col gap-1 bg-card border rounded-lg shadow-lg p-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={handleZoomIn}
+                    title="Zoom in"
+                  >
+                    <ZoomIn size={16} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={handleZoomOut}
+                    title="Zoom out"
+                  >
+                    <ZoomOut size={16} />
+                  </Button>
+                </div>
+
+                <ReactFlow
             nodes={nodes}
             edges={edges}
             onNodesChange={onNodesChange}
@@ -248,19 +363,35 @@ export const TraceFlowView: React.FC<TraceFlowViewProps> = ({
               zoomable
             />
           </ReactFlow>
-        </div>
+              </div>
 
-        {/* Details panel */}
-        {selectedCategorizedSpan && (
-          <div className="w-96 border-l overflow-auto">
-            <SpanDetailsPanel
-              span={selectedCategorizedSpan}
-              onClose={() => onSelectSpan(null)}
-            />
+              {/* Details panel */}
+              {selectedCategorizedSpan && (
+                <div className="w-96 border-l overflow-auto">
+                  <SpanDetailsPanel
+                    span={selectedCategorizedSpan}
+                    onClose={() => onSelectSpan(null)}
+                  />
+                </div>
+              )}
+            </div>
           </div>
-        )}
-      </div>
+      )}
 
+      {/* Collapsed state - show expand button on right edge */}
+      {isCollapsed && (
+        <div className="w-10 border-l flex items-center justify-center bg-card flex-shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setIsCollapsed(false)}
+            title="Expand service map"
+          >
+            <PanelRightOpen size={16} />
+          </Button>
+        </div>
+      )}
     </div>
   );
 };
