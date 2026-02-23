@@ -78,8 +78,8 @@ For development or customization:
 
 ```bash
 # Clone the repository
-git clone https://github.com/opensearch-project/dashboards-traces.git
-cd dashboards-traces
+git clone https://github.com/opensearch-project/agent-health.git
+cd agent-health
 
 # Install dependencies
 npm install
