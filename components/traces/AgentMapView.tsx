@@ -10,7 +10,7 @@
  * Displays agent execution as a directed acyclic graph with collapsible details panel.
  */
 
-import React, { useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -22,7 +22,7 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ZoomIn, ZoomOut } from 'lucide-react';
+import { ZoomIn, ZoomOut, Map } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 import { Span, TimeRange, CategorizedSpan, SpanNodeData } from '@/types';
@@ -67,6 +67,7 @@ export const AgentMapView: React.FC<AgentMapViewProps> = ({
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const reactFlowInstance = useRef<ReactFlowInstance | null>(null);
+  const [showMinimap, setShowMinimap] = useState(true);
 
   // Categorize spans and convert to flow
   const categorizedTree = useMemo(
@@ -133,6 +134,10 @@ export const AgentMapView: React.FC<AgentMapViewProps> = ({
     reactFlowInstance.current?.zoomOut();
   }, []);
 
+  const toggleMinimap = useCallback(() => {
+    setShowMinimap(prev => !prev);
+  }, []);
+
   if (spanTree.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground">
@@ -144,24 +149,33 @@ export const AgentMapView: React.FC<AgentMapViewProps> = ({
   return (
     <div className="h-full w-full relative">
       {/* Floating controls inside the map */}
-      <div className="absolute top-3 right-3 z-10 flex flex-col gap-1 bg-card border rounded-lg shadow-lg p-1">
+      <div className="absolute top-1 right-1 z-10 flex flex-col gap-1 bg-card border rounded-lg shadow-lg p-0.5">
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8"
+          className="h-6 w-6"
           onClick={handleZoomIn}
           title="Zoom in"
         >
-          <ZoomIn size={16} />
+          <ZoomIn size={12} />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8"
+          className="h-6 w-6"
           onClick={handleZoomOut}
           title="Zoom out"
         >
-          <ZoomOut size={16} />
+          <ZoomOut size={12} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6"
+          onClick={toggleMinimap}
+          title={showMinimap ? "Hide minimap" : "Show minimap"}
+        >
+          <Map size={12} />
         </Button>
       </div>
 
@@ -193,13 +207,15 @@ export const AgentMapView: React.FC<AgentMapViewProps> = ({
           size={1}
           color="#334155"
         />
-        <MiniMap
-          nodeColor={minimapNodeColor}
-          maskColor="rgba(15, 23, 42, 0.8)"
-          className="!bg-slate-900/50 !border-slate-700"
-          pannable
-          zoomable
-        />
+        {showMinimap && (
+          <MiniMap
+            nodeColor={minimapNodeColor}
+            maskColor="rgba(15, 23, 42, 0.8)"
+            className="!bg-slate-900/50 !border-slate-700"
+            pannable
+            zoomable
+          />
+        )}
       </ReactFlow>
     </div>
   );

@@ -674,6 +674,7 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
               <List size={14} className="mr-1.5" />
               Timeline
             </Button>
+            {/* Info tab hidden - keep code for potential future use
             <Button
               variant={viewMode === 'stats' ? 'default' : 'ghost'}
               size="sm"
@@ -683,6 +684,7 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
               <Info size={14} className="mr-1.5" />
               Info
             </Button>
+            */}
           </div>
         </div>
         

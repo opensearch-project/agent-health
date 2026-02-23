@@ -10,7 +10,7 @@
  */
 
 import React from 'react';
-import { Info, Network, GitBranch, GanttChart } from 'lucide-react';
+import { Info, Network, GitBranch, List } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -74,7 +74,7 @@ const ViewToggle: React.FC<ViewToggleProps> = ({
         )}
         onClick={() => onChange('gantt')}
       >
-        <GanttChart size={14} />
+        <List size={14} />
         Timeline
       </Button>
     </div>

@@ -310,7 +310,7 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground font-medium text-sm">Span category:</span>
         </div>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-row flex-wrap gap-2">
           {spanStats.byCategory.agent?.count > 0 && (
             <button
               onClick={() => handleSummaryClick('agent')}
