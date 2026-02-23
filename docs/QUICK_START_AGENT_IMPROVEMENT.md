@@ -20,7 +20,7 @@ Get your AI coding assistant to evaluate and improve your agent in 5 minutes.
 # From your agent's project root:
 mkdir -p .claude/skills
 curl -o .claude/skills/agent-health.md \
-  https://raw.githubusercontent.com/opensearch-project/dashboards-traces/main/AGENT_HEALTH.md
+  https://raw.githubusercontent.com/opensearch-project/agent-health/main/AGENT_HEALTH.md
 ```
 
 Done. Claude Code auto-discovers skills.
@@ -31,7 +31,7 @@ Done. Claude Code auto-discovers skills.
 # From your agent's project root:
 mkdir -p .kiro/steering
 curl -o .kiro/steering/agent-health.md \
-  https://raw.githubusercontent.com/opensearch-project/dashboards-traces/main/AGENT_HEALTH.md
+  https://raw.githubusercontent.com/opensearch-project/agent-health/main/AGENT_HEALTH.md
 ```
 
 Done. Kiro auto-loads steering files.
@@ -41,7 +41,7 @@ Done. Kiro auto-loads steering files.
 ```bash
 # Download to project root:
 curl -o AGENT_HEALTH.md \
-  https://raw.githubusercontent.com/opensearch-project/dashboards-traces/main/AGENT_HEALTH.md
+  https://raw.githubusercontent.com/opensearch-project/agent-health/main/AGENT_HEALTH.md
 ```
 
 Then tell your assistant: "Read AGENT_HEALTH.md and follow it"
