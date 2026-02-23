@@ -58,21 +58,21 @@ const ViewToggle: React.FC<ViewToggleProps> = ({
         size="sm"
         className={cn(
           'h-7 px-2 text-xs gap-1.5',
-          viewMode === 'flow' && 'bg-background shadow-sm'
+          viewMode === 'agent-map' && 'bg-background shadow-sm'
         )}
-        onClick={() => onChange('flow')}
+        onClick={() => onChange('agent-map')}
       >
         <GitBranch size={14} />
-        Agent Graph
+        Agent Map
       </Button>
       <Button
         variant="ghost"
         size="sm"
         className={cn(
           'h-7 px-2 text-xs gap-1.5',
-          viewMode === 'tree' && 'bg-background shadow-sm'
+          viewMode === 'gantt' && 'bg-background shadow-sm'
         )}
-        onClick={() => onChange('tree')}
+        onClick={() => onChange('gantt')}
       >
         <GanttChart size={14} />
         Timeline

@@ -46,7 +46,7 @@ interface TraceVisualizationProps {
 const TraceVisualization: React.FC<TraceVisualizationProps> = ({
   spanTree,
   timeRange,
-  initialViewMode = 'timeline',
+  initialViewMode = 'info',
   onViewModeChange,
   showViewToggle = true,
   height = '100%',

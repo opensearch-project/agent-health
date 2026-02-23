@@ -85,7 +85,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   const [tracesError, setTracesError] = useState<string | null>(null);
   const [tracesFetched, setTracesFetched] = useState(false);
   const [activeTab, setActiveTab] = useState('summary');
-  const [traceViewMode, setTraceViewMode] = useState<ViewMode>('timeline');
+  const [traceViewMode, setTraceViewMode] = useState<ViewMode>('info');
   const [traceFullscreenOpen, setTraceFullscreenOpen] = useState(false);
 
   // Live report state for auto-refresh when judge completes
