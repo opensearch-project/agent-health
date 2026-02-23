@@ -11,7 +11,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, Minimize2, Network, List, GitBranch } from 'lucide-react';
+import { Activity, Minimize2, Network, List, GitBranch, Info } from 'lucide-react';
 import {
   FullScreenDialog,
   FullScreenDialogContent,
@@ -48,6 +48,10 @@ interface TraceFullScreenViewProps {
   onViewModeChange?: (mode: ViewMode) => void;
   /** Number of spans (for badge display) */
   spanCount?: number;
+  /** Expanded spans state (controlled) */
+  expandedSpans?: Set<string>;
+  /** Callback when expanded spans change */
+  onToggleExpand?: (spanId: string) => void;
 }
 
 export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
@@ -62,11 +66,13 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
   initialViewMode = 'timeline',
   onViewModeChange,
   spanCount,
+  expandedSpans: controlledExpandedSpans,
+  onToggleExpand: controlledOnToggleExpand,
 }) => {
   // Internal state for uncontrolled mode
   const [internalSelectedSpan, setInternalSelectedSpan] = useState<Span | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
-  const [expandedSpans, setExpandedSpans] = useState<Set<string>>(new Set());
+  const [internalExpandedSpans, setInternalExpandedSpans] = useState<Set<string>>(new Set());
 
   // Sync view mode with external prop changes
   useEffect(() => {
@@ -83,32 +89,37 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
     }
   }, [onSelectSpan]);
 
+  // Use controlled or uncontrolled expanded spans
+  const expandedSpans = controlledExpandedSpans !== undefined ? controlledExpandedSpans : internalExpandedSpans;
+  const handleToggleExpand = useCallback((spanId: string) => {
+    if (controlledOnToggleExpand) {
+      controlledOnToggleExpand(spanId);
+    } else {
+      setInternalExpandedSpans(prev => {
+        const next = new Set(prev);
+        if (next.has(spanId)) {
+          next.delete(spanId);
+        } else {
+          next.add(spanId);
+        }
+        return next;
+      });
+    }
+  }, [controlledOnToggleExpand]);
+
   // Handle view mode change
   const handleViewModeChange = useCallback((mode: ViewMode) => {
     setViewMode(mode);
     onViewModeChange?.(mode);
   }, [onViewModeChange]);
 
-  // Auto-expand root spans when opening
+  // Auto-expand root spans when opening (only for uncontrolled mode)
   useEffect(() => {
-    if (open && spanTree.length > 0) {
+    if (open && spanTree.length > 0 && controlledExpandedSpans === undefined) {
       const rootIds = new Set(spanTree.map(s => s.spanId));
-      setExpandedSpans(rootIds);
+      setInternalExpandedSpans(rootIds);
     }
-  }, [open, spanTree]);
-
-  // Handle toggle expand for timeline view
-  const handleToggleExpand = useCallback((spanId: string) => {
-    setExpandedSpans(prev => {
-      const next = new Set(prev);
-      if (next.has(spanId)) {
-        next.delete(spanId);
-      } else {
-        next.add(spanId);
-      }
-      return next;
-    });
-  }, []);
+  }, [open, spanTree, controlledExpandedSpans]);
 
   // Keyboard shortcut to close
   useEffect(() => {
@@ -158,13 +169,13 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
                 Trace tree
               </Button>
               <Button
-                variant={viewMode === 'flow' ? 'default' : 'ghost'}
+                variant={viewMode === 'agent-map' ? 'default' : 'ghost'}
                 size="sm"
                 className="h-7 px-3 text-xs"
-                onClick={() => handleViewModeChange('flow')}
+                onClick={() => handleViewModeChange('agent-map')}
               >
                 <GitBranch size={14} className="mr-1.5" />
-                Agent graph
+                Agent map
               </Button>
               <Button
                 variant={viewMode === 'gantt' ? 'default' : 'ghost'}
@@ -174,6 +185,15 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
               >
                 <List size={14} className="mr-1.5" />
                 Timeline
+              </Button>
+              <Button
+                variant={viewMode === 'stats' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-7 px-3 text-xs"
+                onClick={() => handleViewModeChange('stats')}
+              >
+                <Info size={14} className="mr-1.5" />
+                Info
               </Button>
             </div>
             

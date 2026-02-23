@@ -43,6 +43,7 @@ import {
 import { formatDuration } from '@/services/traces/utils';
 import { TraceFlyoutContent } from './TraceFlyoutContent';
 import MetricsOverview from './MetricsOverview';
+import { useSidebarCollapse } from '../Layout';
 
 // ==================== Types ====================
 
@@ -116,6 +117,9 @@ const TraceRow: React.FC<TraceRowProps> = ({ trace, onSelect, isSelected }) => {
 // ==================== Main Component ====================
 
 export const AgentTracesPage: React.FC = () => {
+  // Sidebar collapse control
+  const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
+  
   // Filter state
   const [selectedAgent, setSelectedAgent] = useState<string>('all');
   const [textSearch, setTextSearch] = useState('');
@@ -137,10 +141,10 @@ export const AgentTracesPage: React.FC = () => {
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [selectedTrace, setSelectedTrace] = useState<TraceTableRow | null>(null);
   
-  // Flyout resize state - default to 65% of viewport width
+  // Flyout resize state - default to 60% of viewport width
   const [flyoutWidth, setFlyoutWidth] = useState(() => {
     if (typeof window !== 'undefined') {
-      return Math.floor(window.innerWidth * 0.65);
+      return Math.floor(window.innerWidth * 0.60);
     }
     return 1300; // fallback for SSR
   });
@@ -291,14 +295,38 @@ export const AgentTracesPage: React.FC = () => {
 
   // Handle trace selection
   const handleSelectTrace = (trace: TraceTableRow) => {
+    // If flyout is already open, just update the selected trace (no close/reopen flash)
+    // If flyout is closed, open it with the selected trace and collapse the sidebar
     setSelectedTrace(trace);
-    setFlyoutOpen(true);
+    if (!flyoutOpen) {
+      setFlyoutOpen(true);
+      // Collapse sidebar when opening flyout for more screen space
+      setIsCollapsed(true);
+    }
   };
 
   // Close flyout
   const handleCloseFlyout = () => {
     setFlyoutOpen(false);
     setSelectedTrace(null);
+  };
+
+  // Handle click outside - only close if clicking outside both table and flyout
+  const handleInteractOutside = (event: Event) => {
+    const target = event.target as HTMLElement;
+    
+    // Check if click is inside the table or flyout
+    const isInsideTable = target.closest('table') !== null;
+    const isInsideFlyout = target.closest('[data-flyout-content]') !== null;
+    const isResizeHandle = target.closest('[data-resize-handle]') !== null;
+    
+    // Only close if clicking outside both table and flyout
+    if (!isInsideTable && !isInsideFlyout && !isResizeHandle) {
+      handleCloseFlyout();
+    } else {
+      // Prevent default close behavior
+      event.preventDefault();
+    }
   };
 
   // Resize handlers for flyout
@@ -647,11 +675,14 @@ export const AgentTracesPage: React.FC = () => {
           side="right" 
           className="p-0 overflow-hidden"
           style={{ width: `${flyoutWidth}px`, maxWidth: `${flyoutWidth}px` }}
+          onInteractOutside={handleInteractOutside}
+          data-flyout-content
         >
           {/* Resize Handle */}
           <div
             onMouseDown={handleMouseDown}
             className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-opensearch-blue/50 active:bg-opensearch-blue transition-colors z-50"
+            data-resize-handle
             style={{
               background: isResizing ? 'hsl(var(--primary))' : 'transparent',
             }}
