@@ -145,8 +145,8 @@ const Sidebar = ({ context, selectedItem, onSelectItem, onToggleCollapse, isColl
                 <div className="flex items-start gap-3">
                   {/* Status Icon */}
                   <div className="mt-0.5">
-                    {isPassed && <CheckCircle2 size={18} className="text-opensearch-blue" />}
-                    {isFailed && <XCircle size={18} className="text-red-400" />}
+                    {isPassed && <CheckCircle2 size={18} className="text-green-700 dark:text-green-400" />}
+                    {isFailed && <XCircle size={18} className="text-red-700 dark:text-red-400" />}
                     {!isPassed && !isFailed && result.status === 'running' && (
                       <Loader2 size={18} className="text-blue-400 animate-spin" />
                     )}
@@ -547,7 +547,7 @@ export const RunDetailsPage: React.FC = () => {
                   {stats.pending}
                 </span>
               )}
-              <span className="flex items-center gap-1 text-opensearch-blue">
+              <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
                 <CheckCircle2 size={16} />
                 {stats.passed}
               </span>

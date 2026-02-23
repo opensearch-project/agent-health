@@ -44,9 +44,9 @@ export const TrajectoryCompareView: React.FC<TrajectoryCompareViewProps> = ({
 
   const getStatusIcon = (status?: ToolCallStatus) => {
     if (status === ToolCallStatus.SUCCESS) {
-      return <CheckCircle2 size={12} className="text-opensearch-blue" />;
+      return <CheckCircle2 size={12} className="text-green-700 dark:text-green-400" />;
     } else if (status === ToolCallStatus.FAILURE) {
-      return <XCircle size={12} className="text-red-400" />;
+      return <XCircle size={12} className="text-red-700 dark:text-red-400" />;
     }
     return null;
   };

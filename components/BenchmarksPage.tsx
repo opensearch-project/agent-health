@@ -516,8 +516,8 @@ export const BenchmarksPage: React.FC = () => {
       {deleteState.message && (
         <div className={`flex items-center gap-2 text-sm p-3 rounded-lg ${
           deleteState.status === 'success'
-            ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-            : 'bg-red-500/10 text-red-400 border border-red-500/20'
+            ? 'bg-green-100 text-green-700 border border-green-300 dark:bg-green-500/10 dark:text-green-400 dark:border-green-500/20'
+            : 'bg-red-100 text-red-700 border border-red-300 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20'
         }`}>
           {deleteState.status === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
           <span>{deleteState.message}</span>
@@ -641,11 +641,11 @@ export const BenchmarksPage: React.FC = () => {
                             {useCaseStatuses.map(uc => (
                               <div key={uc.id} className="flex items-center gap-2 text-xs">
                                 {uc.status === 'pending' && <Circle size={12} className="text-muted-foreground" />}
-                                {uc.status === 'running' && <Loader2 size={12} className="text-blue-400 animate-spin" />}
-                                {uc.status === 'completed' && <CheckCircle size={12} className="text-opensearch-blue" />}
-                                {uc.status === 'failed' && <XCircle size={12} className="text-red-400" />}
-                                {uc.status === 'cancelled' && <Ban size={12} className="text-orange-400" />}
-                                <span className={uc.status === 'running' ? 'text-blue-400' : uc.status === 'cancelled' ? 'text-orange-400' : 'text-muted-foreground'}>
+                                {uc.status === 'running' && <Loader2 size={12} className="text-blue-700 dark:text-blue-400 animate-spin" />}
+                                {uc.status === 'completed' && <CheckCircle size={12} className="text-green-700 dark:text-green-400" />}
+                                {uc.status === 'failed' && <XCircle size={12} className="text-red-700 dark:text-red-400" />}
+                                {uc.status === 'cancelled' && <Ban size={12} className="text-amber-700 dark:text-amber-400" />}
+                                <span className={uc.status === 'running' ? 'text-blue-700 dark:text-blue-400' : uc.status === 'cancelled' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}>
                                   {uc.name}
                                 </span>
                               </div>

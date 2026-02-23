@@ -469,7 +469,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 </div>
               ) : (
                 <div className={`flex items-center gap-1 text-xs font-semibold ${
-                  liveReport.passFailStatus === 'passed' ? 'text-opensearch-blue' : 'text-red-700 dark:text-red-400'
+                  liveReport.passFailStatus === 'passed' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'
                 }`}>
                   {liveReport.passFailStatus === 'passed' ? (
                     <CheckCircle2 size={12} />

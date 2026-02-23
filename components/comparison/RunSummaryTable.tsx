@@ -29,9 +29,9 @@ const getAgentName = (agentKey: string): string => {
  * Get color class for pass rate value
  */
 export function getPassRateColorClass(passRate: number): string {
-  if (passRate >= 80) return 'text-opensearch-blue';
-  if (passRate >= 50) return 'text-amber-400';
-  return 'text-red-400';
+  if (passRate >= 80) return 'text-green-700 dark:text-green-400';
+  if (passRate >= 50) return 'text-amber-700 dark:text-amber-400';
+  return 'text-red-700 dark:text-red-400';
 }
 
 /**
@@ -352,9 +352,9 @@ export const RunSummaryTable: React.FC<RunSummaryTableProps> = ({
                                 {deltaElement}
                               </div>
                               <div className="text-xs text-muted-foreground">
-                                <span className="text-opensearch-blue">{run.passedCount}P</span>
+                                <span className="text-green-700 dark:text-green-400">{run.passedCount}P</span>
                                 {' \u00b7 '}
-                                <span className="text-red-400">{run.failedCount}F</span>
+                                <span className="text-red-700 dark:text-red-400">{run.failedCount}F</span>
                                 {' / '}{run.totalTestCases}
                               </div>
                             </div>

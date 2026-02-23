@@ -506,8 +506,8 @@ export const AgentTracesPage: React.FC = () => {
       {/* Error State */}
       {error && (
         <div className="px-6 pt-4">
-          <Card className="bg-red-500/10 border-red-500/30">
-            <CardContent className="p-4 text-sm text-red-400">
+          <Card className="bg-red-50 dark:bg-red-500/10 border-red-300 dark:border-red-500/30">
+            <CardContent className="p-4 text-sm text-red-700 dark:text-red-400">
               {error}
             </CardContent>
           </Card>

@@ -17,7 +17,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatCost, formatDuration, formatTokens } from '@/services/metrics';
-import { BenchmarkAgentMetrics, getAgentColor } from '@/lib/dashboardMetrics';
+import { BenchmarkAgentMetrics } from '@/lib/dashboardMetrics';
 
 type SortField = 'benchmarkName' | 'agentName' | 'runCount' | 'avgPassRate' | 'avgLatencyMs' | 'avgCostUsd';
 type SortDirection = 'asc' | 'desc';
@@ -162,21 +162,21 @@ export const MetricsTable: React.FC<MetricsTableProps> = ({
               </div>
             </TableCell>
             <TableCell>
-              <button
-                onClick={() => onAgentClick?.(row.agentKey)}
-                className="cursor-pointer"
-              >
-                <Badge
-                  variant="outline"
-                  className="font-normal"
-                  style={{
-                    borderColor: getAgentColor(row.agentKey),
-                    color: getAgentColor(row.agentKey),
-                  }}
+              {row.agentName ? (
+                <button
+                  onClick={() => onAgentClick?.(row.agentKey)}
+                  className="cursor-pointer"
                 >
-                  {row.agentName}
-                </Badge>
-              </button>
+                  <Badge
+                    variant="outline"
+                    className="font-normal text-xs px-2 py-1 bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/30"
+                  >
+                    {row.agentName}
+                  </Badge>
+                </button>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
             </TableCell>
             <TableCell className="text-right font-mono">{row.runCount}</TableCell>
             <TableCell className="text-right">
@@ -205,15 +205,15 @@ const PassRateBadge: React.FC<{ passRate: number }> = ({ passRate }) => {
 
   let className = '';
   if (passRate >= 80) {
-    className = 'bg-green-900/30 text-green-400 border-green-800/50';
+    className = 'bg-green-100 text-green-700 border-green-300 dark:bg-green-500/20 dark:text-green-400 dark:border-green-500/30';
   } else if (passRate >= 50) {
-    className = 'bg-yellow-900/30 text-yellow-400 border-yellow-800/50';
+    className = 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/20 dark:text-amber-400 dark:border-amber-500/30';
   } else {
-    className = 'bg-red-900/30 text-red-400 border-red-800/50';
+    className = 'bg-red-100 text-red-700 border-red-300 dark:bg-red-500/20 dark:text-red-400 dark:border-red-500/30';
   }
 
   return (
-    <Badge variant="outline" className={`font-mono ${className}`}>
+    <Badge variant="outline" className={`font-mono text-xs px-2 py-1 ${className}`}>
       {passRate.toFixed(0)}%
     </Badge>
   );

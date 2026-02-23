@@ -143,8 +143,8 @@ export const RunSummaryPanel: React.FC<RunSummaryPanelProps> = ({
                 <div className="flex-1">
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2">
-                      <CheckCircle2 size={16} className="text-opensearch-blue" />
-                      <span className="text-opensearch-blue font-medium">{stats.passed} passed</span>
+                      <CheckCircle2 size={16} className="text-green-700 dark:text-green-400" />
+                      <span className="text-green-700 dark:text-green-400 font-medium">{stats.passed} passed</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <XCircle size={16} className="text-red-400" />
