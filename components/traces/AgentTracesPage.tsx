@@ -320,13 +320,12 @@ export const AgentTracesPage: React.FC = () => {
     const isInsideFlyout = target.closest('[data-flyout-content]') !== null;
     const isResizeHandle = target.closest('[data-resize-handle]') !== null;
     
-    // Only close if clicking outside both table and flyout
-    if (!isInsideTable && !isInsideFlyout && !isResizeHandle) {
-      handleCloseFlyout();
-    } else {
-      // Prevent default close behavior
+    // Prevent default close if clicking inside table (keep flyout open)
+    // Allow default close if clicking outside both table and flyout
+    if (isInsideTable || isInsideFlyout || isResizeHandle) {
       event.preventDefault();
     }
+    // If clicking outside, allow default close behavior (don't call preventDefault)
   };
 
   // Resize handlers for flyout
