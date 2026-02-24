@@ -563,7 +563,7 @@ export const AgentTracesPage: React.FC = () => {
                     placeholder="Search traces, services, spans..."
                     value={textSearch}
                     onChange={(e) => setTextSearch(e.target.value)}
-                    className="pl-10 h-9 text-sm bg-opensearch-blue/10 dark:bg-opensearch-blue/15 border-opensearch-blue/60 dark:border-opensearch-blue/70 focus-visible:bg-background focus-visible:border-opensearch-blue dark:focus-visible:border-opensearch-blue focus-visible:ring-opensearch-blue/30 placeholder:text-white dark:placeholder:text-white"
+                    className="pl-10 h-9 text-sm bg-opensearch-blue/10 dark:bg-opensearch-blue/15 border-opensearch-blue/60 dark:border-opensearch-blue/70 focus-visible:bg-background focus-visible:border-opensearch-blue dark:focus-visible:border-opensearch-blue focus-visible:ring-opensearch-blue/30 placeholder:text-[#5B9BD5]/80 dark:placeholder:text-white"
                   />
                 </div>
               </div>
