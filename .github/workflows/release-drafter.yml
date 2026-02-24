@@ -26,6 +26,10 @@ jobs:
           issue-title: 'Release opensearch-benchmark'
           issue-body: "Please approve or deny the release of opensearch-benchmark. **Tag**: ${{ github.ref_name }}  **Commit**: ${{ github.sha }}"
           exclude-workflow-initiator-as-approver: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - run: npm run build --if-present
       - run: npm test
