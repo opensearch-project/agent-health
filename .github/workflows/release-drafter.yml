@@ -23,10 +23,15 @@ jobs:
           secret: ${{ github.TOKEN }}
           approvers: ${{ steps.get_approvers.outputs.approvers }}
           minimum-approvals: 2
-          issue-title: 'Release opensearch-benchmark'
-          issue-body: "Please approve or deny the release of opensearch-benchmark. **Tag**: ${{ github.ref_name }}  **Commit**: ${{ github.sha }}"
+          issue-title: 'Release agent-health'
+          issue-body: "Please approve or deny the release of agent_health. **Tag**: ${{ github.ref_name }}  **Commit**: ${{ github.sha }}"
           exclude-workflow-initiator-as-approver: true
       - run: npm ci
       - run: npm run build --if-present
       - run: npm test
       - run: npm publish
+      - name: Draft a release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          generate_release_notes: true
