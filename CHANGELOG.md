@@ -10,6 +10,8 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Added
+- Minimap toggle control for trace visualization with persistent state ([#44](https://github.com/opensearch-project/agent-health/pull/44))
+- Resizable flyout panels with drag-to-resize functionality and responsive layout ([#44](https://github.com/opensearch-project/agent-health/pull/44))
 - Add release trusted publisher to agent-health repository and rename dashboards-traces ([#45](https://github.com/opensearch-project/agent-health/pull/45))
 - Trace flyout UI improvements: resizable panel, redesigned tabs, agent map DAG view, dark mode support ([#40](https://github.com/opensearch-project/agent-health/pull/40))
 - Trace timeline chart with span categorization and enhanced metrics overview ([#40](https://github.com/opensearch-project/agent-health/pull/40))
@@ -64,6 +66,8 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Enhanced storage route tests with additional coverage
 
 ### Changed
+- Improved benchmark traces tab with default view mode and layout fixes ([#44](https://github.com/opensearch-project/agent-health/pull/44))
+- Enhanced fullscreen trace flyout behavior with better state management ([#44](https://github.com/opensearch-project/agent-health/pull/44))
 - Integrated custom agents from JSON-backed store into benchmark execution ([#35](https://github.com/opensearch-project/agent-health/pull/35))
 - Updated observability agent benchmark scenarios for OTEL demo ([#35](https://github.com/opensearch-project/agent-health/pull/35))
 - Optimized run statistics calculations to avoid expensive per-request aggregation ([#35](https://github.com/opensearch-project/agent-health/pull/35))
@@ -79,6 +83,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Updated judge routes to use demo-model provider detection
 
 ### Fixed
+- Click-outside detection for trace flyout to prevent unintended closures ([#44](https://github.com/opensearch-project/agent-health/pull/44))
 - Data loading race condition in BenchmarkRunsPage ([#33](https://github.com/opensearch-project/agent-health/pull/33))
 - Memory leak in benchmark timeout handling with try-finally pattern ([#33](https://github.com/opensearch-project/agent-health/pull/33))
 - Config loading race condition in server startup ([#33](https://github.com/opensearch-project/agent-health/pull/33))
