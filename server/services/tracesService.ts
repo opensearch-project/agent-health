@@ -251,12 +251,12 @@ export async function fetchTraces(
     });
   }
 
-  // Text search across span name and attributes
+  // Text search across span name, service name, and attributes
   if (textSearch) {
     must.push({
       query_string: {
         query: `*${textSearch}*`,
-        fields: ['name', 'span.attributes.*'],
+        fields: ['name', 'serviceName', 'span.attributes.*'],
         default_operator: 'AND'
       }
     });
