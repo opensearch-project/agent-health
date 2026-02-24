@@ -1,0 +1,48 @@
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Simplified gradient for arrows -->
+    <linearGradient id="arrowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#A855F7"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Circular arrow path - simplified and bolder -->
+  <g opacity="0.9">
+    <!-- Top to Right -->
+    <path d="M 66 24 Q 90 36 90 60" stroke="url(#arrowGrad)" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <polygon points="90,60 87,54 93,54" fill="#8B5CF6"/>
+    
+    <!-- Right to Bottom -->
+    <path d="M 90 66 Q 90 90 66 96" stroke="url(#arrowGrad)" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <polygon points="66,96 71,94 69,100" fill="#A855F7"/>
+    
+    <!-- Bottom to Left -->
+    <path d="M 54 96 Q 30 90 30 66" stroke="url(#arrowGrad)" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <polygon points="30,66 33,72 27,72" fill="#8B5CF6"/>
+    
+    <!-- Left to Top -->
+    <path d="M 30 54 Q 30 30 54 24" stroke="url(#arrowGrad)" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <polygon points="54,24 49,26 51,20" fill="#3B82F6"/>
+  </g>
+  
+  <!-- Trace node - Top (Activity/waveform) -->
+  <g transform="translate(60, 21)">
+    <circle cx="0" cy="0" r="12" fill="#3B82F6"/>
+    <polyline points="-5,1.5 -3,-3 -1,1.5 1,-4.5 3,1.5 5,1.5" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  
+  <!-- Evaluate node - Right (CheckCircle) -->
+  <g transform="translate(99, 81)">
+    <circle cx="0" cy="0" r="12" fill="#8B5CF6"/>
+    <circle cx="0" cy="0" r="5" stroke="white" stroke-width="2" fill="none"/>
+    <polyline points="-2,0 -0.5,2 3,-3" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  
+  <!-- Improve node - Left (Shield) -->
+  <g transform="translate(21, 81)">
+    <circle cx="0" cy="0" r="12" fill="#A855F7"/>
+    <path d="M0 -5 L4 -3 L4 1.5 C4 3.5 2 5 0 5.5 C-2 5 -4 3.5 -4 1.5 L-4 -3 Z" fill="white"/>
+  </g>
+</svg>

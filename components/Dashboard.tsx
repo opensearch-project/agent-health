@@ -11,6 +11,7 @@ import { EvaluationReport, Benchmark } from '@/types';
 import { fetchBatchMetrics } from '@/services/metrics';
 import { AgentTrendChart, TrendMetric } from './charts/AgentTrendChart';
 import { MetricsTable } from './dashboard/MetricsTable';
+import { WorkflowNavigator } from './dashboard/WorkflowNavigator';
 import {
   aggregateMetricsByDate,
   aggregateMetricsByBenchmarkAgent,
@@ -263,65 +264,72 @@ export const Dashboard: React.FC = () => {
         <EmptyState />
       ) : (
         <>
-          {/* Performance Trends Section */}
-          <Card>
-            <CardHeader className="pb-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                  <CardTitle className="text-lg">Performance Trends</CardTitle>
-                  <CardDescription>
-                    {agents.length > 0
-                      ? `Comparing ${agents.length} agent${agents.length > 1 ? 's' : ''} across ${benchmarks.length} benchmark${benchmarks.length > 1 ? 's' : ''}`
-                      : 'Agent performance over time'}
-                  </CardDescription>
+          {/* Grid Container for Performance Trends and Workflow Navigator */}
+          <div className="grid gap-8 lg:grid-cols-3">
+            {/* Performance Trends Card - Takes 2/3 width */}
+            <Card className="lg:col-span-2 lg:flex lg:flex-col">
+              <CardHeader className="pb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-lg">Performance Trends</CardTitle>
+                    <CardDescription>
+                      {agents.length > 0
+                        ? `Comparing ${agents.length} agent${agents.length > 1 ? 's' : ''} across ${benchmarks.length} benchmark${benchmarks.length > 1 ? 's' : ''}`
+                        : 'Agent performance over time'}
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={selectedMetric}
+                      onValueChange={(v) => setSelectedMetric(v as TrendMetric)}
+                    >
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue placeholder="Metric" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="passRate">Pass Rate</SelectItem>
+                        <SelectItem value="cost">Cost</SelectItem>
+                        <SelectItem value="tokens">Tokens</SelectItem>
+                        <SelectItem value="latency">Latency</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={timeRange}
+                      onValueChange={(v) => setTimeRange(v as TimeRange)}
+                    >
+                      <SelectTrigger className="w-[130px]">
+                        <SelectValue placeholder="Time range" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="7d">Last 7 days</SelectItem>
+                        <SelectItem value="30d">Last 30 days</SelectItem>
+                        <SelectItem value="all">All time</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={selectedMetric}
-                    onValueChange={(v) => setSelectedMetric(v as TrendMetric)}
-                  >
-                    <SelectTrigger className="w-[140px]">
-                      <SelectValue placeholder="Metric" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="passRate">Pass Rate</SelectItem>
-                      <SelectItem value="cost">Cost</SelectItem>
-                      <SelectItem value="tokens">Tokens</SelectItem>
-                      <SelectItem value="latency">Latency</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={timeRange}
-                    onValueChange={(v) => setTimeRange(v as TimeRange)}
-                  >
-                    <SelectTrigger className="w-[130px]">
-                      <SelectValue placeholder="Time range" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="7d">Last 7 days</SelectItem>
-                      <SelectItem value="30d">Last 30 days</SelectItem>
-                      <SelectItem value="all">All time</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <FilterChips
+                  filters={filters}
+                  benchmarks={benchmarks}
+                  onRemoveFilter={handleRemoveFilter}
+                  onClearAll={handleClearAllFilters}
+                />
+              </CardHeader>
+              <CardContent className="lg:flex-1 lg:min-h-0">
+                <div className="h-[300px] lg:h-full">
+                  <AgentTrendChart
+                    data={trendData}
+                    metric={selectedMetric}
+                  />
                 </div>
-              </div>
-              <FilterChips
-                filters={filters}
-                benchmarks={benchmarks}
-                onRemoveFilter={handleRemoveFilter}
-                onClearAll={handleClearAllFilters}
-              />
-            </CardHeader>
-            <CardContent>
-              <AgentTrendChart
-                data={trendData}
-                metric={selectedMetric}
-                height={300}
-              />
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
 
-          {/* Benchmark Metrics Table Section */}
+            {/* Workflow Navigator Card - Takes 1/3 width on right */}
+            <WorkflowNavigator />
+          </div>
+
+          {/* Benchmark Metrics Table Section - Full Width */}
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
