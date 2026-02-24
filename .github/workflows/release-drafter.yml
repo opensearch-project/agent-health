@@ -4,15 +4,13 @@ on:
   push:
     tags:
       - "*"
-
-permissions:
-  id-token: write  # Required for OIDC
-  contents: read
-  issues: write
-
 jobs:
   draft-a-release:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for OIDC
+      contents: write
+      issues: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
