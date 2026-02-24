@@ -9,6 +9,10 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+- Update `RunSummaryTable` unit tests to match dark-mode-aware color classes (`text-green-700 dark:text-green-400`) introduced in a previous PR ([#51](https://github.com/opensearch-project/agent-health/pull/51))
+- Replace ambiguous `text=Import Failed` Playwright locator (matched 2 elements, causing strict mode rejection) with `getByRole('alertdialog')` in benchmark import e2e test ([#51](https://github.com/opensearch-project/agent-health/pull/51))
+
 ### Added
 - Minimap toggle control for trace visualization with persistent state ([#44](https://github.com/opensearch-project/agent-health/pull/44))
 - Resizable flyout panels with drag-to-resize functionality and responsive layout ([#44](https://github.com/opensearch-project/agent-health/pull/44))
