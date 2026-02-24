@@ -327,7 +327,7 @@ test.describe('Import JSON on Benchmarks Page', () => {
     // Race navigation against error dialog - whichever comes first
     const navigationOrError = await Promise.race([
       page.waitForURL(/\/benchmarks\/bench-.*\/runs/, { timeout: 15000 }).then(() => 'navigated'),
-      page.locator('text=Import Failed').waitFor({ state: 'visible', timeout: 15000 }).then(() => 'error'),
+      page.getByRole('alertdialog').waitFor({ state: 'visible', timeout: 15000 }).then(() => 'error'),
     ]).catch(() => 'timeout');
 
     // Either successfully navigated or got an expected error (e.g., storage not configured)
