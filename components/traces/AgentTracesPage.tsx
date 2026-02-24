@@ -506,9 +506,17 @@ export const AgentTracesPage: React.FC = () => {
       {/* Error State */}
       {error && (
         <div className="px-6 pt-4">
-          <Card className="bg-red-50 dark:bg-red-500/10 border-red-300 dark:border-red-500/30">
-            <CardContent className="p-4 text-sm text-red-700 dark:text-red-400">
-              {error}
+          <Card className="bg-blue-50 dark:bg-blue-500/10 border-blue-300 dark:border-blue-500/30">
+            <CardContent className="p-4 text-sm text-blue-700 dark:text-blue-400">
+              <div className="flex items-start gap-3">
+                <AlertCircle size={18} className="flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium mb-1">No OpenSearch cluster connected</p>
+                  <p className="text-xs opacity-90">
+                    Connect to an OpenSearch cluster in Settings to view agent traces and execution data.
+                  </p>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>

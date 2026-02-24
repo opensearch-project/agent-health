@@ -5,13 +5,16 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Rocket, X } from 'lucide-react';
+import { Rocket, X, Info } from 'lucide-react';
 import { asyncRunStorage, asyncExperimentStorage } from '@/services/storage';
 import { EvaluationReport, Benchmark } from '@/types';
 import { fetchBatchMetrics } from '@/services/metrics';
 import { AgentTrendChart, TrendMetric } from './charts/AgentTrendChart';
 import { MetricsTable } from './dashboard/MetricsTable';
 import { WorkflowNavigator } from './dashboard/WorkflowNavigator';
+import { FirstRunExperience } from './dashboard/FirstRunExperience';
+import { useDataState } from '@/hooks/useDataState';
+import { isSampleDataActive } from '@/config/sampleData';
 import {
   aggregateMetricsByDate,
   aggregateMetricsByBenchmarkAgent,
@@ -158,10 +161,16 @@ const FilterChips: React.FC<FilterChipsProps> = ({
 // ==================== Main Dashboard Component ====================
 
 export const Dashboard: React.FC = () => {
+  // Check data state for conditional rendering
+  const { dataState, isLoading: isCheckingData } = useDataState();
+
   const [isLoading, setIsLoading] = useState(true);
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [reports, setReports] = useState<EvaluationReport[]>([]);
   const [metricsMap, setMetricsMap] = useState<Map<string, { costUsd: number; durationMs: number; tokens: number }>>(new Map());
+  
+  // Check if sample data is active
+  const isSampleMode = isSampleDataActive();
 
   // Filter state
   const [filters, setFilters] = useState<DashboardFilter>({});
@@ -251,8 +260,41 @@ export const Dashboard: React.FC = () => {
 
   const hasData = benchmarks.length > 0 && benchmarks.some(b => b.runs && b.runs.length > 0);
 
+  // Show loading skeleton while checking data state
+  if (isCheckingData) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto space-y-8" data-testid="dashboard-page">
+        <div>
+          <h2 className="text-2xl font-bold" data-testid="dashboard-title">Leaderboard Overview</h2>
+          <p className="text-muted-foreground">Monitor agent performance trends and compare benchmark metrics</p>
+        </div>
+        <DashboardSkeleton />
+      </div>
+    );
+  }
+
+  // Show FirstRunExperience if no data exists
+  if (!dataState.hasData) {
+    return <FirstRunExperience />;
+  }
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-8" data-testid="dashboard-page">
+      {/* Sample Data Indicator */}
+      {isSampleMode && (
+        <Alert className="bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800">
+          <Info className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+          <AlertTitle className="text-blue-900 dark:text-blue-100">You're viewing sample data</AlertTitle>
+          <AlertDescription className="text-blue-800 dark:text-blue-200">
+            This is demonstration data to help you explore Agent Health.{' '}
+            <Link to="/settings/clusters" className="underline font-medium hover:text-blue-600 dark:hover:text-blue-300">
+              Connect your own data
+            </Link>
+            {' '}to start tracking your agents.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div>
         <h2 className="text-2xl font-bold" data-testid="dashboard-title">Leaderboard Overview</h2>
         <p className="text-muted-foreground">Monitor agent performance trends and compare benchmark metrics</p>
