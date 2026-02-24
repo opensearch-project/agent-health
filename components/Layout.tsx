@@ -10,7 +10,6 @@ import {
   ChevronDown,
   Gauge,
   Activity,
-  Search,
 } from "lucide-react";
 import OpenSearchLogoDark from "@/assets/opensearch-logo.svg";
 import OpenSearchLogoLight from "@/assets/opensearch-logo-light.svg";
@@ -79,7 +78,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                       location.pathname.startsWith("/benchmarks");
   // Keep testing dropdown always open
   const [testingOpen, setTestingOpen] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
   const [isCollapsed, setIsCollapsed] = useState(false);
   
   // Detect theme for logo switching
@@ -159,24 +157,11 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             )}
           </div>
           
-          {/* Search bar - only show when expanded */}
-          {!isCollapsed && (
-            <div className="relative">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search the menu"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 h-9 text-sm"
-              />
-            </div>
-          )}
-          
           {/* Expand button when collapsed */}
           {isCollapsed && (
             <button
               onClick={() => setIsCollapsed(false)}
-              className="w-full p-2 hover:bg-accent rounded transition-colors flex items-center justify-center"
+              className="w-full p-2 hover:bg-accent rounded transition-colors flex items-center justify-center mt-4"
               aria-label="Expand sidebar"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
