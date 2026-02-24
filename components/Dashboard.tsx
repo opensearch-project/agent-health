@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Rocket, X, Info } from 'lucide-react';
+import { Rocket, X, Info, HelpCircle } from 'lucide-react';
 import { asyncRunStorage, asyncExperimentStorage } from '@/services/storage';
 import { EvaluationReport, Benchmark } from '@/types';
 import { fetchBatchMetrics } from '@/services/metrics';
@@ -160,6 +160,8 @@ const FilterChips: React.FC<FilterChipsProps> = ({
 
 // ==================== Main Dashboard Component ====================
 
+const WORKFLOW_CARD_HIDDEN_KEY = 'agent-health-workflow-card-hidden';
+
 export const Dashboard: React.FC = () => {
   // Check data state for conditional rendering
   const { dataState, isLoading: isCheckingData } = useDataState();
@@ -169,6 +171,9 @@ export const Dashboard: React.FC = () => {
   const [reports, setReports] = useState<EvaluationReport[]>([]);
   const [metricsMap, setMetricsMap] = useState<Map<string, { costUsd: number; durationMs: number; tokens: number }>>(new Map());
   
+  // Workflow card visibility state
+  const [isWorkflowCardHidden, setIsWorkflowCardHidden] = useState(false);
+  
   // Check if sample data is active
   const isSampleMode = isSampleDataActive();
 
@@ -176,6 +181,27 @@ export const Dashboard: React.FC = () => {
   const [filters, setFilters] = useState<DashboardFilter>({});
   const [timeRange, setTimeRange] = useState<TimeRange>('7d');
   const [selectedMetric, setSelectedMetric] = useState<TrendMetric>('passRate');
+
+  // Initialize workflow card visibility from localStorage
+  useEffect(() => {
+    const hidden = localStorage.getItem(WORKFLOW_CARD_HIDDEN_KEY) === 'true';
+    setIsWorkflowCardHidden(hidden);
+
+    // Listen for workflow card hidden event
+    const handleWorkflowCardHidden = () => {
+      setIsWorkflowCardHidden(true);
+    };
+
+    window.addEventListener('workflow-card-hidden', handleWorkflowCardHidden);
+    return () => {
+      window.removeEventListener('workflow-card-hidden', handleWorkflowCardHidden);
+    };
+  }, []);
+
+  const handleShowWorkflowCard = () => {
+    localStorage.setItem(WORKFLOW_CARD_HIDDEN_KEY, 'false');
+    setIsWorkflowCardHidden(false);
+  };
 
   useEffect(() => {
     const loadDashboardData = async () => {
@@ -296,8 +322,23 @@ export const Dashboard: React.FC = () => {
       )}
 
       <div>
-        <h2 className="text-2xl font-bold" data-testid="dashboard-title">Leaderboard Overview</h2>
-        <p className="text-muted-foreground">Monitor agent performance trends and compare benchmark metrics</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold" data-testid="dashboard-title">Leaderboard Overview</h2>
+            <p className="text-muted-foreground">Monitor agent performance trends and compare benchmark metrics</p>
+          </div>
+          {isWorkflowCardHidden && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleShowWorkflowCard}
+              className="gap-1.5 text-muted-foreground hover:text-foreground"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+              How It Works
+            </Button>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
@@ -307,9 +348,9 @@ export const Dashboard: React.FC = () => {
       ) : (
         <>
           {/* Grid Container for Performance Trends and Workflow Navigator */}
-          <div className="grid gap-8 lg:grid-cols-3">
-            {/* Performance Trends Card - Takes 2/3 width */}
-            <Card className="lg:col-span-2 lg:flex lg:flex-col">
+          <div className={`grid gap-8 ${isWorkflowCardHidden ? 'lg:grid-cols-1' : 'lg:grid-cols-3'}`}>
+            {/* Performance Trends Card - Takes 2/3 width normally, full width when workflow card is hidden */}
+            <Card className={`lg:flex lg:flex-col ${isWorkflowCardHidden ? 'lg:min-h-[500px]' : 'lg:col-span-2'}`}>
               <CardHeader className="pb-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
@@ -367,8 +408,8 @@ export const Dashboard: React.FC = () => {
               </CardContent>
             </Card>
 
-            {/* Workflow Navigator Card - Takes 1/3 width on right */}
-            <WorkflowNavigator />
+            {/* Workflow Navigator Card - Takes 1/3 width on right, only shown when not hidden */}
+            {!isWorkflowCardHidden && <WorkflowNavigator />}
           </div>
 
           {/* Benchmark Metrics Table Section - Full Width */}

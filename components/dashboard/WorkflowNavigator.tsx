@@ -26,6 +26,8 @@ export const WorkflowNavigator: React.FC = () => {
   const handleDontShowAgain = () => {
     localStorage.setItem(WORKFLOW_CARD_HIDDEN_KEY, 'true');
     setIsHidden(true);
+    // Dispatch custom event to notify Dashboard
+    window.dispatchEvent(new CustomEvent('workflow-card-hidden'));
   };
 
   if (isHidden) {
