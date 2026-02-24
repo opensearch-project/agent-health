@@ -555,15 +555,15 @@ export const AgentTracesPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Search Bar */}
-              <div className="w-[220px]">
+              {/* Search Bar - Primary Action */}
+              <div className="w-[280px]">
                 <div className="relative">
-                  <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-opensearch-blue" />
                   <Input
-                    placeholder="Search"
+                    placeholder="Search traces, spans, or IDs..."
                     value={textSearch}
                     onChange={(e) => setTextSearch(e.target.value)}
-                    className="pl-8 h-8 text-sm"
+                    className="pl-10 h-9 text-sm border-opensearch-blue/30 focus-visible:border-opensearch-blue focus-visible:ring-opensearch-blue/20"
                   />
                 </div>
               </div>
