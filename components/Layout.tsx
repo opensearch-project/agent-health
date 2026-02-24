@@ -8,8 +8,8 @@ import {
   LayoutDashboard,
   Settings,
   ChevronDown,
-  TestTube,
-  Table2,
+  Gauge,
+  Activity,
   Search,
 } from "lucide-react";
 import OpenSearchLogoDark from "@/assets/opensearch-logo.svg";
@@ -61,7 +61,7 @@ export const useSidebarCollapse = () => {
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Overview", tooltip: "Dashboard and quick stats", testId: "nav-overview" },
-  { to: "/agent-traces", icon: Table2, label: "Agent Traces", tooltip: "View and debug agent executions", testId: "nav-agent-traces" },
+  { to: "/agent-traces", icon: Activity, label: "Agent Traces", tooltip: "View and debug agent executions", testId: "nav-agent-traces" },
 ];
 
 const testingSubItems = [
@@ -220,7 +220,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                           isActive={isTestingPath}
                           className="h-9 w-full"
                         >
-                          <TestTube className="h-4 w-4" />
+                          <Gauge className="h-4 w-4" />
                           <span className="text-sm">Testing</span>
                           <ChevronDown 
                             className={`ml-auto h-4 w-4 transition-transform duration-200 ${
@@ -260,7 +260,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                       className="h-9"
                     >
                       <Link to="/benchmarks" className="justify-center">
-                        <TestTube className="h-4 w-4" />
+                        <Gauge className="h-4 w-4" />
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
