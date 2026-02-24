@@ -169,11 +169,21 @@ export const AgentTracesPage: React.FC = () => {
   // Sidebar collapse control
   const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
   
-  // Filter state
-  const [selectedAgent, setSelectedAgent] = useState<string>('all');
+  // Filter state with session persistence
+  const [selectedAgent, setSelectedAgent] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('agentTraces.selectedAgent') || 'all';
+    }
+    return 'all';
+  });
   const [textSearch, setTextSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [timeRange, setTimeRange] = useState<string>('1440'); // Default to 1 day
+  const [timeRange, setTimeRange] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('agentTraces.timeRange') || '1440';
+    }
+    return '1440';
+  });
 
   // Loading state
   const [isLoading, setIsLoading] = useState(false);
@@ -229,6 +239,19 @@ export const AgentTracesPage: React.FC = () => {
     }, 500);
     return () => clearTimeout(timer);
   }, [textSearch]);
+
+  // Persist filter selections to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('agentTraces.selectedAgent', selectedAgent);
+    }
+  }, [selectedAgent]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('agentTraces.timeRange', timeRange);
+    }
+  }, [timeRange]);
 
   // Convert spans to trace table rows
   const processSpansToTraces = useCallback((allSpans: Span[]): TraceTableRow[] => {
