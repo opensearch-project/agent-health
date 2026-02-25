@@ -1,0 +1,32 @@
+name: Release drafter
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
+jobs:
+  draft-a-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+      - id: get_approvers
+        run: |
+          echo "approvers=$(cat .github/CODEOWNERS | grep @ | tr -d '* ' | sed 's/@/,/g' | sed 's/,//1')" >> $GITHUB_OUTPUT
+      - uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{ steps.get_approvers.outputs.approvers }}
+          minimum-approvals: 2
+          issue-title: 'Release opensearch-benchmark'
+          issue-body: "Please approve or deny the release of opensearch-benchmark. **Tag**: ${{ github.ref_name }}  **Commit**: ${{ github.sha }}"
+          exclude-workflow-initiator-as-approver: true
+      - run: npm ci
+      - run: npm run build --if-present
+      - run: npm test
+      - run: npm publish

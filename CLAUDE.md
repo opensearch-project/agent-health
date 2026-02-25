@@ -758,14 +758,14 @@ When preparing to raise a PR against the upstream repository (change remote from
      - `Fixed` - Bug fixes
      - `Removed` - Removed features or deprecated code
      - `Security` - Security-related fixes
-   - Include PR link in format `([#PR_NUMBER](https://github.com/opensearch-project/dashboards-traces/pull/PR_NUMBER))`
+   - Include PR link in format `([#PR_NUMBER](https://github.com/opensearch-project/agent-health/pull/PR_NUMBER))`
    ```markdown
    ## [Unreleased]
    ### Added
-   - CLI commands for headless agent evaluation ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
+   - CLI commands for headless agent evaluation ([#33](https://github.com/opensearch-project/agent-health/pull/33))
 
    ### Fixed
-   - Memory leak in benchmark timeout handling ([#33](https://github.com/opensearch-project/dashboards-traces/pull/33))
+   - Memory leak in benchmark timeout handling ([#33](https://github.com/opensearch-project/agent-health/pull/33))
    ```
 
 6. **Push to your fork (change remote name as needed):**
@@ -775,7 +775,7 @@ When preparing to raise a PR against the upstream repository (change remote from
 
 7. **Create PR** via GitHub UI or CLI:
    ```bash
-   gh pr create --repo opensearch-project/dashboards-traces --base main
+   gh pr create --repo opensearch-project/agent-health --base main
    ```
 
 ## OpenSearch Project Compliance

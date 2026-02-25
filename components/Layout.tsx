@@ -8,9 +8,8 @@ import {
   LayoutDashboard,
   Settings,
   ChevronDown,
-  TestTube,
-  Table2,
-  Search,
+  Gauge,
+  Activity,
 } from "lucide-react";
 import OpenSearchLogoDark from "@/assets/opensearch-logo.svg";
 import OpenSearchLogoLight from "@/assets/opensearch-logo-light.svg";
@@ -60,13 +59,13 @@ export const useSidebarCollapse = () => {
 };
 
 const navItems = [
-  { to: "/", icon: LayoutDashboard, label: "Overview", testId: "nav-overview" },
-  { to: "/agent-traces", icon: Table2, label: "Agent Traces", testId: "nav-agent-traces" },
+  { to: "/", icon: LayoutDashboard, label: "Overview", tooltip: "Dashboard and quick stats", testId: "nav-overview" },
+  { to: "/agent-traces", icon: Activity, label: "Agent Traces", tooltip: "View and debug agent executions", testId: "nav-agent-traces" },
 ];
 
-const evalsSubItems = [
-  { to: "/test-cases", label: "Test Cases", testId: "nav-test-cases" },
-  { to: "/benchmarks", label: "Benchmarks", testId: "nav-benchmarks" },
+const testingSubItems = [
+  { to: "/benchmarks", label: "Benchmarks", tooltip: "Define success criteria and scoring", testId: "nav-benchmarks" },
+  { to: "/test-cases", label: "Test Cases", tooltip: "Create and manage test inputs", testId: "nav-test-cases" },
 ];
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
@@ -74,12 +73,11 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const { status, version, loading } = useServerStatus();
 
-  // Determine if evals section should be open based on current path
-  const isEvalsPath = location.pathname.startsWith("/test-cases") ||
+  // Determine if testing section should be open based on current path
+  const isTestingPath = location.pathname.startsWith("/test-cases") ||
                       location.pathname.startsWith("/benchmarks");
-  // Keep evals dropdown always open
-  const [evalsOpen, setEvalsOpen] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
+  // Keep testing dropdown always open
+  const [testingOpen, setTestingOpen] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
   
   // Detect theme for logo switching
@@ -159,24 +157,11 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             )}
           </div>
           
-          {/* Search bar - only show when expanded */}
-          {!isCollapsed && (
-            <div className="relative">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search the menu"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 h-9 text-sm"
-              />
-            </div>
-          )}
-          
           {/* Expand button when collapsed */}
           {isCollapsed && (
             <button
               onClick={() => setIsCollapsed(false)}
-              className="w-full p-2 hover:bg-accent rounded transition-colors flex items-center justify-center"
+              className="w-full p-2 hover:bg-accent rounded transition-colors flex items-center justify-center mt-4"
               aria-label="Expand sidebar"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -207,31 +192,31 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   </SidebarMenuItem>
                 ))}
 
-                {/* Evals collapsible section - only show when expanded */}
+                {/* Testing collapsible section - only show when expanded */}
                 {!isCollapsed && (
                   <Collapsible
-                    open={evalsOpen}
-                    onOpenChange={setEvalsOpen}
+                    open={testingOpen}
+                    onOpenChange={setTestingOpen}
                   >
                     <SidebarMenuItem>
                       <CollapsibleTrigger asChild>
                         <SidebarMenuButton
-                          tooltip="Evals"
-                          isActive={isEvalsPath}
+                          tooltip="Testing"
+                          isActive={isTestingPath}
                           className="h-9 w-full"
                         >
-                          <TestTube className="h-4 w-4" />
-                          <span className="text-sm">Evals</span>
+                          <Gauge className="h-4 w-4" />
+                          <span className="text-sm">Testing</span>
                           <ChevronDown 
                             className={`ml-auto h-4 w-4 transition-transform duration-200 ${
-                              evalsOpen ? 'rotate-180' : ''
+                              testingOpen ? 'rotate-180' : ''
                             }`} 
                           />
                         </SidebarMenuButton>
                       </CollapsibleTrigger>
                       <CollapsibleContent>
                         <SidebarMenuSub className="ml-4 mt-1 space-y-1">
-                          {evalsSubItems.map((item) => (
+                          {testingSubItems.map((item) => (
                             <SidebarMenuSubItem key={item.to}>
                               <SidebarMenuSubButton
                                 asChild
@@ -249,18 +234,18 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   </Collapsible>
                 )}
                 
-                {/* Evals icon only when collapsed */}
+                {/* Testing icon only when collapsed */}
                 {isCollapsed && (
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       asChild
-                      isActive={isEvalsPath}
-                      tooltip="Evals"
-                      data-testid="nav-evals"
+                      isActive={isTestingPath}
+                      tooltip="Testing"
+                      data-testid="nav-testing"
                       className="h-9"
                     >
                       <Link to="/benchmarks" className="justify-center">
-                        <TestTube className="h-4 w-4" />
+                        <Gauge className="h-4 w-4" />
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -270,7 +255,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   <SidebarMenuButton
                     asChild
                     isActive={location.pathname === "/settings"}
-                    tooltip={isCollapsed ? "Settings" : undefined}
+                    tooltip={isCollapsed ? "Settings" : "Configure connections and preferences"}
                     data-testid="nav-settings"
                     className="h-9"
                   >

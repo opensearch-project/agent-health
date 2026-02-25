@@ -22,7 +22,7 @@ export type TrendMetric = 'passRate' | 'cost' | 'tokens' | 'latency';
 interface AgentTrendChartProps {
   data: TrendDataPoint[];
   metric: TrendMetric;
-  height?: number;
+  height?: number | string;
 }
 
 interface ChartDataPoint {
@@ -104,9 +104,12 @@ function formatDateLabel(dateStr: string): string {
 export const AgentTrendChart: React.FC<AgentTrendChartProps> = ({
   data,
   metric,
-  height = 300,
+  height = "100%",
 }) => {
   const config = METRIC_CONFIG[metric];
+  
+  // Ensure height is in the correct format for ResponsiveContainer
+  const chartHeight = typeof height === 'number' ? height : height as `${number}%` | '100%';
 
   if (!data || data.length === 0) {
     return (
@@ -134,7 +137,7 @@ export const AgentTrendChart: React.FC<AgentTrendChartProps> = ({
   }
 
   return (
-    <ResponsiveContainer width="100%" height={height}>
+    <ResponsiveContainer width="100%" height={chartHeight}>
       <LineChart
         data={chartData}
         margin={{ top: 10, right: 30, left: 10, bottom: 10 }}

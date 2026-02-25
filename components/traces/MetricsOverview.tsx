@@ -114,6 +114,29 @@ export const MetricsOverview: React.FC<MetricsOverviewProps> = ({
                   </div>
                 ))}
               </div>
+              {/* Legend */}
+              <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[9px] text-muted-foreground pt-1">
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-sm bg-green-500" />
+                  <span>Fast</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-sm bg-blue-500" />
+                  <span>Normal</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-sm bg-yellow-500" />
+                  <span>Slow</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-sm bg-orange-500" />
+                  <span>V.Slow</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-sm bg-red-500" />
+                  <span>Critical</span>
+                </div>
+              </div>
             </div>
 
             {/* Error Count - Line Chart with Area Fill */}

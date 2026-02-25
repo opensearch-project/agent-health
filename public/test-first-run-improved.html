@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>First Run Experience - Improved IA</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #0b1120;
+      color: #e5e7eb;
+      line-height: 1.6;
+      padding: 48px 24px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    /* Hero Section */
+    .hero {
+      text-align: center;
+      margin-bottom: 64px;
+    }
+
+    .hero-icon {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 24px;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hero-icon svg {
+      width: 32px;
+      height: 32px;
+      color: white;
+    }
+
+    .hero h1 {
+      font-size: 36px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      color: #ffffff;
+    }
+
+    .hero-subtitle {
+      font-size: 18px;
+      color: #9ca3af;
+      margin-bottom: 32px;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .cta-buttons {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    .cta-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      color: white;
+      padding: 14px 28px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .cta-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(59, 130, 246, 0.4);
+    }
+
+    .cta-button svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .cta-button-outline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: transparent;
+      color: #e5e7eb;
+      padding: 14px 28px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      text-decoration: none;
+      border: 1px solid #2d3748;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+
+    .cta-button-outline:hover {
+      background: rgba(59, 130, 246, 0.1);
+      border-color: #3b82f6;
+    }
+
+    .cta-button-outline svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .helper-text {
+      margin-top: 12px;
+      font-size: 14px;
+      color: #6b7280;
+    }
+
+    /* Cards Grid */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      margin-bottom: 48px;
+    }
+
+    @media (max-width: 768px) {
+      .cards-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      padding: 32px;
+    }
+
+    .card-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #ffffff;
+    }
+
+    .card-subtitle {
+      font-size: 14px;
+      color: #9ca3af;
+      margin-bottom: 24px;
+    }
+
+    /* Left Card - Workflow */
+    .workflow-steps {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 32px;
+      position: relative;
+    }
+
+    .workflow-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .workflow-icon.trace {
+      background: rgba(59, 130, 246, 0.2);
+      color: #3b82f6;
+    }
+
+    .workflow-icon.evaluate {
+      background: rgba(139, 92, 246, 0.2);
+      color: #8b5cf6;
+    }
+
+    .workflow-icon.improve {
+      background: rgba(168, 85, 247, 0.2);
+      color: #a855f7;
+    }
+
+    .workflow-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .workflow-arrow {
+      color: #4b5563;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+
+    /* U-shaped return arrow */
+    .workflow-return-arrow {
+      position: absolute;
+      bottom: -40px;
+      left: 24px;
+      right: 24px;
+      height: 40px;
+      border: 2px dashed #4b5563;
+      border-top: none;
+      border-radius: 0 0 20px 20px;
+    }
+
+    .workflow-return-arrow::before {
+      content: '↑';
+      position: absolute;
+      left: -8px;
+      top: -12px;
+      color: #4b5563;
+      font-size: 20px;
+    }
+
+    .workflow-details {
+      margin-top: 72px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .workflow-item {
+      display: flex;
+      gap: 12px;
+    }
+
+    .workflow-item-icon {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .workflow-item-icon.trace { color: #3b82f6; }
+    .workflow-item-icon.evaluate { color: #8b5cf6; }
+    .workflow-item-icon.improve { color: #a855f7; }
+
+    .workflow-item-content h3 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #ffffff;
+    }
+
+    .workflow-item-content p {
+      font-size: 14px;
+      color: #9ca3af;
+    }
+
+    .card-footer {
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px solid #2d3748;
+      font-size: 14px;
+      color: #9ca3af;
+      font-style: italic;
+    }
+
+    /* Right Card - Features */
+    .features-list {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .feature-item {
+      display: flex;
+      gap: 12px;
+    }
+
+    .feature-icon {
+      width: 20px;
+      height: 20px;
+      color: #10b981;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .feature-content h3 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: #ffffff;
+    }
+
+    .feature-content p {
+      font-size: 14px;
+      color: #9ca3af;
+    }
+
+    .card-link {
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid #2d3748;
+      font-size: 14px;
+      color: #9ca3af;
+      text-align: center;
+    }
+
+    .card-link a {
+      color: #3b82f6;
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .card-link a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Hero Section -->
+    <div class="hero">
+      <div class="hero-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+      </div>
+      
+      <h1>Welcome to Agent Health</h1>
+      <p class="hero-subtitle">
+        Make your AI agents measurable, reliable, and production-ready.
+      </p>
+      
+      <div class="cta-buttons">
+        <button class="cta-button">
+          Configure Your Cluster
+        </button>
+        
+        <button class="cta-button-outline">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          Explore with Sample Data
+        </button>
+      </div>
+      
+      <p class="helper-text">
+        Explore a fully configured environment with real traces and benchmarks.
+      </p>
+    </div>
+
+    <!-- Cards Grid -->
+    <div class="cards-grid">
+      <!-- Left Card: The Workflow -->
+      <div class="card">
+        <h2 class="card-title">The Workflow</h2>
+        <p class="card-subtitle">Improve your agents through a simple loop:</p>
+        
+        <div class="workflow-steps">
+          <div class="workflow-icon trace">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13h4l3-9 4 18 3-9h4" />
+            </svg>
+          </div>
+          <span class="workflow-arrow">→</span>
+          <div class="workflow-icon evaluate">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <span class="workflow-arrow">→</span>
+          <div class="workflow-icon improve">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+          </div>
+          <div class="workflow-return-arrow"></div>
+        </div>
+
+        <div class="workflow-details">
+          <div class="workflow-item">
+            <svg class="workflow-item-icon trace" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 13h4l3-9 4 18 3-9h4" />
+            </svg>
+            <div class="workflow-item-content">
+              <h3>Trace</h3>
+              <p>See exactly what your agent did.</p>
+            </div>
+          </div>
+
+          <div class="workflow-item">
+            <svg class="workflow-item-icon evaluate" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div class="workflow-item-content">
+              <h3>Evaluate</h3>
+              <p>Measure quality, cost, and performance.</p>
+            </div>
+          </div>
+
+          <div class="workflow-item">
+            <svg class="workflow-item-icon improve" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+            <div class="workflow-item-content">
+              <h3>Improve</h3>
+              <p>Prevent regressions with structured test cases.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Card: Key Features -->
+      <div class="card">
+        <h2 class="card-title">Key Features</h2>
+        <p class="card-subtitle">Explore a fully-configured environment with real benchmarks and traces</p>
+        
+        <div class="features-list">
+          <div class="feature-item">
+            <svg class="feature-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div class="feature-content">
+              <h3>Performance Trends</h3>
+              <p>Pass rate, latency, and cost over time.</p>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <svg class="feature-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div class="feature-content">
+              <h3>Benchmark Results</h3>
+              <p>Side-by-side evaluation across agents.</p>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <svg class="feature-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div class="feature-content">
+              <h3>Trace Diagnostics</h3>
+              <p>Step-by-step execution visibility.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-link">
+          Ready to connect your own data? <a href="#">Configure your cluster</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

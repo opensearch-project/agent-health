@@ -6,11 +6,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/opensearch-project/dashboards-traces.git"
+    "url": "https://github.com/opensearch-project/agent-health.git"
   },
-  "homepage": "https://github.com/opensearch-project/dashboards-traces#readme",
+  "homepage": "https://github.com/opensearch-project/agent-health#readme",
   "bugs": {
-    "url": "https://github.com/opensearch-project/dashboards-traces/issues"
+    "url": "https://github.com/opensearch-project/agent-health/issues"
   },
   "keywords": [
     "opensearch",
