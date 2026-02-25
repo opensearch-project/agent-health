@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 const WORKFLOW_CARD_HIDDEN_KEY = 'agent-health-workflow-card-hidden';
 
 /**
- * Optimize with Confidence panel
+ * How it works panel
  * Presents the continuous improvement loop: Trace → Evaluate → Improve
  */
 export const WorkflowNavigator: React.FC = () => {
@@ -37,7 +37,7 @@ export const WorkflowNavigator: React.FC = () => {
   return (
     <Card className="relative overflow-hidden">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Optimize with Confidence</CardTitle>
+        <CardTitle className="text-base">How it works</CardTitle>
         <CardDescription className="text-xs">
           Agent Health turns traces into insight, and insight into measurable improvement.
         </CardDescription>

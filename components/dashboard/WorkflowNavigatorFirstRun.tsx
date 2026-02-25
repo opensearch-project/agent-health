@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 
 /**
- * Optimize with Confidence panel - First Run variant
+ * How it works panel - First Run variant
  * 
  * Adapted from WorkflowNavigator for the first-run experience.
  * Differences from standard WorkflowNavigator:
@@ -23,7 +23,7 @@ export const WorkflowNavigatorFirstRun: React.FC = () => {
   return (
     <Card className="relative overflow-hidden">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Optimize with Confidence</CardTitle>
+        <CardTitle className="text-base">How it works</CardTitle>
         <CardDescription className="text-xs">
           Agent Health turns traces into insight, and insight into measurable improvement.
         </CardDescription>

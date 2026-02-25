@@ -105,7 +105,7 @@ export const FirstRunExperience: React.FC = () => {
         <Card>
           <CardContent className="pt-6 space-y-6">
             <div className="space-y-2">
-              <h2 className="text-xl font-semibold">The Workflow</h2>
+              <h2 className="text-xl font-semibold">How it works</h2>
               <p className="text-sm text-muted-foreground">
                 A continuous cycle that drives measurable improvement:
               </p>
@@ -173,7 +173,7 @@ export const FirstRunExperience: React.FC = () => {
                 <div className="space-y-1">
                   <h3 className="text-sm font-semibold">Evaluate</h3>
                   <p className="text-sm text-muted-foreground">
-                    Measure quality, cost, and performance.
+                    Benchmark and measure quality before production.
                   </p>
                 </div>
               </div>
@@ -183,7 +183,7 @@ export const FirstRunExperience: React.FC = () => {
                 <div className="space-y-1">
                   <h3 className="text-sm font-semibold">Improve</h3>
                   <p className="text-sm text-muted-foreground">
-                    Prevent regressions with structured test cases.
+                    Make informed decisions with recorded history.
                   </p>
                 </div>
               </div>
