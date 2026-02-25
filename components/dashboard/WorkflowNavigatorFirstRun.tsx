@@ -84,6 +84,7 @@ export const WorkflowNavigatorFirstRun: React.FC = () => {
         <div className="space-y-2 text-center">
           <div className="space-y-0.5">
             <div className="flex items-center justify-center gap-1.5 text-blue-500">
+              <Activity className="h-4 w-4" />
               <span className="text-sm font-medium">Trace</span>
             </div>
             <p className="text-xs text-muted-foreground leading-snug">
@@ -93,29 +94,27 @@ export const WorkflowNavigatorFirstRun: React.FC = () => {
 
           <div className="space-y-0.5">
             <div className="flex items-center justify-center gap-1.5 text-purple-500">
+              <Gauge className="h-4 w-4" />
               <span className="text-sm font-medium">Evaluate</span>
             </div>
             <p className="text-xs text-muted-foreground leading-snug">
-              Measure quality before production
+              Benchmark and measure quality before production
             </p>
           </div>
 
           <div className="space-y-0.5">
             <div className="flex items-center justify-center gap-1.5 text-violet-500">
+              <TrendingUp className="h-4 w-4" />
               <span className="text-sm font-medium">Improve</span>
             </div>
             <p className="text-xs text-muted-foreground leading-snug">
-              Create guardrails that prevent regressions
+              Make informed decisions with recorded history
             </p>
           </div>
         </div>
 
         {/* Marketing anchor line */}
-        <div className="text-center">
-          <p className="text-xs font-medium text-foreground/90">
-            Your agents don't just run. They evolve.
-          </p>
-        </div>
+
 
         {/* CTAs with pulsating animations - exploratory for first-run */}
         <style>{`
