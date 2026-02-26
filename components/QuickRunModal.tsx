@@ -224,7 +224,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
               </p>
             )}
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <Button variant="ghost" size="icon" onClick={onClose} disabled={isRunning}>
             <X size={18} />
           </Button>
         </CardHeader>
