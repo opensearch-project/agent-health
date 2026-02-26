@@ -100,6 +100,15 @@ npx @opensearch-project/agent-health run -t <test-case-id> -a <agent-key> --outp
 
 # Run full benchmark with export
 npx @opensearch-project/agent-health benchmark -n <benchmark-name> -a <agent-key> --export results.json
+
+# Import test cases from JSON file and run benchmark
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -a <agent-key>
+
+# Import with a custom benchmark name
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -n "My Benchmark" -a <agent-key>
+
+# Export test cases from a benchmark (produces import-compatible JSON)
+npx @opensearch-project/agent-health export -b <benchmark-name> -o test-cases.json
 ```
 
 ---
