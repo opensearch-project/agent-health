@@ -191,7 +191,7 @@ test.describe('Trace Fetch Size', () => {
     expect(capturedBody.size).toBe(100);
   });
 
-  test('Live Traces page should request size=100 from the API', async ({ page }) => {
+  test('Traces page should request size=100 from the API', async ({ page }) => {
     let capturedBody: any = null;
     await page.route('**/api/traces', async (route) => {
       const request = route.request();
@@ -207,7 +207,7 @@ test.describe('Trace Fetch Size', () => {
       });
     });
 
-    await page.goto('/live-traces');
+    await page.goto('/traces');
     await page.waitForTimeout(3000);
 
     expect(capturedBody).not.toBeNull();
