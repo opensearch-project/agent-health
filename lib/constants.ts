@@ -127,6 +127,20 @@ export const DEFAULT_CONFIG: AppConfig = {
       context_window: 128000,
       max_output_tokens: 4096
     },
+    "deepseek-r1:8b": {
+      model_id: "deepseek-r1:8b",
+      display_name: "DeepSeek R1 8B (Ollama)",
+      provider: "litellm",
+      context_window: 128000,
+      max_output_tokens: 8192
+    },
+    "gemma3:12b": {
+      model_id: "gemma3:12b",
+      display_name: "Gemma 3 12B (Ollama)",
+      provider: "litellm",
+      context_window: 128000,
+      max_output_tokens: 8192
+    },
   },
   defaults: {
     retry_attempts: 2,
