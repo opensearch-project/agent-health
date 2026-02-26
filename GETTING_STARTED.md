@@ -615,7 +615,7 @@ This is expected when OpenSearch is not configured. File-based storage is used b
 - Enable verbose logging: Settings > Verbose Logging toggle
 - Check server logs in the terminal
 - Review [CONFIGURATION.md](./docs/CONFIGURATION.md) for detailed setup
-- Open an issue: https://github.com/opensearch-project/dashboards-traces/issues
+- Open an issue: https://github.com/opensearch-project/agent-health/issues
 
 ---
 
