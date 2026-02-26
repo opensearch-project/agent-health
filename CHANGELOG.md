@@ -13,6 +13,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Settings UI to configure connector type and enable traces toggle when adding custom agent endpoints ([#67](https://github.com/opensearch-project/agent-health/pull/67))
 - Server-side validation for `connectorType` and `useTraces` fields in custom agent creation API ([#67](https://github.com/opensearch-project/agent-health/pull/67))
 - E2E, integration, and unit tests for custom agent connector type and traces settings ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+- `countsByTestCase()` method to storage adapter interface for efficient run count aggregation ([#67](https://github.com/opensearch-project/agent-health/pull/67))
 
 ### Fixed
 - Dark mode color contrast for status icons (running, pending, cancelled, failed) across RunDetailsPage, RunSummaryPanel, and WorkflowNavigator ([#67](https://github.com/opensearch-project/agent-health/pull/67))
