@@ -37,6 +37,23 @@ Update `CHANGELOG.md` under `## [Unreleased]` with your changes:
 - `### Fixed` - Bug fixes
 - `### Security` - Security fixes
 
+### CLI: Import Test Cases from JSON
+
+The `benchmark` command supports importing test cases from a JSON file via `-f` / `--file`:
+
+```bash
+# Import and benchmark in one step
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -a my-agent
+
+# With a custom benchmark name
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -n "My Benchmark" -a my-agent
+
+# Export produces import-compatible JSON (round-trip support)
+npx @opensearch-project/agent-health export -b my-benchmark -o test-cases.json
+```
+
+The JSON file must be an array of test case objects with required fields: `name`, `category`, `difficulty`, `initialPrompt`, `expectedOutcomes`.
+
 ## Environment Setup
 
 Copy `.env.example` to `.env`. Key variables:

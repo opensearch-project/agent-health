@@ -81,6 +81,9 @@ npx @opensearch-project/agent-health list connectors
 # Run a test case against an agent
 npx @opensearch-project/agent-health run -t demo-otel-001 -a demo
 
+# Import test cases from JSON and run a benchmark
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -a my-agent
+
 # Initialize a new project
 npx @opensearch-project/agent-health init
 ```

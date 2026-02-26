@@ -12,9 +12,9 @@ import { ENV_CONFIG, buildMLCommonsHeaders } from '@/lib/config';
  */
 function getClaudeCodeConnectorEnv(): Record<string, string> {
   const env: Record<string, string> = {
-    AWS_PROFILE: process.env.AWS_PROFILE || 'Bedrock',
+    AWS_PROFILE: ENV_CONFIG.awsProfile || 'Bedrock',
     CLAUDE_CODE_USE_BEDROCK: '1',
-    AWS_REGION: process.env.AWS_REGION || 'us-west-2',
+    AWS_REGION: ENV_CONFIG.awsRegion || 'us-west-2',
     DISABLE_PROMPT_CACHING: '1',
     DISABLE_ERROR_REPORTING: '1',
   };

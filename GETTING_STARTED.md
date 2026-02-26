@@ -526,6 +526,45 @@ Run your agent against multiple test cases:
 npx @opensearch-project/agent-health benchmark -b my-benchmark -a my-agent
 ```
 
+### Import Test Cases from JSON
+
+You can import test cases from a JSON file and run a benchmark in a single command using the `-f` / `--file` flag:
+
+```bash
+# Import test cases from file and benchmark against an agent
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -a my-agent
+
+# Optionally name the benchmark
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -n "My Benchmark" -a my-agent
+```
+
+The JSON file must be an array of test case objects:
+
+```json
+[
+  {
+    "name": "My Test Case",
+    "category": "RCA",
+    "difficulty": "Medium",
+    "initialPrompt": "Investigate the latency spike...",
+    "expectedOutcomes": ["Identifies database as root cause"],
+    "context": [
+      { "description": "Error logs", "value": "..." }
+    ]
+  }
+]
+```
+
+This format is compatible with the output of the `export` command, so you can round-trip: export test cases from one benchmark, then import them into a new one:
+
+```bash
+# Export from existing benchmark
+npx @opensearch-project/agent-health export -b my-benchmark -o test-cases.json
+
+# Import into a new benchmark run
+npx @opensearch-project/agent-health benchmark -f test-cases.json -a another-agent
+```
+
 ### Compare Agents
 
 Create experiments with multiple runs using different agents or models, then view side-by-side comparison in the UI.

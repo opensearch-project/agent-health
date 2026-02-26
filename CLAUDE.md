@@ -73,6 +73,13 @@ npx @opensearch-project/agent-health list test-cases # List sample test cases
 npx @opensearch-project/agent-health run -t <test-case> -a <agent>  # Run test case
 npx @opensearch-project/agent-health doctor         # Check configuration
 npx @opensearch-project/agent-health init           # Initialize config files
+
+# Import test cases from JSON and run benchmark
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -a <agent>
+npx @opensearch-project/agent-health benchmark -f ./test-cases.json -n "My Benchmark" -a <agent>
+
+# Export test cases (produces import-compatible JSON)
+npx @opensearch-project/agent-health export -b <benchmark> -o test-cases.json
 ```
 
 **IMPORTANT:** Do not modify the `name` or `version` fields in `package.json`. These are used for publishing the tool via NPX.
@@ -386,7 +393,8 @@ import { getConfig } from '@/lib/config';
 Entry point for NPX package (`bin/cli.js` → `cli/index.ts`):
 - `commands/list.ts`: List agents, test cases, benchmarks, connectors
 - `commands/run.ts`: Run single test case against an agent
-- `commands/benchmark.ts`: Run full benchmark across multiple test cases and agents
+- `commands/benchmark.ts`: Run full benchmark across multiple test cases and agents (supports `-f <file.json>` to import test cases from JSON)
+- `commands/export.ts`: Export benchmark test cases as import-compatible JSON
 - `commands/doctor.ts`: Check configuration and system requirements
 - `commands/init.ts`: Initialize `agent-health.config.ts` configuration file
 - `utils/serverLifecycle.ts`: Playwright-style server auto-start (start if not running, auto-stop on exit)
