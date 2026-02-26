@@ -9,6 +9,21 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+- Settings UI to configure connector type and enable traces toggle when adding custom agent endpoints ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+- Server-side validation for `connectorType` and `useTraces` fields in custom agent creation API ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+- E2E, integration, and unit tests for custom agent connector type and traces settings ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+- `countsByTestCase()` method to storage adapter interface for efficient run count aggregation ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+
+### Fixed
+- Dark mode color contrast for status icons (running, pending, cancelled, failed) across RunDetailsPage, RunSummaryPanel, and WorkflowNavigator ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+- Type mismatch in `BulkCreateTestCasesResponse.errors` field (changed from `boolean` to `number`) ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+- Remove unused minimap toggle from TraceVisualization component ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+- Security vulnerabilities in `basic-ftp` (critical) and `rollup` (high) dependencies ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+
+### Removed
+- Stale Kiro spec files and sample test case data from `agent-health-data/` ([#67](https://github.com/opensearch-project/agent-health/pull/67))
+
 ### Fixed
 - Update `RunSummaryTable` unit tests to match dark-mode-aware color classes (`text-green-700 dark:text-green-400`) introduced in a previous PR ([#51](https://github.com/opensearch-project/agent-health/pull/51))
 - Replace ambiguous `text=Import Failed` Playwright locator (matched 2 elements, causing strict mode rejection) with `getByRole('alertdialog')` in benchmark import e2e test ([#51](https://github.com/opensearch-project/agent-health/pull/51))
