@@ -289,8 +289,8 @@ test.describe('Custom Endpoint Persistence', () => {
     const TRACED_AGENT_NAME = 'E2E Traced REST Agent';
     const TRACED_AGENT_URL = 'http://e2e-traced.example.com:7778';
 
-    // Accept confirm dialogs for delete
-    page.on('dialog', dialog => dialog.accept());
+    // Accept confirm dialogs for delete (catch already-handled errors from auto-dismissed dialogs)
+    page.on('dialog', dialog => dialog.accept().catch(() => {}));
 
     // Cleanup before
     let deleteBtn = page.locator(`button[aria-label="Remove ${TRACED_AGENT_NAME}"]`).first();
