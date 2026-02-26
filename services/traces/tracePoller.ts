@@ -10,10 +10,11 @@
  * Traces take ~5 minutes to propagate to OpenSearch after agent execution.
  */
 
-import { Span, EvaluationReport } from '@/types';
+import { Span, EvaluationReport, AgentConfig, BuildTrajectoryContext } from '@/types';
 import { debug } from '@/lib/debug';
 import { fetchTracesByRunIds } from './index';
 import { asyncRunStorage } from '../storage/asyncRunStorage';
+import { executeBuildTrajectoryHook } from '@/lib/hooks';
 
 // Polling configuration
 const DEFAULT_POLL_INTERVAL_MS = 10000; // 10 seconds
@@ -28,6 +29,7 @@ export interface PollState {
   lastAttempt: string | null;
   running: boolean;
   timerId?: ReturnType<typeof setTimeout>;
+  agentConfig?: AgentConfig;
 }
 
 export interface PollCallbacks {
@@ -57,7 +59,7 @@ class TracePollingManager {
     reportId: string,
     runId: string,
     callbacks: PollCallbacks,
-    options?: { intervalMs?: number; maxAttempts?: number }
+    options?: { intervalMs?: number; maxAttempts?: number; agentConfig?: AgentConfig }
   ): void {
     // Don't start if already polling for this report
     if (this.polls.has(reportId) && this.polls.get(reportId)!.running) {
@@ -73,6 +75,7 @@ class TracePollingManager {
       intervalMs: options?.intervalMs ?? DEFAULT_POLL_INTERVAL_MS,
       lastAttempt: null,
       running: true,
+      agentConfig: options?.agentConfig,
     };
 
     this.polls.set(reportId, state);
@@ -161,6 +164,32 @@ class TracePollingManager {
           throw new Error(`Report ${reportId} not found`);
         }
 
+        // Build trajectory from trace spans
+        const { trajectory, shouldContinuePolling } = await this.buildTrajectory(result.spans, state);
+        // Check if we should continue polling
+        if (shouldContinuePolling) {
+          if (state.attempts >= state.maxAttempts) {
+            console.log(`[TracePoller] Max attempts reached with incomplete trace`);
+            state.running = false;
+            callbacks?.onError(new Error(`Trace incomplete after ${state.maxAttempts} attempts`));
+            
+            await asyncRunStorage.updateReport(reportId, {
+              metricsStatus: 'error',
+              traceError: `Incomplete trace: found ${result.spans.length} spans but no root span after ${state.maxAttempts} attempts`,
+            }).catch(err => console.error(`[TracePoller] Failed to update report error status:`, err));
+            
+            this.callbacks.delete(reportId);
+            this.polls.delete(reportId);
+          } else {
+            // Schedule next poll
+            state.timerId = setTimeout(() => this.poll(reportId), state.intervalMs);
+          }
+          return;
+        }
+
+        // Trajectory is ready - proceed
+        report.trajectory = trajectory;
+
         // Stop polling and notify success
         state.running = false;
 
@@ -230,6 +259,42 @@ class TracePollingManager {
         // Schedule retry
         state.timerId = setTimeout(() => this.poll(reportId), state.intervalMs);
       }
+    }
+  }
+
+  /**
+   * Build trajectory from spans with proper error handling
+   */
+  private async buildTrajectory(spans: Span[], state: PollState): Promise<{ trajectory: any[], shouldContinuePolling: boolean }> {
+    const traceId = spans[0]?.traceId;
+    if (!traceId) {
+      console.warn(`[TracePoller] No traceId found in spans`);
+      return { trajectory: [], shouldContinuePolling: false };
+    }
+
+    // If no buildTrajectory hook, return empty trajectory (will use SSE trajectory)
+    if (!state.agentConfig?.hooks?.buildTrajectory) {
+      return { trajectory: [], shouldContinuePolling: false };
+    }
+
+    try {
+      console.log(`[TracePoller] Building trajectory from hook for trace ${traceId}`);
+      const hookResult = await executeBuildTrajectoryHook(
+        state.agentConfig.hooks,
+        { spans, runId: state.runId },
+        state.agentConfig.key
+      );
+      
+      if (hookResult !== null) {
+        console.log(`[TracePoller] Hook returned ${hookResult.length} trajectory steps`);
+        return { trajectory: hookResult, shouldContinuePolling: false };
+      } else {
+        console.log(`[TracePoller] Hook returned null - trace not ready yet`);
+        return { trajectory: [], shouldContinuePolling: true };
+      }
+    } catch (err) {
+      console.error(`[TracePoller] Failed to build trajectory for ${traceId}:`, err);
+      return { trajectory: [], shouldContinuePolling: false };
     }
   }
 }

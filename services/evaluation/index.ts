@@ -9,8 +9,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { AgentConfig, EvaluationReport, TestCase, TrajectoryStep, OpenSearchLog, LLMJudgeResponse, ConnectorProtocol, BeforeRequestContext } from '@/types';
-import { executeBeforeRequestHook } from '@/lib/hooks';
+import { AgentConfig, EvaluationReport, TestCase, TrajectoryStep, OpenSearchLog, LLMJudgeResponse, ConnectorProtocol, BeforeRequestContext, AfterResponseContext } from '@/types';
+import { executeBeforeRequestHook, executeAfterResponseHook } from '@/lib/hooks';
 import { AGUIToTrajectoryConverter, consumeSSEStream, buildAgentPayload } from '@/services/agent';
 import { AGUIEvent } from '@/types/agui';
 import { generateMockTrajectory } from './mockTrajectory';
@@ -180,13 +180,35 @@ export async function runEvaluationWithConnector(
     }
 
     // Execute via connector
-    const result = await connector.execute(
+    let result = await connector.execute(
       effectiveEndpoint,
       request,
       auth,
       onStep,
       onRawEvent
     );
+
+    // Execute afterResponse hook if defined
+    if (agent.hooks?.afterResponse) {
+      const hookContext: AfterResponseContext = {
+        response: result.rawEvents?.[0] || {},
+        trajectory: result.trajectory,
+        runId: result.runId || undefined,
+      };
+      const hookResult = await executeAfterResponseHook(agent.hooks, hookContext, agent.key);
+
+      // Apply hook modifications
+      result = {
+        ...result,
+        trajectory: hookResult.trajectory,
+        runId: hookResult.runId || result.runId,
+      };
+
+      debug('Eval', 'afterResponse hook applied:', {
+        trajectorySteps: hookResult.trajectory.length,
+        runId: hookResult.runId
+      });
+    }
 
     fullTrajectory = result.trajectory;
     agentRunId = result.runId;

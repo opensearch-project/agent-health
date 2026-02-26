@@ -262,8 +262,15 @@ export const RunDetailsPage: React.FC = () => {
           return;
         }
 
-        // Load all reports for this experiment run
-        const siblingReports = await asyncRunStorage.getByExperimentRun(routeExperimentId, runId);
+        // Load all reports for this experiment run by report ID
+        const reportIds = Object.values(expRun.results || {}).map(r => r.reportId).filter(Boolean);
+        const siblingReports: EvaluationReport[] = [];
+        for (const reportId of reportIds) {
+          const report = await asyncRunStorage.getReportById(reportId);
+          if (report) {
+            siblingReports.push(report);
+          }
+        }
 
         // Load all test cases referenced in this run
         const allTestCases = await asyncTestCaseStorage.getAll();
@@ -294,6 +301,10 @@ export const RunDetailsPage: React.FC = () => {
         if (testCaseFromUrl && testCaseIds.includes(testCaseFromUrl)) {
           setSelectedItem(testCaseFromUrl);
           // Collapse main sidebar when loading with a test case selected
+          setMainSidebarOpen(false);
+        } else if (testCaseIds.length === 1) {
+          // Auto-select the only test case if there's just one
+          setSelectedItem(testCaseIds[0]);
           setMainSidebarOpen(false);
         } else {
           setSelectedItem('summary');

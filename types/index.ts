@@ -33,8 +33,35 @@ export interface BeforeRequestContext {
   headers: Record<string, string>;
 }
 
+export interface AfterResponseContext {
+  response: any;
+  trajectory: TrajectoryStep[];
+  runId?: string;
+}
+
+export interface BuildTrajectoryContext {
+  spans: Span[];
+  runId: string;
+}
+
 export interface AgentHooks {
+  /**
+   * Called before sending request to agent.
+   * Use to modify endpoint, payload, or headers.
+   */
   beforeRequest?: (context: BeforeRequestContext) => Promise<BeforeRequestContext>;
+
+  /**
+   * Called after receiving response from agent.
+   * Use to extract runId from custom response formats (e.g., PER memory_id).
+   */
+  afterResponse?: (context: AfterResponseContext) => Promise<AfterResponseContext>;
+
+  /**
+   * Called when building trajectory from OTEL traces.
+   * Use to customize trajectory extraction for agents with custom span formats.
+   */
+  buildTrajectory?: (context: BuildTrajectoryContext) => Promise<TrajectoryStep[]>;
 }
 
 export interface AgentConfig {

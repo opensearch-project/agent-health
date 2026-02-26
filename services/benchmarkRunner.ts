@@ -362,17 +362,23 @@ function startTracePollingForReportWithModule(report: EvaluationReport, testCase
     return;
   }
 
+  // Pass agent config to trace poller for hooks
+  const config = getConfig();
+  const allAgents = [...config.agents, ...getCustomAgents()];
+  const agentConfig = allAgents.find(a => a.key === report.agentKey);
+
   tracePollingManager.startPolling(
     report.id,
     report.runId,
     {
       onTracesFound: async (spans, updatedReport) => {
         try {
+          const finalTrajectory = agentConfig?.hooks?.buildTrajectory ? updatedReport.trajectory : report.trajectory;
           // Call the Bedrock judge with the trajectory and expectedOutcomes
           const judgeModelId = report.modelId ? getBedrockModelId(report.modelId) : undefined;
 
           const judgment = await callBedrockJudge(
-            updatedReport.trajectory,
+            finalTrajectory,
             {
               expectedOutcomes: testCase.expectedOutcomes,
               expectedTrajectory: testCase.expectedTrajectory,
@@ -384,6 +390,7 @@ function startTracePollingForReportWithModule(report: EvaluationReport, testCase
 
           // Update report with judge results
           await storage.runs.update(report.id, {
+            trajectory: finalTrajectory,
             metricsStatus: 'ready',
             passFailStatus: judgment.passFailStatus,
             metrics: judgment.metrics,
@@ -413,6 +420,9 @@ function startTracePollingForReportWithModule(report: EvaluationReport, testCase
       onError: (error) => {
         console.error(`[BenchmarkRunner] Trace polling failed for report ${report.id}:`, error instanceof Error ? error.message : error);
       },
+    },
+    {
+      agentConfig, // Pass agent config for hooks
     }
   );
 }
@@ -426,21 +436,28 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
     return;
   }
 
+  // Pass agent config to trace poller for hooks
+  const config = getConfig();
+  const allAgents = [...config.agents, ...getCustomAgents()];
+  const agentConfig = allAgents.find(a => a.key === report.agentKey);
+
   tracePollingManager.startPolling(
     report.id,
     report.runId,
     {
       onTracesFound: async (spans, updatedReport) => {
         try {
+          const finalTrajectory = agentConfig?.hooks?.buildTrajectory ? updatedReport.trajectory : report.trajectory;
           const judgeModelId = report.modelId ? getBedrockModelId(report.modelId) : undefined;
           const judgment = await callBedrockJudge(
-            updatedReport.trajectory,
+            finalTrajectory,
             { expectedOutcomes: testCase.expectedOutcomes, expectedTrajectory: testCase.expectedTrajectory },
             [],
             () => {},
             judgeModelId
           );
           await updateRunWithClient(client, report.id, {
+            trajectory: finalTrajectory,
             metricsStatus: 'ready',
             passFailStatus: judgment.passFailStatus,
             metrics: judgment.metrics,
@@ -465,6 +482,9 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
       onError: (error) => {
         console.error(`[BenchmarkRunner] Trace polling failed for report ${report.id}:`, error instanceof Error ? error.message : error);
       },
+    },
+    {
+      agentConfig, // Pass agent config for hooks
     }
   );
 }

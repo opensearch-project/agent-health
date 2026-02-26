@@ -34,7 +34,7 @@ export async function getAllTestCasesWithClient(client: Client): Promise<any[]> 
       size: 0,
       aggs: {
         test_cases: {
-          terms: { field: 'id', size: 10000 },
+          terms: { field: 'id.keyword', size: 10000 },
           aggs: {
             latest: {
               top_hits: { size: 1, sort: [{ version: { order: 'desc' } }] },

@@ -231,8 +231,8 @@ export async function computeMetrics(
 
   for (const span of spans) {
     // Extract token usage from spans with gen_ai@usage attributes
-    const inTokens = span['span.attributes.gen_ai@usage@input_tokens'] || 0;
-    const outTokens = span['span.attributes.gen_ai@usage@output_tokens'] || 0;
+    const inTokens = Number(span['span.attributes.gen_ai@usage@input_tokens']) || 0;
+    const outTokens = Number(span['span.attributes.gen_ai@usage@output_tokens']) || 0;
     inputTokens += inTokens;
     outputTokens += outTokens;
 
