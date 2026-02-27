@@ -11,6 +11,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 - Ollama models (`deepseek-r1:8b`, `gemma3:12b`) to built-in model presets for LiteLLM provider ([#68](https://github.com/opensearch-project/agent-health/pull/68))
+- Add `afterResponse` and `buildTrajectory` for PER agent support ([#70](https://github.com/opensearch-project/agent-health/pull/70))
 
 ### Fixed
 - Dark mode color contrast for status icons (running, pending, cancelled, failed) across RunDetailsPage, RunSummaryPanel, and WorkflowNavigator ([#67](https://github.com/opensearch-project/agent-health/pull/67))

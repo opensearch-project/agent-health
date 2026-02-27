@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { executeBeforeRequestHook } from '@/lib/hooks';
-import type { AgentHooks, BeforeRequestContext } from '@/types';
+import { executeBeforeRequestHook, executeAfterResponseHook, executeBuildTrajectoryHook } from '@/lib/hooks';
+import type { AgentHooks, BeforeRequestContext, AfterResponseContext, BuildTrajectoryContext, TrajectoryStep } from '@/types';
 
 describe('executeBeforeRequestHook', () => {
   const baseContext: BeforeRequestContext = {
@@ -127,5 +127,117 @@ describe('executeBeforeRequestHook', () => {
     await expect(
       executeBeforeRequestHook(hooks, baseContext, 'my-agent')
     ).rejects.toThrow('beforeRequest hook failed for agent "my-agent": string error');
+  });
+});
+
+describe('executeAfterResponseHook', () => {
+  const baseContext: AfterResponseContext = {
+    response: { data: 'test response' },
+    trajectory: [{ id: '1', timestamp: Date.now(), type: 'response', content: 'test' }],
+    runId: 'run-123',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should return original context when hooks is undefined', async () => {
+    const result = await executeAfterResponseHook(undefined, baseContext, 'test-agent');
+    expect(result).toBe(baseContext);
+  });
+
+  it('should return original context when hooks has no afterResponse', async () => {
+    const hooks: AgentHooks = {};
+    const result = await executeAfterResponseHook(hooks, baseContext, 'test-agent');
+    expect(result).toBe(baseContext);
+  });
+
+  it('should pass context to the hook and return modified context', async () => {
+    const modifiedContext: AfterResponseContext = {
+      ...baseContext,
+      runId: 'extracted-run-id',
+    };
+
+    const hooks: AgentHooks = {
+      afterResponse: jest.fn().mockResolvedValue(modifiedContext),
+    };
+
+    const result = await executeAfterResponseHook(hooks, baseContext, 'test-agent');
+
+    expect(hooks.afterResponse).toHaveBeenCalledWith(baseContext);
+    expect(result).toEqual(modifiedContext);
+  });
+
+  it('should wrap hook errors with agent key', async () => {
+    const hooks: AgentHooks = {
+      afterResponse: jest.fn().mockRejectedValue(new Error('Extraction failed')),
+    };
+
+    await expect(
+      executeAfterResponseHook(hooks, baseContext, 'my-agent')
+    ).rejects.toThrow('afterResponse hook failed for agent "my-agent": Extraction failed');
+  });
+});
+
+describe('executeBuildTrajectoryHook', () => {
+  const mockSpans = [
+    { spanId: 'span-1', name: 'agent.run', traceId: 'trace-1', startTime: '2023-01-01T00:00:00Z', endTime: '2023-01-01T00:01:00Z' },
+    { spanId: 'span-2', name: 'tool.execute', traceId: 'trace-1', startTime: '2023-01-01T00:00:30Z', endTime: '2023-01-01T00:00:45Z' },
+  ];
+
+  const baseContext: BuildTrajectoryContext = {
+    spans: mockSpans,
+    runId: 'run-123',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should return null when hooks is undefined', async () => {
+    const result = await executeBuildTrajectoryHook(undefined, baseContext, 'test-agent');
+    expect(result).toBeNull();
+  });
+
+  it('should return null when hooks has no buildTrajectory', async () => {
+    const hooks: AgentHooks = {};
+    const result = await executeBuildTrajectoryHook(hooks, baseContext, 'test-agent');
+    expect(result).toBeNull();
+  });
+
+  it('should pass context to the hook and return trajectory steps', async () => {
+    const mockTrajectory: TrajectoryStep[] = [
+      { id: 'step-1', timestamp: Date.now(), type: 'thinking', content: 'Processing request' },
+      { id: 'step-2', timestamp: Date.now(), type: 'action', content: 'Executing tool', toolName: 'search' },
+    ];
+
+    const hooks: AgentHooks = {
+      buildTrajectory: jest.fn().mockResolvedValue(mockTrajectory),
+    };
+
+    const result = await executeBuildTrajectoryHook(hooks, baseContext, 'test-agent');
+
+    expect(hooks.buildTrajectory).toHaveBeenCalledWith(baseContext);
+    expect(result).toEqual(mockTrajectory);
+  });
+
+  it('should return null when hook returns null (trace not ready)', async () => {
+    const hooks: AgentHooks = {
+      buildTrajectory: jest.fn().mockResolvedValue(null),
+    };
+
+    const result = await executeBuildTrajectoryHook(hooks, baseContext, 'test-agent');
+
+    expect(result).toBeNull();
+  });
+
+  it('should wrap hook errors with agent key', async () => {
+    const hooks: AgentHooks = {
+      buildTrajectory: jest.fn().mockRejectedValue(new Error('Span parsing failed')),
+    };
+
+    await expect(
+      executeBuildTrajectoryHook(hooks, baseContext, 'my-agent')
+    ).rejects.toThrow('buildTrajectory hook failed for agent "my-agent": Span parsing failed');
   });
 });

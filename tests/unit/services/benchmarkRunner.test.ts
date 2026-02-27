@@ -346,6 +346,7 @@ describe('Experiment Runner', () => {
         id: 'saved-report-1',
         runId: 'trace-run-id',
         metricsStatus: 'pending',
+        agentKey: 'test-agent',
       });
 
       await executeRun(experiment, run, jest.fn(), { client: mockClient });
@@ -357,6 +358,9 @@ describe('Experiment Runner', () => {
           onTracesFound: expect.any(Function),
           onAttempt: expect.any(Function),
           onError: expect.any(Function),
+        }),
+        expect.objectContaining({
+          agentConfig: expect.any(Object),
         })
       );
     });
@@ -731,6 +735,8 @@ describe('Experiment Runner', () => {
         runId: 'trace-run-id',
         metricsStatus: 'pending',
         modelId: 'claude-sonnet',
+        agentKey: 'test-agent',
+        trajectory: [],
       });
       mockCallBedrockJudge.mockResolvedValue({
         passFailStatus: 'passed',
@@ -755,7 +761,7 @@ describe('Experiment Runner', () => {
       await callbacks.onTracesFound(spans, updatedReport);
 
       expect(mockCallBedrockJudge).toHaveBeenCalledWith(
-        updatedReport.trajectory,
+        [],
         expect.objectContaining({
           expectedOutcomes: testCase.expectedOutcomes,
         }),
