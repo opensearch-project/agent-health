@@ -75,6 +75,7 @@ describe('Benchmarks Page Import Flow', () => {
   afterAll(async () => {
     if (!backendAvailable) return;
 
+    // Clean up by ID (current run)
     for (const id of createdBenchmarkIds) {
       try {
         await asyncBenchmarkStorage.delete(id);
@@ -89,6 +90,24 @@ describe('Benchmarks Page Import Flow', () => {
       } catch {
         // Ignore cleanup errors
       }
+    }
+
+    // Clean up leftovers from previous failed runs by name
+    try {
+      const allBenchmarks = await asyncBenchmarkStorage.getAll();
+      for (const b of allBenchmarks) {
+        if (b.name === 'sample-import-test-cases') {
+          await asyncBenchmarkStorage.delete(b.id).catch(() => {});
+        }
+      }
+      const allTestCases = await asyncTestCaseStorage.getAll();
+      for (const tc of allTestCases) {
+        if (tc.name?.startsWith('BenchImport Test:')) {
+          await asyncTestCaseStorage.delete(tc.id).catch(() => {});
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
     }
   });
 
