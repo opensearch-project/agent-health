@@ -7,6 +7,7 @@ on:
 jobs:
   draft-a-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 1440
     permissions:
       id-token: write  # Required for OIDC
       contents: write
@@ -24,7 +25,7 @@ jobs:
           minimum-approvals: 2
           issue-title: 'Release agent-health'
           issue-body: "Please approve or deny the release of agent_health. **Tag**: ${{ github.ref_name }}  **Commit**: ${{ github.sha }}"
-          exclude-workflow-initiator-as-approver: true
+          exclude-workflow-initiator-as-approver: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'

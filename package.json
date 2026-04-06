@@ -1,6 +1,6 @@
 {
   "name": "@opensearch-project/agent-health",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "description": "Agent Evaluation and Observability Framework",
   "license": "Apache-2.0",

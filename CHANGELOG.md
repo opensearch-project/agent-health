@@ -7,7 +7,12 @@
 
 Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
-## [Unreleased]
+## [0.2.0]
+
+### Changed
+- Increase release workflow approval timeout from 6 hours (default) to 24 hours
+- Allow workflow initiator to count as one of the required release approvers
+- Bump version to 0.2.0
 
 ### Added
 - Observio sample agent — a reference ReAct agent for practicing agent health improvements (based on [osd-agents](https://github.com/opensearch-project/OpenSearch-Dashboards/tree/main/packages/osd-agents))
