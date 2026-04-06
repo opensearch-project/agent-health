@@ -96,6 +96,19 @@ export function formatTimestamp(timestamp: string): string {
 }
 
 /**
+ * Format large numbers in compact notation: 999 → "999", 1200 → "1.2k", 1500000 → "1.5M"
+ */
+export function formatCompact(n: number): string {
+  if (n < 1000) return n.toString();
+  if (n < 1_000_000) {
+    const v = n / 1000;
+    return v >= 100 ? `${Math.round(v)}k` : `${parseFloat(v.toFixed(1))}k`;
+  }
+  const v = n / 1_000_000;
+  return v >= 100 ? `${Math.round(v)}M` : `${parseFloat(v.toFixed(1))}M`;
+}
+
+/**
  * Parse JSON safely
  */
 export function safeParseJSON(str: string): object | string {

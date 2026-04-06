@@ -18,33 +18,47 @@ import {
   Search,
   RefreshCw,
   Activity,
-  Clock,
-  AlertCircle,
+  Check,
   CheckCircle2,
   XCircle,
   ChevronRight,
+  SlidersHorizontal,
+  X,
+  Copy,
   BarChart3,
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { Span } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import {
   fetchRecentTraces,
   groupSpansByTrace,
+  getCategoryColors,
 } from '@/services/traces';
-import { formatDuration } from '@/services/traces/utils';
+import { formatDuration, formatCompact } from '@/services/traces/utils';
+import { flattenSpans, calculateCategoryStats } from '@/services/traces/traceStats';
+import { categorizeSpanTree } from '@/services/traces/spanCategorization';
+import { processSpansIntoTree } from '@/services/traces';
 import { startMeasure, endMeasure } from '@/lib/performance';
+import { cn } from '@/lib/utils';
 import { TraceFlyoutContent } from './TraceFlyoutContent';
-import MetricsOverview from './MetricsOverview';
-import { useSidebarCollapse } from '@/components/Layout';
+import MetricsOverview, { FilterAction } from './MetricsOverview';
+import { useSidebarCollapse } from '../Layout';
 
 // ==================== Types ====================
 
@@ -117,48 +131,165 @@ interface TraceRowProps {
 }
 
 const TraceRow: React.FC<TraceRowProps> = ({ trace, onSelect, isSelected }) => {
+  const [copiedField, setCopiedField] = React.useState<string | null>(null);
+
+  // Compute per-trace category stats for mini distribution bar
+  const categoryStats = useMemo(() => {
+    const tree = processSpansIntoTree(trace.spans);
+    const categorized = categorizeSpanTree(tree);
+    const flat = flattenSpans(categorized);
+    return calculateCategoryStats(flat, trace.duration);
+  }, [trace.spans, trace.duration]);
+
+  const handleCopy = (e: React.MouseEvent, text: string, field: string) => {
+    e.stopPropagation();
+    // Fallback for non-HTTPS (localhost dev)
+    const doCopy = () => {
+      if (navigator.clipboard?.writeText) {
+        return navigator.clipboard.writeText(text);
+      }
+      // Fallback: textarea + execCommand
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      return Promise.resolve();
+    };
+    doCopy()
+      .then(() => {
+        setCopiedField(field);
+        setTimeout(() => setCopiedField(null), 1500);
+      })
+      .catch((err) => console.error('Copy failed:', err));
+  };
+
   return (
     <tr
-      className={`border-b transition-colors cursor-pointer hover:bg-muted/50 ${isSelected ? 'bg-muted/70' : ''}`}
+      className={`border-b transition-colors cursor-pointer hover:bg-muted/50 group ${isSelected ? 'bg-muted/70' : ''}`}
       onClick={onSelect}
     >
-      <td className="p-4 align-middle text-xs text-muted-foreground w-[180px]">
+      <td className="py-1.5 px-3 align-middle text-xs text-muted-foreground whitespace-nowrap">
         {trace.startTime.toLocaleString()}
       </td>
-      <td className="p-4 align-middle font-mono text-xs">
-        <div className="flex items-center gap-2">
+      <td className="py-1.5 px-3 align-middle font-mono text-xs">
+        <div className="flex items-center gap-1.5">
           {trace.hasErrors ? (
-            <XCircle size={14} className="text-red-700 dark:text-red-400" />
+            <XCircle size={12} className="text-red-700 dark:text-red-400 flex-shrink-0" />
           ) : (
-            <CheckCircle2 size={14} className="text-green-700 dark:text-green-400" />
+            <CheckCircle2 size={12} className="text-green-700 dark:text-green-400 flex-shrink-0" />
           )}
           <span title={trace.traceId}>
-            {trace.traceId}
+            {trace.traceId.slice(0, 8)}…
           </span>
+          <button
+            onClick={(e) => handleCopy(e, trace.traceId, 'traceId')}
+            className="relative opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted-foreground/20 flex-shrink-0"
+            aria-label="Copy trace ID"
+          >
+            {copiedField === 'traceId' ? (
+              <>
+                <Check size={12} className="text-green-500" />
+                <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] bg-foreground text-background px-1.5 py-0.5 rounded whitespace-nowrap">
+                  Copied
+                </span>
+              </>
+            ) : (
+              <Copy size={12} className="text-muted-foreground" />
+            )}
+          </button>
         </div>
       </td>
-      <td className="p-4 align-middle">
-        <span title={trace.rootSpanName}>
-          {trace.rootSpanName}
-        </span>
+      <td className="py-1.5 px-3 align-middle text-xs">
+        <div className="flex items-center gap-1.5 max-w-[200px]">
+          <span className="truncate" title={trace.rootSpanName}>
+            {trace.rootSpanName}
+          </span>
+          <button
+            onClick={(e) => handleCopy(e, trace.rootSpanName, 'rootSpan')}
+            className="relative opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted-foreground/20 flex-shrink-0"
+            aria-label="Copy root span name"
+          >
+            {copiedField === 'rootSpan' ? (
+              <>
+                <Check size={12} className="text-green-500" />
+                <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] bg-foreground text-background px-1.5 py-0.5 rounded whitespace-nowrap">
+                  Copied
+                </span>
+              </>
+            ) : (
+              <Copy size={12} className="text-muted-foreground" />
+            )}
+          </button>
+        </div>
       </td>
-      <td className="p-4 align-middle">
-        <Badge variant="outline" className="text-xs">
+      <td className="py-1.5 px-3 align-middle">
+        <Badge variant="outline" className="text-[11px] py-0 px-1.5">
           {trace.serviceName || 'unknown'}
         </Badge>
       </td>
-      <td className="p-4 align-middle">
+      <td className="py-1.5 px-3 align-middle">
         <span className={`font-mono text-xs ${trace.duration > 5000 ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}>
           {formatDuration(trace.duration)}
         </span>
       </td>
-      <td className="p-4 align-middle text-center">
-        <Badge variant="secondary" className="text-xs">
-          {trace.spanCount}
+      <td className="py-1.5 px-3 align-middle">
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="h-3.5 w-[80px] rounded-sm overflow-hidden flex bg-muted/30 cursor-default">
+                {categoryStats.map((stat) => {
+                  const colors = getCategoryColors(stat.category);
+                  const widthPercent = Math.max(stat.percentage, 1);
+                  return (
+                    <div
+                      key={stat.category}
+                      className={cn('h-full', colors.bar)}
+                      style={{ width: `${widthPercent}%`, opacity: 0.45 }}
+                    />
+                  );
+                })}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent
+              side="bottom"
+              className="bg-gray-900 dark:bg-gray-800 border-gray-800 p-3 max-w-xs text-white [&>svg]:fill-gray-900 dark:[&>svg]:fill-gray-800"
+            >
+              <div className="space-y-1.5">
+                <div className="text-xs font-semibold mb-2">Time Distribution</div>
+                {categoryStats.map((stat) => {
+                  const colors = getCategoryColors(stat.category);
+                  const formattedPercent = stat.percentage < 1
+                    ? stat.percentage.toFixed(1)
+                    : stat.percentage.toFixed(0);
+                  return (
+                    <div key={stat.category} className="flex items-center justify-between gap-4 text-xs">
+                      <div className="flex items-center gap-2">
+                        <div className={cn('w-2.5 h-2.5 rounded-sm flex-shrink-0', colors.bar)} />
+                        <span className="font-medium">{stat.category}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-gray-300">
+                        <span>{formatDuration(stat.totalDuration)}</span>
+                        <span className="text-gray-400">({formattedPercent}%)</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </td>
+      <td className="py-1.5 px-3 align-middle text-center">
+        <Badge variant="secondary" className="text-[11px] py-0 px-1.5">
+          {formatCompact(trace.spanCount)}
         </Badge>
       </td>
-      <td className="p-4 align-middle">
-        <ChevronRight size={16} className="text-muted-foreground" />
+      <td className="py-1.5 px-3 align-middle">
+        <ChevronRight size={14} className="text-muted-foreground" />
       </td>
     </tr>
   );
@@ -170,13 +301,8 @@ export const AgentTracesPage: React.FC = () => {
   // Sidebar collapse control
   const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
   
-  // Filter state with session persistence
-  const [selectedAgent, setSelectedAgent] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('agentTraces.selectedAgent') || 'all';
-    }
-    return 'all';
-  });
+  // Filter state
+  const [selectedAgent, setSelectedAgent] = useState<string>('all');
   const [textSearch, setTextSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [timeRange, setTimeRange] = useState<string>(() => {
@@ -184,6 +310,38 @@ export const AgentTracesPage: React.FC = () => {
       return localStorage.getItem('agentTraces.timeRange') || '1440';
     }
     return '1440';
+  });
+
+  // Advanced filter state
+  const [filterPopoverOpen, setFilterPopoverOpen] = useState(false);
+  const [rootSpanSuggestOpen, setRootSpanSuggestOpen] = useState(false);
+  const [serviceSuggestOpen, setServiceSuggestOpen] = useState(false);
+  const [filters, setFilters] = useState<{
+    status: string;
+    service: string;
+    rootSpan: string;
+    traceId: string;
+    durationRange: string;
+    durationMin: string;
+    durationMax: string;
+    spanCountRange: string;
+    spanCountMin: string;
+    spanCountMax: string;
+    timeWindowStart: string;
+    timeWindowEnd: string;
+  }>({
+    status: 'all',
+    service: '',
+    rootSpan: '',
+    traceId: '',
+    durationRange: 'all',
+    durationMin: '',
+    durationMax: '',
+    spanCountRange: 'all',
+    spanCountMin: '',
+    spanCountMax: '',
+    timeWindowStart: '',
+    timeWindowEnd: '',
   });
 
   // Loading state
@@ -356,9 +514,8 @@ export const AgentTracesPage: React.FC = () => {
 
       setSpans(result.spans);
       const processedTraces = processSpansToTraces(result.spans);
-      const sortedTraces = sortTraces(processedTraces);
-      setAllTraces(sortedTraces);
-      setDisplayedTraces(sortedTraces.slice(0, 100));
+      setAllTraces(processedTraces);
+      setDisplayedTraces(processedTraces.slice(0, 100));
       setDisplayCount(100);
       setLastRefresh(new Date());
 
@@ -431,23 +588,99 @@ export const AgentTracesPage: React.FC = () => {
     return () => scrollContainer.removeEventListener('scroll', handleScroll);
   }, []);
 
+  // Client-side filtering
+  const filteredTraces = useMemo(() => {
+    let result = allTraces;
+
+    // Status filter
+    if (filters.status === 'success') result = result.filter(t => !t.hasErrors);
+    if (filters.status === 'error') result = result.filter(t => t.hasErrors);
+
+    // Root span filter
+    if (filters.rootSpan) {
+      const q = filters.rootSpan.toLowerCase();
+      result = result.filter(t => t.rootSpanName.toLowerCase().includes(q));
+    }
+
+    // Service filter
+    if (filters.service) {
+      const q = filters.service.toLowerCase();
+      result = result.filter(t => t.serviceName.toLowerCase().includes(q));
+    }
+
+    // Trace ID filter
+    if (filters.traceId) {
+      const q = filters.traceId.toLowerCase();
+      result = result.filter(t => t.traceId.toLowerCase().includes(q));
+    }
+
+    // Duration filter (values in ms)
+    if (filters.durationRange !== 'all') {
+      if (filters.durationRange === 'custom') {
+        const min = filters.durationMin ? parseFloat(filters.durationMin) : 0;
+        const max = filters.durationMax ? parseFloat(filters.durationMax) : Infinity;
+        result = result.filter(t => t.duration >= min && t.duration <= max);
+      } else if (filters.durationRange === '>10000') {
+        result = result.filter(t => t.duration > 10000);
+      } else {
+        const [min, max] = filters.durationRange.split('-').map(Number);
+        result = result.filter(t => t.duration >= min && t.duration < max);
+      }
+    }
+
+    // Span count filter
+    if (filters.spanCountRange !== 'all') {
+      if (filters.spanCountRange === 'custom') {
+        const min = filters.spanCountMin ? parseInt(filters.spanCountMin) : 0;
+        const max = filters.spanCountMax ? parseInt(filters.spanCountMax) : Infinity;
+        result = result.filter(t => t.spanCount >= min && t.spanCount <= max);
+      } else if (filters.spanCountRange === '>1000') {
+        result = result.filter(t => t.spanCount > 1000);
+      } else {
+        const [min, max] = filters.spanCountRange.split('-').map(Number);
+        result = result.filter(t => t.spanCount >= min && t.spanCount <= max);
+      }
+    }
+
+    // Time window filter (from chart clicks)
+    if (filters.timeWindowStart && filters.timeWindowEnd) {
+      const start = new Date(filters.timeWindowStart).getTime();
+      const end = new Date(filters.timeWindowEnd).getTime();
+      result = result.filter(t => {
+        const ts = t.startTime.getTime();
+        return ts >= start && ts < end;
+      });
+    }
+
+    // Text search as filter
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
+      result = result.filter(t =>
+        t.traceId.toLowerCase().includes(q) ||
+        t.rootSpanName.toLowerCase().includes(q) ||
+        t.serviceName.toLowerCase().includes(q)
+      );
+    }
+
+    return result;
+  }, [allTraces, filters, debouncedSearch]);
+
   // Lazy loading with intersection observer (client-side + server-side pagination)
   useEffect(() => {
     const currentRef = loadMoreRef.current;
     if (!currentRef) return;
 
     // Nothing left to show client-side or load from server
-    if (displayCount >= allTraces.length && !hasMore) return;
+    if (displayCount >= filteredTraces.length && !hasMore) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         const target = entries[0];
         if (target.isIntersecting) {
-          if (displayCount < allTraces.length) {
+          if (displayCount < filteredTraces.length) {
             // Client-side: show next batch of already-fetched traces
-            const nextCount = Math.min(displayCount + 100, allTraces.length);
-            const sortedTraces = sortTraces(allTraces);
-            setDisplayedTraces(sortedTraces.slice(0, nextCount));
+            const nextCount = Math.min(displayCount + 100, filteredTraces.length);
+            setDisplayedTraces(filteredTraces.slice(0, nextCount));
             setDisplayCount(nextCount);
           } else if (hasMore && !isLoadingMore) {
             // Server-side: fetch next page from the API
@@ -467,7 +700,7 @@ export const AgentTracesPage: React.FC = () => {
     return () => {
       observer.unobserve(currentRef);
     };
-  }, [displayCount, allTraces, hasMore, isLoadingMore, loadMoreTraces, sortTraces]);
+  }, [displayCount, filteredTraces, hasMore, isLoadingMore, loadMoreTraces]);
 
   // Handle trace selection
   const handleSelectTrace = (trace: TraceTableRow) => {
@@ -564,28 +797,201 @@ export const AgentTracesPage: React.FC = () => {
 
   // Calculate stats
   const stats = useMemo(() => {
-    if (allTraces.length === 0) return { total: 0, errors: 0, avgDuration: 0 };
+    if (allTraces.length === 0) return { total: 0, totalSpans: 0, errors: 0, avgDuration: 0 };
 
     const errors = allTraces.filter(t => t.hasErrors).length;
     const avgDuration = allTraces.reduce((sum, t) => sum + t.duration, 0) / allTraces.length;
+    const totalSpans = allTraces.reduce((sum, t) => sum + t.spanCount, 0);
 
     return {
       total: allTraces.length,
+      totalSpans,
       errors,
       avgDuration,
     };
   }, [allTraces]);
 
+  // Unique root span names for autosuggest (derived from in-memory data, zero cost)
+  const uniqueRootSpans = useMemo(() => {
+    const names = new Set(allTraces.map(t => t.rootSpanName));
+    return Array.from(names).sort();
+  }, [allTraces]);
+
+  // Filtered suggestions based on current input
+  const rootSpanSuggestions = useMemo(() => {
+    if (!filters.rootSpan) return uniqueRootSpans.slice(0, 10);
+    const q = filters.rootSpan.toLowerCase();
+    return uniqueRootSpans.filter(n => n.toLowerCase().includes(q)).slice(0, 10);
+  }, [uniqueRootSpans, filters.rootSpan]);
+
+  // Unique service names for autosuggest
+  const uniqueServiceNames = useMemo(() => {
+    const names = new Set(allTraces.map(t => t.serviceName));
+    return Array.from(names).sort();
+  }, [allTraces]);
+
+  // Filtered service suggestions based on current input
+  const serviceSuggestions = useMemo(() => {
+    if (!filters.service) return uniqueServiceNames.slice(0, 10);
+    const q = filters.service.toLowerCase();
+    return uniqueServiceNames.filter(n => n.toLowerCase().includes(q)).slice(0, 10);
+  }, [uniqueServiceNames, filters.service]);
+
+  // Active filter chips
+  const activeFilterChips = useMemo(() => {
+    const chips: { key: string; label: string }[] = [];
+    if (filters.status !== 'all') chips.push({ key: 'status', label: `Status: ${filters.status}` });
+    if (filters.service) chips.push({ key: 'service', label: `Service: ${filters.service}` });
+    if (filters.rootSpan) chips.push({ key: 'rootSpan', label: `Root span: ${filters.rootSpan}` });
+    if (filters.traceId) chips.push({ key: 'traceId', label: `Trace ID: ${filters.traceId}` });
+    if (filters.durationRange !== 'all') {
+      const durationLabels: Record<string, string> = {
+        '0-10': '0–10ms', '10-50': '10–50ms', '50-100': '50–100ms',
+        '100-1000': '100ms–1s', '1000-5000': '1–5s', '5000-10000': '5–10s',
+        '>10000': '>10s',
+      };
+      const label = filters.durationRange === 'custom'
+        ? `Duration: ${filters.durationMin || '0'}–${filters.durationMax || '∞'}ms`
+        : `Duration: ${durationLabels[filters.durationRange] || filters.durationRange}`;
+      chips.push({ key: 'durationRange', label });
+    }
+    if (filters.spanCountRange !== 'all') {
+      const label = filters.spanCountRange === 'custom'
+        ? `Spans: ${filters.spanCountMin || '0'}–${filters.spanCountMax || '∞'}`
+        : `Spans: ${filters.spanCountRange}`;
+      chips.push({ key: 'spanCountRange', label });
+    }
+    if (textSearch) chips.push({ key: 'textSearch', label: `Keyword: ${textSearch}` });
+    if (filters.timeWindowStart) {
+      const s = new Date(filters.timeWindowStart);
+      const e = filters.timeWindowEnd ? new Date(filters.timeWindowEnd) : null;
+      const fmt = (d: Date) => d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      chips.push({ key: 'timeWindow', label: `Time: ${fmt(s)}–${e ? fmt(e) : 'now'}` });
+    }
+    return chips;
+  }, [filters, textSearch]);
+
+  // Remove a single filter chip
+  const removeFilterChip = (key: string) => {
+    if (key === 'textSearch') {
+      setTextSearch('');
+      return;
+    }
+    setFilters(prev => {
+      const next = { ...prev };
+      if (key === 'status') next.status = 'all';
+      if (key === 'service') next.service = '';
+      if (key === 'rootSpan') next.rootSpan = '';
+      if (key === 'traceId') next.traceId = '';
+      if (key === 'durationRange') {
+        next.durationRange = 'all';
+        next.durationMin = '';
+        next.durationMax = '';
+      }
+      if (key === 'spanCountRange') {
+        next.spanCountRange = 'all';
+        next.spanCountMin = '';
+        next.spanCountMax = '';
+      }
+      if (key === 'timeWindow') {
+        next.timeWindowStart = '';
+        next.timeWindowEnd = '';
+      }
+      return next;
+    });
+  };
+
+  // Clear all filters
+  const clearAllFilters = () => {
+    setTextSearch('');
+    setFilters({
+      status: 'all',
+      service: '',
+      rootSpan: '',
+      traceId: '',
+      durationRange: 'all',
+      durationMin: '',
+      durationMax: '',
+      spanCountRange: 'all',
+      spanCountMin: '',
+      spanCountMax: '',
+      timeWindowStart: '',
+      timeWindowEnd: '',
+    });
+  };
+
+  // Handle filter actions from MetricsOverview chart clicks
+  const handleMetricsFilter = useCallback((action: FilterAction) => {
+    if (action.type === 'status') {
+      setFilters(prev => ({ ...prev, status: action.value }));
+    } else if (action.type === 'durationRange') {
+      setFilters(prev => ({
+        ...prev,
+        durationRange: 'custom',
+        durationMin: action.durationMin || '',
+        durationMax: action.durationMax || '',
+      }));
+    } else if (action.type === 'timeRange') {
+      // For time-bucket clicks, compute the bucket window
+      const start = action.timeStart;
+      const end = action.timeEnd;
+      if (start) {
+        // For error-bucket clicks, also set status=error
+        const isError = action.value === 'error-bucket';
+        setFilters(prev => ({
+          ...prev,
+          timeWindowStart: start.toISOString(),
+          timeWindowEnd: end ? end.toISOString() : new Date().toISOString(),
+          ...(isError ? { status: 'error' } : {}),
+        }));
+      }
+    }
+  }, []);
+
+  // Lazy loading with intersection observer
+  useEffect(() => {
+    const currentRef = loadMoreRef.current;
+    if (!currentRef || displayCount >= filteredTraces.length) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const target = entries[0];
+        if (target.isIntersecting && displayCount < filteredTraces.length) {
+          const nextCount = Math.min(displayCount + 100, filteredTraces.length);
+          setDisplayedTraces(filteredTraces.slice(0, nextCount));
+          setDisplayCount(nextCount);
+        }
+      },
+      {
+        root: null,
+        rootMargin: '200px',
+        threshold: 0.1,
+      }
+    );
+
+    observer.observe(currentRef);
+
+    return () => {
+      observer.unobserve(currentRef);
+    };
+  }, [displayCount, filteredTraces]);
+
+  // Reset displayed traces when filteredTraces changes
+  useEffect(() => {
+    setDisplayedTraces(filteredTraces.slice(0, 100));
+    setDisplayCount(100);
+  }, [filteredTraces]);
+
   return (
     <div className="h-full flex flex-col">
       {/* Compact Header with Inline Stats and Filters */}
-      <div className="px-6 pt-6 pb-4 border-b">
+      <div className="px-6 pt-4 pb-3 border-b">
         {/* Single Row: Title + Stats + Filters */}
         <div className="flex items-start justify-between gap-4">
           {/* Left: Title and Description */}
           <div className="flex-shrink-0">
-            <h2 className="text-2xl font-bold">Agent Traces</h2>
-            <p className="text-xs text-muted-foreground mt-1">
+            <h2 className="text-xl font-bold">Agent Traces</h2>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
               Analyze agent execution traces from OTEL
             </p>
           </div>
@@ -593,53 +999,240 @@ export const AgentTracesPage: React.FC = () => {
           {/* Right: Stats and Filters with Last Updated below */}
           <div className="flex flex-col items-end gap-1 flex-shrink-0">
             <div className="flex items-center gap-3">
-              {/* Inline Stats */}
-              <div className="flex items-center gap-2 text-sm">
-                <div className="flex items-center gap-1">
-                  <Activity size={13} className="text-opensearch-blue" />
-                  <span className="font-semibold text-opensearch-blue">{allTraces.length}</span>
-                  <span className="text-muted-foreground">traces</span>
-                </div>
-                <span className="text-muted-foreground">•</span>
-                <div className="flex items-center gap-1">
-                  <BarChart3 size={13} className="text-purple-700 dark:text-purple-400" />
-                  <span className="font-semibold text-purple-700 dark:text-purple-400">{spans.length}</span>
-                  <span className="text-muted-foreground">spans</span>
-                </div>
-                <span className="text-muted-foreground">•</span>
-                <div className="flex items-center gap-1">
-                  <AlertCircle size={13} className="text-red-700 dark:text-red-400" />
-                  <span className="font-semibold text-red-700 dark:text-red-400">
-                    {stats.total > 0 ? ((stats.errors / stats.total) * 100).toFixed(1) : 0}%
-                  </span>
-                  <span className="text-muted-foreground">({stats.errors}) errors</span>
-                </div>
-                <span className="text-muted-foreground">•</span>
-                <div className="flex items-center gap-1">
-                  <Clock size={13} className="text-amber-700 dark:text-amber-400" />
-                  <span className="font-semibold text-amber-700 dark:text-amber-400">
-                    {formatDuration(stats.avgDuration)}
-                  </span>
-                  <span className="text-muted-foreground">avg latency</span>
-                </div>
-              </div>
-
-              {/* Search Bar - Primary Action */}
-              <div className="w-[280px]">
+              {/* Search Bar */}
+              <div className="w-[200px]">
                 <div className="relative">
-                  <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#5B9BD5]" strokeWidth={2.5} />
+                  <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     placeholder="Search traces, services, spans..."
                     value={textSearch}
                     onChange={(e) => setTextSearch(e.target.value)}
-                    className="pl-10 h-9 text-sm bg-background dark:bg-opensearch-blue/15 border-opensearch-blue/60 dark:border-opensearch-blue/70 focus-visible:bg-background focus-visible:border-opensearch-blue dark:focus-visible:border-opensearch-blue focus-visible:ring-opensearch-blue/30 placeholder:text-muted-foreground dark:placeholder:text-white"
+                    className="pl-7 h-7 text-xs md:text-xs"
                   />
                 </div>
               </div>
 
+              {/* Filter Button */}
+              <Popover open={filterPopoverOpen} onOpenChange={setFilterPopoverOpen}>
+                <PopoverTrigger>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 text-xs font-normal"
+                  >
+                    <SlidersHorizontal size={12} />
+                    Filter
+                    {activeFilterChips.length > 0 && (
+                      <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-[10px] rounded-full">
+                        {activeFilterChips.length}
+                      </Badge>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-[320px] p-0">
+                  <div className="p-3 border-b">
+                    <div className="text-sm font-medium">Filters</div>
+                  </div>
+                  <div className="p-3 space-y-3 max-h-[400px] overflow-y-auto">
+                    {/* Status */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Status</label>
+                      <Select value={filters.status} onValueChange={(v) => setFilters(prev => ({ ...prev, status: v }))}>
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="success">Success</SelectItem>
+                          <SelectItem value="error">Error</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Service */}
+                    <div className="space-y-1 relative">
+                      <label className="text-xs font-medium text-muted-foreground">Service</label>
+                      <Input
+                        placeholder="Filter by service name"
+                        value={filters.service}
+                        onChange={(e) => {
+                          setFilters(prev => ({ ...prev, service: e.target.value }));
+                          setServiceSuggestOpen(true);
+                        }}
+                        onFocus={() => setServiceSuggestOpen(true)}
+                        onBlur={() => setTimeout(() => setServiceSuggestOpen(false), 150)}
+                        className="h-8 text-sm"
+                      />
+                      {serviceSuggestOpen && serviceSuggestions.length > 0 && (
+                        <div className="absolute z-50 top-full mt-1 left-0 right-0 max-h-[160px] overflow-y-auto rounded-md border bg-popover shadow-md">
+                          {serviceSuggestions.map(name => (
+                            <button
+                              key={name}
+                              className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted/50 truncate"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setFilters(prev => ({ ...prev, service: name }));
+                                setServiceSuggestOpen(false);
+                              }}
+                            >
+                              {name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Root Span */}
+                    <div className="space-y-1 relative">
+                      <label className="text-xs font-medium text-muted-foreground">Root Span</label>
+                      <Input
+                        placeholder="Filter by root span name"
+                        value={filters.rootSpan}
+                        onChange={(e) => {
+                          setFilters(prev => ({ ...prev, rootSpan: e.target.value }));
+                          setRootSpanSuggestOpen(true);
+                        }}
+                        onFocus={() => setRootSpanSuggestOpen(true)}
+                        onBlur={() => setTimeout(() => setRootSpanSuggestOpen(false), 150)}
+                        className="h-8 text-sm"
+                      />
+                      {rootSpanSuggestOpen && rootSpanSuggestions.length > 0 && (
+                        <div className="absolute z-50 top-full mt-1 left-0 right-0 max-h-[160px] overflow-y-auto rounded-md border bg-popover shadow-md">
+                          {rootSpanSuggestions.map(name => (
+                            <button
+                              key={name}
+                              className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted/50 truncate"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setFilters(prev => ({ ...prev, rootSpan: name }));
+                                setRootSpanSuggestOpen(false);
+                              }}
+                            >
+                              {name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Trace ID */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Trace ID</label>
+                      <Input
+                        placeholder="Filter by trace ID"
+                        value={filters.traceId}
+                        onChange={(e) => setFilters(prev => ({ ...prev, traceId: e.target.value }))}
+                        className="h-8 text-sm"
+                      />
+                    </div>
+
+                    {/* Duration */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Duration</label>
+                      <Select
+                        value={filters.durationRange}
+                        onValueChange={(v) => setFilters(prev => ({
+                          ...prev,
+                          durationRange: v,
+                          ...(v !== 'custom' ? { durationMin: '', durationMax: '' } : {}),
+                        }))}
+                      >
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="0-10">0 – 10ms</SelectItem>
+                          <SelectItem value="10-50">10 – 50ms</SelectItem>
+                          <SelectItem value="50-100">50 – 100ms</SelectItem>
+                          <SelectItem value="100-1000">100ms – 1s</SelectItem>
+                          <SelectItem value="1000-5000">1 – 5s</SelectItem>
+                          <SelectItem value="5000-10000">5 – 10s</SelectItem>
+                          <SelectItem value=">10000">&gt; 10s</SelectItem>
+                          <SelectItem value="custom">Custom range</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {filters.durationRange === 'custom' && (
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <Input
+                            placeholder="Min (ms)"
+                            type="number"
+                            value={filters.durationMin}
+                            onChange={(e) => setFilters(prev => ({ ...prev, durationMin: e.target.value }))}
+                            className="h-8 text-sm"
+                          />
+                          <span className="text-xs text-muted-foreground">to</span>
+                          <Input
+                            placeholder="Max (ms)"
+                            type="number"
+                            value={filters.durationMax}
+                            onChange={(e) => setFilters(prev => ({ ...prev, durationMax: e.target.value }))}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Span Count */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Number of Spans</label>
+                      <Select
+                        value={filters.spanCountRange}
+                        onValueChange={(v) => setFilters(prev => ({
+                          ...prev,
+                          spanCountRange: v,
+                          ...(v !== 'custom' ? { spanCountMin: '', spanCountMax: '' } : {}),
+                        }))}
+                      >
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="0-10">0 – 10</SelectItem>
+                          <SelectItem value="10-50">10 – 50</SelectItem>
+                          <SelectItem value="50-100">50 – 100</SelectItem>
+                          <SelectItem value="100-1000">100 – 1000</SelectItem>
+                          <SelectItem value=">1000">&gt; 1000</SelectItem>
+                          <SelectItem value="custom">Custom range</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {filters.spanCountRange === 'custom' && (
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <Input
+                            placeholder="Min"
+                            type="number"
+                            value={filters.spanCountMin}
+                            onChange={(e) => setFilters(prev => ({ ...prev, spanCountMin: e.target.value }))}
+                            className="h-8 text-sm"
+                          />
+                          <span className="text-xs text-muted-foreground">to</span>
+                          <Input
+                            placeholder="Max"
+                            type="number"
+                            value={filters.spanCountMax}
+                            onChange={(e) => setFilters(prev => ({ ...prev, spanCountMax: e.target.value }))}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Footer */}
+                  <div className="p-3 border-t flex justify-between">
+                    <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={clearAllFilters}>
+                      Clear all
+                    </Button>
+                    <Button size="sm" className="h-7 text-xs" onClick={() => setFilterPopoverOpen(false)}>
+                      Done
+                    </Button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+
               {/* Agent Filter */}
               <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-                <SelectTrigger className="w-[110px] h-8 text-sm">
+                <SelectTrigger className="w-[100px] h-7 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -653,7 +1246,7 @@ export const AgentTracesPage: React.FC = () => {
 
               {/* Time Range */}
               <Select value={timeRange} onValueChange={setTimeRange}>
-                <SelectTrigger className="w-[90px] h-8 text-sm">
+                <SelectTrigger className="w-[85px] h-7 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -671,15 +1264,15 @@ export const AgentTracesPage: React.FC = () => {
                 size="sm"
                 onClick={fetchTraces}
                 disabled={isLoading}
-                className="h-8"
+                className="h-7"
               >
-                <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+                <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
               </Button>
             </div>
             
             {/* Last Updated - Below stats and filters */}
             {lastRefresh && (
-              <span className="text-xs text-muted-foreground">
+              <span className="text-[11px] text-muted-foreground">
                 Last updated: {lastRefresh.toLocaleTimeString()}
               </span>
             )}
@@ -687,41 +1280,63 @@ export const AgentTracesPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Filter Chips */}
+      {activeFilterChips.length > 0 && (
+        <div className="px-6 pt-2 flex items-center gap-2 flex-wrap justify-end">
+          {activeFilterChips.map(chip => (
+            <Badge
+              key={chip.key}
+              variant="secondary"
+              className="gap-1 pr-1 text-xs font-normal"
+            >
+              {chip.label}
+              <button
+                onClick={() => removeFilterChip(chip.key)}
+                className="ml-0.5 rounded-full p-0.5 hover:bg-muted-foreground/20 transition-colors"
+                aria-label={`Remove ${chip.label} filter`}
+              >
+                <X size={12} />
+              </button>
+            </Badge>
+          ))}
+          <button
+            onClick={clearAllFilters}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
+
       {/* Metrics Overview - Trends */}
-      <div className="px-6 pt-4">
+      <div className="px-6 pt-2">
         {allTraces.length > 0 && (
           <MetricsOverview
             latencyDistribution={latencyDistribution}
             errorTimeSeries={errorTimeSeries}
             requestTimeSeries={requestTimeSeries}
             totalRequests={stats.total}
+            totalSpans={stats.totalSpans}
             totalErrors={stats.errors}
             avgLatency={stats.avgDuration}
+            onFilter={handleMetricsFilter}
           />
         )}
       </div>
 
       {/* Error State */}
       {error && (
-        <div className="px-6 pt-4">
-          <Card className="bg-blue-50 dark:bg-blue-500/10 border-blue-300 dark:border-blue-500/30">
-            <CardContent className="p-4 text-sm text-blue-700 dark:text-blue-400">
-              <div className="flex items-start gap-3">
-                <AlertCircle size={18} className="flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-medium mb-1">No OpenSearch cluster connected</p>
-                  <p className="text-xs opacity-90">
-                    Connect to an OpenSearch cluster in Settings to view agent traces and execution data.
-                  </p>
-                </div>
-              </div>
+        <div className="px-6 pt-2">
+          <Card className="bg-red-50 dark:bg-red-500/10 border-red-300 dark:border-red-500/30">
+            <CardContent className="p-4 text-sm text-red-700 dark:text-red-400">
+              {error}
             </CardContent>
           </Card>
         </div>
       )}
 
       {/* Traces Table */}
-      <Card className="flex-1 flex flex-col overflow-hidden mx-6 mt-4 mb-6">
+      <Card className="flex-1 flex flex-col overflow-hidden mx-6 mt-2 mb-6">
         <div ref={scrollContainerRef} className="relative flex-1 overflow-auto">
           {allTraces.length === 0 && !isLoading ? (
             <div className="h-full flex flex-col items-center justify-center text-muted-foreground py-12">
@@ -744,10 +1359,15 @@ export const AgentTracesPage: React.FC = () => {
                 <div className="text-sm font-medium flex items-center gap-2 whitespace-nowrap">
                   <Activity size={14} />
                   Traces
-                  <Badge variant="secondary" className="ml-2">{allTraces.length}</Badge>
-                  {displayedTraces.length < allTraces.length && (
+                  <Badge variant="secondary" className="ml-2">{formatCompact(filteredTraces.length)}</Badge>
+                  {filteredTraces.length < allTraces.length && (
                     <span className="text-xs text-muted-foreground ml-2">
-                      (showing {displayedTraces.length})
+                      (filtered from {formatCompact(allTraces.length)})
+                    </span>
+                  )}
+                  {displayedTraces.length < filteredTraces.length && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      (showing {formatCompact(displayedTraces.length)})
                     </span>
                   )}
                 </div>
@@ -760,57 +1380,28 @@ export const AgentTracesPage: React.FC = () => {
                     isScrolled ? 'shadow-sm' : ''
                   }`}>
                     <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                      <SortableHeader
-                        column="startTime"
-                        label="Start Time"
-                        currentSort={sortColumn}
-                        sortDirection={sortDirection}
-                        onSort={handleSort}
-                        className="w-[180px]"
-                      />
-                      <SortableHeader
-                        column="traceId"
-                        label="Trace ID"
-                        currentSort={sortColumn}
-                        sortDirection={sortDirection}
-                        onSort={handleSort}
-                      />
-                      <SortableHeader
-                        column="rootSpanName"
-                        label="Root Span"
-                        currentSort={sortColumn}
-                        sortDirection={sortDirection}
-                        onSort={handleSort}
-                      />
-                      <SortableHeader
-                        column="serviceName"
-                        label="Service"
-                        currentSort={sortColumn}
-                        sortDirection={sortDirection}
-                        onSort={handleSort}
-                      />
-                      <SortableHeader
-                        column="duration"
-                        label="Duration"
-                        currentSort={sortColumn}
-                        sortDirection={sortDirection}
-                        onSort={handleSort}
-                      />
-                      <SortableHeader
-                        column="spanCount"
-                        label="Spans"
-                        currentSort={sortColumn}
-                        sortDirection={sortDirection}
-                        onSort={handleSort}
-                        className="text-center"
-                      />
-                      <SortableHeader
-                        column={null}
-                        label=""
-                        currentSort={sortColumn}
-                        sortDirection={sortDirection}
-                        onSort={handleSort}
-                      />
+                      <th className="h-8 px-3 text-left align-middle font-medium text-xs text-muted-foreground whitespace-nowrap bg-background border-b">
+                        Start Time
+                      </th>
+                      <th className="h-8 px-3 text-left align-middle font-medium text-xs text-muted-foreground bg-background border-b">
+                        Trace ID
+                      </th>
+                      <th className="h-8 px-3 text-left align-middle font-medium text-xs text-muted-foreground bg-background border-b">
+                        Root Span
+                      </th>
+                      <th className="h-8 px-3 text-left align-middle font-medium text-xs text-muted-foreground bg-background border-b">
+                        Service
+                      </th>
+                      <th className="h-8 px-3 text-left align-middle font-medium text-xs text-muted-foreground bg-background border-b">
+                        Duration
+                      </th>
+                      <th className="h-8 px-3 text-left align-middle font-medium text-xs text-muted-foreground bg-background border-b">
+                        Distribution
+                      </th>
+                      <th className="h-8 px-3 text-center align-middle font-medium text-xs text-muted-foreground bg-background border-b">
+                        Spans
+                      </th>
+                      <th className="h-8 px-3 text-left align-middle font-medium text-xs text-muted-foreground bg-background border-b"></th>
                     </tr>
                   </thead>
                   <tbody className="[&_tr:last-child]:border-0">
@@ -823,9 +1414,9 @@ export const AgentTracesPage: React.FC = () => {
                       />
                     ))}
                     {/* Intersection observer target for lazy loading (client-side + server-side) */}
-                    {(displayedTraces.length < allTraces.length || hasMore) && (
+                    {(displayedTraces.length < filteredTraces.length || hasMore) && (
                       <tr ref={loadMoreRef} className="hover:bg-transparent border-b transition-colors">
-                        <td colSpan={7} className="p-4 align-middle text-center py-8">
+                        <td colSpan={8} className="py-1.5 px-3 align-middle text-center py-4">
                           <div className="flex items-center justify-center gap-2 text-muted-foreground">
                             <RefreshCw size={16} className={isLoadingMore ? 'animate-spin' : ''} />
                             <span className="text-sm">
@@ -847,13 +1438,12 @@ export const AgentTracesPage: React.FC = () => {
       {flyoutOpen && selectedTrace && (
         <div className="fixed inset-0 z-50 pointer-events-none">
           <ResizablePanelGroup direction="horizontal" className="h-full pointer-events-none">
-            {/* Left backdrop panel - click to close flyout */}
-            <ResizablePanel
+            {/* Left invisible panel - allows content below to be interactive */}
+            <ResizablePanel 
               defaultSize={40}
               minSize={10}
               maxSize={70}
-              className="pointer-events-auto cursor-default"
-              onClick={handleCloseFlyout}
+              className="pointer-events-none"
             />
             
             <ResizableHandle withHandle className="pointer-events-auto" />

@@ -24,11 +24,20 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Markdown output format for CLI commands ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Documentation for SigV4 auth for OpenSearch ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Getting-started blog and introductory blog ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Category distribution mini-bar visualization in Agent Traces table rows ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Filter popover with chip-based filtering for Agent Traces ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Compact number formatting (`formatCompact`) for metrics display ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Minimap toggle and resizable panel layout for trace flyout ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Light mode color support with improved contrast across all components ([#108](https://github.com/opensearch-project/agent-health/pull/108))
 
 ### Changed
 - Enhanced CLI help output with grouped sections and examples ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Centralized connector type metadata into single source of truth (`CONNECTOR_TYPE_INFO`) ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Rename 'Testing' to 'Evals' in collapsible section and tooltips ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Reduce global sidebar width and refactor header layout for better space utilization ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Improve metrics overview with sparkline charts and reordered layout ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Remove drop shadows from non-floating UI components (Card, Button, Badge, Input, etc.) for cleaner visual style ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Align metrics chart columns at the bottom with consistent heights ([#108](https://github.com/opensearch-project/agent-health/pull/108))
 
 ### Removed
 - `models` property from agent configurations and related functions ([#115](https://github.com/opensearch-project/agent-health/pull/115))
@@ -40,8 +49,10 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - E2E test data cleanup in test-cases and benchmarks specs ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - `fast-xml-parser` override to 5.5.6 for CVE-2026-26278 ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Resolved high/critical npm audit vulnerabilities (path-to-regexp, picomatch) ([#115](https://github.com/opensearch-project/agent-health/pull/115))
-
-### Added
+- Fullscreen trace flyout click-outside detection closing flyout unexpectedly ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Benchmark traces tab layout and default view mode ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Sidebar spacing and Evals menu interaction behavior ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- TypeScript compilation errors from merge conflict resolution ([#108](https://github.com/opensearch-project/agent-health/pull/108))
 - AWS SigV4 authentication support for OpenSearch clusters with `ClusterAuthType` (`none` | `basic` | `sigv4`) ([#85](https://github.com/opensearch-project/agent-health/pull/85))
 - OpenSearch client factory (`opensearchClientFactory.ts`) for centralized client creation with basic, none, or SigV4 auth ([#85](https://github.com/opensearch-project/agent-health/pull/85))
 - Mapping validation service to detect incompatible field types in OpenSearch indexes ([#85](https://github.com/opensearch-project/agent-health/pull/85))

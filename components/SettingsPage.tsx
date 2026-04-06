@@ -1090,8 +1090,8 @@ export const SettingsPage: React.FC = () => {
             )
           )}
 
-          <Alert className="bg-blue-900/10 border-blue-700/20">
-            <AlertDescription className="text-xs text-blue-300">
+          <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-900/10 dark:border-blue-700/20">
+            <AlertDescription className="text-xs text-blue-700 dark:text-blue-300">
               Custom endpoints will appear in the agent selector during evaluations.
               For authentication, use environment variables in the server configuration.
             </AlertDescription>
@@ -1463,9 +1463,9 @@ export const SettingsPage: React.FC = () => {
             )}
 
             {!storageStats?.isConnected && !isLoading && (
-              <Alert className="bg-amber-900/20 border-amber-700/30">
-                <AlertTriangle className="h-4 w-4 text-amber-400" />
-                <AlertDescription className="text-amber-400">
+              <Alert className="bg-amber-50 border-amber-300 dark:bg-amber-900/20 dark:border-amber-700/30">
+                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                <AlertDescription className="text-amber-700 dark:text-amber-400">
                   Cannot connect to OpenSearch backend. Make sure the server is running.
                 </AlertDescription>
               </Alert>
@@ -1767,9 +1767,9 @@ export const SettingsPage: React.FC = () => {
 
             {/* Migration Status */}
             {migrationStatus && (
-              <Alert className={migrationStatus.includes('failed') ? 'bg-red-900/20 border-red-700/30' : 'bg-blue-900/20 border-blue-700/30'}>
-                {isMigrating && <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
-                <AlertDescription className={migrationStatus.includes('failed') ? 'text-red-400' : 'text-blue-400'}>
+              <Alert className={migrationStatus.includes('failed') ? 'bg-red-50 border-red-300 dark:bg-red-900/20 dark:border-red-700/30' : 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-700/30'}>
+                {isMigrating && <Loader2 className="h-4 w-4 text-blue-600 dark:text-blue-400 animate-spin" />}
+                <AlertDescription className={migrationStatus.includes('failed') ? 'text-red-700 dark:text-red-400' : 'text-blue-700 dark:text-blue-400'}>
                   {migrationStatus}
                 </AlertDescription>
               </Alert>

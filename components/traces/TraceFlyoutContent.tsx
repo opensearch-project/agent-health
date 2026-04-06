@@ -154,7 +154,19 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
   // Copy trace ID to clipboard
   const handleCopyTraceId = async () => {
     try {
-      await navigator.clipboard.writeText(trace.traceId);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(trace.traceId);
+      } else {
+        // Fallback for non-HTTPS (localhost dev)
+        const ta = document.createElement('textarea');
+        ta.value = trace.traceId;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
       setCopiedTraceId(true);
       setTimeout(() => setCopiedTraceId(false), 2000);
     } catch (err) {
