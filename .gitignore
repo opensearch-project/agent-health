@@ -43,8 +43,9 @@ tokens.json
 # Local auth tokens
 .auth/
 
-# Claude Code working files
-.claude/
+# Claude Code working files (keep skills shared)
+.claude/*
+!.claude/skills/
 
 # Development artifacts
 *.local.json
@@ -52,5 +53,6 @@ tokens.json
 # File-based storage backend (runtime data, not source)
 agent-health-data/
 
-# AI-agent generated specification files
-.kiro/
+# AI-agent generated specification files (keep steering shared)
+.kiro/*
+!.kiro/steering/
