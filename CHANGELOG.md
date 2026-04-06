@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [0.2.0]
 
+### Fixed
+- Release workflow using `build` instead of `build:all`, causing CLI tests to fail ([#123](https://github.com/opensearch-project/agent-health/pull/123))
+
 ### Changed
 - Increase release workflow approval timeout from 6 hours (default) to 24 hours
 - Allow workflow initiator to count as one of the required release approvers
