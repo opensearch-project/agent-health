@@ -7,6 +7,22 @@
 
 Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [Unreleased]
+
+### Added
+- Coding Agent Analytics: unified dashboard for Claude Code, Kiro, and Codex CLI usage data
+- Plugin-based reader system for ingesting local session data from ~/.claude/, ~/.kiro/, and ~/.codex/
+- API routes for coding agent stats, sessions, costs, activity patterns, and tool usage (/api/coding-agents/*)
+- Frontend page with Overview, Sessions, Projects, Costs, Activity, Efficiency, Tools, Advanced, and Workspace tabs at /coding-agents
+- Pricing engine covering Claude, Bedrock, and OpenAI models for cost estimation
+- Unified tool categorization across all three coding agents
+- Insights engine generating actionable recommendations from session data
+- In-memory session cache with directory-level invalidation and background refresh
+- Feature toggle to disable Coding Agent Analytics (AGENT_HEALTH_DISABLE_CODING_ANALYTICS=true or codingAgentAnalytics: false in config)
+- Graceful shutdown handler (SIGTERM/SIGINT) for stopping background timers and draining connections
+- Health endpoint now returns feature flags for frontend conditional rendering
+- RFC 001 documenting Coding Agent Analytics design
+
 ## [0.2.0]
 
 ### Fixed

@@ -20,6 +20,7 @@ import { ComparisonPage } from './components/comparison/ComparisonPage';
 import { TracesPage } from './components/traces/TracesPage';
 import { AgentTracesPage } from './components/traces/AgentTracesPage';
 import { PerformanceOverlay } from './components/PerformanceOverlay';
+import { CodingAgentsPage } from './components/codingAgents/CodingAgentsPage';
 
 function ExperimentRunsRedirect() {
   const { experimentId } = useParams();
@@ -111,6 +112,9 @@ function App() {
 
             {/* Agent Traces - Table View */}
             <Route path="/agent-traces" element={<AgentTracesPage />} />
+
+            {/* Coding Agent Analytics */}
+            <Route path="/coding-agents" element={<CodingAgentsPage />} />
 
             {/* Redirects for deprecated routes */}
             <Route path="/evals" element={<Navigate to="/test-cases" replace />} />

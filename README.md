@@ -6,12 +6,15 @@
 
 ## What is Agent Health?
 
-Agent Health is an evaluation and observability framework for AI agents. It helps you measure agent performance through "Golden Path" trajectory comparison—where an LLM judge evaluates agent actions against expected outcomes.
+Agent Health is an evaluation and observability framework for AI agents. It helps you measure agent performance through "Golden Path" trajectory comparison — where an LLM judge evaluates agent actions against expected outcomes — and provides deep observability into agent execution via OpenTelemetry traces.
+
+It also includes a **Coding Agent Analytics** dashboard for monitoring Claude Code, Kiro, and Codex CLI usage on your local machine.
 
 **Who uses Agent Health:**
 - AI teams building autonomous agents (RCA, customer support, data analysis)
 - QA engineers testing agent behavior across scenarios
 - Platform teams monitoring agent performance in production
+- Developers using AI coding agents who want visibility into usage, costs, and productivity
 
 **Key capabilities:**
 - Real-time agent execution streaming and visualization
@@ -19,6 +22,7 @@ Agent Health is an evaluation and observability framework for AI agents. It help
 - Batch experiments comparing agents and models
 - OpenTelemetry trace integration for performance analysis
 - Pluggable connectors for different agent types (REST, SSE, CLI)
+- Coding agent analytics with cost estimation, tool usage, and session drill-downs
 
 ## Quick Start
 
@@ -35,6 +39,8 @@ Opens http://localhost:4001 with pre-loaded sample data for exploration.
 
 ## Features
 
+### Agent Evaluation & Observability
+
 - **Evals**: Real-time agent evaluation with trajectory streaming
 - **Experiments**: Batch evaluation runs with configurable parameters
 - **Compare**: Side-by-side trace comparison with aligned and merged views
@@ -43,6 +49,18 @@ Opens http://localhost:4001 with pre-loaded sample data for exploration.
 - **Trace Views**: Timeline and Flow visualizations for debugging
 - **Reports**: Evaluation reports with LLM judge reasoning
 - **Connectors**: Pluggable protocol adapters for different agent types
+
+### Coding Agent Analytics
+
+A unified dashboard for monitoring AI coding agent usage across **Claude Code**, **Kiro**, and **Codex CLI**. Zero configuration — just run `agent-health` and it auto-detects installed agents.
+
+- **Multi-agent dashboard**: Session history, cost estimation, tool usage, activity patterns, and efficiency metrics across all three agents
+- **9 analytics tabs**: Overview, Sessions, Projects, Costs, Activity, Efficiency, Tools, Advanced, and Workspace management
+- **Interactive drill-downs**: Click any chart, card, or metric to drill into filtered session views
+- **Workspace management**: View and edit Claude Code memory files, plans, tasks; browse Kiro MCP servers, agents, and extensions
+- **Privacy-first**: All data stays local — reads directly from `~/.claude/`, `~/.kiro/`, `~/.codex/`
+
+[Full documentation](./docs/CODING_AGENT_ANALYTICS.md)
 
 ### Supported Connectors
 

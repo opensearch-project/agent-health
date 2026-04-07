@@ -112,6 +112,9 @@ describe('Health Endpoint Integration Tests', () => {
           status: 'ok',
           version: expect.stringMatching(/^\d+\.\d+\.\d+/),
           service: 'agent-health',
+          features: {
+            codingAgentAnalytics: true,
+          },
         });
       },
       TEST_TIMEOUT
