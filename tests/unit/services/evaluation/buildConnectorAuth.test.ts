@@ -63,6 +63,7 @@ describe('buildConnectorAuth (via runEvaluationWithConnector)', () => {
     name: 'Test Agent',
     endpoint: 'http://localhost:3000/agent',
     protocol: 'agui' as const,
+    models: ['claude-3-sonnet'],
     type: 'langgraph',
     useTraces: true, // Use trace mode to skip the judge call
   };

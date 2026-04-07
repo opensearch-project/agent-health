@@ -373,38 +373,11 @@ Click on any evaluation result to view the detailed trajectory.
 
 ## Step 5: Connect Your Agent
 
-Now that you've explored demo data, let's connect a real agent. You can start with the **Observio sample agent** included in this repository, or connect your own.
+Now that you've explored demo data, let's connect your own agent.
 
-### Option A: Use Observio Sample Agent
+### Create Configuration File
 
-Observio is a reference ReAct agent included in `observio-sample-agent/` — perfect for learning the evaluation workflow before connecting your own agent.
-
-```bash
-# In a separate terminal, start Observio
-cd observio-sample-agent && npm install && npm run start:ag-ui
-```
-
-Then add it to your config:
-
-```typescript
-// agent-health.config.ts
-export default {
-  agents: [
-    {
-      key: "observio",
-      name: "Observio Sample Agent",
-      endpoint: "http://localhost:3001/run-agent",
-      connectorType: "agui-streaming",
-    }
-  ],
-};
-```
-
-See the [Observio README](./observio-sample-agent/README.md) for details on what to improve.
-
-### Option B: Connect Your Own Agent
-
-Create a configuration file:
+Run the init command to create a config file:
 
 ```bash
 npx @opensearch-project/agent-health init

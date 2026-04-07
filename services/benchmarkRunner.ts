@@ -80,8 +80,6 @@ export interface ExecuteRunOptions {
   cancellationToken?: CancellationToken;
   /** OpenSearch client for storage operations (required) */
   client: Client;
-  /** Storage module for test case lookups (preferred over direct OpenSearch queries) */
-  storageModule?: IStorageModule;
   /** Callback invoked after each test case completes (for persisting intermediate progress) */
   onTestCaseComplete?: OnTestCaseCompleteCallback;
 }
@@ -156,7 +154,7 @@ export async function executeRun(
   options: ExecuteRunOptions
 ): Promise<BenchmarkRun> {
   const totalTestCases = benchmark.testCaseIds.length;
-  const { cancellationToken, client, storageModule, onTestCaseComplete } = options;
+  const { cancellationToken, client, onTestCaseComplete } = options;
   const concurrency = run.concurrency ?? 1;
   const runStartTime = Date.now();
 
@@ -167,16 +165,8 @@ export async function executeRun(
     run.results = {};
   }
 
-  // Fetch all test cases upfront for this benchmark.
-  // Prefer the storage adapter (supports both file and OpenSearch backends)
-  // over direct OpenSearch queries which only work with OpenSearch storage.
-  let allTestCases: TestCase[];
-  if (storageModule) {
-    const result = await storageModule.testCases.getAll({ size: 10000 });
-    allTestCases = result.items;
-  } else {
-    allTestCases = await getAllTestCasesWithClient(client);
-  }
+  // Fetch all test cases upfront for this benchmark
+  const allTestCases = await getAllTestCasesWithClient(client);
   const testCaseMap = new Map(allTestCases.map((tc: any) => [tc.id, tc]));
 
   // Mutable counters for tracking progress across concurrent tasks.

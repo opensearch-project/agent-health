@@ -10,8 +10,6 @@ build
 .env.*
 .env.backup*
 !.env.example
-!.env.docker
-docker-compose/.env
 judge.log
 
 # Configuration files (may contain credentials)
@@ -43,9 +41,8 @@ tokens.json
 # Local auth tokens
 .auth/
 
-# Claude Code working files (keep skills shared)
-.claude/*
-!.claude/skills/
+# Claude Code working files
+.claude/
 
 # Development artifacts
 *.local.json
@@ -53,6 +50,5 @@ tokens.json
 # File-based storage backend (runtime data, not source)
 agent-health-data/
 
-# AI-agent generated specification files (keep steering shared)
-.kiro/*
-!.kiro/steering/
+# AI-agent generated specification files
+.kiro/

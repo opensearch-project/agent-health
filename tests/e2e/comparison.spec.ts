@@ -19,7 +19,7 @@ test.describe('Comparison Page', () => {
 
     if (await viewLatestButton.isVisible().catch(() => false)) {
       await viewLatestButton.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
+      await page.waitForTimeout(2000);
 
       // Find and click Compare button
       const compareButton = page.locator('button:has-text("Compare")');
@@ -32,7 +32,7 @@ test.describe('Comparison Page', () => {
         }
 
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         // Should be on comparison page
         await expect(page.locator('[data-testid="comparison-page"]')).toBeVisible();
@@ -45,7 +45,7 @@ test.describe('Comparison Page', () => {
 
     if (await viewLatestButton.isVisible().catch(() => false)) {
       await viewLatestButton.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
+      await page.waitForTimeout(2000);
 
       const compareButton = page.locator('button:has-text("Compare")');
       if (await compareButton.isVisible().catch(() => false)) {
@@ -56,7 +56,7 @@ test.describe('Comparison Page', () => {
         }
 
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         await expect(page.locator('[data-testid="comparison-title"]')).toHaveText('Compare Runs');
       }
@@ -68,7 +68,7 @@ test.describe('Comparison Page', () => {
 
     if (await viewLatestButton.isVisible().catch(() => false)) {
       await viewLatestButton.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
+      await page.waitForTimeout(2000);
 
       const compareButton = page.locator('button:has-text("Compare")');
       if (await compareButton.isVisible().catch(() => false)) {
@@ -79,7 +79,7 @@ test.describe('Comparison Page', () => {
         }
 
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         const backButton = page.locator('[data-testid="back-button"]');
         await expect(backButton).toBeVisible();
@@ -95,7 +95,7 @@ test.describe('Comparison Page', () => {
 
     if (await viewLatestButton.isVisible().catch(() => false)) {
       await viewLatestButton.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
+      await page.waitForTimeout(2000);
 
       const compareButton = page.locator('button:has-text("Compare")');
       if (await compareButton.isVisible().catch(() => false)) {
@@ -106,7 +106,7 @@ test.describe('Comparison Page', () => {
         }
 
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         // Should show "Select Runs to Compare" section
         await expect(page.locator('text=Select Runs to Compare')).toBeVisible();
@@ -119,7 +119,7 @@ test.describe('Comparison Page', () => {
 
     if (await viewLatestButton.isVisible().catch(() => false)) {
       await viewLatestButton.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
+      await page.waitForTimeout(2000);
 
       const compareButton = page.locator('button:has-text("Compare")');
       if (await compareButton.isVisible().catch(() => false)) {
@@ -130,7 +130,7 @@ test.describe('Comparison Page', () => {
         }
 
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         // Should NOT show a baseline selector (removed in favor of automatic oldest-run reference)
         const hasBaseline = await page.locator('text=Baseline').isVisible().catch(() => false);
@@ -148,24 +148,22 @@ test.describe('Comparison Page - Metrics', () => {
   });
 
   test('should display run summary cards', async ({ page }) => {
-    // Navigate to the benchmark runs listing page (not run detail) by clicking the card name
-    const benchmarkCard = page.locator('[data-testid="benchmarks-page"] h3').first();
+    const viewLatestButton = page.locator('button:has-text("View Latest")').first();
 
-    if (await benchmarkCard.isVisible().catch(() => false)) {
-      await benchmarkCard.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
-
-      // Now on the runs listing page where Select All and Compare buttons exist
-      const selectAllButton = page.locator('button:has-text("Select All")');
-      if (await selectAllButton.isVisible().catch(() => false)) {
-        await selectAllButton.click();
-        await page.waitForTimeout(500);
-      }
+    if (await viewLatestButton.isVisible().catch(() => false)) {
+      await viewLatestButton.click();
+      await page.waitForTimeout(2000);
 
       const compareButton = page.locator('button:has-text("Compare")');
       if (await compareButton.isVisible().catch(() => false)) {
+        const selectAllButton = page.locator('button:has-text("Select All")');
+        if (await selectAllButton.isVisible().catch(() => false)) {
+          await selectAllButton.click();
+          await page.waitForTimeout(500);
+        }
+
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         // Should show run summary cards with metrics
         const hasSummary = await page.locator('text=/Pass Rate|Accuracy|Avg/').first().isVisible().catch(() => false);
@@ -175,23 +173,22 @@ test.describe('Comparison Page - Metrics', () => {
   });
 
   test('should display comparison table', async ({ page }) => {
-    // Navigate to the benchmark runs listing page by clicking the card name
-    const benchmarkCard = page.locator('[data-testid="benchmarks-page"] h3').first();
+    const viewLatestButton = page.locator('button:has-text("View Latest")').first();
 
-    if (await benchmarkCard.isVisible().catch(() => false)) {
-      await benchmarkCard.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
-
-      const selectAllButton = page.locator('button:has-text("Select All")');
-      if (await selectAllButton.isVisible().catch(() => false)) {
-        await selectAllButton.click();
-        await page.waitForTimeout(500);
-      }
+    if (await viewLatestButton.isVisible().catch(() => false)) {
+      await viewLatestButton.click();
+      await page.waitForTimeout(2000);
 
       const compareButton = page.locator('button:has-text("Compare")');
       if (await compareButton.isVisible().catch(() => false)) {
+        const selectAllButton = page.locator('button:has-text("Select All")');
+        if (await selectAllButton.isVisible().catch(() => false)) {
+          await selectAllButton.click();
+          await page.waitForTimeout(500);
+        }
+
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         // Should show use case comparison table or similar
         const hasTable = await page.locator('text=/Use Case|Test Case|Status/').first().isVisible().catch(() => false);
@@ -213,7 +210,7 @@ test.describe('Comparison Page - Filters', () => {
 
     if (await viewLatestButton.isVisible().catch(() => false)) {
       await viewLatestButton.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
+      await page.waitForTimeout(2000);
 
       const compareButton = page.locator('button:has-text("Compare")');
       if (await compareButton.isVisible().catch(() => false)) {
@@ -224,7 +221,7 @@ test.describe('Comparison Page - Filters', () => {
         }
 
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         // May have category filter
         const hasCategoryFilter = await page.locator('text=/Category|Filter/').first().isVisible().catch(() => false);
@@ -239,7 +236,7 @@ test.describe('Comparison Page - Filters', () => {
 
     if (await viewLatestButton.isVisible().catch(() => false)) {
       await viewLatestButton.click();
-      await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 10000 }).catch(() => null);
+      await page.waitForTimeout(2000);
 
       const compareButton = page.locator('button:has-text("Compare")');
       if (await compareButton.isVisible().catch(() => false)) {
@@ -250,7 +247,7 @@ test.describe('Comparison Page - Filters', () => {
         }
 
         await compareButton.click();
-        await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+        await page.waitForTimeout(2000);
 
         // May have status filter
         const hasStatusFilter = await page.locator('text=/Status|All|Passed|Failed/').first().isVisible().catch(() => false);

@@ -15,7 +15,10 @@ import { loadConfig } from '@/lib/config/index';
 import { migrateYamlToJsonIfNeeded } from './services/configMigration.js';
 import { getStorageConfigFromFile } from './services/configService.js';
 import { getStorageConfigFromEnv } from './middleware/dataSourceConfig.js';
-import { initializeStorageFromConfig } from './services/storageInitializer.js';
+import { setStorageModule } from './adapters/index.js';
+import { OpenSearchStorageModule } from './adapters/opensearch/StorageModule.js';
+import { ensureIndexesWithValidation } from './services/indexInitializer.js';
+import { createOpenSearchClient } from './services/opensearchClientFactory.js';
 
 // Register server-side connectors (subprocess, claude-code)
 // This import has side effects that register connectors with the registry
@@ -32,16 +35,44 @@ function resolveStorageConfigAtStartup() {
 /**
  * If OpenSearch storage is configured, create an OpenSearchStorageModule
  * and register it as the active storage backend.
- * On failure, sets error state instead of silently falling back to file storage.
  */
 async function initializeStorageBackend(): Promise<void> {
   const config = resolveStorageConfigAtStartup();
   if (!config) return;
 
-  const state = await initializeStorageFromConfig(config, { runIndexValidation: true });
-  if (state.backend === 'error') {
-    console.warn(`[app] Storage configured but unreachable: ${state.error}`);
-    console.warn('[app] File storage remains active. Fix the endpoint or use the Settings page to retry.');
+  const client = createOpenSearchClient(config);
+
+  try {
+    // Verify connectivity before swapping the storage module
+    await client.cluster.health({ timeout: '5s' });
+
+    // Auto-create indexes, validate mappings, and fix incompatibilities
+    const setupResult = await ensureIndexesWithValidation(client, (progress) => {
+      for (const p of progress) {
+        if (p.status === 'reindexing') console.log(`[app] Reindexing ${p.indexName}...`);
+        if (p.status === 'completed') console.log(`[app] Reindexed ${p.indexName} (${p.documentCount} docs)`);
+        if (p.status === 'failed') console.error(`[app] Failed to reindex ${p.indexName}: ${p.error}`);
+      }
+    });
+    const { indexResults } = setupResult;
+    const created = Object.entries(indexResults).filter(([, r]) => r.status === 'created').map(([n]) => n);
+    const failedIndexes = Object.entries(indexResults)
+      .filter(([, r]) => r.status === 'error')
+      .map(([name, r]) => `${name}: ${r.error}`);
+    if (created.length > 0) console.log(`[app] Created indexes: ${created.join(', ')}`);
+    if (failedIndexes.length > 0) {
+      console.warn(`[app] WARNING: ${failedIndexes.length} index(es) failed to initialize:\n  ${failedIndexes.join('\n  ')}`);
+      console.warn('[app] Some features may not work correctly. Check OpenSearch connectivity.');
+    } else {
+      console.log('[app] All indexes initialized successfully');
+    }
+
+    const osModule = new OpenSearchStorageModule(client);
+    setStorageModule(osModule);
+    console.log('[app] OpenSearch storage module activated');
+  } catch (error: any) {
+    console.warn('[app] OpenSearch not reachable, falling back to file storage:', error.message);
+    await client.close().catch(() => {});
   }
 }
 

@@ -14,42 +14,42 @@ describe('agentUtils', () => {
       name: 'AG-UI Agent',
       endpoint: 'http://localhost:3000',
       connectorType: 'agui-streaming',
+      models: ['claude-sonnet-4'],
     },
     {
       key: 'rest-agent',
       name: 'REST Agent',
       endpoint: 'http://localhost:4000',
       connectorType: 'rest',
+      models: ['claude-sonnet-4'],
     },
     {
       key: 'mock-agent',
       name: 'Mock Agent',
       endpoint: 'mock://demo',
       connectorType: 'mock',
+      models: ['demo-model'],
     },
     {
       key: 'subprocess-agent',
       name: 'Subprocess Agent',
       endpoint: '/usr/local/bin/agent',
       connectorType: 'subprocess',
+      models: ['claude-sonnet-4'],
     },
     {
       key: 'claude-code',
       name: 'Claude Code',
       endpoint: 'claude',
       connectorType: 'claude-code',
-    },
-    {
-      key: 'openai-agent',
-      name: 'OpenAI Compatible Agent',
-      endpoint: 'http://localhost:11434',
-      connectorType: 'openai-compatible',
+      models: ['claude-sonnet-4'],
     },
     {
       key: 'default-agent',
       name: 'Default Agent (no connector type)',
       endpoint: 'http://localhost:5000',
       // No connectorType specified - should default to agui-streaming
+      models: ['claude-sonnet-4'],
     },
   ];
 
@@ -66,11 +66,6 @@ describe('agentUtils', () => {
 
     it('should return true for mock connector', () => {
       const agent = mockAgents.find(a => a.key === 'mock-agent')!;
-      expect(isBrowserCompatible(agent)).toBe(true);
-    });
-
-    it('should return true for openai-compatible connector', () => {
-      const agent = mockAgents.find(a => a.key === 'openai-agent')!;
       expect(isBrowserCompatible(agent)).toBe(true);
     });
 

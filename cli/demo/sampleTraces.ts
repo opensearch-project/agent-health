@@ -6,7 +6,7 @@
 /**
  * Sample Trace Spans for Demo Mode
  *
- * OTel-format trace spans linked to sample Demo Agent runs.
+ * OTel-format trace spans linked to sample Travel Planner runs.
  * Uses Gen-AI semantic conventions for multi-agent orchestration.
  * Always visible alongside real traces - trace IDs prefixed with 'demo-'.
  *
@@ -46,7 +46,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 8500,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Travel Coordinator',
         'gen_ai.agent.type': 'orchestrator',
@@ -66,7 +66,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -88,7 +88,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 1350,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Weather Agent',
         'gen_ai.agent.type': 'specialist',
@@ -106,7 +106,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 500,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -127,7 +127,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 650,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'get_weather_forecast',
         'gen_ai.tool.args': '{"location":"Napa Valley, CA","dates":"Saturday-Sunday"}',
         'http.method': 'GET',
@@ -146,7 +146,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 2250,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Events Agent',
         'gen_ai.agent.type': 'specialist',
@@ -164,7 +164,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 600,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -185,7 +185,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 1450,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'find_events',
         'gen_ai.tool.args': '{"location":"Napa Valley","categories":["wine-tasting","food-festival","tours"]}',
         'http.method': 'GET',
@@ -204,7 +204,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 2650,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Booking Agent',
         'gen_ai.agent.type': 'specialist',
@@ -222,7 +222,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 600,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -243,7 +243,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 850,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'book_restaurant',
         'gen_ai.tool.args': '{"restaurant":"Bottega Napa Valley","date":"Saturday","time":"7:30 PM","party_size":2}',
         'http.method': 'POST',
@@ -262,7 +262,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 950,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_hotels',
         'gen_ai.tool.args': '{"location":"Napa Valley","checkin":"Saturday","checkout":"Sunday","guests":2}',
         'http.method': 'GET',
@@ -281,7 +281,7 @@ function generateWeekendTripSpans(): Span[] {
       duration: 1150,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -318,7 +318,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 18500,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Travel Coordinator',
         'gen_ai.agent.type': 'orchestrator',
@@ -338,7 +338,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 1150,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -359,7 +359,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 4500,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Booking Agent',
         'gen_ai.agent.type': 'specialist',
@@ -377,7 +377,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 650,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -398,7 +398,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 1750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_flights',
         'gen_ai.tool.args': '{"origin":"SFO","destinations":["NRT","KIX"],"type":"open_jaw","dates":"Mar 25-Apr 4"}',
         'http.method': 'GET',
@@ -417,7 +417,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 1850,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'book_hotel',
         'gen_ai.tool.args': '{"cities":["Tokyo","Kyoto","Osaka"],"include_ryokan":true}',
         'http.method': 'POST',
@@ -436,7 +436,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 2300,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Weather Agent',
         'gen_ai.agent.type': 'specialist',
@@ -454,7 +454,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 550,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -475,7 +475,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 1550,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'get_weather_forecast',
         'gen_ai.tool.args': '{"locations":["Tokyo","Kyoto","Osaka"],"forecast_type":"cherry_blossom"}',
         'http.method': 'GET',
@@ -493,7 +493,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 4600,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Events Agent',
         'gen_ai.agent.type': 'specialist',
@@ -511,7 +511,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -532,7 +532,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 1150,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'find_events',
         'gen_ai.tool.args': '{"location":"Tokyo","categories":["cherry-blossom","cultural"]}',
         'events.results_count': 4,
@@ -549,7 +549,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 1150,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'find_events',
         'gen_ai.tool.args': '{"location":"Kyoto","categories":["tea-ceremony","temple","illumination"]}',
         'events.results_count': 4,
@@ -566,7 +566,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 1250,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'find_events',
         'gen_ai.tool.args': '{"location":"Osaka","categories":["food-tour","festival"]}',
         'events.results_count': 3,
@@ -583,7 +583,7 @@ function generateJapanTripSpans(): Span[] {
       duration: 7800,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -620,7 +620,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 12000,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Travel Coordinator',
         'gen_ai.agent.type': 'orchestrator',
@@ -640,7 +640,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 850,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -661,7 +661,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 3200,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Budget Agent',
         'gen_ai.agent.type': 'specialist',
@@ -679,7 +679,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -700,7 +700,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 2250,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'compare_destination_costs',
         'gen_ai.tool.args': '{"destinations":["Thailand","Vietnam","Cambodia"],"budget":1500,"duration":5}',
         'http.method': 'GET',
@@ -718,7 +718,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 3200,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Booking Agent',
         'gen_ai.agent.type': 'specialist',
@@ -736,7 +736,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 650,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -757,7 +757,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 1450,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_flights',
         'gen_ai.tool.args': '{"origin":"LAX","destination":"BKK","max_price":600,"class":"economy"}',
         'http.method': 'GET',
@@ -776,7 +776,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 850,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_hotels',
         'gen_ai.tool.args': '{"location":"Bangkok+Phuket","max_price_per_night":30,"type":"hostel"}',
         'http.method': 'GET',
@@ -795,7 +795,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 2600,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Events Agent',
         'gen_ai.agent.type': 'specialist',
@@ -813,7 +813,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 650,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -834,7 +834,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 1750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'find_events',
         'gen_ai.tool.args': '{"locations":["Bangkok","Phuket"],"price_range":"free-cheap","categories":["temple","beach","market"]}',
         'events.results_count': 10,
@@ -851,7 +851,7 @@ function generateBudgetTripSpans(): Span[] {
       duration: 1600,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -888,7 +888,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 16000,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Travel Coordinator',
         'gen_ai.agent.type': 'orchestrator',
@@ -908,7 +908,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 1050,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -929,7 +929,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 1800,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Weather Agent',
         'gen_ai.agent.type': 'specialist',
@@ -947,7 +947,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 550,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -968,7 +968,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 1050,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'get_weather_forecast',
         'gen_ai.tool.args': '{"location":"Estes Park, CO","dates":"Thursday-Sunday","detail":"outdoor_safety"}',
         'http.method': 'GET',
@@ -986,7 +986,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 5400,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Booking Agent',
         'gen_ai.agent.type': 'specialist',
@@ -1004,7 +1004,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1025,7 +1025,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 1550,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_hotels',
         'gen_ai.tool.args': '{"location":"Estes Park, CO","guests":12,"type":"lodge","requirements":["meeting_room","kitchen","wifi"]}',
         'http.method': 'GET',
@@ -1044,7 +1044,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 1600,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'arrange_catering',
         'gen_ai.tool.args': '{"group_size":12,"meals":8,"dietary":{"vegetarian":3,"vegan":1,"gluten_free":1,"nut_allergy":1}}',
         'http.method': 'POST',
@@ -1063,7 +1063,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 1150,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_flights',
         'gen_ai.tool.args': '{"origin":"AUS","destination":"DEN","passengers":12}',
         'http.method': 'GET',
@@ -1082,7 +1082,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 3400,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Events Agent',
         'gen_ai.agent.type': 'specialist',
@@ -1100,7 +1100,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1121,7 +1121,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 1750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'find_events',
         'gen_ai.tool.args': '{"location":"Estes Park, CO","group_size":12,"categories":["hiking","rafting","team-building","stargazing"]}',
         'events.results_count': 6,
@@ -1138,7 +1138,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 650,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'check_availability',
         'gen_ai.tool.args': '{"activities":["guided_hike","rafting","aerial_adventure","stargazing"],"group_size":12}',
         'availability.all_confirmed': true,
@@ -1155,7 +1155,7 @@ function generateGroupRetreatSpans(): Span[] {
       duration: 3800,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1193,7 +1193,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 11000,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Travel Coordinator',
         'gen_ai.agent.type': 'orchestrator',
@@ -1213,7 +1213,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1234,7 +1234,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 3300,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Booking Agent',
         'gen_ai.agent.type': 'specialist',
@@ -1252,7 +1252,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 650,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1273,7 +1273,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 2450,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_last_minute_deals',
         'gen_ai.tool.args': '{"origin":"MIA","dates":"Friday-Sunday","type":"beach_package","max_price":1000}',
         'http.method': 'GET',
@@ -1304,7 +1304,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 1900,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Weather Agent',
         'gen_ai.agent.type': 'specialist',
@@ -1322,7 +1322,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 550,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1343,7 +1343,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 1150,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'get_weather_forecast',
         'gen_ai.tool.args': '{"locations":["Cancun","Nassau","Key West"],"dates":"Friday-Sunday"}',
         'http.method': 'GET',
@@ -1361,7 +1361,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 2500,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Budget Agent',
         'gen_ai.agent.type': 'specialist',
@@ -1379,7 +1379,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 750,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1400,7 +1400,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 1550,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'validate_deal_pricing',
         'gen_ai.tool.args': '{"deals":[{"destination":"Cancun","price":689},{"destination":"Nassau","price":725},{"destination":"Key West","price":420}]}',
         'http.method': 'POST',
@@ -1419,7 +1419,7 @@ function generateLastMinuteSpans(): Span[] {
       duration: 2000,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1454,7 +1454,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 9500,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Travel Coordinator',
         'gen_ai.agent.type': 'orchestrator',
@@ -1474,7 +1474,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 850,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1495,7 +1495,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 2850,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Budget Agent',
         'gen_ai.agent.type': 'specialist',
@@ -1513,7 +1513,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 700,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1534,7 +1534,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 1950,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'compare_destination_costs',
         'gen_ai.tool.args': '{"destinations":["Thailand","Vietnam","Cambodia"],"budget":1500,"duration":5}',
         'http.method': 'GET',
@@ -1553,7 +1553,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 2900,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.agent.name': 'Booking Agent',
         'gen_ai.agent.type': 'specialist',
@@ -1571,7 +1571,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 650,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',
@@ -1592,7 +1592,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 1450,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_flights',
         'gen_ai.tool.args': '{"origin":"LAX","destination":"SGN","max_price":600,"class":"economy"}',
         'http.method': 'GET',
@@ -1611,7 +1611,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 600,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.tool.name': 'search_hotels',
         'gen_ai.tool.args': '{"location":"Ho Chi Minh City+Da Nang","max_price_per_night":18,"type":"guesthouse"}',
         'http.method': 'GET',
@@ -1630,7 +1630,7 @@ function generateBudgetTripVietnamSpans(): Span[] {
       duration: 2500,
       status: 'OK',
       attributes: {
-        'service.name': 'demo',
+        'service.name': 'travel-planner',
         'gen_ai.system': 'openai',
         'gen_ai.operation.name': 'chat',
         'gen_ai.request.model': 'claude-sonnet-4-20250514',

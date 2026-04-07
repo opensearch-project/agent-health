@@ -17,6 +17,8 @@ const __dirname = dirname(__filename);
 
 interface StartOptions {
   port: number;
+  headless?: boolean;
+  apiKey?: string;
 }
 
 /**
@@ -39,6 +41,8 @@ function findPackageRoot(): string {
 export async function startServer(options: StartOptions): Promise<void> {
   // Set environment variables for the server
   process.env.VITE_BACKEND_PORT = String(options.port);
+  if (options.headless) process.env.AGENT_HEALTH_HEADLESS = '1';
+  if (options.apiKey) process.env.AGENT_HEALTH_API_KEY = options.apiKey;
 
   // Dynamic import the server module from package root
   // Using computed path prevents esbuild from bundling server code into CLI

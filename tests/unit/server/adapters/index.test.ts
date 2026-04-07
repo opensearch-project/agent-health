@@ -62,8 +62,6 @@ import {
   checkObservabilityHealth,
   getStorageModule,
   setStorageModule,
-  setStorageError,
-  getStorageState,
   isFileStorage,
   STORAGE_INDEXES,
   DEFAULT_OTEL_INDEXES,
@@ -674,112 +672,6 @@ describe('Data Source Adapter Factory', () => {
       // Depending on mock prototype chain, this may be true or false
       // The important thing is the function does not throw
       expect(typeof isFileStorage()).toBe('boolean');
-    });
-  });
-
-  // ============================================================================
-  // Storage State Tracking
-  // ============================================================================
-
-  describe('getStorageState', () => {
-    afterEach(() => {
-      // Reset to default state
-      setStorageModule(mockFileStorageInstance as any, {
-        backend: 'file',
-        configKey: null,
-        error: null,
-        configuredEndpoint: null,
-      });
-    });
-
-    it('should return initial file storage state', () => {
-      const state = getStorageState();
-
-      expect(state.backend).toBe('file');
-      expect(state.configKey).toBeNull();
-      expect(state.error).toBeNull();
-      expect(state.configuredEndpoint).toBeNull();
-    });
-
-    it('should return a copy (not a reference to internal state)', () => {
-      const state1 = getStorageState();
-      const state2 = getStorageState();
-
-      expect(state1).toEqual(state2);
-      expect(state1).not.toBe(state2);
-    });
-  });
-
-  describe('setStorageModule with state', () => {
-    afterEach(() => {
-      setStorageModule(mockFileStorageInstance as any, {
-        backend: 'file',
-        configKey: null,
-        error: null,
-        configuredEndpoint: null,
-      });
-    });
-
-    it('should update storage state when state is provided', () => {
-      const customModule = { testCases: {}, benchmarks: {}, runs: {}, analytics: {}, health: jest.fn(), isConfigured: jest.fn() };
-
-      setStorageModule(customModule as any, {
-        backend: 'opensearch',
-        configKey: 'basic|https://localhost:9200|abc123',
-        error: null,
-        configuredEndpoint: 'https://localhost:9200',
-      });
-
-      const state = getStorageState();
-      expect(state.backend).toBe('opensearch');
-      expect(state.configKey).toBe('basic|https://localhost:9200|abc123');
-      expect(state.configuredEndpoint).toBe('https://localhost:9200');
-    });
-
-    it('should not change state when state is not provided', () => {
-      // First set a known state
-      setStorageModule(mockFileStorageInstance as any, {
-        backend: 'opensearch',
-        configKey: 'test-key',
-        error: null,
-        configuredEndpoint: 'https://example.com',
-      });
-
-      // Now swap module without state
-      const newModule = { testCases: {}, benchmarks: {}, runs: {}, analytics: {}, health: jest.fn(), isConfigured: jest.fn() };
-      setStorageModule(newModule as any);
-
-      // State should remain unchanged
-      const state = getStorageState();
-      expect(state.backend).toBe('opensearch');
-      expect(state.configKey).toBe('test-key');
-    });
-  });
-
-  describe('setStorageError', () => {
-    afterEach(() => {
-      setStorageModule(mockFileStorageInstance as any, {
-        backend: 'file',
-        configKey: null,
-        error: null,
-        configuredEndpoint: null,
-      });
-    });
-
-    it('should set error state without changing the module', () => {
-      const originalModule = getStorageModule();
-
-      setStorageError('Connection refused', 'basic|https://bad:9200|abc', 'https://bad:9200');
-
-      // Module unchanged
-      expect(getStorageModule()).toBe(originalModule);
-
-      // State updated to error
-      const state = getStorageState();
-      expect(state.backend).toBe('error');
-      expect(state.error).toBe('Connection refused');
-      expect(state.configKey).toBe('basic|https://bad:9200|abc');
-      expect(state.configuredEndpoint).toBe('https://bad:9200');
     });
   });
 });

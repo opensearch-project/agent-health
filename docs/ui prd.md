@@ -142,6 +142,7 @@ In the simplest case, the user has a single agent endpoint that evolves as they 
 | endpoint | string | yes | URL to call |
 | description | string | no | What this agent does |
 | enabled | boolean | no | Can be selected for runs (default: true) |
+| models | string[] | yes | Model IDs this agent supports |
 | headers | Record<string, string> | no | Custom headers for requests (e.g., auth tokens) |
 
 **Note:** If only one agent is configured, the UI should streamline the experience (e.g., skip agent selection step).

@@ -17,8 +17,6 @@ import { Request, Response, NextFunction } from 'express';
 import { Client } from '@opensearch-project/opensearch';
 import { resolveStorageConfig } from './dataSourceConfig.js';
 import { createOpenSearchClient, configToCacheKey } from '../services/opensearchClientFactory.js';
-import { getStorageState } from '../adapters/index.js';
-import { initializeStorageFromConfig } from '../services/storageInitializer.js';
 import type { StorageClusterConfig } from '../../types/index.js';
 
 // Client cache keyed by endpoint+credentials (avoids creating new clients per request)
@@ -63,69 +61,11 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-// ============================================================================
-// Drift Detection
-// ============================================================================
-
-const DRIFT_DEBOUNCE_MS = 5_000;
-let lastDriftCheckTime = 0;
-let driftReinitPromise: Promise<void> | null = null;
-
-/**
- * Check if the on-disk config has drifted from the runtime storage state.
- * If so, trigger a non-blocking reinit (current request proceeds with existing module).
- * Debounced to avoid hammering the filesystem on every request.
- */
-function checkForConfigDrift(config: StorageClusterConfig | null): void {
-  const now = Date.now();
-  if (now - lastDriftCheckTime < DRIFT_DEBOUNCE_MS) return;
-  lastDriftCheckTime = now;
-
-  const currentState = getStorageState();
-  const newConfigKey = config ? configToCacheKey(config) : null;
-
-  // No drift if keys match (both null = file storage, both same string = same OpenSearch config)
-  if (newConfigKey === currentState.configKey) return;
-
-  // Skip if a file-override sentinel is active (set by "Use File Storage" button)
-  if (currentState.configKey === '__file_override__') return;
-
-  // Already reinitializing — coalesce
-  if (driftReinitPromise) return;
-
-  console.log('[storageClient] Config drift detected, reinitializing storage...');
-  driftReinitPromise = initializeStorageFromConfig(config)
-    .then((state) => {
-      if (state.backend === 'error') {
-        console.warn(`[storageClient] Drift reinit failed: ${state.error}`);
-      } else {
-        console.log(`[storageClient] Drift reinit complete: ${state.backend}`);
-      }
-    })
-    .catch((err) => {
-      console.error('[storageClient] Drift reinit unexpected error:', err);
-    })
-    .finally(() => {
-      driftReinitPromise = null;
-    });
-}
-
-// Exported for testing
-export function _resetDriftState(): void {
-  lastDriftCheckTime = 0;
-  driftReinitPromise = null;
-}
-
-// ============================================================================
-// Middleware
-// ============================================================================
-
 /**
  * Storage client middleware
  *
  * Attaches req.storageClient and req.storageConfig to the request object.
  * These are null if storage is not configured.
- * Also checks for config drift and triggers async reinit if needed.
  */
 export function storageClientMiddleware(
   req: Request,
@@ -141,9 +81,6 @@ export function storageClientMiddleware(
     req.storageClient = null;
     req.storageConfig = null;
   }
-
-  // Non-blocking drift detection
-  checkForConfigDrift(config);
 
   next();
 }

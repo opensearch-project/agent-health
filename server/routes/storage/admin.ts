@@ -14,23 +14,19 @@
 import { Router, Request, Response } from 'express';
 import { isStorageAvailable, requireStorageClient, INDEXES } from '../../middleware/storageClient.js';
 import { INDEX_MAPPINGS } from '../../constants/indexMappings';
-import { getStorageModule, testStorageConnection, isFileStorage, setStorageModule, getStorageState, OpenSearchStorageModule, FileStorageModule } from '../../adapters/index.js';
-import type { StorageState } from '../../adapters/index.js';
+import { getStorageModule, testStorageConnection, isFileStorage, setStorageModule, OpenSearchStorageModule, FileStorageModule } from '../../adapters/index.js';
 import { resolveStorageConfig } from '../../middleware/dataSourceConfig.js';
-import { createOpenSearchClient, configToCacheKey } from '../../services/opensearchClientFactory.js';
+import { createOpenSearchClient } from '../../services/opensearchClientFactory.js';
 import { debug } from '@/lib/debug';
 import { ensureIndexes, ensureIndexesWithValidation } from '../../services/indexInitializer.js';
 import { reindexSingleIndex } from '../../services/mappingFixer.js';
-import { initializeStorageFromConfig } from '../../services/storageInitializer.js';
 import {
   getConfigStatus,
-  getStorageConfigFromFile,
   saveStorageConfig,
   saveObservabilityConfig,
   clearStorageConfig,
   clearObservabilityConfig,
 } from '../../services/configService.js';
-import { getStorageConfigFromEnv } from '../../middleware/dataSourceConfig.js';
 
 const router = Router();
 
@@ -309,13 +305,7 @@ router.post('/api/storage/config/storage', async (req: Request, res: Response) =
     // Auto-create indexes, validate mappings, and auto-fix if needed
     const setupResult = await ensureIndexesWithValidation(client);
 
-    const state: StorageState = {
-      backend: 'opensearch',
-      configKey: configToCacheKey({ endpoint, authType, username, password, awsProfile, awsRegion, awsService, tlsSkipVerify: tlsSkipVerify === true }),
-      error: null,
-      configuredEndpoint: endpoint,
-    };
-    setStorageModule(new OpenSearchStorageModule(client), state);
+    setStorageModule(new OpenSearchStorageModule(client));
 
     const hasFixFailures = setupResult.fixResults?.some((f) => f.status === 'failed') ?? false;
     const hadIssues = setupResult.validationResults.some((r) => r.status === 'needs_reindex');
@@ -418,56 +408,10 @@ router.post('/api/storage/config/observability', (req: Request, res: Response) =
 router.delete('/api/storage/config/storage', (req: Request, res: Response) => {
   try {
     clearStorageConfig();
-    const state: StorageState = {
-      backend: 'file',
-      configKey: null,
-      error: null,
-      configuredEndpoint: null,
-    };
-    setStorageModule(new FileStorageModule(), state);
+    setStorageModule(new FileStorageModule());
     res.json({ success: true, message: 'Storage configuration cleared' });
   } catch (error: any) {
     console.error('[StorageAPI] Failed to clear storage config:', error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * POST /api/storage/config/retry
- * Re-run storage initialization from current config (file or env).
- * Used when config was edited externally or after fixing a connectivity issue.
- */
-router.post('/api/storage/config/retry', async (req: Request, res: Response) => {
-  try {
-    const config = getStorageConfigFromFile() ?? getStorageConfigFromEnv() ?? null;
-    const state = await initializeStorageFromConfig(config);
-    res.json({
-      success: state.backend !== 'error',
-      state,
-    });
-  } catch (error: any) {
-    console.error('[StorageAPI] Retry failed:', error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * POST /api/storage/config/use-file-storage
- * Force file storage regardless of config file contents.
- * Sets a sentinel config key so drift detection doesn't immediately reinit.
- */
-router.post('/api/storage/config/use-file-storage', (req: Request, res: Response) => {
-  try {
-    const state: StorageState = {
-      backend: 'file',
-      configKey: '__file_override__',
-      error: null,
-      configuredEndpoint: null,
-    };
-    setStorageModule(new FileStorageModule(), state);
-    res.json({ success: true, message: 'Switched to file storage' });
-  } catch (error: any) {
-    console.error('[StorageAPI] Use file storage failed:', error.message);
     res.status(500).json({ error: error.message });
   }
 });

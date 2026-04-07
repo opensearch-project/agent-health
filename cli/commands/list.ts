@@ -21,7 +21,13 @@ import { connectorRegistry } from '@/services/connectors/server.js';
 import { ensureServer, createServerCleanup, type EnsureServerResult } from '@/cli/utils/serverLifecycle.js';
 import { ApiClient, type ListResponseWithMeta } from '@/cli/utils/apiClient.js';
 import type { StorageMetadata, TestCase, Benchmark } from '@/types/index.js';
-import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
+
+/**
+ * Format output as JSON
+ */
+function formatJson(data: any): string {
+  return JSON.stringify(data, null, 2);
+}
 
 /**
  * Display storage status warnings based on metadata
@@ -40,7 +46,7 @@ function displayStorageWarnings(meta: StorageMetadata): void {
 /**
  * List all available agents via server API
  */
-async function listAgents(format: OutputFormat, config: ResolvedConfig): Promise<void> {
+async function listAgents(format: string, config: ResolvedConfig): Promise<void> {
   const serverResult = await ensureServer(config.server);
   const cleanup = createServerCleanup(serverResult, config.server.reuseExistingServer === false);
 
@@ -53,26 +59,26 @@ async function listAgents(format: OutputFormat, config: ResolvedConfig): Promise
       return;
     }
 
-    const headers = ['Key', 'Name', 'Connector', 'Endpoint'];
-    const rows = agents.map(agent => [
-      agent.key,
-      agent.name,
-      agent.connectorType || 'agui-streaming',
-      agent.endpoint.substring(0, 47) + (agent.endpoint.length > 47 ? '...' : ''),
-    ]);
-
-    if (format === 'markdown') {
-      console.log(formatMarkdownTable(headers, rows));
-      return;
-    }
-
     const table = new Table({
-      head: headers.map(h => chalk.cyan(h)),
-      colWidths: [15, 20, 15, 50],
+      head: [
+        chalk.cyan('Key'),
+        chalk.cyan('Name'),
+        chalk.cyan('Connector'),
+        chalk.cyan('Models'),
+        chalk.cyan('Endpoint'),
+      ],
+      colWidths: [15, 20, 15, 25, 40],
       wordWrap: true,
     });
-    for (const row of rows) {
-      table.push(row);
+
+    for (const agent of agents) {
+      table.push([
+        agent.key,
+        agent.name,
+        agent.connectorType || 'agui-streaming',
+        agent.models.slice(0, 3).join(', ') + (agent.models.length > 3 ? '...' : ''),
+        agent.endpoint.substring(0, 37) + (agent.endpoint.length > 37 ? '...' : ''),
+      ]);
     }
 
     console.log(chalk.bold('\nAvailable Agents:\n'));
@@ -90,7 +96,7 @@ async function listAgents(format: OutputFormat, config: ResolvedConfig): Promise
 /**
  * List all available test cases via server API
  */
-async function listTestCases(format: OutputFormat, config: ResolvedConfig): Promise<void> {
+async function listTestCases(format: string, config: ResolvedConfig): Promise<void> {
   const serverResult = await ensureServer(config.server);
   const cleanup = createServerCleanup(serverResult, config.server.reuseExistingServer === false);
 
@@ -98,39 +104,34 @@ async function listTestCases(format: OutputFormat, config: ResolvedConfig): Prom
     const client = new ApiClient(serverResult.baseUrl);
     const response = await client.listTestCasesWithMeta();
 
-    if (format !== 'markdown') {
-      displayStorageWarnings(response.meta);
-    }
+    displayStorageWarnings(response.meta);
 
     if (format === 'json') {
       console.log(formatJson(response));
       return;
     }
 
-    const headers = ['ID', 'Name', 'Labels', 'Version', 'Source'];
-    const rows = response.data.map(tc => {
+    const table = new Table({
+      head: [
+        chalk.cyan('ID'),
+        chalk.cyan('Name'),
+        chalk.cyan('Labels'),
+        chalk.cyan('Version'),
+        chalk.cyan('Source'),
+      ],
+      colWidths: [25, 28, 28, 10, 10],
+      wordWrap: true,
+    });
+
+    for (const tc of response.data) {
       const isDemo = tc.id.startsWith('demo-');
-      return [
+      table.push([
         tc.id,
         tc.name,
         tc.labels?.slice(0, 3).join(', ') || '',
         `v${tc.currentVersion || 1}`,
-        isDemo ? 'Sample' : 'Stored',
-      ];
-    });
-
-    if (format === 'markdown') {
-      console.log(formatMarkdownTable(headers, rows));
-      return;
-    }
-
-    const table = new Table({
-      head: headers.map(h => chalk.cyan(h)),
-      colWidths: [25, 28, 28, 10, 10],
-      wordWrap: true,
-    });
-    for (const row of rows) {
-      table.push(row);
+        isDemo ? chalk.gray('Sample') : chalk.green('Stored'),
+      ]);
     }
 
     console.log(chalk.bold('\nAvailable Test Cases:\n'));
@@ -154,7 +155,7 @@ async function listTestCases(format: OutputFormat, config: ResolvedConfig): Prom
 /**
  * List all available benchmarks via server API
  */
-async function listBenchmarks(format: OutputFormat, config: ResolvedConfig): Promise<void> {
+async function listBenchmarks(format: string, config: ResolvedConfig): Promise<void> {
   const serverResult = await ensureServer(config.server);
   const cleanup = createServerCleanup(serverResult, config.server.reuseExistingServer === false);
 
@@ -162,39 +163,34 @@ async function listBenchmarks(format: OutputFormat, config: ResolvedConfig): Pro
     const client = new ApiClient(serverResult.baseUrl);
     const response = await client.listBenchmarksWithMeta();
 
-    if (format !== 'markdown') {
-      displayStorageWarnings(response.meta);
-    }
+    displayStorageWarnings(response.meta);
 
     if (format === 'json') {
       console.log(formatJson(response));
       return;
     }
 
-    const headers = ['ID', 'Name', 'Test Cases', 'Created', 'Source'];
-    const rows = response.data.map(b => {
+    const table = new Table({
+      head: [
+        chalk.cyan('ID'),
+        chalk.cyan('Name'),
+        chalk.cyan('Test Cases'),
+        chalk.cyan('Created'),
+        chalk.cyan('Source'),
+      ],
+      colWidths: [28, 28, 12, 22, 10],
+      wordWrap: true,
+    });
+
+    for (const b of response.data) {
       const isDemo = b.id.startsWith('demo-');
-      return [
+      table.push([
         b.id,
         b.name,
         b.testCaseIds.length.toString(),
         new Date(b.createdAt).toLocaleDateString(),
-        isDemo ? 'Sample' : 'Stored',
-      ];
-    });
-
-    if (format === 'markdown') {
-      console.log(formatMarkdownTable(headers, rows));
-      return;
-    }
-
-    const table = new Table({
-      head: headers.map(h => chalk.cyan(h)),
-      colWidths: [28, 28, 12, 22, 10],
-      wordWrap: true,
-    });
-    for (const row of rows) {
-      table.push(row);
+        isDemo ? chalk.gray('Sample') : chalk.green('Stored'),
+      ]);
     }
 
     console.log(chalk.bold('\nAvailable Benchmarks:\n'));
@@ -221,7 +217,7 @@ async function listBenchmarks(format: OutputFormat, config: ResolvedConfig): Pro
  * Note: Connectors are loaded from the local registry since they're
  * in-memory objects that can't be serialized over HTTP.
  */
-function listConnectors(format: OutputFormat): void {
+function listConnectors(format: string): void {
   const types = connectorRegistry.getRegisteredTypes();
   const connectors = types.map(type => {
     const connector = connectorRegistry.get(type);
@@ -237,27 +233,20 @@ function listConnectors(format: OutputFormat): void {
     return;
   }
 
-  const headers = ['Type', 'Name', 'Streaming'];
-  const rows = connectors.map(c => [
-    c.type,
-    c.name,
-    c.streaming ? 'Yes' : 'No',
-  ]);
-
-  if (format === 'markdown') {
-    console.log(formatMarkdownTable(headers, rows));
-    return;
-  }
-
   const table = new Table({
-    head: headers.map(h => chalk.cyan(h)),
+    head: [
+      chalk.cyan('Type'),
+      chalk.cyan('Name'),
+      chalk.cyan('Streaming'),
+    ],
     colWidths: [20, 25, 12],
   });
-  for (const row of rows) {
+
+  for (const c of connectors) {
     table.push([
-      row[0],
-      row[1],
-      row[2] === 'Yes' ? chalk.green('Yes') : chalk.gray('No'),
+      c.type,
+      c.name,
+      c.streaming ? chalk.green('Yes') : chalk.gray('No'),
     ]);
   }
 
@@ -269,7 +258,7 @@ function listConnectors(format: OutputFormat): void {
 /**
  * List all models via server API
  */
-async function listModels(format: OutputFormat, config: ResolvedConfig): Promise<void> {
+async function listModels(format: string, config: ResolvedConfig): Promise<void> {
   const serverResult = await ensureServer(config.server);
   const cleanup = createServerCleanup(serverResult, config.server.reuseExistingServer === false);
 
@@ -282,26 +271,24 @@ async function listModels(format: OutputFormat, config: ResolvedConfig): Promise
       return;
     }
 
-    const headers = ['Key', 'Display Name', 'Provider', 'Context'];
-    const rows = models.map(m => [
-      m.key,
-      m.display_name || m.key,
-      m.provider || 'bedrock',
-      m.context_window ? `${Math.round(m.context_window / 1000)}k` : '-',
-    ]);
-
-    if (format === 'markdown') {
-      console.log(formatMarkdownTable(headers, rows));
-      return;
-    }
-
     const table = new Table({
-      head: headers.map(h => chalk.cyan(h)),
+      head: [
+        chalk.cyan('Key'),
+        chalk.cyan('Display Name'),
+        chalk.cyan('Provider'),
+        chalk.cyan('Context'),
+      ],
       colWidths: [25, 30, 12, 12],
       wordWrap: true,
     });
-    for (const row of rows) {
-      table.push(row);
+
+    for (const m of models) {
+      table.push([
+        m.key,
+        m.display_name || m.key,
+        m.provider || 'bedrock',
+        m.context_window ? `${Math.round(m.context_window / 1000)}k` : '-',
+      ]);
     }
 
     console.log(chalk.bold('\nAvailable Models:\n'));
@@ -323,9 +310,9 @@ export function createListCommand(): Command {
   const command = new Command('list')
     .description('List available resources')
     .argument('<resource>', 'Resource type: agents, test-cases, benchmarks, connectors, models')
-    .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
+    .option('-o, --output <format>', 'Output format: table, json', 'table')
     .action(async (resource: string, options: { output: string }) => {
-      const format = parseOutputFormat(options.output);
+      const format = options.output;
 
       // Load config (registers custom connectors)
       const config = await loadConfig();

@@ -24,11 +24,11 @@ export const AWS_REGION = process.env.AWS_REGION || 'us-west-2';
 export const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
 
 // ============================================================================
-// OpenAI-compatible Configuration
+// LiteLLM Configuration
 // ============================================================================
 
-export const OPENAI_COMPATIBLE_API_KEY = process.env.OPENAI_COMPATIBLE_API_KEY || '';
-export const OPENAI_COMPATIBLE_ENDPOINT = process.env.OPENAI_COMPATIBLE_ENDPOINT || 'http://localhost:4000/v1/chat/completions';
+export const LITELLM_API_KEY = process.env.LITELLM_API_KEY || '';
+export const LITELLM_ENDPOINT = process.env.LITELLM_ENDPOINT || 'http://localhost:4000/v1/chat/completions';
 
 // ============================================================================
 // OpenSearch Logs Configuration
@@ -83,8 +83,8 @@ const config = {
   PORT,
   AWS_REGION,
   BEDROCK_MODEL_ID,
-  OPENAI_COMPATIBLE_API_KEY,
-  OPENAI_COMPATIBLE_ENDPOINT,
+  LITELLM_API_KEY,
+  LITELLM_ENDPOINT,
   OPENSEARCH_LOGS,
   STORAGE_CONFIG,
   isStorageConfigured,

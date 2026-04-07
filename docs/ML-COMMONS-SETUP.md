@@ -211,8 +211,6 @@ MLCOMMONS_ENDPOINT=http://localhost:9200/_plugins/_ml/agents/{agent_id}/_execute
 
 ## Environment Variables
 
-### ML-Commons Agent Headers
-
 These headers allow the ML-Commons agent to access the OpenSearch data cluster:
 
 | Variable | Description |
@@ -224,32 +222,6 @@ These headers allow the ML-Commons agent to access the OpenSearch data cluster:
 | `MLCOMMONS_HEADER_AWS_ACCESS_KEY_ID` | AWS access key |
 | `MLCOMMONS_HEADER_AWS_SECRET_ACCESS_KEY` | AWS secret key |
 | `MLCOMMONS_HEADER_AWS_SESSION_TOKEN` | AWS session token |
-
-### OpenSearch Storage & Observability (AWS SigV4)
-
-Agent Health can connect to OpenSearch clusters using AWS SigV4 instead of username/password. This is useful for AWS-managed OpenSearch domains and OpenSearch Serverless.
-
-**Storage cluster (for persisting test cases, benchmarks, and results):**
-
-| Variable | Description |
-|----------|-------------|
-| `OPENSEARCH_STORAGE_ENDPOINT` | Storage cluster URL |
-| `OPENSEARCH_STORAGE_AUTH_TYPE` | Set to `sigv4` for AWS SigV4 auth |
-| `OPENSEARCH_STORAGE_AWS_REGION` | AWS region (required for SigV4) |
-| `OPENSEARCH_STORAGE_AWS_PROFILE` | AWS profile name (uses default credential chain if omitted) |
-| `OPENSEARCH_STORAGE_AWS_SERVICE` | `es` for managed OpenSearch, `aoss` for Serverless |
-
-**Observability cluster (for traces and logs):**
-
-| Variable | Description |
-|----------|-------------|
-| `OPENSEARCH_LOGS_ENDPOINT` | Observability cluster URL |
-| `OPENSEARCH_LOGS_AUTH_TYPE` | Set to `sigv4` for AWS SigV4 auth |
-| `OPENSEARCH_LOGS_AWS_REGION` | AWS region (required for SigV4) |
-| `OPENSEARCH_LOGS_AWS_PROFILE` | AWS profile name (uses default credential chain if omitted) |
-| `OPENSEARCH_LOGS_AWS_SERVICE` | `es` for managed OpenSearch, `aoss` for Serverless |
-
-SigV4 uses the AWS credential provider chain (`AWS_PROFILE`, `~/.aws/credentials`, IAM role, etc.), so no explicit access keys are needed. You can also configure these settings via the Settings UI (select "AWS SigV4" from the Authentication Type dropdown).
 
 ---
 

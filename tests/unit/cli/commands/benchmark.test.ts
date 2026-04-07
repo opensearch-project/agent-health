@@ -44,8 +44,8 @@ describe('Benchmark Command - Helper Functions', () => {
   describe('findAgent', () => {
     const mockConfig = {
       agents: [
-        { key: 'mock', name: 'Mock Agent', endpoint: 'http://mock' },
-        { key: 'ml-commons', name: 'ML Commons Agent', endpoint: 'http://ml' },
+        { key: 'mock', name: 'Mock Agent', endpoint: 'http://mock', models: ['claude-sonnet'] },
+        { key: 'ml-commons', name: 'ML Commons Agent', endpoint: 'http://ml', models: ['claude-opus'] },
       ],
     };
 
@@ -74,18 +74,23 @@ describe('Benchmark Command - Helper Functions', () => {
 
   // Test getDefaultModel functionality
   describe('getDefaultModel', () => {
-    function getDefaultModel(config: { models: Record<string, any> }): string {
-      return Object.keys(config.models)[0] || 'claude-sonnet';
+    function getDefaultModel(agent: Partial<AgentConfig>): string {
+      return (agent.models?.[0]) || 'claude-sonnet';
     }
 
-    it('should return first model key from config', () => {
-      const config = { models: { 'claude-opus': {}, 'claude-sonnet': {} } };
-      expect(getDefaultModel(config)).toBe('claude-opus');
+    it('should return first model from agent config', () => {
+      const agent = { models: ['claude-opus', 'claude-sonnet'] };
+      expect(getDefaultModel(agent)).toBe('claude-opus');
     });
 
-    it('should return claude-sonnet as fallback for empty models', () => {
-      const config = { models: {} };
-      expect(getDefaultModel(config)).toBe('claude-sonnet');
+    it('should return claude-sonnet as fallback', () => {
+      const agent = { models: [] };
+      expect(getDefaultModel(agent)).toBe('claude-sonnet');
+    });
+
+    it('should handle undefined models array', () => {
+      const agent = {};
+      expect(getDefaultModel(agent)).toBe('claude-sonnet');
     });
   });
 

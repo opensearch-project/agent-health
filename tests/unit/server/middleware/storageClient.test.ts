@@ -41,28 +41,6 @@ jest.mock('@/server/services/opensearchClientFactory', () => ({
   ),
 }));
 
-// Mock adapters getStorageState
-const mockGetStorageState = jest.fn().mockReturnValue({
-  backend: 'file',
-  configKey: null,
-  error: null,
-  configuredEndpoint: null,
-});
-jest.mock('@/server/adapters/index', () => ({
-  getStorageState: mockGetStorageState,
-}));
-
-// Mock storageInitializer
-const mockInitializeStorageFromConfig = jest.fn().mockResolvedValue({
-  backend: 'opensearch',
-  configKey: 'basic|https://new:9200||',
-  error: null,
-  configuredEndpoint: 'https://new:9200',
-});
-jest.mock('@/server/services/storageInitializer', () => ({
-  initializeStorageFromConfig: mockInitializeStorageFromConfig,
-}));
-
 // Import after mocks are set up
 import {
   storageClientMiddleware,
@@ -70,7 +48,6 @@ import {
   requireStorageClient,
   getStorageClient,
   INDEXES,
-  _resetDriftState,
 } from '@/server/middleware/storageClient';
 
 // Silence console output
@@ -270,97 +247,5 @@ describe('INDEXES', () => {
     expect(INDEXES.benchmarks).toBe('evals_experiments');
     expect(INDEXES.runs).toBe('evals_runs');
     expect(INDEXES.analytics).toBe('evals_analytics');
-  });
-});
-
-describe('drift detection', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    _resetDriftState();
-    mockGetStorageState.mockReturnValue({
-      backend: 'file',
-      configKey: null,
-      error: null,
-      configuredEndpoint: null,
-    });
-  });
-
-  it('should trigger reinit when config key changes', async () => {
-    // Current state has null configKey (file storage)
-    // New config will produce a different key
-    const mockConfig = { endpoint: 'https://new:9200' };
-    mockResolveStorageConfig.mockReturnValue(mockConfig);
-
-    const req = createMockReq();
-    const res = createMockRes();
-    const next = createMockNext();
-
-    storageClientMiddleware(req, res, next);
-
-    // Wait for async reinit
-    await new Promise(resolve => setTimeout(resolve, 10));
-
-    expect(mockInitializeStorageFromConfig).toHaveBeenCalledWith(mockConfig);
-  });
-
-  it('should not trigger reinit when config key matches', async () => {
-    // State and config produce the same key
-    const mockConfig = { endpoint: 'https://same:9200' };
-    mockResolveStorageConfig.mockReturnValue(mockConfig);
-    mockGetStorageState.mockReturnValue({
-      backend: 'opensearch',
-      configKey: 'basic|https://same:9200||',
-      error: null,
-      configuredEndpoint: 'https://same:9200',
-    });
-
-    const req = createMockReq();
-    const res = createMockRes();
-    const next = createMockNext();
-
-    storageClientMiddleware(req, res, next);
-
-    await new Promise(resolve => setTimeout(resolve, 10));
-
-    expect(mockInitializeStorageFromConfig).not.toHaveBeenCalled();
-  });
-
-  it('should skip drift check when file_override sentinel is active', async () => {
-    mockGetStorageState.mockReturnValue({
-      backend: 'file',
-      configKey: '__file_override__',
-      error: null,
-      configuredEndpoint: null,
-    });
-    const mockConfig = { endpoint: 'https://new:9200' };
-    mockResolveStorageConfig.mockReturnValue(mockConfig);
-
-    const req = createMockReq();
-    const res = createMockRes();
-    const next = createMockNext();
-
-    storageClientMiddleware(req, res, next);
-
-    await new Promise(resolve => setTimeout(resolve, 10));
-
-    expect(mockInitializeStorageFromConfig).not.toHaveBeenCalled();
-  });
-
-  it('should debounce rapid requests', async () => {
-    const mockConfig = { endpoint: 'https://new:9200' };
-    mockResolveStorageConfig.mockReturnValue(mockConfig);
-
-    const next = createMockNext();
-    const res = createMockRes();
-
-    // Multiple rapid requests
-    storageClientMiddleware(createMockReq(), res, next);
-    storageClientMiddleware(createMockReq(), res, next);
-    storageClientMiddleware(createMockReq(), res, next);
-
-    await new Promise(resolve => setTimeout(resolve, 10));
-
-    // Only one reinit should have been triggered
-    expect(mockInitializeStorageFromConfig).toHaveBeenCalledTimes(1);
   });
 });

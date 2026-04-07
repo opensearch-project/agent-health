@@ -83,18 +83,13 @@ test.describe('Debug API E2E', () => {
     const initialResponse = await request.get('/api/debug');
     const initialData = await initialResponse.json();
 
-    // Find and click the debug mode toggle (use specific ID since there are multiple switches)
-    const toggle = page.locator('#debug-mode');
-    await toggle.scrollIntoViewIfNeeded();
+    // Find and click the verbose logging toggle
+    const toggle = page.locator('button[role="switch"]').first();
     await expect(toggle).toBeVisible();
 
-    // Click toggle and wait for POST to complete
-    const postPromise = page.waitForResponse(
-      resp => resp.url().includes('/api/debug') && resp.request().method() === 'POST',
-      { timeout: 10000 },
-    );
+    // Click toggle to change state
     await toggle.click();
-    await postPromise;
+    await page.waitForTimeout(1000);
 
     // Verify server state changed
     const afterResponse = await request.get('/api/debug');

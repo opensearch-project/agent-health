@@ -80,8 +80,6 @@ Required for Claude Code agent and Bedrock judge.
 
 Override the default file-based storage with an OpenSearch cluster for shared, production-grade persistence. Without these settings, file-based storage is used automatically.
 
-**Basic Auth (username/password):**
-
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OPENSEARCH_STORAGE_ENDPOINT` | Storage cluster URL | - |
@@ -89,24 +87,9 @@ Override the default file-based storage with an OpenSearch cluster for shared, p
 | `OPENSEARCH_STORAGE_PASSWORD` | Password | - |
 | `OPENSEARCH_STORAGE_TLS_SKIP_VERIFY` | Skip TLS verification | `false` |
 
-**AWS SigV4 Auth (instead of username/password):**
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENSEARCH_STORAGE_ENDPOINT` | Storage cluster URL | - |
-| `OPENSEARCH_STORAGE_AUTH_TYPE` | Set to `sigv4` to enable SigV4 | - |
-| `OPENSEARCH_STORAGE_AWS_REGION` | AWS region (required for SigV4) | - |
-| `OPENSEARCH_STORAGE_AWS_PROFILE` | AWS profile name (uses default credential chain if omitted) | - |
-| `OPENSEARCH_STORAGE_AWS_SERVICE` | `es` for managed OpenSearch, `aoss` for Serverless | `es` |
-| `OPENSEARCH_STORAGE_TLS_SKIP_VERIFY` | Skip TLS verification | `false` |
-
-SigV4 uses the AWS credential chain (`AWS_PROFILE`, `~/.aws/credentials`, IAM role, etc.) — no explicit access keys needed. You can also configure SigV4 via the Settings UI or the `agent-health.config.json` file.
-
 ### OpenSearch Observability (Optional)
 
 View agent traces and logs. Only needed for ML-Commons agent.
-
-**Basic Auth (username/password):**
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -116,20 +99,6 @@ View agent traces and logs. Only needed for ML-Commons agent.
 | `OPENSEARCH_LOGS_TRACES_INDEX` | Traces index pattern | `otel-v1-apm-span-*` |
 | `OPENSEARCH_LOGS_INDEX` | Logs index pattern | `ml-commons-logs-*` |
 
-**AWS SigV4 Auth (instead of username/password):**
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENSEARCH_LOGS_ENDPOINT` | Logs cluster URL | - |
-| `OPENSEARCH_LOGS_AUTH_TYPE` | Set to `sigv4` to enable SigV4 | - |
-| `OPENSEARCH_LOGS_AWS_REGION` | AWS region (required for SigV4) | - |
-| `OPENSEARCH_LOGS_AWS_PROFILE` | AWS profile name (uses default credential chain if omitted) | - |
-| `OPENSEARCH_LOGS_AWS_SERVICE` | `es` for managed OpenSearch, `aoss` for Serverless | `es` |
-| `OPENSEARCH_LOGS_TRACES_INDEX` | Traces index pattern | `otel-v1-apm-span-*` |
-| `OPENSEARCH_LOGS_INDEX` | Logs index pattern | `ml-commons-logs-*` |
-
-SigV4 authentication is also configurable via the Settings UI (select "AWS SigV4" from the Authentication Type dropdown) or the `agent-health.config.json` file.
-
 ### Agent Endpoints (Optional)
 
 Override default agent endpoints.
@@ -138,7 +107,7 @@ Override default agent endpoints.
 |----------|-------------|---------|
 | `TRAVEL_PLANNER_ENDPOINT` | Travel Planner demo agent URL (requires OTel Demo Docker) | `http://localhost:3000` |
 
-To configure additional agents (LangGraph, ML-Commons, HolmesGPT, Claude Code, etc.), use `agent-health.config.ts`. See [TypeScript Config File](#typescript-config-file-optional) below.
+To configure additional agents (LangGraph, ML-Commons, HolmesGPT, LiteLLM, Claude Code, etc.), use `agent-health.config.ts`. See [TypeScript Config File](#typescript-config-file-optional) below.
 
 ### Debug Logging
 
@@ -243,6 +212,7 @@ These agents work out of the box:
 | Demo Agent | `demo` | `mock` | Simulated responses for testing |
 | Claude Code | `claude-code` | `claude-code` | Requires `claude` CLI installed |
 | Langgraph | `langgraph` | `agui-streaming` | AG-UI protocol |
+| ML-Commons | `mlcommons-local` | `agui-streaming` | Local OpenSearch |
 | HolmesGPT | `holmesgpt` | `agui-streaming` | AI investigation agent |
 
 ## Built-in Connectors

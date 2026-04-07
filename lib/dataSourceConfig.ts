@@ -62,14 +62,6 @@ export interface ConfigStatus {
       metrics?: string;
     };
   };
-  runtime?: {
-    storage: {
-      backend: 'file' | 'opensearch' | 'error';
-      error: string | null;
-      configuredEndpoint: string | null;
-      drifted: boolean;
-    };
-  };
 }
 
 // ============================================================================
@@ -189,41 +181,6 @@ export async function clearObservabilityConfig(): Promise<void> {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
     throw new Error(error.error || 'Failed to clear observability configuration');
-  }
-}
-
-// ============================================================================
-// Storage Runtime Control API
-// ============================================================================
-
-/**
- * Retry storage connection using current config (file or env).
- * Used when config was edited externally or after fixing connectivity.
- */
-export async function retryStorageConnection(): Promise<{ success: boolean; state: ConfigStatus['runtime'] extends infer T ? T extends { storage: infer S } ? S : never : never }> {
-  const response = await fetch(`${API_BASE}/api/storage/config/retry`, {
-    method: 'POST',
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || 'Failed to retry storage connection');
-  }
-
-  return response.json();
-}
-
-/**
- * Force file storage regardless of config file contents.
- */
-export async function useFileStorage(): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/storage/config/use-file-storage`, {
-    method: 'POST',
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || 'Failed to switch to file storage');
   }
 }
 

@@ -11,7 +11,6 @@ import { existsSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { config as loadDotenv } from 'dotenv';
-import { execSync } from 'child_process';
 
 describe('CLI index', () => {
   let tempDir: string;
@@ -103,54 +102,6 @@ BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet
     it('should have a default version', () => {
       const defaultVersion = '0.1.0';
       expect(defaultVersion).toMatch(/^\d+\.\d+\.\d+$/);
-    });
-  });
-
-  describe('help output', () => {
-    let helpOutput: string;
-
-    beforeAll(() => {
-      helpOutput = execSync('node cli/dist/index.js --help 2>/dev/null', {
-        encoding: 'utf-8',
-        timeout: 10000,
-      });
-    });
-
-    it('should display grouped command sections', () => {
-      expect(helpOutput).toContain('Getting Started:');
-      expect(helpOutput).toContain('Running Evaluations:');
-      expect(helpOutput).toContain('Viewing Results:');
-      expect(helpOutput).toContain('Maintenance:');
-    });
-
-    it('should display examples section', () => {
-      expect(helpOutput).toContain('Examples:');
-      expect(helpOutput).toContain('npx @opensearch-project/agent-health');
-    });
-
-    it('should list all commands with descriptions', () => {
-      expect(helpOutput).toContain('agent-health init');
-      expect(helpOutput).toContain('agent-health doctor');
-      expect(helpOutput).toContain('agent-health run');
-      expect(helpOutput).toContain('agent-health benchmark');
-      expect(helpOutput).toContain('agent-health list');
-      expect(helpOutput).toContain('agent-health report');
-      expect(helpOutput).toContain('agent-health export');
-      expect(helpOutput).toContain('agent-health migrate');
-      expect(helpOutput).toContain('agent-health serve');
-      expect(helpOutput).toContain('agent-health compare-services');
-    });
-
-    it('should show key flags inline with commands', () => {
-      expect(helpOutput).toContain('-t <case> -a <agent>');
-      expect(helpOutput).toContain('-f <file>');
-      expect(helpOutput).toContain('-b <benchmark>');
-    });
-
-    it('should not display default Commander commands list', () => {
-      // The default Commander help shows "Commands:" section with flat list
-      // Our custom help replaces this with grouped sections
-      expect(helpOutput).not.toMatch(/^Commands:\s*$/m);
     });
   });
 });

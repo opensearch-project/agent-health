@@ -120,16 +120,9 @@ test.describe('Agent Selection', () => {
     });
 
     test('should show built-in badges for agents', async ({ page }) => {
-      // Expand the collapsible built-in agents section
-      const builtInToggle = page.locator('button:has-text("Built-in Agents")');
-      if (await builtInToggle.isVisible().catch(() => false)) {
-        await builtInToggle.click();
-        await page.waitForTimeout(500);
-      }
-
       const builtInBadges = page.locator('span').filter({ hasText: 'built-in' });
       const builtInCount = await builtInBadges.count();
-      expect(builtInCount).toBeGreaterThanOrEqual(2);
+      expect(builtInCount).toBeGreaterThanOrEqual(3);
     });
   });
 });

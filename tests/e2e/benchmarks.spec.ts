@@ -284,20 +284,6 @@ test.describe('Import JSON on Benchmarks Page', () => {
       }
     }
     createdBenchmarkIds.length = 0; // Clear array
-
-    // Clean up test cases created by import (match fixture name prefix)
-    const response = await page.request.get(`${baseURL}/api/storage/test-cases`).catch(() => null);
-    if (response?.ok()) {
-      const data = await response.json();
-      const testCases = Array.isArray(data) ? data : data.testCases ?? [];
-      for (const tc of testCases) {
-        if (tc.name?.startsWith('E2E Import Test:')) {
-          await page.request.delete(
-            `${baseURL}/api/storage/test-cases/${encodeURIComponent(tc.id)}`
-          ).catch(() => {});
-        }
-      }
-    }
   });
 
   test('should show Import JSON button', async ({ page }) => {

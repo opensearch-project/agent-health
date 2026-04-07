@@ -92,6 +92,7 @@ export function getDateCutoff(timeRange: TimeRange): Date | null {
 export function getAgentDisplayName(agentKey: string): string {
   const agentNames: Record<string, string> = {
     'demo': 'Demo Agent',
+    'travel-planner': 'Travel Planner',
   };
   return agentNames[agentKey] || agentKey;
 }
@@ -349,6 +350,7 @@ export function getUniqueAgents(benchmarks: Benchmark[]): Array<{ key: string; n
  */
 export const AGENT_COLORS: Record<string, string> = {
   'demo': '#6b7280',            // gray-500
+  'travel-planner': '#10b981',  // emerald-500 (teal)
 };
 
 /**

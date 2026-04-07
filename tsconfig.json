@@ -39,7 +39,6 @@
     "**/*.test.ts",
     "**/*.test.tsx",
     "**/*.spec.ts",
-    "**/*.spec.tsx",
-    "observio-sample-agent"
+    "**/*.spec.tsx"
   ]
 }

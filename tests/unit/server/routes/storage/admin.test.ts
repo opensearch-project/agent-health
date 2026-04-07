@@ -68,7 +68,6 @@ jest.mock('@/server/middleware/storageClient', () => ({
 // Mock dataSourceConfig
 jest.mock('@/server/middleware/dataSourceConfig', () => ({
   resolveStorageConfig: jest.fn(),
-  getStorageConfigFromEnv: jest.fn(),
 }));
 
 // Mock @opensearch-project/opensearch Client constructor
@@ -79,21 +78,14 @@ jest.mock('@opensearch-project/opensearch', () => ({
 // Mock opensearchClientFactory
 jest.mock('@/server/services/opensearchClientFactory', () => ({
   createOpenSearchClient: jest.fn().mockReturnValue({ close: jest.fn() }),
-  configToCacheKey: jest.fn().mockReturnValue('basic|https://test:9200|abc'),
 }));
 
-// Mock adapters - includes getStorageModule, testStorageConnection, isFileStorage, setStorageModule, getStorageState, and module constructors
+// Mock adapters - includes getStorageModule, testStorageConnection, isFileStorage, setStorageModule, and module constructors
 jest.mock('@/server/adapters/index', () => ({
   getStorageModule: jest.fn(),
   testStorageConnection: jest.fn(),
   isFileStorage: jest.fn().mockReturnValue(false),
   setStorageModule: jest.fn(),
-  getStorageState: jest.fn().mockReturnValue({
-    backend: 'file',
-    configKey: null,
-    error: null,
-    configuredEndpoint: null,
-  }),
   OpenSearchStorageModule: jest.fn().mockImplementation(() => ({ type: 'opensearch' })),
   FileStorageModule: jest.fn().mockImplementation(() => ({ type: 'file' })),
 }));
@@ -109,15 +101,9 @@ jest.mock('@/server/services/mappingFixer', () => ({
   reindexSingleIndex: jest.fn(),
 }));
 
-// Mock storageInitializer
-jest.mock('@/server/services/storageInitializer', () => ({
-  initializeStorageFromConfig: jest.fn(),
-}));
-
 // Mock configService
 jest.mock('@/server/services/configService', () => ({
   getConfigStatus: jest.fn(),
-  getStorageConfigFromFile: jest.fn(),
   saveStorageConfig: jest.fn(),
   saveObservabilityConfig: jest.fn(),
   clearStorageConfig: jest.fn(),
@@ -125,7 +111,7 @@ jest.mock('@/server/services/configService', () => ({
 }));
 
 // Import mocked adapter functions
-import { getStorageModule, testStorageConnection, isFileStorage, setStorageModule, getStorageState, OpenSearchStorageModule, FileStorageModule } from '@/server/adapters/index';
+import { getStorageModule, testStorageConnection, isFileStorage, setStorageModule, OpenSearchStorageModule, FileStorageModule } from '@/server/adapters/index';
 
 // Import mocked indexInitializer
 import { ensureIndexes, ensureIndexesWithValidation } from '@/server/services/indexInitializer';
@@ -136,14 +122,9 @@ const mockEnsureIndexesWithValidation = ensureIndexesWithValidation as jest.Mock
 import { reindexSingleIndex } from '@/server/services/mappingFixer';
 const mockReindexSingleIndex = reindexSingleIndex as jest.Mock;
 
-// Import mocked storageInitializer
-import { initializeStorageFromConfig } from '@/server/services/storageInitializer';
-const mockInitializeStorageFromConfig = initializeStorageFromConfig as jest.Mock;
-
 // Import mocked configService functions
 import {
   getConfigStatus,
-  getStorageConfigFromFile,
   saveStorageConfig,
   saveObservabilityConfig,
   clearStorageConfig,
@@ -158,16 +139,13 @@ const MockOpenSearchStorageModule = OpenSearchStorageModule as jest.Mock;
 const MockFileStorageModule = FileStorageModule as jest.Mock;
 
 const mockGetConfigStatus = getConfigStatus as jest.Mock;
-const mockGetStorageConfigFromFile = getStorageConfigFromFile as jest.Mock;
 const mockSaveStorageConfig = saveStorageConfig as jest.Mock;
 const mockSaveObservabilityConfig = saveObservabilityConfig as jest.Mock;
 const mockClearStorageConfig = clearStorageConfig as jest.Mock;
 const mockClearObservabilityConfig = clearObservabilityConfig as jest.Mock;
-import { resolveStorageConfig, getStorageConfigFromEnv } from '@/server/middleware/dataSourceConfig';
+import { resolveStorageConfig } from '@/server/middleware/dataSourceConfig';
 
 const mockResolveStorageConfig = resolveStorageConfig as jest.Mock;
-const mockGetStorageConfigFromEnv = getStorageConfigFromEnv as jest.Mock;
-const mockGetStorageState = getStorageState as jest.Mock;
 
 // Mock index mappings
 jest.mock('@/server/constants/indexMappings', () => ({
@@ -724,10 +702,7 @@ describe('Admin Storage Routes', () => {
       });
       expect(mockEnsureIndexesWithValidation).toHaveBeenCalled();
       expect(MockOpenSearchStorageModule).toHaveBeenCalled();
-      expect(mockSetStorageModule).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({ backend: 'opensearch' })
-      );
+      expect(mockSetStorageModule).toHaveBeenCalledWith(expect.any(Object));
       expect(res.json).toHaveBeenCalledWith({
         success: true,
         message: 'Storage configuration saved',
@@ -859,10 +834,7 @@ describe('Admin Storage Routes', () => {
 
       expect(mockClearStorageConfig).toHaveBeenCalled();
       expect(MockFileStorageModule).toHaveBeenCalled();
-      expect(mockSetStorageModule).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({ backend: 'file', configKey: null })
-      );
+      expect(mockSetStorageModule).toHaveBeenCalledWith(expect.any(Object));
       expect(res.json).toHaveBeenCalledWith({
         success: true,
         message: 'Storage configuration cleared',
@@ -896,96 +868,6 @@ describe('Admin Storage Routes', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: true,
         message: 'Observability configuration cleared',
-      });
-    });
-  });
-
-  // ============================================================================
-  // Retry & Use File Storage Endpoints
-  // ============================================================================
-
-  describe('POST /api/storage/config/retry', () => {
-    it('should reinitialize storage from current config', async () => {
-      const fileConfig = { endpoint: 'https://retry-host:9200' };
-      mockGetStorageConfigFromFile.mockReturnValue(fileConfig);
-      mockGetStorageConfigFromEnv.mockReturnValue(null);
-      mockInitializeStorageFromConfig.mockResolvedValue({
-        backend: 'opensearch',
-        configKey: 'basic|https://retry-host:9200|abc',
-        error: null,
-        configuredEndpoint: 'https://retry-host:9200',
-      });
-
-      const { req, res } = createMocks();
-      const handler = getRouteHandler(adminRoutes, 'post', '/api/storage/config/retry');
-
-      await handler(req, res);
-
-      expect(mockInitializeStorageFromConfig).toHaveBeenCalledWith(fileConfig);
-      expect(res.json).toHaveBeenCalledWith({
-        success: true,
-        state: expect.objectContaining({ backend: 'opensearch' }),
-      });
-    });
-
-    it('should return success false on error state', async () => {
-      mockGetStorageConfigFromFile.mockReturnValue({ endpoint: 'https://bad:9200' });
-      mockGetStorageConfigFromEnv.mockReturnValue(null);
-      mockInitializeStorageFromConfig.mockResolvedValue({
-        backend: 'error',
-        configKey: 'basic|https://bad:9200|abc',
-        error: 'Connection refused',
-        configuredEndpoint: 'https://bad:9200',
-      });
-
-      const { req, res } = createMocks();
-      const handler = getRouteHandler(adminRoutes, 'post', '/api/storage/config/retry');
-
-      await handler(req, res);
-
-      expect(res.json).toHaveBeenCalledWith({
-        success: false,
-        state: expect.objectContaining({ backend: 'error', error: 'Connection refused' }),
-      });
-    });
-
-    it('should fall back to env config when file config is absent', async () => {
-      mockGetStorageConfigFromFile.mockReturnValue(null);
-      const envConfig = { endpoint: 'https://env-host:9200' };
-      mockGetStorageConfigFromEnv.mockReturnValue(envConfig);
-      mockInitializeStorageFromConfig.mockResolvedValue({
-        backend: 'opensearch',
-        configKey: 'basic|https://env-host:9200|abc',
-        error: null,
-        configuredEndpoint: 'https://env-host:9200',
-      });
-
-      const { req, res } = createMocks();
-      const handler = getRouteHandler(adminRoutes, 'post', '/api/storage/config/retry');
-
-      await handler(req, res);
-
-      expect(mockInitializeStorageFromConfig).toHaveBeenCalledWith(envConfig);
-    });
-  });
-
-  describe('POST /api/storage/config/use-file-storage', () => {
-    it('should switch to file storage with sentinel config key', async () => {
-      const { req, res } = createMocks();
-      const handler = getRouteHandler(adminRoutes, 'post', '/api/storage/config/use-file-storage');
-
-      await handler(req, res);
-
-      expect(mockSetStorageModule).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({
-          backend: 'file',
-          configKey: '__file_override__',
-        })
-      );
-      expect(res.json).toHaveBeenCalledWith({
-        success: true,
-        message: 'Switched to file storage',
       });
     });
   });

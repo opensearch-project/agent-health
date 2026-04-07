@@ -3,8 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AgentConfig } from '@/types';
-import { BROWSER_SAFE_CONNECTORS } from '@/lib/constants';
+import { AgentConfig, ConnectorProtocol } from '@/types';
+
+/**
+ * Browser-safe connector types that work via HTTP/fetch APIs.
+ * These connectors can run evaluations directly from the UI.
+ */
+const BROWSER_SAFE_CONNECTORS: ConnectorProtocol[] = ['agui-streaming', 'rest', 'mock'];
 
 /**
  * Determines if an agent can be run from the browser UI.

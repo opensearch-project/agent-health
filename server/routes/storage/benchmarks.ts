@@ -903,7 +903,6 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
     debug('StorageAPI', 'Fetching test cases...');
     const allTestCases = await getAllTestCases();
     debug('StorageAPI', 'Found', allTestCases.length, 'test cases');
-    const storage = getStorageModule();
     const testCaseMap = new Map(allTestCases.map((tc: any) => [tc.id, tc]));
 
     // Capture test case snapshots at execution time (for reproducibility)
@@ -983,7 +982,6 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
         {
           cancellationToken,
           client,
-          storageModule: storage,
           onTestCaseComplete: async (testCaseId, result) => {
             // Stream per-test-case result to the client
             const tc = testCaseMap.get(testCaseId);

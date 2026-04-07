@@ -56,6 +56,7 @@ jest.mock('@/lib/constants', () => ({
         key: 'demo',
         name: 'Demo Agent',
         endpoint: 'http://localhost:3000',
+        models: ['claude-sonnet-4'],
         useTraces: false,
         isCustom: false,
       },

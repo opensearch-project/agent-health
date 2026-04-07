@@ -16,20 +16,6 @@
 
 jest.mock('fs');
 
-// Mock the new dependencies added to configService
-jest.mock('@/server/adapters/index', () => ({
-  getStorageState: jest.fn().mockReturnValue({
-    backend: 'file',
-    configKey: null,
-    error: null,
-    configuredEndpoint: null,
-  }),
-}));
-
-jest.mock('@/server/services/opensearchClientFactory', () => ({
-  configToCacheKey: jest.fn().mockReturnValue(null),
-}));
-
 import fs from 'fs';
 
 // Silence noise from the debug module's init block

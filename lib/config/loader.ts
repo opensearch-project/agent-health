@@ -68,6 +68,7 @@ function toAgentConfig(userAgent: UserAgentConfig): AgentConfig {
     endpoint: userAgent.endpoint,
     description: userAgent.description,
     enabled: userAgent.enabled ?? true,
+    models: userAgent.models,
     headers: userAgent.headers ?? {},
     useTraces: userAgent.useTraces ?? false,
     connectorType: userAgent.connectorType,

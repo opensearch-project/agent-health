@@ -264,7 +264,7 @@ Each sub-module (`ITestCaseStorage`, `IBenchmarkStorage`, `IRunStorage`) provide
 
 **FileStorageModule** is the default adapter. It stores data as JSON files in a `.agent-health-data/` directory relative to the working directory. No external services are needed - the application works out of the box.
 
-**OpenSearchStorageModule** connects to an OpenSearch cluster for persistent, shared storage. It is activated when `OPENSEARCH_STORAGE_ENDPOINT` is configured. Supports both basic auth (username/password) and AWS SigV4 authentication for managed OpenSearch domains and OpenSearch Serverless. The `opensearchClientFactory.ts` handles client creation with the appropriate auth strategy based on `authType` in the cluster config.
+**OpenSearchStorageModule** connects to an OpenSearch cluster for persistent, shared storage. It is activated when `OPENSEARCH_STORAGE_ENDPOINT` is configured.
 
 ### Adapter Factory Singleton
 

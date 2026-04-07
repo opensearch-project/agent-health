@@ -10,6 +10,11 @@ jest.mock('@/server/utils/version', () => ({
   getVersion: jest.fn().mockReturnValue('1.0.0'),
 }));
 
+// Mock coding agents module
+jest.mock('@/server/services/codingAgents', () => ({
+  codingAnalyticsEnabled: true,
+}));
+
 import healthRoutes from '@/server/routes/health';
 
 // Helper to create mock request/response
@@ -43,6 +48,9 @@ describe('Health Routes', () => {
         status: 'ok',
         version: '1.0.0',
         service: 'agent-health',
+        features: {
+          codingAgentAnalytics: true,
+        },
       });
     });
   });
