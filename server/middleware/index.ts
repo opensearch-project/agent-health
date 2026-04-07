@@ -15,6 +15,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { debug } from '../../lib/debug.js';
 import { storageClientMiddleware } from './storageClient.js';
+import { apiKeyAuth } from './apiKeyAuth.js';
 
 // Get directory of this file for resolving paths relative to package location
 // Server always runs from server/dist/, so path resolution is straightforward
@@ -27,8 +28,11 @@ const __dirname = path.dirname(__filename);
  * - Dev mode uses Vite proxy (vite.config.ts) to forward /api requests
  */
 function setupCors(app: Express): void {
+  const isHeadless = process.env.AGENT_HEALTH_HEADLESS === '1';
   app.use(cors({
-    origin: false,  // Same-origin only - dev uses Vite proxy, prod serves from same server
+    // Headless mode: allow cross-origin (remote aggregator fetches from this server)
+    // Normal mode: same-origin only (dev uses Vite proxy, prod serves from same server)
+    origin: isHeadless ? true : false,
     credentials: true
   }));
 }
@@ -46,6 +50,12 @@ function setupJsonParser(app: Express): void {
  * SPA fallback is registered separately via setupSpaFallback() after routes.
  */
 function setupStaticServing(app: Express): void {
+  // Headless mode: pure API server, no frontend assets
+  if (process.env.AGENT_HEALTH_HEADLESS === '1') {
+    debug('StaticServer', 'Headless mode — skipping static file serving');
+    return;
+  }
+
   // From server/dist/, go up 2 levels to package root, then into dist/
   const distPath = path.join(__dirname, '..', '..', 'dist');
   const indexPath = path.join(distPath, 'index.html');
@@ -70,6 +80,8 @@ function setupStaticServing(app: Express): void {
  * Must be registered AFTER API routes so it only catches client-side routes.
  */
 export function setupSpaFallback(app: Express): void {
+  if (process.env.AGENT_HEALTH_HEADLESS === '1') return;
+
   const distPath = path.join(__dirname, '..', '..', 'dist');
   const indexPath = path.join(distPath, 'index.html');
 
@@ -105,6 +117,7 @@ function setupStorageClient(app: Express): void {
 export function setupMiddleware(app: Express): void {
   setupCors(app);
   setupJsonParser(app);
+  app.use(apiKeyAuth);      // API key auth (no-op when AGENT_HEALTH_API_KEY not set)
   setupStorageClient(app);  // Add storage client before routes
   setupStaticServing(app);
 }

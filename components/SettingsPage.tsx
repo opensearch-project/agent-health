@@ -16,7 +16,6 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import type { ConnectorProtocol, ClusterAuthType } from '@/types';
-import { CONNECTOR_TYPE_INFO } from '@/lib/constants';
 import { storageAdmin } from '@/services/storage/opensearchClient';
 import {
   hasLocalStorageData,
@@ -32,8 +31,6 @@ import {
   saveObservabilityConfig,
   clearStorageConfig,
   clearObservabilityConfig,
-  retryStorageConnection,
-  useFileStorage,
   type ConfigStatus,
   type SaveStorageConfigResult,
 } from '@/lib/dataSourceConfig';
@@ -96,7 +93,6 @@ export const SettingsPage: React.FC = () => {
   const [newConnectorType, setNewConnectorType] = useState<ConnectorProtocol>('agui-streaming');
   const [newUseTraces, setNewUseTraces] = useState(false);
   const [endpointUrlError, setEndpointUrlError] = useState<string | null>(null);
-  const [showBuiltInAgents, setShowBuiltInAgents] = useState(false);
 
   // Data source configuration state (form inputs - not stored values)
   const [storageConfig, setStorageConfigState] = useState({
@@ -131,6 +127,15 @@ export const SettingsPage: React.FC = () => {
   const [storageTestMessage, setStorageTestMessage] = useState('');
   const [observabilityTestStatus, setObservabilityTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [observabilityTestMessage, setObservabilityTestMessage] = useState('');
+
+  // Remote servers state
+  const [remoteServers, setRemoteServers] = useState<Array<{ name: string; url: string; hasApiKey: boolean }>>([]);
+  const [isAddingRemote, setIsAddingRemote] = useState(false);
+  const [newRemoteName, setNewRemoteName] = useState('');
+  const [newRemoteUrl, setNewRemoteUrl] = useState('');
+  const [newRemoteApiKey, setNewRemoteApiKey] = useState('');
+  const [remoteTestStatus, setRemoteTestStatus] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'error'>>({});
+  const [remoteTestMessage, setRemoteTestMessage] = useState<Record<string, string>>({});
 
   // Index fix modal state
   const [indexFixState, setIndexFixState] = useState<{
@@ -210,6 +215,62 @@ export const SettingsPage: React.FC = () => {
     }
   }, []);
 
+  // Remote servers CRUD
+  const loadRemoteServers = useCallback(async () => {
+    try {
+      const res = await fetch(`${ENV_CONFIG.backendUrl}/api/remote-servers`);
+      const data = await res.json();
+      setRemoteServers(data.servers || []);
+    } catch { /* ignore */ }
+  }, []);
+
+  const addRemoteServer = async () => {
+    if (!newRemoteName.trim() || !newRemoteUrl.trim()) return;
+    try {
+      const res = await fetch(`${ENV_CONFIG.backendUrl}/api/remote-servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newRemoteName.trim(), url: newRemoteUrl.trim(), apiKey: newRemoteApiKey.trim() || undefined }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || 'Failed to add server');
+        return;
+      }
+      setNewRemoteName('');
+      setNewRemoteUrl('');
+      setNewRemoteApiKey('');
+      setIsAddingRemote(false);
+      loadRemoteServers();
+    } catch { alert('Failed to add server'); }
+  };
+
+  const removeRemoteServer = async (name: string) => {
+    try {
+      await fetch(`${ENV_CONFIG.backendUrl}/api/remote-servers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      loadRemoteServers();
+    } catch { /* ignore */ }
+  };
+
+  const testRemoteServer = async (name: string) => {
+    setRemoteTestStatus(prev => ({ ...prev, [name]: 'testing' }));
+    setRemoteTestMessage(prev => ({ ...prev, [name]: '' }));
+    try {
+      const res = await fetch(`${ENV_CONFIG.backendUrl}/api/remote-servers/${encodeURIComponent(name)}/test`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        setRemoteTestStatus(prev => ({ ...prev, [name]: 'ok' }));
+        setRemoteTestMessage(prev => ({ ...prev, [name]: `Connected — ${data.agents} agent(s) detected` }));
+      } else {
+        setRemoteTestStatus(prev => ({ ...prev, [name]: 'error' }));
+        setRemoteTestMessage(prev => ({ ...prev, [name]: data.message || 'Connection failed' }));
+      }
+    } catch {
+      setRemoteTestStatus(prev => ({ ...prev, [name]: 'error' }));
+      setRemoteTestMessage(prev => ({ ...prev, [name]: 'Request failed' }));
+    }
+  };
+
   // Scroll to section if URL hash is present (e.g., /settings#storage)
   const location = useLocation();
   const hasScrolled = useRef(false);
@@ -265,6 +326,7 @@ export const SettingsPage: React.FC = () => {
     setCurrentTheme(getTheme());
     loadStorageStats();
     loadConfigStatus();
+    loadRemoteServers();
 
     // Check for localStorage data to migrate
     const hasData = hasLocalStorageData();
@@ -831,6 +893,66 @@ export const SettingsPage: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Debug Settings */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Debug Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <Label htmlFor="debug-mode" className="text-sm font-medium">
+                Debug Mode
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Enable verbose logging (console.debug) AND real-time performance metrics overlay.
+                Useful for debugging evaluation flow, SSE events, and performance issues.
+              </p>
+            </div>
+            <Switch
+              id="debug-mode"
+              checked={debugMode}
+              onCheckedChange={handleDebugToggle}
+            />
+          </div>
+
+          {debugMode && (
+            <Alert className="bg-amber-900/20 border-amber-700/30">
+              <AlertTriangle className="h-4 w-4 text-amber-400" />
+              <AlertDescription className="text-amber-400">
+                <div className="space-y-2">
+                  <div className="font-medium">Debug mode enabled</div>
+
+                  {/* Verbose Logging Info */}
+                  <div className="text-sm">
+                    <strong>Verbose Logging:</strong> Detailed logs appear in browser console and server terminal.
+                  </div>
+                  <div className="text-xs opacity-80">
+                    <strong>Note:</strong> Browser debug logs use console.debug() which may be hidden by default.
+                    <br />
+                    • <strong>Chrome:</strong> Console settings (⚙️) → Check "Verbose"
+                    <br />
+                    • <strong>Firefox:</strong> Console settings → Enable all log levels
+                    <br />
+                    • <strong>Safari:</strong> Develop → Show JavaScript Console → All levels
+                  </div>
+
+                  {/* Performance Monitoring Info */}
+                  <div className="text-sm mt-3 pt-3 border-t border-amber-700/30">
+                    <strong>Performance Monitoring:</strong> A metrics overlay will appear in the bottom-right corner on instrumented pages (Agent Traces, etc.).
+                  </div>
+                  <div className="text-xs opacity-80">
+                    <strong>Color coding:</strong> 🟢 Fast (&lt; 50ms) · 🟡 OK (&lt; 200ms) · 🔴 Slow (&gt; 200ms)
+                    <br />
+                    <strong>Tracked:</strong> API calls, tree processing, render performance
+                  </div>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Agent Endpoints */}
       <Card className="mb-6">
         <CardHeader>
@@ -840,39 +962,35 @@ export const SettingsPage: React.FC = () => {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Built-in Agents (collapsible) */}
+          {/* Built-in Agents */}
           <div className="space-y-2">
-            <button
-              type="button"
-              onClick={() => setShowBuiltInAgents(!showBuiltInAgents)}
-              className="flex items-center gap-1 text-xs text-muted-foreground uppercase tracking-wide hover:text-foreground"
-            >
-              {showBuiltInAgents ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              Built-in Agents ({DEFAULT_CONFIG.agents.filter(a => !a.isCustom).length})
-            </button>
+            <Label className="text-xs text-muted-foreground uppercase tracking-wide">Built-in Agents</Label>
 
-            {showBuiltInAgents && DEFAULT_CONFIG.agents.filter(a => !a.isCustom).map((agent) => (
-              <div
-                key={agent.key}
-                className="p-3 border rounded-lg bg-muted/5 flex items-start justify-between gap-3"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm flex items-center gap-2">
-                    {agent.name}
-                    <span className="text-xs px-2 py-1 rounded inline-block bg-blue-100 text-blue-900 border border-blue-300 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-700/50">
-                      built-in
-                    </span>
+            {DEFAULT_CONFIG.agents.filter(a => !a.isCustom).map((agent) => {
+
+              return (
+                <div
+                  key={agent.key}
+                  className="p-3 border rounded-lg bg-muted/5 flex items-start justify-between gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm flex items-center gap-2">
+                      {agent.name}
+                      <span className="text-xs px-2 py-1 rounded inline-block bg-blue-100 text-blue-900 border border-blue-300 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-700/50">
+                        built-in
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-1">
+                      <ExternalLink size={10} />
+                      {agent.endpoint || <span className="italic">Not configured</span>}
+                    </div>
+                    {agent.description && (
+                      <div className="text-xs text-muted-foreground mt-1">{agent.description}</div>
+                    )}
                   </div>
-                  <div className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-1">
-                    <ExternalLink size={10} />
-                    {agent.endpoint || <span className="italic">Not configured</span>}
-                  </div>
-                  {agent.description && (
-                    <div className="text-xs text-muted-foreground mt-1">{agent.description}</div>
-                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Custom Endpoints Section */}
@@ -930,23 +1048,14 @@ export const SettingsPage: React.FC = () => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {(Object.entries(CONNECTOR_TYPE_INFO) as [ConnectorProtocol, typeof CONNECTOR_TYPE_INFO[ConnectorProtocol]][]).map(([type, info]) => (
-                      <SelectItem key={type} value={type}>
-                        {type === 'agui-streaming' ? `${type} (default)` : type}
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="agui-streaming">agui-streaming (default)</SelectItem>
+                    <SelectItem value="rest">rest</SelectItem>
+                    <SelectItem value="litellm">litellm</SelectItem>
+                    <SelectItem value="subprocess">subprocess</SelectItem>
+                    <SelectItem value="claude-code">claude-code</SelectItem>
+                    <SelectItem value="mock">mock</SelectItem>
                   </SelectContent>
                 </Select>
-                {CONNECTOR_TYPE_INFO[newConnectorType] ? (
-                  <>
-                    <p className="text-xs text-muted-foreground">{CONNECTOR_TYPE_INFO[newConnectorType].description}</p>
-                    {CONNECTOR_TYPE_INFO[newConnectorType].serverOnly && (
-                      <p className="text-xs text-amber-600 dark:text-amber-400">Server-only — runs via CLI or benchmark runner, not from the browser UI.</p>
-                    )}
-                  </>
-                ) : (
-                  <p className="text-xs text-amber-600 dark:text-amber-400">Unknown connector type: {newConnectorType}. Please select a supported connector type.</p>
-                )}
               </div>
               <div className="flex items-center gap-2">
                 <Switch
@@ -1007,23 +1116,14 @@ export const SettingsPage: React.FC = () => {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {(Object.entries(CONNECTOR_TYPE_INFO) as [ConnectorProtocol, typeof CONNECTOR_TYPE_INFO[ConnectorProtocol]][]).map(([type, info]) => (
-                              <SelectItem key={type} value={type}>
-                                {type === 'agui-streaming' ? `${type} (default)` : type}
-                              </SelectItem>
-                            ))}
+                            <SelectItem value="agui-streaming">agui-streaming (default)</SelectItem>
+                            <SelectItem value="rest">rest</SelectItem>
+                            <SelectItem value="litellm">litellm</SelectItem>
+                            <SelectItem value="subprocess">subprocess</SelectItem>
+                            <SelectItem value="claude-code">claude-code</SelectItem>
+                            <SelectItem value="mock">mock</SelectItem>
                           </SelectContent>
                         </Select>
-                        {CONNECTOR_TYPE_INFO[newConnectorType] ? (
-                          <>
-                            <p className="text-xs text-muted-foreground">{CONNECTOR_TYPE_INFO[newConnectorType].description}</p>
-                            {CONNECTOR_TYPE_INFO[newConnectorType].serverOnly && (
-                              <p className="text-xs text-amber-600 dark:text-amber-400">Server-only — runs via CLI or benchmark runner, not from the browser UI.</p>
-                            )}
-                          </>
-                        ) : (
-                          <p className="text-xs text-amber-600 dark:text-amber-400">Unknown connector type: {newConnectorType}. Please select a supported connector type.</p>
-                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <Switch
@@ -1090,10 +1190,144 @@ export const SettingsPage: React.FC = () => {
             )
           )}
 
-          <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-900/10 dark:border-blue-700/20">
-            <AlertDescription className="text-xs text-blue-700 dark:text-blue-300">
+          <Alert className="bg-blue-900/10 border-blue-700/20">
+            <AlertDescription className="text-xs text-blue-300">
               Custom endpoints will appear in the agent selector during evaluations.
               For authentication, use environment variables in the server configuration.
+            </AlertDescription>
+          </Alert>
+        </CardContent>
+      </Card>
+
+      {/* Remote Servers */}
+      <Card id="remote-servers" className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Server size={18} />
+            Remote Servers
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Aggregate coding agent data from remote build servers, EC2 instances, or cloud dev environments.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Server list */}
+          {remoteServers.length > 0 && (
+            <div className="space-y-2">
+              {remoteServers.map((server) => (
+                <div
+                  key={server.name}
+                  className="p-3 border rounded-lg bg-muted/5 flex items-start justify-between gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm flex items-center gap-2">
+                      {server.name}
+                      {server.hasApiKey && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-800 dark:bg-green-950/50 dark:text-green-300 border border-green-300 dark:border-green-700/50">
+                          auth
+                        </span>
+                      )}
+                      {remoteTestStatus[server.name] === 'ok' && (
+                        <CheckCircle2 size={14} className="text-green-500" />
+                      )}
+                      {remoteTestStatus[server.name] === 'error' && (
+                        <XCircle size={14} className="text-red-500" />
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-1">
+                      <ExternalLink size={10} />
+                      {server.url}
+                    </div>
+                    {remoteTestMessage[server.name] && (
+                      <div className={`text-xs mt-1 ${remoteTestStatus[server.name] === 'ok' ? 'text-green-500' : 'text-red-500'}`}>
+                        {remoteTestMessage[server.name]}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => testRemoteServer(server.name)}
+                      disabled={remoteTestStatus[server.name] === 'testing'}
+                    >
+                      {remoteTestStatus[server.name] === 'testing' ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <RefreshCw size={14} />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeRemoteServer(server.name)}
+                      className="text-red-500 hover:text-red-600 hover:bg-red-100/10"
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {remoteServers.length === 0 && !isAddingRemote && (
+            <div className="text-sm text-muted-foreground text-center py-4">
+              No remote servers configured.
+            </div>
+          )}
+
+          {/* Add form */}
+          {isAddingRemote ? (
+            <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="remote-name" className="text-xs">Name</Label>
+                <Input
+                  id="remote-name"
+                  placeholder="ec2-build-1"
+                  value={newRemoteName}
+                  onChange={(e) => setNewRemoteName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="remote-url" className="text-xs">Server URL</Label>
+                <Input
+                  id="remote-url"
+                  placeholder="http://10.0.1.50:4001"
+                  value={newRemoteUrl}
+                  onChange={(e) => setNewRemoteUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="remote-api-key" className="text-xs">API Key (optional)</Label>
+                <Input
+                  id="remote-api-key"
+                  type="password"
+                  placeholder="sk-..."
+                  value={newRemoteApiKey}
+                  onChange={(e) => setNewRemoteApiKey(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={addRemoteServer} disabled={!newRemoteName.trim() || !newRemoteUrl.trim()}>
+                  <Save size={14} className="mr-1" />
+                  Add Server
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setIsAddingRemote(false); setNewRemoteName(''); setNewRemoteUrl(''); setNewRemoteApiKey(''); }}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => setIsAddingRemote(true)}>
+              <Plus size={14} className="mr-1" />
+              Add Remote Server
+            </Button>
+          )}
+
+          <Alert className="bg-blue-900/10 border-blue-700/20">
+            <AlertDescription className="text-xs text-blue-300">
+              Run <code className="bg-muted px-1 py-0.5 rounded">agent-health serve --headless --api-key sk-secret</code> on each remote machine, then add it here. The dashboard will aggregate data from all servers. Changes take effect after server restart.
             </AlertDescription>
           </Alert>
         </CardContent>
@@ -1107,13 +1341,12 @@ export const SettingsPage: React.FC = () => {
             Evaluation Storage
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Test cases, experiments, and run results.
-            Uses local filesystem (<code className="text-xs bg-muted/50 px-1 rounded">agent-health-data/</code>) if not configured.
+            Test cases, experiments, and run results
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Optionally configure an OpenSearch cluster for persistent storage. Credentials are stored on the server (in agent-health.config.json), not in your browser.
+            Configure the OpenSearch cluster for storing evaluation data. Credentials are stored securely on the server (in agent-health.config.json), not in your browser.
           </p>
 
           <div className="space-y-3">
@@ -1251,105 +1484,15 @@ export const SettingsPage: React.FC = () => {
             <div className="flex items-center gap-2 text-xs">
               <span className="text-muted-foreground">Currently configured via:</span>
               <span className={`px-2 py-0.5 rounded ${
-                configStatus.storage.source === 'file'
+                configStatus.storage.source === 'file' 
                   ? 'bg-green-100 text-green-900 border border-green-300 dark:bg-green-950/50 dark:text-green-300 dark:border-green-700/50'
-                  : configStatus.storage.source === 'environment'
+                  : configStatus.storage.source === 'environment' 
                   ? 'bg-blue-100 text-blue-900 border border-blue-300 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-700/50'
                   : 'bg-gray-100 text-gray-900 border border-gray-300 dark:bg-gray-800/50 dark:text-gray-400 dark:border-gray-700/50'
               }`}>
                 {configStatus.storage.source === 'file' ? 'Config file (agent-health.config.json)' :
                  configStatus.storage.source === 'environment' ? 'Environment variables' :
                  'Not configured'}
-              </span>
-            </div>
-          )}
-
-          {/* Runtime storage state */}
-          {configStatus?.runtime?.storage.backend === 'error' && (
-            <Alert variant="destructive" className="py-2">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription className="flex items-center justify-between">
-                <span className="text-sm">
-                  Storage configured but unreachable: {configStatus.runtime.storage.error}
-                </span>
-                <span className="flex gap-2 ml-4 shrink-0">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        await retryStorageConnection();
-                        const status = await getConfigStatus();
-                        setConfigStatus(status);
-                      } catch (e: any) {
-                        console.error('Retry failed:', e.message);
-                      }
-                    }}
-                  >
-                    <RefreshCw size={14} className="mr-1" />
-                    Retry
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        await useFileStorage();
-                        const status = await getConfigStatus();
-                        setConfigStatus(status);
-                      } catch (e: any) {
-                        console.error('Use file storage failed:', e.message);
-                      }
-                    }}
-                  >
-                    <Database size={14} className="mr-1" />
-                    Use File Storage
-                  </Button>
-                </span>
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {configStatus?.runtime?.storage.drifted && configStatus.runtime.storage.backend !== 'error' && (
-            <Alert className="py-2 border-yellow-500/50 bg-yellow-50 dark:bg-yellow-950/20">
-              <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
-              <AlertDescription className="flex items-center justify-between">
-                <span className="text-sm text-yellow-800 dark:text-yellow-300">
-                  Config file changed. Runtime storage may be out of date.
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="ml-4 shrink-0"
-                  onClick={async () => {
-                    try {
-                      await retryStorageConnection();
-                      const status = await getConfigStatus();
-                      setConfigStatus(status);
-                    } catch (e: any) {
-                      console.error('Apply failed:', e.message);
-                    }
-                  }}
-                >
-                  <RefreshCw size={14} className="mr-1" />
-                  Apply Now
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {configStatus?.runtime?.storage && !configStatus.runtime.storage.drifted && configStatus.runtime.storage.backend !== 'error' && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground">Runtime:</span>
-              <span className={`flex items-center gap-1 px-2 py-0.5 rounded ${
-                configStatus.runtime.storage.backend === 'opensearch'
-                  ? 'bg-green-100 text-green-900 border border-green-300 dark:bg-green-950/50 dark:text-green-300 dark:border-green-700/50'
-                  : 'bg-gray-100 text-gray-900 border border-gray-300 dark:bg-gray-800/50 dark:text-gray-400 dark:border-gray-700/50'
-              }`}>
-                {configStatus.runtime.storage.backend === 'opensearch' && <CheckCircle2 size={12} />}
-                {configStatus.runtime.storage.backend === 'opensearch'
-                  ? `OpenSearch (${configStatus.runtime.storage.configuredEndpoint})`
-                  : 'File Storage'}
               </span>
             </div>
           )}
@@ -1463,9 +1606,9 @@ export const SettingsPage: React.FC = () => {
             )}
 
             {!storageStats?.isConnected && !isLoading && (
-              <Alert className="bg-amber-50 border-amber-300 dark:bg-amber-900/20 dark:border-amber-700/30">
-                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                <AlertDescription className="text-amber-700 dark:text-amber-400">
+              <Alert className="bg-amber-900/20 border-amber-700/30">
+                <AlertTriangle className="h-4 w-4 text-amber-400" />
+                <AlertDescription className="text-amber-400">
                   Cannot connect to OpenSearch backend. Make sure the server is running.
                 </AlertDescription>
               </Alert>
@@ -1767,9 +1910,9 @@ export const SettingsPage: React.FC = () => {
 
             {/* Migration Status */}
             {migrationStatus && (
-              <Alert className={migrationStatus.includes('failed') ? 'bg-red-50 border-red-300 dark:bg-red-900/20 dark:border-red-700/30' : 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-700/30'}>
-                {isMigrating && <Loader2 className="h-4 w-4 text-blue-600 dark:text-blue-400 animate-spin" />}
-                <AlertDescription className={migrationStatus.includes('failed') ? 'text-red-700 dark:text-red-400' : 'text-blue-700 dark:text-blue-400'}>
+              <Alert className={migrationStatus.includes('failed') ? 'bg-red-900/20 border-red-700/30' : 'bg-blue-900/20 border-blue-700/30'}>
+                {isMigrating && <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
+                <AlertDescription className={migrationStatus.includes('failed') ? 'text-red-400' : 'text-blue-400'}>
                   {migrationStatus}
                 </AlertDescription>
               </Alert>
@@ -1842,39 +1985,6 @@ export const SettingsPage: React.FC = () => {
           </CardContent>
         </Card>
       )}
-      {/* Debug Settings */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Debug Settings</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="debug-mode" className="text-sm font-medium">
-                Debug Mode
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                Verbose logging and real-time performance metrics overlay
-              </p>
-            </div>
-            <Switch
-              id="debug-mode"
-              checked={debugMode}
-              onCheckedChange={handleDebugToggle}
-            />
-          </div>
-
-          {debugMode && (
-            <Alert className="bg-amber-900/20 border-amber-700/30 mt-4">
-              <AlertTriangle className="h-4 w-4 text-amber-400" />
-              <AlertDescription className="text-amber-400 text-xs">
-                <strong>Enabled:</strong> Detailed logs in browser console (enable "Verbose" level) and server terminal.
-                A performance overlay will appear on instrumented pages.
-              </AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
     </div>
 
     {/* Index Fix Progress Modal */}

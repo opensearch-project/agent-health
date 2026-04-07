@@ -25,7 +25,7 @@ const TEST_TIMEOUT = 30000;
  * Number of agents in DEFAULT_CONFIG (lib/constants.ts).
  * If the defaults change, update this constant.
  */
-const DEFAULT_AGENT_COUNT = 2;
+const DEFAULT_AGENT_COUNT = 5;
 
 /**
  * Minimum number of models in DEFAULT_CONFIG.
