@@ -364,5 +364,5 @@ This RFC covers **local, single-machine analytics only**. Remote aggregation and
 
 - [cc-lens](https://github.com/Arindam200/cc-lens) — Claude Code analytics dashboard (MIT license, data format reference)
 - [OpenAI Codex CLI](https://github.com/openai/codex) — Codex CLI source (rollout file format)
-- [Agent Health Architecture](./ARCHITECTURE.md) — Server-mediated access principle
-- [Agent Health Connectors](./CONNECTORS.md) — Existing connector system for agent protocols
+- [Agent Health Architecture](../ARCHITECTURE.md) — Server-mediated access principle
+- [Agent Health Connectors](../CONNECTORS.md) — Existing connector system for agent protocols
