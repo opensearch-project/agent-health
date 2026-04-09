@@ -8,23 +8,25 @@ import { test, expect } from '@playwright/test';
 /**
  * Builds mock span data with a mix of OK and ERROR traces.
  * Each trace has a root span (no parentSpanId) and one child span.
+ * OK traces have varying durations for sort testing.
  */
 function buildMockSpans() {
   const now = Date.now();
   const spans = [];
 
-  // 3 OK traces
+  // 3 OK traces with different durations
+  const okDurations = [30000, 60000, 90000];
   for (let i = 0; i < 3; i++) {
     const traceId = `ok-trace-${i}`;
     const start = new Date(now - (i + 1) * 60000).toISOString();
-    const end = new Date(now - i * 60000).toISOString();
+    const end = new Date(now - (i + 1) * 60000 + okDurations[i]).toISOString();
     spans.push({
       traceId,
       spanId: `ok-root-${i}`,
       name: 'agent.run',
       startTime: start,
       endTime: end,
-      duration: 60000,
+      duration: okDurations[i],
       status: 'OK',
       attributes: { 'service.name': 'test-agent' },
     });
@@ -35,24 +37,25 @@ function buildMockSpans() {
       name: 'agent.node.callModel',
       startTime: start,
       endTime: end,
-      duration: 50000,
+      duration: okDurations[i] - 10000,
       status: 'OK',
       attributes: { 'service.name': 'test-agent' },
     });
   }
 
-  // 2 ERROR traces
+  // 2 ERROR traces with different durations
+  const errorDurations = [45000, 75000];
   for (let i = 0; i < 2; i++) {
     const traceId = `error-trace-${i}`;
     const start = new Date(now - (i + 4) * 60000).toISOString();
-    const end = new Date(now - (i + 3) * 60000).toISOString();
+    const end = new Date(now - (i + 4) * 60000 + errorDurations[i]).toISOString();
     spans.push({
       traceId,
       spanId: `error-root-${i}`,
       name: 'agent.run',
       startTime: start,
       endTime: end,
-      duration: 60000,
+      duration: errorDurations[i],
       status: 'ERROR',
       attributes: { 'service.name': 'test-agent' },
     });
@@ -63,7 +66,7 @@ function buildMockSpans() {
       name: 'agent.node.callModel',
       startTime: start,
       endTime: end,
-      duration: 50000,
+      duration: errorDurations[i] - 10000,
       status: 'ERROR',
       attributes: { 'service.name': 'test-agent' },
     });
@@ -72,47 +75,52 @@ function buildMockSpans() {
   return spans;
 }
 
+/** Helper to set up mock API route and navigate to traces page */
+async function setupMockTraces(page: any, mockSpans: any[]) {
+  await page.route('**/api/traces', async (route: any) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ spans: mockSpans, total: mockSpans.length, hasMore: false }),
+    });
+  });
+
+  await page.goto('/agent-traces');
+  await page.waitForTimeout(3000);
+}
+
+/** Helper to expand metrics section and click the error % button */
+async function activateErrorFilter(page: any) {
+  // Expand metrics if collapsed
+  const metricsToggle = page.locator('text=Metrics').first();
+  if (await metricsToggle.isVisible().catch(() => false)) {
+    await metricsToggle.click();
+    await page.waitForTimeout(500);
+  }
+
+  // Click the error percentage button
+  const errorButton = page.locator('button:has-text("%")').filter({ hasText: /\d+.*%/ }).first();
+  await expect(errorButton).toBeVisible();
+  await expect(errorButton).toBeEnabled();
+  await errorButton.click();
+  await page.waitForTimeout(1000);
+}
+
 test.describe('Trace Error Filtering', () => {
   test('should show only error traces when error percentage is clicked', async ({ page }) => {
     const mockSpans = buildMockSpans();
-
-    // Intercept trace API to return controlled data with both OK and ERROR traces
-    await page.route('**/api/traces', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ spans: mockSpans, total: mockSpans.length, hasMore: false }),
-      });
-    });
-
-    await page.goto('/agent-traces');
-    await page.waitForTimeout(3000);
+    await setupMockTraces(page, mockSpans);
 
     // Verify we have 5 traces total (3 OK + 2 ERROR)
-    const allRows = page.locator('tbody tr');
-    await expect(allRows).toHaveCount(5);
+    await expect(page.locator('tbody tr')).toHaveCount(5);
 
-    // Expand metrics if collapsed
-    const metricsToggle = page.locator('text=Metrics').first();
-    if (await metricsToggle.isVisible().catch(() => false)) {
-      await metricsToggle.click();
-      await page.waitForTimeout(500);
-    }
+    await activateErrorFilter(page);
 
-    // Click the error percentage button to filter to errors only
-    const errorButton = page.locator('button:has-text("%")').filter({ hasText: /\d+.*%/ }).first();
-    if (await errorButton.isVisible().catch(() => false)) {
-      await errorButton.click();
-      await page.waitForTimeout(1000);
+    // Should now show only 2 error traces
+    await expect(page.locator('tbody tr')).toHaveCount(2);
 
-      // Should now show only 2 error traces
-      const filteredRows = page.locator('tbody tr');
-      await expect(filteredRows).toHaveCount(2);
-
-      // Status filter chip should be visible
-      const statusChip = page.locator('text=Status: error');
-      await expect(statusChip).toBeVisible();
-    }
+    // Status filter chip should be visible
+    await expect(page.locator('text=Status: error')).toBeVisible();
   });
 
   test('error filter should persist when new data arrives', async ({ page }) => {
@@ -159,21 +167,7 @@ test.describe('Trace Error Filtering', () => {
     await page.goto('/agent-traces');
     await page.waitForTimeout(3000);
 
-    // Expand metrics
-    const metricsToggle = page.locator('text=Metrics').first();
-    if (await metricsToggle.isVisible().catch(() => false)) {
-      await metricsToggle.click();
-      await page.waitForTimeout(500);
-    }
-
-    // Click error percentage to activate filter
-    const errorButton = page.locator('button:has-text("%")').filter({ hasText: /\d+.*%/ }).first();
-    if (!await errorButton.isVisible().catch(() => false)) {
-      return;
-    }
-
-    await errorButton.click();
-    await page.waitForTimeout(1000);
+    await activateErrorFilter(page);
 
     // Verify filter chip is active
     const statusChip = page.locator('text=Status: error');
@@ -199,37 +193,12 @@ test.describe('Trace Error Filtering', () => {
 
   test('should clear error filter via chip dismiss', async ({ page }) => {
     const mockSpans = buildMockSpans();
+    await setupMockTraces(page, mockSpans);
 
-    await page.route('**/api/traces', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ spans: mockSpans, total: mockSpans.length, hasMore: false }),
-      });
-    });
-
-    await page.goto('/agent-traces');
-    await page.waitForTimeout(3000);
-
-    // Expand metrics
-    const metricsToggle = page.locator('text=Metrics').first();
-    if (await metricsToggle.isVisible().catch(() => false)) {
-      await metricsToggle.click();
-      await page.waitForTimeout(500);
-    }
-
-    // Activate error filter
-    const errorButton = page.locator('button:has-text("%")').filter({ hasText: /\d+.*%/ }).first();
-    if (!await errorButton.isVisible().catch(() => false)) {
-      return;
-    }
-
-    await errorButton.click();
-    await page.waitForTimeout(1000);
+    await activateErrorFilter(page);
 
     // Verify filter is active
-    const filteredRows = page.locator('tbody tr');
-    await expect(filteredRows).toHaveCount(2);
+    await expect(page.locator('tbody tr')).toHaveCount(2);
 
     // Dismiss the status filter chip via its X button
     const chipDismiss = page.locator('[aria-label="Remove Status: error filter"]');
@@ -239,55 +208,116 @@ test.describe('Trace Error Filtering', () => {
     await page.waitForTimeout(1000);
 
     // Should show all 5 traces again
-    const allRows = page.locator('tbody tr');
-    await expect(allRows).toHaveCount(5);
+    await expect(page.locator('tbody tr')).toHaveCount(5);
   });
 
   test('sort should not bypass active error filter', async ({ page }) => {
     const mockSpans = buildMockSpans();
+    await setupMockTraces(page, mockSpans);
 
-    await page.route('**/api/traces', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ spans: mockSpans, total: mockSpans.length, hasMore: false }),
-      });
-    });
-
-    await page.goto('/agent-traces');
-    await page.waitForTimeout(3000);
-
-    // Expand metrics
-    const metricsToggle = page.locator('text=Metrics').first();
-    if (await metricsToggle.isVisible().catch(() => false)) {
-      await metricsToggle.click();
-      await page.waitForTimeout(500);
-    }
-
-    // Activate error filter
-    const errorButton = page.locator('button:has-text("%")').filter({ hasText: /\d+.*%/ }).first();
-    if (!await errorButton.isVisible().catch(() => false)) {
-      return;
-    }
-
-    await errorButton.click();
-    await page.waitForTimeout(1000);
+    await activateErrorFilter(page);
 
     // Should show 2 error traces
     await expect(page.locator('tbody tr')).toHaveCount(2);
 
     // Click a column header to change sort order
     const durationHeader = page.locator('th:has-text("Duration"), button:has-text("Duration")').first();
-    if (await durationHeader.isVisible().catch(() => false)) {
-      await durationHeader.click();
-      await page.waitForTimeout(1000);
+    await expect(durationHeader).toBeVisible();
+    await durationHeader.click();
+    await page.waitForTimeout(1000);
 
-      // After sorting, should still show only 2 error traces (not all 5)
+    // After sorting, should still show only 2 error traces (not all 5)
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    // Filter chip should still be active
+    await expect(page.locator('text=Status: error')).toBeVisible();
+  });
+
+  test('sort then filter should show correct filtered count', async ({ page }) => {
+    const mockSpans = buildMockSpans();
+    await setupMockTraces(page, mockSpans);
+
+    // Verify all 5 traces visible initially
+    await expect(page.locator('tbody tr')).toHaveCount(5);
+
+    // Sort by duration first
+    const durationHeader = page.locator('th:has-text("Duration"), button:has-text("Duration")').first();
+    await expect(durationHeader).toBeVisible();
+    await durationHeader.click();
+    await page.waitForTimeout(1000);
+
+    // Should still show all 5 traces after sort (no filter active)
+    await expect(page.locator('tbody tr')).toHaveCount(5);
+
+    // Now activate error filter
+    await activateErrorFilter(page);
+
+    // Should show only 2 error traces
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+    await expect(page.locator('text=Status: error')).toBeVisible();
+  });
+
+  test('filter then sort then clear should restore all traces', async ({ page }) => {
+    const mockSpans = buildMockSpans();
+    await setupMockTraces(page, mockSpans);
+
+    // Step 1: Apply error filter
+    await activateErrorFilter(page);
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    // Step 2: Sort by duration while filtered
+    const durationHeader = page.locator('th:has-text("Duration"), button:has-text("Duration")').first();
+    await expect(durationHeader).toBeVisible();
+    await durationHeader.click();
+    await page.waitForTimeout(1000);
+
+    // Still 2 error traces after sort
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    // Step 3: Clear the filter
+    const chipDismiss = page.locator('[aria-label="Remove Status: error filter"]');
+    await expect(chipDismiss).toBeVisible();
+    await chipDismiss.click();
+    await page.waitForTimeout(1000);
+
+    // All 5 traces should be visible again (sorted by duration)
+    await expect(page.locator('tbody tr')).toHaveCount(5);
+
+    // No filter chip should remain
+    await expect(page.locator('text=Status: error')).not.toBeVisible();
+  });
+
+  test('multiple sort clicks should not affect filtered count', async ({ page }) => {
+    const mockSpans = buildMockSpans();
+    await setupMockTraces(page, mockSpans);
+
+    // Apply error filter
+    await activateErrorFilter(page);
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    // Click duration header multiple times to toggle sort direction
+    const durationHeader = page.locator('th:has-text("Duration"), button:has-text("Duration")').first();
+    await expect(durationHeader).toBeVisible();
+
+    // Sort ascending
+    await durationHeader.click();
+    await page.waitForTimeout(500);
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    // Sort descending
+    await durationHeader.click();
+    await page.waitForTimeout(500);
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    // Sort by a different column
+    const startTimeHeader = page.locator('th:has-text("Start Time"), button:has-text("Start Time")').first();
+    if (await startTimeHeader.isVisible().catch(() => false)) {
+      await startTimeHeader.click();
+      await page.waitForTimeout(500);
       await expect(page.locator('tbody tr')).toHaveCount(2);
-
-      // Filter chip should still be active
-      const statusChip = page.locator('text=Status: error');
-      await expect(statusChip).toBeVisible();
     }
+
+    // Filter chip should persist through all sort changes
+    await expect(page.locator('text=Status: error')).toBeVisible();
   });
 });

@@ -379,6 +379,8 @@ export const AgentTracesPage: React.FC = () => {
 
   // Intersection observer ref for lazy loading
   const loadMoreRef = React.useRef<HTMLTableRowElement>(null);
+  // Track previous filteredTraces identity to distinguish filter vs sort changes
+  const prevFilteredRef = React.useRef<TraceTableRow[]>([]);
 
   // Get unique service names from agents config (no memo — recomputes when
   // parent App re-renders after refreshConfig(), keeping custom agents visible)
@@ -657,8 +659,11 @@ export const AgentTracesPage: React.FC = () => {
       );
     }
 
-    return sortTraces(result);
-  }, [allTraces, filters, debouncedSearch, sortTraces]);
+    return result;
+  }, [allTraces, filters, debouncedSearch]);
+
+  // Sorted view of filtered traces (separate from filtering so sort changes don't reset scroll)
+  const sortedTraces = useMemo(() => sortTraces(filteredTraces), [filteredTraces, sortTraces]);
 
   // Lazy loading with intersection observer (client-side + server-side pagination)
   useEffect(() => {
@@ -666,16 +671,16 @@ export const AgentTracesPage: React.FC = () => {
     if (!currentRef) return;
 
     // Nothing left to show client-side or load from server
-    if (displayCount >= filteredTraces.length && !hasMore) return;
+    if (displayCount >= sortedTraces.length && !hasMore) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         const target = entries[0];
         if (target.isIntersecting) {
-          if (displayCount < filteredTraces.length) {
+          if (displayCount < sortedTraces.length) {
             // Client-side: show next batch of already-fetched traces
-            const nextCount = Math.min(displayCount + 100, filteredTraces.length);
-            setDisplayedTraces(filteredTraces.slice(0, nextCount));
+            const nextCount = Math.min(displayCount + 100, sortedTraces.length);
+            setDisplayedTraces(sortedTraces.slice(0, nextCount));
             setDisplayCount(nextCount);
           } else if (hasMore && !isLoadingMore) {
             // Server-side: fetch next page from the API
@@ -695,7 +700,7 @@ export const AgentTracesPage: React.FC = () => {
     return () => {
       observer.unobserve(currentRef);
     };
-  }, [displayCount, filteredTraces, hasMore, isLoadingMore, loadMoreTraces]);
+  }, [displayCount, sortedTraces, hasMore, isLoadingMore, loadMoreTraces]);
 
   // Handle trace selection
   const handleSelectTrace = (trace: TraceTableRow) => {
@@ -943,39 +948,22 @@ export const AgentTracesPage: React.FC = () => {
     }
   }, []);
 
-  // Lazy loading with intersection observer
+
+  // Update displayed traces when filters or sort changes
   useEffect(() => {
-    const currentRef = loadMoreRef.current;
-    if (!currentRef || displayCount >= filteredTraces.length) return;
+    const filterChanged = prevFilteredRef.current !== filteredTraces;
+    prevFilteredRef.current = filteredTraces;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const target = entries[0];
-        if (target.isIntersecting && displayCount < filteredTraces.length) {
-          const nextCount = Math.min(displayCount + 100, filteredTraces.length);
-          setDisplayedTraces(filteredTraces.slice(0, nextCount));
-          setDisplayCount(nextCount);
-        }
-      },
-      {
-        root: null,
-        rootMargin: '200px',
-        threshold: 0.1,
-      }
-    );
-
-    observer.observe(currentRef);
-
-    return () => {
-      observer.unobserve(currentRef);
-    };
-  }, [displayCount, filteredTraces]);
-
-  // Reset displayed traces when filteredTraces changes
-  useEffect(() => {
-    setDisplayedTraces(filteredTraces.slice(0, 100));
-    setDisplayCount(100);
-  }, [filteredTraces]);
+    if (filterChanged) {
+      // Filter/data change — reset to first page
+      setDisplayedTraces(sortedTraces.slice(0, 100));
+      setDisplayCount(100);
+    } else {
+      // Sort-only change — re-sort in place, preserving scroll position
+      setDisplayedTraces(sortedTraces.slice(0, displayCount));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- displayCount intentionally excluded to avoid infinite loop
+  }, [sortedTraces, filteredTraces]);
 
   return (
     <div className="h-full flex flex-col">
