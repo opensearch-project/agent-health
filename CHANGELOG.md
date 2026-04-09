@@ -46,6 +46,11 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - `models` property from agent configurations and related functions ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 
 ### Fixed
+- Error filter bypass: sorting useEffect and data fetches directly set displayedTraces, ignoring active filters ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Relative import regression in AgentTracesPage (`../Layout` → `@/components/Layout`) ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- selectedAgent localStorage persistence asymmetry — writes but never reads on init ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Remove auto-generated documentation files and `.kiro/specs/` directory from PR #108 ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Add missing `formatCompact` unit tests and E2E tests for error filter regression ([#108](https://github.com/opensearch-project/agent-health/pull/108))
 - Storage adapter for test case lookup in benchmark runner ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Flaky E2E tests: replaced `waitForTimeout` with proper element waits in comparison tests ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Debug mode E2E test race condition ([#115](https://github.com/opensearch-project/agent-health/pull/115))

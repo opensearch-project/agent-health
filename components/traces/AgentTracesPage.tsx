@@ -58,7 +58,7 @@ import { startMeasure, endMeasure } from '@/lib/performance';
 import { cn } from '@/lib/utils';
 import { TraceFlyoutContent } from './TraceFlyoutContent';
 import MetricsOverview, { FilterAction } from './MetricsOverview';
-import { useSidebarCollapse } from '../Layout';
+import { useSidebarCollapse } from '@/components/Layout';
 
 // ==================== Types ====================
 
@@ -302,7 +302,12 @@ export const AgentTracesPage: React.FC = () => {
   const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
   
   // Filter state
-  const [selectedAgent, setSelectedAgent] = useState<string>('all');
+  const [selectedAgent, setSelectedAgent] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('agentTraces.selectedAgent') || 'all';
+    }
+    return 'all';
+  });
   const [textSearch, setTextSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [timeRange, setTimeRange] = useState<string>(() => {
@@ -515,8 +520,6 @@ export const AgentTracesPage: React.FC = () => {
       setSpans(result.spans);
       const processedTraces = processSpansToTraces(result.spans);
       setAllTraces(processedTraces);
-      setDisplayedTraces(processedTraces.slice(0, 100));
-      setDisplayCount(100);
       setLastRefresh(new Date());
 
       // Update pagination state
@@ -527,7 +530,7 @@ export const AgentTracesPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedAgent, debouncedSearch, timeRange, processSpansToTraces, sortTraces]);
+  }, [selectedAgent, debouncedSearch, timeRange, processSpansToTraces]);
 
   // Load more traces from server (appends to existing data)
   const loadMoreTraces = useCallback(async () => {
@@ -550,8 +553,6 @@ export const AgentTracesPage: React.FC = () => {
       setSpans(allSpans);
       const processedTraces = processSpansToTraces(allSpans);
       setAllTraces(processedTraces);
-      setDisplayedTraces(processedTraces);
-      setDisplayCount(processedTraces.length);
 
       setCursor(result.nextCursor || null);
       setHasMore(result.hasMore || false);
@@ -567,12 +568,6 @@ export const AgentTracesPage: React.FC = () => {
   useEffect(() => {
     fetchTraces();
   }, [fetchTraces]);
-
-  // Re-sort traces when sort column or direction changes
-  useEffect(() => {
-    const sortedTraces = sortTraces(allTraces);
-    setDisplayedTraces(sortedTraces.slice(0, displayCount));
-  }, [sortColumn, sortDirection, allTraces, displayCount, sortTraces]);
 
   // Handle scroll to hide/show container header
   useEffect(() => {
@@ -662,8 +657,8 @@ export const AgentTracesPage: React.FC = () => {
       );
     }
 
-    return result;
-  }, [allTraces, filters, debouncedSearch]);
+    return sortTraces(result);
+  }, [allTraces, filters, debouncedSearch, sortTraces]);
 
   // Lazy loading with intersection observer (client-side + server-side pagination)
   useEffect(() => {
