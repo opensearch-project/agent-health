@@ -7,6 +7,16 @@
 
 Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [Unreleased]
+
+### Added
+- Coding Agent Analytics: local filesystem readers for Claude Code, Kiro, and Codex CLI sessions ([#126](https://github.com/opensearch-project/agent-health/pull/126))
+- Remote server aggregation for multi-machine coding agent monitoring ([#126](https://github.com/opensearch-project/agent-health/pull/126))
+- Settings UI for remote server management with connectivity testing ([#126](https://github.com/opensearch-project/agent-health/pull/126))
+- CLI commands for remote server configuration (`agent-health remote add|remove|list|test`) ([#126](https://github.com/opensearch-project/agent-health/pull/126))
+- API key authentication middleware for headless remote mode ([#126](https://github.com/opensearch-project/agent-health/pull/126))
+- Feature toggle for Coding Agent Analytics via config or `AGENT_HEALTH_DISABLE_CODING_ANALYTICS` env var ([#126](https://github.com/opensearch-project/agent-health/pull/126))
+
 ## [0.2.0]
 
 ### Fixed
