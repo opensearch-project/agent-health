@@ -194,6 +194,35 @@ export async function checkObservabilityHealth(config: ObservabilityClusterConfi
 }
 
 // ============================================================================
+// Storage State Tracking
+// ============================================================================
+
+export type StorageBackend = 'file' | 'opensearch' | 'error';
+
+export interface StorageState {
+  backend: StorageBackend;
+  configKey: string | null;           // from configToCacheKey(), null for file storage
+  error: string | null;               // error message when backend='error'
+  configuredEndpoint: string | null;  // endpoint from config, for display
+}
+
+const DEFAULT_STORAGE_STATE: StorageState = {
+  backend: 'file',
+  configKey: null,
+  error: null,
+  configuredEndpoint: null,
+};
+
+let currentStorageState: StorageState = { ...DEFAULT_STORAGE_STATE };
+
+/**
+ * Get the current storage runtime state.
+ */
+export function getStorageState(): StorageState {
+  return { ...currentStorageState };
+}
+
+// ============================================================================
 // Storage Module Singleton
 // ============================================================================
 
@@ -215,9 +244,26 @@ export function getStorageModule(): IStorageModule {
 /**
  * Replace the storage module (e.g., when OpenSearch becomes available).
  * Used at startup or when storage config changes at runtime.
+ * Optionally accepts a StorageState to update the runtime state.
  */
-export function setStorageModule(module: IStorageModule): void {
+export function setStorageModule(module: IStorageModule, state?: StorageState): void {
   storageModule = module;
+  if (state) {
+    currentStorageState = { ...state };
+  }
+}
+
+/**
+ * Mark storage as errored without swapping the module.
+ * The existing module stays active (allows graceful degradation).
+ */
+export function setStorageError(error: string, configKey: string, endpoint: string): void {
+  currentStorageState = {
+    backend: 'error',
+    configKey,
+    error,
+    configuredEndpoint: endpoint,
+  };
 }
 
 /**

@@ -20,6 +20,7 @@ import { loadConfig, type ResolvedConfig } from '@/lib/config/index.js';
 import { ensureServer, createServerCleanup } from '@/cli/utils/serverLifecycle.js';
 import { ApiClient, type EvaluationResult, type EvaluationProgressEvent } from '@/cli/utils/apiClient.js';
 import type { AgentConfig, TrajectoryStep } from '@/types/index.js';
+import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
 
 // Import server connectors to ensure they're registered
 import { connectorRegistry } from '@/services/connectors/server.js';
@@ -41,10 +42,10 @@ function findAgent(identifier: string, config: ResolvedConfig): AgentConfig | un
 }
 
 /**
- * Get default model for an agent
+ * Get default model key from config
  */
-function getDefaultModel(agent: AgentConfig): string {
-  return agent.models[0] || 'claude-sonnet';
+function getDefaultModel(config: ResolvedConfig): string {
+  return Object.keys(config.models)[0] || 'claude-sonnet';
 }
 
 /**
@@ -127,38 +128,54 @@ async function runForAgent(
 }
 
 /**
+ * Build rows from results (shared between table and markdown)
+ */
+function buildResultRows(results: Array<{ agent: AgentConfig; report: EvaluationResult | null }>): string[][] {
+  return results.map(r => {
+    if (!r.report) {
+      return [r.agent.name, 'ERROR', '-', '-', '-'];
+    }
+    const status = r.report.passFailStatus === 'passed' ? 'PASSED'
+      : r.report.passFailStatus === 'failed' ? 'FAILED'
+      : r.report.status;
+    return [
+      r.agent.name,
+      status,
+      r.report.metrics?.accuracy ? `${Math.round(r.report.metrics.accuracy)}%` : '-',
+      r.report.trajectorySteps.toString(),
+      r.report.id?.substring(0, 27) + '...' || '-',
+    ];
+  });
+}
+
+/**
  * Display results as table
  */
-function displayTableResults(results: Array<{ agent: AgentConfig; report: EvaluationResult | null }>): void {
+function displayResults(results: Array<{ agent: AgentConfig; report: EvaluationResult | null }>, format: OutputFormat): void {
+  const headers = ['Agent', 'Status', 'Accuracy', 'Steps', 'Report ID'];
+  const rows = buildResultRows(results);
+
+  if (format === 'markdown') {
+    console.log('\n');
+    console.log(formatMarkdownTable(headers, rows));
+    return;
+  }
+
   const table = new Table({
-    head: [
-      chalk.cyan('Agent'),
-      chalk.cyan('Status'),
-      chalk.cyan('Accuracy'),
-      chalk.cyan('Steps'),
-      chalk.cyan('Report ID'),
-    ],
+    head: headers.map(h => chalk.cyan(h)),
     colWidths: [20, 12, 12, 10, 30],
   });
 
   for (const r of results) {
     if (!r.report) {
-      table.push([
-        r.agent.name,
-        chalk.red('ERROR'),
-        '-',
-        '-',
-        '-',
-      ]);
+      table.push([r.agent.name, chalk.red('ERROR'), '-', '-', '-']);
       continue;
     }
-
     const statusStr = r.report.passFailStatus === 'passed'
       ? chalk.green('PASSED')
       : r.report.passFailStatus === 'failed'
         ? chalk.red('FAILED')
         : chalk.yellow(r.report.status);
-
     table.push([
       r.agent.name,
       statusStr,
@@ -181,7 +198,7 @@ export function createRunCommand(): Command {
     .requiredOption('-t, --test-case <id>', 'Test case ID or name')
     .option('-a, --agent <key>', 'Agent key (can be specified multiple times)', (val, arr: string[]) => [...arr, val], [])
     .option('-m, --model <id>', 'Model ID (uses agent default if not specified)')
-    .option('-o, --output <format>', 'Output format: table, json', 'table')
+    .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
     .option('-v, --verbose', 'Show detailed trajectory output')
     .action(async (options: RunOptions & { testCase: string }) => {
       console.log(chalk.bold('\nAgent Health - Test Case Runner\n'));
@@ -240,7 +257,7 @@ export function createRunCommand(): Command {
         const results: Array<{ agent: AgentConfig; report: EvaluationResult | null }> = [];
 
         for (const agent of agents) {
-          const modelId = options.model || getDefaultModel(agent);
+          const modelId = options.model || getDefaultModel(config);
 
           // Validate agent requirements before running
           const validationError = await validateAgentRequirements(agent);
@@ -272,13 +289,14 @@ export function createRunCommand(): Command {
         }
 
         // Output results
-        if (options.output === 'json') {
-          console.log(JSON.stringify(results.map(r => ({
+        const outputFormat = parseOutputFormat(options.output);
+        if (outputFormat === 'json') {
+          console.log(formatJson(results.map(r => ({
             agent: { key: r.agent.key, name: r.agent.name },
             report: r.report,
-          })), null, 2));
+          }))));
         } else {
-          displayTableResults(results);
+          displayResults(results, outputFormat);
         }
       } catch (error: any) {
         console.error(chalk.red(`\n  Error: ${error.message}`));

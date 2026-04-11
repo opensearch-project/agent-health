@@ -59,7 +59,7 @@ describe('Config Routes', () => {
     it('returns agents from config', () => {
       mockLoadConfigSync.mockReturnValue({
         agents: [
-          { key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo', models: ['demo-model'] },
+          { key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo' },
         ],
         models: {},
       } as any);
@@ -69,7 +69,7 @@ describe('Config Routes', () => {
       handler(req, res);
 
       expect(res.json).toHaveBeenCalledWith({
-        agents: [{ key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo', models: ['demo-model'] }],
+        agents: [{ key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo' }],
         total: 1,
         meta: { source: 'config' },
       });
@@ -83,7 +83,6 @@ describe('Config Routes', () => {
             key: 'pulsar',
             name: 'Pulsar',
             endpoint: 'http://localhost:3000/agent',
-            models: ['claude-sonnet-4.5'],
             headers: { Authorization: 'Bearer token' },
             hooks: { beforeRequest: mockHook },
           },
@@ -105,8 +104,8 @@ describe('Config Routes', () => {
     it('handles agents without hooks gracefully', () => {
       mockLoadConfigSync.mockReturnValue({
         agents: [
-          { key: 'basic', name: 'Basic Agent', endpoint: 'http://localhost:3000', models: ['m1'] },
-          { key: 'hooked', name: 'Hooked Agent', endpoint: 'http://localhost:3001', models: ['m1'], hooks: { beforeRequest: jest.fn() } },
+          { key: 'basic', name: 'Basic Agent', endpoint: 'http://localhost:3000' },
+          { key: 'hooked', name: 'Hooked Agent', endpoint: 'http://localhost:3001', hooks: { beforeRequest: jest.fn() } },
         ],
         models: {},
       } as any);
@@ -139,13 +138,13 @@ describe('Config Routes', () => {
     it('returns merged built-in and custom agents', () => {
       mockLoadConfigSync.mockReturnValue({
         agents: [
-          { key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo', models: ['demo-model'] },
+          { key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo' },
         ],
         models: {},
       } as any);
 
       mockGetCustomAgents.mockReturnValue([
-        { key: 'custom-1', name: 'My Custom', endpoint: 'http://custom.example.com', isCustom: true, models: [], headers: {}, connectorType: 'agui-streaming' as const },
+        { key: 'custom-1', name: 'My Custom', endpoint: 'http://custom.example.com', isCustom: true, headers: {}, connectorType: 'agui-streaming' as const },
       ]);
 
       const { req, res } = createMocks();
@@ -292,7 +291,7 @@ describe('Config Routes', () => {
     });
 
     it('accepts all valid connectorType values', () => {
-      const validTypes = ['agui-streaming', 'rest', 'litellm', 'subprocess', 'claude-code', 'mock'] as const;
+      const validTypes = ['agui-streaming', 'rest', 'openai-compatible', 'subprocess', 'claude-code', 'mock'] as const;
       const handler = getRouteHandler(configRoutes, 'post', '/api/agents/custom');
 
       for (const connectorType of validTypes) {

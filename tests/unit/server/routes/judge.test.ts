@@ -6,7 +6,20 @@
 import { Request, Response } from 'express';
 import judgeRoutes from '@/server/routes/judge';
 import { evaluateTrajectory, parseBedrockError } from '@/server/services/bedrockService';
-import { evaluateWithLiteLLM, parseLiteLLMError } from '@/server/services/litellmJudgeService';
+import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/server/services/judgeService';
+
+// Mock the AWS Bedrock client
+const mockSend = jest.fn();
+jest.mock('@aws-sdk/client-bedrock', () => ({
+  BedrockClient: jest.fn().mockImplementation(() => ({
+    send: mockSend,
+  })),
+  ListInferenceProfilesCommand: jest.fn().mockImplementation((input) => input),
+}));
+
+jest.mock('@aws-sdk/credential-providers', () => ({
+  fromNodeProviderChain: jest.fn().mockReturnValue({}),
+}));
 
 // Mock the bedrock service
 jest.mock('@/server/services/bedrockService', () => ({
@@ -14,16 +27,16 @@ jest.mock('@/server/services/bedrockService', () => ({
   parseBedrockError: jest.fn(),
 }));
 
-// Mock the litellm judge service
-jest.mock('@/server/services/litellmJudgeService', () => ({
-  evaluateWithLiteLLM: jest.fn(),
-  parseLiteLLMError: jest.fn(),
+// Mock the OpenAI-compatible judge service
+jest.mock('@/server/services/judgeService', () => ({
+  evaluateWithOpenAICompatible: jest.fn(),
+  parseOpenAICompatibleError: jest.fn(),
 }));
 
 const mockEvaluateTrajectory = evaluateTrajectory as jest.MockedFunction<typeof evaluateTrajectory>;
 const mockParseBedrockError = parseBedrockError as jest.MockedFunction<typeof parseBedrockError>;
-const mockEvaluateWithLiteLLM = evaluateWithLiteLLM as jest.MockedFunction<typeof evaluateWithLiteLLM>;
-const mockParseLiteLLMError = parseLiteLLMError as jest.MockedFunction<typeof parseLiteLLMError>;
+const mockEvaluateWithOpenAICompatible = evaluateWithOpenAICompatible as jest.MockedFunction<typeof evaluateWithOpenAICompatible>;
+const mockParseOpenAICompatibleError = parseOpenAICompatibleError as jest.MockedFunction<typeof parseOpenAICompatibleError>;
 
 // Helper to create mock request/response
 function createMocks(body: any = {}) {
@@ -58,6 +71,81 @@ describe('Judge Routes', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  describe('GET /api/judge/bedrock-models', () => {
+    it('returns discovered Anthropic models from Bedrock', async () => {
+      mockSend.mockResolvedValue({
+        inferenceProfileSummaries: [
+          { inferenceProfileId: 'us.anthropic.claude-sonnet-4-20250514-v1:0', inferenceProfileName: 'Claude Sonnet 4' },
+          { inferenceProfileId: 'us.anthropic.claude-opus-4-6-v1', inferenceProfileName: 'Claude Opus 4.6' },
+          { inferenceProfileId: 'us.meta.llama3-8b-instruct-v1:0', inferenceProfileName: 'Llama 3 8B' },
+        ],
+      });
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(judgeRoutes, 'get', '/api/judge/bedrock-models');
+      await handler(req, res);
+
+      expect(res.json).toHaveBeenCalledWith({
+        models: [
+          { id: 'us.anthropic.claude-sonnet-4-20250514-v1:0', name: 'Claude Sonnet 4' },
+          { id: 'us.anthropic.claude-opus-4-6-v1', name: 'Claude Opus 4.6' },
+        ],
+        region: expect.any(String),
+        configured: true,
+      });
+    });
+
+    it('filters out non-Anthropic models', async () => {
+      mockSend.mockResolvedValue({
+        inferenceProfileSummaries: [
+          { inferenceProfileId: 'us.meta.llama3-8b-instruct-v1:0', inferenceProfileName: 'Llama 3 8B' },
+          { inferenceProfileId: 'us.amazon.titan-text-express-v1', inferenceProfileName: 'Titan Text' },
+        ],
+      });
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(judgeRoutes, 'get', '/api/judge/bedrock-models');
+      await handler(req, res);
+
+      expect(res.json).toHaveBeenCalledWith({
+        models: [],
+        region: expect.any(String),
+        configured: true,
+      });
+    });
+
+    it('returns 503 when Bedrock credentials are missing or API fails', async () => {
+      mockSend.mockRejectedValue(new Error('Could not load credentials'));
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(judgeRoutes, 'get', '/api/judge/bedrock-models');
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({
+        error: expect.stringContaining('Cannot discover Bedrock models'),
+        region: expect.any(String),
+        configured: false,
+      });
+    });
+
+    it('handles empty inference profiles response', async () => {
+      mockSend.mockResolvedValue({
+        inferenceProfileSummaries: [],
+      });
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(judgeRoutes, 'get', '/api/judge/bedrock-models');
+      await handler(req, res);
+
+      expect(res.json).toHaveBeenCalledWith({
+        models: [],
+        region: expect.any(String),
+        configured: true,
+      });
+    });
   });
 
   describe('POST /api/judge', () => {
@@ -244,11 +332,11 @@ describe('Judge Routes', () => {
       expect(mockEvaluateTrajectory).toHaveBeenCalled();
     });
 
-    it('routes to evaluateWithLiteLLM when provider is litellm', async () => {
-      mockEvaluateWithLiteLLM.mockResolvedValue({
+    it('routes to evaluateWithOpenAICompatible when provider is openai-compatible', async () => {
+      mockEvaluateWithOpenAICompatible.mockResolvedValue({
         passFailStatus: 'passed',
         metrics: { accuracy: 0.9 },
-        llmJudgeReasoning: 'LiteLLM evaluation',
+        llmJudgeReasoning: 'OpenAI-compatible evaluation',
         improvementStrategies: [],
         duration: 120,
       });
@@ -256,13 +344,13 @@ describe('Judge Routes', () => {
       const { req, res } = createMocks({
         trajectory: [{ type: 'action', toolName: 'search' }],
         expectedOutcomes: ['Identify issue'],
-        modelId: 'gpt-4o', // Uses provider: 'litellm' in DEFAULT_CONFIG
+        modelId: 'gpt-4o', // Uses provider: 'openai-compatible' in DEFAULT_CONFIG
       });
       const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
 
       await handler(req, res);
 
-      expect(mockEvaluateWithLiteLLM).toHaveBeenCalledWith(
+      expect(mockEvaluateWithOpenAICompatible).toHaveBeenCalledWith(
         expect.objectContaining({
           trajectory: expect.any(Array),
           expectedOutcomes: expect.any(Array),
@@ -277,11 +365,11 @@ describe('Judge Routes', () => {
       );
     });
 
-    it('does NOT call evaluateTrajectory (Bedrock) when provider is litellm', async () => {
-      mockEvaluateWithLiteLLM.mockResolvedValue({
+    it('does NOT call evaluateTrajectory (Bedrock) when provider is openai-compatible', async () => {
+      mockEvaluateWithOpenAICompatible.mockResolvedValue({
         passFailStatus: 'passed',
         metrics: { accuracy: 0.9 },
-        llmJudgeReasoning: 'LiteLLM evaluation',
+        llmJudgeReasoning: 'OpenAI-compatible evaluation',
         improvementStrategies: [],
         duration: 120,
       });
@@ -298,10 +386,10 @@ describe('Judge Routes', () => {
       expect(mockEvaluateTrajectory).not.toHaveBeenCalled();
     });
 
-    it('returns 500 with LiteLLM error message on LiteLLM failure', async () => {
-      const error = new Error('LiteLLM responded 401: Unauthorized');
-      mockEvaluateWithLiteLLM.mockRejectedValue(error);
-      mockParseLiteLLMError.mockReturnValue('LiteLLM authentication failed. Check your LITELLM_API_KEY.');
+    it('returns 500 with OpenAI-compatible error message on failure', async () => {
+      const error = new Error('OpenAI-compatible endpoint responded 401: Unauthorized');
+      mockEvaluateWithOpenAICompatible.mockRejectedValue(error);
+      mockParseOpenAICompatibleError.mockReturnValue('OpenAI-compatible endpoint authentication failed. Check your OPENAI_COMPATIBLE_API_KEY.');
 
       const { req, res } = createMocks({
         trajectory: [{ type: 'action' }],

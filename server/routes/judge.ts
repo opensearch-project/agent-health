@@ -8,8 +8,10 @@
  */
 
 import { Request, Response, Router } from 'express';
+import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bedrock';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import { evaluateTrajectory, parseBedrockError } from '../services/bedrockService';
-import { evaluateWithLiteLLM, parseLiteLLMError } from '../services/litellmJudgeService';
+import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '../services/judgeService';
 import { loadConfigSync } from '../../lib/config/index';
 import serverConfig from '../config';
 import { debug } from '@/lib/debug';
@@ -72,20 +74,20 @@ ${expectedOutcomes?.map((outcome, i) => `${i + 1}. "${outcome.substring(0, 50)}.
 }
 
 /**
- * GET /api/judge/litellm-models
- * Discover available models from the configured LiteLLM / OpenAI-compatible endpoint.
+ * GET /api/judge/openai-compatible-models
+ * Discover available models from the configured OpenAI-compatible endpoint.
  * Returns { models: string[], endpoint: string, configured: boolean }
  */
-router.get('/api/judge/litellm-models', async (_req: Request, res: Response) => {
-  const endpoint = serverConfig.LITELLM_ENDPOINT;
+router.get('/api/judge/openai-compatible-models', async (_req: Request, res: Response) => {
+  const endpoint = serverConfig.OPENAI_COMPATIBLE_ENDPOINT;
   // Derive the /models URL from the chat completions endpoint
   const modelsUrl = endpoint.replace(/\/chat\/completions$/, '/models');
 
-  debug('JudgeAPI', 'Fetching LiteLLM models from:', modelsUrl);
+  debug('JudgeAPI', 'Fetching OpenAI-compatible models from:', modelsUrl);
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (serverConfig.LITELLM_API_KEY) {
-    headers['Authorization'] = `Bearer ${serverConfig.LITELLM_API_KEY}`;
+  if (serverConfig.OPENAI_COMPATIBLE_API_KEY) {
+    headers['Authorization'] = `Bearer ${serverConfig.OPENAI_COMPATIBLE_API_KEY}`;
   }
 
   try {
@@ -93,26 +95,68 @@ router.get('/api/judge/litellm-models', async (_req: Request, res: Response) => 
     if (!response.ok) {
       const body = await response.text();
       return res.status(response.status).json({
-        error: `LiteLLM /models returned ${response.status}`,
+        error: `OpenAI-compatible /models returned ${response.status}`,
         details: body,
         endpoint: modelsUrl,
-        configured: !!serverConfig.LITELLM_API_KEY,
+        configured: !!serverConfig.OPENAI_COMPATIBLE_API_KEY,
       });
     }
     const data = await response.json();
     // OpenAI /models returns { object: "list", data: [{ id, ... }] }
     const models: string[] = (data.data || data.models || []).map((m: any) => m.id || m).filter(Boolean);
-    debug('JudgeAPI', 'Discovered', models.length, 'LiteLLM models');
+    debug('JudgeAPI', 'Discovered', models.length, 'OpenAI-compatible models');
     return res.json({
       models,
       endpoint: modelsUrl,
-      configured: !!serverConfig.LITELLM_API_KEY,
+      configured: !!serverConfig.OPENAI_COMPATIBLE_API_KEY,
     });
   } catch (err: any) {
     return res.status(503).json({
-      error: `Cannot reach LiteLLM endpoint: ${err.message}`,
+      error: `Cannot reach OpenAI-compatible endpoint: ${err.message}`,
       endpoint: modelsUrl,
-      configured: !!serverConfig.LITELLM_API_KEY,
+      configured: !!serverConfig.OPENAI_COMPATIBLE_API_KEY,
+    });
+  }
+});
+
+/**
+ * GET /api/judge/bedrock-models
+ * Discover available Anthropic models from AWS Bedrock via ListInferenceProfiles.
+ * Returns { models: Array<{id, name}>, region: string, configured: boolean }
+ */
+router.get('/api/judge/bedrock-models', async (_req: Request, res: Response) => {
+  const region = serverConfig.AWS_REGION;
+  debug('JudgeAPI', 'Fetching Bedrock inference profiles from region:', region);
+
+  try {
+    const client = new BedrockClient({
+      region,
+      credentials: fromNodeProviderChain(),
+    });
+
+    const command = new ListInferenceProfilesCommand({});
+    const response = await client.send(command);
+
+    const profiles = response.inferenceProfileSummaries || [];
+    const anthropicModels = profiles
+      .filter(p => (p.inferenceProfileId || '').includes('anthropic'))
+      .map(p => ({
+        id: p.inferenceProfileId,
+        name: p.inferenceProfileName || p.inferenceProfileId,
+      }));
+
+    debug('JudgeAPI', 'Discovered', anthropicModels.length, 'Anthropic Bedrock models');
+    return res.json({
+      models: anthropicModels,
+      region,
+      configured: true,
+    });
+  } catch (err: any) {
+    debug('JudgeAPI', 'Bedrock discovery failed:', err.message);
+    return res.status(503).json({
+      error: `Cannot discover Bedrock models: ${err.message}`,
+      region,
+      configured: false,
     });
   }
 });
@@ -158,9 +202,9 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       return res.json(mockResult);
     }
 
-    if (provider === 'litellm') {
-      debug('JudgeAPI', 'LiteLLM provider - calling OpenAI-compatible endpoint');
-      const result = await evaluateWithLiteLLM(
+    if (provider === 'openai-compatible') {
+      debug('JudgeAPI', 'OpenAI-compatible provider - calling endpoint');
+      const result = await evaluateWithOpenAICompatible(
         { trajectory, expectedOutcomes, expectedTrajectory, logs },
         resolvedModelId
       );
@@ -192,8 +236,8 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       }
     })();
 
-    const errorMessage = provider === 'litellm'
-      ? parseLiteLLMError(error)
+    const errorMessage = provider === 'openai-compatible'
+      ? parseOpenAICompatibleError(error)
       : parseBedrockError(error);
 
     res.status(500).json({

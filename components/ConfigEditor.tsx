@@ -21,9 +21,7 @@ agents:
 ${DEFAULT_CONFIG.agents.map(agent => `  - name: ${agent.name}
     endpoint: ${agent.endpoint}
     description: ${agent.description || 'N/A'}
-    enabled: ${agent.enabled !== false}
-    models:
-${agent.models.map(m => `      - ${m}`).join('\n')}`).join('\n\n')}
+    enabled: ${agent.enabled !== false}`).join('\n\n')}
 
 models:
 ${Object.values(DEFAULT_CONFIG.models).map(model => `  ${model.display_name}:

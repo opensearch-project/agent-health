@@ -29,7 +29,6 @@ export default {
       name: "My REST Agent",
       endpoint: "http://localhost:8000/api/agent",
       connectorType: "rest",
-      models: ["claude-sonnet-4"],
       useTraces: true,           // Enable OpenTelemetry trace collection
     },
 
@@ -39,7 +38,6 @@ export default {
       name: "My Streaming Agent",
       endpoint: "http://localhost:9000/agent/stream",
       connectorType: "agui-streaming",
-      models: ["claude-sonnet-4.5"],
       useTraces: false,
     },
 
@@ -49,7 +47,6 @@ export default {
     //   name: "My CLI Agent",
     //   endpoint: "/usr/local/bin/my-agent",
     //   connectorType: "subprocess",
-    //   models: ["gpt-4"],
     //   useTraces: false,
     // },
 
@@ -59,7 +56,6 @@ export default {
     //   name: "Authenticated Agent",
     //   endpoint: "https://api.example.com/agent",
     //   connectorType: "rest",
-    //   models: ["claude-sonnet-4"],
     //   useTraces: true,
     //   hooks: {
     //     beforeRequest: async ({ endpoint, payload, headers }) => {
@@ -82,7 +78,6 @@ export default {
     //   name: "Claude Code (Eval)",
     //   endpoint: "claude",
     //   connectorType: "claude-code",
-    //   models: ["claude-sonnet-4"],
     //   useTraces: true,
     //   connectorConfig: {
     //     dangerouslySkipPermissions: true,
@@ -101,7 +96,7 @@ export default {
   //     key: "my-model",
   //     model_id: "us.anthropic.claude-sonnet-4-20250514-v1:0",
   //     display_name: "My Model",
-  //     provider: "bedrock",       // "bedrock" | "litellm" | "demo"
+  //     provider: "bedrock",       // "bedrock" | "openai-compatible" | "demo"
   //     context_window: 200000,
   //     max_output_tokens: 4096,
   //   },

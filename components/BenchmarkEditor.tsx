@@ -101,7 +101,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
       id: asyncBenchmarkStorage.generateRunId(),
       name: 'Baseline',
       agentKey: defaultAgent.key,
-      modelId: defaultAgent.models[0] || 'claude-sonnet-4.5',
+      modelId: Object.keys(DEFAULT_CONFIG.models)[0] || 'claude-sonnet-4.5',
     };
   }
 
@@ -146,7 +146,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
       id: asyncBenchmarkStorage.generateRunId(),
       name: `Run ${runNum}`,
       agentKey: defaultAgent.key,
-      modelId: defaultAgent.models[0] || 'claude-sonnet-4.5',
+      modelId: Object.keys(DEFAULT_CONFIG.models)[0] || 'claude-sonnet-4.5',
     }]);
   };
 

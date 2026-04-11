@@ -3,8 +3,59 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AppConfig, ModelConfig } from '@/types';
-import { ENV_CONFIG, buildMLCommonsHeaders } from '@/lib/config';
+import { AppConfig, ConnectorProtocol, ModelConfig } from '@/types';
+import { ENV_CONFIG } from '@/lib/config';
+
+/**
+ * Single source of truth for connector type metadata.
+ * Used by Settings UI (dropdown + descriptions), server validation, and browser-safety checks.
+ */
+export interface ConnectorTypeInfo {
+  label: string;
+  description: string;
+  serverOnly: boolean;
+}
+
+export const CONNECTOR_TYPE_INFO: Record<ConnectorProtocol, ConnectorTypeInfo> = {
+  'agui-streaming': {
+    label: 'AG-UI Streaming',
+    description: 'AG-UI protocol over SSE. Use for ML-Commons and AG-UI compatible agents.',
+    serverOnly: false,
+  },
+  'rest': {
+    label: 'REST',
+    description: 'Standard HTTP POST. Agent receives JSON, returns JSON. No streaming.',
+    serverOnly: false,
+  },
+  'openai-compatible': {
+    label: 'OpenAI Compatible',
+    description: 'OpenAI chat completions format (POST /v1/chat/completions). Works with LiteLLM, Ollama, vLLM.',
+    serverOnly: false,
+  },
+  'subprocess': {
+    label: 'Subprocess',
+    description: 'Runs a CLI command as a child process. Server-only — use the CLI or benchmark runner.',
+    serverOnly: true,
+  },
+  'claude-code': {
+    label: 'Claude Code',
+    description: 'Invokes the Claude Code CLI. Server-only — use the CLI or benchmark runner.',
+    serverOnly: true,
+  },
+  'mock': {
+    label: 'Mock',
+    description: 'Built-in demo agent for testing. No real endpoint needed.',
+    serverOnly: false,
+  },
+};
+
+/** All valid connector protocol types, derived from CONNECTOR_TYPE_INFO. */
+export const VALID_CONNECTOR_TYPES = Object.keys(CONNECTOR_TYPE_INFO) as ConnectorProtocol[];
+
+/** Connector types that work in the browser (non-serverOnly). */
+export const BROWSER_SAFE_CONNECTORS = (Object.entries(CONNECTOR_TYPE_INFO) as [ConnectorProtocol, ConnectorTypeInfo][])
+  .filter(([, info]) => !info.serverOnly)
+  .map(([type]) => type);
 
 /**
  * Get Claude Code connector environment variables at runtime.
@@ -38,10 +89,17 @@ function getClaudeCodeConnectorEnv(): Record<string, string> {
 
 // Model pricing per 1M tokens (USD)
 export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  // Claude 4.x models (with inference profile prefix)
+  // Claude Opus models
+  'us.anthropic.claude-opus-4-6-v1': { input: 5.0, output: 25.0 },
+  'us.anthropic.claude-opus-4-5-20251101-v1:0': { input: 5.0, output: 25.0 },
+  'us.anthropic.claude-opus-4-1-20250805-v1:0': { input: 15.0, output: 75.0 },
+  'us.anthropic.claude-opus-4-20250514-v1:0': { input: 15.0, output: 75.0 },
+  // Claude Sonnet models
+  'us.anthropic.claude-sonnet-4-6': { input: 3.0, output: 15.0 },
   'us.anthropic.claude-sonnet-4-20250514-v1:0': { input: 3.0, output: 15.0 },
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0': { input: 3.0, output: 15.0 },
-  // Claude 3.x models
+  // Claude Haiku models
+  'us.anthropic.claude-haiku-4-5-20251001-v1:0': { input: 1.0, output: 5.0 },
   'us.anthropic.claude-3-5-haiku-20241022-v1:0': { input: 0.80, output: 4.0 },
   // Default fallback
   'default': { input: 3.0, output: 15.0 },
@@ -55,29 +113,8 @@ export const DEFAULT_CONFIG: AppConfig = {
       endpoint: "mock://demo",
       description: "Mock agent for testing (simulated responses)",
       connectorType: "mock",
-      models: ["demo-model"],
       headers: {},
       useTraces: false,
-    },
-    {
-      key: "mlcommons-local",
-      name: "ML-Commons (Localhost)",
-      endpoint: ENV_CONFIG.mlcommonsEndpoint,
-      description: "Local OpenSearch ML-Commons conversational agent",
-      connectorType: "agui-streaming",
-      models: ["claude-sonnet-4.5", "claude-sonnet-4", "claude-haiku-3.5"],
-      headers: buildMLCommonsHeaders(),
-      useTraces: true,
-    },
-    {
-      key: "travel-planner",
-      name: "Travel Planner",
-      endpoint: ENV_CONFIG.travelPlannerEndpoint,
-      description: "Multi-agent Travel Planner demo (requires OTel Demo running via Docker)",
-      connectorType: "agui-streaming",
-      models: ["claude-sonnet-4.5", "claude-sonnet-4", "claude-haiku-3.5"],
-      headers: {},
-      useTraces: true,
     },
     {
       key: "claude-code",
@@ -85,7 +122,6 @@ export const DEFAULT_CONFIG: AppConfig = {
       endpoint: "claude",
       description: "Claude Code CLI agent (requires claude command installed)",
       connectorType: "claude-code",
-      models: ["claude-sonnet-4"],
       headers: {},
       useTraces: ENV_CONFIG.claudeCodeTelemetryEnabled && !!ENV_CONFIG.otelExporterEndpoint,
       connectorConfig: { env: getClaudeCodeConnectorEnv() },
@@ -98,6 +134,48 @@ export const DEFAULT_CONFIG: AppConfig = {
       provider: "demo",
       context_window: 200000,
       max_output_tokens: 4096
+    },
+    "claude-opus-4.6": {
+      model_id: "us.anthropic.claude-opus-4-6-v1",
+      display_name: "Claude Opus 4.6",
+      provider: "bedrock",
+      context_window: 200000,
+      max_output_tokens: 128000
+    },
+    "claude-sonnet-4.6": {
+      model_id: "us.anthropic.claude-sonnet-4-6",
+      display_name: "Claude Sonnet 4.6",
+      provider: "bedrock",
+      context_window: 200000,
+      max_output_tokens: 64000
+    },
+    "claude-haiku-4.5": {
+      model_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      display_name: "Claude Haiku 4.5",
+      provider: "bedrock",
+      context_window: 200000,
+      max_output_tokens: 64000
+    },
+    "claude-opus-4.5": {
+      model_id: "us.anthropic.claude-opus-4-5-20251101-v1:0",
+      display_name: "Claude Opus 4.5",
+      provider: "bedrock",
+      context_window: 200000,
+      max_output_tokens: 64000
+    },
+    "claude-opus-4.1": {
+      model_id: "us.anthropic.claude-opus-4-1-20250805-v1:0",
+      display_name: "Claude Opus 4.1",
+      provider: "bedrock",
+      context_window: 200000,
+      max_output_tokens: 32000
+    },
+    "claude-opus-4": {
+      model_id: "us.anthropic.claude-opus-4-20250514-v1:0",
+      display_name: "Claude Opus 4",
+      provider: "bedrock",
+      context_window: 200000,
+      max_output_tokens: 32000
     },
     "claude-sonnet-4.5": {
       model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -122,22 +200,22 @@ export const DEFAULT_CONFIG: AppConfig = {
     },
     "gpt-4o": {
       model_id: "gpt-4o",
-      display_name: "GPT-4o (via LiteLLM)",
-      provider: "litellm",
+      display_name: "GPT-4o",
+      provider: "openai-compatible",
       context_window: 128000,
       max_output_tokens: 4096
     },
     "deepseek-r1:8b": {
       model_id: "deepseek-r1:8b",
       display_name: "DeepSeek R1 8B (Ollama)",
-      provider: "litellm",
+      provider: "openai-compatible",
       context_window: 128000,
       max_output_tokens: 8192
     },
     "gemma3:12b": {
       model_id: "gemma3:12b",
       display_name: "Gemma 3 12B (Ollama)",
-      provider: "litellm",
+      provider: "openai-compatible",
       context_window: 128000,
       max_output_tokens: 8192
     },

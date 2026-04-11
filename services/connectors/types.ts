@@ -15,7 +15,7 @@ import type { TestCase, TrajectoryStep, AgentHooks } from '@/types';
  * - claude-code: Claude Code CLI (specialized subprocess)
  * - mock: Demo/testing connector
  */
-export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'litellm' | 'subprocess' | 'claude-code' | 'mock';
+export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code' | 'mock';
 
 // ============ Authentication Types ============
 

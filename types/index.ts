@@ -12,10 +12,10 @@ export type Difficulty = 'Easy' | 'Medium' | 'Hard';
 export type DateFormatVariant = 'date' | 'datetime' | 'detailed';
 
 // Judge provider determines which backend service handles evaluation
-export type JudgeProvider = 'demo' | 'bedrock' | 'litellm';
+export type JudgeProvider = 'demo' | 'bedrock' | 'openai-compatible';
 
 // Connector protocol for agent communication
-export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'litellm' | 'subprocess' | 'claude-code' | 'mock';
+export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code' | 'mock';
 
 export interface ModelConfig {
   model_id: string;
@@ -70,7 +70,6 @@ export interface AgentConfig {
   endpoint: string;
   description?: string;
   enabled?: boolean;
-  models: string[]; // Keys referring to ModelConfig
   headers?: Record<string, string>; // Custom headers for agent endpoint (e.g., AWS credentials)
   auth?: ConnectorAuthConfig; // Explicit auth config (preferred over headers inference)
   useTraces?: boolean; // When true, fetch traces instead of logs for evaluation

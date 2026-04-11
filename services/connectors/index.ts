@@ -41,20 +41,20 @@ export { BaseConnector } from './base/BaseConnector';
 export { AGUIStreamingConnector, aguiStreamingConnector } from './agui/AGUIStreamingConnector';
 export { MockConnector, mockConnector } from './mock/MockConnector';
 export { RESTConnector, restConnector } from './rest/RESTConnector';
-export { LiteLLMConnector, litellmConnector } from './litellm/LiteLLMConnector';
+export { OpenAICompatibleConnector, openaiCompatibleConnector } from './openai-compatible/OpenAICompatibleConnector';
 
 // ============ Auto-register Browser-safe Connectors ============
 import { connectorRegistry } from './registry';
 import { aguiStreamingConnector } from './agui/AGUIStreamingConnector';
 import { mockConnector } from './mock/MockConnector';
 import { restConnector } from './rest/RESTConnector';
-import { litellmConnector } from './litellm/LiteLLMConnector';
+import { openaiCompatibleConnector } from './openai-compatible/OpenAICompatibleConnector';
 
 // Register browser-compatible connectors on module load
 // Server-only connectors (subprocess, claude-code) are registered via server.ts
 connectorRegistry.register(aguiStreamingConnector);
 connectorRegistry.register(mockConnector);
 connectorRegistry.register(restConnector);
-connectorRegistry.register(litellmConnector);
+connectorRegistry.register(openaiCompatibleConnector);
 
 console.log('[Connectors] Browser-safe connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));

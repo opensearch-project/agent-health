@@ -21,6 +21,7 @@ import { ensureServer, createServerCleanup, isServerRunning, type EnsureServerRe
 import { ApiClient, ServerError, type BenchmarkExecutionEvent } from '@/cli/utils/apiClient.js';
 import { validateTestCasesArrayJson, type ValidatedTestCaseInput } from '@/lib/testCaseValidation.js';
 import { calculateRunStats, getReportIdsFromRun } from '@/lib/runStats.js';
+import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
 import type { AgentConfig, Benchmark, BenchmarkRun, TestCaseRun, EvaluationReport } from '@/types/index.js';
 
 interface BenchmarkOptions {
@@ -54,10 +55,10 @@ function findAgent(identifier: string, config: ResolvedConfig): AgentConfig | un
 }
 
 /**
- * Get default model for an agent
+ * Get default model key from config
  */
-function getDefaultModel(agent: AgentConfig): string {
-  return agent.models[0] || 'claude-sonnet';
+function getDefaultModel(config: ResolvedConfig): string {
+  return Object.keys(config.models)[0] || 'claude-sonnet';
 }
 
 /**
@@ -293,17 +294,37 @@ async function runBenchmarkForAgent(
 }
 
 /**
- * Display summary table
+ * Build summary rows (shared between table and markdown)
  */
-function displaySummaryTable(allResults: AgentResults[], totalTestCases: number): void {
+function buildSummaryRows(allResults: AgentResults[], totalTestCases: number): string[][] {
+  return allResults.map(results => {
+    const passRate = totalTestCases > 0 ? (results.passed / totalTestCases) * 100 : 0;
+    return [
+      results.agent.name,
+      results.passed.toString(),
+      results.failed.toString(),
+      `${passRate.toFixed(0)}%`,
+      results.run?.id || results.runId || 'N/A',
+    ];
+  });
+}
+
+/**
+ * Display summary table or markdown
+ */
+function displaySummary(allResults: AgentResults[], totalTestCases: number, format: OutputFormat): void {
+  const headers = ['Agent', 'Passed', 'Failed', 'Pass Rate', 'Run ID'];
+  const rows = buildSummaryRows(allResults, totalTestCases);
+
+  if (format === 'markdown') {
+    console.log('\n');
+    console.log('## Benchmark Summary\n');
+    console.log(formatMarkdownTable(headers, rows));
+    return;
+  }
+
   const table = new Table({
-    head: [
-      chalk.cyan('Agent'),
-      chalk.cyan('Passed'),
-      chalk.cyan('Failed'),
-      chalk.cyan('Pass Rate'),
-      chalk.cyan('Run ID'),
-    ],
+    head: headers.map(h => chalk.cyan(h)),
     colWidths: [25, 10, 10, 12, 35],
   });
 
@@ -408,7 +429,7 @@ export function createBenchmarkCommand(): Command {
       []
     )
     .option('-m, --model <id>', 'Model ID (uses agent default if not specified)')
-    .option('-o, --output <format>', 'Output format: table, json', 'table')
+    .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
     .option('--export <path>', 'Export results to file')
     .option('--format <type>', 'Report format for --export: json (default), html, pdf', 'json')
     .option('-c, --concurrency <n>', 'Number of test cases to run in parallel (default: 1)', '1')
@@ -604,7 +625,7 @@ export function createBenchmarkCommand(): Command {
         const allResults: AgentResults[] = [];
 
         for (const agent of agents) {
-          const modelId = options.model || getDefaultModel(agent);
+          const modelId = options.model || getDefaultModel(config);
           const results = await runBenchmarkForAgent(
             api,
             agent,
@@ -617,7 +638,8 @@ export function createBenchmarkCommand(): Command {
         }
 
         // Output results
-        if (options.output === 'json') {
+        const outputFormat = parseOutputFormat(options.output);
+        if (outputFormat === 'json') {
           const jsonOutput = allResults.map((r) => ({
             agent: { key: r.agent.key, name: r.agent.name },
             runId: r.run?.id || r.runId,
@@ -629,9 +651,9 @@ export function createBenchmarkCommand(): Command {
                 : 0,
             results: r.run?.results,
           }));
-          console.log(JSON.stringify(jsonOutput, null, 2));
+          console.log(formatJson(jsonOutput));
         } else {
-          displaySummaryTable(allResults, benchmark.testCaseIds.length);
+          displaySummary(allResults, benchmark.testCaseIds.length, outputFormat);
         }
 
         // Export if requested

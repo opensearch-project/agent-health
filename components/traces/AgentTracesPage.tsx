@@ -666,13 +666,15 @@ export const AgentTracesPage: React.FC = () => {
 
   // Calculate stats
   const stats = useMemo(() => {
-    if (allTraces.length === 0) return { total: 0, errors: 0, avgDuration: 0 };
+    if (allTraces.length === 0) return { total: 0, totalSpans: 0, errors: 0, avgDuration: 0 };
 
     const errors = allTraces.filter(t => t.hasErrors).length;
     const avgDuration = allTraces.reduce((sum, t) => sum + t.duration, 0) / allTraces.length;
+    const totalSpans = allTraces.reduce((sum, t) => sum + t.spanCount, 0);
 
     return {
       total: allTraces.length,
+      totalSpans,
       errors,
       avgDuration,
     };
@@ -951,8 +953,10 @@ export const AgentTracesPage: React.FC = () => {
             errorTimeSeries={errorTimeSeries}
             requestTimeSeries={requestTimeSeries}
             totalRequests={stats.total}
+            totalSpans={stats.totalSpans}
             totalErrors={stats.errors}
             avgLatency={stats.avgDuration}
+            onFilter={handleMetricsFilter}
           />
         )}
       </div>
