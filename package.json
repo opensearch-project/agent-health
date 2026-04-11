@@ -157,6 +157,6 @@
   },
   "overrides": {
     "minimatch": "^10.2.4",
-    "fast-xml-parser": "5.4.1"
+    "fast-xml-parser": "5.5.11"
   }
 }
