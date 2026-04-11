@@ -73,6 +73,8 @@ const CLAUDE_PROJECTS = path.join(os.homedir(), '.claude', 'projects');
 const KIRO_CLI = path.join(os.homedir(), '.kiro', 'sessions', 'cli');
 const CODEX_SESSIONS = path.join(os.homedir(), '.codex', 'sessions');
 
+import { kiroCliDataDir } from './readers/kiro';
+
 function kiroIdePath(): string {
   if (process.platform === 'darwin') {
     return path.join(os.homedir(), 'Library', 'Application Support', 'Kiro', 'User', 'globalStorage', 'kiro.kiroagent', 'workspace-sessions');
@@ -82,14 +84,49 @@ function kiroIdePath(): string {
   return path.join(os.homedir(), '.config', 'Kiro', 'User', 'globalStorage', 'kiro.kiroagent', 'workspace-sessions');
 }
 
+function kiroIdeBasePath(): string {
+  // Parent of workspace-sessions — strip the last segment
+  return path.dirname(kiroIdePath());
+}
+
+/** Compute signature across all hash-based .chat workspace dirs. */
+async function kiroChatDirSignature(): Promise<string> {
+  const baseDir = kiroIdeBasePath();
+  let fileCount = 0;
+  let latestMtime = 0;
+  try {
+    const entries = await fs.readdir(baseDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isDirectory() || !/^[0-9a-f]{32}$/.test(e.name)) continue;
+      const dp = path.join(baseDir, e.name);
+      const files = await fs.readdir(dp);
+      for (const f of files) {
+        if (!f.endsWith('.chat')) continue;
+        fileCount++;
+        try {
+          const stat = await fs.stat(path.join(dp, f));
+          if (stat.mtimeMs > latestMtime) latestMtime = stat.mtimeMs;
+        } catch { /* skip */ }
+      }
+    }
+  } catch { /* dir doesn't exist */ }
+  return `${Math.floor(latestMtime)}:${fileCount}`;
+}
+
 const DIR_SIGNATURE_FNS: Record<AgentKind, () => Promise<string>> = {
   'claude-code': () => dirSignature(CLAUDE_PROJECTS, f => f.endsWith('.jsonl'), false),
   'kiro': async () => {
-    const [cliSig, ideSig] = await Promise.all([
+    const [cliSig, ideSig, chatSig, dbSig] = await Promise.all([
       dirSignature(KIRO_CLI, f => f.endsWith('.jsonl'), false),
       dirSignature(kiroIdePath(), () => true, true),
+      kiroChatDirSignature(),
+      dirSignature(
+        kiroCliDataDir(),
+        f => f === 'data.sqlite3',
+        false,
+      ),
     ]);
-    return `${cliSig}|${ideSig}`;
+    return `${cliSig}|${ideSig}|${chatSig}|${dbSig}`;
   },
   'codex': () => dirSignature(CODEX_SESSIONS, f => f.startsWith('rollout-') && f.endsWith('.jsonl'), true),
 };
@@ -112,31 +149,9 @@ export class ReaderCache {
   /** Return cached sessions, refreshing if directory signature changed.
    *  Skips signature check if within TTL window to avoid blocking the event loop. */
   async getSessions(): Promise<AgentSession[]> {
-    // If a refresh is in progress, wait for it
-    if (this.refreshLock) {
+    // If first load and refresh in progress, wait for it
+    if (this.sessions.length === 0 && this.refreshLock) {
       await this.refreshLock;
-      return this.sessions;
-    }
-
-    // If the signature was checked recently, return cached data (even if empty)
-    if (this.lastSignatureCheck > 0 && (Date.now() - this.lastSignatureCheck) < SIGNATURE_TTL_MS) {
-      return this.sessions;
-    }
-
-    const sigFn = DIR_SIGNATURE_FNS[this.reader.agentName];
-    if (!sigFn) return this.reader.getSessions();
-
-    try {
-      const currentSig = await sigFn();
-      this.lastSignatureCheck = Date.now();
-      if (currentSig !== this.signature || this.sessions.length === 0) {
-        await this.fullRefresh();
-      }
-    } catch {
-      // If signature check fails, use cache if available
-      if (this.sessions.length === 0) {
-        await this.fullRefresh();
-      }
     }
     return this.sessions;
   }
@@ -156,9 +171,28 @@ export class ReaderCache {
     }
   }
 
+  /** Fast refresh: only load sessions modified since `sinceMs`. */
+  async fastRefresh(sinceMs: number): Promise<void> {
+    try {
+      const recent = await this.reader.getSessions(sinceMs);
+      if (recent.length > 0) {
+        // Merge with any existing sessions (avoid duplicates)
+        const existing = new Set(this.sessions.map(s => s.session_id));
+        for (const s of recent) {
+          if (!existing.has(s.session_id)) this.sessions.push(s);
+        }
+        this.lastFullRefresh = Date.now();
+      }
+    } catch { /* non-fatal — full refresh will follow */ }
+  }
+
   private async _doFullRefresh(): Promise<void> {
     try {
-      this.sessions = await this.reader.getSessions();
+      const fresh = await this.reader.getSessions();
+      // Merge: prefer fresh data, but keep fast-pass entries not in fresh set
+      const freshIds = new Set(fresh.map(s => s.session_id));
+      const kept = this.sessions.filter(s => !freshIds.has(s.session_id));
+      this.sessions = [...fresh, ...kept];
       const sigFn = DIR_SIGNATURE_FNS[this.reader.agentName];
       if (sigFn) this.signature = await sigFn();
       this.lastFullRefresh = Date.now();
@@ -254,10 +288,7 @@ export class SessionCacheManager {
 
   /** Get all sessions (merged, sorted, _filePath stripped). */
   async getAllSessionsCached(): Promise<AgentSession[]> {
-    // Wait for warmup to complete so first request gets real data
-    if (this.warmupPromise) {
-      await this.warmupPromise;
-    }
+
 
     // Check if any reader cache has been refreshed since last merge
     let needsMerge = this.mergedCache === null;
@@ -283,18 +314,86 @@ export class SessionCacheManager {
     return this.mergedCache!;
   }
 
-  /** Start async warmup (non-blocking). */
-  warmup(): void {
-    this.warmupPromise = this._doWarmup();
+  /** How many days of data have been loaded so far. */
+  loadedDays(): number {
+    return this._loadedDays;
   }
 
+  /** Whether background data loading is still in progress. */
+  isBackfilling(): boolean {
+    return this.backfillInProgress;
+  }
+
+  private backfillInProgress = false;
+  private _loadedDays = 0;
+
+  /** Start async warmup. Fast pass resolves quickly for immediate serving. */
+  warmup(): void {
+    this.fastPassDone = this._doWarmup();
+  }
+
+  /** Wait for the fast pass to complete (call before serving first request). */
+  async waitForFastPass(): Promise<void> {
+    if (this.fastPassDone) await this.fastPassDone;
+  }
+
+  private fastPassDone: Promise<void> | null = null;
+
   private async _doWarmup(): Promise<void> {
+    const now = Date.now();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    // Phase 1: today + 7 days in parallel — unblocks server
     try {
       await Promise.all(
-        [...this.readerCaches.values()].map(rc => rc.fullRefresh())
+        [...this.readerCaches.values()].map(rc => rc.fastRefresh(todayStart.getTime()))
       );
+      this._loadedDays = 1;
+      this.invalidateMergedCache();
     } catch { /* non-fatal */ }
-    this.warmupPromise = null;
+    this.warmupPromise = null; // fast pass done
+
+    // Phase 2: progressive backfill in background
+    this.backfillInProgress = true;
+    (async () => {
+      // 7 days (~2s)
+      try {
+        await Promise.all(
+          [...this.readerCaches.values()].map(rc => rc.fastRefresh(now - 7 * 86_400_000))
+        );
+        this._loadedDays = 7;
+        this.invalidateMergedCache();
+      } catch { /* non-fatal */ }
+
+      // 30 days (~20s)
+      try {
+        await Promise.all(
+          [...this.readerCaches.values()].map(rc => rc.fastRefresh(now - 30 * 86_400_000))
+        );
+        this._loadedDays = 30;
+        this.invalidateMergedCache();
+      } catch { /* non-fatal */ }
+
+      // Full scan (slow — only if needed)
+      try {
+        await Promise.all(
+          [...this.readerCaches.values()].map(rc =>
+            rc.fullRefresh().then(() => this.invalidateMergedCache())
+          )
+        );
+      } catch { /* non-fatal */ }
+
+      this._loadedDays = Infinity;
+      this.backfillInProgress = false;
+      this.invalidateMergedCache();
+    })();
+  }
+
+  /** Force merged cache to rebuild on next access. */
+  private invalidateMergedCache(): void {
+    this.mergedCache = null;
+    this.mergedAt = 0;
   }
 
   /** Start background refresh interval for active sessions. */

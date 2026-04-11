@@ -10,12 +10,23 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Added
-- Coding Agent Analytics: local filesystem readers for Claude Code, Kiro, and Codex CLI sessions ([#126](https://github.com/opensearch-project/agent-health/pull/126))
-- Remote server aggregation for multi-machine coding agent monitoring ([#126](https://github.com/opensearch-project/agent-health/pull/126))
-- Settings UI for remote server management with connectivity testing ([#126](https://github.com/opensearch-project/agent-health/pull/126))
-- CLI commands for remote server configuration (`agent-health remote add|remove|list|test`) ([#126](https://github.com/opensearch-project/agent-health/pull/126))
-- API key authentication middleware for headless remote mode ([#126](https://github.com/opensearch-project/agent-health/pull/126))
-- Feature toggle for Coding Agent Analytics via config or `AGENT_HEALTH_DISABLE_CODING_ANALYTICS` env var ([#126](https://github.com/opensearch-project/agent-health/pull/126))
+- Kiro CLI SQLite reader with progressive warmup, non-blocking cache, and phase-aware loading UX
+- Coding Agent Analytics: unified dashboard for Claude Code, Kiro, and Codex CLI usage data
+- Plugin-based reader system for ingesting local session data from ~/.claude/, ~/.kiro/, and ~/.codex/
+- API routes for coding agent stats, sessions, costs, activity patterns, and tool usage (/api/coding-agents/*)
+- Frontend page with Overview, Sessions, Projects, Costs, Activity, Efficiency, Tools, Advanced, and Workspace tabs at /coding-agents
+- Pricing engine covering Claude, Bedrock, and OpenAI models for cost estimation
+- Unified tool categorization across all three coding agents
+- Insights engine generating actionable recommendations from session data
+- In-memory session cache with directory-level invalidation and background refresh
+- Feature toggle to disable Coding Agent Analytics (AGENT_HEALTH_DISABLE_CODING_ANALYTICS=true or codingAgentAnalytics: false in config)
+- Graceful shutdown handler (SIGTERM/SIGINT) for stopping background timers and draining connections
+- Health endpoint now returns feature flags for frontend conditional rendering
+- RFC 001 documenting Coding Agent Analytics design
+- Remote server aggregation for multi-machine coding agent monitoring
+- Settings UI for remote server management with connectivity testing
+- CLI commands for remote server configuration (`agent-health remote add|remove|list|test`)
+- API key authentication middleware for headless remote mode
 
 ## [0.2.0]
 
@@ -56,6 +67,11 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - `models` property from agent configurations and related functions ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 
 ### Fixed
+- Error filter bypass: sorting useEffect and data fetches directly set displayedTraces, ignoring active filters ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Relative import regression in AgentTracesPage (`../Layout` → `@/components/Layout`) ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- selectedAgent localStorage persistence asymmetry — writes but never reads on init ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Remove auto-generated documentation files and `.kiro/specs/` directory from PR #108 ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Add missing `formatCompact` unit tests and E2E tests for error filter regression ([#108](https://github.com/opensearch-project/agent-health/pull/108))
 - Storage adapter for test case lookup in benchmark runner ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Flaky E2E tests: replaced `waitForTimeout` with proper element waits in comparison tests ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Debug mode E2E test race condition ([#115](https://github.com/opensearch-project/agent-health/pull/115))
