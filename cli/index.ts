@@ -82,7 +82,79 @@ program
   .version(version)
   // Enable subcommands to handle their own options (prevents parent options from shadowing)
   .enablePositionalOptions()
-  .passThroughOptions();
+  .passThroughOptions()
+  .configureHelp({
+    sortSubcommands: false,
+    // Hide default command list — replaced by grouped custom help below
+    subcommandTerm: () => '',
+    formatHelp: (cmd, helper) => {
+      const termWidth = helper.padWidth(cmd, helper);
+      const helpWidth = helper.helpWidth || 80;
+
+      // Build custom help with only description, usage, and options (no commands list)
+      const output: string[] = [];
+
+      // Description
+      const desc = helper.commandDescription(cmd);
+      if (desc) {
+        output.push(desc, '');
+      }
+
+      // Usage
+      output.push(`${chalk.cyan.bold('Usage:')} ${helper.commandUsage(cmd)}`, '');
+
+      // Options
+      const optionList = helper.visibleOptions(cmd)
+        .map(opt => {
+          const term = helper.optionTerm(opt);
+          const desc = helper.optionDescription(opt);
+          return `  ${term.padEnd(termWidth)}  ${desc}`;
+        })
+        .join('\n');
+      if (optionList) {
+        output.push(`${chalk.cyan.bold('Options:')}`, optionList, '');
+      }
+
+      return output.join('\n');
+    },
+  });
+
+// Custom help output with grouped commands and examples
+program.addHelpText('after', `
+${chalk.cyan.bold('Getting Started:')}
+  ${chalk.yellow('agent-health')}                        Launch the web UI and evaluation server
+  ${chalk.yellow('agent-health init')}                   Generate an agent-health.config.ts file
+  ${chalk.yellow('agent-health doctor')}                 Verify your setup (AWS creds, OpenSearch, agents)
+
+${chalk.cyan.bold('Running Evaluations:')}
+  ${chalk.yellow('agent-health run')} ${chalk.gray('-t <case> -a <agent>')}   Run a single test case against an agent
+  ${chalk.yellow('agent-health benchmark')} ${chalk.gray('-f <file>')}        Run a full benchmark from a test cases JSON file
+  ${chalk.yellow('agent-health benchmark')} ${chalk.gray('-b <id>')}          Re-run an existing benchmark
+
+${chalk.cyan.bold('Viewing Results:')}
+  ${chalk.yellow('agent-health list')} ${chalk.gray('agents|benchmarks|...')}  List agents, connectors, test cases, or benchmarks
+  ${chalk.yellow('agent-health report')} ${chalk.gray('-b <benchmark>')}       Generate an HTML/PDF/JSON report
+  ${chalk.yellow('agent-health export')} ${chalk.gray('-b <benchmark>')}       Export test cases as re-importable JSON
+  ${chalk.yellow('agent-health compare-services')} ${chalk.gray('-s A B')}    Compare error patterns between services
+
+${chalk.cyan.bold('Remote Servers:')}
+  ${chalk.yellow('agent-health remote add')} ${chalk.gray('--name <n> --url <u>')}  Add a remote server
+  ${chalk.yellow('agent-health remote list')}             List configured remote servers
+  ${chalk.yellow('agent-health remote test')}             Test connectivity to all remotes
+
+${chalk.cyan.bold('Maintenance:')}
+  ${chalk.yellow('agent-health migrate')}                Migrate legacy benchmark data to current format
+  ${chalk.yellow('agent-health serve')}                  Start the server (same as default, explicit command)
+
+${chalk.cyan.bold('Examples:')}
+  ${chalk.gray('$')} npx @opensearch-project/agent-health
+  ${chalk.gray('$')} npx @opensearch-project/agent-health --port 8080 --no-browser
+  ${chalk.gray('$')} npx @opensearch-project/agent-health run -t "RCA for 500 errors" -a langgraph
+  ${chalk.gray('$')} npx @opensearch-project/agent-health benchmark -f ./test-cases.json -a my-agent
+  ${chalk.gray('$')} npx @opensearch-project/agent-health list agents
+  ${chalk.gray('$')} npx @opensearch-project/agent-health report -b bench-123 -f pdf -o report.pdf
+  ${chalk.gray('$')} npx @opensearch-project/agent-health serve --headless --api-key sk-secret
+`);
 
 // CLI options for default action (when no subcommand is specified)
 program

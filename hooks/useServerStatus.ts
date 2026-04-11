@@ -41,12 +41,12 @@ export function useServerStatus(): ServerStatus {
         } else {
           setStatus('offline');
           setVersion(null);
-          setFeatures({});
+          setFeatures(DEFAULT_FEATURES);
         }
       } catch {
         setStatus('offline');
         setVersion(null);
-        setFeatures({});
+        setFeatures(DEFAULT_FEATURES);
       } finally {
         setLoading(false);
       }

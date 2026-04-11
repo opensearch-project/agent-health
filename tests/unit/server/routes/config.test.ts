@@ -292,7 +292,7 @@ describe('Config Routes', () => {
     });
 
     it('accepts all valid connectorType values', () => {
-      const validTypes = ['agui-streaming', 'rest', 'litellm', 'subprocess', 'claude-code', 'mock'] as const;
+      const validTypes = ['agui-streaming', 'rest', 'openai-compatible', 'subprocess', 'claude-code', 'mock'] as const;
       const handler = getRouteHandler(configRoutes, 'post', '/api/agents/custom');
 
       for (const connectorType of validTypes) {
