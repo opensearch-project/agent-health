@@ -43,7 +43,7 @@ import {
 import { formatDuration } from '@/services/traces/utils';
 import { startMeasure, endMeasure } from '@/lib/performance';
 import { TraceFlyoutContent } from './TraceFlyoutContent';
-import MetricsOverview from './MetricsOverview';
+import MetricsOverview, { FilterAction } from './MetricsOverview';
 import { useSidebarCollapse } from '@/components/Layout';
 
 // ==================== Types ====================
@@ -186,6 +186,38 @@ export const AgentTracesPage: React.FC = () => {
     return '1440';
   });
 
+  // Advanced filter state
+  const [filterPopoverOpen, setFilterPopoverOpen] = useState(false);
+  const [rootSpanSuggestOpen, setRootSpanSuggestOpen] = useState(false);
+  const [serviceSuggestOpen, setServiceSuggestOpen] = useState(false);
+  const [filters, setFilters] = useState<{
+    status: string;
+    service: string;
+    rootSpan: string;
+    traceId: string;
+    durationRange: string;
+    durationMin: string;
+    durationMax: string;
+    spanCountRange: string;
+    spanCountMin: string;
+    spanCountMax: string;
+    timeWindowStart: string;
+    timeWindowEnd: string;
+  }>({
+    status: 'all',
+    service: '',
+    rootSpan: '',
+    traceId: '',
+    durationRange: 'all',
+    durationMin: '',
+    durationMax: '',
+    spanCountRange: 'all',
+    spanCountMin: '',
+    spanCountMax: '',
+    timeWindowStart: '',
+    timeWindowEnd: '',
+  });
+
   // Loading state
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -216,6 +248,8 @@ export const AgentTracesPage: React.FC = () => {
 
   // Intersection observer ref for lazy loading
   const loadMoreRef = React.useRef<HTMLTableRowElement>(null);
+  // Track previous filteredTraces identity to distinguish filter vs sort changes
+  const prevFilteredRef = React.useRef<TraceTableRow[]>([]);
 
   // Get unique service names from agents config (no memo — recomputes when
   // parent App re-renders after refreshConfig(), keeping custom agents visible)
@@ -356,10 +390,7 @@ export const AgentTracesPage: React.FC = () => {
 
       setSpans(result.spans);
       const processedTraces = processSpansToTraces(result.spans);
-      const sortedTraces = sortTraces(processedTraces);
-      setAllTraces(sortedTraces);
-      setDisplayedTraces(sortedTraces.slice(0, 100));
-      setDisplayCount(100);
+      setAllTraces(processedTraces);
       setLastRefresh(new Date());
 
       // Update pagination state
@@ -370,7 +401,7 @@ export const AgentTracesPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedAgent, debouncedSearch, timeRange, processSpansToTraces, sortTraces]);
+  }, [selectedAgent, debouncedSearch, timeRange, processSpansToTraces]);
 
   // Load more traces from server (appends to existing data)
   const loadMoreTraces = useCallback(async () => {
@@ -393,8 +424,6 @@ export const AgentTracesPage: React.FC = () => {
       setSpans(allSpans);
       const processedTraces = processSpansToTraces(allSpans);
       setAllTraces(processedTraces);
-      setDisplayedTraces(processedTraces);
-      setDisplayCount(processedTraces.length);
 
       setCursor(result.nextCursor || null);
       setHasMore(result.hasMore || false);
@@ -411,12 +440,6 @@ export const AgentTracesPage: React.FC = () => {
     fetchTraces();
   }, [fetchTraces]);
 
-  // Re-sort traces when sort column or direction changes
-  useEffect(() => {
-    const sortedTraces = sortTraces(allTraces);
-    setDisplayedTraces(sortedTraces.slice(0, displayCount));
-  }, [sortColumn, sortDirection, allTraces, displayCount, sortTraces]);
-
   // Handle scroll to hide/show container header
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -431,22 +454,101 @@ export const AgentTracesPage: React.FC = () => {
     return () => scrollContainer.removeEventListener('scroll', handleScroll);
   }, []);
 
+  // Client-side filtering
+  const filteredTraces = useMemo(() => {
+    let result = allTraces;
+
+    // Status filter
+    if (filters.status === 'success') result = result.filter(t => !t.hasErrors);
+    if (filters.status === 'error') result = result.filter(t => t.hasErrors);
+
+    // Root span filter
+    if (filters.rootSpan) {
+      const q = filters.rootSpan.toLowerCase();
+      result = result.filter(t => t.rootSpanName.toLowerCase().includes(q));
+    }
+
+    // Service filter
+    if (filters.service) {
+      const q = filters.service.toLowerCase();
+      result = result.filter(t => t.serviceName.toLowerCase().includes(q));
+    }
+
+    // Trace ID filter
+    if (filters.traceId) {
+      const q = filters.traceId.toLowerCase();
+      result = result.filter(t => t.traceId.toLowerCase().includes(q));
+    }
+
+    // Duration filter (values in ms)
+    if (filters.durationRange !== 'all') {
+      if (filters.durationRange === 'custom') {
+        const min = filters.durationMin ? parseFloat(filters.durationMin) : 0;
+        const max = filters.durationMax ? parseFloat(filters.durationMax) : Infinity;
+        result = result.filter(t => t.duration >= min && t.duration <= max);
+      } else if (filters.durationRange === '>10000') {
+        result = result.filter(t => t.duration > 10000);
+      } else {
+        const [min, max] = filters.durationRange.split('-').map(Number);
+        result = result.filter(t => t.duration >= min && t.duration < max);
+      }
+    }
+
+    // Span count filter
+    if (filters.spanCountRange !== 'all') {
+      if (filters.spanCountRange === 'custom') {
+        const min = filters.spanCountMin ? parseInt(filters.spanCountMin) : 0;
+        const max = filters.spanCountMax ? parseInt(filters.spanCountMax) : Infinity;
+        result = result.filter(t => t.spanCount >= min && t.spanCount <= max);
+      } else if (filters.spanCountRange === '>1000') {
+        result = result.filter(t => t.spanCount > 1000);
+      } else {
+        const [min, max] = filters.spanCountRange.split('-').map(Number);
+        result = result.filter(t => t.spanCount >= min && t.spanCount <= max);
+      }
+    }
+
+    // Time window filter (from chart clicks)
+    if (filters.timeWindowStart && filters.timeWindowEnd) {
+      const start = new Date(filters.timeWindowStart).getTime();
+      const end = new Date(filters.timeWindowEnd).getTime();
+      result = result.filter(t => {
+        const ts = t.startTime.getTime();
+        return ts >= start && ts < end;
+      });
+    }
+
+    // Text search as filter
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
+      result = result.filter(t =>
+        t.traceId.toLowerCase().includes(q) ||
+        t.rootSpanName.toLowerCase().includes(q) ||
+        t.serviceName.toLowerCase().includes(q)
+      );
+    }
+
+    return result;
+  }, [allTraces, filters, debouncedSearch]);
+
+  // Sorted view of filtered traces (separate from filtering so sort changes don't reset scroll)
+  const sortedTraces = useMemo(() => sortTraces(filteredTraces), [filteredTraces, sortTraces]);
+
   // Lazy loading with intersection observer (client-side + server-side pagination)
   useEffect(() => {
     const currentRef = loadMoreRef.current;
     if (!currentRef) return;
 
     // Nothing left to show client-side or load from server
-    if (displayCount >= allTraces.length && !hasMore) return;
+    if (displayCount >= sortedTraces.length && !hasMore) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         const target = entries[0];
         if (target.isIntersecting) {
-          if (displayCount < allTraces.length) {
+          if (displayCount < sortedTraces.length) {
             // Client-side: show next batch of already-fetched traces
-            const nextCount = Math.min(displayCount + 100, allTraces.length);
-            const sortedTraces = sortTraces(allTraces);
+            const nextCount = Math.min(displayCount + 100, sortedTraces.length);
             setDisplayedTraces(sortedTraces.slice(0, nextCount));
             setDisplayCount(nextCount);
           } else if (hasMore && !isLoadingMore) {
@@ -467,7 +569,7 @@ export const AgentTracesPage: React.FC = () => {
     return () => {
       observer.unobserve(currentRef);
     };
-  }, [displayCount, allTraces, hasMore, isLoadingMore, loadMoreTraces, sortTraces]);
+  }, [displayCount, sortedTraces, hasMore, isLoadingMore, loadMoreTraces]);
 
   // Handle trace selection
   const handleSelectTrace = (trace: TraceTableRow) => {
@@ -575,6 +677,160 @@ export const AgentTracesPage: React.FC = () => {
       avgDuration,
     };
   }, [allTraces]);
+
+  // Unique root span names for autosuggest (derived from in-memory data, zero cost)
+  const uniqueRootSpans = useMemo(() => {
+    const names = new Set(allTraces.map(t => t.rootSpanName));
+    return Array.from(names).sort();
+  }, [allTraces]);
+
+  // Filtered suggestions based on current input
+  const rootSpanSuggestions = useMemo(() => {
+    if (!filters.rootSpan) return uniqueRootSpans.slice(0, 10);
+    const q = filters.rootSpan.toLowerCase();
+    return uniqueRootSpans.filter(n => n.toLowerCase().includes(q)).slice(0, 10);
+  }, [uniqueRootSpans, filters.rootSpan]);
+
+  // Unique service names for autosuggest
+  const uniqueServiceNames = useMemo(() => {
+    const names = new Set(allTraces.map(t => t.serviceName));
+    return Array.from(names).sort();
+  }, [allTraces]);
+
+  // Filtered service suggestions based on current input
+  const serviceSuggestions = useMemo(() => {
+    if (!filters.service) return uniqueServiceNames.slice(0, 10);
+    const q = filters.service.toLowerCase();
+    return uniqueServiceNames.filter(n => n.toLowerCase().includes(q)).slice(0, 10);
+  }, [uniqueServiceNames, filters.service]);
+
+  // Active filter chips
+  const activeFilterChips = useMemo(() => {
+    const chips: { key: string; label: string }[] = [];
+    if (filters.status !== 'all') chips.push({ key: 'status', label: `Status: ${filters.status}` });
+    if (filters.service) chips.push({ key: 'service', label: `Service: ${filters.service}` });
+    if (filters.rootSpan) chips.push({ key: 'rootSpan', label: `Root span: ${filters.rootSpan}` });
+    if (filters.traceId) chips.push({ key: 'traceId', label: `Trace ID: ${filters.traceId}` });
+    if (filters.durationRange !== 'all') {
+      const durationLabels: Record<string, string> = {
+        '0-10': '0–10ms', '10-50': '10–50ms', '50-100': '50–100ms',
+        '100-1000': '100ms–1s', '1000-5000': '1–5s', '5000-10000': '5–10s',
+        '>10000': '>10s',
+      };
+      const label = filters.durationRange === 'custom'
+        ? `Duration: ${filters.durationMin || '0'}–${filters.durationMax || '∞'}ms`
+        : `Duration: ${durationLabels[filters.durationRange] || filters.durationRange}`;
+      chips.push({ key: 'durationRange', label });
+    }
+    if (filters.spanCountRange !== 'all') {
+      const label = filters.spanCountRange === 'custom'
+        ? `Spans: ${filters.spanCountMin || '0'}–${filters.spanCountMax || '∞'}`
+        : `Spans: ${filters.spanCountRange}`;
+      chips.push({ key: 'spanCountRange', label });
+    }
+    if (textSearch) chips.push({ key: 'textSearch', label: `Keyword: ${textSearch}` });
+    if (filters.timeWindowStart) {
+      const s = new Date(filters.timeWindowStart);
+      const e = filters.timeWindowEnd ? new Date(filters.timeWindowEnd) : null;
+      const fmt = (d: Date) => d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      chips.push({ key: 'timeWindow', label: `Time: ${fmt(s)}–${e ? fmt(e) : 'now'}` });
+    }
+    return chips;
+  }, [filters, textSearch]);
+
+  // Remove a single filter chip
+  const removeFilterChip = (key: string) => {
+    if (key === 'textSearch') {
+      setTextSearch('');
+      return;
+    }
+    setFilters(prev => {
+      const next = { ...prev };
+      if (key === 'status') next.status = 'all';
+      if (key === 'service') next.service = '';
+      if (key === 'rootSpan') next.rootSpan = '';
+      if (key === 'traceId') next.traceId = '';
+      if (key === 'durationRange') {
+        next.durationRange = 'all';
+        next.durationMin = '';
+        next.durationMax = '';
+      }
+      if (key === 'spanCountRange') {
+        next.spanCountRange = 'all';
+        next.spanCountMin = '';
+        next.spanCountMax = '';
+      }
+      if (key === 'timeWindow') {
+        next.timeWindowStart = '';
+        next.timeWindowEnd = '';
+      }
+      return next;
+    });
+  };
+
+  // Clear all filters
+  const clearAllFilters = () => {
+    setTextSearch('');
+    setFilters({
+      status: 'all',
+      service: '',
+      rootSpan: '',
+      traceId: '',
+      durationRange: 'all',
+      durationMin: '',
+      durationMax: '',
+      spanCountRange: 'all',
+      spanCountMin: '',
+      spanCountMax: '',
+      timeWindowStart: '',
+      timeWindowEnd: '',
+    });
+  };
+
+  // Handle filter actions from MetricsOverview chart clicks
+  const handleMetricsFilter = useCallback((action: FilterAction) => {
+    if (action.type === 'status') {
+      setFilters(prev => ({ ...prev, status: action.value }));
+    } else if (action.type === 'durationRange') {
+      setFilters(prev => ({
+        ...prev,
+        durationRange: 'custom',
+        durationMin: action.durationMin || '',
+        durationMax: action.durationMax || '',
+      }));
+    } else if (action.type === 'timeRange') {
+      // For time-bucket clicks, compute the bucket window
+      const start = action.timeStart;
+      const end = action.timeEnd;
+      if (start) {
+        // For error-bucket clicks, also set status=error
+        const isError = action.value === 'error-bucket';
+        setFilters(prev => ({
+          ...prev,
+          timeWindowStart: start.toISOString(),
+          timeWindowEnd: end ? end.toISOString() : new Date().toISOString(),
+          ...(isError ? { status: 'error' } : {}),
+        }));
+      }
+    }
+  }, []);
+
+
+  // Update displayed traces when filters or sort changes
+  useEffect(() => {
+    const filterChanged = prevFilteredRef.current !== filteredTraces;
+    prevFilteredRef.current = filteredTraces;
+
+    if (filterChanged) {
+      // Filter/data change — reset to first page
+      setDisplayedTraces(sortedTraces.slice(0, 100));
+      setDisplayCount(100);
+    } else {
+      // Sort-only change — re-sort in place, preserving scroll position
+      setDisplayedTraces(sortedTraces.slice(0, displayCount));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- displayCount intentionally excluded to avoid infinite loop
+  }, [sortedTraces, filteredTraces]);
 
   return (
     <div className="h-full flex flex-col">

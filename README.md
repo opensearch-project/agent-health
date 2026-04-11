@@ -75,6 +75,7 @@ agent-health remote test   # verify connectivity
 agent-health               # dashboard aggregates all servers automatically
 ```
 
+
 ### Supported Connectors
 
 | Connector | Protocol | Description |

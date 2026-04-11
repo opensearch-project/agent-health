@@ -10,13 +10,24 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Added
+- Kiro CLI SQLite reader with progressive warmup, non-blocking cache, and phase-aware loading UX
+- Coding Agent Analytics: unified dashboard for Claude Code, Kiro, and Codex CLI usage data
+- Plugin-based reader system for ingesting local session data from ~/.claude/, ~/.kiro/, and ~/.codex/
+- API routes for coding agent stats, sessions, costs, activity patterns, and tool usage (/api/coding-agents/*)
+- Frontend page with Overview, Sessions, Projects, Costs, Activity, Efficiency, Tools, Advanced, and Workspace tabs at /coding-agents
+- Pricing engine covering Claude, Bedrock, and OpenAI models for cost estimation
+- Unified tool categorization across all three coding agents
+- Insights engine generating actionable recommendations from session data
+- In-memory session cache with directory-level invalidation and background refresh
+- Feature toggle to disable Coding Agent Analytics (AGENT_HEALTH_DISABLE_CODING_ANALYTICS=true or codingAgentAnalytics: false in config)
+- Graceful shutdown handler (SIGTERM/SIGINT) for stopping background timers and draining connections
+- Health endpoint now returns feature flags for frontend conditional rendering
+- RFC 001 documenting Coding Agent Analytics design
 - Remote build server support: headless mode (`--headless`, `--api-key`) for running on remote machines, local proxy aggregator merging data from multiple servers
 - Settings UI for remote server management with add/remove/test connectivity
 - CLI commands for remote server management: `remote add`, `remote remove`, `remote list`, `remote test`
 - API key authentication middleware for securing remote coding-agents endpoints
 - Server name badges in sessions table for multi-server environments
-- Feature toggle to disable Coding Agent Analytics (`AGENT_HEALTH_DISABLE_CODING_ANALYTICS=true` or `codingAgentAnalytics: false` in config)
-- Graceful shutdown handler (SIGTERM/SIGINT) — stops background timers, drains connections
 - Unit tests for apiKeyAuth middleware, RemoteAggregator, createRegistry, remoteConfig, and session cache (62 new tests)
 - Clickable drill-down navigation across all dashboard tabs (Tools, Costs, Activity, Efficiency, Advanced)
 - Dismissable filter badges with "Clear all filters" for drill-down context visibility
@@ -42,13 +53,43 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Streaming file reads for project path resolution instead of loading entire files
 - Remote aggregator uses `Promise.allSettled` — one failing remote no longer blocks local data
 - Background cache refresh only invalidates merged cache when data actually changed
-- Health endpoint now returns feature flags for frontend conditional rendering
-- Coding Agent Analytics: unified dashboard for Claude Code, Kiro, and Codex CLI usage data
-- Plugin-based reader system for ingesting local session data from ~/.claude/, ~/.kiro/, and ~/.codex/
-- API routes for coding agent stats, sessions, costs, activity patterns, and tool usage (/api/coding-agents/*)
-- Frontend page with Overview, Sessions, Costs, Activity, and Tools tabs at /coding-agents
-- Pricing engine covering Claude, Bedrock, and OpenAI models for cost estimation
-- Unified tool categorization across all three coding agents
+- Enhanced CLI help output with grouped sections and examples ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Centralized connector type metadata into single source of truth (`CONNECTOR_TYPE_INFO`) ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Rename 'Testing' to 'Evals' in collapsible section and tooltips ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Reduce global sidebar width and refactor header layout for better space utilization ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Improve metrics overview with sparkline charts and reordered layout ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Remove drop shadows from non-floating UI components (Card, Button, Badge, Input, etc.) for cleaner visual style ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Align metrics chart columns at the bottom with consistent heights ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+
+### Removed
+- `models` property from agent configurations and related functions ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+
+### Fixed
+- Error filter bypass: sorting useEffect and data fetches directly set displayedTraces, ignoring active filters ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Relative import regression in AgentTracesPage (`../Layout` → `@/components/Layout`) ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- selectedAgent localStorage persistence asymmetry — writes but never reads on init ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Remove auto-generated documentation files and `.kiro/specs/` directory from PR #108 ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Add missing `formatCompact` unit tests and E2E tests for error filter regression ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Storage adapter for test case lookup in benchmark runner ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Flaky E2E tests: replaced `waitForTimeout` with proper element waits in comparison tests ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Debug mode E2E test race condition ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- E2E test data cleanup in test-cases and benchmarks specs ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- `fast-xml-parser` override to 5.5.6 for CVE-2026-26278 ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Resolved high/critical npm audit vulnerabilities (path-to-regexp, picomatch) ([#115](https://github.com/opensearch-project/agent-health/pull/115))
+- Fullscreen trace flyout click-outside detection closing flyout unexpectedly ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Benchmark traces tab layout and default view mode ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Sidebar spacing and Evals menu interaction behavior ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- TypeScript compilation errors from merge conflict resolution ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+
+## [0.2.0]
+
+### Fixed
+- Release workflow using `build` instead of `build:all`, causing CLI tests to fail ([#123](https://github.com/opensearch-project/agent-health/pull/123))
+
+### Changed
+- Increase release workflow approval timeout from 6 hours (default) to 24 hours
+- Allow workflow initiator to count as one of the required release approvers
+- Bump version to 0.2.0
 - AWS SigV4 authentication support for OpenSearch clusters with `ClusterAuthType` (`none` | `basic` | `sigv4`) ([#85](https://github.com/opensearch-project/agent-health/pull/85))
 - OpenSearch client factory (`opensearchClientFactory.ts`) for centralized client creation with basic, none, or SigV4 auth ([#85](https://github.com/opensearch-project/agent-health/pull/85))
 - Mapping validation service to detect incompatible field types in OpenSearch indexes ([#85](https://github.com/opensearch-project/agent-health/pull/85))

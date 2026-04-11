@@ -135,6 +135,7 @@ All endpoints support optional `from` and `to` query parameters for date range f
 | `DELETE /api/remote-servers/:name` | Remove a remote server |
 | `POST /api/remote-servers/:name/test` | Test connectivity to a remote server |
 
+
 ### Workspace Endpoints
 
 | Endpoint | Description |
@@ -270,6 +271,7 @@ Or configure via `agent-health.config.json`:
 - **10-second timeout**: Slow remotes don't block the entire dashboard
 - **Server badges**: Sessions from remote servers show a colored badge with the server name
 - **Transparent aggregation**: All analytics (stats, costs, activity, tools, etc.) automatically include remote data
+
 
 ## Feature Toggle
 

@@ -13,6 +13,7 @@ import {
   estimateTokens,
   truncateText,
   formatTimestamp,
+  formatCompact,
   safeParseJSON,
 } from '@/services/traces/utils';
 import type { Span } from '@/types';
@@ -214,6 +215,43 @@ describe('formatTimestamp', () => {
     const result = formatTimestamp('2024-01-15T14:30:45.123+05:30');
 
     expect(result).toMatch(/\d{2}:\d{2}:\d{2}/);
+  });
+});
+
+describe('formatCompact', () => {
+  it('returns number as string for values under 1000', () => {
+    expect(formatCompact(0)).toBe('0');
+    expect(formatCompact(1)).toBe('1');
+    expect(formatCompact(999)).toBe('999');
+  });
+
+  it('formats thousands with k suffix and decimal', () => {
+    expect(formatCompact(1200)).toBe('1.2k');
+    expect(formatCompact(1500)).toBe('1.5k');
+    expect(formatCompact(9900)).toBe('9.9k');
+  });
+
+  it('formats exact thousands without decimal', () => {
+    expect(formatCompact(1000)).toBe('1k');
+    expect(formatCompact(2000)).toBe('2k');
+    expect(formatCompact(5000)).toBe('5k');
+  });
+
+  it('formats large thousands with rounding', () => {
+    expect(formatCompact(10000)).toBe('10k');
+    expect(formatCompact(100000)).toBe('100k');
+    expect(formatCompact(500000)).toBe('500k');
+  });
+
+  it('formats millions with M suffix', () => {
+    expect(formatCompact(1000000)).toBe('1M');
+    expect(formatCompact(1500000)).toBe('1.5M');
+    expect(formatCompact(2500000)).toBe('2.5M');
+  });
+
+  it('formats large millions with rounding', () => {
+    expect(formatCompact(100000000)).toBe('100M');
+    expect(formatCompact(500000000)).toBe('500M');
   });
 });
 
