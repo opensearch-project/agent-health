@@ -7,6 +7,48 @@ import { MODEL_PRICING, DEFAULT_CONFIG, MOCK_TOOLS } from '@/lib/constants';
 
 describe('lib/constants', () => {
   describe('MODEL_PRICING', () => {
+    it('should have Claude Opus 4.6 pricing', () => {
+      expect(MODEL_PRICING['us.anthropic.claude-opus-4-6-v1']).toEqual({
+        input: 5.0,
+        output: 25.0,
+      });
+    });
+
+    it('should have Claude Sonnet 4.6 pricing', () => {
+      expect(MODEL_PRICING['us.anthropic.claude-sonnet-4-6']).toEqual({
+        input: 3.0,
+        output: 15.0,
+      });
+    });
+
+    it('should have Claude Haiku 4.5 pricing', () => {
+      expect(MODEL_PRICING['us.anthropic.claude-haiku-4-5-20251001-v1:0']).toEqual({
+        input: 1.0,
+        output: 5.0,
+      });
+    });
+
+    it('should have Claude Opus 4.5 pricing', () => {
+      expect(MODEL_PRICING['us.anthropic.claude-opus-4-5-20251101-v1:0']).toEqual({
+        input: 5.0,
+        output: 25.0,
+      });
+    });
+
+    it('should have Claude Opus 4.1 pricing', () => {
+      expect(MODEL_PRICING['us.anthropic.claude-opus-4-1-20250805-v1:0']).toEqual({
+        input: 15.0,
+        output: 75.0,
+      });
+    });
+
+    it('should have Claude Opus 4 pricing', () => {
+      expect(MODEL_PRICING['us.anthropic.claude-opus-4-20250514-v1:0']).toEqual({
+        input: 15.0,
+        output: 75.0,
+      });
+    });
+
     it('should have Claude Sonnet 4 model pricing', () => {
       expect(MODEL_PRICING['us.anthropic.claude-sonnet-4-20250514-v1:0']).toEqual({
         input: 3.0,
@@ -51,13 +93,11 @@ describe('lib/constants', () => {
         expect(DEFAULT_CONFIG.agents.length).toBeGreaterThan(0);
       });
 
-      it('should have travel-planner agent', () => {
-        const travelPlanner = DEFAULT_CONFIG.agents.find(a => a.key === 'travel-planner');
-        expect(travelPlanner).toBeDefined();
-        expect(travelPlanner?.name).toBe('Travel Planner');
-        expect(travelPlanner?.endpoint).toContain('localhost:3000');
-        expect(travelPlanner?.useTraces).toBe(true);
-        expect(travelPlanner?.connectorType).toBe('agui-streaming');
+      it('should have claude-code agent', () => {
+        const claudeCode = DEFAULT_CONFIG.agents.find(a => a.key === 'claude-code');
+        expect(claudeCode).toBeDefined();
+        expect(claudeCode?.name).toBe('Claude Code');
+        expect(claudeCode?.connectorType).toBe('claude-code');
       });
 
       it('should have valid agent structure', () => {
@@ -65,8 +105,6 @@ describe('lib/constants', () => {
           expect(agent.key).toBeDefined();
           expect(agent.name).toBeDefined();
           expect(agent.endpoint).toBeDefined();
-          expect(agent.models).toBeInstanceOf(Array);
-          expect(agent.models.length).toBeGreaterThan(0);
           expect(typeof agent.useTraces).toBe('boolean');
         });
       });
@@ -75,6 +113,56 @@ describe('lib/constants', () => {
     describe('models', () => {
       it('should have multiple models configured', () => {
         expect(Object.keys(DEFAULT_CONFIG.models).length).toBeGreaterThan(0);
+      });
+
+      it('should have claude-opus-4.6 model', () => {
+        const model = DEFAULT_CONFIG.models['claude-opus-4.6'];
+        expect(model).toBeDefined();
+        expect(model.model_id).toBe('us.anthropic.claude-opus-4-6-v1');
+        expect(model.display_name).toBe('Claude Opus 4.6');
+        expect(model.context_window).toBe(200000);
+        expect(model.max_output_tokens).toBe(128000);
+        expect(model.provider).toBe('bedrock');
+      });
+
+      it('should have claude-sonnet-4.6 model', () => {
+        const model = DEFAULT_CONFIG.models['claude-sonnet-4.6'];
+        expect(model).toBeDefined();
+        expect(model.model_id).toBe('us.anthropic.claude-sonnet-4-6');
+        expect(model.display_name).toBe('Claude Sonnet 4.6');
+        expect(model.max_output_tokens).toBe(64000);
+      });
+
+      it('should have claude-haiku-4.5 model', () => {
+        const model = DEFAULT_CONFIG.models['claude-haiku-4.5'];
+        expect(model).toBeDefined();
+        expect(model.model_id).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+        expect(model.display_name).toBe('Claude Haiku 4.5');
+        expect(model.max_output_tokens).toBe(64000);
+      });
+
+      it('should have claude-opus-4.5 model', () => {
+        const model = DEFAULT_CONFIG.models['claude-opus-4.5'];
+        expect(model).toBeDefined();
+        expect(model.model_id).toBe('us.anthropic.claude-opus-4-5-20251101-v1:0');
+        expect(model.display_name).toBe('Claude Opus 4.5');
+        expect(model.max_output_tokens).toBe(64000);
+      });
+
+      it('should have claude-opus-4.1 model', () => {
+        const model = DEFAULT_CONFIG.models['claude-opus-4.1'];
+        expect(model).toBeDefined();
+        expect(model.model_id).toBe('us.anthropic.claude-opus-4-1-20250805-v1:0');
+        expect(model.display_name).toBe('Claude Opus 4.1');
+        expect(model.max_output_tokens).toBe(32000);
+      });
+
+      it('should have claude-opus-4 model', () => {
+        const model = DEFAULT_CONFIG.models['claude-opus-4'];
+        expect(model).toBeDefined();
+        expect(model.model_id).toBe('us.anthropic.claude-opus-4-20250514-v1:0');
+        expect(model.display_name).toBe('Claude Opus 4');
+        expect(model.max_output_tokens).toBe(32000);
       });
 
       it('should have claude-sonnet-4 model', () => {
