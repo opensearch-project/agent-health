@@ -21,7 +21,6 @@ export interface UserAgentConfig {
   endpoint: string;
   description?: string;
   enabled?: boolean;
-  models: string[];
   headers?: Record<string, string>;
   useTraces?: boolean;
   connectorType?: ConnectorProtocol;

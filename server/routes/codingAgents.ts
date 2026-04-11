@@ -13,12 +13,16 @@
 
 import { Router, Request, Response } from 'express';
 import { codingAgentRegistry as _registry } from '../services/codingAgents';
-
-// Routes are only mounted when codingAnalyticsEnabled is true (see routes/index.ts),
-// so the registry is guaranteed to be non-null here.
-const codingAgentRegistry = _registry!;
 import type { DateRange, AgentKind } from '../services/codingAgents/types';
 import { RemoteAggregator } from '../services/codingAgents/remoteAggregator';
+
+// Routes are only mounted when codingAnalyticsEnabled is true (see routes/index.ts),
+// so the registry is guaranteed to be non-null here. Defensive check prevents a crash
+// if initialization order ever changes.
+if (!_registry) {
+  throw new Error('codingAgentRegistry is null — coding agent routes should not be mounted when analytics is disabled');
+}
+const codingAgentRegistry = _registry;
 
 const router = Router();
 
