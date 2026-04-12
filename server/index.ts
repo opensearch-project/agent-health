@@ -25,6 +25,14 @@ const PORT = config.PORT;
 async function startServer() {
   const app = await createApp();
 
+  // Wait for coding agent fast pass so first requests have data
+  try {
+    const { codingAgentRegistry } = require('./services/codingAgents');
+    if (codingAgentRegistry?.waitForReady) {
+      await codingAgentRegistry.waitForReady();
+    }
+  } catch { /* non-fatal */ }
+
   // Start server - bind to 0.0.0.0 to allow external access
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n  Backend Server running on http://0.0.0.0:${PORT}`);

@@ -147,6 +147,21 @@ export class CodingAgentRegistry {
     this.cacheManager.startBackgroundRefresh(30_000);
   }
 
+  /** Wait for initial fast pass to complete so first requests have data. */
+  async waitForReady(): Promise<void> {
+    await this.cacheManager.waitForFastPass();
+  }
+
+  /** Whether historical data is still loading in the background. */
+  isBackfilling(): boolean {
+    return this.cacheManager.isBackfilling();
+  }
+
+  /** How many days of data have been loaded so far. */
+  loadedDays(): number {
+    return this.cacheManager.loadedDays();
+  }
+
   /** Stop background refresh timers (for graceful shutdown). */
   stopBackgroundRefresh(): void {
     this.cacheManager.stopBackgroundRefresh();

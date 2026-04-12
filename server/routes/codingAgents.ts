@@ -56,7 +56,11 @@ router.get('/api/coding-agents/stats', async (req: Request, res: Response) => {
   try {
     const range = parseDateRange(req);
     const stats = await codingAgentRegistry.getCombinedStats(range);
-    res.json(stats);
+    res.json({
+      ...stats,
+      warming: codingAgentRegistry.isBackfilling(),
+      loadedDays: Math.min(codingAgentRegistry.loadedDays(), 99999),
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -10,6 +10,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Added
+- Kiro CLI SQLite reader with progressive warmup, non-blocking cache, and phase-aware loading UX
 - Coding Agent Analytics: unified dashboard for Claude Code, Kiro, and Codex CLI usage data
 - Plugin-based reader system for ingesting local session data from ~/.claude/, ~/.kiro/, and ~/.codex/
 - API routes for coding agent stats, sessions, costs, activity patterns, and tool usage (/api/coding-agents/*)
