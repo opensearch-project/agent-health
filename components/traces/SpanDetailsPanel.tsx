@@ -166,7 +166,7 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
 
       {/* Content */}
       <ScrollArea className="flex-1 min-w-0">
-        <div className="p-4 space-y-6 min-w-0">
+        <div className="pl-4 pt-4 pb-4 space-y-6 min-w-0">
           {/* INPUT SECTION - Moved to top, auto-open if data exists */}
           <div className="space-y-2 min-w-0">
             <div className="flex items-center justify-between min-w-0 gap-2">

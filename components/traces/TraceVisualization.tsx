@@ -201,10 +201,10 @@ const TraceVisualization: React.FC<TraceVisualizationProps> = ({
           /* Gantt chart timeline view - shown for 'tree' (Timeline button) and 'gantt' modes */
           showSpanDetailsPanel ? (
             <div className="flex h-full w-full min-w-0 overflow-hidden">
-              <div 
-                className="overflow-auto p-4 min-w-0"
-                style={{ 
-                  width: detailsCollapsed ? '100%' : '60%'
+              <div
+                className="overflow-auto min-w-0 flex-1"
+                style={{
+                  width: detailsCollapsed ? '100%' : undefined
                 }}
               >
                 <TraceTimelineChart
@@ -240,7 +240,7 @@ const TraceVisualization: React.FC<TraceVisualizationProps> = ({
               ) : null}
             </div>
           ) : (
-            <div className="p-4 h-full w-full overflow-auto">
+            <div className="h-full w-full overflow-auto">
               <TraceTimelineChart
                 spanTree={spanTree}
                 timeRange={timeRange}
