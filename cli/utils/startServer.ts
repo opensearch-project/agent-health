@@ -70,5 +70,9 @@ export async function startServer(options: StartOptions): Promise<number> {
     });
   };
 
-  return tryListen(options.port);
+  const actualPort = await tryListen(options.port);
+  if (actualPort !== options.port) {
+    process.env.VITE_BACKEND_PORT = String(actualPort);
+  }
+  return actualPort;
 }
