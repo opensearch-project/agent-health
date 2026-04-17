@@ -34,8 +34,14 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [0.2.0]
 
+### Added
+- Opt-in OTel span emission for benchmark evaluation data using semantic conventions (`lib/telemetry/`) ([#134](https://github.com/opensearch-project/agent-health/pull/134))
+- Bulk batch metrics computation (`computeBatchMetrics`) with `_source` projection for efficient run listing ([#134](https://github.com/opensearch-project/agent-health/pull/134))
+
 ### Fixed
 - Release workflow using `build` instead of `build:all`, causing CLI tests to fail ([#123](https://github.com/opensearch-project/agent-health/pull/123))
+- Add `@testing-library/dom` peer dependency required by `@testing-library/react` v16 ([#134](https://github.com/opensearch-project/agent-health/pull/134))
+- Integration test cleanup to prevent leftover test data from failed runs ([#134](https://github.com/opensearch-project/agent-health/pull/134))
 
 ### Changed
 - Increase release workflow approval timeout from 6 hours (default) to 24 hours

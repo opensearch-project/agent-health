@@ -235,7 +235,7 @@ export const Dashboard: React.FC = () => {
 
   // Phase 2: Deferred metrics loading (non-blocking, after reports are available)
   useEffect(() => {
-    const runIds = reports.filter(r => r.runId).map(r => r.runId!);
+    const runIds = reports.filter(r => r.runId).map(r => r.runId!).slice(0, 100);
     if (runIds.length === 0) return;
 
     fetchBatchMetrics(runIds)

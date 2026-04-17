@@ -12,7 +12,7 @@
 
 import React, { memo, useMemo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Bot, Zap, Wrench, AlertCircle, Circle, AlertTriangle } from 'lucide-react';
+import { Bot, Zap, Wrench, ClipboardCheck, AlertCircle, Circle, AlertTriangle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -60,6 +60,13 @@ const CATEGORY_CONFIG: Record<SpanCategory, {
     bgColor: 'bg-amber-500/10',
     iconColor: 'text-amber-400',
     barColor: 'bg-amber-500',
+  },
+  EVAL: {
+    icon: ClipboardCheck,
+    borderColor: 'border-emerald-500',
+    bgColor: 'bg-emerald-500/10',
+    iconColor: 'text-emerald-400',
+    barColor: 'bg-emerald-500',
   },
   ERROR: {
     icon: AlertCircle,

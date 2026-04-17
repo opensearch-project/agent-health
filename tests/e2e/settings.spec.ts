@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/test-fixtures';
 
 test.describe('Settings Page', () => {
   // Debug mode tests share server-side state, so run sequentially to avoid interference
@@ -50,7 +50,7 @@ test.describe('Settings Page', () => {
     // If debug is already on (from prior test), the warning should be visible
     const currentState = await toggle.getAttribute('data-state');
     if (currentState === 'checked') {
-      await expect(page.locator('text=Enabled:')).toBeVisible({ timeout: 5000 });
+      await expect(page.locator('text=Debug mode enabled')).toBeVisible({ timeout: 5000 });
       return;
     }
 
@@ -59,7 +59,7 @@ test.describe('Settings Page', () => {
 
     // The UI updates optimistically — check the warning appears immediately
     await expect(toggle).toHaveAttribute('data-state', 'checked', { timeout: 5000 });
-    await expect(page.locator('text=Enabled:')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=Debug mode enabled')).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -74,13 +74,9 @@ test.describe('Agent Endpoints Section', () => {
   });
 
   test('should display built-in agents', async ({ page }) => {
-    // Built-in agents section is collapsible - the toggle button is visible
-    const builtInToggle = page.locator('button:has-text("Built-in Agents")');
-    await expect(builtInToggle).toBeVisible();
-
-    // Expand the section to see built-in badges
-    await builtInToggle.click();
-    await page.waitForTimeout(500);
+    // Built-in agents label is visible (not collapsible)
+    const builtInLabel = page.locator('text=Built-in Agents');
+    await expect(builtInLabel).toBeVisible();
 
     // Should show at least one built-in agent
     const builtInBadge = page.locator('text=built-in').first();

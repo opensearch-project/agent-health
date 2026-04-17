@@ -11,7 +11,7 @@
  */
 
 import React from 'react';
-import { AlertCircle, Layers, Clock } from 'lucide-react';
+import { AlertCircle, Layers, Clock, ClipboardCheck } from 'lucide-react';
 import { TraceSummary } from '@/types';
 import { formatDuration } from '@/services/traces/utils';
 import { cn } from '@/lib/utils';
@@ -64,6 +64,12 @@ export const TraceListItem: React.FC<TraceListItemProps> = ({
             >
               {trace.rootSpanName}
             </span>
+            {trace.hasEvalSpans && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 flex-shrink-0">
+                <ClipboardCheck size={9} />
+                Eval
+              </span>
+            )}
           </div>
 
           {/* Service Name */}

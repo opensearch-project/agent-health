@@ -8,7 +8,7 @@
  * Tests the complete user journey from viewing stale stats to seeing corrected stats
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/test-fixtures';
 
 test.describe('Benchmark Stats Refresh E2E', () => {
   const createdBenchmarkIds: string[] = [];

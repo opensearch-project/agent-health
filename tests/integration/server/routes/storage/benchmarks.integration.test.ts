@@ -211,12 +211,35 @@ describe('Benchmark Cancel Integration Tests', () => {
   afterAll(async () => {
     if (!backendAvailable) return;
 
-    // Cleanup
+    // Cleanup by tracked ID
     if (benchmarkId) {
       await deleteBenchmark(benchmarkId);
     }
     if (testCaseId) {
       await deleteTestCase(testCaseId);
+    }
+    // Fallback: clean up leftovers from previous failed runs by name
+    try {
+      const tcResp = await fetch(`${BASE_URL}/api/storage/test-cases`);
+      if (tcResp.ok) {
+        const data = await tcResp.json();
+        for (const tc of (data.testCases ?? [])) {
+          if (tc.name === 'Cancel Test Case') {
+            await deleteTestCase(tc.id).catch(() => {});
+          }
+        }
+      }
+      const benchResp = await fetch(`${BASE_URL}/api/storage/benchmarks`);
+      if (benchResp.ok) {
+        const benchData = await benchResp.json();
+        for (const b of (benchData.benchmarks ?? benchData ?? [])) {
+          if (b.name === 'Cancel Integration Test Benchmark') {
+            await deleteBenchmark(b.id).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
     }
   }, 30000);
 
@@ -323,6 +346,29 @@ describe('Benchmark Export Integration Tests', () => {
     if (!backendAvailable) return;
     if (exportBenchmarkId) await deleteBenchmark(exportBenchmarkId);
     if (exportTestCaseId) await deleteTestCase(exportTestCaseId);
+    // Fallback: clean up leftovers from previous failed runs by name
+    try {
+      const tcResp = await fetch(`${BASE_URL}/api/storage/test-cases`);
+      if (tcResp.ok) {
+        const data = await tcResp.json();
+        for (const tc of (data.testCases ?? [])) {
+          if (tc.name === 'Export Integration Test Case') {
+            await deleteTestCase(tc.id).catch(() => {});
+          }
+        }
+      }
+      const benchResp = await fetch(`${BASE_URL}/api/storage/benchmarks`);
+      if (benchResp.ok) {
+        const benchData = await benchResp.json();
+        for (const b of (benchData.benchmarks ?? benchData ?? [])) {
+          if (b.name === 'Export Integration Benchmark') {
+            await deleteBenchmark(b.id).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
   }, 30000);
 
   it('should export the actual test case content created via OpenSearch', async () => {

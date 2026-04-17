@@ -4,6 +4,11 @@
  */
 
 import { test as base, expect, Page } from '@playwright/test';
+import * as fs from 'fs';
+import * as path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+
+const COVERAGE_DIR = path.join(process.cwd(), '.nyc_output');
 
 /**
  * Custom test fixtures for AgentEval E2E tests
@@ -105,10 +110,31 @@ export async function createBenchmark(
   }
 }
 
-// Extended test with fixtures
+// Ensure .nyc_output directory exists (once, at import time)
+if (process.env.E2E_COVERAGE === 'true') {
+  fs.mkdirSync(COVERAGE_DIR, { recursive: true });
+}
+
+// Extended test with fixtures and optional coverage collection
 export const test = base.extend<{
   authenticatedPage: Page;
 }>({
+  // Collect Istanbul coverage from window.__coverage__ after each test
+  page: async ({ page }, use) => {
+    await use(page);
+
+    if (process.env.E2E_COVERAGE === 'true') {
+      const coverage = await page.evaluate(() => (window as any).__coverage__).catch(() => null);
+      if (coverage) {
+        const fileName = `coverage-${uuidv4()}.json`;
+        fs.writeFileSync(
+          path.join(COVERAGE_DIR, fileName),
+          JSON.stringify(coverage)
+        );
+      }
+    }
+  },
+
   authenticatedPage: async ({ page }, use) => {
     // Navigate to the app and wait for it to be ready
     await page.goto('/');

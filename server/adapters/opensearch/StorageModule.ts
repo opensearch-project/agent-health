@@ -496,15 +496,21 @@ class OpenSearchRunOperations implements IRunOperations {
     const size = options?.size ?? 100;
     const from = options?.from ?? 0;
 
+    const body: any = {
+      size,
+      from,
+      sort: [{ createdAt: { order: 'desc' } }],
+      query: { match_all: {} },
+    };
+
+    if (options?._source && options._source.length > 0) {
+      body._source = options._source;
+    }
+
     try {
       const result = await this.client.search({
         index: this.index,
-        body: {
-          size,
-          from,
-          sort: [{ createdAt: { order: 'desc' } }],
-          query: { match_all: {} },
-        },
+        body,
       });
 
       const items = hitsToSources<TestCaseRun>(result.body.hits?.hits || []);

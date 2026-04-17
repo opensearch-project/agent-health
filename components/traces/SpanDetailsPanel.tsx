@@ -34,14 +34,16 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
   const llmResponseEvent = span.events?.find(e => e.name === 'llm.response');
 
   // Extract input/output data from span attributes OR events
-  const inputData = span.attributes?.['gen_ai.tool.input'] || 
+  const inputData = span.attributes?.['gen_ai.tool.input'] ||
                     span.attributes?.['input'] ||
                     span.attributes?.['gen_ai.prompt'] ||
+                    span.attributes?.['test.case.input'] ||
                     llmRequestEvent?.attributes?.['llm.prompt'] ||
                     llmRequestEvent?.attributes?.['llm.system_prompt'];
-  const outputData = span.attributes?.['gen_ai.tool.output'] || 
+  const outputData = span.attributes?.['gen_ai.tool.output'] ||
                      span.attributes?.['output'] ||
                      span.attributes?.['gen_ai.completion'] ||
+                     span.attributes?.['test.case.output'] ||
                      llmResponseEvent?.attributes?.['llm.completion'];
 
   // Initialize expanded sections - use useMemo to ensure it updates when span changes

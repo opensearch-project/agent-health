@@ -435,6 +435,173 @@ describe('ClaudeCodeConnector', () => {
     });
   });
 
+  describe('error surfacing', () => {
+    it('should create error step when process exits with non-zero code and empty trajectory', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+      const progressSteps: TrajectoryStep[] = [];
+
+      setTimeout(() => {
+        mockProcess.stderr.emit('data', Buffer.from('Error: --mcp-config file not found'));
+        mockProcess.emit('close', 1, null);
+      }, 10);
+
+      const result = await connector.execute(
+        'claude',
+        request,
+        mockAuth,
+        (step) => progressSteps.push(step)
+      );
+
+      expect(result.trajectory.length).toBeGreaterThan(0);
+      expect(result.trajectory[0].type).toBe('tool_result');
+      expect(result.trajectory[0].status).toBe('FAILURE');
+      expect(result.trajectory[0].content).toContain('exited with code 1');
+      expect(result.trajectory[0].content).toContain('--mcp-config file not found');
+      expect(progressSteps.length).toBeGreaterThan(0);
+    });
+
+    it('should create error step with just exit code when stderr is empty', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+
+      setTimeout(() => {
+        mockProcess.emit('close', 2, null);
+      }, 10);
+
+      const result = await connector.execute('claude', request, mockAuth);
+
+      expect(result.trajectory.length).toBe(1);
+      expect(result.trajectory[0].content).toBe('Error: Process exited with code 2');
+    });
+  });
+
+  describe('buffer flushing', () => {
+    it('should flush outputBuffer when process closes with incomplete line', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+
+      setTimeout(() => {
+        // Send JSON without trailing newline
+        mockProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"Final answer"}'));
+        mockProcess.emit('close', 0, null);
+      }, 10);
+
+      const result = await connector.execute('claude', request, mockAuth);
+
+      const responseSteps = result.trajectory.filter(s => s.type === 'response');
+      expect(responseSteps.length).toBe(1);
+      expect(responseSteps[0].content).toBe('Final answer');
+    });
+
+    it('should flush thinkingBuffer when process closes without content_block_stop', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+
+      setTimeout(() => {
+        mockProcess.stdout.emit('data', Buffer.from(
+          '{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Analyzing..."}}\n'
+        ));
+        mockProcess.emit('close', 0, null);
+      }, 10);
+
+      const result = await connector.execute('claude', request, mockAuth);
+
+      const thinkingSteps = result.trajectory.filter(s => s.type === 'thinking');
+      expect(thinkingSteps.length).toBe(1);
+      expect(thinkingSteps[0].content).toBe('Analyzing...');
+    });
+
+    it('should flush textBuffer as response when process exits without result event', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+
+      setTimeout(() => {
+        mockProcess.stdout.emit('data', Buffer.from(
+          '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Partial response"}}\n'
+        ));
+        mockProcess.emit('close', 1, null);
+      }, 10);
+
+      const result = await connector.execute('claude', request, mockAuth);
+
+      const responseSteps = result.trajectory.filter(s => s.type === 'response');
+      expect(responseSteps.length).toBe(1);
+      expect(responseSteps[0].content).toBe('Partial response');
+    });
+  });
+
+  describe('text buffer consolidation', () => {
+    it('should emit consolidated assistant step from text_delta buffer and response from result', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+
+      setTimeout(() => {
+        mockProcess.stdout.emit('data', Buffer.from(
+          '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello "}}\n' +
+          '{"type":"content_block_delta","delta":{"type":"text_delta","text":"world"}}\n' +
+          '{"type":"content_block_stop"}\n' +
+          '{"type":"result","result":"Hello world"}\n'
+        ));
+        mockProcess.emit('close', 0, null);
+      }, 10);
+
+      const result = await connector.execute('claude', request, mockAuth);
+
+      // Should have one consolidated assistant step from buffer and one response from result
+      const assistantTextSteps = result.trajectory.filter(
+        s => s.type === 'assistant' && s.content.includes('Hello')
+      );
+      const responseSteps = result.trajectory.filter(s => s.type === 'response');
+      expect(assistantTextSteps.length).toBe(1);
+      expect(assistantTextSteps[0].content).toBe('Hello world');
+      expect(responseSteps.length).toBe(1);
+      expect(responseSteps[0].content).toBe('Hello world');
+    });
+
+    it('should emit thinking, assistant, and response steps from full stream', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+
+      setTimeout(() => {
+        mockProcess.stdout.emit('data', Buffer.from(
+          '{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Let me think"}}\n' +
+          '{"type":"content_block_stop"}\n' +
+          '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Answer"}}\n' +
+          '{"type":"content_block_stop"}\n' +
+          '{"type":"result","result":"Answer"}\n'
+        ));
+        mockProcess.emit('close', 0, null);
+      }, 10);
+
+      const result = await connector.execute('claude', request, mockAuth);
+
+      const thinkingSteps = result.trajectory.filter(s => s.type === 'thinking');
+      const assistantSteps = result.trajectory.filter(s => s.type === 'assistant');
+      const responseSteps = result.trajectory.filter(s => s.type === 'response');
+      expect(thinkingSteps.length).toBe(1);
+      expect(thinkingSteps[0].content).toBe('Let me think');
+      expect(assistantSteps.length).toBe(1);
+      expect(assistantSteps[0].content).toBe('Answer');
+      expect(responseSteps.length).toBe(1);
+      expect(responseSteps[0].content).toBe('Answer');
+    });
+  });
+
   describe('createBedrockClaudeCodeConnector', () => {
     it('should create connector with Bedrock config', () => {
       const bedrockConnector = createBedrockClaudeCodeConnector();

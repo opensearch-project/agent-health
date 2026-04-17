@@ -59,6 +59,35 @@ export interface JudgeConfig {
 }
 
 /**
+ * Telemetry configuration for OTel span emission
+ */
+export interface TelemetryConfig {
+  /**
+   * Enable evaluation telemetry (OTel span emission)
+   * @default false (can also be set via OTEL_EVAL_ENABLED env var)
+   */
+  enabled?: boolean;
+
+  /**
+   * OTLP exporter endpoint
+   * @default 'http://localhost:4318/v1/traces' (can also be set via OTEL_EVAL_EXPORTER_ENDPOINT)
+   */
+  exporterEndpoint?: string;
+
+  /**
+   * Headers for the OTLP exporter (e.g., auth tokens)
+   * Can also be set via OTEL_EVAL_EXPORTER_HEADERS (JSON string)
+   */
+  exporterHeaders?: Record<string, string>;
+
+  /**
+   * Service name for resource attributes
+   * @default 'agent-health' (can also be set via OTEL_SERVICE_NAME)
+   */
+  serviceName?: string;
+}
+
+/**
  * Server configuration for CLI lifecycle management
  * Follows Playwright's webServer pattern
  */
@@ -139,6 +168,11 @@ export interface UserConfig {
   judge?: JudgeConfig;
 
   /**
+   * Telemetry configuration for OTel evaluation span emission
+   */
+  telemetry?: TelemetryConfig;
+
+  /**
    * Remote servers for aggregating coding agent data from multiple machines.
    * Each remote runs `agent-health serve --headless` and this dashboard
    * fetches + merges their session data into a unified view.
@@ -184,6 +218,7 @@ export interface ResolvedConfig {
   testCases: string[];
   reporters: ReporterConfig[];
   judge: JudgeConfig;
+  telemetry: TelemetryConfig;
 }
 
 /**

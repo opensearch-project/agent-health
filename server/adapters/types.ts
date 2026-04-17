@@ -32,6 +32,7 @@ import type {
 export interface PaginationOptions {
   size?: number;
   from?: number;
+  _source?: string[];
 }
 
 export interface DateRangeFilter {
