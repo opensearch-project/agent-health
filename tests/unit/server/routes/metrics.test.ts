@@ -5,16 +5,18 @@
 
 import { Request, Response } from 'express';
 import metricsRoutes from '@/server/routes/metrics';
-import { computeMetrics, computeAggregateMetrics } from '@/server/services/metricsService';
+import { computeMetrics, computeBatchMetrics, computeAggregateMetrics } from '@/server/services/metricsService';
 
 // Mock the metrics service
 jest.mock('@/server/services/metricsService', () => ({
   computeMetrics: jest.fn(),
+  computeBatchMetrics: jest.fn(),
   computeMetricsFromSampleSpans: jest.fn().mockReturnValue(null),
   computeAggregateMetrics: jest.fn(),
 }));
 
 const mockComputeMetrics = computeMetrics as jest.MockedFunction<typeof computeMetrics>;
+const mockComputeBatchMetrics = computeBatchMetrics as jest.MockedFunction<typeof computeBatchMetrics>;
 const mockComputeAggregateMetrics = computeAggregateMetrics as jest.MockedFunction<typeof computeAggregateMetrics>;
 
 // Helper to create mock request/response
@@ -122,7 +124,7 @@ describe('Metrics Routes', () => {
   });
 
   describe('POST /api/metrics/batch', () => {
-    it('should return metrics for multiple runs', async () => {
+    it('should return metrics for multiple runs using bulk query', async () => {
       const mockMetrics1 = {
         runId: 'run-1',
         traceId: 'trace-1',
@@ -149,9 +151,7 @@ describe('Metrics Routes', () => {
         durationMs: 3000,
         status: 'success' as const,
       };
-      mockComputeMetrics
-        .mockResolvedValueOnce(mockMetrics1)
-        .mockResolvedValueOnce(mockMetrics2);
+      mockComputeBatchMetrics.mockResolvedValue([mockMetrics1, mockMetrics2]);
 
       const mockAggregate = {
         totalRuns: 2,
@@ -174,7 +174,11 @@ describe('Metrics Routes', () => {
 
       await handler(req, res);
 
-      expect(mockComputeMetrics).toHaveBeenCalledTimes(2);
+      expect(mockComputeBatchMetrics).toHaveBeenCalledTimes(1);
+      expect(mockComputeBatchMetrics).toHaveBeenCalledWith(
+        ['run-1', 'run-2'],
+        expect.objectContaining({ endpoint: 'http://localhost:9200' })
+      );
       expect(mockComputeAggregateMetrics).toHaveBeenCalledWith([mockMetrics1, mockMetrics2]);
       expect(res.json).toHaveBeenCalledWith({
         metrics: [mockMetrics1, mockMetrics2],
@@ -226,37 +230,22 @@ describe('Metrics Routes', () => {
       }));
     });
 
-    it('should handle partial failures', async () => {
-      const mockMetrics1 = {
-        runId: 'run-1',
-        traceId: 'trace-1',
-        totalTokens: 500,
-        inputTokens: 400,
-        outputTokens: 100,
-        llmCalls: 2,
-        toolCalls: 3,
-        toolsUsed: ['search'],
-        costUsd: 0.02,
-        durationMs: 2000,
-        status: 'success' as const,
-      };
-      mockComputeMetrics
-        .mockResolvedValueOnce(mockMetrics1)
-        .mockRejectedValueOnce(new Error('Trace not found'));
+    it('should handle batch failure gracefully', async () => {
+      mockComputeBatchMetrics.mockRejectedValue(new Error('OpenSearch connection failed'));
 
       mockComputeAggregateMetrics.mockReturnValue({
-        totalRuns: 1,
-        successRate: 100,
-        totalCostUsd: 0.02,
-        avgCostUsd: 0.02,
-        avgDurationMs: 2000,
-        p50DurationMs: 2000,
-        p95DurationMs: 2000,
-        avgTokens: 500,
-        totalInputTokens: 400,
-        totalOutputTokens: 100,
-        avgLlmCalls: 2,
-        avgToolCalls: 3,
+        totalRuns: 0,
+        successRate: 0,
+        totalCostUsd: 0,
+        avgCostUsd: 0,
+        avgDurationMs: 0,
+        p50DurationMs: 0,
+        p95DurationMs: 0,
+        avgTokens: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        avgLlmCalls: 0,
+        avgToolCalls: 0,
       });
 
       const { req, res } = createMocks({}, { runIds: ['run-1', 'run-2'] });
@@ -264,19 +253,23 @@ describe('Metrics Routes', () => {
 
       await handler(req, res);
 
-      expect(res.json).toHaveBeenCalledWith({
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
         metrics: [
-          mockMetrics1,
-          { runId: 'run-2', error: 'Trace not found', status: 'error' },
+          expect.objectContaining({ runId: 'run-1', error: 'OpenSearch connection failed', status: 'error' }),
+          expect.objectContaining({ runId: 'run-2', error: 'OpenSearch connection failed', status: 'error' }),
         ],
-        aggregate: expect.any(Object),
-      });
+      }));
     });
 
-    it('should return 500 on unexpected error', async () => {
-      // Force an error by making computeMetrics throw for all calls
-      mockComputeMetrics.mockImplementation(() => {
+    it('should return per-run errors when computeBatchMetrics throws synchronously', async () => {
+      mockComputeBatchMetrics.mockImplementation(() => {
         throw new Error('Unexpected error');
+      });
+
+      mockComputeAggregateMetrics.mockReturnValue({
+        totalRuns: 0, successRate: 0, totalCostUsd: 0, avgCostUsd: 0,
+        avgDurationMs: 0, p50DurationMs: 0, p95DurationMs: 0, avgTokens: 0,
+        totalInputTokens: 0, totalOutputTokens: 0, avgLlmCalls: 0, avgToolCalls: 0,
       });
 
       const { req, res } = createMocks({}, { runIds: ['run-1'] });
@@ -284,7 +277,9 @@ describe('Metrics Routes', () => {
 
       await handler(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        metrics: [expect.objectContaining({ runId: 'run-1', error: 'Unexpected error', status: 'error' })],
+      }));
     });
   });
 });

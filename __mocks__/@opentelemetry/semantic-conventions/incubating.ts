@@ -28,6 +28,33 @@ export const GEN_AI_OPERATION_NAME_VALUE_TEXT_COMPLETION = 'text_completion';
 export const GEN_AI_OPERATION_NAME_VALUE_GENERATE_CONTENT = 'generate_content';
 export const GEN_AI_OPERATION_NAME_VALUE_EXECUTE_TOOL = 'execute_tool';
 
+// Test attributes (from semantic-conventions registry)
+export const ATTR_TEST_SUITE_NAME = 'test.suite.name';
+export const ATTR_TEST_SUITE_RUN_STATUS = 'test.suite.run.status';
+export const ATTR_TEST_CASE_NAME = 'test.case.name';
+export const ATTR_TEST_CASE_RESULT_STATUS = 'test.case.result.status';
+
+// Test suite run status values
+export const TEST_SUITE_RUN_STATUS_VALUE_SUCCESS = 'success';
+export const TEST_SUITE_RUN_STATUS_VALUE_FAILURE = 'failure';
+export const TEST_SUITE_RUN_STATUS_VALUE_SKIPPED = 'skipped';
+export const TEST_SUITE_RUN_STATUS_VALUE_ABORTED = 'aborted';
+export const TEST_SUITE_RUN_STATUS_VALUE_TIMED_OUT = 'timed_out';
+export const TEST_SUITE_RUN_STATUS_VALUE_IN_PROGRESS = 'in_progress';
+
+// Test case result status values
+export const TEST_CASE_RESULT_STATUS_VALUE_PASS = 'pass';
+export const TEST_CASE_RESULT_STATUS_VALUE_FAIL = 'fail';
+
+// GenAI evaluation attributes
+export const ATTR_GEN_AI_EVALUATION_NAME = 'gen_ai.evaluation.name';
+export const ATTR_GEN_AI_EVALUATION_SCORE_VALUE = 'gen_ai.evaluation.score.value';
+export const ATTR_GEN_AI_EVALUATION_SCORE_LABEL = 'gen_ai.evaluation.score.label';
+export const ATTR_GEN_AI_EVALUATION_EXPLANATION = 'gen_ai.evaluation.explanation';
+
+// GenAI evaluation event name
+export const EVENT_GEN_AI_EVALUATION_RESULT = 'gen_ai.evaluation.result';
+
 export default {
   ATTR_GEN_AI_OPERATION_NAME,
   ATTR_GEN_AI_AGENT_NAME,
@@ -45,4 +72,17 @@ export default {
   GEN_AI_OPERATION_NAME_VALUE_TEXT_COMPLETION,
   GEN_AI_OPERATION_NAME_VALUE_GENERATE_CONTENT,
   GEN_AI_OPERATION_NAME_VALUE_EXECUTE_TOOL,
+  ATTR_TEST_SUITE_NAME,
+  ATTR_TEST_SUITE_RUN_STATUS,
+  ATTR_TEST_CASE_NAME,
+  ATTR_TEST_CASE_RESULT_STATUS,
+  TEST_SUITE_RUN_STATUS_VALUE_SUCCESS,
+  TEST_SUITE_RUN_STATUS_VALUE_FAILURE,
+  TEST_CASE_RESULT_STATUS_VALUE_PASS,
+  TEST_CASE_RESULT_STATUS_VALUE_FAIL,
+  ATTR_GEN_AI_EVALUATION_NAME,
+  ATTR_GEN_AI_EVALUATION_SCORE_VALUE,
+  ATTR_GEN_AI_EVALUATION_SCORE_LABEL,
+  ATTR_GEN_AI_EVALUATION_EXPLANATION,
+  EVENT_GEN_AI_EVALUATION_RESULT,
 };

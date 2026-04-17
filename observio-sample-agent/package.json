@@ -17,7 +17,7 @@
     "@ag-ui/client": "^0.0.39",
     "@ag-ui/core": "^0.0.36",
     "@langchain/aws": "^0.1.15",
-    "@langchain/core": "^0.3.80",
+    "@langchain/core": "^1.1.40",
     "@langchain/langgraph": "^0.4.9",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@opensearch-project/opensearch": "^2.13.0",

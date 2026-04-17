@@ -199,12 +199,35 @@ describe('useBenchmarkCancellation Integration Tests', () => {
   afterAll(async () => {
     if (!backendAvailable) return;
 
-    // Cleanup
+    // Cleanup by tracked ID
     if (benchmarkId) {
       await deleteBenchmark(benchmarkId);
     }
     if (testCaseId) {
       await deleteTestCase(testCaseId);
+    }
+    // Fallback: clean up leftovers from previous failed runs by name prefix
+    try {
+      const tcResp = await fetch(`${BASE_URL}/api/storage/test-cases`);
+      if (tcResp.ok) {
+        const data = await tcResp.json();
+        for (const tc of (data.testCases ?? [])) {
+          if (tc.name?.startsWith('Hook Cancel Test Case')) {
+            await deleteTestCase(tc.id).catch(() => {});
+          }
+        }
+      }
+      const benchResp = await fetch(`${BASE_URL}/api/storage/benchmarks`);
+      if (benchResp.ok) {
+        const benchData = await benchResp.json();
+        for (const b of (benchData.benchmarks ?? benchData ?? [])) {
+          if (b.name?.startsWith('Hook Cancel Integration Test Benchmark')) {
+            await deleteBenchmark(b.id).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
     }
   }, 30000);
 

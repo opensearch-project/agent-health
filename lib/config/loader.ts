@@ -23,6 +23,7 @@ import type {
   ConfigFileInfo,
   ReporterConfig,
   JudgeConfig,
+  TelemetryConfig,
 } from './types';
 
 /**
@@ -159,6 +160,9 @@ function mergeConfigs(
     ...userConfig.server,
   };
 
+  // Telemetry config (user config overrides env vars, resolved at init time)
+  const telemetry: TelemetryConfig = userConfig.telemetry ?? {};
+
   return {
     server,
     agents,
@@ -167,6 +171,7 @@ function mergeConfigs(
     testCases,
     reporters,
     judge,
+    telemetry,
   };
 }
 
@@ -253,6 +258,7 @@ export function loadConfigSync(cwd: string = process.cwd()): ResolvedConfig {
     testCases: [],
     reporters: [['console']],
     judge: { provider: 'bedrock', model: 'claude-sonnet-4' },
+    telemetry: {},
   };
 }
 

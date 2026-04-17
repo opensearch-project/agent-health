@@ -13,9 +13,11 @@ import routes from './routes/index.js';
 import { setupMiddleware, setupSpaFallback } from './middleware/index.js';
 import { loadConfig } from '@/lib/config/index';
 import { migrateYamlToJsonIfNeeded } from './services/configMigration.js';
-import { getStorageConfigFromFile } from './services/configService.js';
-import { getStorageConfigFromEnv } from './middleware/dataSourceConfig.js';
+import { getStorageConfigFromFile, getObservabilityConfigFromFile } from './services/configService.js';
+import { getStorageConfigFromEnv, getObservabilityConfigFromEnv } from './middleware/dataSourceConfig.js';
 import { initializeStorageFromConfig } from './services/storageInitializer.js';
+import { initEvalTracerProvider, resolveEvalTelemetryConfig, shutdownEvalTracer } from '@/lib/telemetry';
+import type { OpenSearchExporterConfig } from '@/lib/telemetry';
 
 // Register server-side connectors (subprocess, claude-code)
 // This import has side effects that register connectors with the registry
@@ -55,7 +57,27 @@ export async function createApp(): Promise<Express> {
   // Migrate agent-health.yaml → agent-health.config.json if needed (one-time)
   await migrateYamlToJsonIfNeeded();
 
-  await loadConfig();
+  const config = await loadConfig();
+
+  // Initialize evaluation telemetry (OTel span emission).
+  // Prefer the observability data source for direct OpenSearch export — this
+  // ensures eval spans land in the same cluster/index as agent spans.
+  const obsConfig = getObservabilityConfigFromFile() ?? getObservabilityConfigFromEnv();
+  let opensearchExporterConfig: OpenSearchExporterConfig | undefined;
+  if (obsConfig?.endpoint) {
+    opensearchExporterConfig = {
+      endpoint: obsConfig.endpoint,
+      username: obsConfig.username,
+      password: obsConfig.password,
+      tlsSkipVerify: obsConfig.tlsSkipVerify,
+      indexName: 'otel-v1-apm-span',
+    };
+  }
+  initEvalTracerProvider(resolveEvalTelemetryConfig({
+    ...config.telemetry,
+    opensearch: opensearchExporterConfig,
+  }));
+  process.once('SIGTERM', async () => { await shutdownEvalTracer(); });
 
   // Swap to OpenSearch storage when configured and reachable
   await initializeStorageBackend();

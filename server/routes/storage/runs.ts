@@ -46,12 +46,18 @@ router.get('/api/storage/runs', async (req: Request, res: Response) => {
     const { size = '100', from = '0', fields } = req.query;
     let realData: TestCaseRun[] = [];
 
+    // Parse fields query param for _source projection
+    const fieldList = typeof fields === 'string'
+      ? fields.split(',').map(f => f.trim()).filter(Boolean)
+      : undefined;
+
     // Fetch from storage backend
     const storage = getStorageModule();
     try {
       const result = await storage.runs.getAll({
         size: parseInt(size as string),
         from: parseInt(from as string),
+        _source: fieldList,
       });
       realData = result.items;
     } catch (e: any) {

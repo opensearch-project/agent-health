@@ -90,6 +90,17 @@ jobs:
             echo "✅ Line coverage ${COVERAGE}% meets the 90% threshold" >> $GITHUB_STEP_SUMMARY
           fi
 
+      - name: Upload unit test coverage to Codecov
+        if: matrix.node-version == '20'
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+        with:
+          files: coverage/lcov.info
+          flags: unit
+          name: unit-tests
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Upload unit test badge data
         if: matrix.node-version == '20'
         uses: actions/upload-artifact@v4
@@ -274,6 +285,17 @@ jobs:
             echo "{\"schemaVersion\":1,\"label\":\"Integration Coverage\",\"message\":\"N/A\",\"color\":\"lightgrey\"}" > badges/integration-coverage.json
           fi
 
+      - name: Upload integration coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+        with:
+          directory: coverage-integration/
+          flags: integration
+          name: integration-tests
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Upload integration badge data
         if: always()
         uses: actions/upload-artifact@v4
@@ -308,15 +330,38 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      - name: Build application
+      - name: Build application with coverage instrumentation
         run: |
           npm run build
           npm run build:server
+        env:
+          E2E_COVERAGE: 'true'
 
       - name: Run Playwright E2E tests
         run: npm run test:e2e 2>&1 | tee e2e-test-output.txt
         env:
           CI: true
+          E2E_COVERAGE: 'true'
+
+      - name: Generate E2E coverage report
+        if: always()
+        run: |
+          if [ -d .nyc_output ] && [ "$(ls -A .nyc_output 2>/dev/null)" ]; then
+            npx nyc report
+          else
+            echo "No E2E coverage data collected"
+          fi
+
+      - name: Upload E2E coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+        with:
+          directory: coverage-e2e/
+          flags: e2e
+          name: e2e-tests
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
@@ -324,6 +369,14 @@ jobs:
         with:
           name: playwright-report
           path: playwright-report/
+          retention-days: 30
+
+      - name: Upload E2E coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-coverage-report
+          path: coverage-e2e/
           retention-days: 30
 
       - name: Generate E2E test summary and badges
@@ -346,11 +399,11 @@ jobs:
 
             echo "| Status | Count |" >> $GITHUB_STEP_SUMMARY
             echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
-            echo "| ❌ Failed | $UNEXPECTED |" >> $GITHUB_STEP_SUMMARY
-            echo "| ⚠️ Flaky | $FLAKY |" >> $GITHUB_STEP_SUMMARY
-            echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
-            echo "| 📊 Total | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Failed | $UNEXPECTED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Flaky | $FLAKY |" >> $GITHUB_STEP_SUMMARY
+            echo "| Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Total | $TOTAL |" >> $GITHUB_STEP_SUMMARY
 
             # Calculate pass rate
             if [ "$TOTAL" -gt 0 ]; then
@@ -364,6 +417,31 @@ jobs:
             echo "{\"schemaVersion\":1,\"label\":\"E2E Tests\",\"message\":\"$PASSED/$TOTAL passed\",\"color\":\"$([ "$UNEXPECTED" -eq 0 ] && echo 'brightgreen' || echo 'red')\"}" > badges/e2e-tests.json
           else
             echo "E2E tests completed. Check the test output above for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # E2E coverage numbers
+          if [ -f coverage-e2e/coverage-summary.json ]; then
+            E2E_LINES=$(node -e "const c = require('./coverage-e2e/coverage-summary.json'); console.log(c.total.lines.pct)" 2>/dev/null || echo "N/A")
+            E2E_BRANCHES=$(node -e "const c = require('./coverage-e2e/coverage-summary.json'); console.log(c.total.branches.pct)" 2>/dev/null || echo "N/A")
+            E2E_FUNCTIONS=$(node -e "const c = require('./coverage-e2e/coverage-summary.json'); console.log(c.total.functions.pct)" 2>/dev/null || echo "N/A")
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### E2E Code Coverage (UI)" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Coverage |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|----------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Lines | ${E2E_LINES}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| Branches | ${E2E_BRANCHES}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| Functions | ${E2E_FUNCTIONS}% |" >> $GITHUB_STEP_SUMMARY
+
+            # Generate E2E coverage badge
+            mkdir -p badges
+            if (( $(echo "$E2E_LINES >= 70" | bc -l 2>/dev/null || echo "0") )); then
+              E2E_COV_COLOR="brightgreen"
+            elif (( $(echo "$E2E_LINES >= 50" | bc -l 2>/dev/null || echo "0") )); then
+              E2E_COV_COLOR="yellow"
+            else
+              E2E_COV_COLOR="red"
+            fi
+            echo "{\"schemaVersion\":1,\"label\":\"E2E Coverage\",\"message\":\"${E2E_LINES}%\",\"color\":\"${E2E_COV_COLOR}\"}" > badges/e2e-coverage.json
           fi
 
       - name: Upload badge data
@@ -434,68 +512,115 @@ jobs:
           path: coverage-integration
         continue-on-error: true
 
+      - name: Download E2E coverage report
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-coverage-report
+          path: coverage-e2e
+        continue-on-error: true
+
       - name: Generate consolidated test summary
         run: |
-          echo "# 📋 Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "# Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Unit test results
-          echo "## Unit Tests" >> $GITHUB_STEP_SUMMARY
+          # ---- Coverage overview table ----
+          echo "## Coverage Overview" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Lines | Branches | Functions | Threshold | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|-------|----------|-----------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          # Unit coverage
+          UNIT_LINES="N/A"
+          UNIT_BRANCHES="N/A"
+          UNIT_FUNCTIONS="N/A"
+          UNIT_STATUS="--"
+          if [ -f badges/unit/unit-coverage.json ]; then
+            UNIT_LINES=$(jq -r '.message' badges/unit/unit-coverage.json 2>/dev/null || echo "N/A")
+            # Extract numeric value for status check
+            UNIT_NUM=$(echo "$UNIT_LINES" | grep -o '[0-9.]*' || echo "0")
+            if (( $(echo "$UNIT_NUM >= 90" | bc -l 2>/dev/null || echo "0") )); then
+              UNIT_STATUS="PASS"
+            else
+              UNIT_STATUS="FAIL"
+            fi
+          fi
+          echo "| Unit | ${UNIT_LINES} | ${UNIT_BRANCHES} | ${UNIT_FUNCTIONS} | >= 90% | ${UNIT_STATUS} |" >> $GITHUB_STEP_SUMMARY
+
+          # Integration coverage
+          INTEG_LINES="N/A"
+          INTEG_BRANCHES="N/A"
+          INTEG_FUNCTIONS="N/A"
+          if [ -f coverage-integration/coverage-summary.json ]; then
+            INTEG_LINES=$(node -e "const c = require('./coverage-integration/coverage-summary.json'); console.log(c.total.lines.pct + '%')" 2>/dev/null || echo "N/A")
+            INTEG_BRANCHES=$(node -e "const c = require('./coverage-integration/coverage-summary.json'); console.log(c.total.branches.pct + '%')" 2>/dev/null || echo "N/A")
+            INTEG_FUNCTIONS=$(node -e "const c = require('./coverage-integration/coverage-summary.json'); console.log(c.total.functions.pct + '%')" 2>/dev/null || echo "N/A")
+          fi
+          echo "| Integration | ${INTEG_LINES} | ${INTEG_BRANCHES} | ${INTEG_FUNCTIONS} | >= 70% | -- |" >> $GITHUB_STEP_SUMMARY
+
+          # E2E coverage
+          E2E_COV_LINES="N/A"
+          E2E_COV_BRANCHES="N/A"
+          E2E_COV_FUNCTIONS="N/A"
+          if [ -f coverage-e2e/coverage-summary.json ]; then
+            E2E_COV_LINES=$(node -e "const c = require('./coverage-e2e/coverage-summary.json'); console.log(c.total.lines.pct + '%')" 2>/dev/null || echo "N/A")
+            E2E_COV_BRANCHES=$(node -e "const c = require('./coverage-e2e/coverage-summary.json'); console.log(c.total.branches.pct + '%')" 2>/dev/null || echo "N/A")
+            E2E_COV_FUNCTIONS=$(node -e "const c = require('./coverage-e2e/coverage-summary.json'); console.log(c.total.functions.pct + '%')" 2>/dev/null || echo "N/A")
+          fi
+          echo "| E2E (UI) | ${E2E_COV_LINES} | ${E2E_COV_BRANCHES} | ${E2E_COV_FUNCTIONS} | >= 50% | -- |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # ---- Test results ----
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Unit tests
+          echo "### Unit Tests" >> $GITHUB_STEP_SUMMARY
           if [ -f badges/unit/unit-tests.json ]; then
             TESTS=$(jq -r '.message' badges/unit/unit-tests.json 2>/dev/null || echo "N/A")
             echo "- **Tests:** $TESTS" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -f badges/unit/unit-coverage.json ]; then
-            COVERAGE=$(jq -r '.message' badges/unit/unit-coverage.json 2>/dev/null || echo "N/A")
-            echo "- **Coverage:** $COVERAGE" >> $GITHUB_STEP_SUMMARY
-            echo "- **Threshold:** 90% (lines)" >> $GITHUB_STEP_SUMMARY
           else
             echo "- Badge data not available" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Integration test results
-          echo "## Integration Tests" >> $GITHUB_STEP_SUMMARY
+          # Integration tests
+          echo "### Integration Tests" >> $GITHUB_STEP_SUMMARY
           if [ -f badges/integration/integration-tests.json ]; then
             INTEG_TESTS=$(jq -r '.message' badges/integration/integration-tests.json 2>/dev/null || echo "N/A")
             echo "- **Tests:** $INTEG_TESTS" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -f badges/integration/integration-coverage.json ]; then
-            INTEG_COV=$(jq -r '.message' badges/integration/integration-coverage.json 2>/dev/null || echo "N/A")
-            echo "- **Coverage:** $INTEG_COV" >> $GITHUB_STEP_SUMMARY
-          elif [ -f coverage-integration/coverage-summary.json ]; then
-            LINES=$(node -e "const c = require('./coverage-integration/coverage-summary.json'); console.log(c.total.lines.pct)" 2>/dev/null || echo "N/A")
-            echo "- **Coverage:** ${LINES}%" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- Coverage data not available" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          # E2E tests
-          echo "## E2E Tests (Playwright)" >> $GITHUB_STEP_SUMMARY
-          if [ -f badges/e2e/e2e-tests.json ]; then
-            E2E_MSG=$(jq -r '.message' badges/e2e/e2e-tests.json 2>/dev/null || echo "N/A")
-            E2E_COLOR=$(jq -r '.color' badges/e2e/e2e-tests.json 2>/dev/null || echo "unknown")
-            STATUS_ICON="✅"
-            if [ "$E2E_COLOR" = "red" ]; then STATUS_ICON="❌"; fi
-            echo "- **Results:** $STATUS_ICON $E2E_MSG" >> $GITHUB_STEP_SUMMARY
           else
             echo "- Badge data not available" >> $GITHUB_STEP_SUMMARY
           fi
+
+          # E2E tests
+          echo "### E2E Tests (Playwright)" >> $GITHUB_STEP_SUMMARY
+          if [ -f badges/e2e/e2e-tests.json ]; then
+            E2E_MSG=$(jq -r '.message' badges/e2e/e2e-tests.json 2>/dev/null || echo "N/A")
+            E2E_COLOR=$(jq -r '.color' badges/e2e/e2e-tests.json 2>/dev/null || echo "unknown")
+            STATUS_ICON="PASS"
+            if [ "$E2E_COLOR" = "red" ]; then STATUS_ICON="FAIL"; fi
+            echo "- **Results:** $STATUS_ICON $E2E_MSG" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f badges/e2e/e2e-coverage.json ]; then
+            E2E_COV_MSG=$(jq -r '.message' badges/e2e/e2e-coverage.json 2>/dev/null || echo "N/A")
+            echo "- **UI Coverage:** $E2E_COV_MSG" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Overall status
+          # ---- Thresholds reference ----
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Coverage Thresholds" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Type | Metric | Threshold |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|--------|-----------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit | Lines | ≥ 90% |" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit | Branches | ≥ 80% |" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit | Functions | ≥ 80% |" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit | Statements | ≥ 90% |" >> $GITHUB_STEP_SUMMARY
-          echo "| Integration | - | No threshold (informational) |" >> $GITHUB_STEP_SUMMARY
-          echo "| E2E | Pass Rate | 100% |" >> $GITHUB_STEP_SUMMARY
+          echo "### Enforced Coverage Thresholds" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Type | Metric | Threshold | Enforced By |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|-----------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | Lines | >= 90% | Jest + Codecov |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | Branches | >= 80% | Jest + Codecov |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | Functions | >= 80% | Jest + Codecov |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | Statements | >= 90% | Jest |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration | Lines | >= 70% | Codecov |" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E (UI) | Lines | >= 50% | Codecov |" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E | Pass Rate | 100% | Playwright |" >> $GITHUB_STEP_SUMMARY
+          echo "| Patch (new code) | Lines | >= 90% | Codecov |" >> $GITHUB_STEP_SUMMARY
 
       - name: Combine badge data
         run: |

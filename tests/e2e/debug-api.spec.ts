@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/test-fixtures';
 
 // Run these tests serially to avoid race conditions with shared debug state
 test.describe.configure({ mode: 'serial' });
