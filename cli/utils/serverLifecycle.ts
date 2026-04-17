@@ -244,7 +244,14 @@ export async function startServer(
 
   let stderrOutput = '';
   let stdoutOutput = '';
-  let detectedPort: number | null = null;
+
+  // Wait for the child to print its actual port before health-checking.
+  // The server prints "Backend Server running on http://0.0.0.0:XXXX",
+  // which may differ from the requested port due to auto-increment.
+  let resolvePortDetection: (port: number) => void;
+  const portDetected = new Promise<number>((resolve) => {
+    resolvePortDetection = resolve;
+  });
 
   child.stderr?.on('data', (data: Buffer) => {
     stderrOutput += data.toString();
@@ -252,12 +259,9 @@ export async function startServer(
   child.stdout?.on('data', (data: Buffer) => {
     const chunk = data.toString();
     stdoutOutput += chunk;
-    // Parse "Backend Server running on http://0.0.0.0:XXXX" to detect actual port
-    if (detectedPort === null) {
-      const match = chunk.match(/Backend Server running on http:\/\/0\.0\.0\.0:(\d+)/);
-      if (match) {
-        detectedPort = parseInt(match[1], 10);
-      }
+    const match = chunk.match(/Backend Server running on http:\/\/0\.0\.0\.0:(\d+)/);
+    if (match) {
+      resolvePortDetection(parseInt(match[1], 10));
     }
   });
 
@@ -266,22 +270,22 @@ export async function startServer(
   child.on('exit', (code) => {
     earlyExit = true;
     exitCode = code;
+    // If the child exits before printing a port, fall back to the requested port
+    resolvePortDetection(port);
   });
 
   child.unref();
 
-  const actualPort = detectedPort ?? port;
+  // Wait for either: port detected from stdout, child exit, or timeout
+  const portDetectionTimeout = Math.min(timeout, 10000);
+  const actualPort = await Promise.race([
+    portDetected,
+    new Promise<number>((resolve) => setTimeout(() => resolve(port), portDetectionTimeout)),
+  ]);
+
   const ready = await waitForServer(actualPort, timeout);
 
   if (!ready) {
-    // Port may have auto-incremented — scan nearby ports before giving up
-    if (detectedPort && detectedPort !== port) {
-      const retryReady = await waitForServer(detectedPort, Math.min(timeout, 5000));
-      if (retryReady) {
-        return { child, actualPort: detectedPort };
-      }
-    }
-
     try {
       child.kill();
     } catch {
@@ -307,7 +311,7 @@ export async function startServer(
     throw new Error(`Server failed to start within ${timeout}ms on port ${port}`);
   }
 
-  return { child, actualPort: detectedPort ?? port };
+  return { child, actualPort };
 }
 
 /**

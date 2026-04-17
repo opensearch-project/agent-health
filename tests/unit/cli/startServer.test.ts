@@ -66,7 +66,7 @@ describe('startServer module', () => {
               const err: NodeJS.ErrnoException = new Error(`listen EADDRINUSE: address already in use 0.0.0.0:${port}`);
               err.code = 'EADDRINUSE';
 
-              if (port < requestedPort + maxAttempts) {
+              if (port <= requestedPort + maxAttempts) {
                 tryPort(port + 1);
               } else {
                 reject(err);
@@ -98,17 +98,19 @@ describe('startServer module', () => {
 
     it('should fail after MAX_PORT_ATTEMPTS consecutive in-use ports', async () => {
       const maxAttempts = 10;
-      const allInUse = Array.from({ length: maxAttempts + 1 }, (_, i) => 4001 + i);
+      // Need maxAttempts + 2 ports in use to exhaust retries (original + 10 retries + 1 more)
+      const allInUse = Array.from({ length: maxAttempts + 2 }, (_, i) => 4001 + i);
 
       await expect(
         simulateTryListen(4001, allInUse, maxAttempts)
       ).rejects.toThrow('EADDRINUSE');
     });
 
-    it('should try up to 10 ports by default', async () => {
-      const portsInUse = Array.from({ length: 10 }, (_, i) => 4001 + i);
+    it('should try up to 10 additional ports by default', async () => {
+      // Ports 4001-4011 in use (11 ports), 4012 should succeed
+      const portsInUse = Array.from({ length: 11 }, (_, i) => 4001 + i);
       const port = await simulateTryListen(4001, portsInUse);
-      expect(port).toBe(4011);
+      expect(port).toBe(4012);
     });
 
     it('should propagate non-EADDRINUSE errors immediately', async () => {

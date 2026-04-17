@@ -50,7 +50,7 @@ function tryListen(
     });
 
     server.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE' && port < startPort + MAX_PORT_ATTEMPTS) {
+      if (err.code === 'EADDRINUSE' && port <= startPort + MAX_PORT_ATTEMPTS) {
         resolve(tryListen(app, port + 1, startPort));
       } else {
         reject(err);
@@ -79,14 +79,16 @@ describe('Server port auto-increment (tryListen pattern)', () => {
   });
 
   it('should handle the last allowed attempt succeeding', async () => {
-    const inUse = new Set(Array.from({ length: 10 }, (_, i) => 4001 + i));
+    // Ports 4001-4011 in use (11 ports), 4012 is free and is the last allowed attempt
+    const inUse = new Set(Array.from({ length: 11 }, (_, i) => 4001 + i));
     const app = createMockApp(inUse);
     const port = await tryListen(app, 4001, 4001);
-    expect(port).toBe(4011);
+    expect(port).toBe(4012);
   });
 
   it('should reject after MAX_PORT_ATTEMPTS consecutive failures', async () => {
-    const inUse = new Set(Array.from({ length: 12 }, (_, i) => 4001 + i));
+    // All ports 4001-4012 in use (12 ports), exceeds the 10 retry limit
+    const inUse = new Set(Array.from({ length: 13 }, (_, i) => 4001 + i));
     const app = createMockApp(inUse);
     await expect(tryListen(app, 4001, 4001)).rejects.toThrow('EADDRINUSE');
   });
