@@ -80,7 +80,7 @@ Get Agent Health running in minutes. Choose the option that best suits your need
 npx @opensearch-project/agent-health
 ```
 
-Opens http://localhost:4001 with pre-loaded sample data for exploration.
+Opens http://localhost:4001 with pre-loaded sample data for exploration. If port 4001 is already in use, the server automatically tries the next available port (4002, 4003, etc., up to 10 attempts).
 
 ### Option 2: Docker Compose (with OpenSearch Observability Stack)
 
@@ -242,6 +242,8 @@ npm install
 npm run dev          # Frontend on port 4000
 npm run dev:server   # Backend on port 4001
 ```
+
+> **Port conflicts:** If port 4001 is already in use, the backend server automatically tries 4002, 4003, etc. (up to 10 attempts). The actual port is displayed in the console output.
 
 All commits require DCO signoff (`git commit -s`) and all PRs must pass CI checks.
 
