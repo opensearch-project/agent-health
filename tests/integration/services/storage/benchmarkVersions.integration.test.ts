@@ -53,13 +53,25 @@ describe('Benchmark Versions Integration Tests', () => {
 
   afterAll(async () => {
     if (!backendAvailable) return;
-    // Cleanup all created benchmarks
+    // Cleanup all created benchmarks by tracked ID
     for (const id of createdBenchmarkIds) {
       try {
         await asyncBenchmarkStorage.delete(id);
       } catch {
         // Ignore cleanup errors
       }
+    }
+    // Fallback: clean up leftovers from previous failed runs by name
+    try {
+      const names = ['Version Integration Test', 'Run Embed Test', 'Run Delete Test', 'Delete Test'];
+      const allBenchmarks = await asyncBenchmarkStorage.getAll();
+      for (const b of allBenchmarks) {
+        if (names.includes(b.name)) {
+          await asyncBenchmarkStorage.delete(b.id).catch(() => {});
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
     }
   });
 

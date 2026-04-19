@@ -183,12 +183,15 @@ program.action(async (options) => {
   const spinner = ora(headless ? 'Starting headless API server...' : 'Starting server...').start();
 
   try {
-    // Start the server
-    await startServer({ port, headless, apiKey: options.apiKey });
+    const actualPort = await startServer({ port, headless, apiKey: options.apiKey });
     spinner.succeed(headless ? 'Headless API server started' : 'Server started');
 
+    if (actualPort !== port) {
+      console.log(chalk.yellow(`\n  Port ${port} was in use, started on port ${actualPort} instead`));
+    }
+
     if (headless) {
-      console.log(chalk.green(`\n  API server running on http://0.0.0.0:${port}`));
+      console.log(chalk.green(`\n  API server running on http://0.0.0.0:${actualPort}`));
       if (options.apiKey) console.log(chalk.gray('  API key authentication enabled'));
       console.log(chalk.gray('  Mode: headless (API only, no frontend)\n'));
     } else {
@@ -197,7 +200,7 @@ program.action(async (options) => {
       console.log(chalk.gray(`    Agent: Select in UI (Demo Agent for mock, real agents require endpoints)`));
       console.log(chalk.gray(`    Judge: Select in UI (Demo Judge for mock, Bedrock requires AWS creds)\n`));
 
-      const url = `http://localhost:${port}`;
+      const url = `http://localhost:${actualPort}`;
       console.log(chalk.green(`  Server running at ${chalk.bold(url)}\n`));
       console.log(chalk.green(`  Demo data loaded`));
 
@@ -244,12 +247,16 @@ program
     const spinner = ora(headless ? 'Starting headless API server...' : 'Starting server...').start();
 
     try {
-      await startServer({ port, headless, apiKey: options.apiKey });
+      const actualPort = await startServer({ port, headless, apiKey: options.apiKey });
       spinner.succeed(headless ? 'Headless API server started' : 'Server started');
 
-      const url = `http://localhost:${port}`;
+      if (actualPort !== port) {
+        console.log(chalk.yellow(`\n  Port ${port} was in use, started on port ${actualPort} instead`));
+      }
+
+      const url = `http://localhost:${actualPort}`;
       if (headless) {
-        console.log(chalk.green(`  API server running on http://0.0.0.0:${port}`));
+        console.log(chalk.green(`  API server running on http://0.0.0.0:${actualPort}`));
         if (options.apiKey) console.log(chalk.gray('  API key authentication enabled'));
         console.log(chalk.gray('  Mode: headless (API only, no frontend)\n'));
       } else {

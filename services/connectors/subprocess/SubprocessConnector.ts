@@ -9,6 +9,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { ToolCallStatus } from '@/types';
 import type { TrajectoryStep } from '@/types';
 import { BaseConnector } from '@/services/connectors/base/BaseConnector';
 import type {
@@ -83,6 +84,9 @@ export class SubprocessConnector extends BaseConnector {
     // Use pre-built payload from hook if available, otherwise build fresh
     const input = request.payload || this.buildPayload(request);
 
+    // Generate runId before spawning so the subprocess can include it in OTel spans
+    const runId = `subprocess-${Date.now()}`;
+
     this.debug('Command:', command);
     this.debug('Args:', args);
     this.debug('Input mode:', this.config.inputMode);
@@ -90,12 +94,16 @@ export class SubprocessConnector extends BaseConnector {
     this.debug('Timeout:', this.config.timeout);
     this.debug('Input (first 500 chars):', input.substring(0, 500));
     this.debug('Working dir:', this.config.workingDir || process.cwd());
+    this.debug('Run ID:', runId);
 
-    // Merge environment variables
+    // Merge environment variables.
+    // AGENT_EVAL_RUN_ID is passed so the subprocess can set gen_ai.request.id
+    // in its OTel spans, enabling trace correlation in the traces view.
     const env = {
       ...process.env,
       ...this.buildAuthEnv(auth),
       ...this.config.env,
+      AGENT_EVAL_RUN_ID: runId,
     };
 
     return new Promise((resolve, reject) => {
@@ -175,6 +183,23 @@ export class SubprocessConnector extends BaseConnector {
           this.error('stderr:', stderr);
         }
 
+        // Flush subclass buffers before finalizing streaming trajectory
+        if (this.config.outputParser === 'streaming') {
+          this.onBeforeStreamEnd(trajectory, onProgress);
+
+          // Surface error when streaming produced no steps
+          if (code !== 0 && trajectory.length === 0) {
+            const errorContent = stderr.trim()
+              ? `Error: Process exited with code ${code}. ${stderr.trim()}`
+              : `Error: Process exited with code ${code}`;
+            const errorStep = this.createStep('tool_result', errorContent, {
+              status: ToolCallStatus.FAILURE,
+            });
+            trajectory.push(errorStep);
+            onProgress?.(errorStep);
+          }
+        }
+
         // Parse final output
         const finalTrajectory = this.config.outputParser === 'streaming'
           ? trajectory
@@ -188,7 +213,7 @@ export class SubprocessConnector extends BaseConnector {
         this.debug('Resolving with trajectory of', finalTrajectory.length, 'steps');
         resolve({
           trajectory: finalTrajectory,
-          runId: `subprocess-${Date.now()}`,
+          runId,
           rawEvents: rawOutput,
           metadata: {
             command,
@@ -223,6 +248,17 @@ export class SubprocessConnector extends BaseConnector {
       });
     });
     this.debug('========== execute() COMPLETED ==========');
+  }
+
+  /**
+   * Hook called before returning the streaming trajectory on process close.
+   * Subclasses can override to flush internal buffers.
+   */
+  protected onBeforeStreamEnd(
+    _trajectory: TrajectoryStep[],
+    _onProgress?: ConnectorProgressCallback
+  ): void {
+    // No-op by default
   }
 
   /**

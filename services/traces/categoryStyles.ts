@@ -42,6 +42,13 @@ export const CATEGORY_COLORS: Record<SpanCategory | 'OTHER', CategoryColorConfig
     bar: 'bg-amber-500',
     chipHover: 'hover:bg-amber-500/20',
   },
+  EVAL: {
+    border: 'border-emerald-500/50',
+    bg: 'bg-emerald-500/10',
+    text: 'text-emerald-400',
+    bar: 'bg-emerald-500',
+    chipHover: 'hover:bg-emerald-500/20',
+  },
   ERROR: {
     border: 'border-red-500/50',
     bg: 'bg-red-500/10',

@@ -34,6 +34,7 @@ npm run server  # Build UI + start server on port 4001
 **Ports:**
 - Development: Frontend on 4000, Backend on 4001
 - Production: Single server on 4001 (serves both UI and API)
+- If a port is in use, the server auto-increments (4001 → 4002 → ... up to 10 attempts)
 
 ### Building
 ```bash

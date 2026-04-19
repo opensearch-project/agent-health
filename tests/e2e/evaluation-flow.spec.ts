@@ -13,7 +13,7 @@
  * This allows testing the full flow without external dependencies (AWS Bedrock, real agents).
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/test-fixtures';
 
 // Unique identifiers for test data
 const TEST_RUN_ID = Date.now();

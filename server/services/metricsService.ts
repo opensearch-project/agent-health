@@ -70,6 +70,7 @@ interface OpenSearchSpanSource {
   endTime?: string;
   durationInNanos?: number;
   'status.code'?: number;
+  'span.attributes.gen_ai@request@id'?: string;
   'span.attributes.gen_ai@usage@input_tokens'?: number;
   'span.attributes.gen_ai@usage@output_tokens'?: number;
   'span.attributes.gen_ai@request@model'?: string;
@@ -167,13 +168,125 @@ export function computeMetricsFromSampleSpans(runId: string): MetricsResult | nu
  * @param osConfig - OpenSearch configuration
  * @returns Computed metrics
  */
+// Fields needed for metrics computation (used for _source projection in bulk queries)
+const METRICS_SOURCE_FIELDS = [
+  'span.attributes.gen_ai@request@id',
+  'span.attributes.gen_ai@usage@input_tokens',
+  'span.attributes.gen_ai@usage@output_tokens',
+  'span.attributes.gen_ai@request@model',
+  'span.attributes.gen_ai@tool@name',
+  'span.attributes.tool.name',
+  'name',
+  'traceId',
+  'startTime',
+  'endTime',
+  'durationInNanos',
+  'status.code',
+];
+
+/**
+ * Compute metrics from an array of OpenSearch span sources (pure function).
+ * Shared by both single-run and batch-run code paths.
+ */
+export function computeMetricsFromSpans(
+  runId: string,
+  spans: OpenSearchSpanSource[]
+): MetricsResult {
+  if (spans.length === 0) {
+    return {
+      runId,
+      traceId: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      durationMs: 0,
+      llmCalls: 0,
+      toolCalls: 0,
+      toolsUsed: [],
+      status: 'pending'
+    };
+  }
+
+  // Find the root agent.run span
+  const rootSpan = spans.find(s => s.name === 'agent.run');
+
+  // Aggregate metrics from all spans
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let llmCalls = 0;
+  const toolsUsed = new Set<string>();
+  let modelId = 'default';
+
+  for (const span of spans) {
+    const inTokens = Number(span['span.attributes.gen_ai@usage@input_tokens']) || 0;
+    const outTokens = Number(span['span.attributes.gen_ai@usage@output_tokens']) || 0;
+    inputTokens += inTokens;
+    outputTokens += outTokens;
+
+    const spanModel = span['span.attributes.gen_ai@request@model'];
+    if (spanModel) {
+      llmCalls++;
+      modelId = spanModel;
+    }
+
+    if (span.name === 'agent.tool.execute' || span.name?.includes('tool')) {
+      const toolName = span['span.attributes.gen_ai@tool@name'] ||
+                       span['span.attributes.tool.name'] ||
+                       span.name;
+      if (toolName && toolName !== 'agent.tool.execute') {
+        toolsUsed.add(toolName);
+      }
+    }
+  }
+
+  const pricing = getPricing(modelId);
+  const costUsd = (inputTokens / 1e6) * pricing.input + (outputTokens / 1e6) * pricing.output;
+
+  let durationMs = 0;
+  if (rootSpan) {
+    durationMs = (rootSpan.durationInNanos || 0) / 1e6;
+  } else if (spans.length > 0) {
+    const firstSpan = spans[0];
+    const lastSpan = spans[spans.length - 1];
+    const startTime = new Date(firstSpan.startTime || 0).getTime();
+    const endTime = new Date(lastSpan.endTime || lastSpan.startTime || 0).getTime();
+    durationMs = endTime - startTime;
+  }
+
+  let status: 'pending' | 'success' | 'error' = 'pending';
+  if (rootSpan) {
+    status = rootSpan['status.code'] === 2 ? 'error' :
+             rootSpan['status.code'] === 1 ? 'success' : 'success';
+  } else if (spans.length > 0) {
+    const hasError = spans.some(s => s['status.code'] === 2);
+    status = hasError ? 'error' : 'success';
+  }
+
+  return {
+    runId,
+    traceId: rootSpan?.traceId || spans[0]?.traceId || null,
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    costUsd,
+    durationMs,
+    llmCalls,
+    toolCalls: toolsUsed.size,
+    toolsUsed: Array.from(toolsUsed),
+    status
+  };
+}
+
+/**
+ * Compute metrics from OpenSearch traces for a single run
+ */
 export async function computeMetrics(
   runId: string,
   osConfig: OpenSearchConfig
 ): Promise<MetricsResult> {
   const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
 
-  // Query spans by run ID
   const query = {
     size: 500,
     sort: [{ startTime: { order: 'asc' } }],
@@ -203,98 +316,92 @@ export async function computeMetrics(
   const data: OpenSearchResponse = await response.json();
   const spans = data.hits?.hits?.map(h => h._source) || [];
 
-  if (spans.length === 0) {
-    return {
-      runId,
-      traceId: null,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      costUsd: 0,
-      durationMs: 0,
-      llmCalls: 0,
-      toolCalls: 0,
-      toolsUsed: [],
-      status: 'pending'
-    };
+  return computeMetricsFromSpans(runId, spans);
+}
+
+/**
+ * Compute metrics for multiple runs using bulk OpenSearch terms query.
+ * Issues one query per chunk instead of one query per run ID.
+ */
+export async function computeBatchMetrics(
+  runIds: string[],
+  osConfig: OpenSearchConfig
+): Promise<MetricsResult[]> {
+  if (runIds.length === 0) return [];
+
+  const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
+  const CHUNK_SIZE = 50;
+  const allResults: MetricsResult[] = [];
+
+  // Process in chunks to stay under OpenSearch max_result_window (10,000 hits)
+  const chunks: string[][] = [];
+  for (let i = 0; i < runIds.length; i += CHUNK_SIZE) {
+    chunks.push(runIds.slice(i, i + CHUNK_SIZE));
   }
 
-  // Find the root agent.run span
-  const rootSpan = spans.find(s => s.name === 'agent.run');
+  const chunkResults = await Promise.all(chunks.map(async (chunk) => {
+    const query = {
+      size: 10000,
+      sort: [{ startTime: { order: 'asc' } }],
+      _source: METRICS_SOURCE_FIELDS,
+      query: {
+        bool: {
+          must: [
+            { terms: { 'span.attributes.gen_ai@request@id': chunk } }
+          ]
+        }
+      }
+    };
 
-  // Aggregate metrics from all spans
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let llmCalls = 0;
-  const toolsUsed = new Set<string>();
-  let modelId = 'default';
+    const response = await fetch(`${endpoint}/${indexPattern}/_search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+      },
+      body: JSON.stringify(query)
+    });
 
-  for (const span of spans) {
-    // Extract token usage from spans with gen_ai@usage attributes
-    const inTokens = Number(span['span.attributes.gen_ai@usage@input_tokens']) || 0;
-    const outTokens = Number(span['span.attributes.gen_ai@usage@output_tokens']) || 0;
-    inputTokens += inTokens;
-    outputTokens += outTokens;
-
-    // Count LLM calls (spans with gen_ai@request@model)
-    const spanModel = span['span.attributes.gen_ai@request@model'];
-    if (spanModel) {
-      llmCalls++;
-      modelId = spanModel; // Use the last model ID found
+    if (!response.ok) {
+      const responseBody = await response.text();
+      console.warn(
+        `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ` +
+        `${response.status} ${response.statusText}. Response body: ${responseBody}`
+      );
+      // On failure, return pending results for all IDs in this chunk
+      return chunk.map(runId => computeMetricsFromSpans(runId, []));
     }
 
-    // Count tool executions
-    if (span.name === 'agent.tool.execute' || span.name?.includes('tool')) {
-      const toolName = span['span.attributes.gen_ai@tool@name'] ||
-                       span['span.attributes.tool.name'] ||
-                       span.name;
-      if (toolName && toolName !== 'agent.tool.execute') {
-        toolsUsed.add(toolName);
+    const data: OpenSearchResponse = await response.json();
+    const allSpans = data.hits?.hits?.map(h => h._source) || [];
+
+    // Warn if results were truncated (more spans exist than size limit)
+    const totalHits = (data.hits as any)?.total?.value ?? allSpans.length;
+    if (totalHits > 10000) {
+      console.warn(
+        `OpenSearch batch metrics query returned ${allSpans.length} of ${totalHits} spans ` +
+        `for chunk of ${chunk.length} run IDs. Metrics may be incomplete.`
+      );
+    }
+
+    // Group spans by run ID
+    const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
+    for (const rid of chunk) spansByRunId.set(rid, []);
+    for (const span of allSpans) {
+      const rid = span['span.attributes.gen_ai@request@id'] as unknown as string;
+      if (rid && spansByRunId.has(rid)) {
+        spansByRunId.get(rid)!.push(span);
       }
     }
+
+    return chunk.map(runId => computeMetricsFromSpans(runId, spansByRunId.get(runId) || []));
+  }));
+
+  for (const results of chunkResults) {
+    allResults.push(...results);
   }
 
-  // Calculate cost
-  const pricing = getPricing(modelId);
-  const costUsd = (inputTokens / 1e6) * pricing.input + (outputTokens / 1e6) * pricing.output;
-
-  // Calculate duration from root span
-  let durationMs = 0;
-  if (rootSpan) {
-    durationMs = (rootSpan.durationInNanos || 0) / 1e6;
-  } else if (spans.length > 0) {
-    // Fallback: calculate from first to last span
-    const firstSpan = spans[0];
-    const lastSpan = spans[spans.length - 1];
-    const startTime = new Date(firstSpan.startTime || 0).getTime();
-    const endTime = new Date(lastSpan.endTime || lastSpan.startTime || 0).getTime();
-    durationMs = endTime - startTime;
-  }
-
-  // Determine status from root span or overall
-  let status: 'pending' | 'success' | 'error' = 'pending';
-  if (rootSpan) {
-    status = rootSpan['status.code'] === 2 ? 'error' :
-             rootSpan['status.code'] === 1 ? 'success' : 'success';
-  } else if (spans.length > 0) {
-    // Check if any span has error status
-    const hasError = spans.some(s => s['status.code'] === 2);
-    status = hasError ? 'error' : 'success';
-  }
-
-  return {
-    runId,
-    traceId: rootSpan?.traceId || spans[0]?.traceId || null,
-    inputTokens,
-    outputTokens,
-    totalTokens: inputTokens + outputTokens,
-    costUsd,
-    durationMs,
-    llmCalls,
-    toolCalls: toolsUsed.size,
-    toolsUsed: Array.from(toolsUsed),
-    status
-  };
+  return allResults;
 }
 
 /**

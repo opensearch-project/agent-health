@@ -62,10 +62,23 @@ describe('OpenSearch Storage Integration Tests', () => {
     let createdTestCaseId: string | null = null;
 
     afterAll(async () => {
-      if (!backendAvailable || !createdTestCaseId) return;
-      // Cleanup: delete test case
+      if (!backendAvailable) return;
+      // Cleanup: delete test case by tracked ID
+      if (createdTestCaseId) {
+        try {
+          await asyncTestCaseStorage.delete(createdTestCaseId);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+      // Fallback: clean up leftovers from previous failed runs by name
       try {
-        await asyncTestCaseStorage.delete(createdTestCaseId);
+        const allTestCases = await asyncTestCaseStorage.getAll();
+        for (const tc of allTestCases) {
+          if (tc.name === 'Integration Test Case' || tc.name === 'Updated Test Case') {
+            await asyncTestCaseStorage.delete(tc.id).catch(() => {});
+          }
+        }
       } catch {
         // Ignore cleanup errors
       }
@@ -133,10 +146,23 @@ describe('OpenSearch Storage Integration Tests', () => {
     let benchmarkId: string;
 
     afterAll(async () => {
-      if (!backendAvailable || !benchmarkId) return;
-      // Cleanup: delete benchmark
+      if (!backendAvailable) return;
+      // Cleanup: delete benchmark by tracked ID
+      if (benchmarkId) {
+        try {
+          await asyncBenchmarkStorage.delete(benchmarkId);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+      // Fallback: clean up leftovers from previous failed runs by name
       try {
-        await asyncBenchmarkStorage.delete(benchmarkId);
+        const allBenchmarks = await asyncBenchmarkStorage.getAll();
+        for (const b of allBenchmarks) {
+          if (b.name === 'Integration Test Benchmark') {
+            await asyncBenchmarkStorage.delete(b.id).catch(() => {});
+          }
+        }
       } catch {
         // Ignore cleanup errors
       }

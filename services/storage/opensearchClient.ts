@@ -395,7 +395,7 @@ export const runStorage = {
   /**
    * Get all runs with pagination
    */
-  async getAll(options: { size?: number; from?: number } = {}): Promise<{
+  async getAll(options: { size?: number; from?: number; _source?: string[] } = {}): Promise<{
     runs: StorageRun[];
     total: number;
     size: number;
@@ -404,6 +404,9 @@ export const runStorage = {
     const params = new URLSearchParams();
     if (options.size) params.append('size', options.size.toString());
     if (options.from) params.append('from', options.from.toString());
+    if (options._source && options._source.length > 0) {
+      params.append('fields', options._source.join(','));
+    }
     const query = params.toString() ? `?${params.toString()}` : '';
     return request('GET', `/runs${query}`);
   },

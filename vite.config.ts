@@ -3,16 +3,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
+import istanbul from 'vite-plugin-istanbul';
 import path from 'path';
 
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '');
 
+  const plugins: PluginOption[] = [react()];
+
+  // Add Istanbul instrumentation for E2E coverage collection in CI
+  if (process.env.E2E_COVERAGE === 'true') {
+    plugins.push(
+      istanbul({
+        include: ['components/*', 'hooks/*', 'lib/*', 'App.tsx', 'index.tsx'],
+        exclude: ['node_modules', 'tests/', 'dist/', 'server/', 'cli/', '**/*.test.ts'],
+        extension: ['.ts', '.tsx', '.js', '.jsx'],
+        requireEnv: true,
+        forceBuildInstrument: true,
+      })
+    );
+  }
+
   return {
-    plugins: [react()],
+    plugins,
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './')

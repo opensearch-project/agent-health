@@ -38,6 +38,17 @@ export function getKeyAttributes(span: Span): Record<string, string | number | n
   const attrs = span.attributes || {};
   const name = span.name || '';
 
+  // Eval spans
+  const opName = attrs['gen_ai.operation.name'];
+  if (opName === 'evaluation' || name.includes('test_case') || name.includes('test_suite_run')) {
+    return {
+      'Test Case': attrs['test.case.name'],
+      'Result': attrs['test.case.result.status'],
+      'Suite': attrs['test.suite.name'],
+      'Service': attrs['service.name'] || attrs['serviceName'],
+    };
+  }
+
   // Bedrock/LLM spans
   if (name.startsWith('bedrock.') || name.includes('llm') || name.includes('converse')) {
     return {

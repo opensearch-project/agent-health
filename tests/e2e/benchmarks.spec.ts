@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/test-fixtures';
 import path from 'path';
 import { fileURLToPath } from 'url';
 

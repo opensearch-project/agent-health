@@ -64,28 +64,42 @@ describe('Benchmark File Mode Integration', () => {
 
     if (!backendAvailable) return;
 
-    // Clean up created benchmarks
-    for (const id of createdBenchmarkIds) {
-      try {
-        await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(id)}`, {
-          method: 'DELETE',
-        });
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
+    // Clean up created benchmarks and test cases in parallel
+    await Promise.all([
+      ...createdBenchmarkIds.map(id =>
+        fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})),
+      ...createdTestCaseIds.map(id =>
+        fetch(`${BASE_URL}/api/storage/test-cases/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})),
+    ]);
 
-    // Clean up created test cases so no files accumulate in agent-health-data/
-    for (const id of createdTestCaseIds) {
-      try {
-        await fetch(`${BASE_URL}/api/storage/test-cases/${encodeURIComponent(id)}`, {
-          method: 'DELETE',
-        });
-      } catch {
-        // Ignore cleanup errors
+    // Fallback: clean up leftovers from previous failed runs by name prefix
+    try {
+      const [tcResp, benchResp] = await Promise.all([
+        fetch(`${BASE_URL}/api/storage/test-cases`),
+        fetch(`${BASE_URL}/api/storage/benchmarks`),
+      ]);
+      const deletes: Promise<any>[] = [];
+      if (tcResp.ok) {
+        const data = await tcResp.json();
+        for (const tc of data.testCases ?? []) {
+          if (tc.name?.startsWith('IntegTest:') || tc.name?.startsWith('ID Test ') || tc.name?.startsWith('OTEL Demo:')) {
+            deletes.push(fetch(`${BASE_URL}/api/storage/test-cases/${encodeURIComponent(tc.id)}`, { method: 'DELETE' }).catch(() => {}));
+          }
+        }
       }
+      if (benchResp.ok) {
+        const benchData = await benchResp.json();
+        for (const b of (benchData.benchmarks ?? benchData ?? [])) {
+          if (b.name?.startsWith('File Mode IntegTest') || b.name?.startsWith('OTEL Demo IntegTest')) {
+            deletes.push(fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(b.id)}`, { method: 'DELETE' }).catch(() => {}));
+          }
+        }
+      }
+      await Promise.all(deletes);
+    } catch {
+      // Ignore cleanup errors
     }
-  }, TEST_TIMEOUT);
+  }, 60000);
 
   // --- File loading and validation (no backend needed) ---
 

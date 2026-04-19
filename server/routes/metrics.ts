@@ -9,7 +9,7 @@
 
 import { Request, Response, Router } from 'express';
 import { debug } from '@/lib/debug';
-import { computeMetrics, computeMetricsFromSampleSpans, computeAggregateMetrics } from '../services/metricsService';
+import { computeMetrics, computeBatchMetrics, computeMetricsFromSampleSpans, computeAggregateMetrics } from '../services/metricsService';
 import { resolveObservabilityConfig, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceConfig.js';
 import { MetricsResult } from '@/types';
 
@@ -69,25 +69,6 @@ router.get('/api/metrics/:runId', async (req: Request, res: Response) => {
 });
 
 /**
- * Process array in batches to avoid overwhelming OpenSearch
- */
-async function processBatches<T, R>(
-  items: T[],
-  batchSize: number,
-  processor: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
-
-  for (let i = 0; i < items.length; i += batchSize) {
-    const batch = items.slice(i, i + batchSize);
-    const batchResults = await Promise.all(batch.map(processor));
-    results.push(...batchResults);
-  }
-
-  return results;
-}
-
-/**
  * POST /api/metrics/batch - Compute metrics for multiple runs
  */
 router.post('/api/metrics/batch', async (req: Request, res: Response) => {
@@ -132,16 +113,15 @@ router.post('/api/metrics/batch', async (req: Request, res: Response) => {
           indexPattern
         };
 
-        const BATCH_SIZE = 10;
-        realResults = await processBatches(
-          realRunIds,
-          BATCH_SIZE,
-          (runId) => computeMetrics(runId, osConfig).catch(e => ({
+        try {
+          realResults = await computeBatchMetrics(realRunIds, osConfig);
+        } catch (e: any) {
+          realResults = realRunIds.map((runId: string) => ({
             runId,
             error: e.message,
             status: 'error'
-          }))
-        );
+          }));
+        }
       }
     }
 

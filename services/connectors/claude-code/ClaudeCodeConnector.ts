@@ -80,6 +80,7 @@ export class ClaudeCodeConnector extends SubprocessConnector {
 
   private outputBuffer = '';
   private thinkingBuffer = '';
+  private textBuffer = '';
   private isInThinking = false;
 
   constructor(config?: Partial<SubprocessConfig>) {
@@ -168,16 +169,24 @@ export class ClaudeCodeConnector extends SubprocessConnector {
         }
       }
     } else if (event.type === 'content_block_delta') {
-      // Streaming delta updates
+      // Streaming delta updates — accumulate into buffers
       if (event.delta?.type === 'thinking_delta' && event.delta.thinking) {
         this.thinkingBuffer += event.delta.thinking;
       } else if (event.delta?.type === 'text_delta' && event.delta.text) {
-        steps.push(this.createStep('assistant', event.delta.text));
+        // Accumulate text deltas; the 'result' event will emit the final response
+        this.textBuffer += event.delta.text;
       }
-    } else if (event.type === 'content_block_stop' && this.thinkingBuffer) {
+    } else if (event.type === 'content_block_stop') {
       // Flush thinking buffer when block ends
-      steps.push(this.createStep('thinking', this.thinkingBuffer));
-      this.thinkingBuffer = '';
+      if (this.thinkingBuffer) {
+        steps.push(this.createStep('thinking', this.thinkingBuffer));
+        this.thinkingBuffer = '';
+      }
+      // Flush text buffer when block ends (consolidated assistant step)
+      if (this.textBuffer) {
+        steps.push(this.createStep('assistant', this.textBuffer));
+        this.textBuffer = '';
+      }
     } else if (event.type === 'result' && event.result) {
       // Final result message
       steps.push(this.createStep('response',
@@ -232,7 +241,49 @@ export class ClaudeCodeConnector extends SubprocessConnector {
   private resetState(): void {
     this.outputBuffer = '';
     this.thinkingBuffer = '';
+    this.textBuffer = '';
     this.isInThinking = false;
+  }
+
+  /**
+   * Flush remaining buffers when the subprocess stream ends.
+   */
+  protected override onBeforeStreamEnd(
+    trajectory: TrajectoryStep[],
+    onProgress?: ConnectorProgressCallback
+  ): void {
+    // Flush outputBuffer (incomplete NDJSON line)
+    if (this.outputBuffer.trim()) {
+      try {
+        const event = JSON.parse(this.outputBuffer.trim());
+        const steps = this.parseJsonEvent(event);
+        for (const step of steps) {
+          trajectory.push(step);
+          onProgress?.(step);
+        }
+      } catch {
+        const step = this.createStep('assistant', this.outputBuffer.trim());
+        trajectory.push(step);
+        onProgress?.(step);
+      }
+      this.outputBuffer = '';
+    }
+
+    // Flush thinkingBuffer
+    if (this.thinkingBuffer) {
+      const step = this.createStep('thinking', this.thinkingBuffer);
+      trajectory.push(step);
+      onProgress?.(step);
+      this.thinkingBuffer = '';
+    }
+
+    // Flush textBuffer (text deltas received without a result event)
+    if (this.textBuffer) {
+      const step = this.createStep('response', this.textBuffer);
+      trajectory.push(step);
+      onProgress?.(step);
+      this.textBuffer = '';
+    }
   }
 
   /**

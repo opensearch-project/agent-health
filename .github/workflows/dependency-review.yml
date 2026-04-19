@@ -23,3 +23,8 @@ jobs:
         with:
           fail-on-severity: high
           allow-licenses: Apache-2.0, MIT, MIT-0, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD, CC0-1.0, CC-BY-4.0, BlueOak-1.0.0, Python-2.0
+          # protobufjs is BSD-3-Clause but GitHub reports a compound SPDX expression
+          # that includes a scanner artifact for bundled protobuf definitions.
+          # bowser uses "MIT AND MITNFA" (compound), json-schema-typed uses "BSD-2-Clause AND JSON" —
+          # both are transitive deps of observio-sample-agent and use permissive licenses.
+          allow-dependencies-licenses: 'pkg:npm/protobufjs, pkg:npm/bowser, pkg:npm/json-schema-typed'

@@ -177,7 +177,7 @@ describe('Runs Storage Routes', () => {
 
       await handler(req, res);
 
-      expect(mockRunsGetAll).toHaveBeenCalledWith({ size: 50, from: 0 });
+      expect(mockRunsGetAll).toHaveBeenCalledWith({ size: 50, from: 0, _source: undefined });
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           runs: expect.arrayContaining([
@@ -186,6 +186,36 @@ describe('Runs Storage Routes', () => {
           ]),
         })
       );
+    });
+
+    it('should forward fields query param as _source to storage adapter', async () => {
+      mockRunsGetAll.mockResolvedValue({ items: [], total: 0 });
+
+      const { req, res } = createMocks({}, {}, { fields: 'id,testCaseId,passFailStatus' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+
+      await handler(req, res);
+
+      expect(mockRunsGetAll).toHaveBeenCalledWith({
+        size: 100,
+        from: 0,
+        _source: ['id', 'testCaseId', 'passFailStatus'],
+      });
+    });
+
+    it('should not pass _source when fields query param is missing', async () => {
+      mockRunsGetAll.mockResolvedValue({ items: [], total: 0 });
+
+      const { req, res } = createMocks({}, {}, {});
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+
+      await handler(req, res);
+
+      expect(mockRunsGetAll).toHaveBeenCalledWith({
+        size: 100,
+        from: 0,
+        _source: undefined,
+      });
     });
 
     it('should return only sample data when storage unavailable', async () => {

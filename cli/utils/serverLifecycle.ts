@@ -218,15 +218,20 @@ async function waitForServer(port: number, timeout: number): Promise<boolean> {
   return false;
 }
 
+interface StartServerResult {
+  child: ChildProcess;
+  actualPort: number;
+}
+
 /**
- * Start the Agent Health server
+ * Start the Agent Health server.
+ * Parses stdout to detect the actual port (which may differ from the
+ * requested port if auto-increment kicked in on EADDRINUSE).
  */
 export async function startServer(
   port: number,
   timeout: number
-): Promise<ChildProcess> {
-  // Spawn server process using absolute path to bin/cli.js
-  // __dirname resolves to cli/dist/ in the installed package, so go up 2 levels to package root
+): Promise<StartServerResult> {
   const packageRoot = join(__dirname, '..', '..');
   const cliPath = join(packageRoot, 'bin', 'cli.js');
   const child = spawn('node', [cliPath, 'serve', '-p', String(port), '--no-browser'], {
@@ -237,39 +242,56 @@ export async function startServer(
     },
   });
 
-  // Capture stderr output for diagnostics on failure
   let stderrOutput = '';
   let stdoutOutput = '';
+
+  // Wait for the child to print its actual port before health-checking.
+  // The server prints "Backend Server running on http://0.0.0.0:XXXX",
+  // which may differ from the requested port due to auto-increment.
+  let resolvePortDetection: (port: number) => void;
+  const portDetected = new Promise<number>((resolve) => {
+    resolvePortDetection = resolve;
+  });
+
   child.stderr?.on('data', (data: Buffer) => {
     stderrOutput += data.toString();
   });
   child.stdout?.on('data', (data: Buffer) => {
-    stdoutOutput += data.toString();
+    const chunk = data.toString();
+    stdoutOutput += chunk;
+    const match = chunk.match(/Backend Server running on http:\/\/0\.0\.0\.0:(\d+)/);
+    if (match) {
+      resolvePortDetection(parseInt(match[1], 10));
+    }
   });
 
-  // Listen for early exit (crash before server is ready)
   let earlyExit = false;
   let exitCode: number | null = null;
   child.on('exit', (code) => {
     earlyExit = true;
     exitCode = code;
+    // If the child exits before printing a port, fall back to the requested port
+    resolvePortDetection(port);
   });
 
-  // Unref so parent can exit independently (in non-CI mode)
   child.unref();
 
-  // Wait for server to be ready
-  const ready = await waitForServer(port, timeout);
+  // Wait for either: port detected from stdout, child exit, or timeout
+  const portDetectionTimeout = Math.min(timeout, 10000);
+  const actualPort = await Promise.race([
+    portDetected,
+    new Promise<number>((resolve) => setTimeout(() => resolve(port), portDetectionTimeout)),
+  ]);
+
+  const ready = await waitForServer(actualPort, timeout);
 
   if (!ready) {
-    // Kill the process if it didn't start in time
     try {
       child.kill();
     } catch {
       // Ignore kill errors
     }
 
-    // Show diagnostics to help debug startup failures
     if (earlyExit) {
       console.error(`[ServerLifecycle] Server process exited with code ${exitCode} before becoming ready`);
     } else {
@@ -289,7 +311,7 @@ export async function startServer(
     throw new Error(`Server failed to start within ${timeout}ms on port ${port}`);
   }
 
-  return child;
+  return { child, actualPort };
 }
 
 /**
@@ -373,12 +395,16 @@ export async function ensureServer(
   }
 
   // Server not running (or was killed due to version mismatch) - start it
-  const serverProcess = await startServer(port, startTimeout);
+  const { child, actualPort } = await startServer(port, startTimeout);
+
+  if (actualPort !== port) {
+    console.log(`[ServerLifecycle] Port ${port} was in use, server started on port ${actualPort}`);
+  }
 
   return {
     wasStarted: true,
-    baseUrl,
-    process: serverProcess,
+    baseUrl: `http://localhost:${actualPort}`,
+    process: child,
   };
 }
 

@@ -80,6 +80,12 @@ const CATEGORY_META: Record<SpanCategory, CategoryMeta> = {
     icon: 'Wrench',
     label: 'Tool',
   },
+  EVAL: {
+    color: 'text-emerald-400',
+    bgColor: 'bg-emerald-500/20',
+    icon: 'ClipboardCheck',
+    label: 'Eval',
+  },
   ERROR: {
     color: 'text-red-400',
     bgColor: 'bg-red-500/20',
@@ -115,6 +121,9 @@ export function getSpanCategory(span: Span): SpanCategory {
   const operationName = span.attributes?.[ATTR_GEN_AI_OPERATION_NAME];
 
   if (operationName) {
+    if (operationName === 'evaluation') {
+      return 'EVAL';
+    }
     if (AGENT_OPERATIONS.includes(operationName)) {
       return 'AGENT';
     }
@@ -137,6 +146,11 @@ export function getSpanCategory(span: Span): SpanCategory {
   // Tool patterns - check before agent since tool spans may contain 'agent' prefix
   if (name.includes('executetool') || name.includes('tool.execute')) {
     return 'TOOL';
+  }
+
+  // Eval patterns - evaluation spans from agent-health telemetry
+  if (name.includes('test_suite_run') || name.includes('test_case')) {
+    return 'EVAL';
   }
 
   // Agent patterns - root spans, orchestration, and internal processing
@@ -173,6 +187,11 @@ export function buildDisplayName(span: Span, category: SpanCategory): string {
     case 'TOOL': {
       const toolName = attrs[ATTR_GEN_AI_TOOL_NAME] || span.name;
       return operationName ? `${operationName} ${toolName}` : toolName;
+    }
+
+    case 'EVAL': {
+      const testName = attrs['test.case.name'] || attrs['test.suite.name'] || '';
+      return testName ? `evaluation ${testName}` : span.name;
     }
 
     case 'ERROR':
@@ -276,6 +295,7 @@ export function countByCategory(spans: CategorizedSpan[]): Record<SpanCategory, 
     AGENT: 0,
     LLM: 0,
     TOOL: 0,
+    EVAL: 0,
     ERROR: 0,
     OTHER: 0,
   };
@@ -303,6 +323,7 @@ const EXPECTED_ATTRIBUTES: Record<SpanCategory, string[]> = {
   LLM: [ATTR_GEN_AI_OPERATION_NAME, ATTR_GEN_AI_REQUEST_MODEL, ATTR_GEN_AI_SYSTEM],
   TOOL: [ATTR_GEN_AI_OPERATION_NAME, ATTR_GEN_AI_TOOL_NAME],
   AGENT: [ATTR_GEN_AI_OPERATION_NAME, ATTR_GEN_AI_AGENT_NAME],
+  EVAL: [ATTR_GEN_AI_OPERATION_NAME],
   ERROR: [],  // Errors just need status
   OTHER: [],  // No expectations for OTHER
 };

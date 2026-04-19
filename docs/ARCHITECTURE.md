@@ -78,15 +78,42 @@ export default defineConfig({
 });
 ```
 
+### Port Auto-Increment
+
+When starting, both the standalone server (`npm run dev:server`) and the CLI (`npx @opensearch-project/agent-health`) automatically handle port conflicts. If the configured port (default 4001) is already in use, the server tries the next port (4002, 4003, etc.) up to 10 consecutive attempts before failing. The actual port is:
+
+- Printed to the console: `Backend Server running on http://0.0.0.0:<port>`
+- Propagated to `VITE_BACKEND_PORT` so the frontend connects to the correct backend
+- Returned by `ensureServer()` so CLI subcommands use the correct `baseUrl`
+
 ### Implementation Details
 
 The server lifecycle is implemented in `cli/utils/serverLifecycle.ts`:
 
 - `isServerRunning(port)` - Check if server is listening on port
-- `startServer(port, timeout)` - Spawn server process and wait for ready
+- `startServer(port, timeout)` - Spawn server process, parse stdout for actual port, wait for ready
 - `stopServer(process)` - Gracefully terminate server
-- `ensureServer(config)` - Main entry point, handles all scenarios
+- `ensureServer(config)` - Main entry point, handles all scenarios including port auto-increment
 - `createServerCleanup(result, isCI)` - Returns cleanup function for CI mode
+
+The port retry logic uses a recursive `tryListen()` pattern in both `server/index.ts` and `cli/utils/startServer.ts`:
+
+```typescript
+const tryListen = (port: number): Promise<number> => {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, '0.0.0.0');
+    server.on('listening', () => resolve(port));
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      server.close();
+      if (err.code === 'EADDRINUSE' && port <= startPort + MAX_PORT_ATTEMPTS) {
+        resolve(tryListen(port + 1));
+      } else {
+        reject(err);
+      }
+    });
+  });
+};
+```
 
 ## API Client Pattern
 

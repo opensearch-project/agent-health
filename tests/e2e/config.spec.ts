@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/test-fixtures';
 
 test.describe('Config/Agents & Models Page', () => {
   test.beforeEach(async ({ page }) => {

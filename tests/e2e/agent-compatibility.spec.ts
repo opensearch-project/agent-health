@@ -10,7 +10,7 @@
  * so every agent should be selectable in the UI without restriction.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/test-fixtures';
 
 test.describe('Agent Selection', () => {
 

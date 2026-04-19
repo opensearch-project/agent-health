@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MODEL_PRICING, getPricing, computeAggregateMetrics, computeMetrics } from '@/server/services/metricsService';
+import { MODEL_PRICING, getPricing, computeAggregateMetrics, computeMetrics, computeMetricsFromSpans, computeBatchMetrics } from '@/server/services/metricsService';
 import type { MetricsResult, OpenSearchConfig } from '@/types';
 
 // Mock fetch globally
@@ -586,6 +586,130 @@ describe('metricsService', () => {
         'http://localhost:9200/otel-v1-apm-span-*/_search',
         expect.any(Object)
       );
+    });
+  });
+
+  describe('computeMetricsFromSpans', () => {
+    it('should return pending metrics for empty spans', () => {
+      const result = computeMetricsFromSpans('run-1', []);
+      expect(result.runId).toBe('run-1');
+      expect(result.status).toBe('pending');
+      expect(result.totalTokens).toBe(0);
+    });
+
+    it('should compute metrics from spans with token usage', () => {
+      const spans = [
+        {
+          name: 'agent.run',
+          traceId: 'trace-1',
+          durationInNanos: 3000000000,
+          'status.code': 1,
+          'span.attributes.gen_ai@usage@input_tokens': 500,
+          'span.attributes.gen_ai@usage@output_tokens': 200,
+          'span.attributes.gen_ai@request@model': 'anthropic.claude-sonnet-4',
+        },
+      ];
+
+      const result = computeMetricsFromSpans('run-1', spans);
+
+      expect(result.inputTokens).toBe(500);
+      expect(result.outputTokens).toBe(200);
+      expect(result.totalTokens).toBe(700);
+      expect(result.llmCalls).toBe(1);
+      expect(result.durationMs).toBe(3000);
+      expect(result.status).toBe('success');
+      expect(result.traceId).toBe('trace-1');
+    });
+  });
+
+  describe('computeBatchMetrics', () => {
+    const defaultConfig: OpenSearchConfig = {
+      endpoint: 'http://localhost:9200',
+      username: 'admin',
+      password: 'admin',
+      indexPattern: 'otel-v1-apm-span-*',
+    };
+
+    it('should return empty array for empty run IDs', async () => {
+      const result = await computeBatchMetrics([], defaultConfig);
+      expect(result).toEqual([]);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should use terms query to fetch spans for multiple runs', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          hits: {
+            hits: [
+              {
+                _source: {
+                  name: 'agent.run',
+                  traceId: 'trace-1',
+                  durationInNanos: 1000000000,
+                  'status.code': 1,
+                  'span.attributes.gen_ai@request@id': 'run-1',
+                  'span.attributes.gen_ai@usage@input_tokens': 100,
+                  'span.attributes.gen_ai@usage@output_tokens': 50,
+                  'span.attributes.gen_ai@request@model': 'anthropic.claude-sonnet-4',
+                },
+              },
+              {
+                _source: {
+                  name: 'agent.run',
+                  traceId: 'trace-2',
+                  durationInNanos: 2000000000,
+                  'status.code': 1,
+                  'span.attributes.gen_ai@request@id': 'run-2',
+                  'span.attributes.gen_ai@usage@input_tokens': 200,
+                  'span.attributes.gen_ai@usage@output_tokens': 100,
+                  'span.attributes.gen_ai@request@model': 'anthropic.claude-sonnet-4',
+                },
+              },
+            ],
+          },
+        }),
+      });
+
+      const result = await computeBatchMetrics(['run-1', 'run-2'], defaultConfig);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].runId).toBe('run-1');
+      expect(result[0].inputTokens).toBe(100);
+      expect(result[1].runId).toBe('run-2');
+      expect(result[1].inputTokens).toBe(200);
+
+      // Should use terms query (single request for both IDs)
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(requestBody.query.bool.must[0].terms['span.attributes.gen_ai@request@id']).toEqual(['run-1', 'run-2']);
+    });
+
+    it('should return pending metrics for run IDs with no matching spans', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ hits: { hits: [] } }),
+      });
+
+      const result = await computeBatchMetrics(['run-no-data'], defaultConfig);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].runId).toBe('run-no-data');
+      expect(result[0].status).toBe('pending');
+    });
+
+    it('should handle OpenSearch failure gracefully', async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Internal error'),
+      });
+
+      const result = await computeBatchMetrics(['run-1', 'run-2'], defaultConfig);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].status).toBe('pending');
+      expect(result[1].status).toBe('pending');
     });
   });
 });

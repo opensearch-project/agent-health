@@ -13,6 +13,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Extra spacing in Timeline view by removing container padding ([#73](https://github.com/opensearch-project/agent-health/issues/73))
 
 ### Added
+- Auto-increment server port on EADDRINUSE — if port 4001 is in use, tries 4002, 4003, etc. up to 10 attempts
 - GitHub Actions workflow for AI-powered PR code diff analysis and review via AWS Bedrock
 - Kiro CLI SQLite reader with progressive warmup, non-blocking cache, and phase-aware loading UX
 - Coding Agent Analytics: unified dashboard for Claude Code, Kiro, and Codex CLI usage data
@@ -47,8 +48,14 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [0.2.0]
 
+### Added
+- Opt-in OTel span emission for benchmark evaluation data using semantic conventions (`lib/telemetry/`) ([#134](https://github.com/opensearch-project/agent-health/pull/134))
+- Bulk batch metrics computation (`computeBatchMetrics`) with `_source` projection for efficient run listing ([#134](https://github.com/opensearch-project/agent-health/pull/134))
+
 ### Fixed
 - Release workflow using `build` instead of `build:all`, causing CLI tests to fail ([#123](https://github.com/opensearch-project/agent-health/pull/123))
+- Add `@testing-library/dom` peer dependency required by `@testing-library/react` v16 ([#134](https://github.com/opensearch-project/agent-health/pull/134))
+- Integration test cleanup to prevent leftover test data from failed runs ([#134](https://github.com/opensearch-project/agent-health/pull/134))
 
 ### Changed
 - Increase release workflow approval timeout from 6 hours (default) to 24 hours

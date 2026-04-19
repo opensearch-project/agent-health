@@ -23,6 +23,7 @@ import {
   Bot,
   Cpu,
   Wrench,
+  ClipboardCheck,
   MessageSquare,
   AlertCircle,
   CheckCircle2,
@@ -42,7 +43,7 @@ interface SpanInputOutputProps {
 
 interface SpanIOData {
   span: Span;
-  category: 'agent' | 'llm' | 'tool' | 'other';
+  category: 'agent' | 'llm' | 'tool' | 'eval' | 'other';
   input: string | null;
   output: string | null;
   toolName?: string;
@@ -82,7 +83,9 @@ function extractSpanIO(span: Span): SpanIOData {
 
   // Determine category
   let category: SpanIOData['category'] = 'other';
-  if (name.includes('agent') || attrs['gen_ai.agent.name']) {
+  if (name.includes('test_case') || attrs['test.case.name']) {
+    category = 'eval';
+  } else if (name.includes('agent') || attrs['gen_ai.agent.name']) {
     category = 'agent';
   } else if (name.includes('llm') || name.includes('bedrock') || name.includes('converse') || attrs['gen_ai.system']) {
     category = 'llm';
@@ -153,6 +156,12 @@ function extractSpanIO(span: Span): SpanIOData {
              null;
   }
 
+  // Eval spans - test case input/output
+  if (category === 'eval') {
+    input = attrs['test.case.input'] || attrs['input'] || null;
+    output = attrs['test.case.output'] || attrs['output'] || null;
+  }
+
   // Generic fallback for any category
   if (!input) {
     input = attrs['input'] || attrs['request'] || attrs['message'] || null;
@@ -200,6 +209,8 @@ const SpanIOCard: React.FC<SpanIOCardProps> = ({ data }) => {
         return <Cpu size={14} className="text-purple-400" />;
       case 'tool':
         return <Wrench size={14} className="text-amber-400" />;
+      case 'eval':
+        return <ClipboardCheck size={14} className="text-emerald-400" />;
       default:
         return <MessageSquare size={14} className="text-gray-400" />;
     }
@@ -213,6 +224,8 @@ const SpanIOCard: React.FC<SpanIOCardProps> = ({ data }) => {
         return 'border-l-purple-400';
       case 'tool':
         return 'border-l-amber-400';
+      case 'eval':
+        return 'border-l-emerald-400';
       default:
         return 'border-l-gray-400';
     }
@@ -365,7 +378,7 @@ export const SpanInputOutput: React.FC<SpanInputOutputProps> = ({ spans }) => {
       acc[data.category]++;
       return acc;
     },
-    { agent: 0, llm: 0, tool: 0, other: 0 } as Record<string, number>
+    { agent: 0, llm: 0, tool: 0, eval: 0, other: 0 } as Record<string, number>
   );
 
   if (spanIOData.length === 0) {
@@ -403,6 +416,12 @@ export const SpanInputOutput: React.FC<SpanInputOutputProps> = ({ spans }) => {
           <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30">
             <Wrench size={10} className="mr-1" />
             Tool: {categoryCounts.tool}
+          </Badge>
+        )}
+        {categoryCounts.eval > 0 && (
+          <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-500/10 dark:text-emerald-300 dark:border-emerald-500/30">
+            <ClipboardCheck size={10} className="mr-1" />
+            Eval: {categoryCounts.eval}
           </Badge>
         )}
       </div>

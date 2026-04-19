@@ -108,6 +108,10 @@ export function groupSpansByTrace(spans: Span[]): TraceSummary[] {
       startTime: getEarliestStartTime(traceSpans),
       duration: calculateDuration(traceSpans),
       hasErrors: hasErrors(traceSpans),
+      hasEvalSpans: traceSpans.some(s =>
+        s.attributes?.['gen_ai.operation.name'] === 'evaluation' ||
+        s.name?.includes('test_case')
+      ),
       spans: traceSpans,
     });
   }

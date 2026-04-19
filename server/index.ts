@@ -21,6 +21,7 @@ import '@/services/connectors/server';
 export { createApp } from './app.js';
 
 const PORT = config.PORT;
+const MAX_PORT_ATTEMPTS = 10;
 
 async function startServer() {
   const app = await createApp();
@@ -33,40 +34,58 @@ async function startServer() {
     }
   } catch { /* non-fatal */ }
 
-  // Start server - bind to 0.0.0.0 to allow external access
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  Backend Server running on http://0.0.0.0:${PORT}`);
-    console.log(`   Health check: http://localhost:${PORT}/health`);
-    console.log(`   AWS Region: ${process.env.AWS_REGION || 'us-west-2'}`);
-    console.log(`   Bedrock Model: ${process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'}`);
-    const storageEndpoint = process.env.OPENSEARCH_STORAGE_ENDPOINT
-      || getStorageConfigFromFile()?.endpoint;
-    if (storageEndpoint) {
-      console.log(`   OpenSearch Storage: ${storageEndpoint}`);
-    } else {
-      console.log(`   OpenSearch Storage: NOT CONFIGURED`);
-    }
-    console.log('');
-  });
+  const tryListen = (port: number): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const server = app.listen(port, '0.0.0.0');
 
-  // Graceful shutdown — stop background timers and drain connections
-  const shutdown = (signal: string) => {
-    console.log(`\n  Received ${signal}, shutting down gracefully...`);
-    try {
-      const { codingAgentRegistry } = require('./services/codingAgents');
-      if (codingAgentRegistry) {
-        codingAgentRegistry.stopBackgroundRefresh();
-      }
-    } catch { /* registry may not be initialized */ }
-    server.close(() => {
-      console.log('  Server closed.');
-      process.exit(0);
+      server.on('listening', () => {
+        console.log(`\n  Backend Server running on http://0.0.0.0:${port}`);
+        console.log(`   Health check: http://localhost:${port}/health`);
+        console.log(`   AWS Region: ${process.env.AWS_REGION || 'us-west-2'}`);
+        console.log(`   Bedrock Model: ${process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'}`);
+        const storageEndpoint = process.env.OPENSEARCH_STORAGE_ENDPOINT
+          || getStorageConfigFromFile()?.endpoint;
+        if (storageEndpoint) {
+          console.log(`   OpenSearch Storage: ${storageEndpoint}`);
+        } else {
+          console.log(`   OpenSearch Storage: NOT CONFIGURED`);
+        }
+        console.log('');
+
+        // Graceful shutdown — stop background timers and drain connections
+        const shutdown = (signal: string) => {
+          console.log(`\n  Received ${signal}, shutting down gracefully...`);
+          try {
+            const { codingAgentRegistry } = require('./services/codingAgents');
+            if (codingAgentRegistry) {
+              codingAgentRegistry.stopBackgroundRefresh();
+            }
+          } catch { /* registry may not be initialized */ }
+          server.close(() => {
+            console.log('  Server closed.');
+            process.exit(0);
+          });
+          setTimeout(() => process.exit(0), 5000).unref();
+        };
+        process.on('SIGTERM', () => shutdown('SIGTERM'));
+        process.on('SIGINT', () => shutdown('SIGINT'));
+
+        resolve();
+      });
+
+      server.on('error', (err: NodeJS.ErrnoException) => {
+        server.close();
+        if (err.code === 'EADDRINUSE' && port <= PORT + MAX_PORT_ATTEMPTS) {
+          console.log(`  Port ${port} is in use, trying ${port + 1}...`);
+          resolve(tryListen(port + 1));
+        } else {
+          reject(err);
+        }
+      });
     });
-    // Force exit after 5 seconds if connections don't drain
-    setTimeout(() => process.exit(0), 5000).unref();
   };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  await tryListen(PORT);
 }
 
 startServer().catch((error) => {

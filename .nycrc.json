@@ -1,0 +1,19 @@
+{
+  "report-dir": "coverage-e2e",
+  "reporter": ["lcov", "json-summary", "text"],
+  "include": [
+    "components/**",
+    "hooks/**",
+    "lib/**",
+    "App.tsx",
+    "index.tsx"
+  ],
+  "exclude": [
+    "node_modules/**",
+    "tests/**",
+    "dist/**",
+    "server/**",
+    "cli/**",
+    "**/*.test.ts"
+  ]
+}

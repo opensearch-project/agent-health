@@ -70,7 +70,7 @@ describe('Test Case Import Integration', () => {
   afterAll(async () => {
     if (!backendAvailable) return;
 
-    // Cleanup: delete created test cases and benchmarks
+    // Cleanup: delete created test cases and benchmarks by tracked ID
     for (const id of createdTestCaseIds) {
       try {
         await asyncTestCaseStorage.delete(id);
@@ -85,6 +85,37 @@ describe('Test Case Import Integration', () => {
       } catch {
         // Ignore cleanup errors
       }
+    }
+
+    // Fallback: clean up leftovers from previous failed runs by name
+    try {
+      const testCaseNames = [
+        ...sampleTestCases.map(tc => tc.name),
+        'Single Import Test',
+        'Benchmark Import Test',
+        'Multi Test 1',
+        'Multi Test 2',
+        'Multi Test 3',
+        'Duplicate Name Test',
+      ];
+      const allTestCases = await asyncTestCaseStorage.getAll();
+      for (const tc of allTestCases) {
+        if (testCaseNames.includes(tc.name)) {
+          await asyncTestCaseStorage.delete(tc.id).catch(() => {});
+        }
+      }
+      const benchmarkNames = [
+        'OTEL Demo Benchmark (Import Test)',
+        'Multi Test Case Benchmark',
+      ];
+      const allBenchmarks = await asyncBenchmarkStorage.getAll();
+      for (const b of allBenchmarks) {
+        if (benchmarkNames.includes(b.name)) {
+          await asyncBenchmarkStorage.delete(b.id).catch(() => {});
+        }
+      }
+    } catch {
+      // Ignore cleanup errors
     }
   });
 
@@ -195,6 +226,16 @@ describe('Test Case Import Integration', () => {
 
       expect(result.created).toBe(2);
       expect(result.errors).toBe(false);
+
+      // Track created test cases for cleanup by matching names
+      const allTestCases = await asyncTestCaseStorage.getAll();
+      allTestCases
+        .filter((tc) => sampleTestCases.some((d) => d.name === tc.name))
+        .forEach((tc) => {
+          if (!createdTestCaseIds.includes(tc.id)) {
+            createdTestCaseIds.push(tc.id);
+          }
+        });
     });
 
     it('should create test case with tc- prefix ID', async () => {
