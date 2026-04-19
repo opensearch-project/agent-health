@@ -108,6 +108,8 @@ export interface RunEvaluationWithConnectorOptions {
   registry: ConnectorRegistry;
   /** Callback for raw events from the connector */
   onRawEvent?: (event: any) => void;
+  /** Optional evaluator ID for custom evaluation criteria */
+  evaluatorId?: string;
 }
 
 /**
@@ -127,7 +129,7 @@ export async function runEvaluationWithConnector(
   onStep: (step: TrajectoryStep) => void,
   options: RunEvaluationWithConnectorOptions
 ): Promise<EvaluationReport> {
-  const { registry: connectorRegistry, onRawEvent } = options;
+  const { registry: connectorRegistry, onRawEvent, evaluatorId } = options;
 
   const reportId = uuidv4();
   let fullTrajectory: TrajectoryStep[] = [];
@@ -270,7 +272,8 @@ export async function runEvaluationWithConnector(
       },
       undefined, // No logs in direct connector mode
       (chunk) => debug('Eval', 'Judge progress:', chunk.slice(0, 100)),
-      judgeModelId
+      judgeModelId,
+      evaluatorId
     );
 
     debug('Eval', 'Metrics:', judgment.metrics);
@@ -282,12 +285,7 @@ export async function runEvaluationWithConnector(
       completionTokens: 0,
       latencyMs: judgment.judgeDurationMs ?? 0,
       rawResponse: judgment.llmJudgeReasoning,
-      parsedMetrics: {
-        accuracy: judgment.metrics.accuracy,
-        faithfulness: judgment.metrics.faithfulness,
-        latency_score: judgment.metrics.latency_score,
-        trajectory_alignment_score: judgment.metrics.trajectory_alignment_score,
-      },
+      parsedMetrics: judgment.metrics as any,
       improvementStrategies: judgment.improvementStrategies,
     };
 
@@ -528,12 +526,7 @@ export async function runEvaluation(
       completionTokens: 0,
       latencyMs: judgment.judgeDurationMs ?? 0,
       rawResponse: judgment.llmJudgeReasoning,
-      parsedMetrics: {
-        accuracy: judgment.metrics.accuracy,
-        faithfulness: judgment.metrics.faithfulness,
-        latency_score: judgment.metrics.latency_score,
-        trajectory_alignment_score: judgment.metrics.trajectory_alignment_score,
-      },
+      parsedMetrics: judgment.metrics as any,
       improvementStrategies: judgment.improvementStrategies,
     };
 

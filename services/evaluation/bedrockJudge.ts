@@ -47,7 +47,8 @@ export async function callBedrockJudge(
   expected: ExpectedBehavior,
   logs?: OpenSearchLog[],
   onProgress?: (chunk: string) => void,
-  modelId?: string
+  modelId?: string,
+  evaluatorId?: string
 ): Promise<JudgeResult> {
   const maxRetries = 10;
   const baseDelay = 1000; // 1 second
@@ -79,6 +80,7 @@ export async function callBedrockJudge(
           expectedTrajectory: expected.expectedTrajectory,
           logs,
           modelId,
+          ...(evaluatorId ? { evaluatorId } : {}),
         }),
       });
 

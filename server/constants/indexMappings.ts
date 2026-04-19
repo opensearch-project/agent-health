@@ -205,6 +205,59 @@ export function getIndexMappings(): IndexMappings {
         },
       },
     },
+    [STORAGE_CONFIG.indexes.evaluators]: {
+      settings: {
+        number_of_shards: 1,
+        number_of_replicas: 1,
+      },
+      mappings: {
+        properties: {
+          id: { type: 'keyword' },
+          name: { type: 'text', fields: { keyword: { type: 'keyword' } } },
+          description: { type: 'text' },
+          isSystem: { type: 'boolean' },
+          tags: { type: 'keyword' },
+          currentVersion: { type: 'integer' },
+          author: { type: 'keyword' },
+          createdAt: { type: 'date' },
+          updatedAt: { type: 'date' },
+          systemPrompt: { type: 'text' },
+          scoringConfig: {
+            properties: {
+              metrics: {
+                type: 'nested',
+                properties: {
+                  name: { type: 'keyword' },
+                  description: { type: 'text' },
+                  weight: { type: 'float' },
+                  scale: { type: 'float' },
+                },
+              },
+              passThreshold: { type: 'float' },
+              scale: { type: 'float' },
+            },
+          },
+          inferenceConfig: {
+            properties: {
+              provider: { type: 'keyword' },
+              modelId: { type: 'keyword' },
+              temperature: { type: 'float' },
+              maxTokens: { type: 'integer' },
+            },
+          },
+          versions: {
+            type: 'nested',
+            properties: {
+              version: { type: 'integer' },
+              createdAt: { type: 'date' },
+              systemPrompt: { type: 'text' },
+              scoringConfig: { type: 'object', enabled: false },
+              inferenceConfig: { type: 'object', enabled: false },
+            },
+          },
+        },
+      },
+    },
   };
 }
 

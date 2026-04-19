@@ -120,11 +120,13 @@ export interface TrajectoryStep {
 }
 
 export interface EvaluationMetrics {
-  accuracy: number; // 0-100
+  accuracy?: number; // 0-100
   // Legacy metrics - kept for backwards compatibility with old reports
   faithfulness?: number; // 0-100 (deprecated)
   latency_score?: number; // 0-100 (deprecated)
   trajectory_alignment_score?: number; // 0-100 (deprecated)
+  // Dynamic metrics - populated based on evaluator's scoring config
+  [key: string]: number | undefined;
 }
 
 export interface ImprovementStrategy {
@@ -132,6 +134,80 @@ export interface ImprovementStrategy {
   issue: string;
   recommendation: string;
   priority: 'high' | 'medium' | 'low';
+}
+
+// ============ Evaluator Types (Pluggable Judge System) ============
+
+/**
+ * Scoring metric definition for evaluators
+ */
+export interface ScoringMetric {
+  name: string;              // Metric name (e.g., 'accuracy', 'factual_accuracy')
+  description?: string;      // Human-readable description
+  weight: number;            // Weight in overall score (0-1)
+  scale: number;             // Max value (e.g., 100 for 0-100 scale)
+}
+
+/**
+ * Scoring configuration for an evaluator
+ */
+export interface ScoringConfig {
+  metrics: ScoringMetric[];  // Metrics to evaluate
+  passThreshold: number;     // Minimum score to pass (0-100)
+  scale: number;             // Overall scale (typically 100)
+}
+
+/**
+ * Inference configuration for an evaluator
+ */
+export interface InferenceConfig {
+  provider?: JudgeProvider;  // Judge provider (bedrock, openai-compatible, demo)
+  modelId?: string;          // Model ID override
+  temperature?: number;      // Temperature for LLM
+  maxTokens?: number;        // Max output tokens
+}
+
+/**
+ * Evaluator version - immutable snapshot of evaluator configuration
+ */
+export interface EvaluatorVersion {
+  version: number;
+  createdAt: string;
+
+  // Content fields (snapshot)
+  systemPrompt: string;
+  scoringConfig: ScoringConfig;
+  inferenceConfig: InferenceConfig;
+}
+
+/**
+ * Evaluator - pluggable judge configuration
+ * Defines how agent performance is evaluated
+ */
+export interface Evaluator {
+  id: string;
+  name: string;
+  description: string;
+
+  // System flag - built-in evaluators that can't be deleted
+  isSystem: boolean;
+
+  // Tags for categorization
+  tags?: string[];
+
+  // Versioning (follows TestCase pattern)
+  currentVersion: number;
+  versions: EvaluatorVersion[];
+
+  // Metadata
+  createdAt: string;
+  updatedAt: string;
+  author?: string;
+
+  // Current version content (convenience accessors - mirrors latest version)
+  systemPrompt: string;
+  scoringConfig: ScoringConfig;
+  inferenceConfig: InferenceConfig;
 }
 
 export type PassFailStatus = 'passed' | 'failed';
@@ -182,6 +258,7 @@ export interface TestCaseRun {
   modelName: string;
   modelId?: string;
   agentEndpoint?: string;
+  evaluatorId?: string;              // Which evaluator was used (optional for backwards compatibility)
 
   // Results
   status: 'running' | 'completed' | 'failed';
@@ -652,6 +729,7 @@ export interface BenchmarkRun {
   agentKey: string;                // Reference to AgentConfig.key
   agentEndpoint?: string;          // Override agent endpoint (optional)
   modelId: string;                 // Model to use (also determines judge provider)
+  evaluatorId?: string;            // Evaluator to use for judging (optional, defaults to RCA Default)
   headers?: Record<string, string>; // Custom headers
   concurrency?: number;              // Parallel test case execution limit (1 = sequential, default)
 
@@ -784,7 +862,7 @@ export interface TestCaseComparisonRow {
 
 // Derived type for creating new benchmark runs - stays in sync with BenchmarkRun
 export type RunConfigInput = Pick<BenchmarkRun,
-  'name' | 'description' | 'agentKey' | 'modelId' | 'agentEndpoint' | 'headers' | 'concurrency'
+  'name' | 'description' | 'agentKey' | 'modelId' | 'agentEndpoint' | 'headers' | 'concurrency' | 'evaluatorId'
 >;
 
 // ============ Server/API Types ============
@@ -810,7 +888,10 @@ export interface ExpectedStep {
 export interface JudgeRequest {
   trajectory: TrajectoryStep[];
   expectedTrajectory: ExpectedStep[];
+  expectedOutcomes?: string[];
   logs?: OpenSearchLog[];
+  modelId?: string;                // Model to use for judging
+  evaluatorId?: string;            // Evaluator to use (optional, defaults to RCA Default)
 }
 
 export interface JudgeResponse {
@@ -836,6 +917,7 @@ export interface StorageConfig {
     benchmarks: string;
     runs: string;
     analytics: string;
+    evaluators: string;
   };
 }
 

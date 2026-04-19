@@ -25,6 +25,7 @@ import type {
   TestCaseRun,
   RunAnnotation,
   HealthStatus,
+  Evaluator,
 } from '../../../types/index.js';
 import type {
   IStorageModule,
@@ -32,6 +33,7 @@ import type {
   IBenchmarkOperations,
   IRunOperations,
   IAnalyticsOperations,
+  IEvaluatorOperations,
   PaginationOptions,
   TestCaseSearchFilters,
   RunSearchFilters,
@@ -581,6 +583,152 @@ class FileAnalyticsOperations implements IAnalyticsOperations {
 }
 
 // ============================================================================
+// Evaluator Operations
+// ============================================================================
+
+class FileEvaluatorOperations implements IEvaluatorOperations {
+  constructor(private baseDir: string) {}
+
+  private get dir() { return path.join(this.baseDir, 'evaluators'); }
+
+  private docPath(id: string, version: number): string {
+    return path.join(this.dir, `${id}-v${version}.json`);
+  }
+
+  async getAll(options?: PaginationOptions): Promise<{ items: Evaluator[]; total: number }> {
+    const allDocs = readAllFromDir<Evaluator>(this.dir);
+    // Group by ID, keep latest version
+    const byId = new Map<string, Evaluator>();
+    for (const doc of allDocs) {
+      const existing = byId.get(doc.id);
+      const docVer = doc.currentVersion ?? 1;
+      const existVer = existing?.currentVersion ?? 0;
+      if (!existing || docVer > existVer) {
+        byId.set(doc.id, doc);
+      }
+    }
+
+    const items = Array.from(byId.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+
+    return paginate(items, options);
+  }
+
+  async getById(id: string): Promise<Evaluator | null> {
+    const allDocs = readAllFromDir<Evaluator>(this.dir);
+    const versions = allDocs.filter(doc => doc.id === id);
+    if (versions.length === 0) return null;
+    return versions.reduce((latest, current) =>
+      (current.currentVersion ?? 1) > (latest.currentVersion ?? 1) ? current : latest
+    );
+  }
+
+  async getVersions(id: string): Promise<Evaluator[]> {
+    const allDocs = readAllFromDir<Evaluator>(this.dir);
+    return allDocs
+      .filter(doc => doc.id === id)
+      .sort((a, b) => (b.currentVersion ?? 1) - (a.currentVersion ?? 1));
+  }
+
+  async getVersion(id: string, version: number): Promise<Evaluator | null> {
+    return readJsonFile<Evaluator>(this.docPath(id, version));
+  }
+
+  async create(evaluator: Partial<Evaluator>): Promise<Evaluator> {
+    if (!evaluator.name) throw new Error('Evaluator name is required');
+    if (!evaluator.systemPrompt) throw new Error('Evaluator system prompt is required');
+    if (!evaluator.scoringConfig) throw new Error('Evaluator scoring config is required');
+
+    const now = new Date().toISOString();
+    const id = evaluator.id || `eval-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    const version = 1;
+
+    const doc: Evaluator = {
+      ...evaluator,
+      id,
+      currentVersion: version,
+      createdAt: now,
+      updatedAt: now,
+      isSystem: evaluator.isSystem ?? false,
+      versions: [
+        {
+          version,
+          createdAt: now,
+          systemPrompt: evaluator.systemPrompt,
+          scoringConfig: evaluator.scoringConfig,
+          inferenceConfig: evaluator.inferenceConfig || {},
+        },
+      ],
+    } as Evaluator;
+
+    writeJsonFile(this.docPath(id, version), doc);
+    return doc;
+  }
+
+  async update(id: string, updates: Partial<Evaluator>): Promise<Evaluator> {
+    const current = await this.getById(id);
+    if (!current) throw new Error(`Evaluator ${id} not found`);
+
+    // Prevent editing system evaluators
+    if (current.isSystem) {
+      throw new Error('Cannot edit system evaluators. Duplicate them to create a custom version.');
+    }
+
+    const currentVer = current.currentVersion ?? 1;
+    const newVer = currentVer + 1;
+    const now = new Date().toISOString();
+
+    const newVersion = {
+      version: newVer,
+      createdAt: now,
+      systemPrompt: updates.systemPrompt ?? current.systemPrompt,
+      scoringConfig: updates.scoringConfig ?? current.scoringConfig,
+      inferenceConfig: updates.inferenceConfig ?? current.inferenceConfig,
+    };
+
+    const doc: Evaluator = {
+      ...current,
+      ...updates,
+      id,
+      currentVersion: newVer,
+      updatedAt: now,
+      systemPrompt: newVersion.systemPrompt,
+      scoringConfig: newVersion.scoringConfig,
+      inferenceConfig: newVersion.inferenceConfig,
+      versions: [...(current.versions || []), newVersion],
+    };
+
+    writeJsonFile(this.docPath(id, newVer), doc);
+    return doc;
+  }
+
+  async delete(id: string): Promise<{ deleted: number }> {
+    const evaluator = await this.getById(id);
+    if (!evaluator) return { deleted: 0 };
+
+    // Prevent deleting system evaluators
+    if (evaluator.isSystem) {
+      throw new Error('Cannot delete system evaluators');
+    }
+
+    // Delete all version files
+    const versions = await this.getVersions(id);
+    let deleted = 0;
+    for (const version of versions) {
+      const ver = version.currentVersion ?? 1;
+      const filePath = this.docPath(id, ver);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        deleted++;
+      }
+    }
+
+    return { deleted };
+  }
+}
+
+// ============================================================================
 // File Storage Module
 // ============================================================================
 
@@ -591,6 +739,7 @@ export class FileStorageModule implements IStorageModule {
   readonly benchmarks: IBenchmarkOperations;
   readonly runs: IRunOperations;
   readonly analytics: IAnalyticsOperations;
+  readonly evaluators: IEvaluatorOperations;
 
   private readonly baseDir: string;
 
@@ -602,6 +751,7 @@ export class FileStorageModule implements IStorageModule {
     this.benchmarks = new FileBenchmarkOperations(this.baseDir);
     this.runs = new FileRunOperations(this.baseDir);
     this.analytics = new FileAnalyticsOperations(this.baseDir);
+    this.evaluators = new FileEvaluatorOperations(this.baseDir);
   }
 
   async health(): Promise<HealthStatus> {

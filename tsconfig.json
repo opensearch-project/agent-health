@@ -40,6 +40,9 @@
     "**/*.test.tsx",
     "**/*.spec.ts",
     "**/*.spec.tsx",
-    "observio-sample-agent"
+    "observio-sample-agent",
+    "services/adapters",
+    "scripts/test-adapters.ts",
+    "scripts/test-claude-code-adapter.ts"
   ]
 }

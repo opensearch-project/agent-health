@@ -544,6 +544,12 @@ export const RunDetailsPage: React.FC = () => {
                 <span>Model: {getModelName(report.modelName)}</span>
                 <span className="text-muted-foreground/50">·</span>
                 <span>Agent: {report.agentName}</span>
+                {report.evaluatorId && (
+                  <>
+                    <span className="text-muted-foreground/50">·</span>
+                    <span>Evaluator: {report.evaluatorId.replace('system-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -588,6 +594,12 @@ export const RunDetailsPage: React.FC = () => {
               </span>
               <span className="text-muted-foreground/50">·</span>
               <span>Model: {getModelName(report?.modelName || experimentContext.experimentRun.modelId)}</span>
+              {(report?.evaluatorId || experimentContext.experimentRun.evaluatorId) && (
+                <>
+                  <span className="text-muted-foreground/50">·</span>
+                  <span>Evaluator: {(report?.evaluatorId || experimentContext.experimentRun.evaluatorId)?.replace('system-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span>
+                </>
+              )}
               {experimentContext.experimentRun.performanceMetrics?.durationMs != null && (
                 <>
                   <span className="text-muted-foreground/50">·</span>

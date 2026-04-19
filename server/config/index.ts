@@ -57,6 +57,7 @@ export const STORAGE_CONFIG: StorageConfig = {
     benchmarks: 'evals_experiments',
     runs: 'evals_runs',
     analytics: 'evals_analytics',
+    evaluators: 'evals_evaluators',
   },
 };
 

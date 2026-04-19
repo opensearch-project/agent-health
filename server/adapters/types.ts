@@ -23,6 +23,7 @@ import type {
   DataSourceConfig,
   StorageClusterConfig,
   ObservabilityClusterConfig,
+  Evaluator,
 } from '../../types/index.js';
 
 // ============================================================================
@@ -159,6 +160,19 @@ export interface IAnalyticsOperations {
 }
 
 /**
+ * Evaluator CRUD operations
+ */
+export interface IEvaluatorOperations {
+  getAll(options?: PaginationOptions): Promise<{ items: Evaluator[]; total: number }>;
+  getById(id: string): Promise<Evaluator | null>;
+  getVersions(id: string): Promise<Evaluator[]>;
+  getVersion(id: string, version: number): Promise<Evaluator | null>;
+  create(evaluator: Partial<Evaluator>): Promise<Evaluator>;
+  update(id: string, updates: Partial<Evaluator>): Promise<Evaluator>;
+  delete(id: string): Promise<{ deleted: number }>;
+}
+
+/**
  * Logs query operations
  */
 export interface ILogsOperations {
@@ -186,13 +200,14 @@ export interface IMetricsOperations {
 // ============================================================================
 
 /**
- * Storage module - handles test cases, benchmarks, runs, and analytics
+ * Storage module - handles test cases, benchmarks, runs, analytics, and evaluators
  */
 export interface IStorageModule {
   testCases: ITestCaseOperations;
   benchmarks: IBenchmarkOperations;
   runs: IRunOperations;
   analytics: IAnalyticsOperations;
+  evaluators: IEvaluatorOperations;
   health(): Promise<HealthStatus>;
   isConfigured(): boolean;
 }

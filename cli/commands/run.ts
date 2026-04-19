@@ -28,6 +28,7 @@ import { connectorRegistry } from '@/services/connectors/server.js';
 interface RunOptions {
   agent: string[];
   model?: string;
+  evaluator?: string;
   output: string;
   verbose?: boolean;
 }
@@ -94,7 +95,8 @@ async function runForAgent(
   testCaseId: string,
   agent: AgentConfig,
   modelId: string,
-  verbose: boolean
+  verbose: boolean,
+  evaluatorId?: string
 ): Promise<EvaluationResult | null> {
   const spinner = ora(`Running ${agent.name}...`).start();
 
@@ -109,7 +111,8 @@ async function runForAgent(
         } else if (event.type === 'started') {
           spinner.text = `${agent.name}: Started evaluation...`;
         }
-      }
+      },
+      evaluatorId
     );
 
     if (report.status === 'completed' && report.passFailStatus === 'passed') {
@@ -198,6 +201,7 @@ export function createRunCommand(): Command {
     .requiredOption('-t, --test-case <id>', 'Test case ID or name')
     .option('-a, --agent <key>', 'Agent key (can be specified multiple times)', (val, arr: string[]) => [...arr, val], [])
     .option('-m, --model <id>', 'Model ID (uses agent default if not specified)')
+    .option('-e, --evaluator <id>', 'Evaluator ID (uses RCA default if not specified)')
     .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
     .option('-v, --verbose', 'Show detailed trajectory output')
     .action(async (options: RunOptions & { testCase: string }) => {
@@ -268,7 +272,7 @@ export function createRunCommand(): Command {
           }
 
           try {
-            const report = await runForAgent(client, testCase.id, agent, modelId, options.verbose || false);
+            const report = await runForAgent(client, testCase.id, agent, modelId, options.verbose || false, options.evaluator);
             results.push({ agent, report });
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);

@@ -27,6 +27,7 @@ import type { AgentConfig, Benchmark, BenchmarkRun, TestCaseRun, EvaluationRepor
 interface BenchmarkOptions {
   agent: string[];
   model?: string;
+  evaluator?: string;
   output: string;
   verbose?: boolean;
   export?: string;
@@ -125,7 +126,8 @@ async function runBenchmarkForAgent(
   modelId: string,
   benchmark: Benchmark,
   verbose: boolean,
-  concurrency?: number
+  concurrency?: number,
+  evaluatorId?: string
 ): Promise<AgentResults> {
   const results: AgentResults = {
     agent,
@@ -148,6 +150,7 @@ async function runBenchmarkForAgent(
         agentKey: agent.key,
         modelId: modelId,
         ...(concurrency && concurrency > 1 ? { concurrency } : {}),
+        ...(evaluatorId ? { evaluatorId } : {}),
       },
       (event: BenchmarkExecutionEvent) => {
         if (event.type === 'started') {
@@ -429,6 +432,7 @@ export function createBenchmarkCommand(): Command {
       []
     )
     .option('-m, --model <id>', 'Model ID (uses agent default if not specified)')
+    .option('-e, --evaluator <id>', 'Evaluator ID (uses RCA default if not specified)')
     .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
     .option('--export <path>', 'Export results to file')
     .option('--format <type>', 'Report format for --export: json (default), html, pdf', 'json')
@@ -632,7 +636,8 @@ export function createBenchmarkCommand(): Command {
             modelId,
             benchmark,
             options.verbose || false,
-            concurrency
+            concurrency,
+            options.evaluator
           );
           allResults.push(results);
         }

@@ -25,6 +25,7 @@ import type {
   TestCaseRun,
   RunAnnotation,
   HealthStatus,
+  Evaluator,
 } from '../../../types/index.js';
 import type {
   IStorageModule,
@@ -32,6 +33,7 @@ import type {
   IBenchmarkOperations,
   IRunOperations,
   IAnalyticsOperations,
+  IEvaluatorOperations,
   PaginationOptions,
   TestCaseSearchFilters,
   RunSearchFilters,
@@ -878,6 +880,221 @@ class OpenSearchAnalyticsOperations implements IAnalyticsOperations {
 }
 
 // ============================================================================
+// Evaluator Operations
+// ============================================================================
+
+class OpenSearchEvaluatorOperations implements IEvaluatorOperations {
+  constructor(private client: Client) {}
+
+  private get index() { return STORAGE_INDEXES.evaluators; }
+
+  async getAll(options?: PaginationOptions): Promise<{ items: Evaluator[]; total: number }> {
+    const size = options?.size ?? 10000;
+    const from = options?.from ?? 0;
+
+    let result;
+    try {
+      // Fetch all docs, then group by ID to return latest version of each
+      result = await this.client.search({
+        index: this.index,
+        body: {
+          size,
+          from,
+          sort: [{ createdAt: { order: 'desc' } }],
+          query: { match_all: {} },
+        },
+      });
+    } catch (error: any) {
+      if (isIndexNotFound(error)) return { items: [], total: 0 };
+      throw error;
+    }
+
+    const hits = result.body.hits?.hits || [];
+    const allDocs = hitsToSources<Evaluator & { version?: number }>(hits);
+    const total = typeof result.body.hits?.total === 'object'
+      ? result.body.hits.total.value
+      : result.body.hits?.total ?? 0;
+
+    // Group by ID, keep latest version
+    const byId = new Map<string, Evaluator>();
+    for (const doc of allDocs) {
+      const existing = byId.get(doc.id);
+      const docVer = (doc as any).version ?? (doc as any).currentVersion ?? 0;
+      const existVer = existing ? ((existing as any).version ?? (existing as any).currentVersion ?? 0) : -1;
+      if (!existing || docVer > existVer) {
+        byId.set(doc.id, doc);
+      }
+    }
+
+    const items = Array.from(byId.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+
+    return { items, total: items.length };
+  }
+
+  async getById(id: string): Promise<Evaluator | null> {
+    // Search for latest version of this evaluator
+    try {
+      const result = await this.client.search({
+        index: this.index,
+        body: {
+          size: 1,
+          sort: [{ currentVersion: { order: 'desc' } }],
+          query: { term: { id } },
+        },
+      });
+
+      const hits = result.body.hits?.hits || [];
+      return hits.length > 0 ? hits[0]._source as Evaluator : null;
+    } catch (error: any) {
+      if (error.meta?.statusCode === 404) return null;
+      throw error;
+    }
+  }
+
+  async getVersions(id: string): Promise<Evaluator[]> {
+    try {
+      const result = await this.client.search({
+        index: this.index,
+        body: {
+          size: 100,
+          sort: [{ currentVersion: { order: 'desc' } }],
+          query: { term: { id } },
+        },
+      });
+
+      return hitsToSources<Evaluator>(result.body.hits?.hits || []);
+    } catch (error: any) {
+      if (isIndexNotFound(error)) return [];
+      throw error;
+    }
+  }
+
+  async getVersion(id: string, version: number): Promise<Evaluator | null> {
+    const docId = `${id}-v${version}`;
+    try {
+      const result = await this.client.get({ index: this.index, id: docId });
+      return result.body.found ? result.body._source as Evaluator : null;
+    } catch (error: any) {
+      if (error.meta?.statusCode === 404) return null;
+      throw error;
+    }
+  }
+
+  async create(evaluator: Partial<Evaluator>): Promise<Evaluator> {
+    assertNotMigrating(this.index);
+    if (!evaluator.name) throw new Error('Evaluator name is required');
+    if (!evaluator.systemPrompt) throw new Error('Evaluator system prompt is required');
+    if (!evaluator.scoringConfig) throw new Error('Evaluator scoring config is required');
+
+    const now = new Date().toISOString();
+    const id = evaluator.id || generateId('eval');
+    const version = 1;
+    const docId = `${id}-v${version}`;
+
+    const doc: Evaluator = {
+      ...evaluator,
+      id,
+      currentVersion: version,
+      createdAt: now,
+      updatedAt: now,
+      isSystem: evaluator.isSystem ?? false,
+      versions: [
+        {
+          version,
+          createdAt: now,
+          systemPrompt: evaluator.systemPrompt,
+          scoringConfig: evaluator.scoringConfig,
+          inferenceConfig: evaluator.inferenceConfig || {},
+        },
+      ],
+    } as Evaluator;
+
+    await this.client.index({
+      index: this.index,
+      id: docId,
+      body: doc,
+      refresh: 'wait_for',
+    });
+
+    return doc;
+  }
+
+  async update(id: string, updates: Partial<Evaluator>): Promise<Evaluator> {
+    assertNotMigrating(this.index);
+    const current = await this.getById(id);
+    if (!current) throw new Error(`Evaluator ${id} not found`);
+
+    // Prevent editing system evaluators
+    if (current.isSystem) {
+      throw new Error('Cannot edit system evaluators. Duplicate them to create a custom version.');
+    }
+
+    const currentVer = current.currentVersion ?? 1;
+    const newVer = currentVer + 1;
+    const now = new Date().toISOString();
+    const docId = `${id}-v${newVer}`;
+
+    const newVersion = {
+      version: newVer,
+      createdAt: now,
+      systemPrompt: updates.systemPrompt ?? current.systemPrompt,
+      scoringConfig: updates.scoringConfig ?? current.scoringConfig,
+      inferenceConfig: updates.inferenceConfig ?? current.inferenceConfig,
+    };
+
+    const doc: Evaluator = {
+      ...current,
+      ...updates,
+      id,
+      currentVersion: newVer,
+      updatedAt: now,
+      systemPrompt: newVersion.systemPrompt,
+      scoringConfig: newVersion.scoringConfig,
+      inferenceConfig: newVersion.inferenceConfig,
+      versions: [...(current.versions || []), newVersion],
+    };
+
+    await this.client.index({
+      index: this.index,
+      id: docId,
+      body: doc,
+      refresh: 'wait_for',
+    });
+
+    return doc;
+  }
+
+  async delete(id: string): Promise<{ deleted: number }> {
+    assertNotMigrating(this.index);
+    const evaluator = await this.getById(id);
+    if (!evaluator) return { deleted: 0 };
+
+    // Prevent deleting system evaluators
+    if (evaluator.isSystem) {
+      throw new Error('Cannot delete system evaluators');
+    }
+
+    // Delete all versions
+    try {
+      const result = await this.client.deleteByQuery({
+        index: this.index,
+        body: {
+          query: { term: { id } },
+        },
+        refresh: true,
+      });
+
+      return { deleted: (result.body as any).deleted || 0 };
+    } catch (error: any) {
+      if (isIndexNotFound(error)) return { deleted: 0 };
+      throw error;
+    }
+  }
+}
+
+// ============================================================================
 // OpenSearch Storage Module
 // ============================================================================
 
@@ -886,12 +1103,14 @@ export class OpenSearchStorageModule implements IStorageModule {
   readonly benchmarks: IBenchmarkOperations;
   readonly runs: IRunOperations;
   readonly analytics: IAnalyticsOperations;
+  readonly evaluators: IEvaluatorOperations;
 
   constructor(private client: Client) {
     this.testCases = new OpenSearchTestCaseOperations(client);
     this.benchmarks = new OpenSearchBenchmarkOperations(client);
     this.runs = new OpenSearchRunOperations(client);
     this.analytics = new OpenSearchAnalyticsOperations(client);
+    this.evaluators = new OpenSearchEvaluatorOperations(client);
   }
 
   async health(): Promise<HealthStatus> {

@@ -109,7 +109,7 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
     return res.status(400).json({ error: validationError });
   }
 
-  const { testCaseId, agentKey, modelId, agentEndpoint } = req.body;
+  const { testCaseId, agentKey, modelId, agentEndpoint, evaluatorId } = req.body;
   const inlineTestCase = req.body.testCase as TestCase | undefined;
   debug('EvalAPI', 'testCaseId:', testCaseId, 'agentKey:', agentKey, 'modelId:', modelId, 'inline:', !!inlineTestCase);
 
@@ -217,7 +217,8 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
             timestamp: step.timestamp,
           },
         })}\n\n`);
-      }
+      },
+      evaluatorId
     );
 
     // Fetch the completed report via adapter
