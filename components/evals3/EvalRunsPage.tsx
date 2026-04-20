@@ -649,18 +649,14 @@ export const EvalRunsPage: React.FC = () => {
                 variant="outline"
                 size="sm"
                 className={`h-7 gap-1.5 text-xs ${selectedRuns.size > 0 ? 'border-primary/50' : ''}`}
-                disabled={multiBenchmark}
+                disabled={multiBenchmark || selectedRuns.size < 1}
                 onClick={() => {
-                  if (multiBenchmark) return;
-                  if (selectedRuns.size >= 2) {
-                    const bmId = [...benchmarkIds][0];
-                    const ids = selectedRows.map(rr => rr.run.id).join(',');
-                    navigate(`/compare/${bmId}?runs=${ids}`);
-                  } else {
-                    navigate('/compare');
-                  }
+                  if (multiBenchmark || selectedRuns.size < 1) return;
+                  const bmId = [...benchmarkIds][0];
+                  const ids = selectedRows.map(rr => rr.run.id).join(',');
+                  navigate(`/compare/${bmId}?runs=${ids}`);
                 }}
-                title={multiBenchmark ? 'Select runs from a single benchmark to compare' : 'Compare runs'}
+                title={multiBenchmark ? 'Select runs from a single benchmark to compare' : selectedRuns.size < 1 ? 'Select at least one run to compare' : 'Compare runs'}
               >
                 <GitCompare size={12} />
                 Compare
