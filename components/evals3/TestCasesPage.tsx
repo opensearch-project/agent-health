@@ -114,11 +114,6 @@ export const TestCasesPage4: React.FC = () => {
   // Sort
   const [sort, setSort] = useState<{ field: SortField; dir: SortDir }>({ field: 'created', dir: 'desc' });
 
-  // Runs tab — deferred
-  const [allRuns, setAllRuns] = useState<TestCaseRun[]>([]);
-  const [runsLoading, setRunsLoading] = useState(false);
-  const runsLoadedRef = useRef(false);
-
   const loadDefinitions = useCallback(async () => {
     try {
       const [tcs, counts, bms] = await Promise.all([
@@ -127,13 +122,6 @@ export const TestCasesPage4: React.FC = () => {
       setTestCases(tcs as TestCase[]); setRunCounts(counts); setBenchmarks(bms);
     } catch (err) { console.error('Failed:', err); }
     finally { setLoading(false); }
-  }, []);
-
-  const loadRuns = useCallback(async () => {
-    setRunsLoading(true);
-    try { const runs = await asyncRunStorage.getAllReports({ limit: 500 }); setAllRuns(runs as unknown as TestCaseRun[]); runsLoadedRef.current = true; }
-    catch (err) { console.error('Failed:', err); }
-    finally { setRunsLoading(false); }
   }, []);
 
   useEffect(() => { loadDefinitions(); }, [loadDefinitions]);
@@ -157,31 +145,9 @@ export const TestCasesPage4: React.FC = () => {
     return map;
   }, [benchmarks]);
 
-  // Latest run by TC (from all runs) — includes status and ID for the Last Run column
-  const latestRunByTc = useMemo(() => {
-    const map: Record<string, { timestamp: string; passed: boolean | null; id: string }> = {};
-    for (const run of allRuns) {
-      const tcId = (run as any).testCaseId;
-      if (tcId && (!map[tcId] || new Date(run.timestamp) > new Date(map[tcId].timestamp))) {
-        const passed = run.passFailStatus === 'passed' ? true : run.passFailStatus === 'failed' ? false : null;
-        map[tcId] = { timestamp: run.timestamp, passed, id: run.id };
-      }
-    }
-    return map;
-  }, [allRuns]);
-
-  // Pass rate per test case
-  const passRateByTc = useMemo(() => {
-    const counts: Record<string, { passed: number; total: number }> = {};
-    for (const run of allRuns) {
-      const tcId = (run as any).testCaseId;
-      if (!tcId) continue;
-      if (!counts[tcId]) counts[tcId] = { passed: 0, total: 0 };
-      counts[tcId].total++;
-      if (run.passFailStatus === 'passed') counts[tcId].passed++;
-    }
-    return counts;
-  }, [allRuns]);
+  // Placeholder maps — populated when run data is available
+  const latestRunByTc: Record<string, { timestamp: string; passed: boolean | null; id: string }> = {};
+  const passRateByTc: Record<string, { passed: number; total: number }> = {};
 
   // Filtered test cases
   const filteredTcs = useMemo(() => {
@@ -277,16 +243,6 @@ export const TestCasesPage4: React.FC = () => {
 
   const toggleGroup = (id: string) => setCollapsedGroups(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  // Runs tab
-  const timeFilteredRuns = useMemo(() => { const t = getTimeThreshold(timeRange); return t ? allRuns.filter(r => new Date(r.timestamp) >= t) : allRuns; }, [allRuns, timeRange]);
-  const totalRuns = timeFilteredRuns.length;
-  const passCount = timeFilteredRuns.filter(r => getPassFail(r) === 'pass').length;
-  const passRate = totalRuns > 0 ? Math.round((passCount / totalRuns) * 100) : 0;
-  const filteredRuns = useMemo(() => {
-    if (!search) return timeFilteredRuns;
-    const q = search.toLowerCase(); const nm = new Map(testCases.map(tc => [tc.id, tc.name]));
-    return timeFilteredRuns.filter(r => { const n = nm.get((r as any).testCaseId) || ''; return n.toLowerCase().includes(q) || r.agentName?.toLowerCase().includes(q); });
-  }, [timeFilteredRuns, search, testCases]);
 
   // Import handler
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {

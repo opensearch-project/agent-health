@@ -95,12 +95,6 @@ function TrendBadge({ trend }: { trend: TrendDir }) {
   return <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${c.cls}`}>{c.icon} {c.label}</span>;
 }
 
-interface FlatResult {
-  benchmarkId: string; benchmarkName: string; runId: string; runName: string;
-  runCreatedAt: string; agentName: string; testCaseId: string; testCaseName: string;
-  reportId: string | null; resultStatus: string; passed: boolean | null;
-}
-
 interface BenchmarkStats {
   runCount: number; latestRun: BenchmarkRun | null; latestScore: number | null;
   bestScore: number | null; worstScore: number | null; trend: TrendDir;
@@ -109,7 +103,6 @@ interface BenchmarkStats {
 
 // Sort types
 type BmSortField = 'name' | 'tcs' | 'runs' | 'score' | 'best' | 'worst' | 'trend';
-type RunSortField = 'testCase' | 'benchmark' | 'run' | 'agent' | 'timestamp' | 'result';
 type SortDir = 'asc' | 'desc';
 
 /** Tiny inline sparkline for pass rate trend */
@@ -166,8 +159,6 @@ export const BenchmarksPage4: React.FC = () => {
 
   // Sort state for Benchmarks tab
   const [bmSort, setBmSort] = useState<{ field: BmSortField; dir: SortDir }>({ field: 'runs', dir: 'desc' });
-  // Sort state for Runs tab
-  const [runSort, setRunSort] = useState<{ field: RunSortField; dir: SortDir }>({ field: 'timestamp', dir: 'desc' });
 
   const loadData = useCallback(async () => {
     try {
@@ -239,21 +230,6 @@ export const BenchmarksPage4: React.FC = () => {
   const allScores = Array.from(benchmarkStats.values()).map(bs => bs.latestScore).filter((s): s is number => s !== null);
   const avgPassRate = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0;
 
-  const worstTestCase = useMemo(() => {
-    let worst: { name: string; benchmarkName: string } | null = null;
-    for (const bm of timeFilteredBenchmarks) {
-      const stats = benchmarkStats.get(bm.id);
-      if (!stats?.latestRun) continue;
-      for (const [tcId, result] of Object.entries(stats.latestRun.results || {})) {
-        if (result.status === 'failed') {
-          const tc = tcMap.get(tcId);
-          if (!worst) worst = { name: tc?.name || tcId, benchmarkName: bm.name };
-        }
-      }
-    }
-    return worst;
-  }, [timeFilteredBenchmarks, benchmarkStats, tcMap]);
-
   // Filtered + sorted benchmarks
   const sortedBenchmarks = useMemo(() => {
     let list = timeFilteredBenchmarks;
@@ -282,57 +258,6 @@ export const BenchmarksPage4: React.FC = () => {
     setBmSort(prev => prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'desc' });
   };
 
-
-  // Flattened test case results for Runs tab
-  const allFlatResults = useMemo<FlatResult[]>(() => {
-    const rows: FlatResult[] = [];
-    for (const bm of timeFilteredBenchmarks) {
-      for (const run of bm.runs || []) {
-        const agent = DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey)?.name || run.agentKey || 'Unknown';
-        for (const [tcId, result] of Object.entries(run.results || {})) {
-          rows.push({
-            benchmarkId: bm.id, benchmarkName: bm.name, runId: run.id, runName: run.name,
-            runCreatedAt: run.createdAt, agentName: agent, testCaseId: tcId,
-            testCaseName: tcMap.get(tcId)?.name || tcId, reportId: result.reportId || null,
-            resultStatus: result.status,
-            passed: result.status === 'completed' ? true : result.status === 'failed' ? false : null,
-          });
-        }
-      }
-    }
-    return rows;
-  }, [timeFilteredBenchmarks, tcMap]);
-
-  const sortedResults = useMemo(() => {
-    let list = allFlatResults;
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter(r => r.benchmarkName.toLowerCase().includes(q) || r.testCaseName.toLowerCase().includes(q) || r.agentName.toLowerCase().includes(q));
-    }
-    const dir = runSort.dir === 'asc' ? 1 : -1;
-    return [...list].sort((a, b) => {
-      switch (runSort.field) {
-        case 'testCase': return dir * a.testCaseName.localeCompare(b.testCaseName);
-        case 'benchmark': return dir * a.benchmarkName.localeCompare(b.benchmarkName);
-        case 'run': return dir * a.runName.localeCompare(b.runName);
-        case 'agent': return dir * a.agentName.localeCompare(b.agentName);
-        case 'timestamp': return dir * (new Date(a.runCreatedAt).getTime() - new Date(b.runCreatedAt).getTime());
-        case 'result': {
-          const order = (p: boolean | null) => p === true ? 0 : p === false ? 1 : 2;
-          return dir * (order(a.passed) - order(b.passed));
-        }
-        default: return 0;
-      }
-    });
-  }, [allFlatResults, search, runSort]);
-
-  const handleRunSort = (field: RunSortField) => {
-    setRunSort(prev => prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'desc' });
-  };
-
-  const totalResults = allFlatResults.length;
-  const passedResults = allFlatResults.filter(r => r.passed === true).length;
-  const resultsPassRate = totalResults > 0 ? Math.round((passedResults / totalResults) * 100) : 0;
 
   // Import JSON handler
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {

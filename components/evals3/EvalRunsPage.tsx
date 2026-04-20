@@ -149,38 +149,6 @@ export const EvalRunsPage: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Load annotation counts for all runs (deferred, non-blocking, parallelized)
-  useEffect(() => {
-    if (benchmarks.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      const map = new Map<string, { total: number; tcCount: number; firstTcId: string }>();
-      await Promise.all(benchmarks.flatMap(bm =>
-        (bm.runs || []).map(async run => {
-          let totalAnnotations = 0;
-          let tcWithAnnotations = 0;
-          let firstTcId = '';
-          for (const [tcId, result] of Object.entries(run.results || {})) {
-            if (!result.reportId) continue;
-            try {
-              const report = await asyncRunStorage.getReportById(result.reportId);
-              if (report?.annotations && report.annotations.length > 0) {
-                totalAnnotations += report.annotations.length;
-                tcWithAnnotations++;
-                if (!firstTcId) firstTcId = tcId;
-              }
-            } catch { /* skip failed loads */ }
-          }
-          if (totalAnnotations > 0) {
-            map.set(run.id, { total: totalAnnotations, tcCount: tcWithAnnotations, firstTcId });
-          }
-        })
-      ));
-      if (!cancelled) setAnnotationMap(map);
-    })();
-    return () => { cancelled = true; };
-  }, [benchmarks]);
-
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -305,6 +273,60 @@ export const EvalRunsPage: React.FC = () => {
   const avgAccuracy = totalRuns > 0
     ? Math.round(filteredRunRows.reduce((sum, r) => sum + (r.total > 0 ? (r.passed / r.total) * 100 : 0), 0) / totalRuns)
     : 0;
+
+  // Load annotation counts lazily for visible runs only (avoids N+1 on mount)
+  const loadedAnnotationRuns = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (benchmarks.length === 0) return;
+
+    const toLoad: { runId: string; run: any; bmId: string }[] = [];
+    for (const rr of filteredRunRows.slice(0, 100)) {
+      if (loadedAnnotationRuns.current.has(rr.run.id)) continue;
+      toLoad.push({ runId: rr.run.id, run: rr.run, bmId: rr.benchmarkId });
+    }
+    if (toLoad.length === 0) return;
+
+    let cancelled = false;
+
+    // Load in batches of 10 to limit concurrency
+    (async () => {
+      const BATCH_SIZE = 10;
+      for (let i = 0; i < toLoad.length; i += BATCH_SIZE) {
+        if (cancelled) return;
+        const batch = toLoad.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(batch.map(async ({ runId, run }) => {
+          let totalAnnotations = 0;
+          let tcWithAnnotations = 0;
+          let firstTcId = '';
+          for (const [tcId, result] of Object.entries(run.results || {} as Record<string, any>)) {
+            if (!(result as any).reportId) continue;
+            try {
+              const report = await asyncRunStorage.getReportById((result as any).reportId);
+              if (report?.annotations && report.annotations.length > 0) {
+                totalAnnotations += report.annotations.length;
+                tcWithAnnotations++;
+                if (!firstTcId) firstTcId = tcId;
+              }
+            } catch { /* skip */ }
+          }
+          return { runId, total: totalAnnotations, tcCount: tcWithAnnotations, firstTcId };
+        }));
+
+        if (cancelled) return;
+        setAnnotationMap(prev => {
+          const next = new Map(prev);
+          for (const r of batchResults) {
+            loadedAnnotationRuns.current.add(r.runId);
+            if (r.total > 0) next.set(r.runId, { total: r.total, tcCount: r.tcCount, firstTcId: r.firstTcId });
+          }
+          return next;
+        });
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [filteredRunRows, benchmarks]);
 
   // Regressions — computed after groupedByBenchmark
 
