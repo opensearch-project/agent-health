@@ -30,6 +30,8 @@ module.exports = {
     '^@xyflow/react$': '<rootDir>/__mocks__/xyflow-react.ts',
     // Mock OpenTelemetry incubating module (not installed by default)
     '^@opentelemetry/semantic-conventions/incubating$': '<rootDir>/__mocks__/@opentelemetry/semantic-conventions/incubating.ts',
+    // Mock uuid (v14 is ESM-only, incompatible with Jest CJS transform)
+    '^uuid$': '<rootDir>/__mocks__/uuid.ts',
     // Handle .js imports resolving to .ts files (ESM compatibility)
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
