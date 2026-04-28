@@ -67,6 +67,12 @@ jest.mock('@/server/middleware/index', () => ({
 
 jest.mock('@/services/connectors/server', () => ({}));
 
+jest.mock('@/lib/telemetry', () => ({
+  initEvalTracerProvider: jest.fn(),
+  resolveEvalTelemetryConfig: jest.fn().mockReturnValue({}),
+  shutdownEvalTracer: jest.fn(),
+}));
+
 // Mock config migration (new in config consolidation)
 jest.mock('@/server/services/configMigration', () => ({
   migrateYamlToJsonIfNeeded: jest.fn().mockResolvedValue(undefined),
@@ -75,6 +81,7 @@ jest.mock('@/server/services/configMigration', () => ({
 // Mock config resolution for storage backend detection
 jest.mock('@/server/services/configService', () => ({
   getStorageConfigFromFile: jest.fn().mockReturnValue(null),
+  getObservabilityConfigFromFile: jest.fn().mockReturnValue(null),
   getConfigStatus: jest.fn(),
   saveStorageConfig: jest.fn(),
   saveObservabilityConfig: jest.fn(),
@@ -85,6 +92,7 @@ jest.mock('@/server/services/configService', () => ({
 
 jest.mock('@/server/middleware/dataSourceConfig', () => ({
   getStorageConfigFromEnv: jest.fn().mockReturnValue(null),
+  getObservabilityConfigFromEnv: jest.fn().mockReturnValue(null),
   resolveStorageConfig: jest.fn(),
   STORAGE_INDEXES: {
     testCases: 'evals_test_cases',
