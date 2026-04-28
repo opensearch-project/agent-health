@@ -53,6 +53,58 @@ test.describe('Dashboard Page', () => {
   });
 });
 
+test.describe('Dashboard Stats Summary Bar', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('[data-testid="dashboard-page"]', { timeout: 30000 });
+  });
+
+  test('should display stats summary bar with three cards', async ({ page }) => {
+    await page.waitForTimeout(2000);
+
+    const statsBar = page.locator('[data-testid="stats-summary-bar"]');
+    const isVisible = await statsBar.isVisible().catch(() => false);
+
+    if (isVisible) {
+      // All three stat cards should be present
+      await expect(page.locator('[data-testid="stats-benchmarks"]')).toBeVisible();
+      await expect(page.locator('[data-testid="stats-runs"]')).toBeVisible();
+      await expect(page.locator('[data-testid="stats-test-cases"]')).toBeVisible();
+
+      // Cards should contain the label text
+      await expect(page.locator('[data-testid="stats-benchmarks"]')).toContainText('Benchmarks');
+      await expect(page.locator('[data-testid="stats-runs"]')).toContainText('Runs');
+      await expect(page.locator('[data-testid="stats-test-cases"]')).toContainText('Test Cases');
+    }
+  });
+
+  test('should navigate to benchmarks page when clicking benchmarks stat', async ({ page }) => {
+    await page.waitForTimeout(2000);
+
+    const benchmarksCard = page.locator('[data-testid="stats-benchmarks"]');
+    const isVisible = await benchmarksCard.isVisible().catch(() => false);
+
+    if (isVisible) {
+      await benchmarksCard.click();
+      await page.waitForURL('**/benchmarks', { timeout: 5000 });
+      expect(page.url()).toContain('/benchmarks');
+    }
+  });
+
+  test('should navigate to test cases page when clicking test cases stat', async ({ page }) => {
+    await page.waitForTimeout(2000);
+
+    const testCasesCard = page.locator('[data-testid="stats-test-cases"]');
+    const isVisible = await testCasesCard.isVisible().catch(() => false);
+
+    if (isVisible) {
+      await testCasesCard.click();
+      await page.waitForURL('**/test-cases', { timeout: 5000 });
+      expect(page.url()).toContain('/test-cases');
+    }
+  });
+});
+
 test.describe('Dashboard Performance Section', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');

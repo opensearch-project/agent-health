@@ -98,6 +98,14 @@ function transformDataForChart(
 }
 
 /**
+ * Sanitize agent key for use as SVG gradient ID.
+ * Replaces non-alphanumeric characters with hyphens to avoid invalid SVG id/url(#...) references.
+ */
+function sanitizeId(key: string): string {
+  return key.replace(/[^a-zA-Z0-9-_]/g, '-');
+}
+
+/**
  * Format date for x-axis display
  */
 function formatDateLabel(dateStr: string): string {
@@ -148,7 +156,7 @@ export const AgentTrendChart: React.FC<AgentTrendChartProps> = ({
       >
         <defs>
           {agents.map((agent) => (
-            <linearGradient key={`gradient-${agent}`} id={`gradient-${agent}`} x1="0" y1="0" x2="0" y2="1">
+            <linearGradient key={`gradient-${agent}`} id={`gradient-${sanitizeId(agent)}`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={getAgentColor(agent)} stopOpacity={0.3} />
               <stop offset="100%" stopColor={getAgentColor(agent)} stopOpacity={0} />
             </linearGradient>
@@ -198,7 +206,7 @@ export const AgentTrendChart: React.FC<AgentTrendChartProps> = ({
             type="monotone"
             dataKey={agent}
             name={`${agent}-area`}
-            fill={`url(#gradient-${agent})`}
+            fill={`url(#gradient-${sanitizeId(agent)})`}
             stroke="none"
             connectNulls
             legendType="none"

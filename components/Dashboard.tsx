@@ -170,7 +170,7 @@ export const Dashboard: React.FC = () => {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [reports, setReports] = useState<EvaluationReport[]>([]);
   const [metricsMap, setMetricsMap] = useState<Map<string, { costUsd: number; durationMs: number; tokens: number }>>(new Map());
-  const [testCaseCount, setTestCaseCount] = useState<number>(0);
+  const [testCaseCount, setTestCaseCount] = useState<number | null>(null);
   
   // Workflow card visibility state
   const [isWorkflowCardHidden, setIsWorkflowCardHidden] = useState(false);
@@ -190,6 +190,18 @@ export const Dashboard: React.FC = () => {
       main.classList.add('dashboard-gradient-bg');
       return () => { main.classList.remove('dashboard-gradient-bg'); };
     }
+  }, []);
+
+  // Fetch test case count (independent of benchmark data)
+  useEffect(() => {
+    let cancelled = false;
+    asyncTestCaseStorage.getAll()
+      .then(tc => { if (!cancelled) setTestCaseCount(tc.length); })
+      .catch(err => {
+        console.warn('[Dashboard] Failed to load test case count:', err);
+        if (!cancelled) setTestCaseCount(0);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   // Initialize workflow card visibility from localStorage
@@ -233,9 +245,6 @@ export const Dashboard: React.FC = () => {
         ]);
         setBenchmarks(allBenchmarks);
         setReports(allReports);
-
-        // Fetch test case count
-        asyncTestCaseStorage.getAll().then(tc => setTestCaseCount(tc.length)).catch(() => {});
       } catch (error) {
         console.error('Failed to load dashboard data:', error);
       } finally {
@@ -365,31 +374,29 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* Stats Summary Bar */}
-      {hasData && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <Link to="/benchmarks" className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between hover:opacity-80 transition-opacity">
-            <div className="flex items-center gap-3">
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground">Benchmarks</span>
-            </div>
-            <span className="text-2xl font-bold">{benchmarks.length}</span>
-          </Link>
-          <div className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between opacity-75 cursor-default">
-            <div className="flex items-center gap-3">
-              <Play className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground">Runs</span>
-            </div>
-            <span className="text-2xl font-bold">{totalRuns.toLocaleString()}</span>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" data-testid="stats-summary-bar">
+        <Link to="/benchmarks" className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between hover:opacity-80 transition-opacity" data-testid="stats-benchmarks">
+          <div className="flex items-center gap-3">
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Benchmarks</span>
           </div>
-          <Link to="/test-cases" className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between hover:opacity-80 transition-opacity">
-            <div className="flex items-center gap-3">
-              <FileText className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground">Test Cases</span>
-            </div>
-            <span className="text-2xl font-bold">{testCaseCount}</span>
-          </Link>
+          <span className="text-2xl font-bold">{benchmarks.length}</span>
+        </Link>
+        <div className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between opacity-75 cursor-default" data-testid="stats-runs">
+          <div className="flex items-center gap-3">
+            <Play className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Runs</span>
+          </div>
+          <span className="text-2xl font-bold">{totalRuns.toLocaleString()}</span>
         </div>
-      )}
+        <Link to="/test-cases" className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between hover:opacity-80 transition-opacity" data-testid="stats-test-cases">
+          <div className="flex items-center gap-3">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Test Cases</span>
+          </div>
+          <span className="text-2xl font-bold">{testCaseCount === null ? '—' : testCaseCount}</span>
+        </Link>
+      </div>
 
       {isLoading ? (
         <DashboardSkeleton />
