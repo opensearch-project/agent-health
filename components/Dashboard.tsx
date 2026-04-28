@@ -5,8 +5,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Rocket, X, Info, HelpCircle } from 'lucide-react';
-import { asyncRunStorage, asyncExperimentStorage } from '@/services/storage';
+import { Rocket, X, Info, HelpCircle, BarChart3, Play, FileText } from 'lucide-react';
+import { asyncRunStorage, asyncExperimentStorage, asyncTestCaseStorage } from '@/services/storage';
 import { EvaluationReport, Benchmark } from '@/types';
 import { fetchBatchMetrics } from '@/services/metrics';
 import { AgentTrendChart, TrendMetric } from './charts/AgentTrendChart';
@@ -170,6 +170,7 @@ export const Dashboard: React.FC = () => {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [reports, setReports] = useState<EvaluationReport[]>([]);
   const [metricsMap, setMetricsMap] = useState<Map<string, { costUsd: number; durationMs: number; tokens: number }>>(new Map());
+  const [testCaseCount, setTestCaseCount] = useState<number>(0);
   
   // Workflow card visibility state
   const [isWorkflowCardHidden, setIsWorkflowCardHidden] = useState(false);
@@ -181,6 +182,15 @@ export const Dashboard: React.FC = () => {
   const [filters, setFilters] = useState<DashboardFilter>({});
   const [timeRange, setTimeRange] = useState<TimeRange>('7d');
   const [selectedMetric, setSelectedMetric] = useState<TrendMetric>('passRate');
+
+  // Apply gradient background to the scrollable main container
+  useEffect(() => {
+    const main = document.querySelector('main');
+    if (main) {
+      main.classList.add('dashboard-gradient-bg');
+      return () => { main.classList.remove('dashboard-gradient-bg'); };
+    }
+  }, []);
 
   // Initialize workflow card visibility from localStorage
   useEffect(() => {
@@ -223,6 +233,9 @@ export const Dashboard: React.FC = () => {
         ]);
         setBenchmarks(allBenchmarks);
         setReports(allReports);
+
+        // Fetch test case count
+        asyncTestCaseStorage.getAll().then(tc => setTestCaseCount(tc.length)).catch(() => {});
       } catch (error) {
         console.error('Failed to load dashboard data:', error);
       } finally {
@@ -292,6 +305,8 @@ export const Dashboard: React.FC = () => {
     setFilters({});
   };
 
+  const totalRuns = useMemo(() => benchmarks.reduce((sum, b) => sum + (b.runs?.length || 0), 0), [benchmarks]);
+
   const hasData = benchmarks.length > 0 && benchmarks.some(b => b.runs && b.runs.length > 0);
 
   // Show loading skeleton while checking data state
@@ -348,6 +363,33 @@ export const Dashboard: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Stats Summary Bar */}
+      {hasData && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Link to="/benchmarks" className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between hover:opacity-80 transition-opacity">
+            <div className="flex items-center gap-3">
+              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Benchmarks</span>
+            </div>
+            <span className="text-2xl font-bold">{benchmarks.length}</span>
+          </Link>
+          <div className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between opacity-75 cursor-default">
+            <div className="flex items-center gap-3">
+              <Play className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Runs</span>
+            </div>
+            <span className="text-2xl font-bold">{totalRuns.toLocaleString()}</span>
+          </div>
+          <Link to="/test-cases" className="stats-card-gradient rounded-lg px-5 py-4 flex items-center justify-between hover:opacity-80 transition-opacity">
+            <div className="flex items-center gap-3">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Test Cases</span>
+            </div>
+            <span className="text-2xl font-bold">{testCaseCount}</span>
+          </Link>
+        </div>
+      )}
 
       {isLoading ? (
         <DashboardSkeleton />
