@@ -47,9 +47,10 @@ export const EvaluatorsPage: React.FC = () => {
         throw new Error(`Failed to load evaluators: ${response.statusText}`);
       }
       const data = await response.json();
-      setEvaluators(data.items || []);
-      setSystemCount(data.systemCount || 0);
-      setCustomCount(data.customCount || 0);
+      const allEvaluators = data.evaluators || [];
+      setEvaluators(allEvaluators);
+      setSystemCount(allEvaluators.filter((e: any) => e.isSystem).length);
+      setCustomCount(allEvaluators.filter((e: any) => !e.isSystem).length);
     } catch (error) {
       console.error('Error loading evaluators:', error);
     } finally {
