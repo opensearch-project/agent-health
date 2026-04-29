@@ -42,6 +42,16 @@ export const CONNECTOR_TYPE_INFO: Record<ConnectorProtocol, ConnectorTypeInfo> =
     description: 'Invokes the Claude Code CLI. Server-only — use the CLI or benchmark runner.',
     serverOnly: true,
   },
+  'strands': {
+    label: 'Amazon Strands',
+    description: 'Amazon Strands agent framework via Bedrock Agent Runtime API. Server-only — requires AWS SDK.',
+    serverOnly: true,
+  },
+  'langgraph': {
+    label: 'LangGraph (REST)',
+    description: 'LangGraph agent via direct REST API. Use for non-AG-UI LangGraph instances.',
+    serverOnly: false,
+  },
   'mock': {
     label: 'Mock',
     description: 'Built-in demo agent for testing. No real endpoint needed.',
@@ -125,6 +135,30 @@ export const DEFAULT_CONFIG: AppConfig = {
       headers: {},
       useTraces: ENV_CONFIG.claudeCodeTelemetryEnabled && !!ENV_CONFIG.otelExporterEndpoint,
       connectorConfig: { env: getClaudeCodeConnectorEnv() },
+    },
+    {
+      key: "strands",
+      name: "Amazon Strands",
+      endpoint: "${STRANDS_AGENT_ID}",
+      description: "Amazon Strands agent framework (Bedrock Agent Runtime)",
+      connectorType: "strands",
+      headers: {},
+      useTraces: false,
+      connectorConfig: {
+        agentAliasId: "${STRANDS_ALIAS_ID:-TSTALIASID}",
+        region: "${AWS_REGION:-us-east-1}",
+      },
+      enabled: false,
+    },
+    {
+      key: "langgraph-rest",
+      name: "LangGraph (REST)",
+      endpoint: "${LANGGRAPH_API_ENDPOINT:-http://localhost:8000}",
+      description: "LangGraph agent via direct REST API",
+      connectorType: "langgraph",
+      headers: {},
+      useTraces: false,
+      enabled: false,
     },
   ],
   models: {

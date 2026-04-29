@@ -42,6 +42,7 @@ export { AGUIStreamingConnector, aguiStreamingConnector } from './agui/AGUIStrea
 export { MockConnector, mockConnector } from './mock/MockConnector';
 export { RESTConnector, restConnector } from './rest/RESTConnector';
 export { OpenAICompatibleConnector, openaiCompatibleConnector } from './openai-compatible/OpenAICompatibleConnector';
+export { LangGraphConnector, langgraphConnector } from './langgraph/LangGraphConnector';
 
 // ============ Auto-register Browser-safe Connectors ============
 import { connectorRegistry } from './registry';
@@ -49,12 +50,14 @@ import { aguiStreamingConnector } from './agui/AGUIStreamingConnector';
 import { mockConnector } from './mock/MockConnector';
 import { restConnector } from './rest/RESTConnector';
 import { openaiCompatibleConnector } from './openai-compatible/OpenAICompatibleConnector';
+import { langgraphConnector } from './langgraph/LangGraphConnector';
 
 // Register browser-compatible connectors on module load
-// Server-only connectors (subprocess, claude-code) are registered via server.ts
+// Server-only connectors (subprocess, claude-code, strands) are registered via server.ts
 connectorRegistry.register(aguiStreamingConnector);
 connectorRegistry.register(mockConnector);
 connectorRegistry.register(restConnector);
 connectorRegistry.register(openaiCompatibleConnector);
+connectorRegistry.register(langgraphConnector);
 
 console.log('[Connectors] Browser-safe connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));

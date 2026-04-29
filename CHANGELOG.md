@@ -14,6 +14,8 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Pre-existing test failures: add missing `fast-check` dev dependency and fix incomplete mocks in `app.test.ts` ([#153](https://github.com/opensearch-project/agent-health/pull/153))
 
 ### Added
+- Amazon Strands connector for Bedrock Agent Runtime integration (`services/connectors/strands/`)
+- LangGraph REST connector for non-AG-UI LangGraph instances (`services/connectors/langgraph/`)
 - Dashboard homepage gradient background, stats summary bar, and chart area gradient fills ([#153](https://github.com/opensearch-project/agent-health/pull/153))
 - Auto-increment server port on EADDRINUSE — if port 4001 is in use, tries 4002, 4003, etc. up to 10 attempts
 - GitHub Actions workflow for AI-powered PR code diff analysis and review via AWS Bedrock
