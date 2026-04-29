@@ -150,7 +150,7 @@
     "jest": "^30.2.0",
     "jest-environment-jsdom": "^30.2.0",
     "nyc": "^18.0.0",
-    "postcss": "^8.4.32",
+    "postcss": "^8.5.12",
     "shadcn": "^3.5.1",
     "supertest": "^7.2.2",
     "tailwindcss": "^3.4.0",
@@ -164,7 +164,8 @@
   },
   "overrides": {
     "minimatch": "^10.2.4",
-    "fast-xml-parser": "5.5.10",
+    "fast-xml-parser": ">=5.7.2",
+    "uuid": "$uuid",
     "@anthropic-ai/claude-agent-sdk": {
       "zod": "$zod"
     }
