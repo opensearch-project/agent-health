@@ -60,6 +60,7 @@ export const FirstRunExperience: React.FC = () => {
 
   const dockerCommand = 'curl -fsSL https://raw.githubusercontent.com/opensearch-project/agent-health/main/scripts/install.sh | bash';
   const aiPrompt = 'Clone opensearch-project/agent-health, run docker compose up -d, copy .env.docker to .env, then run npx @opensearch-project/agent-health';
+  const cfnCliCommand = 'aws cloudformation create-stack --stack-name AgentHealthObservability --template-body file://deployment/cloudformation/agent-health-observability.yaml --capabilities CAPABILITY_NAMED_IAM';
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-16" data-testid="first-run-experience">
@@ -385,8 +386,24 @@ export const FirstRunExperience: React.FC = () => {
                             className="h-8"
                           />
                         </a>
+                        <p className="text-xs text-muted-foreground">Or deploy via CLI:</p>
+                        <div className="relative">
+                          <div className="bg-secondary rounded-lg p-3 pr-10 font-mono text-xs">
+                            {cfnCliCommand}
+                          </div>
+                          <button
+                            onClick={() => handleCopy(cfnCliCommand, 'cfn-cli')}
+                            className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
+                            title="Copy command"
+                          >
+                            {copiedCommand === 'cfn-cli'
+                              ? <Check className="h-3.5 w-3.5 text-green-500" />
+                              : <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                            }
+                          </button>
+                        </div>
                         <p className="text-xs text-muted-foreground">
-                          Deploys an OpenSearch domain and OSIS ingestion pipeline in your AWS account.
+                          Then auto-configure Agent Health:
                         </p>
                         <div className="relative">
                           <div className="bg-secondary rounded-lg p-3 pr-10 font-mono text-xs">
@@ -403,9 +420,6 @@ export const FirstRunExperience: React.FC = () => {
                             }
                           </button>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          Run after deployment to auto-configure Agent Health.
-                        </p>
                       </div>
                     </div>
                   )}

@@ -160,28 +160,35 @@ Resources:
                 Action:
                   - 'osis:Ingest'
                 Resource:
-                  - !Sub 'arn:aws:osis:${AWS::Region}:${AWS::AccountId}:pipeline/${DomainName}-otlp'
+                  - !Sub 'arn:aws:osis:${AWS::Region}:${AWS::AccountId}:pipeline/${DomainName}-traces'
+                  - !Sub 'arn:aws:osis:${AWS::Region}:${AWS::AccountId}:pipeline/${DomainName}-logs'
 
   # ---------------------------------------------------------------------------
-  # OpenSearch Ingestion (OSIS) Pipeline — OTLP → OpenSearch
+  # OpenSearch Ingestion (OSIS) Pipeline — OTLP Traces → OpenSearch
   # ---------------------------------------------------------------------------
-  OSISPipeline:
+  OSISTracePipeline:
     Type: AWS::OSIS::Pipeline
-    DependsOn: OpenSearchDomain
     Properties:
-      PipelineName: !Sub '${DomainName}-otlp'
+      PipelineName: !Sub '${DomainName}-traces'
       MinUnits: !Ref PipelineMinUnits
       MaxUnits: !Ref PipelineMaxUnits
       PipelineConfigurationBody: !Sub |
         version: "2"
-        otel-traces-pipeline:
+        otel-traces-entry:
           source:
             otel_trace_source:
               path: "/v1/traces"
+          sink:
+            - pipeline:
+                name: "otel-traces-raw-pipeline"
+            - pipeline:
+                name: "otel-service-map-pipeline"
+        otel-traces-raw-pipeline:
+          source:
+            pipeline:
+              name: "otel-traces-entry"
           processor:
             - otel_traces:
-                service_map:
-                  enabled: true
           sink:
             - opensearch:
                 hosts:
@@ -193,10 +200,10 @@ Resources:
         otel-service-map-pipeline:
           source:
             pipeline:
-              name: "otel-traces-pipeline"
+              name: "otel-traces-entry"
           processor:
-            - otel_apm_service_map:
-                window_duration: "10s"
+            - service_map:
+                window_duration: 180
           sink:
             - opensearch:
                 hosts:
@@ -205,6 +212,21 @@ Resources:
                 aws:
                   sts_role_arn: "${OSISPipelineRole.Arn}"
                   region: "${AWS::Region}"
+      Tags:
+        - Key: agent-health
+          Value: observability
+
+  # ---------------------------------------------------------------------------
+  # OpenSearch Ingestion (OSIS) Pipeline — OTLP Logs → OpenSearch
+  # ---------------------------------------------------------------------------
+  OSISLogsPipeline:
+    Type: AWS::OSIS::Pipeline
+    Properties:
+      PipelineName: !Sub '${DomainName}-logs'
+      MinUnits: !Ref PipelineMinUnits
+      MaxUnits: !Ref PipelineMaxUnits
+      PipelineConfigurationBody: !Sub |
+        version: "2"
         otel-logs-pipeline:
           source:
             otel_logs_source:
@@ -213,7 +235,7 @@ Resources:
             - opensearch:
                 hosts:
                   - "https://${OpenSearchDomain.DomainEndpoint}"
-                index: "otel-logs-%{yyyy.MM.dd}"
+                index: "otel-logs-%%{yyyy.MM.dd}"
                 aws:
                   sts_role_arn: "${OSISPipelineRole.Arn}"
                   region: "${AWS::Region}"
@@ -229,9 +251,19 @@ Outputs:
     Description: OpenSearch domain endpoint URL
     Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
 
-  OSISIngestEndpoint:
-    Description: OSIS OTLP ingest endpoint (configure as OTEL_EXPORTER_OTLP_ENDPOINT in your agent)
-    Value: !Sub 'https://${OSISPipeline.IngestEndpointUrls[0]}'
+  OSISTraceIngestEndpoint:
+    Description: OSIS trace ingest endpoint (configure as OTEL_EXPORTER_OTLP_TRACES_ENDPOINT in your agent)
+    Value: !Join
+      - ''
+      - - 'https://'
+        - !Select [0, !GetAtt OSISTracePipeline.IngestEndpointUrls]
+
+  OSISLogsIngestEndpoint:
+    Description: OSIS logs ingest endpoint (configure as OTEL_EXPORTER_OTLP_LOGS_ENDPOINT in your agent)
+    Value: !Join
+      - ''
+      - - 'https://'
+        - !Select [0, !GetAtt OSISLogsPipeline.IngestEndpointUrls]
 
   Region:
     Description: AWS Region where the stack was deployed

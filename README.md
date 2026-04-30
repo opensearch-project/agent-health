@@ -122,9 +122,20 @@ This brings up:
 
 ### Option 3: AWS CloudFormation (Managed OpenSearch)
 
-Deploy a fully managed observability backend with one click:
+Deploy a fully managed observability backend:
+
+**Option A — Launch Stack button (AWS Console):**
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/template?stackName=AgentHealthObservability&templateURL=https://agent-health-cfn-us-east-1.s3.us-east-1.amazonaws.com/agent-health-observability.yaml)
+
+**Option B — AWS CLI:**
+
+```bash
+aws cloudformation create-stack \
+  --stack-name AgentHealthObservability \
+  --template-body file://deployment/cloudformation/agent-health-observability.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+```
 
 This deploys:
 - **Amazon OpenSearch Service** domain for trace storage

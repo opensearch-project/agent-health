@@ -57,9 +57,10 @@ function writeConfig(config: Record<string, unknown>): void {
 /**
  * Fetch CloudFormation stack outputs using the AWS CLI.
  */
-function getStackOutputs(stackName: string, region?: string): CFNOutput[] {
+function getStackOutputs(stackName: string, region?: string, profile?: string): CFNOutput[] {
   const regionFlag = region ? ` --region ${region}` : '';
-  const cmd = `aws cloudformation describe-stacks --stack-name ${stackName}${regionFlag} --output json`;
+  const profileFlag = profile ? ` --profile ${profile}` : '';
+  const cmd = `aws cloudformation describe-stacks --stack-name ${stackName}${regionFlag}${profileFlag} --output json`;
 
   try {
     const result = execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -92,10 +93,11 @@ export function createConfigureCommand(): Command {
     .description('Configure Agent Health from infrastructure outputs')
     .option('--from-stack <stackName>', 'Import observability config from a CloudFormation stack')
     .option('--region <region>', 'AWS region for the CloudFormation stack')
+    .option('--profile <profile>', 'AWS CLI profile to use')
     .option('--dry-run', 'Show what would be written without making changes')
     .action(async (options) => {
       if (options.fromStack) {
-        await configureFromStack(options.fromStack, options.region, options.dryRun);
+        await configureFromStack(options.fromStack, options.region, options.profile, options.dryRun);
       } else {
         console.log(chalk.yellow('\n  No configuration source specified.\n'));
         console.log(chalk.gray('  Usage:'));
@@ -108,7 +110,7 @@ export function createConfigureCommand(): Command {
   return cmd;
 }
 
-async function configureFromStack(stackName: string, region?: string, dryRun?: boolean): Promise<void> {
+async function configureFromStack(stackName: string, region?: string, profile?: string, dryRun?: boolean): Promise<void> {
   console.log(chalk.cyan(`\n  Importing configuration from CloudFormation stack: ${chalk.bold(stackName)}\n`));
 
   // Check AWS CLI is available
@@ -122,7 +124,7 @@ async function configureFromStack(stackName: string, region?: string, dryRun?: b
   // Fetch stack outputs
   let outputs: CFNOutput[];
   try {
-    outputs = getStackOutputs(stackName, region);
+    outputs = getStackOutputs(stackName, region, profile);
   } catch (err) {
     console.error(chalk.red(`  ${err instanceof Error ? err.message : err}\n`));
     process.exit(1);
@@ -132,7 +134,7 @@ async function configureFromStack(stackName: string, region?: string, dryRun?: b
   const outputMap = new Map(outputs.map(o => [o.OutputKey, o.OutputValue]));
 
   const endpoint = outputMap.get('OpenSearchEndpoint');
-  const osisEndpoint = outputMap.get('OSISIngestEndpoint');
+  const osisEndpoint = outputMap.get('OSISTraceIngestEndpoint') || outputMap.get('OSISIngestEndpoint');
   const stackRegion = outputMap.get('Region') || region;
   const ingestionRoleArn = outputMap.get('IngestionRoleArn');
 
