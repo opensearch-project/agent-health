@@ -12,12 +12,16 @@ coverage:
   range: "80...100"
 
   status:
-    # Overall project coverage
+    # Overall project coverage (combines all flagged uploads)
     project:
       default:
         target: 90%
         threshold: 2%
         if_ci_failed: error
+        flags:
+          - unit
+          - integration
+          - e2e
 
       # Unit tests coverage target
       unit:
