@@ -25,6 +25,11 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Compare page with blank state, single-run support, and N-run table compare
 - RunPairSelector component for trajectory comparison gating
 - Dashboard workflow navigator and first-run experience
+- Observio sample agent: built-in ReAct agent that auto-starts with the server, with `kill` CLI command ([#156](https://github.com/opensearch-project/agent-health/pull/156))
+- Progressive onboarding: FirstRunExperience redesigned with 4-step Getting Started flow ([#156](https://github.com/opensearch-project/agent-health/pull/156))
+- One-click Docker Compose installer (`scripts/install.sh`) with auto-config generation ([#156](https://github.com/opensearch-project/agent-health/pull/156))
+- AWS CloudFormation template for managed OpenSearch + OSIS trace/log pipelines ([#156](https://github.com/opensearch-project/agent-health/pull/156))
+- CLI `configure --from-stack` command to import observability config from CloudFormation stack outputs ([#156](https://github.com/opensearch-project/agent-health/pull/156))
 
 ### Changed
 - Move metrics to right side of title on Benchmarks and Eval Runs pages

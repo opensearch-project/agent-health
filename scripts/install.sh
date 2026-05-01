@@ -9,6 +9,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/opensearch-project/agent-health.git"
 REPO_DIR="agent-health"
+# Default password matches docker-compose.yml — change for non-local use
 OPENSEARCH_PASSWORD="My_password_123!@#"
 
 # --- Helpers ---
@@ -17,16 +18,31 @@ ok()    { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 fail()  { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 
+# --- Port check helper (works without lsof) ---
+port_in_use() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -i ":${port}" >/dev/null 2>&1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltn "( sport = :${port} )" 2>/dev/null | grep -q LISTEN
+  else
+    # Fallback: try connecting with bash /dev/tcp
+    (echo >/dev/tcp/localhost/"${port}") 2>/dev/null
+  fi
+}
+
 # --- Prerequisite checks ---
 info "Checking prerequisites..."
 
 command -v docker >/dev/null 2>&1 || fail "Docker is not installed. Install Docker Desktop from https://www.docker.com/products/docker-desktop"
 docker info >/dev/null 2>&1 || fail "Docker daemon is not running. Start Docker Desktop and try again."
 command -v npx >/dev/null 2>&1 || fail "Node.js / npx is not installed. Install Node.js 18+ from https://nodejs.org"
+command -v git >/dev/null 2>&1 || fail "git is not installed. Install git from https://git-scm.com"
+command -v node >/dev/null 2>&1 || fail "Node.js is not installed. Install Node.js 18+ from https://nodejs.org"
 
 # Check if ports are available
 for port in 9200 4317 4318; do
-  if lsof -i ":${port}" >/dev/null 2>&1; then
+  if port_in_use "${port}"; then
     fail "Port ${port} is already in use. Stop the process using it and try again."
   fi
 done
@@ -78,43 +94,39 @@ fi
 CONFIG_FILE="${PROJECT_DIR}/agent-health.config.json"
 info "Writing observability config to agent-health.config.json..."
 
-if [ -f "${CONFIG_FILE}" ]; then
-  # Merge observability into existing config using a simple approach
-  # Check if observability key already exists
-  if grep -q '"observability"' "${CONFIG_FILE}" 2>/dev/null; then
-    warn "agent-health.config.json already has an observability section — skipping config write"
-  else
-    # Insert observability before the closing brace
-    # Use a temp file for portability
-    TMP_FILE=$(mktemp)
-    sed '$ d' "${CONFIG_FILE}" > "${TMP_FILE}"
-    # Add comma after last property if needed
-    if tail -1 "${TMP_FILE}" | grep -qE '[^,{]$'; then
-      echo ',' >> "${TMP_FILE}"
-    fi
-    cat >> "${TMP_FILE}" <<JSONEOF
-  "observability": {
-    "endpoint": "https://localhost:9200",
-    "username": "admin",
-    "password": "${OPENSEARCH_PASSWORD}",
-    "tlsSkipVerify": true
-  }
+OBSERVABILITY_JSON=$(cat <<JSONEOF
+{
+  "endpoint": "https://localhost:9200",
+  "username": "admin",
+  "password": "${OPENSEARCH_PASSWORD}",
+  "tlsSkipVerify": true
 }
 JSONEOF
-    mv "${TMP_FILE}" "${CONFIG_FILE}"
+)
+
+if [ -f "${CONFIG_FILE}" ]; then
+  # Use Node.js for safe JSON merge
+  if node -e "
+    const fs = require('fs');
+    const config = JSON.parse(fs.readFileSync('${CONFIG_FILE}', 'utf8'));
+    if (config.observability) {
+      process.stdout.write('EXISTS');
+    } else {
+      config.observability = ${OBSERVABILITY_JSON};
+      fs.writeFileSync('${CONFIG_FILE}', JSON.stringify(config, null, 2) + '\n');
+      process.stdout.write('MERGED');
+    }
+  " 2>/dev/null | grep -q "EXISTS"; then
+    warn "agent-health.config.json already has an observability section — skipping config write"
+  else
     ok "Updated existing agent-health.config.json with observability config"
   fi
 else
-  cat > "${CONFIG_FILE}" <<JSONEOF
-{
-  "observability": {
-    "endpoint": "https://localhost:9200",
-    "username": "admin",
-    "password": "${OPENSEARCH_PASSWORD}",
-    "tlsSkipVerify": true
-  }
-}
-JSONEOF
+  node -e "
+    const fs = require('fs');
+    const config = { observability: ${OBSERVABILITY_JSON} };
+    fs.writeFileSync('${CONFIG_FILE}', JSON.stringify(config, null, 2) + '\n');
+  "
   ok "Created agent-health.config.json with observability config"
 fi
 

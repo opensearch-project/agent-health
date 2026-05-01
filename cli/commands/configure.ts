@@ -12,7 +12,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 
 const CONFIG_FILENAME = 'agent-health.config.json';
 
@@ -34,15 +34,18 @@ interface CFNStack {
 function readConfig(): Record<string, unknown> {
   const filePath = join(process.cwd(), CONFIG_FILENAME);
   if (!existsSync(filePath)) return {};
+  const raw = readFileSync(filePath, 'utf-8');
   try {
-    const raw = readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw);
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
+      throw new Error(`Config file must contain a JSON object: ${filePath}`);
     }
     return parsed as Record<string, unknown>;
-  } catch {
-    return {};
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(`Failed to parse ${filePath}: ${err.message}. Fix the JSON syntax or delete the file to start fresh.`);
+    }
+    throw err;
   }
 }
 
@@ -54,17 +57,38 @@ function writeConfig(config: Record<string, unknown>): void {
   writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }
 
+/** Validate CLI option values to prevent shell injection */
+function validateInput(value: string, label: string): void {
+  if (/[;&|`$(){}[\]<>!#'"\\\n\r]/.test(value)) {
+    throw new Error(`Invalid ${label}: contains disallowed characters`);
+  }
+}
+
 /**
  * Fetch CloudFormation stack outputs using the AWS CLI.
+ * Uses spawnSync with argument array to prevent shell injection.
  */
 function getStackOutputs(stackName: string, region?: string, profile?: string): CFNOutput[] {
-  const regionFlag = region ? ` --region ${region}` : '';
-  const profileFlag = profile ? ` --profile ${profile}` : '';
-  const cmd = `aws cloudformation describe-stacks --stack-name ${stackName}${regionFlag}${profileFlag} --output json`;
+  validateInput(stackName, 'stack name');
+  if (region) validateInput(region, 'region');
+  if (profile) validateInput(profile, 'profile');
+
+  const args = ['cloudformation', 'describe-stacks', '--stack-name', stackName, '--output', 'json'];
+  if (region) args.push('--region', region);
+  if (profile) args.push('--profile', profile);
 
   try {
-    const result = execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
-    const parsed = JSON.parse(result);
+    const result = spawnSync('aws', args, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+
+    if (result.status !== 0) {
+      const stderr = (result.stderr || '').trim();
+      if (stderr.includes('Unable to locate credentials')) {
+        throw new Error('AWS credentials not configured. Run `aws configure` or set AWS_PROFILE.');
+      }
+      throw new Error(stderr || `AWS CLI exited with code ${result.status}`);
+    }
+
+    const parsed = JSON.parse(result.stdout);
     const stacks: CFNStack[] = parsed.Stacks || [];
 
     if (stacks.length === 0) {
@@ -78,11 +102,8 @@ function getStackOutputs(stackName: string, region?: string, profile?: string): 
 
     return stack.Outputs;
   } catch (err) {
-    if (err instanceof Error && err.message.includes('not found')) {
+    if (err instanceof Error && (err.message.includes('not found') || err.message.includes('credentials') || err.message.includes('Invalid'))) {
       throw err;
-    }
-    if (err instanceof Error && err.message.includes('Unable to locate credentials')) {
-      throw new Error('AWS credentials not configured. Run `aws configure` or set AWS_PROFILE.');
     }
     throw new Error(`Failed to describe stack '${stackName}': ${err instanceof Error ? err.message : err}`);
   }

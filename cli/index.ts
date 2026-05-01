@@ -149,6 +149,7 @@ ${chalk.cyan.bold('Infrastructure:')}
 
 ${chalk.cyan.bold('Maintenance:')}
   ${chalk.yellow('agent-health migrate')}                Migrate legacy benchmark data to current format
+  ${chalk.yellow('agent-health kill')} ${chalk.gray('sample-agent')}       Stop a running sample agent by name
   ${chalk.yellow('agent-health serve')}                  Start the server (same as default, explicit command)
 
 ${chalk.cyan.bold('Examples:')}

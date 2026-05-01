@@ -10,7 +10,7 @@
  * observio-sample-agent that ships alongside Agent Health.
  */
 
-import { ChildProcess, spawn, execSync } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -20,6 +20,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export const OBSERVIO_PORT = 3001;
+
+/** Track the spawned child process for graceful shutdown */
+let observioChild: ChildProcess | null = null;
 
 /**
  * Find the observio-sample-agent directory relative to the package root.
@@ -43,36 +46,33 @@ export function findObservioRoot(): string | null {
  */
 export function isPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
+    let resolved = false;
+    const done = (value: boolean) => {
+      if (!resolved) {
+        resolved = true;
+        socket.destroy();
+        resolve(value);
+      }
+    };
+
     const socket = new net.Socket();
     socket.setTimeout(1000);
-
-    socket.on('connect', () => {
-      socket.destroy();
-      resolve(false);
-    });
-
-    socket.on('timeout', () => {
-      socket.destroy();
-      resolve(true);
-    });
-
-    socket.on('error', () => {
-      resolve(true);
-    });
-
+    socket.once('connect', () => done(false));
+    socket.once('timeout', () => done(true));
+    socket.once('error', () => done(true));
     socket.connect(port, 'localhost');
   });
 }
 
 /**
  * Spawn the observio sample agent as a child process.
- * Installs dependencies first if node_modules is missing.
+ * Skips if dependencies are not installed — run `npm install` manually first.
  */
-export function spawnObservioAgent(cwd: string): ChildProcess {
-  // Install deps if needed
+export function spawnObservioAgent(cwd: string): ChildProcess | null {
+  // Only start if dependencies are already installed (avoid blocking event loop)
   if (!existsSync(join(cwd, 'node_modules', '@langchain', 'langgraph'))) {
-    console.log('  Observio sample agent: installing dependencies...');
-    execSync('npm install --legacy-peer-deps --silent', { cwd, stdio: 'ignore' });
+    console.log('  [observio] Dependencies not installed. Run `cd observio-sample-agent && npm install --legacy-peer-deps` first.');
+    return null;
   }
 
   const child = spawn('npm', ['run', 'start:ag-ui'], {
@@ -80,6 +80,13 @@ export function spawnObservioAgent(cwd: string): ChildProcess {
     detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: true,
+  });
+
+  observioChild = child;
+
+  // Clean up reference when process exits
+  child.once('exit', () => {
+    if (observioChild === child) observioChild = null;
   });
 
   // Forward observio output with prefix
@@ -105,40 +112,38 @@ export function spawnObservioAgent(cwd: string): ChildProcess {
 }
 
 /**
- * Kill whatever process is listening on the observio port.
- * Cross-platform: lsof on Unix/Mac, netstat on Windows.
+ * Kill the observio agent process.
+ * Prefers killing the tracked child process; falls back to port-based lookup.
+ * Attempts graceful SIGTERM first, then SIGKILL after timeout.
  */
 export async function killObservioAgent(port: number = OBSERVIO_PORT): Promise<boolean> {
-  const free = await isPortFree(port);
-  if (free) {
-    return false; // nothing to kill
-  }
+  // First, try to kill the tracked child process
+  if (observioChild && !observioChild.killed) {
+    try {
+      observioChild.kill('SIGTERM');
+      // Wait up to 5s for graceful shutdown
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        if (observioChild === null || observioChild.killed) break;
+      }
+      // Force kill if still alive
+      if (observioChild && !observioChild.killed) {
+        observioChild.kill('SIGKILL');
+      }
+      observioChild = null;
+    } catch { /* process already exited */ }
 
-  try {
-    if (process.platform !== 'win32') {
-      execSync(`lsof -t -i:${port} -sTCP:LISTEN | xargs kill -9 2>/dev/null || true`, { stdio: 'ignore' });
-    } else {
-      try {
-        const result = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf-8' });
-        const lines = result.trim().split('\n');
-        for (const line of lines) {
-          const parts = line.trim().split(/\s+/);
-          const pid = parts[parts.length - 1];
-          if (pid && !isNaN(parseInt(pid))) {
-            execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
-          }
-        }
-      } catch { /* no process on port */ }
-    }
-
-    // Wait for port to free
+    // Verify port is free
     for (let i = 0; i < 10; i++) {
       await new Promise(r => setTimeout(r, 500));
       if (await isPortFree(port)) return true;
     }
-    console.warn(`  [observio] Port ${port} may still be in use after retries`);
-    return true;
-  } catch {
-    return false;
   }
+
+  // Fallback: check if port is in use by something else
+  const free = await isPortFree(port);
+  if (free) return false; // nothing to kill
+
+  console.warn(`  [observio] Port ${port} is in use but not by a tracked process. Use 'lsof -i :${port}' to investigate.`);
+  return false;
 }

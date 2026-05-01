@@ -47,9 +47,12 @@ async function tryStartObservioAgent(): Promise<void> {
     }
 
     observioChild = spawnObservioAgent(root);
+    if (!observioChild) {
+      return; // Dependencies not installed — message already logged
+    }
     console.log(`  Observio sample agent: starting on port ${OBSERVIO_PORT}...`);
 
-    observioChild.on('exit', (code, signal) => {
+    observioChild.on('exit', (code) => {
       if (code !== null && code !== 0) {
         console.log(`  [observio] Exited with code ${code}`);
       }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Zap, Activity, Gauge, TrendingUp, ArrowRight, Server, Database, Copy, Check, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,14 @@ export const FirstRunExperience: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isStep3Expanded, setIsStep3Expanded] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   const handleViewSampleData = async () => {
     setIsLoading(true);
@@ -51,7 +59,8 @@ export const FirstRunExperience: React.FC = () => {
     try {
       await navigator.clipboard.writeText(text);
       setCopiedCommand(id);
-      setTimeout(() => setCopiedCommand(null), 2000);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopiedCommand(null), 2000);
     } catch {
       // Fallback for environments where clipboard API isn't available
       console.warn('[FirstRunExperience] Clipboard API not available');
@@ -132,13 +141,16 @@ export const FirstRunExperience: React.FC = () => {
             <Button
               size="sm"
               variant="outline"
-              asChild
               className="text-muted-foreground"
+              onClick={() => {
+                setIsStep3Expanded(true);
+                setTimeout(() => {
+                  document.getElementById('step-3-aws')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 100);
+              }}
             >
-              <a href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/template?stackName=AgentHealthObservability&templateURL=https://agent-health-cfn-us-east-1.s3.us-east-1.amazonaws.com/agent-health-observability.yaml" target="_blank" rel="noopener noreferrer">
-                <Database className="mr-1.5 h-4 w-4" />
-                AWS CloudFormation
-              </a>
+              <Database className="mr-1.5 h-4 w-4" />
+              AWS CloudFormation
             </Button>
           </div>
 
@@ -340,7 +352,8 @@ export const FirstRunExperience: React.FC = () => {
                           <button
                             onClick={() => handleCopy(dockerCommand, 'docker')}
                             className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
-                            title="Copy command"
+                            type="button"
+                            aria-label="Copy command"
                           >
                             {copiedCommand === 'docker'
                               ? <Check className="h-3.5 w-3.5 text-green-500" />
@@ -355,9 +368,10 @@ export const FirstRunExperience: React.FC = () => {
                               &ldquo;{aiPrompt}&rdquo;
                             </div>
                             <button
+                              type="button"
                               onClick={() => handleCopy(aiPrompt, 'ai')}
                               className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
-                              title="Copy prompt"
+                              aria-label="Copy prompt"
                             >
                               {copiedCommand === 'ai'
                                 ? <Check className="h-3.5 w-3.5 text-green-500" />
@@ -369,24 +383,12 @@ export const FirstRunExperience: React.FC = () => {
                       </div>
 
                       {/* AWS option */}
-                      <div className="space-y-2">
+                      <div id="step-3-aws" className="space-y-2">
                         <div className="flex items-center gap-2">
                           <Database className="h-4 w-4 text-muted-foreground" />
                           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AWS Managed (CloudFormation)</span>
                         </div>
-                        <a
-                          href="https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/template?stackName=AgentHealthObservability&templateURL=https://agent-health-cfn-us-east-1.s3.us-east-1.amazonaws.com/agent-health-observability.yaml"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-block"
-                        >
-                          <img
-                            src="https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png"
-                            alt="Launch Stack"
-                            className="h-8"
-                          />
-                        </a>
-                        <p className="text-xs text-muted-foreground">Or deploy via CLI:</p>
+                        <p className="text-xs text-muted-foreground">Deploy via CLI:</p>
                         <div className="relative">
                           <div className="bg-secondary rounded-lg p-3 pr-10 font-mono text-xs">
                             {cfnCliCommand}
@@ -394,7 +396,8 @@ export const FirstRunExperience: React.FC = () => {
                           <button
                             onClick={() => handleCopy(cfnCliCommand, 'cfn-cli')}
                             className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
-                            title="Copy command"
+                            type="button"
+                            aria-label="Copy command"
                           >
                             {copiedCommand === 'cfn-cli'
                               ? <Check className="h-3.5 w-3.5 text-green-500" />
@@ -412,7 +415,8 @@ export const FirstRunExperience: React.FC = () => {
                           <button
                             onClick={() => handleCopy('npx @opensearch-project/agent-health configure --from-stack AgentHealthObservability', 'cfn')}
                             className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
-                            title="Copy command"
+                            type="button"
+                            aria-label="Copy command"
                           >
                             {copiedCommand === 'cfn'
                               ? <Check className="h-3.5 w-3.5 text-green-500" />
