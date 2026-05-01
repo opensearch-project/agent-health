@@ -125,8 +125,9 @@ export class StrandsConnector extends BaseConnector {
       }
     }
 
-    // Add final response step
-    if (finalOutput) {
+    // Add final response step only if no response was already emitted from traces
+    const hasResponseFromTrace = trajectory.some(s => s.type === 'response');
+    if (finalOutput && !hasResponseFromTrace) {
       const responseStep = this.createStep('response', finalOutput);
       trajectory.push(responseStep);
       onProgress?.(responseStep);

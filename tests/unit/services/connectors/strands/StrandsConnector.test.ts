@@ -289,6 +289,30 @@ describe('StrandsConnector', () => {
       expect(result.runId).toBeDefined();
     });
 
+    it('should not produce duplicate response steps when trace emits finalResponse and chunks are present', async () => {
+      mockSend.mockResolvedValue(createStreamingResponse([
+        {
+          trace: {
+            trace: {
+              orchestrationTrace: {
+                observation: {
+                  finalResponse: { text: 'Final from trace' },
+                },
+              },
+            },
+          },
+        },
+        { chunk: { bytes: new TextEncoder().encode('Final from chunks') } },
+      ]));
+
+      const request: ConnectorRequest = { testCase: mockTestCase };
+      const result = await connector.execute('AGENT123', request, mockAuth);
+
+      const responseSteps = result.trajectory.filter(s => s.type === 'response');
+      expect(responseSteps).toHaveLength(1);
+      expect(responseSteps[0].content).toBe('Final from trace');
+    });
+
     it('should default region to us-east-1 when not specified', async () => {
       mockSend.mockResolvedValue(createStreamingResponse([]));
 

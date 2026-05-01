@@ -25,7 +25,8 @@ import type {
  * LangGraph REST Connector
  *
  * Communicates with LangGraph agents via the LangGraph REST API.
- * Supports both /invoke (synchronous) and /stream (streaming) endpoints.
+ * Uses the /invoke endpoint for synchronous execution.
+ * For streaming LangGraph agents, use the agui-streaming connector instead.
  *
  * Configuration:
  * - endpoint: Base URL of the LangGraph server (e.g., "http://localhost:8123")
