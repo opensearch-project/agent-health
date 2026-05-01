@@ -88,8 +88,12 @@ export function resolveObservabilityConfig(req: Request): ObservabilityClusterCo
   if (fileConfig) {
     return {
       endpoint: fileConfig.endpoint,
+      authType: fileConfig.authType,
       username: fileConfig.username,
       password: fileConfig.password,
+      awsProfile: fileConfig.awsProfile,
+      awsRegion: fileConfig.awsRegion,
+      awsService: fileConfig.awsService,
       tlsSkipVerify: fileConfig.tlsSkipVerify,
       indexes: {
         traces: fileConfig.indexes?.traces || DEFAULT_OTEL_INDEXES.traces,

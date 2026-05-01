@@ -29,9 +29,14 @@ import { Logger } from './utils/logger';
 import { AGUIAuditLogger } from './utils/ag_ui_audit_logger';
 import { ConfigLoader } from './config/config_loader';
 import { HTTPServer } from './server/http_server';
+import { initTelemetry, shutdownTelemetry } from './telemetry/provider';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables — check own dir first, then parent (when run as built-in agent)
+dotenv.config(); // observio-sample-agent/.env
+dotenv.config({ path: '../.env' }); // parent project .env (won't override existing vars)
+
+// Initialize OTel telemetry (reads OPENSEARCH_LOGS_* env vars)
+initTelemetry();
 
 class BaseAGUIServer {
   private adapter: BaseAGUIAdapter;
@@ -114,6 +119,7 @@ async function main() {
     process.on('SIGINT', async () => {
       logger.info('Received SIGINT, shutting down gracefully');
       console.log('\n🛑 Shutting down HTTP server...');
+      await shutdownTelemetry();
       await server.stop();
       process.exit(0);
     });

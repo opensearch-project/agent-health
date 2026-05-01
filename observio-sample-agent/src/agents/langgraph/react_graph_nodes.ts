@@ -11,6 +11,7 @@ import { ToolExecutor } from './tool_executor';
 import { ModelConfigManager } from '../../config/model_config';
 import { getPrometheusMetricsEmitter } from '../../utils/metrics_emitter';
 import { LLMRequestLogger } from '../../utils/llm_request_logger';
+import { startLLMSpan, endLLMSpan } from '../../telemetry/spans';
 
 export class ReactGraphNodes {
   private logger: Logger;
@@ -163,7 +164,35 @@ export class ReactGraphNodes {
       // Capture start time for duration calculation
       const startTime = Date.now();
 
-      const processedResponse = await this.bedrockClient.makeRequest(request, streamingCallbacks);
+      // Start OTel LLM span (only when OTel context is available)
+      const llmSpanResult = state.otelContext
+        ? startLLMSpan(state.otelContext, {
+            modelId: request.modelId,
+            temperature: request.inferenceConfig?.temperature,
+            maxTokens: request.inferenceConfig?.maxTokens,
+            iteration: iterations + 1,
+            runId: runId,
+          })
+        : null;
+
+      let processedResponse;
+      try {
+        processedResponse = await this.bedrockClient.makeRequest(request, streamingCallbacks);
+        if (llmSpanResult) {
+          endLLMSpan(llmSpanResult.span, {
+            inputTokens: processedResponse.usage?.inputTokens,
+            outputTokens: processedResponse.usage?.outputTokens,
+            stopReason: processedResponse.stopReason,
+            promptMessages: bedrockMessages,
+            completionText: processedResponse.message.textContent,
+          });
+        }
+      } catch (err) {
+        if (llmSpanResult) {
+          endLLMSpan(llmSpanResult.span, { error: err as Error });
+        }
+        throw err;
+      }
 
       // Calculate duration
       const duration = Date.now() - startTime;
@@ -365,7 +394,8 @@ export class ReactGraphNodes {
         context: clientContext,
         threadId,
         runId,
-      }
+      },
+      state.otelContext
     );
 
     if (result.isClientTools) {

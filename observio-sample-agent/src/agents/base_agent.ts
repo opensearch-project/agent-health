@@ -38,6 +38,7 @@ export interface BaseAgent {
       runId?: string;
       requestId?: string;
       modelId?: string;
+      otelContext?: any;
     }
   ): Promise<void>;
 

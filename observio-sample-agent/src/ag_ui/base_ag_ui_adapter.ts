@@ -74,6 +74,7 @@ import { MCPServerConfig } from '../types/mcp_types';
 import { Logger } from '../utils/logger';
 import { AGUIAuditLogger } from '../utils/ag_ui_audit_logger';
 import { TextMessageManager } from './managers/text_message_manager';
+import { startAgentSpan } from '../telemetry/spans';
 
 export interface BaseAGUIConfig {
   port?: number;
@@ -226,6 +227,11 @@ export class BaseAGUIAdapter {
   ): Promise<void> {
     const agentType = this.agent.getAgentType();
 
+    // Start OTel root span for the agent invocation
+    const { span: agentSpan, ctx: agentCtx } = startAgentSpan(input.runId);
+    // Store the OTel context so downstream code (graph nodes) can create child spans
+    (input as any)._otelContext = agentCtx;
+
     // Emit run started event
     this.emitAndAuditEvent(
       {
@@ -283,6 +289,9 @@ export class BaseAGUIAdapter {
       // End audit logging for successful completion
       this.auditLogger?.endRequest(input.threadId, input.runId, 'success');
 
+      // End the OTel root span (success)
+      agentSpan.end();
+
       // Complete the stream
       observer.complete();
     } catch (error) {
@@ -310,6 +319,11 @@ export class BaseAGUIAdapter {
 
       // End audit logging for error
       this.auditLogger?.endRequest(input.threadId, input.runId, 'error', errorMessage);
+
+      // End the OTel root span (error)
+      const { SpanStatusCode } = require('@opentelemetry/api');
+      agentSpan.setStatus({ code: SpanStatusCode.ERROR, message: errorMessage });
+      agentSpan.end();
 
       // Complete the stream
       observer.complete();
@@ -617,6 +631,7 @@ export class BaseAGUIAdapter {
           runId: fullInput?.runId,
           requestId, // Pass request ID for logging correlation
           modelId: fullInput?.forwardedProps?.modelId, // Extract modelId from forwardedProps
+          otelContext: (fullInput as any)?._otelContext, // OTel context for child spans
         });
       } else {
         await this.agent.processMessageWithCallbacks(messages, callbacks);

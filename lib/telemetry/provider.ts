@@ -13,7 +13,7 @@
 
 import { trace, type Tracer } from '@opentelemetry/api';
 import { NodeTracerProvider, BatchSpanProcessor, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { EVAL_TRACER_NAME } from './constants.js';
 import { OpenSearchSpanExporter, type OpenSearchExporterConfig } from './opensearchExporter.js';
@@ -91,10 +91,22 @@ export function initEvalTracerProvider(config: EvalTelemetryConfig): void {
     'telemetry.sdk.language': 'nodejs',
   });
 
-  // Choose exporter: OpenSearch direct (preferred) or OTLP/HTTP (fallback)
+  // Choose exporter priority:
+  //   1. OTLP/HTTP when exporterEndpoint is explicitly configured (e.g., OSIS pipeline)
+  //   2. OpenSearch direct when observability data source is configured
+  //   3. OTLP/HTTP with default endpoint as last resort
   const spanProcessors = [];
+  const hasExplicitOtlpEndpoint = config.exporterEndpoint !== 'http://localhost:4318/v1/traces';
 
-  if (config.opensearch) {
+  if (hasExplicitOtlpEndpoint) {
+    // User explicitly configured an OTLP endpoint (e.g., OSIS pipeline) — prefer it
+    const otlpExporter = new OTLPTraceExporter({
+      url: config.exporterEndpoint,
+      headers: config.exporterHeaders,
+    });
+    spanProcessors.push(new BatchSpanProcessor(otlpExporter));
+    console.log(`[Telemetry] Evaluation telemetry enabled → OTLP (${config.exporterEndpoint})`);
+  } else if (config.opensearch) {
     const osExporter = new OpenSearchSpanExporter(config.opensearch);
     // Use SimpleSpanProcessor for immediate export (eval spans are infrequent)
     spanProcessors.push(new SimpleSpanProcessor(osExporter));

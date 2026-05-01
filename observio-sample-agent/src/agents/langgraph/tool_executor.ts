@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { type Context } from '@opentelemetry/api';
 import { Logger } from '../../utils/logger';
 import { BaseMCPClient } from '../../mcp';
 import { StreamingCallbacks } from '../base_agent';
 import { truncateToolResult } from '../../utils/truncate_tool_result';
 import { getPrometheusMetricsEmitter } from '../../utils/metrics_emitter';
 import { LLMRequestLogger } from '../../utils/llm_request_logger';
+import { startToolSpan, endToolSpan } from '../../telemetry/spans';
 
 export class ToolExecutor {
   private logger: Logger;
@@ -153,7 +155,8 @@ export class ToolExecutor {
       context?: any[];
       threadId?: string;
       runId?: string;
-    }
+    },
+    otelContext?: Context
   ): Promise<{
     toolResults: Record<string, any>;
     toolResultMessage?: any;
@@ -242,6 +245,11 @@ export class ToolExecutor {
 
       streamingCallbacks?.onToolUseStart?.(toolName, toolUseId, input);
 
+      // Start OTel tool span for this individual tool execution
+      const toolSpanResult = otelContext
+        ? startToolSpan(otelContext, toolName, { toolInput: input, runId: clientContext?.runId })
+        : null;
+
       try {
         // Pass client context along with tool execution
         const enhancedInput = {
@@ -278,6 +286,11 @@ export class ToolExecutor {
           true // success
         );
 
+        // End OTel tool span (success)
+        if (toolSpanResult) {
+          endToolSpan(toolSpanResult.span, result);
+        }
+
         streamingCallbacks?.onToolResult?.(toolName, toolUseId, result);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -288,6 +301,11 @@ export class ToolExecutor {
           error: errorMessage,
           input,
         });
+
+        // End OTel tool span (error)
+        if (toolSpanResult) {
+          endToolSpan(toolSpanResult.span, undefined, error as Error);
+        }
 
         streamingCallbacks?.onToolError?.(toolName, toolUseId, errorMessage);
         toolResults[toolUseId] = { error: errorMessage };

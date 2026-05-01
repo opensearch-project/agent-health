@@ -40,6 +40,7 @@ export interface ReactAgentState {
   threadId?: string; // Store thread identifier
   runId?: string; // Store run identifier
   modelId?: string; // Store model identifier from forwardedProps for dynamic model selection
+  otelContext?: any; // OTel context for span propagation through the graph
 }
 
 /**
@@ -162,6 +163,7 @@ export class ReactAgent implements BaseAgent {
       runId?: string;
       requestId?: string;
       modelId?: string;
+      otelContext?: any;
     }
   ): Promise<void> {
     try {
@@ -197,6 +199,7 @@ export class ReactAgent implements BaseAgent {
         threadId: additionalInputs?.threadId,
         runId: additionalInputs?.runId,
         modelId: additionalInputs?.modelId,
+        otelContext: additionalInputs?.otelContext,
       };
 
       // Run the graph - unique config per request for stateless operation

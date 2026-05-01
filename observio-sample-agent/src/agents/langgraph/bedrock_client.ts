@@ -27,6 +27,10 @@ export interface BedrockResponse {
   };
   toolCalls: any[];
   stopReason?: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+  };
 }
 
 export class BedrockClient {
@@ -209,6 +213,19 @@ export class BedrockClient {
             result.message.content.push(toolUseBlock);
             currentToolUseBlock = null;
           }
+        }
+
+        // Capture stop reason from messageStop event
+        if (chunk.messageStop?.stopReason) {
+          result.stopReason = chunk.messageStop.stopReason;
+        }
+
+        // Capture token usage from the metadata event
+        if (chunk.metadata?.usage) {
+          result.usage = {
+            inputTokens: chunk.metadata.usage.inputTokens,
+            outputTokens: chunk.metadata.usage.outputTokens,
+          };
         }
       }
     }

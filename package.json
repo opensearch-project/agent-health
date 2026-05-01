@@ -66,7 +66,7 @@
     "build:lib": "esbuild lib/index.ts lib/config/index.ts --bundle --platform=node --format=esm --outdir=lib/dist --packages=external",
     "build:all": "npm run build && npm run build:server && npm run build:cli && npm run build:lib",
     "start:observio": "cd observio-sample-agent && npm install --legacy-peer-deps --silent && npm run start:ag-ui",
-    "dev:all": "npm run start:observio & npm run dev:server",
+"dev:all": "npm run start:observio & npm run dev:server",
     "demo": "npm run build:all && node cli/dist/index.js",
     "prepublishOnly": "npm run build:all"
   },
@@ -78,6 +78,7 @@
     "@opensearch-project/opensearch": "^3.5.1",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.214.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.216.0",
     "@opentelemetry/resources": "^2.6.1",
     "@opentelemetry/sdk-trace-node": "^2.6.1",
     "@opentelemetry/semantic-conventions": "^1.38.0",
