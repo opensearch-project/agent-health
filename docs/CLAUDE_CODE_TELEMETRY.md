@@ -18,7 +18,7 @@ From CloudFormation stack outputs:
 ```bash
 aws cloudformation describe-stacks \
   --stack-name AgentHealthObservability \
-  --query "Stacks[0].Outputs[?OutputKey=='OTLPProxyApiEndpoint'].OutputValue" \
+  --query "Stacks[0].Outputs[?OutputKey=='OTLPIngestEndpoint'].OutputValue" \
   --output text
 ```
 

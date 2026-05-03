@@ -100,10 +100,12 @@ function getApiGatewayUrl(stackName: string, region?: string, profile?: string):
   const outputs: Array<{ OutputKey: string; OutputValue: string }> = stacks[0].Outputs || [];
   const outputMap = new Map(outputs.map(o => [o.OutputKey, o.OutputValue]));
 
-  const apiUrl = outputMap.get('OTLPProxyApiEndpoint');
+  // Try both output key names — newer stacks use OTLPProxyApiEndpoint,
+  // existing stacks use OTLPIngestEndpoint for the same API Gateway URL
+  const apiUrl = outputMap.get('OTLPProxyApiEndpoint') || outputMap.get('OTLPIngestEndpoint');
   if (!apiUrl) {
     const available = outputs.map(o => o.OutputKey).join(', ');
-    throw new Error(`Stack '${stackName}' has no OTLPProxyApiEndpoint output.\n    Available outputs: ${available}\n    Make sure the stack includes the API Gateway OTLP proxy.`);
+    throw new Error(`Stack '${stackName}' has no OTLP endpoint output.\n    Available outputs: ${available}\n    Make sure the stack includes the API Gateway OTLP proxy.`);
   }
 
   return apiUrl;
