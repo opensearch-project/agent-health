@@ -13,6 +13,9 @@ import { getSpanCategory } from './spanCategorization';
 // Re-export trace grouping utilities
 export { groupSpansByTrace, getSpansForTrace } from './traceGrouping';
 
+// Re-export message extraction
+export { extractMessagesFromSpans } from './messageExtraction';
+
 /**
  * Get API base URL dynamically
  * Server-side (Node.js): Use localhost with PORT env var
@@ -67,12 +70,19 @@ export async function fetchTracesByRunIds(runIds: string[]): Promise<TraceSearch
  */
 export async function fetchRecentTraces(options: {
   minutesAgo?: number;
+  sessionId?: string;
   serviceName?: string;
   textSearch?: string;
   size?: number;
   cursor?: string;
 }): Promise<TraceSearchResult> {
-  const { minutesAgo = 5, serviceName, textSearch, size = 100, cursor } = options;
+  const { minutesAgo = 5, sessionId, serviceName, textSearch, size = 100, cursor } = options;
+
+  // Session queries don't need a time range — fetch all spans for the session
+  if (sessionId) {
+    return fetchTraces({ sessionId, serviceName, textSearch, size, cursor });
+  }
+
   const now = Date.now();
   const startTime = now - (minutesAgo * 60 * 1000);
 
@@ -84,6 +94,13 @@ export async function fetchRecentTraces(options: {
     size,
     cursor,
   });
+}
+
+/**
+ * Fetch all traces for a Claude Code session by session ID
+ */
+export async function fetchTracesBySessionId(sessionId: string): Promise<TraceSearchResult> {
+  return fetchTraces({ sessionId, size: 1000 });
 }
 
 /**

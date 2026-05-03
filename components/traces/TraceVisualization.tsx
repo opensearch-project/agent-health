@@ -21,6 +21,7 @@ import AgentMapView from './AgentMapView';
 import SpanDetailsPanel from './SpanDetailsPanel';
 import TraceInfoView from './TraceInfoView';
 import TraceStatsView from './TraceStatsView';
+import MessageHistoryView from './MessageHistoryView';
 
 interface TraceVisualizationProps {
   spanTree: Span[];
@@ -40,6 +41,10 @@ interface TraceVisualizationProps {
   onToggleExpand?: (spanId: string) => void;
   /** Optional Run ID to display in info view */
   runId?: string;
+  /** Flat spans for message extraction (messages view) */
+  flatSpans?: Span[];
+  /** Service name for message extraction heuristics */
+  serviceName?: string;
 }
 
 const TraceVisualization: React.FC<TraceVisualizationProps> = ({
@@ -55,6 +60,8 @@ const TraceVisualization: React.FC<TraceVisualizationProps> = ({
   expandedSpans: externalExpandedSpans,
   onToggleExpand: externalOnToggleExpand,
   runId,
+  flatSpans,
+  serviceName,
 }) => {
   // Internal state for view mode
   const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
@@ -187,7 +194,9 @@ const TraceVisualization: React.FC<TraceVisualizationProps> = ({
 
       {/* View Content */}
       <div className="flex-1 overflow-hidden">
-        {viewMode === 'info' ? (
+        {viewMode === 'messages' ? (
+          <MessageHistoryView spans={flatSpans || spanTree} serviceName={serviceName} />
+        ) : viewMode === 'info' ? (
           /* Info view - trace overview and statistics */
           <div className="h-full w-full overflow-auto">
             <TraceInfoView spanTree={spanTree} runId={runId} />

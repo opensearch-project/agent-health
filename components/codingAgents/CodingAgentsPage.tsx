@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import SessionTracesView from './SessionTracesView';
 
 const AGENT_COLORS: Record<string, string> = {
   'claude-code': '#f97316',
@@ -986,78 +987,91 @@ function SessionDetailPanel({ session, onClose }: { session: Session; onClose: (
           <div><span className="text-muted-foreground">Tokens:</span> {formatTokens(session.input_tokens + session.output_tokens)}</div>
         </div>
 
-        {loading ? (
-          <TabSkeleton label="Loading conversation..." cards={3} />
-        ) : detail?.messages && detail.messages.length > 0 ? (
-          <>
-            {/* Search & filter for conversation */}
-            <div className="flex items-center gap-2 mb-3 sticky top-[73px] bg-background py-2 z-10">
-              <div className="relative flex-1">
-                <input
-                  className="border rounded px-3 py-1.5 text-sm w-full bg-background pr-20"
-                  placeholder="Search messages..."
-                  value={msgSearch}
-                  onChange={e => setMsgSearch(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && matchPositions.length > 0) {
-                      goToMatch(e.shiftKey ? -1 : 1);
-                      e.preventDefault();
-                    }
-                  }}
-                />
-                {msgSearch && matchPositions.length > 0 && (
-                  <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
-                    <span className="text-[10px] text-muted-foreground tabular-nums mr-1">
-                      {activeMatchIdx + 1}/{matchPositions.length}
-                    </span>
-                    <button onClick={() => goToMatch(-1)} className="text-muted-foreground hover:text-foreground p-0.5 text-xs" title="Previous match (Shift+Enter)">&#x25B2;</button>
-                    <button onClick={() => goToMatch(1)} className="text-muted-foreground hover:text-foreground p-0.5 text-xs" title="Next match (Enter)">&#x25BC;</button>
+        <Tabs defaultValue="messages">
+          <TabsList className="mb-3">
+            <TabsTrigger value="messages">Messages</TabsTrigger>
+            <TabsTrigger value="traces">Traces</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="messages">
+            {loading ? (
+              <TabSkeleton label="Loading conversation..." cards={3} />
+            ) : detail?.messages && detail.messages.length > 0 ? (
+              <>
+                {/* Search & filter for conversation */}
+                <div className="flex items-center gap-2 mb-3 sticky top-[73px] bg-background py-2 z-10">
+                  <div className="relative flex-1">
+                    <input
+                      className="border rounded px-3 py-1.5 text-sm w-full bg-background pr-20"
+                      placeholder="Search messages..."
+                      value={msgSearch}
+                      onChange={e => setMsgSearch(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && matchPositions.length > 0) {
+                          goToMatch(e.shiftKey ? -1 : 1);
+                          e.preventDefault();
+                        }
+                      }}
+                    />
+                    {msgSearch && matchPositions.length > 0 && (
+                      <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+                        <span className="text-[10px] text-muted-foreground tabular-nums mr-1">
+                          {activeMatchIdx + 1}/{matchPositions.length}
+                        </span>
+                        <button onClick={() => goToMatch(-1)} className="text-muted-foreground hover:text-foreground p-0.5 text-xs" title="Previous match (Shift+Enter)">&#x25B2;</button>
+                        <button onClick={() => goToMatch(1)} className="text-muted-foreground hover:text-foreground p-0.5 text-xs" title="Next match (Enter)">&#x25BC;</button>
+                      </div>
+                    )}
+                    {msgSearch && matchPositions.length === 0 && (
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">No matches</span>
+                    )}
                   </div>
-                )}
-                {msgSearch && matchPositions.length === 0 && (
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">No matches</span>
-                )}
-              </div>
-              <Select value={roleFilter} onValueChange={setRoleFilter}>
-                <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Roles</SelectItem>
-                  <SelectItem value="user">User</SelectItem>
-                  <SelectItem value="assistant">Assistant</SelectItem>
-                  <SelectItem value="tool_result">Tool Result</SelectItem>
-                </SelectContent>
-              </Select>
-              <span className="text-xs text-muted-foreground whitespace-nowrap">
-                {filteredMessages.length}/{detail.messages.length}
-              </span>
-            </div>
-            <div className="space-y-2">
-              {filteredMessages.map((msg, i) => (
-                <div key={i} className={`rounded-md p-3 text-sm ${
-                  msg.role === 'user' ? 'bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800' :
-                  msg.role === 'tool_result' ? `border ${msg.isError ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800' : 'bg-gray-50 dark:bg-gray-900/30 border-gray-200 dark:border-gray-700'}` :
-                  'bg-muted/50 border border-border'
-                }`}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-medium text-muted-foreground uppercase">{msg.role}</span>
-                    {msg.toolName && <Badge variant="secondary" className="text-xs">{msg.toolName}</Badge>}
-                    {msg.timestamp && <span className="text-xs text-muted-foreground ml-auto">{new Date(msg.timestamp).toLocaleTimeString()}</span>}
-                  </div>
-                  <pre className="whitespace-pre-wrap text-xs font-mono break-all">{highlightText(msg.text, msgMatchStart[i] ?? 0)}</pre>
+                  <Select value={roleFilter} onValueChange={setRoleFilter}>
+                    <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Roles</SelectItem>
+                      <SelectItem value="user">User</SelectItem>
+                      <SelectItem value="assistant">Assistant</SelectItem>
+                      <SelectItem value="tool_result">Tool Result</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {filteredMessages.length}/{detail.messages.length}
+                  </span>
                 </div>
-              ))}
-              {filteredMessages.length === 0 && (
-                <p className="text-sm text-muted-foreground text-center py-4">No messages match your search.</p>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className="text-center py-8">
-            <div className="text-2xl mb-2 opacity-20">[...]</div>
-            <p className="text-sm text-muted-foreground">No conversation data available</p>
-            <p className="text-xs text-muted-foreground/70 mt-1">The session JSONL file may have been removed or is in an unsupported format.</p>
-          </div>
-        )}
+                <div className="space-y-2">
+                  {filteredMessages.map((msg, i) => (
+                    <div key={i} className={`rounded-md p-3 text-sm ${
+                      msg.role === 'user' ? 'bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800' :
+                      msg.role === 'tool_result' ? `border ${msg.isError ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800' : 'bg-gray-50 dark:bg-gray-900/30 border-gray-200 dark:border-gray-700'}` :
+                      'bg-muted/50 border border-border'
+                    }`}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-medium text-muted-foreground uppercase">{msg.role}</span>
+                        {msg.toolName && <Badge variant="secondary" className="text-xs">{msg.toolName}</Badge>}
+                        {msg.timestamp && <span className="text-xs text-muted-foreground ml-auto">{new Date(msg.timestamp).toLocaleTimeString()}</span>}
+                      </div>
+                      <pre className="whitespace-pre-wrap text-xs font-mono break-all">{highlightText(msg.text, msgMatchStart[i] ?? 0)}</pre>
+                    </div>
+                  ))}
+                  {filteredMessages.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-4">No messages match your search.</p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-center py-8">
+                <div className="text-2xl mb-2 opacity-20">[...]</div>
+                <p className="text-sm text-muted-foreground">No conversation data available</p>
+                <p className="text-xs text-muted-foreground/70 mt-1">The session JSONL file may have been removed or is in an unsupported format.</p>
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="traces">
+            <SessionTracesView sessionId={session.session_id} />
+          </TabsContent>
+        </Tabs>
       </div>
       </div>{/* flex-1 */}
     </div>{/* panel */}

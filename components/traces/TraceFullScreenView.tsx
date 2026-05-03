@@ -11,7 +11,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, Minimize2, Network, List, GitBranch, Info } from 'lucide-react';
+import { Activity, Minimize2, Network, List, GitBranch, Info, MessageSquare } from 'lucide-react';
 import {
   FullScreenDialog,
   FullScreenDialogContent,
@@ -52,6 +52,10 @@ interface TraceFullScreenViewProps {
   expandedSpans?: Set<string>;
   /** Callback when expanded spans change */
   onToggleExpand?: (spanId: string) => void;
+  /** Flat spans for message extraction */
+  flatSpans?: Span[];
+  /** Service name for message extraction heuristics */
+  serviceName?: string;
 }
 
 export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
@@ -68,6 +72,8 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
   spanCount,
   expandedSpans: controlledExpandedSpans,
   onToggleExpand: controlledOnToggleExpand,
+  flatSpans,
+  serviceName,
 }) => {
   // Internal state for uncontrolled mode
   const [internalSelectedSpan, setInternalSelectedSpan] = useState<Span | null>(null);
@@ -195,6 +201,15 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
                 <Info size={14} className="mr-1.5" />
                 Info
               </Button>
+              <Button
+                variant={viewMode === 'messages' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-7 px-3 text-xs"
+                onClick={() => handleViewModeChange('messages')}
+              >
+                <MessageSquare size={14} className="mr-1.5" />
+                Messages
+              </Button>
             </div>
             
             <Button
@@ -229,6 +244,8 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
               expandedSpans={expandedSpans}
               onToggleExpand={handleToggleExpand}
               showSpanDetailsPanel={true}
+              flatSpans={flatSpans}
+              serviceName={serviceName}
             />
           )}
         </div>

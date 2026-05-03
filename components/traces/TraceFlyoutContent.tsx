@@ -50,6 +50,7 @@ import ViewToggle, { ViewMode } from './ViewToggle';
 import TraceFullScreenView from './TraceFullScreenView';
 import { SpanInputOutput } from './SpanInputOutput';
 import SpanDetailsPanel from './SpanDetailsPanel';
+import MessageHistoryView from './MessageHistoryView';
 import {
   flattenSpans,
   calculateCategoryStats,
@@ -686,6 +687,15 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
               <List size={14} className="mr-1.5" />
               Timeline
             </Button>
+            <Button
+              variant={viewMode === 'messages' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-7 px-3 text-xs"
+              onClick={() => setViewMode('messages')}
+            >
+              <MessageSquare size={14} className="mr-1.5" />
+              Messages
+            </Button>
             {/* Info tab hidden - keep code for potential future use
             <Button
               variant={viewMode === 'stats' ? 'default' : 'ghost'}
@@ -702,18 +712,22 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
         
         {/* Visualization Content */}
         <div className="flex-1 overflow-hidden">
-          <TraceVisualization
-            spanTree={spanTree}
-            timeRange={timeRange}
-            initialViewMode={viewMode}
-            onViewModeChange={setViewMode}
-            showViewToggle={false}
-            selectedSpan={selectedSpan}
-            onSelectSpan={setSelectedSpan}
-            expandedSpans={expandedSpans}
-            onToggleExpand={handleToggleExpand}
-            showSpanDetailsPanel={true}
-          />
+          {viewMode === 'messages' ? (
+            <MessageHistoryView spans={trace.spans} serviceName={trace.serviceName} />
+          ) : (
+            <TraceVisualization
+              spanTree={spanTree}
+              timeRange={timeRange}
+              initialViewMode={viewMode}
+              onViewModeChange={setViewMode}
+              showViewToggle={false}
+              selectedSpan={selectedSpan}
+              onSelectSpan={setSelectedSpan}
+              expandedSpans={expandedSpans}
+              onToggleExpand={handleToggleExpand}
+              showSpanDetailsPanel={true}
+            />
+          )}
         </div>
       </div>
 
@@ -727,6 +741,8 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
         timeRange={timeRange}
         selectedSpan={selectedSpan}
         onSelectSpan={setSelectedSpan}
+        flatSpans={trace.spans}
+        serviceName={trace.serviceName}
         initialViewMode={viewMode}
         onViewModeChange={setViewMode}
         spanCount={trace.spanCount}

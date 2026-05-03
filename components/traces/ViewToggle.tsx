@@ -14,7 +14,7 @@ import { Info, Network, GitBranch, List } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-export type ViewMode = 'info' | 'timeline' | 'tree' | 'flow' | 'gantt' | 'agent-map' | 'stats';
+export type ViewMode = 'info' | 'timeline' | 'tree' | 'flow' | 'gantt' | 'agent-map' | 'stats' | 'messages';
 
 interface ViewToggleProps {
   viewMode: ViewMode;
