@@ -31,6 +31,7 @@ import {
   createRemoteCommand,
   createConfigureCommand,
   createKillCommand,
+  createSetupTelemetryCommand,
 } from './commands/index.js';
 
 // Get package.json for version
@@ -146,6 +147,8 @@ ${chalk.cyan.bold('Remote Servers:')}
 
 ${chalk.cyan.bold('Infrastructure:')}
   ${chalk.yellow('agent-health configure')} ${chalk.gray('--from-stack <name>')}  Import config from a CloudFormation stack
+  ${chalk.yellow('agent-health setup-telemetry')}            Configure Claude Code → Agent Health telemetry
+  ${chalk.yellow('agent-health setup-telemetry')} ${chalk.gray('--status')}  Check current telemetry status
 
 ${chalk.cyan.bold('Maintenance:')}
   ${chalk.yellow('agent-health migrate')}                Migrate legacy benchmark data to current format
@@ -238,6 +241,7 @@ program.addCommand(createCompareServicesCommand());
 program.addCommand(createRemoteCommand());
 program.addCommand(createConfigureCommand());
 program.addCommand(createKillCommand());
+program.addCommand(createSetupTelemetryCommand());
 
 // Add serve command as an alias for the default action
 program
