@@ -83,7 +83,7 @@ export OTEL_LOG_TOOL_CONTENT=1
 
 Every span includes `service.name: claude-code`, `session.id`, `user.account_uuid`, and `organization.id`. LLM request spans add `model`, `input_tokens`, `output_tokens`, `cost_usd`, `duration_ms`. Tool spans add `tool_name`, `result_tokens`.
 
-See the [Claude Code monitoring docs](https://docs.anthropic.com/en/docs/claude-code/monitoring) for the full attribute reference.
+See the [Claude Code monitoring docs](https://code.claude.com/docs/en/monitoring-usage) for the full attribute reference.
 
 ## Verification
 

@@ -598,7 +598,7 @@ function startTracePollingForReportWithModule(report: EvaluationReport, testCase
             report.runId,
             undefined, // startTime
             undefined, // endTime
-            agentTraceId
+            spans[0]?.traceId
           );
 
           // Update parent benchmark run stats now that this report is complete
