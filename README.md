@@ -150,6 +150,9 @@ A unified dashboard for monitoring AI coding agent usage across **Claude Code**,
 |-----------|----------|-------------|
 | `agui-streaming` | AG-UI SSE | ML-Commons agents (default) |
 | `rest` | HTTP POST | Non-streaming REST APIs |
+| `openai-compatible` | OpenAI Chat | LiteLLM, Ollama, vLLM |
+| `strands` | Bedrock Agent Runtime | Amazon Strands agents (server-only) |
+| `langgraph` | LangGraph REST | Non-AG-UI LangGraph instances |
 | `subprocess` | CLI | Command-line tools |
 | `claude-code` | Claude CLI | Claude Code agent comparison |
 | `mock` | In-memory | Demo and testing |
@@ -200,7 +203,7 @@ export default {
       key: "my-agent",
       name: "My Agent",
       endpoint: "http://localhost:8000/agent",
-      connectorType: "rest",  // or "agui-streaming", "subprocess"
+      connectorType: "rest",  // or "agui-streaming", "langgraph", "strands", "subprocess"
       models: ["claude-sonnet-4"],
       useTraces: true,        // Enable OpenTelemetry trace collection
     }

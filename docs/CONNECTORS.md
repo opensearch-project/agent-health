@@ -13,13 +13,16 @@ Connectors are protocol adapters that handle communication with different types 
 
 ## Built-in Connectors
 
-| Type | Protocol | Use Case |
-|------|----------|----------|
-| `agui-streaming` | AG-UI SSE | ML-Commons agents (default) |
-| `rest` | HTTP POST | Non-streaming REST APIs |
-| `subprocess` | CLI stdin/stdout | Command-line tools |
-| `claude-code` | Claude Code CLI | Claude Code agent comparison |
-| `mock` | In-memory | Demo and testing |
+| Type | Protocol | Use Case | Browser-safe |
+|------|----------|----------|:---:|
+| `agui-streaming` | AG-UI SSE | ML-Commons agents (default) | Yes |
+| `rest` | HTTP POST | Non-streaming REST APIs | Yes |
+| `openai-compatible` | OpenAI Chat Completions | LiteLLM, Ollama, vLLM | Yes |
+| `langgraph` | LangGraph REST `/invoke` | Non-AG-UI LangGraph instances | Yes |
+| `strands` | Bedrock Agent Runtime | Amazon Strands agents (requires AWS SDK) | No |
+| `subprocess` | CLI stdin/stdout | Command-line tools | No |
+| `claude-code` | Claude Code CLI | Claude Code agent comparison | No |
+| `mock` | In-memory | Demo and testing | Yes |
 
 ## Creating a Custom Connector
 
@@ -281,11 +284,14 @@ Some connectors require Node.js APIs (like `child_process`) and cannot run in th
 **Browser-safe connectors** (in `services/connectors/index.ts`):
 - `agui-streaming`
 - `rest`
+- `openai-compatible`
+- `langgraph`
 - `mock`
 
 **Server-only connectors** (in `services/connectors/server.ts`):
 - `subprocess`
 - `claude-code`
+- `strands` (requires `@aws-sdk/client-bedrock-agent-runtime`)
 
 If your connector needs Node.js APIs, export it from `server.ts` only.
 
