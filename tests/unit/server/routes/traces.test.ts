@@ -14,11 +14,15 @@ import {
   isSampleTraceId,
 } from '@/cli/demo/sampleTraces';
 
-// Mock the traces service
-jest.mock('@/server/services/tracesService', () => ({
-  fetchTraces: jest.fn(),
-  checkTracesHealth: jest.fn(),
-}));
+// Mock the traces service (keep classifyOpenSearchError as real implementation)
+jest.mock('@/server/services/tracesService', () => {
+  const actual = jest.requireActual('@/server/services/tracesService');
+  return {
+    fetchTraces: jest.fn(),
+    checkTracesHealth: jest.fn(),
+    classifyOpenSearchError: actual.classifyOpenSearchError,
+  };
+});
 
 // Mock the client factory
 jest.mock('@/server/services/opensearchClientFactory', () => ({
@@ -234,6 +238,8 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         warning: 'Observability data source not configured',
+        warningCategory: 'not_configured',
+        suggestion: 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.',
       });
     });
 
@@ -253,6 +259,8 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         warning: 'Connection failed',
+        warningCategory: 'unknown',
+        suggestion: 'Check the server logs for more details.',
       });
     });
 
@@ -283,6 +291,8 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         warning: undefined,
+        warningCategory: undefined,
+        suggestion: undefined,
       });
     });
 
@@ -300,6 +310,8 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         warning: 'index_not_found_exception',
+        warningCategory: 'unknown',
+        suggestion: 'Check the server logs for more details.',
       });
     });
 
@@ -327,6 +339,8 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         warning: 'Observability data source not configured',
+        warningCategory: 'not_configured',
+        suggestion: 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.',
       });
     });
 
@@ -353,6 +367,8 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         warning: 'Observability data source not configured',
+        warningCategory: 'not_configured',
+        suggestion: 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.',
       });
     });
 
@@ -379,6 +395,8 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         warning: 'Observability data source not configured',
+        warningCategory: 'not_configured',
+        suggestion: 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.',
       });
     });
 

@@ -348,6 +348,8 @@ export const AgentTracesPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCategory, setErrorCategory] = useState<string | null>(null);
+  const [errorSuggestion, setErrorSuggestion] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   // Pagination state (server-side cursor)
@@ -499,6 +501,8 @@ export const AgentTracesPage: React.FC = () => {
     setIsLoading(true);
     setCursor(null);
     setError(null);
+    setErrorCategory(null);
+    setErrorSuggestion(null);
 
     try {
       const result = await fetchRecentTraces({
@@ -509,7 +513,9 @@ export const AgentTracesPage: React.FC = () => {
       });
 
       if (result.warning) {
-        setError(`Trace query warning: ${result.warning}`);
+        setError(result.warning);
+        setErrorCategory(result.warningCategory || null);
+        setErrorSuggestion(result.suggestion || null);
       }
 
       setSpans(result.spans);
@@ -1300,9 +1306,19 @@ export const AgentTracesPage: React.FC = () => {
       {/* Error State */}
       {error && (
         <div className="px-6 pt-2">
-          <Card className="bg-red-50 dark:bg-red-500/10 border-red-300 dark:border-red-500/30">
-            <CardContent className="p-4 text-sm text-red-700 dark:text-red-400">
-              {error}
+          <Card className={errorCategory === 'auth'
+            ? "bg-amber-50 dark:bg-amber-500/10 border-amber-300 dark:border-amber-500/30"
+            : "bg-red-50 dark:bg-red-500/10 border-red-300 dark:border-red-500/30"
+          }>
+            <CardContent className={`p-4 text-sm ${
+              errorCategory === 'auth'
+                ? 'text-amber-700 dark:text-amber-400'
+                : 'text-red-700 dark:text-red-400'
+            }`}>
+              <p className="font-medium">{error}</p>
+              {errorSuggestion && (
+                <p className="mt-1 opacity-80 font-mono text-xs">{errorSuggestion}</p>
+              )}
             </CardContent>
           </Card>
         </div>

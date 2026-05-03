@@ -349,7 +349,9 @@ describe('tracesService', () => {
       const result = await checkTracesHealth(client);
 
       expect(result.status).toBe('error');
-      expect(result.error).toBe('Connection refused');
+      expect(result.error).toBe('Cannot connect to OpenSearch: Connection refused');
+      expect(result.errorCategory).toBe('connection');
+      expect(result.suggestion).toBeDefined();
     });
 
     it('should use default index pattern when not provided', async () => {

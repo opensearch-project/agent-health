@@ -11,7 +11,7 @@
  */
 
 import { Request, Response, Router } from 'express';
-import { fetchTraces, checkTracesHealth } from '../services/tracesService.js';
+import { fetchTraces, checkTracesHealth, classifyOpenSearchError } from '../services/tracesService.js';
 import {
   getSampleSpansForRunIds,
   getSampleSpansByTraceId,
@@ -30,11 +30,11 @@ const router = Router();
  */
 router.post('/api/traces', async (req: Request, res: Response) => {
   try {
-    const { traceId, runIds, startTime, endTime, size = 100, serviceName, textSearch, cursor } = req.body;
+    const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor } = req.body;
 
     // Validate request - allow time range queries for live tailing
     const hasTimeRange = startTime || endTime;
-    const hasIdFilter = traceId || (runIds && runIds.length > 0);
+    const hasIdFilter = traceId || (runIds && runIds.length > 0) || sessionId;
 
     if (!hasIdFilter && !hasTimeRange) {
       return res.status(400).json({
@@ -54,18 +54,20 @@ router.post('/api/traces', async (req: Request, res: Response) => {
     // 2. Query live OpenSearch traces (independent of sample logic)
     let realSpans: Span[] = [];
     let warning: string | undefined;
+    let warningCategory: string | undefined;
+    let suggestion: string | undefined;
     let nextCursor: string | null = null;
     let hasMore: boolean = false;
     const config = resolveObservabilityConfig(req);
 
-    if (config && (traceId || (runIds && runIds.length > 0) || startTime || endTime)) {
+    if (config && (traceId || (runIds && runIds.length > 0) || sessionId || startTime || endTime)) {
       let client;
       try {
         client = createOpenSearchClient(config);
         const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
 
         const result = await fetchTraces(
-          { traceId, runIds, startTime, endTime, size, serviceName, textSearch, cursor },
+          { traceId, runIds, sessionId, startTime, endTime, size, serviceName, textSearch, cursor },
           client,
           indexPattern
         );
@@ -74,8 +76,11 @@ router.post('/api/traces', async (req: Request, res: Response) => {
         nextCursor = result.nextCursor || null;
         hasMore = result.hasMore || false;
       } catch (e: any) {
-        console.warn('[TracesAPI] OpenSearch query failed:', e.message);
-        warning = e.message;
+        const classified = classifyOpenSearchError(e);
+        console.warn(`[TracesAPI] OpenSearch query failed (${classified.category}):`, classified.message);
+        warning = classified.message;
+        warningCategory = classified.category;
+        suggestion = classified.suggestion;
       } finally {
         if (client) {
           await client.close().catch(() => {});
@@ -103,6 +108,8 @@ router.post('/api/traces', async (req: Request, res: Response) => {
         }
       }
       warning = 'Observability data source not configured';
+      warningCategory = 'not_configured';
+      suggestion = 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.';
     }
 
     // Merge: sample spans first, then real spans
@@ -113,7 +120,9 @@ router.post('/api/traces', async (req: Request, res: Response) => {
       total: allSpans.length,
       nextCursor,
       hasMore,
-      warning
+      warning,
+      warningCategory,
+      suggestion,
     });
 
   } catch (error: any) {

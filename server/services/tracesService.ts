@@ -57,6 +57,7 @@ export interface NormalizedSpan {
 export interface TracesQueryOptions {
   traceId?: string;
   runIds?: string[];
+  sessionId?: string;  // Claude Code session.id — fetches all traces in a session
   startTime?: number;
   endTime?: number;
   size?: number;
@@ -72,10 +73,52 @@ export interface TracesResponse {
   hasMore?: boolean; // Whether more results are available
 }
 
+export type ErrorCategory = 'auth' | 'connection' | 'index_not_found' | 'unknown';
+
 export interface HealthStatus {
   status: 'ok' | 'error';
   error?: string;
+  errorCategory?: ErrorCategory;
+  suggestion?: string;
   index?: string;
+}
+
+/**
+ * Classify an OpenSearch client error into a user-friendly category with actionable suggestion.
+ */
+export function classifyOpenSearchError(error: any): { category: ErrorCategory; message: string; suggestion: string } {
+  const statusCode = error.meta?.statusCode;
+  const message = error.message || 'Unknown error';
+
+  if (statusCode === 401 || statusCode === 403) {
+    return {
+      category: 'auth',
+      message: `Authentication failed (HTTP ${statusCode})`,
+      suggestion: 'AWS credentials may be expired or invalid. Run `aws sts get-caller-identity` to verify, then refresh with `aws sso login` or update your credentials.',
+    };
+  }
+
+  if (statusCode === 404) {
+    return {
+      category: 'index_not_found',
+      message: 'Trace index not found',
+      suggestion: 'The OpenSearch traces index does not exist yet. Ensure your agents are configured to emit OpenTelemetry spans.',
+    };
+  }
+
+  if (message.includes('ECONNREFUSED') || message.includes('ENOTFOUND') || message.includes('getaddrinfo') || message.includes('Connection refused')) {
+    return {
+      category: 'connection',
+      message: `Cannot connect to OpenSearch: ${message}`,
+      suggestion: 'Check that the OpenSearch endpoint is correct and the cluster is reachable from your network.',
+    };
+  }
+
+  return {
+    category: 'unknown',
+    message,
+    suggestion: 'Check the server logs for more details.',
+  };
 }
 
 // ============================================================================
@@ -167,14 +210,14 @@ export async function fetchTraces(
   client: Client,
   indexPattern: string = 'otel-v1-apm-span-*'
 ): Promise<TracesResponse> {
-  const { traceId, runIds, startTime, endTime, size = 100, serviceName, textSearch, cursor } = options;
+  const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor } = options;
 
   // For live tailing, we allow queries with just time range + optional filters
   const hasTimeRange = startTime || endTime;
-  const hasIdFilter = traceId || (runIds && runIds.length > 0);
+  const hasIdFilter = traceId || (runIds && runIds.length > 0) || sessionId;
 
   if (!hasIdFilter && !hasTimeRange) {
-    throw new Error('Either traceId, runIds, or time range is required');
+    throw new Error('Either traceId, runIds, sessionId, or time range is required');
   }
 
   debug('TracesService', 'Fetching traces:', { traceId, runIds: runIds?.length, serviceName, textSearch, size, cursor: cursor ? 'present' : 'none' });
@@ -190,6 +233,10 @@ export async function fetchTraces(
     must.push({
       terms: { 'span.attributes.gen_ai@request@id': runIds }
     });
+  }
+
+  if (sessionId) {
+    must.push({ term: { 'span.attributes.session@id': sessionId } });
   }
 
   if (startTime || endTime) {
@@ -292,6 +339,12 @@ export async function checkTracesHealth(
       return { status: 'error', index: indexPattern };
     }
   } catch (error: any) {
-    return { status: 'error', error: error.message };
+    const classified = classifyOpenSearchError(error);
+    return {
+      status: 'error',
+      error: classified.message,
+      errorCategory: classified.category,
+      suggestion: classified.suggestion,
+    };
   }
 }

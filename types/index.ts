@@ -369,6 +369,7 @@ export interface TimeRange {
 export interface TraceQueryParams {
   traceId?: string;
   runIds?: string[];
+  sessionId?: string;  // Claude Code session.id — fetches all traces in a session
   startTime?: number;  // Unix timestamp ms
   endTime?: number;    // Unix timestamp ms
   size?: number;
@@ -377,10 +378,28 @@ export interface TraceQueryParams {
   cursor?: string; // For pagination
 }
 
+export interface ConversationMessage {
+  id: string;
+  timestamp: string;
+  role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'system';
+  content: string;
+  metadata?: {
+    spanId?: string;
+    spanName?: string;
+    toolName?: string;
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    durationMs?: number;
+  };
+}
+
 export interface TraceSearchResult {
   spans: Span[];
   total: number;
   warning?: string;
+  warningCategory?: 'auth' | 'connection' | 'index_not_found' | 'not_configured' | 'unknown';
+  suggestion?: string;
   nextCursor?: string | null;
   hasMore?: boolean;
 }
@@ -844,6 +863,8 @@ export interface LogsResponse {
 export interface HealthStatus {
   status: 'ok' | 'error' | 'not_configured';
   error?: string;
+  errorCategory?: 'auth' | 'connection' | 'index_not_found' | 'unknown';
+  suggestion?: string;
   index?: string;
   cluster?: any;
 }

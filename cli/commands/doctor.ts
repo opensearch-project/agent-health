@@ -73,9 +73,9 @@ function checkEnvFile(): CheckResult {
 }
 
 /**
- * Check AWS credentials
+ * Check AWS credentials (validates they are not expired)
  */
-function checkAWSCredentials(): CheckResult {
+async function checkAWSCredentials(): Promise<CheckResult> {
   const profile = process.env.AWS_PROFILE;
   const accessKey = process.env.AWS_ACCESS_KEY_ID;
   const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
@@ -92,24 +92,55 @@ function checkAWSCredentials(): CheckResult {
     details.push(`AWS_REGION: ${region}`);
   }
 
-  if (profile || accessKey) {
+  if (!profile && !accessKey) {
     return {
       name: 'AWS Credentials',
-      status: 'ok',
-      message: profile ? `Profile: ${profile}` : 'Using access key',
-      details: details.length > 0 ? details : undefined,
+      status: 'warning',
+      message: 'No AWS credentials detected',
+      details: [
+        'Set AWS_PROFILE or AWS_ACCESS_KEY_ID for Bedrock judge',
+        'Claude Code connector also requires AWS credentials',
+      ],
     };
   }
 
-  return {
-    name: 'AWS Credentials',
-    status: 'warning',
-    message: 'No AWS credentials detected',
-    details: [
-      'Set AWS_PROFILE or AWS_ACCESS_KEY_ID for Bedrock judge',
-      'Claude Code connector also requires AWS credentials',
-    ],
-  };
+  // Validate credentials are not expired
+  try {
+    const { fromNodeProviderChain } = await import('@aws-sdk/credential-providers');
+    const provider = fromNodeProviderChain({
+      ...(profile && { profile }),
+    });
+    const creds = await provider();
+    if (creds.expiration && creds.expiration.getTime() < Date.now()) {
+      return {
+        name: 'AWS Credentials',
+        status: 'error',
+        message: 'AWS credentials are expired',
+        details: [
+          ...details,
+          `Expired: ${creds.expiration.toISOString()}`,
+          profile ? `Run: aws sso login --profile ${profile}` : 'Refresh your AWS credentials',
+        ],
+      };
+    }
+    return {
+      name: 'AWS Credentials',
+      status: 'ok',
+      message: profile ? `Profile: ${profile} (validated)` : 'Using access key (validated)',
+      details: details.length > 0 ? details : undefined,
+    };
+  } catch (err: any) {
+    return {
+      name: 'AWS Credentials',
+      status: 'error',
+      message: `AWS credentials invalid: ${err.message}`,
+      details: [
+        ...details,
+        'Run: aws sts get-caller-identity to debug',
+        profile ? `Run: aws sso login --profile ${profile}` : 'Check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY',
+      ],
+    };
+  }
 }
 
 /**
@@ -229,6 +260,56 @@ function checkOpenSearchObservability(): CheckResult {
 }
 
 /**
+ * Check traces connectivity via the running server's health endpoint
+ */
+async function checkTracesConnectivity(): Promise<CheckResult> {
+  const port = process.env.PORT || '4001';
+  try {
+    const response = await fetch(`http://localhost:${port}/api/traces/health`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = await response.json() as { status: string; error?: string; errorCategory?: string; suggestion?: string };
+
+    if (data.status === 'ok') {
+      return {
+        name: 'Traces Connectivity',
+        status: 'ok',
+        message: 'OpenSearch traces index is accessible',
+      };
+    }
+
+    if (data.status === 'sample_only') {
+      return {
+        name: 'Traces Connectivity',
+        status: 'ok',
+        message: 'Sample data only (no observability backend)',
+      };
+    }
+
+    // Error with classification from the server
+    const details: string[] = [];
+    if (data.error) details.push(data.error);
+    if (data.suggestion) details.push(data.suggestion);
+
+    return {
+      name: 'Traces Connectivity',
+      status: 'error',
+      message: data.errorCategory === 'auth'
+        ? 'Authentication failed — credentials may be expired'
+        : `Connection error: ${data.error || 'unknown'}`,
+      details: details.length > 0 ? details : undefined,
+    };
+  } catch {
+    return {
+      name: 'Traces Connectivity',
+      status: 'ok',
+      message: 'Server not running (skipped)',
+      details: ['Start the server first: npm run dev:server'],
+    };
+  }
+}
+
+/**
  * Display results
  */
 function displayResults(results: CheckResult[]): void {
@@ -290,12 +371,13 @@ export function createDoctorCommand(): Command {
 
       results.push(checkConfigFile());
       results.push(checkEnvFile());
-      results.push(checkAWSCredentials());
+      results.push(await checkAWSCredentials());
       results.push(await checkClaudeCodeCLI());
       results.push(checkAgents(config));
       results.push(checkConnectors());
       results.push(checkOpenSearchStorage());
       results.push(checkOpenSearchObservability());
+      results.push(await checkTracesConnectivity());
 
       if (options.output === 'json') {
         console.log(JSON.stringify(results, null, 2));
