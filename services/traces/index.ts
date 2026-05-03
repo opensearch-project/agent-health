@@ -8,6 +8,7 @@
  */
 
 import { Span, TimeRange, TraceQueryParams, TraceSearchResult } from '@/types';
+import { getSpanCategory } from './spanCategorization';
 
 // Re-export trace grouping utilities
 export { groupSpansByTrace, getSpansForTrace } from './traceGrouping';
@@ -162,26 +163,18 @@ export function calculateTimeRange(spans: Span[]): TimeRange {
  * Get color for a span based on its type/name
  */
 export function getSpanColor(span: Span): string {
-  const name = span.name?.toLowerCase() || '';
-  const status = span.status;
+  const category = getSpanCategory(span);
 
-  // Error spans are always red
-  if (status === 'ERROR') return '#ef4444';
+  const CATEGORY_HEX: Record<string, string> = {
+    AGENT: '#6366f1',  // indigo
+    LLM: '#a855f7',    // purple
+    TOOL: '#f59e0b',   // amber
+    EVAL: '#10b981',   // emerald
+    ERROR: '#ef4444',  // red
+    OTHER: '#64748b',  // slate
+  };
 
-  // Agent run root spans
-  if (name.includes('agent.run') || name.includes('run')) return '#6366f1';
-
-  // LLM/Bedrock calls
-  if (name.includes('bedrock') || name.includes('llm') || name.includes('converse')) return '#a855f7';
-
-  // Tool executions
-  if (name.includes('tool')) return '#f59e0b';
-
-  // Graph nodes
-  if (name.includes('node') || name.includes('process')) return '#3b82f6';
-
-  // Default
-  return '#64748b';
+  return CATEGORY_HEX[category] || CATEGORY_HEX.OTHER;
 }
 
 /**

@@ -318,10 +318,11 @@ export function emitDeferredTestCaseSpan(
   if (agentTraceId) {
     const remoteSpanContext: SpanContext = {
       traceId: agentTraceId,
-      // Use a synthetic spanId — this is a "remote" context that only carries
-      // the traceId forward. The eval span becomes a root span in the trace
-      // (no parentSpanId) but shares the same traceId as the agent spans.
-      spanId: '0000000000000000',
+      // Use a valid synthetic spanId — an all-zero spanId is considered invalid
+      // by the OTel SDK and would cause it to ignore this context entirely.
+      // This "remote" context carries the traceId forward so the eval span
+      // shares the same trace as the agent spans.
+      spanId: 'eeee000000000001',
       traceFlags: TraceFlags.SAMPLED,
       isRemote: true,
     };

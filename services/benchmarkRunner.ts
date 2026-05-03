@@ -590,7 +590,6 @@ function startTracePollingForReportWithModule(report: EvaluationReport, testCase
             metrics: judgment.metrics,
             llmJudgeReasoning: judgment.llmJudgeReasoning,
           } as EvaluationReport;
-          const agentTraceId = spans[0]?.traceId;
           emitDeferredTestCaseSpan(
             testCase,
             completedReport,

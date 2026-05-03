@@ -10,7 +10,7 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { killObservioAgent, isPortFree, OBSERVIO_PORT } from '../../server/services/observioAgent.js';
+import { killObservioAgent, isPortFree, OBSERVIO_PORT } from '@/server/services/observioAgent.js';
 
 export function createKillCommand(): Command {
   const command = new Command('kill')

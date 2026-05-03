@@ -22,8 +22,9 @@ export const nodeTypes: NodeTypes = {
   agent: SpanNode,
   llm: SpanNode,
   tool: SpanNode,
+  eval: SpanNode,
   error: SpanNode,
   other: SpanNode,
 };
 
-export type NodeType = 'agent' | 'llm' | 'tool' | 'error' | 'other';
+export type NodeType = 'agent' | 'llm' | 'tool' | 'eval' | 'error' | 'other';

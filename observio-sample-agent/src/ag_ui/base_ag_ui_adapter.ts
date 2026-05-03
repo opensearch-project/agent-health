@@ -74,6 +74,7 @@ import { MCPServerConfig } from '../types/mcp_types';
 import { Logger } from '../utils/logger';
 import { AGUIAuditLogger } from '../utils/ag_ui_audit_logger';
 import { TextMessageManager } from './managers/text_message_manager';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { startAgentSpan } from '../telemetry/spans';
 
 export interface BaseAGUIConfig {
@@ -321,7 +322,6 @@ export class BaseAGUIAdapter {
       this.auditLogger?.endRequest(input.threadId, input.runId, 'error', errorMessage);
 
       // End the OTel root span (error)
-      const { SpanStatusCode } = require('@opentelemetry/api');
       agentSpan.setStatus({ code: SpanStatusCode.ERROR, message: errorMessage });
       agentSpan.end();
 

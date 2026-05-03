@@ -14,7 +14,7 @@
  */
 
 import React from 'react';
-import { ChevronDown, ChevronRight, Coins, Bot, Zap, Wrench, AlertCircle, Circle } from 'lucide-react';
+import { ChevronDown, ChevronRight, Coins, Bot, Zap, Wrench, ClipboardCheck, AlertCircle, Circle } from 'lucide-react';
 import { Span } from '@/types';
 import { getSpanColor, flattenVisibleSpans } from '@/services/traces';
 import { getSpanCategory, getCategoryMeta } from '@/services/traces/spanCategorization';
@@ -27,6 +27,7 @@ const ICON_MAP = {
   Bot,
   Zap,
   Wrench,
+  ClipboardCheck,
   AlertCircle,
   Circle,
 };

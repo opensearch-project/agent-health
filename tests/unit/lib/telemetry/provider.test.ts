@@ -24,7 +24,7 @@ jest.mock('@opentelemetry/sdk-trace-node', () => {
   };
 });
 
-jest.mock('@opentelemetry/exporter-trace-otlp-http', () => ({
+jest.mock('@opentelemetry/exporter-trace-otlp-proto', () => ({
   OTLPTraceExporter: jest.fn(),
 }));
 

@@ -234,6 +234,7 @@ const FlowPanelInner: React.FC<{
       case 'AGENT': return '#6366f1';
       case 'LLM': return '#a855f7';
       case 'TOOL': return '#f59e0b';
+      case 'EVAL': return '#10b981';
       case 'ERROR': return '#ef4444';
       default: return '#64748b';
     }

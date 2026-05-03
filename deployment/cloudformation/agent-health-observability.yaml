@@ -168,6 +168,7 @@ Resources:
   # ---------------------------------------------------------------------------
   OSISTracePipeline:
     Type: AWS::OSIS::Pipeline
+    DependsOn: OpenSearchDomain
     Properties:
       PipelineName: !Sub '${DomainName}-traces'
       MinUnits: !Ref PipelineMinUnits
@@ -221,6 +222,7 @@ Resources:
   # ---------------------------------------------------------------------------
   OSISLogsPipeline:
     Type: AWS::OSIS::Pipeline
+    DependsOn: OpenSearchDomain
     Properties:
       PipelineName: !Sub '${DomainName}-logs'
       MinUnits: !Ref PipelineMinUnits
@@ -242,6 +244,171 @@ Resources:
       Tags:
         - Key: agent-health
           Value: observability
+
+  # ---------------------------------------------------------------------------
+  # OTLP Ingestion — API Gateway + Lambda (SigV4 proxy to OSIS)
+  # Provides a public HTTPS endpoint so apps can send OTLP without SigV4 auth.
+  # ---------------------------------------------------------------------------
+  OTLPIngestLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${DomainName}-otlp-ingest-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: OSISIngest
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'osis:Ingest'
+                Resource:
+                  - !Sub 'arn:aws:osis:${AWS::Region}:${AWS::AccountId}:pipeline/${DomainName}-traces'
+                  - !Sub 'arn:aws:osis:${AWS::Region}:${AWS::AccountId}:pipeline/${DomainName}-logs'
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+  OTLPIngestFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${DomainName}-otlp-ingest'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      MemorySize: 256
+      Role: !GetAtt OTLPIngestLambdaRole.Arn
+      Environment:
+        Variables:
+          OSIS_TRACES_ENDPOINT: !Join
+            - ''
+            - - 'https://'
+              - !Select [0, !GetAtt OSISTracePipeline.IngestEndpointUrls]
+          OSIS_LOGS_ENDPOINT: !Join
+            - ''
+            - - 'https://'
+              - !Select [0, !GetAtt OSISLogsPipeline.IngestEndpointUrls]
+      Code:
+        ZipFile: |
+          """OTLP Ingestion Proxy — forwards OTLP payloads to OSIS with SigV4."""
+          import json
+          import os
+          import urllib.request
+          import urllib.parse
+          from datetime import datetime
+          from botocore.auth import SigV4Auth
+          from botocore.awsrequest import AWSRequest
+          from botocore.session import Session
+
+          ENDPOINTS = {
+              '/v1/traces': os.environ['OSIS_TRACES_ENDPOINT'],
+              '/v1/logs': os.environ['OSIS_LOGS_ENDPOINT'],
+          }
+          REGION = os.environ.get('AWS_REGION', 'us-west-2')
+          session = Session()
+
+          def _get_credentials():
+              creds = session.get_credentials()
+              if hasattr(creds, 'resolve_credentials'):
+                  return creds.resolve_credentials()
+              return creds
+
+          def handler(event, context):
+              path = event.get('rawPath', '')
+              # Map /v1/traces and /v1/logs to their OSIS endpoints
+              osis_base = None
+              for route, endpoint in ENDPOINTS.items():
+                  if path.startswith(route):
+                      osis_base = endpoint
+                      break
+              if not osis_base:
+                  return {'statusCode': 404, 'body': json.dumps({'error': f'Unknown path: {path}'})}
+
+              url = osis_base + path
+              body = event.get('body', '')
+              is_base64 = event.get('isBase64Encoded', False)
+              if is_base64:
+                  import base64
+                  body = base64.b64decode(body)
+              elif isinstance(body, str):
+                  body = body.encode('utf-8')
+
+              content_type = ''
+              headers = event.get('headers', {})
+              content_type = headers.get('content-type', 'application/x-protobuf')
+
+              # Sign request with SigV4 for OSIS
+              request = AWSRequest(method='POST', url=url, data=body,
+                                   headers={'Content-Type': content_type})
+              SigV4Auth(_get_credentials(), 'osis', REGION).add_auth(request)
+
+              req = urllib.request.Request(
+                  url, data=body, method='POST',
+                  headers={k: v for k, v in dict(request.headers).items()})
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      return {'statusCode': resp.status, 'body': resp.read().decode('utf-8', errors='replace')}
+              except urllib.error.HTTPError as e:
+                  return {'statusCode': e.code, 'body': e.read().decode('utf-8', errors='replace')}
+      Tags:
+        - Key: agent-health
+          Value: observability
+
+  OTLPIngestApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${DomainName}-otlp-ingest'
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - POST
+        AllowHeaders:
+          - content-type
+
+  OTLPIngestApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref OTLPIngestApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt OTLPIngestFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  OTLPIngestApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref OTLPIngestApi
+      RouteKey: 'POST /v1/{signal+}'
+      Target: !Sub 'integrations/${OTLPIngestApiIntegration}'
+
+  OTLPIngestApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref OTLPIngestApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  OTLPIngestApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref OTLPIngestFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${OTLPIngestApi}/*'
 
 # =============================================================================
 # Outputs
@@ -272,6 +439,12 @@ Outputs:
   IngestionRoleArn:
     Description: IAM role ARN for agents to assume when pushing telemetry via SigV4
     Value: !GetAtt IngestionRole.Arn
+
+  OTLPIngestEndpoint:
+    Description: >-
+      HTTPS endpoint for OTLP trace/log ingestion (no SigV4 needed on client).
+      Set OTEL_EXPORTER_OTLP_ENDPOINT to this value in your agent config.
+    Value: !Sub 'https://${OTLPIngestApi}.execute-api.${AWS::Region}.amazonaws.com'
 
   AgentHealthConfigJSON:
     Description: >-
