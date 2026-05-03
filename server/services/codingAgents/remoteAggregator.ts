@@ -111,9 +111,10 @@ export class RemoteAggregator extends CodingAgentRegistry {
   private filterByRange(sessions: AgentSession[], range?: DateRange): AgentSession[] {
     if (!range?.from && !range?.to) return sessions;
     return sessions.filter(s => {
-      const t = s.start_time;
-      if (range.from && t < range.from) return false;
-      if (range.to && t > range.to + 'T23:59:59') return false;
+      const y = new Date(s.start_time);
+      const date = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+      if (range.from && date < range.from) return false;
+      if (range.to && date > range.to) return false;
       return true;
     });
   }

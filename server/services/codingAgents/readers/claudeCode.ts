@@ -276,7 +276,8 @@ export class ClaudeCodeReader implements CodingAgentReader {
       const toolCallCount = Object.values(s.tool_counts).reduce((a, b) => a + b, 0);
       totalToolCalls += toolCallCount;
 
-      const date = s.start_time.slice(0, 10);
+      const _d = new Date(s.start_time);
+      const date = `${_d.getFullYear()}-${String(_d.getMonth() + 1).padStart(2, '0')}-${String(_d.getDate()).padStart(2, '0')}`;
       if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         const existing = dailyMap.get(date) ?? { date, messageCount: 0, sessionCount: 0, toolCallCount: 0 };
         existing.messageCount += s.user_message_count + s.assistant_message_count;
