@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionTracesView from './SessionTracesView';
+import { PerformancePulseSection, EvalTrendPoint } from './PerformancePulse';
 
 const AGENT_COLORS: Record<string, string> = {
   'claude-code': '#f97316',
@@ -1126,6 +1127,15 @@ function SessionsTab({ range, loading: initialLoading, initialProject, initialAg
   }, [page, agentFilter, completedFilter, projectFilter, search, range]);
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
+
+  // Auto-select first session on initial load only
+  const hasAutoSelected = React.useRef(false);
+  useEffect(() => {
+    if (!hasAutoSelected.current && sessions.length > 0) {
+      hasAutoSelected.current = true;
+      setSelectedSession(sessions[0]);
+    }
+  }, [sessions]);
 
   const handleSearch = () => { setSearch(searchInput); setPage(0); };
 
@@ -2853,11 +2863,12 @@ export const CodingAgentsPage: React.FC = () => {
   const [projects, setProjects] = useState<ProjectAnalytics[] | null>(null);
   const [advanced, setAdvanced] = useState<AdvancedAnalytics | null>(null);
   const [failurePatterns, setFailurePatterns] = useState<FailurePattern[] | null>(null);
+  const [evalTrends, setEvalTrends] = useState<EvalTrendPoint[] | null>(null);
   const [team, setTeam] = useState<TeamAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   // Read initial tab from URL query param (e.g., ?tab=workspace)
   const [activeTab, setActiveTab] = useState(() => {
-    try { return new URLSearchParams(window.location.search).get('tab') || 'overview'; } catch { return 'overview'; }
+    try { return new URLSearchParams(window.location.search).get('tab') || 'sessions'; } catch { return 'sessions'; }
   });
   const [error, setError] = useState<string | null>(null);
   const [rangePreset, setRangePreset] = useState<DateRangePreset>('today');
@@ -2893,6 +2904,7 @@ export const CodingAgentsPage: React.FC = () => {
     setProjects(null);
     setAdvanced(null);
     setFailurePatterns(null);
+    setEvalTrends(null);
     setTeam(null);
   };
 
@@ -2958,6 +2970,26 @@ export const CodingAgentsPage: React.FC = () => {
         fetchJson<EfficiencyData>(buildQuery('/api/coding-agents/efficiency', range))
           .then(d => setEfficiency(d))
           .catch(() => {});
+      }
+      // Optionally fetch eval pass rate trends for Performance Pulse
+      if (evalTrends === null) {
+        fetchJson<{ benchmarks: Array<{ runs?: Array<{ createdAt: string; agentKey: string; stats?: { passed: number; failed: number; total: number } }> }> }>('/api/storage/benchmarks')
+          .then(({ benchmarks }) => {
+            const trends: EvalTrendPoint[] = [];
+            for (const bm of benchmarks) {
+              for (const run of bm.runs || []) {
+                if (!run.stats || run.stats.total === 0) continue;
+                trends.push({
+                  date: run.createdAt.split('T')[0],
+                  agentKey: run.agentKey,
+                  passRate: (run.stats.passed / run.stats.total) * 100,
+                  runCount: run.stats.total,
+                });
+              }
+            }
+            setEvalTrends(trends);
+          })
+          .catch(() => setEvalTrends([]));
       }
     }
     // Tools tab loads tools + advanced
@@ -3082,9 +3114,13 @@ export const CodingAgentsPage: React.FC = () => {
             <CostsTab costs={costs} loading={activeTab === 'costs' && !costs} onTabChange={setActiveTab} onSelectProject={handleSelectProject} cacheSavings={stats ? stats.agents.reduce((s, a) => s + a.totalCacheSavings, 0) : undefined} />
           </TabsContent>
           <TabsContent value="performance" className="mt-4">
-            {/* Merged Activity + Efficiency */}
             <div className="space-y-8">
+              {/* Performance Pulse — unified trend overlay */}
               <div>
+                <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-4">Performance Pulse</h2>
+                <PerformancePulseSection stats={stats} efficiency={efficiency} costs={costs} evalTrends={evalTrends} />
+              </div>
+              <div className="border-t pt-6">
                 <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-4">Activity Patterns</h2>
                 <ActivityTab activity={activity} loading={(activeTab === 'performance') && !activity} onTabChange={setActiveTab} />
               </div>

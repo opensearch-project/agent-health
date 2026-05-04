@@ -11,10 +11,27 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { existsSync, readFileSync, appendFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync, appendFileSync, writeFileSync } from 'fs';
+import { join, dirname } from 'path';
 import { spawnSync } from 'child_process';
 import { homedir } from 'os';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** Resolve the bundled CFN template path (works from both source and dist) */
+function getCfnTemplatePath(): string {
+  // From cli/commands/ → ../../deployment/cloudformation/
+  // From cli/dist/    → ../../deployment/cloudformation/
+  const candidates = [
+    join(__dirname, '..', '..', 'deployment', 'cloudformation', 'agent-health-observability.yaml'),
+    join(__dirname, '..', 'deployment', 'cloudformation', 'agent-health-observability.yaml'),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return candidates[0]; // Return first for error messaging
+}
 
 /** Env vars we manage — used for detection and writing */
 const TELEMETRY_ENV_VARS: Record<string, string> = {
@@ -66,10 +83,17 @@ function rcFileHasTelemetryBlock(rcPath: string): boolean {
   return content.includes(RC_BLOCK_START);
 }
 
+/** Stack outputs we care about */
+interface StackOutputs {
+  otlpEndpoint: string;
+  opensearchEndpoint?: string;
+  region?: string;
+}
+
 /**
- * Fetch the OTLP proxy endpoint from CloudFormation stack outputs
+ * Fetch key outputs from the CloudFormation stack
  */
-function getApiGatewayUrl(stackName: string, region?: string, profile?: string): string {
+function getStackOutputs(stackName: string, region?: string, profile?: string): StackOutputs {
   validateInput(stackName, 'stack name');
   if (region) validateInput(region, 'region');
   if (profile) validateInput(profile, 'profile');
@@ -86,7 +110,8 @@ function getApiGatewayUrl(stackName: string, region?: string, profile?: string):
       throw new Error('AWS credentials not configured. Run `aws configure` or set AWS_PROFILE.');
     }
     if (stderr.includes('does not exist')) {
-      throw new Error(`Stack '${stackName}' not found. Deploy it first:\n    aws cloudformation deploy --template-file deployment/cloudformation/agent-health-observability.yaml --stack-name ${stackName} --capabilities CAPABILITY_IAM`);
+      const templatePath = getCfnTemplatePath();
+      throw new Error(`Stack '${stackName}' not found. Deploy it first:\n    npx @goyamegh/agent-health setup-telemetry --deploy\n  Or manually:\n    aws cloudformation deploy --template-file ${templatePath} --stack-name ${stackName} --capabilities CAPABILITY_NAMED_IAM`);
     }
     throw new Error(stderr || `AWS CLI exited with code ${result.status}`);
   }
@@ -102,13 +127,56 @@ function getApiGatewayUrl(stackName: string, region?: string, profile?: string):
 
   // Try both output key names — newer stacks use OTLPProxyApiEndpoint,
   // existing stacks use OTLPIngestEndpoint for the same API Gateway URL
-  const apiUrl = outputMap.get('OTLPProxyApiEndpoint') || outputMap.get('OTLPIngestEndpoint');
-  if (!apiUrl) {
+  const otlpEndpoint = outputMap.get('OTLPProxyApiEndpoint') || outputMap.get('OTLPIngestEndpoint');
+  if (!otlpEndpoint) {
     const available = outputs.map(o => o.OutputKey).join(', ');
     throw new Error(`Stack '${stackName}' has no OTLP endpoint output.\n    Available outputs: ${available}\n    Make sure the stack includes the API Gateway OTLP proxy.`);
   }
 
-  return apiUrl;
+  // OpenSearch domain endpoint for server-side reading
+  const opensearchEndpoint = outputMap.get('OpenSearchEndpoint') || outputMap.get('DomainEndpoint');
+  const stackRegion = outputMap.get('Region') || region;
+
+  return { otlpEndpoint, opensearchEndpoint, region: stackRegion };
+}
+
+const CONFIG_FILENAME = 'agent-health.config.json';
+
+/**
+ * Write the server-side observability config so Agent Health can read traces from OpenSearch.
+ * Writes to CWD (where the server reads from) and also to ~ as a fallback.
+ */
+function writeServerConfig(opensearchEndpoint: string, region: string): string[] {
+  const fullEndpoint = opensearchEndpoint.startsWith('https://') ? opensearchEndpoint : `https://${opensearchEndpoint}`;
+  const observability = {
+    endpoint: fullEndpoint,
+    authType: 'sigv4',
+    awsRegion: region,
+    awsService: 'es',
+  };
+
+  const paths = [
+    join(process.cwd(), CONFIG_FILENAME),
+    join(homedir(), CONFIG_FILENAME),
+  ];
+
+  // Deduplicate if cwd === home
+  const uniquePaths = [...new Set(paths)];
+  const written: string[] = [];
+
+  for (const configPath of uniquePaths) {
+    let config: Record<string, unknown> = {};
+    if (existsSync(configPath)) {
+      try {
+        config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      } catch { /* start fresh */ }
+    }
+    config.observability = observability;
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    written.push(configPath);
+  }
+
+  return written;
 }
 
 /**
@@ -194,6 +262,7 @@ export function createSetupTelemetryCommand(): Command {
     .option('--dry-run', 'Show what would be written without making changes')
     .option('--skip-rc', 'Print env vars without writing to shell rc file')
     .option('--status', 'Check current telemetry configuration status')
+    .option('--deploy', 'Deploy the CloudFormation stack before configuring telemetry')
     .action(async (options: {
       stack: string;
       region?: string;
@@ -202,6 +271,7 @@ export function createSetupTelemetryCommand(): Command {
       dryRun?: boolean;
       skipRc?: boolean;
       status?: boolean;
+      deploy?: boolean;
     }) => {
       console.log(chalk.cyan.bold('\n  Agent Health — Claude Code Telemetry Setup\n'));
 
@@ -221,8 +291,54 @@ export function createSetupTelemetryCommand(): Command {
         console.log(chalk.green('  ✓ Claude Code CLI installed'));
       }
 
-      // Step 2: Get the OTLP endpoint
+      // Step 2: Deploy the stack if requested
+      if (options.deploy && !options.endpoint) {
+        if (!isAwsCliInstalled()) {
+          console.error(chalk.red('  ✗ AWS CLI not found. Install it first or use --endpoint <url>.\n'));
+          process.exit(1);
+        }
+        console.log(chalk.green('  ✓ AWS CLI installed'));
+
+        const templatePath = getCfnTemplatePath();
+        if (!existsSync(templatePath)) {
+          console.error(chalk.red(`\n  ✗ CFN template not found at ${templatePath}`));
+          console.error(chalk.gray('    This can happen if running from source. Try: npx @goyamegh/agent-health setup-telemetry --deploy\n'));
+          process.exit(1);
+        }
+
+        console.log(chalk.gray(`\n  Deploying stack ${chalk.bold(options.stack)}...`));
+        console.log(chalk.gray(`  Template: ${templatePath}`));
+        console.log(chalk.gray('  This may take 10-15 minutes on first deploy.\n'));
+
+        const deployArgs = [
+          'cloudformation', 'deploy',
+          '--template-file', templatePath,
+          '--stack-name', options.stack,
+          '--capabilities', 'CAPABILITY_NAMED_IAM',
+          '--no-fail-on-empty-changeset',
+        ];
+        if (options.region) deployArgs.push('--region', options.region);
+        if (options.profile) deployArgs.push('--profile', options.profile);
+
+        const deployResult = spawnSync('aws', deployArgs, {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 20 * 60 * 1000, // 20 min timeout for CFN deploy
+        });
+
+        if (deployResult.status !== 0) {
+          const stderr = (deployResult.stderr || '').trim();
+          console.error(chalk.red(`\n  ✗ Stack deployment failed:\n    ${stderr}\n`));
+          process.exit(1);
+        }
+
+        console.log(chalk.green(`  ✓ Stack ${options.stack} deployed successfully`));
+      }
+
+      // Step 3: Get the OTLP endpoint
       let endpoint: string;
+
+      let stackOutputs: StackOutputs | null = null;
 
       if (options.endpoint) {
         endpoint = options.endpoint;
@@ -232,20 +348,24 @@ export function createSetupTelemetryCommand(): Command {
           console.error(chalk.red('  ✗ AWS CLI not found. Install it or use --endpoint <url> to skip stack lookup.\n'));
           process.exit(1);
         }
-        console.log(chalk.green('  ✓ AWS CLI installed'));
+        if (!options.deploy) console.log(chalk.green('  ✓ AWS CLI installed'));
 
         console.log(chalk.gray(`\n  Reading stack outputs from ${chalk.bold(options.stack)}...`));
         try {
-          endpoint = getApiGatewayUrl(options.stack, options.region, options.profile);
-          console.log(chalk.green(`  ✓ API Gateway endpoint: ${endpoint}`));
+          stackOutputs = getStackOutputs(options.stack, options.region, options.profile);
+          endpoint = stackOutputs.otlpEndpoint;
+          console.log(chalk.green(`  ✓ OTLP endpoint: ${endpoint}`));
+          if (stackOutputs.opensearchEndpoint) {
+            console.log(chalk.green(`  ✓ OpenSearch endpoint: ${stackOutputs.opensearchEndpoint}`));
+          }
         } catch (err) {
           console.error(chalk.red(`\n  ✗ ${err instanceof Error ? err.message : err}\n`));
           process.exit(1);
         }
       }
 
-      // Step 3: Test connectivity
-      console.log(chalk.gray('\n  Testing endpoint connectivity...'));
+      // Step: Test OTLP connectivity
+      console.log(chalk.gray('\n  Testing OTLP endpoint connectivity...'));
       const connectivity = await testEndpoint(endpoint);
       if (connectivity.ok) {
         console.log(chalk.green(`  ✓ ${connectivity.message}`));
@@ -254,7 +374,27 @@ export function createSetupTelemetryCommand(): Command {
         console.log(chalk.gray('    Telemetry may not work until the endpoint is reachable.'));
       }
 
-      // Step 4: Write to shell rc file
+      // Step: Write server-side config (so Agent Health can read traces from OpenSearch)
+      if (stackOutputs?.opensearchEndpoint) {
+        const effectiveRegion = stackOutputs.region || options.region;
+        if (effectiveRegion) {
+          if (options.dryRun) {
+            console.log(chalk.yellow('\n  Dry run — would write server config:'));
+            console.log(chalk.gray(`    OpenSearch endpoint: ${stackOutputs.opensearchEndpoint}`));
+            console.log(chalk.gray(`    Auth: SigV4, Region: ${effectiveRegion}\n`));
+          } else {
+            const configPaths = writeServerConfig(stackOutputs.opensearchEndpoint, effectiveRegion);
+            for (const p of configPaths) {
+              console.log(chalk.green(`  ✓ Server config written to ${p}`));
+            }
+            console.log(chalk.gray(`    Agent Health server will read traces from this OpenSearch domain.`));
+          }
+        } else {
+          console.log(chalk.yellow('\n  ⚠ Could not determine region for server config. Set --region explicitly.'));
+        }
+      }
+
+      // Step: Write to shell rc file
       const { shell, rcPath } = detectRcFile();
       console.log(chalk.gray(`\n  Detected shell: ${shell} → ${rcPath}`));
 
@@ -283,7 +423,7 @@ export function createSetupTelemetryCommand(): Command {
       console.log(chalk.cyan.bold('\n  Next steps:\n'));
       console.log(chalk.gray(`    1. Reload your shell:  ${chalk.white(`source ${rcPath}`)}`));
       console.log(chalk.gray(`    2. Start Claude Code:  ${chalk.white('claude')}`));
-      console.log(chalk.gray(`    3. View traces:        ${chalk.white('Open Agent Health → Agent Traces tab')}`));
+      console.log(chalk.gray(`    3. View traces:        ${chalk.white('http://localhost:4001/coding-agents')}`));
       console.log(chalk.gray(`\n    Telemetry flows automatically. No restart of the API Gateway needed.\n`));
     });
 
