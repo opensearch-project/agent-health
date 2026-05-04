@@ -185,7 +185,7 @@ export default defineConfig({
     {
       key: 'my-agent',
       name: 'My Custom Agent',
-      connectorType: 'rest', // or 'agui', 'subprocess'
+      connectorType: 'rest', // or 'agui-streaming', 'langgraph', 'strands', 'subprocess'
       endpoint: 'http://localhost:8080/chat',
       models: ['claude-sonnet-4'],
     },
@@ -224,7 +224,7 @@ interface UserAgentConfig {
   key: string;              // Unique identifier
   name: string;             // Display name
   endpoint: string;         // URL or command name
-  connectorType?: string;   // 'agui', 'rest', 'subprocess', 'claude-code', 'mock'
+  connectorType?: string;   // 'agui-streaming', 'rest', 'langgraph', 'strands', 'subprocess', 'claude-code', 'mock'
   models: string[];         // Supported model keys
   headers?: Record<string, string>;  // HTTP headers
   useTraces?: boolean;      // Enable trace collection
@@ -242,15 +242,18 @@ These agents work out of the box:
 |-------|-----|-----------|-------|
 | Demo Agent | `demo` | `mock` | Simulated responses for testing |
 | Claude Code | `claude-code` | `claude-code` | Requires `claude` CLI installed |
-| Langgraph | `langgraph` | `agui-streaming` | AG-UI protocol |
-| HolmesGPT | `holmesgpt` | `agui-streaming` | AI investigation agent |
+| Amazon Strands | `strands` | `strands` | Bedrock Agent Runtime (disabled by default) |
+| LangGraph (REST) | `langgraph-rest` | `langgraph` | Direct REST API (disabled by default) |
 
 ## Built-in Connectors
 
 | Type | Protocol | Use Case |
 |------|----------|----------|
-| `agui-streaming` | AG-UI SSE | ML-Commons, Langgraph, HolmesGPT |
+| `agui-streaming` | AG-UI SSE | ML-Commons and AG-UI compatible agents |
 | `rest` | HTTP POST | Simple REST APIs |
+| `openai-compatible` | OpenAI Chat Completions | LiteLLM, Ollama, vLLM |
+| `langgraph` | LangGraph REST `/invoke` | Non-AG-UI LangGraph instances |
+| `strands` | Bedrock Agent Runtime | Amazon Strands agents (server-only) |
 | `subprocess` | CLI | Generic CLI tools |
 | `claude-code` | CLI | Claude Code CLI specifically |
 | `mock` | In-memory | Testing and demos |

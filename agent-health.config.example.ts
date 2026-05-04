@@ -50,7 +50,33 @@ export default {
     //   useTraces: false,
     // },
 
-    // Example 4: Agent with authentication hook
+    // Example 4: LangGraph REST connector (non-streaming invoke)
+    // {
+    //   key: "my-langgraph-agent",
+    //   name: "My LangGraph Agent",
+    //   endpoint: "http://localhost:8123",
+    //   connectorType: "langgraph",
+    //   connectorConfig: {
+    //     graphId: "agent",        // Assistant/graph ID (defaults to "agent")
+    //     // threadId: "...",      // Optional thread ID for multi-turn
+    //   },
+    //   useTraces: true,
+    // },
+
+    // Example 5: Amazon Strands connector (Bedrock Agent Runtime)
+    // {
+    //   key: "my-strands-agent",
+    //   name: "My Strands Agent",
+    //   endpoint: "ABCDEF1234",     // Bedrock Agent ID
+    //   connectorType: "strands",
+    //   connectorConfig: {
+    //     agentAliasId: "TSTALIASID",  // Agent alias ID
+    //     region: "us-west-2",          // AWS region (defaults to AWS_REGION)
+    //   },
+    //   useTraces: false,
+    // },
+
+    // Example 6: Agent with authentication hook
     // {
     //   key: "authenticated-agent",
     //   name: "Authenticated Agent",
@@ -71,7 +97,7 @@ export default {
     //   },
     // },
 
-    // Example 5: Claude Code with MCP servers (competitive evaluation)
+    // Example 7: Claude Code with MCP servers (competitive evaluation)
     // Uses a standard MCP config JSON file (same format as ~/.claude.json mcpServers)
     // {
     //   key: "claude-code-eval",

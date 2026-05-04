@@ -106,6 +106,12 @@ jest.mock('@/server/middleware/dataSourceConfig', () => ({
   },
 }));
 
+jest.mock('@/lib/telemetry', () => ({
+  initEvalTracerProvider: jest.fn(),
+  resolveEvalTelemetryConfig: jest.fn().mockReturnValue({}),
+  shutdownEvalTracer: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('@/server/services/storageInitializer', () => ({
   initializeStorageFromConfig: jest.fn().mockResolvedValue({
     backend: 'file',

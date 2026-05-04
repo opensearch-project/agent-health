@@ -11,11 +11,14 @@ import type { TestCase, TrajectoryStep, AgentHooks } from '@/types';
  * Protocol type for agent communication
  * - agui-streaming: AG-UI protocol over SSE (current default)
  * - rest: Non-streaming REST API
+ * - openai-compatible: OpenAI chat completions format (LiteLLM, Ollama, vLLM)
  * - subprocess: CLI tools invoked as child processes
  * - claude-code: Claude Code CLI (specialized subprocess)
+ * - strands: Amazon Strands via Bedrock Agent Runtime API
+ * - langgraph: LangGraph agent via direct REST API
  * - mock: Demo/testing connector
  */
-export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code' | 'mock';
+export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code' | 'strands' | 'langgraph' | 'mock';
 
 // ============ Authentication Types ============
 
