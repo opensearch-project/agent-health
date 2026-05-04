@@ -9,6 +9,7 @@ import { Zap, Activity, Gauge, TrendingUp, ArrowRight, Server, Database, Copy, C
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { loadSampleData } from '@/config/sampleData';
+import { CodingAgentsBanner } from './CodingAgentsBanner';
 
 /**
  * First Run Experience component
@@ -20,7 +21,11 @@ import { loadSampleData } from '@/config/sampleData';
  * 3. Enable trace collection (Docker / AWS)
  * 4. Persist evaluations (OpenSearch storage)
  */
-export const FirstRunExperience: React.FC = () => {
+interface FirstRunExperienceProps {
+  showCodingAgentsBanner?: boolean;
+}
+
+export const FirstRunExperience: React.FC<FirstRunExperienceProps> = ({ showCodingAgentsBanner }) => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const [isStep3Expanded, setIsStep3Expanded] = useState(false);
@@ -75,19 +80,6 @@ export const FirstRunExperience: React.FC = () => {
     <div className="p-6 max-w-7xl mx-auto space-y-16" data-testid="first-run-experience">
       {/* Hero Section */}
       <div className="text-center space-y-6">
-        <div className="flex justify-center">
-          <img
-            src="/opensearch-logo-dark.svg"
-            alt="OpenSearch Logo"
-            className="w-16 h-16 dark:block hidden"
-          />
-          <img
-            src="/opensearch-logo-light.svg"
-            alt="OpenSearch Logo"
-            className="w-16 h-16 dark:hidden block"
-          />
-        </div>
-
         <div className="space-y-4">
           <h1 className="text-4xl font-bold tracking-tight">
             Welcome to Agent Health
@@ -98,7 +90,7 @@ export const FirstRunExperience: React.FC = () => {
         </div>
 
         <div className="pt-2 space-y-4">
-          <div className="flex items-center justify-center gap-3">
+          <div className="flex items-center justify-center gap-3 flex-wrap">
             <Button
               size="lg"
               onClick={handleViewSampleData}
@@ -119,27 +111,24 @@ export const FirstRunExperience: React.FC = () => {
                 Connect Your Agent
               </Link>
             </Button>
-          </div>
 
-          <div className="flex items-center justify-center gap-3">
             <Button
-              size="sm"
+              size="lg"
               variant="outline"
               className="text-muted-foreground"
               onClick={() => {
                 setIsStep3Expanded(true);
-                // Scroll to Step 3 after expanding
                 setTimeout(() => {
                   document.getElementById('step-3-docker')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }, 100);
               }}
             >
-              <Terminal className="mr-1.5 h-4 w-4" />
+              <Terminal className="mr-2 h-5 w-5" />
               Docker Compose
             </Button>
 
             <Button
-              size="sm"
+              size="lg"
               variant="outline"
               className="text-muted-foreground"
               onClick={() => {
@@ -149,14 +138,18 @@ export const FirstRunExperience: React.FC = () => {
                 }, 100);
               }}
             >
-              <Database className="mr-1.5 h-4 w-4" />
+              <Database className="mr-2 h-5 w-5" />
               AWS CloudFormation
             </Button>
           </div>
 
-          <p className="text-sm text-muted-foreground">
-            No setup required — explore pre-loaded benchmarks, traces, and evaluations.
-          </p>
+          <p className="text-sm text-muted-foreground">No setup required — explore pre-loaded benchmarks, traces, and evaluations.</p>
+
+          {showCodingAgentsBanner && (
+            <div className="max-w-2xl mx-auto pt-2">
+              <CodingAgentsBanner />
+            </div>
+          )}
         </div>
       </div>
 

@@ -13,7 +13,9 @@ import { AgentTrendChart, TrendMetric } from './charts/AgentTrendChart';
 import { MetricsTable } from './dashboard/MetricsTable';
 import { WorkflowNavigator } from './dashboard/WorkflowNavigator';
 import { FirstRunExperience } from './dashboard/FirstRunExperience';
+import { CodingAgentsBanner } from './dashboard/CodingAgentsBanner';
 import { useDataState } from '@/hooks/useDataState';
+import { useServerStatus } from '@/hooks/useServerStatus';
 import { isSampleDataActive } from '@/config/sampleData';
 import {
   aggregateMetricsByDate,
@@ -165,6 +167,7 @@ const WORKFLOW_CARD_HIDDEN_KEY = 'agent-health-workflow-card-hidden';
 export const Dashboard: React.FC = () => {
   // Check data state for conditional rendering
   const { dataState, isLoading: isCheckingData } = useDataState();
+  const { features } = useServerStatus();
 
   const [isLoading, setIsLoading] = useState(true);
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
@@ -333,7 +336,7 @@ export const Dashboard: React.FC = () => {
 
   // Show FirstRunExperience if no data exists
   if (!dataState.hasData) {
-    return <FirstRunExperience />;
+    return <FirstRunExperience showCodingAgentsBanner={features.codingAgentAnalytics} />;
   }
 
   return (
@@ -397,6 +400,9 @@ export const Dashboard: React.FC = () => {
           <span className="text-2xl font-bold">{testCaseCount === null ? '—' : testCaseCount}</span>
         </Link>
       </div>
+
+      {/* Coding Agents Banner */}
+      {features.codingAgentAnalytics && <CodingAgentsBanner />}
 
       {isLoading ? (
         <DashboardSkeleton />

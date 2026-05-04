@@ -64,7 +64,7 @@ export const useSidebarCollapse = () => {
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Overview", tooltip: "Dashboard and quick stats", testId: "nav-overview" },
   { to: "/agent-traces", icon: Activity, label: "Agent Traces", tooltip: "View and debug agent executions", testId: "nav-agent-traces" },
-  { to: "/coding-agents", icon: BarChart3, label: "Coding Agents", tooltip: "Claude Code, Kiro & Codex analytics", testId: "nav-coding-agents" },
+  { to: "/coding-agents", icon: BarChart3, label: "AI Dev Tools", tooltip: "Claude Code, Kiro & Codex analytics", testId: "nav-coding-agents" },
 ];
 
 const testingSubItems = [

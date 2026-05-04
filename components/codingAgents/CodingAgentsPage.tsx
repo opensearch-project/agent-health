@@ -3025,18 +3025,14 @@ export const CodingAgentsPage: React.FC = () => {
     <div className="p-6 space-y-6 max-w-7xl">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Coding Agent Analytics</h1>
-          <p className="text-muted-foreground">
-            Usage analytics across your coding agents
-            {agents.length > 0 && (
-              <span className="ml-2">
-                {agents.map(a => (
-                  <Badge key={a.name} variant="outline" className="ml-1" style={{ borderColor: AGENT_COLORS[a.name], color: AGENT_COLORS[a.name] }}>
-                    {a.displayName}
-                  </Badge>
-                ))}
-              </span>
-            )}
+          <h1 className="text-2xl font-bold tracking-tight">AI Dev Tools</h1>
+          <p className="text-muted-foreground flex items-center flex-wrap gap-1">
+            <span>Usage analytics across your AI dev tools</span>
+            {agents.length > 0 && agents.map(a => (
+              <Badge key={a.name} variant="outline" className="ml-0.5" style={{ borderColor: AGENT_COLORS[a.name], color: AGENT_COLORS[a.name] }}>
+                {a.displayName}
+              </Badge>
+            ))}
           </p>
         </div>
         <div className="flex items-center gap-2">

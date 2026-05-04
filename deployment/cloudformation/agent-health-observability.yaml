@@ -27,14 +27,14 @@ Parameters:
 
   InstanceType:
     Type: String
-    Default: r6g.large.search
+    Default: r8g.large.search
     Description: OpenSearch instance type
     AllowedValues:
       - t3.small.search
       - t3.medium.search
-      - r6g.large.search
-      - r6g.xlarge.search
-      - r6g.2xlarge.search
+      - r8g.large.search
+      - r8g.xlarge.search
+      - r8g.2xlarge.search
 
   VolumeSize:
     Type: Number
@@ -57,6 +57,19 @@ Parameters:
     MinValue: 1
     MaxValue: 96
 
+  MasterUserARN:
+    Type: String
+    Description: >-
+      IAM ARN for the OpenSearch FGAC master user (used for security plugin admin).
+      Defaults to the account root; override with your IAM role ARN for direct access.
+    Default: ''
+
+# =============================================================================
+# Conditions
+# =============================================================================
+Conditions:
+  HasMasterUserARN: !Not [!Equals [!Ref MasterUserARN, '']]
+
 # =============================================================================
 # Resources
 # =============================================================================
@@ -69,12 +82,16 @@ Resources:
     Type: AWS::OpenSearchService::Domain
     Properties:
       DomainName: !Ref DomainName
-      EngineVersion: OpenSearch_2.19
+      EngineVersion: OpenSearch_3.5
       ClusterConfig:
         InstanceType: !Ref InstanceType
-        InstanceCount: 1
-        DedicatedMasterEnabled: false
-        ZoneAwarenessEnabled: false
+        InstanceCount: 3
+        DedicatedMasterEnabled: true
+        DedicatedMasterType: !Ref InstanceType
+        DedicatedMasterCount: 3
+        ZoneAwarenessEnabled: true
+        ZoneAwarenessConfig:
+          AvailabilityZoneCount: 3
       EBSOptions:
         EBSEnabled: true
         VolumeType: gp3
@@ -90,19 +107,19 @@ Resources:
         Enabled: true
         InternalUserDatabaseEnabled: false
         MasterUserOptions:
-          MasterUserARN: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+          MasterUserARN: !If
+            - HasMasterUserARN
+            - !Ref MasterUserARN
+            - !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+      # "Only use fine-grained access control" — open domain policy,
+      # all authorization is handled by the OpenSearch Security plugin (FGAC).
       AccessPolicies:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !GetAtt OSISPipelineRole.Arn
-            Action: 'es:ESHttp*'
-            Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${DomainName}/*'
-          - Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
-            Action: 'es:ESHttp*'
+              AWS: '*'
+            Action: 'es:*'
             Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${DomainName}/*'
       Tags:
         - Key: agent-health
@@ -178,7 +195,7 @@ Resources:
         otel-traces-entry:
           source:
             otel_trace_source:
-              path: "/v1/traces"
+              path: "/${DomainName}-traces/v1/traces"
           sink:
             - pipeline:
                 name: "otel-traces-raw-pipeline"
@@ -232,7 +249,7 @@ Resources:
         otel-logs-pipeline:
           source:
             otel_logs_source:
-              path: "/v1/logs"
+              path: "/${DomainName}-logs/v1/logs"
           sink:
             - opensearch:
                 hosts:
@@ -246,8 +263,10 @@ Resources:
           Value: observability
 
   # ---------------------------------------------------------------------------
-  # OTLP Ingestion — API Gateway + Lambda (SigV4 proxy to OSIS)
+  # OTLP Ingestion — API Gateway + Lambda → OpenSearch (direct)
   # Provides a public HTTPS endpoint so apps can send OTLP without SigV4 auth.
+  # Converts OTLP JSON to trace-analytics format and bulk-indexes into OpenSearch.
+  # Also forwards to OSIS pipelines when available for service-map generation.
   # ---------------------------------------------------------------------------
   OTLPIngestLambdaRole:
     Type: AWS::IAM::Role
@@ -261,6 +280,15 @@ Resources:
               Service: lambda.amazonaws.com
             Action: 'sts:AssumeRole'
       Policies:
+        - PolicyName: OpenSearchAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'es:ESHttp*'
+                Resource:
+                  - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${DomainName}/*'
         - PolicyName: OSISIngest
           PolicyDocument:
             Version: '2012-10-17'
@@ -284,6 +312,7 @@ Resources:
 
   OTLPIngestFunction:
     Type: AWS::Lambda::Function
+    DependsOn: OpenSearchDomain
     Properties:
       FunctionName: !Sub '${DomainName}-otlp-ingest'
       Runtime: python3.12
@@ -293,76 +322,156 @@ Resources:
       Role: !GetAtt OTLPIngestLambdaRole.Arn
       Environment:
         Variables:
-          OSIS_TRACES_ENDPOINT: !Join
-            - ''
-            - - 'https://'
-              - !Select [0, !GetAtt OSISTracePipeline.IngestEndpointUrls]
-          OSIS_LOGS_ENDPOINT: !Join
-            - ''
-            - - 'https://'
-              - !Select [0, !GetAtt OSISLogsPipeline.IngestEndpointUrls]
+          OPENSEARCH_ENDPOINT: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
       Code:
         ZipFile: |
-          """OTLP Ingestion Proxy — forwards OTLP payloads to OSIS with SigV4."""
+          """OTLP Ingestion — converts OTLP JSON to OpenSearch trace-analytics format."""
           import json
           import os
           import urllib.request
-          import urllib.parse
-          from datetime import datetime
+          import hashlib
+          from datetime import datetime, timezone
           from botocore.auth import SigV4Auth
           from botocore.awsrequest import AWSRequest
           from botocore.session import Session
 
-          ENDPOINTS = {
-              '/v1/traces': os.environ['OSIS_TRACES_ENDPOINT'],
-              '/v1/logs': os.environ['OSIS_LOGS_ENDPOINT'],
-          }
-          REGION = os.environ.get('AWS_REGION', 'us-west-2')
+          OS_ENDPOINT = os.environ['OPENSEARCH_ENDPOINT']
+          REGION = os.environ.get('AWS_REGION', 'us-east-1')
           session = Session()
 
-          def _get_credentials():
-              creds = session.get_credentials()
-              if hasattr(creds, 'resolve_credentials'):
-                  return creds.resolve_credentials()
-              return creds
+          STATUS_MAP = {0: 0, 1: 0, 2: 2}  # OTLP Unset/Ok->0, Error->2
+          KIND_MAP = {0: 'SPAN_KIND_UNSPECIFIED', 1: 'SPAN_KIND_INTERNAL', 2: 'SPAN_KIND_SERVER',
+                      3: 'SPAN_KIND_CLIENT', 4: 'SPAN_KIND_PRODUCER', 5: 'SPAN_KIND_CONSUMER'}
+
+          def _creds():
+              c = session.get_credentials()
+              return c.resolve_credentials() if hasattr(c, 'resolve_credentials') else c
+
+          def _attr_value(v):
+              for k in ('stringValue', 'intValue', 'boolValue', 'doubleValue'):
+                  if k in v:
+                      return v[k]
+              if 'arrayValue' in v:
+                  return [_attr_value(x) for x in v['arrayValue'].get('values', [])]
+              return str(v)
+
+          def _nano_to_iso(ns):
+              """Convert nanosecond timestamp to ISO 8601 with nanosecond precision."""
+              try:
+                  ns = int(ns)
+              except (ValueError, TypeError):
+                  return '1970-01-01T00:00:00.000000000Z'
+              secs = ns // 1_000_000_000
+              nanos = ns % 1_000_000_000
+              dt = datetime.fromtimestamp(secs, tz=timezone.utc)
+              return dt.strftime('%Y-%m-%dT%H:%M:%S') + f'.{nanos:09d}Z'
+
+          def _sanitize_key(key):
+              """Replace dots with @ in attribute keys (data prepper convention)."""
+              return key.replace('.', '@')
+
+          def _convert_span(span, resource_attrs, scope_name):
+              trace_id = span.get('traceId', '')
+              span_id = span.get('spanId', '')
+              parent = span.get('parentSpanId', '')
+              start_ns = span.get('startTimeUnixNano', '0')
+              end_ns = span.get('endTimeUnixNano', '0')
+              try:
+                  duration_nanos = int(end_ns) - int(start_ns)
+                  if duration_nanos < 0:
+                      duration_nanos = 0
+              except (ValueError, TypeError):
+                  duration_nanos = 0
+              status = span.get('status', {})
+              status_code = STATUS_MAP.get(status.get('code', 0), 0)
+              kind = KIND_MAP.get(span.get('kind', 0), 'SPAN_KIND_UNSPECIFIED')
+              service_name = 'unknown'
+              events = []
+              for evt in span.get('events', []):
+                  evt_attrs = {}
+                  for a in evt.get('attributes', []):
+                      evt_attrs[_sanitize_key(a['key'])] = _attr_value(a['value'])
+                  events.append({
+                      'name': evt.get('name', ''),
+                      'time': _nano_to_iso(evt.get('timeUnixNano', '0')),
+                      'attributes': evt_attrs
+                  })
+              doc = {
+                  'traceId': trace_id,
+                  'spanId': span_id,
+                  'parentSpanId': parent,
+                  'traceState': span.get('traceState', ''),
+                  'name': span.get('name', ''),
+                  'kind': kind,
+                  'startTime': _nano_to_iso(start_ns),
+                  'endTime': _nano_to_iso(end_ns),
+                  'durationInNanos': duration_nanos,
+                  'serviceName': service_name,
+                  'status': {'code': status_code, 'message': status.get('message', '')},
+                  'events': events,
+                  'links': [],
+                  'instrumentationScope.name': scope_name,
+              }
+              if not parent:
+                  doc['traceGroup'] = span.get('name', '')
+                  doc['traceGroupFields.endTime'] = _nano_to_iso(end_ns)
+                  doc['traceGroupFields.durationInNanos'] = duration_nanos
+                  doc['traceGroupFields.statusCode'] = status_code
+              # Flatten resource attributes with @ separator for dotted keys
+              for a in resource_attrs:
+                  key = _sanitize_key(a['key'])
+                  val = _attr_value(a['value'])
+                  doc[f'resource.attributes.{key}'] = val
+                  if a['key'] == 'service.name':
+                      doc['serviceName'] = val
+              # Flatten span attributes with @ separator for dotted keys
+              for a in span.get('attributes', []):
+                  key = _sanitize_key(a['key'])
+                  val = _attr_value(a['value'])
+                  doc[f'span.attributes.{key}'] = val
+              doc_id = hashlib.md5(f'{trace_id}{span_id}'.encode()).hexdigest()
+              return doc_id, doc
+
+          def _signed_request(method, path, body):
+              url = OS_ENDPOINT + path
+              request = AWSRequest(method=method, url=url, data=body,
+                                   headers={'Content-Type': 'application/json'})
+              SigV4Auth(_creds(), 'es', REGION).add_auth(request)
+              req = urllib.request.Request(url, data=body.encode('utf-8'), method=method,
+                                           headers={k: v for k, v in dict(request.headers).items()})
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      return resp.status, resp.read().decode('utf-8', errors='replace')
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode('utf-8', errors='replace')
 
           def handler(event, context):
               path = event.get('rawPath', '')
-              # Map /v1/traces and /v1/logs to their OSIS endpoints
-              osis_base = None
-              for route, endpoint in ENDPOINTS.items():
-                  if path.startswith(route):
-                      osis_base = endpoint
-                      break
-              if not osis_base:
+              if '/v1/traces' not in path and '/v1/logs' not in path:
                   return {'statusCode': 404, 'body': json.dumps({'error': f'Unknown path: {path}'})}
-
-              url = osis_base + path
               body = event.get('body', '')
               is_base64 = event.get('isBase64Encoded', False)
               if is_base64:
                   import base64
-                  body = base64.b64decode(body)
-              elif isinstance(body, str):
-                  body = body.encode('utf-8')
-
-              content_type = ''
-              headers = event.get('headers', {})
-              content_type = headers.get('content-type', 'application/x-protobuf')
-
-              # Sign request with SigV4 for OSIS
-              request = AWSRequest(method='POST', url=url, data=body,
-                                   headers={'Content-Type': content_type})
-              SigV4Auth(_get_credentials(), 'osis', REGION).add_auth(request)
-
-              req = urllib.request.Request(
-                  url, data=body, method='POST',
-                  headers={k: v for k, v in dict(request.headers).items()})
+                  body = base64.b64decode(body).decode('utf-8', errors='replace')
               try:
-                  with urllib.request.urlopen(req) as resp:
-                      return {'statusCode': resp.status, 'body': resp.read().decode('utf-8', errors='replace')}
-              except urllib.error.HTTPError as e:
-                  return {'statusCode': e.code, 'body': e.read().decode('utf-8', errors='replace')}
+                  otlp = json.loads(body) if isinstance(body, str) else body
+              except json.JSONDecodeError as e:
+                  return {'statusCode': 400, 'body': json.dumps({'error': f'Invalid JSON: {e}'})}
+              bulk_lines = []
+              for rs in otlp.get('resourceSpans', []):
+                  res_attrs = rs.get('resource', {}).get('attributes', [])
+                  for ss in rs.get('scopeSpans', []):
+                      scope_name = ss.get('scope', {}).get('name', '')
+                      for span in ss.get('spans', []):
+                          doc_id, doc = _convert_span(span, res_attrs, scope_name)
+                          bulk_lines.append(json.dumps({'index': {'_index': 'otel-v1-apm-span-000001', '_id': doc_id}}))
+                          bulk_lines.append(json.dumps(doc, default=str))
+              if not bulk_lines:
+                  return {'statusCode': 200, 'body': json.dumps({'message': 'No spans to index'})}
+              bulk_body = '\n'.join(bulk_lines) + '\n'
+              status, resp_body = _signed_request('POST', '/otel-v1-apm-span-000001/_bulk', bulk_body)
+              return {'statusCode': status, 'body': resp_body}
       Tags:
         - Key: agent-health
           Value: observability
