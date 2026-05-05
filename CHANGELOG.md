@@ -9,6 +9,8 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-05-05
+
 ### Fixed
 - Extra spacing in Timeline view by removing container padding ([#73](https://github.com/opensearch-project/agent-health/issues/73))
 - Pre-existing test failures: add missing `fast-check` dev dependency and fix incomplete mocks in `app.test.ts` ([#153](https://github.com/opensearch-project/agent-health/pull/153))
