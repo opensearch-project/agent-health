@@ -22,6 +22,17 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionTracesView from './SessionTracesView';
 import { PerformancePulseSection, EvalTrendPoint } from './PerformancePulse';
+// Task 3A/3B/3C: shared primitives for the AI Dev Tools page.
+import {
+  SectionHeader,
+  FilterBar,
+  FilterBarChip,
+  DataTable,
+  DATA_TABLE_HEAD_CLASSES,
+  DATA_TABLE_CELL_CLASSES,
+  CompactBadge,
+  EmptyState,
+} from './_shared';
 
 const AGENT_COLORS: Record<string, string> = {
   'claude-code': '#f97316',
@@ -399,14 +410,32 @@ function SortableHead({ label, sortKey, sort, onSort, className }: {
   className?: string;
 }) {
   const active = sort.key === sortKey;
+  // Task 4B (ai-dev-tool-ux): a11y for sortable headers.
+  //  * aria-sort announces the current column's direction to screen readers.
+  //  * role="button" + tabIndex + onKeyDown make the sort toggle operable
+  //    with the keyboard; previously it was mouse-only.
+  const ariaSort = active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
   return (
     <TableHead
-      className={`cursor-pointer select-none hover:text-foreground ${className ?? ''}`}
+      className={`cursor-pointer select-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset ${className ?? ''}`}
       onClick={() => onSort(sortKey)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSort(sortKey);
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-sort={ariaSort}
+      aria-label={`${label}, sortable column${active ? `, currently sorted ${ariaSort}` : ''}`}
     >
       <span className="inline-flex items-center gap-1">
         {label}
-        <span className={`text-xs ${active ? 'text-foreground' : 'text-muted-foreground/40'}`}>
+        <span
+          className={`text-xs ${active ? 'text-foreground' : 'text-muted-foreground/40'}`}
+          aria-hidden="true"
+        >
           {active ? (sort.dir === 'asc' ? '\u25B2' : '\u25BC') : '\u25BC'}
         </span>
       </span>
@@ -665,8 +694,8 @@ function OverviewTab({ stats, agents, onTabChange, rangePreset, onRangeChange, o
       )}
       {/* Loading indicator for non-today ranges */}
       {isIncomplete && (
-        <div className="flex items-center gap-2">
-          <div className="h-4 w-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+        <div className="flex items-center gap-2" role="status" aria-live="polite">
+          <div className="h-4 w-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin" aria-hidden="true" />
           <span className="text-sm text-muted-foreground">Loading historical data…</span>
         </div>
       )}
@@ -686,7 +715,7 @@ function OverviewTab({ stats, agents, onTabChange, rangePreset, onRangeChange, o
       {/* Key metric cards — grouped by Usage and Cost */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
-          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Usage</h3>
+          <SectionHeader label="Usage" />
           <div className="grid grid-cols-3 gap-3">
             <StatCard title="Total Sessions" value={String(stats.totalSessions)} onClick={() => onTabChange('sessions')} loading={isIncomplete} />
             <StatCard title="Agents Detected" value={String(agents.length)} onClick={() => onTabChange('workspace')} />
@@ -694,7 +723,7 @@ function OverviewTab({ stats, agents, onTabChange, rangePreset, onRangeChange, o
           </div>
         </div>
         <div>
-          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Cost</h3>
+          <SectionHeader label="Cost" />
           <div className="grid grid-cols-3 gap-3">
             <StatCard title="Estimated Cost" value={formatCost(stats.totalCost)} onClick={() => onTabChange('costs')} loading={isIncomplete} />
             <StatCard title="Wasted Cost" value={stats.wastedCost > 0 ? formatCost(stats.wastedCost) : '$0.00'} accent={stats.wastedCost > 0.5 ? 'red' : stats.wastedCost > 0 ? 'yellow' : undefined} onClick={() => onTabChange('costs')} loading={isIncomplete} />
@@ -707,7 +736,9 @@ function OverviewTab({ stats, agents, onTabChange, rangePreset, onRangeChange, o
       {cacheSavings > 0 && <TokenCacheBar stats={stats} />}
 
       {/* Per-agent breakdown — click to view sessions for that agent */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Task 2 (ai-dev-tool-ux): scale the per-agent grid past 3 columns on
+          wide screens so 4+ detected agents don't leave empty space to the right. */}
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-4">
         {stats.agents.map(a => (
           <Card key={a.agent} className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => { onAgentFilter?.(a.agent); onTabChange('sessions'); }}>
             <CardHeader className="pb-2 relative">
@@ -740,7 +771,9 @@ function OverviewTab({ stats, agents, onTabChange, rangePreset, onRangeChange, o
       </div>
 
       {/* Charts row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* Task 2 (ai-dev-tool-ux): let the chart pair become a 3-up row on
+          1920+ monitors so the trend chart can share the width. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
         <Card className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => onTabChange('sessions')}>
           <CardHeader className="pb-2 relative">
             {isIncomplete && <div className="absolute top-2 right-2 h-3 w-3 rounded-full border-[1.5px] border-muted-foreground/30 border-t-muted-foreground animate-spin" />}
@@ -1093,7 +1126,6 @@ function SessionsTab({ range, loading: initialLoading, initialProject, initialAg
   const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(initialLoading);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
-  const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
   const { sort: sessSort, toggle: toggleSessSort } = useSort<string>('start_time');
   const pageSize = 50;
 
@@ -1141,65 +1173,88 @@ function SessionsTab({ range, loading: initialLoading, initialProject, initialAg
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 flex-wrap">
-        <input
-          className="border rounded px-3 py-1.5 text-sm w-64 bg-background"
-          placeholder="Search prompts..."
-          value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleSearch()}
-        />
-        <button onClick={handleSearch} className="px-3 py-1.5 text-sm border rounded hover:bg-muted">Search</button>
-        <Select value={agentFilter} onValueChange={v => { setAgentFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-40"><SelectValue placeholder="Agent" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Agents</SelectItem>
-            <SelectItem value="claude-code">Claude Code</SelectItem>
-            <SelectItem value="kiro">Kiro</SelectItem>
-            <SelectItem value="codex">Codex CLI</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={completedFilter} onValueChange={v => { setCompletedFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="true">Completed</SelectItem>
-            <SelectItem value="false">Abandoned</SelectItem>
-          </SelectContent>
-        </Select>
-        {projectFilter && (
-          <Badge variant="secondary" className="text-xs flex items-center gap-1">
-            Project: {projectFilter.split('/').pop()}
-            <button onClick={() => { setProjectFilter(''); setPage(0); onClearFilters?.(); }} className="ml-1 hover:text-foreground">&times;</button>
-          </Badge>
-        )}
-        {agentFilter !== 'all' && (
-          <Badge variant="secondary" className="text-xs flex items-center gap-1">
-            Agent: {AGENT_LABELS[agentFilter] ?? agentFilter}
-            <button onClick={() => { setAgentFilter('all'); setPage(0); onClearFilters?.(); }} className="ml-1 hover:text-foreground">&times;</button>
-          </Badge>
-        )}
-        {hasActiveFilters && (
-          <button onClick={clearAllFilters} className="text-xs text-muted-foreground hover:text-foreground underline">Clear all filters</button>
-        )}
-        <span className="text-sm text-muted-foreground ml-auto">{total} sessions</span>
-      </div>
+      <FilterBar
+        search={{
+          value: searchInput,
+          onChange: setSearchInput,
+          onSubmit: handleSearch,
+          placeholder: 'Search prompts…',
+        }}
+        facets={
+          <>
+            <Select value={agentFilter} onValueChange={v => { setAgentFilter(v); setPage(0); }}>
+              <SelectTrigger className="w-40"><SelectValue placeholder="Agent" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Agents</SelectItem>
+                <SelectItem value="claude-code">Claude Code</SelectItem>
+                <SelectItem value="kiro">Kiro</SelectItem>
+                <SelectItem value="codex">Codex CLI</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={completedFilter} onValueChange={v => { setCompletedFilter(v); setPage(0); }}>
+              <SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="true">Completed</SelectItem>
+                <SelectItem value="false">Abandoned</SelectItem>
+              </SelectContent>
+            </Select>
+          </>
+        }
+        chips={
+          <>
+            {projectFilter && (
+              <FilterBarChip
+                label={<>Project: {projectFilter.split('/').pop()}</>}
+                onRemove={() => { setProjectFilter(''); setPage(0); onClearFilters?.(); }}
+              />
+            )}
+            {agentFilter !== 'all' && (
+              <FilterBarChip
+                label={<>Agent: {AGENT_LABELS[agentFilter] ?? agentFilter}</>}
+                onRemove={() => { setAgentFilter('all'); setPage(0); onClearFilters?.(); }}
+              />
+            )}
+            {hasActiveFilters && (
+              <button
+                onClick={clearAllFilters}
+                className="text-xs text-muted-foreground hover:text-foreground underline"
+              >
+                Clear all filters
+              </button>
+            )}
+          </>
+        }
+        right={<span className="text-sm text-muted-foreground">{total} sessions</span>}
+      />
 
       {loading ? <TabSkeleton label="Loading sessions..." table /> : (
         <>
-          <Card>
+          <DataTable
+            isEmpty={sessions.length === 0}
+            emptyState={
+              <div className="text-center py-8">
+                <div className="text-2xl mb-2 opacity-20">&gt;_</div>
+                <p className="text-sm text-muted-foreground">No sessions found</p>
+                <p className="text-xs text-muted-foreground/70 mt-1">Try adjusting your filters or date range.</p>
+              </div>
+            }
+          >
             <Table>
+              <caption className="sr-only">
+                Session list — click a row to view conversation details. Click a column header to sort.
+              </caption>
               <TableHeader>
                 <TableRow>
-                  <SortableHead label="Agent" sortKey="agent" sort={sessSort} onSort={toggleSessSort} />
-                  <TableHead className="min-w-[300px]">First Prompt</TableHead>
-                  <SortableHead label="Project" sortKey="project_path" sort={sessSort} onSort={toggleSessSort} />
-                  <SortableHead label="Wall Time" sortKey="duration_minutes" sort={sessSort} onSort={toggleSessSort} className="text-right" />
-                  <SortableHead label="Messages" sortKey="messages" sort={sessSort} onSort={toggleSessSort} className="text-right" />
-                  <SortableHead label="Tokens" sortKey="tokens" sort={sessSort} onSort={toggleSessSort} className="text-right" />
-                  <SortableHead label="Cost" sortKey="estimated_cost" sort={sessSort} onSort={toggleSessSort} className="text-right" />
-                  <SortableHead label="Status" sortKey="session_completed" sort={sessSort} onSort={toggleSessSort} />
-                  <SortableHead label="Date" sortKey="start_time" sort={sessSort} onSort={toggleSessSort} />
+                  <SortableHead label="Agent" sortKey="agent" sort={sessSort} onSort={toggleSessSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <TableHead className={`${DATA_TABLE_HEAD_CLASSES} min-w-[300px]`}>First Prompt</TableHead>
+                  <SortableHead label="Project" sortKey="project_path" sort={sessSort} onSort={toggleSessSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Wall Time" sortKey="duration_minutes" sort={sessSort} onSort={toggleSessSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Messages" sortKey="messages" sort={sessSort} onSort={toggleSessSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Tokens" sortKey="tokens" sort={sessSort} onSort={toggleSessSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Cost" sortKey="estimated_cost" sort={sessSort} onSort={toggleSessSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Status" sortKey="session_completed" sort={sessSort} onSort={toggleSessSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Date" sortKey="start_time" sort={sessSort} onSort={toggleSessSort} className={DATA_TABLE_HEAD_CLASSES} />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1210,44 +1265,40 @@ function SessionsTab({ range, loading: initialLoading, initialProject, initialAg
                   return s[k as keyof Session] as number | string;
                 }).map(s => (
                   <TableRow key={`${s.agent}-${s.session_id}`} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedSession(s)}>
-                    <TableCell>
+                    <TableCell className={DATA_TABLE_CELL_CLASSES}>
                       <div className="flex items-center gap-1">
                         <Badge variant="outline" style={{ borderColor: AGENT_COLORS[s.agent], color: AGENT_COLORS[s.agent] }}>
                           {AGENT_LABELS[s.agent] ?? s.agent}
                         </Badge>
                         {s.server_name && s.server_name !== 'local' && (
-                          <Badge variant="secondary" className="text-[10px] px-1">{s.server_name}</Badge>
+                          <CompactBadge variant="secondary">{s.server_name}</CompactBadge>
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="max-w-xs text-sm">
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} max-w-xs`}>
                       {s.first_prompt ? (
-                        <div
-                          className={`cursor-pointer ${expandedPrompts.has(s.session_id) ? '' : 'line-clamp-2'}`}
-                          onClick={(e) => { e.stopPropagation(); setExpandedPrompts(prev => { const next = new Set(prev); if (next.has(s.session_id)) next.delete(s.session_id); else next.add(s.session_id); return next; }); }}
-                          title={expandedPrompts.has(s.session_id) ? 'Click to collapse' : s.first_prompt}
-                        >
+                        <div className="line-clamp-2" title={s.first_prompt}>
                           {s.first_prompt}
                         </div>
                       ) : <span className="text-muted-foreground italic">No prompt</span>}
                     </TableCell>
-                    <TableCell className="max-w-[120px] truncate text-sm" title={s.project_path}>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} max-w-[120px] truncate`} title={s.project_path}>
                       {s.project_path.split('/').pop()}
                     </TableCell>
-                    <TableCell className="text-right text-sm">{formatDuration(s.duration_minutes)}</TableCell>
-                    <TableCell className="text-right text-sm">{s.user_message_count + s.assistant_message_count}</TableCell>
-                    <TableCell className="text-right text-sm">
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{formatDuration(s.duration_minutes)}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{s.user_message_count + s.assistant_message_count}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>
                       {s.input_tokens + s.output_tokens > 0 ? formatTokens(s.input_tokens + s.output_tokens) : '-'}
                     </TableCell>
-                    <TableCell className="text-right text-sm">
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>
                       {s.estimated_cost > 0 ? formatCost(s.estimated_cost) : '-'}
                     </TableCell>
-                    <TableCell className="text-sm">
+                    <TableCell className={DATA_TABLE_CELL_CLASSES}>
                       {s.session_completed
-                        ? <Badge className="bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/20 text-xs">Completed</Badge>
-                        : <Badge className="bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/20 text-xs">Abandoned</Badge>}
+                        ? <CompactBadge className="bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/20">Completed</CompactBadge>
+                        : <CompactBadge className="bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/20">Abandoned</CompactBadge>}
                     </TableCell>
-                    <TableCell className="text-sm whitespace-nowrap">
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} whitespace-nowrap`}>
                       <span className="text-foreground">{relativeTime(s.start_time)}</span>
                       <br />
                       <span className="text-xs text-muted-foreground">{new Date(s.start_time).toLocaleDateString()}</span>
@@ -1256,14 +1307,7 @@ function SessionsTab({ range, loading: initialLoading, initialProject, initialAg
                 ))}
               </TableBody>
             </Table>
-            {sessions.length === 0 && (
-              <div className="text-center py-8">
-                <div className="text-2xl mb-2 opacity-20">&gt;_</div>
-                <p className="text-sm text-muted-foreground">No sessions found</p>
-                <p className="text-xs text-muted-foreground/70 mt-1">Try adjusting your filters or date range.</p>
-              </div>
-            )}
-          </Card>
+          </DataTable>
 
           {/* Pagination */}
           {total > pageSize && (
@@ -1361,7 +1405,7 @@ function CostsTab({ costs, loading, onTabChange, onSelectProject, cacheSavings }
         <CostTrendChart dailyCosts={costs.daily_costs} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Cost by Model</CardTitle>
@@ -1431,7 +1475,7 @@ function ActivityTab({ activity, loading, onTabChange }: { activity: ActivityDat
         <StatCard title="Active Days" value={String(activity.total_active_days)} onClick={() => onTabChange('sessions')} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
         {(() => {
           const totalHourSessions = activity.hour_counts.reduce((s, h) => s + h.count, 0);
           const peakHour = activity.hour_counts.reduce((a, b) => b.count > a.count ? b : a, activity.hour_counts[0]);
@@ -1594,7 +1638,9 @@ function EfficiencyTab({ efficiency, loading, onTabChange, onAgentFilter }: { ef
       </div>
 
       {/* Per-agent comparison cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Task 2 (ai-dev-tool-ux): same wide-screen scaling as the Overview
+          per-agent grid — keeps cards dense past 3 agents on 1440/2560 monitors. */}
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-4">
         {efficiency.agents.map(a => (
           <Card key={a.agent} className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => { onAgentFilter?.(a.agent); onTabChange('sessions'); }}>
             <CardHeader className="pb-2">
@@ -1713,7 +1759,7 @@ function ToolsTab({ tools, loading, onTabChange, onAgentFilter }: { tools: Tools
         <StatCard title="Overall Success Rate" value={tools.total_tool_calls > 0 ? formatPct((tools.total_tool_calls - tools.total_tool_errors) / tools.total_tool_calls) : '100%'} accent={tools.total_tool_calls > 0 && (tools.total_tool_calls - tools.total_tool_errors) / tools.total_tool_calls < 0.9 ? 'red' : 'green'} onClick={() => onTabChange('performance')} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">
@@ -1749,31 +1795,34 @@ function ToolsTab({ tools, loading, onTabChange, onAgentFilter }: { tools: Tools
           </CardHeader>
           <CardContent>
             <Table>
+              <caption className="sr-only">
+                Tool usage ranked by total calls. Click a row to filter sessions by agent.
+              </caption>
               <TableHeader>
                 <TableRow>
-                  <SortableHead label="Agent" sortKey="agent" sort={toolSort} onSort={toggleToolSort} />
-                  <SortableHead label="Tool" sortKey="name" sort={toolSort} onSort={toggleToolSort} />
-                  <SortableHead label="Category" sortKey="category" sort={toolSort} onSort={toggleToolSort} />
-                  <SortableHead label="Calls" sortKey="total_calls" sort={toolSort} onSort={toggleToolSort} className="text-right" />
-                  <SortableHead label="Errors" sortKey="error_count" sort={toolSort} onSort={toggleToolSort} className="text-right" />
-                  <SortableHead label="Success %" sortKey="success_rate" sort={toolSort} onSort={toggleToolSort} className="text-right" />
+                  <SortableHead label="Agent" sortKey="agent" sort={toolSort} onSort={toggleToolSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Tool" sortKey="name" sort={toolSort} onSort={toggleToolSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Category" sortKey="category" sort={toolSort} onSort={toggleToolSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Calls" sortKey="total_calls" sort={toolSort} onSort={toggleToolSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Errors" sortKey="error_count" sort={toolSort} onSort={toggleToolSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Success %" sortKey="success_rate" sort={toolSort} onSort={toggleToolSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {sortRows(filteredTools, toolSort.key, toolSort.dir).slice(0, 20).map((t, i) => (
                   <TableRow key={i} className="cursor-pointer hover:bg-muted/50" onClick={() => { onAgentFilter?.(t.agent); onTabChange('sessions'); }}>
-                    <TableCell>
-                      <Badge variant="outline" style={{ borderColor: AGENT_COLORS[t.agent], color: AGENT_COLORS[t.agent] }} className="text-xs">
+                    <TableCell className={DATA_TABLE_CELL_CLASSES}>
+                      <CompactBadge variant="outline" style={{ borderColor: AGENT_COLORS[t.agent], color: AGENT_COLORS[t.agent] }}>
                         {AGENT_LABELS[t.agent] ?? t.agent}
-                      </Badge>
+                      </CompactBadge>
                     </TableCell>
-                    <TableCell className="text-sm font-mono">{t.name}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary" className="text-xs cursor-pointer hover:bg-secondary/80" onClick={(e) => { e.stopPropagation(); setCategoryFilter(t.category === categoryFilter ? null : t.category); }}>{friendlyCategory(t.category)}</Badge>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-mono`}>{t.name}</TableCell>
+                    <TableCell className={DATA_TABLE_CELL_CLASSES}>
+                      <CompactBadge variant="secondary" className="cursor-pointer hover:bg-secondary/80" onClick={(e) => { e.stopPropagation(); setCategoryFilter(t.category === categoryFilter ? null : t.category); }}>{friendlyCategory(t.category)}</CompactBadge>
                     </TableCell>
-                    <TableCell className="text-right text-sm">{t.total_calls}</TableCell>
-                    <TableCell className="text-right text-sm">{t.error_count > 0 ? t.error_count : '-'}</TableCell>
-                    <TableCell className={`text-right text-sm font-medium ${successRateColor(t.success_rate)}`}>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{t.total_calls}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{t.error_count > 0 ? t.error_count : '-'}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right font-medium ${successRateColor(t.success_rate)}`}>
                       {formatPct(t.success_rate)}
                     </TableCell>
                   </TableRow>
@@ -1801,41 +1850,52 @@ function ProjectsTab({ projects, loading, onSelectProject }: { projects: Project
   return (
     <div className="space-y-4">
       <span className="text-sm text-muted-foreground">{projects.length} projects</span>
-      <Card>
+      <DataTable
+        isEmpty={projects.length === 0}
+        emptyState={
+          <div className="text-center py-8">
+            <div className="text-2xl mb-2 opacity-20">[  ]</div>
+            <p className="text-sm text-muted-foreground">No projects found</p>
+          </div>
+        }
+      >
         <Table>
+          <caption className="sr-only">
+            Project analytics — click a row to filter sessions by project.
+          </caption>
           <TableHeader>
             <TableRow>
-              <SortableHead label="Project" sortKey="display_name" sort={projSort} onSort={toggleProjSort} />
-              <TableHead>Agents</TableHead>
-              <SortableHead label="Sessions" sortKey="total_sessions" sort={projSort} onSort={toggleProjSort} className="text-right" />
-              <SortableHead label="Completion" sortKey="completion_rate" sort={projSort} onSort={toggleProjSort} className="text-right" />
-              <SortableHead label="Cost" sortKey="total_cost" sort={projSort} onSort={toggleProjSort} className="text-right" />
-              <SortableHead label="Wasted" sortKey="wasted_cost" sort={projSort} onSort={toggleProjSort} className="text-right" />
-              <SortableHead label="Avg Session" sortKey="avg_session_minutes" sort={projSort} onSort={toggleProjSort} className="text-right" />
-              <SortableHead label="Tool Errors" sortKey="error_rate" sort={projSort} onSort={toggleProjSort} className="text-right" />
+              <SortableHead label="Project" sortKey="display_name" sort={projSort} onSort={toggleProjSort} className={DATA_TABLE_HEAD_CLASSES} />
+              <TableHead className={DATA_TABLE_HEAD_CLASSES}>Agents</TableHead>
+              <SortableHead label="Sessions" sortKey="total_sessions" sort={projSort} onSort={toggleProjSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+              <SortableHead label="Completion" sortKey="completion_rate" sort={projSort} onSort={toggleProjSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+              <SortableHead label="Cost" sortKey="total_cost" sort={projSort} onSort={toggleProjSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+              <SortableHead label="Wasted" sortKey="wasted_cost" sort={projSort} onSort={toggleProjSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+              <SortableHead label="Avg Session" sortKey="avg_session_minutes" sort={projSort} onSort={toggleProjSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+              <SortableHead label="Tool Errors" sortKey="error_rate" sort={projSort} onSort={toggleProjSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
             </TableRow>
           </TableHeader>
           <TableBody>
             {sorted.map(p => (
               <TableRow key={p.project_path} className="cursor-pointer hover:bg-muted/50" onClick={() => onSelectProject(p.project_path)}>
-                <TableCell className="text-sm font-medium" title={p.project_path}>{p.display_name}</TableCell>
-                <TableCell>
+                <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-medium`} title={p.project_path}>{p.display_name}</TableCell>
+                <TableCell className={DATA_TABLE_CELL_CLASSES}>
                   <div className="flex gap-1">
                     {p.agents.map(a => (
                       <div key={a} className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: AGENT_COLORS[a] }} title={AGENT_LABELS[a] ?? a} />
                     ))}
                   </div>
                 </TableCell>
-                <TableCell className="text-right text-sm">{p.completed_sessions} of {p.total_sessions}</TableCell>
-                <TableCell className={`text-right text-sm font-medium ${p.completion_rate < 0.6 ? 'text-red-600' : p.completion_rate < 0.8 ? 'text-yellow-600' : 'text-green-600'}`}>
+                <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{p.completed_sessions} of {p.total_sessions}</TableCell>
+                <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right font-medium ${p.completion_rate < 0.6 ? 'text-red-600' : p.completion_rate < 0.8 ? 'text-yellow-600' : 'text-green-600'}`}>
                   {formatPct(p.completion_rate)}
                 </TableCell>
-                <TableCell className="text-right text-sm">{p.total_cost > 0 ? formatCost(p.total_cost) : '-'}</TableCell>
-                <TableCell className={`text-right text-sm ${p.wasted_cost > 0 ? 'text-red-600' : ''}`}>
+                <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{p.total_cost > 0 ? formatCost(p.total_cost) : '-'}</TableCell>
+                <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right ${p.wasted_cost > 0 ? 'text-red-600' : ''}`}>
                   {p.wasted_cost > 0 ? formatCost(p.wasted_cost) : '-'}
                 </TableCell>
-                <TableCell className="text-right text-sm">{formatDuration(p.avg_session_minutes)}</TableCell>
-                <TableCell className="text-right text-sm">
+                <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{formatDuration(p.avg_session_minutes)}</TableCell>
+                <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>
                   {p.total_tool_errors > 0 ? (
                     <span className="text-yellow-600" title={`${p.total_tool_errors} errors out of ${p.total_tool_calls} calls`}>
                       {p.total_tool_errors} / {p.total_tool_calls} ({p.total_tool_calls > 0 ? formatPct(p.total_tool_errors / p.total_tool_calls) : '0%'})
@@ -1846,13 +1906,7 @@ function ProjectsTab({ projects, loading, onSelectProject }: { projects: Project
             ))}
           </TableBody>
         </Table>
-        {projects.length === 0 && (
-          <div className="text-center py-8">
-            <div className="text-2xl mb-2 opacity-20">[  ]</div>
-            <p className="text-sm text-muted-foreground">No projects found</p>
-          </div>
-        )}
-      </Card>
+      </DataTable>
     </div>
   );
 }
@@ -1883,29 +1937,32 @@ function AdvancedTab({ advanced, failurePatterns, loading, onTabChange, onAgentF
           </CardHeader>
           <CardContent>
             <Table>
+              <caption className="sr-only">
+                MCP servers used across sessions.
+              </caption>
               <TableHeader>
                 <TableRow>
-                  <SortableHead label="Server" sortKey="server" sort={mcpSort} onSort={toggleMcpSort} />
-                  <SortableHead label="Agent" sortKey="agent" sort={mcpSort} onSort={toggleMcpSort} />
-                  <SortableHead label="Calls" sortKey="total_calls" sort={mcpSort} onSort={toggleMcpSort} className="text-right" />
-                  <SortableHead label="Errors" sortKey="error_count" sort={mcpSort} onSort={toggleMcpSort} className="text-right" />
-                  <SortableHead label="Success %" sortKey="success_rate" sort={mcpSort} onSort={toggleMcpSort} className="text-right" />
-                  <SortableHead label="Sessions" sortKey="session_count" sort={mcpSort} onSort={toggleMcpSort} className="text-right" />
+                  <SortableHead label="Server" sortKey="server" sort={mcpSort} onSort={toggleMcpSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Agent" sortKey="agent" sort={mcpSort} onSort={toggleMcpSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Calls" sortKey="total_calls" sort={mcpSort} onSort={toggleMcpSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Errors" sortKey="error_count" sort={mcpSort} onSort={toggleMcpSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Success %" sortKey="success_rate" sort={mcpSort} onSort={toggleMcpSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Sessions" sortKey="session_count" sort={mcpSort} onSort={toggleMcpSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {sortRows(mcp.servers, mcpSort.key, mcpSort.dir).map((s, i) => (
                   <TableRow key={i} className="cursor-pointer hover:bg-muted/50" onClick={() => { onAgentFilter?.(s.agent); onTabChange('sessions'); }}>
-                    <TableCell className="font-mono text-sm">{s.server}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" style={{ borderColor: AGENT_COLORS[s.agent], color: AGENT_COLORS[s.agent] }} className="text-xs">
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-mono`}>{s.server}</TableCell>
+                    <TableCell className={DATA_TABLE_CELL_CLASSES}>
+                      <CompactBadge variant="outline" style={{ borderColor: AGENT_COLORS[s.agent], color: AGENT_COLORS[s.agent] }}>
                         {AGENT_LABELS[s.agent] ?? s.agent}
-                      </Badge>
+                      </CompactBadge>
                     </TableCell>
-                    <TableCell className="text-right text-sm">{s.total_calls}</TableCell>
-                    <TableCell className="text-right text-sm" title="Errors include connection failures and timeouts that may not count as completed calls">{s.error_count > 0 ? s.error_count : '-'}</TableCell>
-                    <TableCell className={`text-right text-sm font-medium ${successRateColor(s.success_rate)}`}>{formatPct(s.success_rate)}</TableCell>
-                    <TableCell className="text-right text-sm">{s.session_count}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{s.total_calls}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`} title="Errors include connection failures and timeouts that may not count as completed calls">{s.error_count > 0 ? s.error_count : '-'}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right font-medium ${successRateColor(s.success_rate)}`}>{formatPct(s.success_rate)}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{s.session_count}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -1914,7 +1971,7 @@ function AdvancedTab({ advanced, failurePatterns, loading, onTabChange, onAgentF
         </Card>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
         {/* Hourly Effectiveness */}
         <Card className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => onTabChange('performance')}>
           <CardHeader className="pb-2">
@@ -2003,25 +2060,28 @@ function AdvancedTab({ advanced, failurePatterns, loading, onTabChange, onAgentF
           </CardHeader>
           <CardContent>
             <Table>
+              <caption className="sr-only">
+                Recurring tool failures grouped by tool and agent.
+              </caption>
               <TableHeader>
                 <TableRow>
-                  <SortableHead label="Agent" sortKey="agent" sort={fpSort} onSort={toggleFpSort} />
-                  <SortableHead label="Tool" sortKey="tool" sort={fpSort} onSort={toggleFpSort} />
-                  <SortableHead label="Occurrences" sortKey="occurrences" sort={fpSort} onSort={toggleFpSort} className="text-right" />
-                  <SortableHead label="Sessions Affected" sortKey="sessions" sort={fpSort} onSort={toggleFpSort} className="text-right" />
+                  <SortableHead label="Agent" sortKey="agent" sort={fpSort} onSort={toggleFpSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Tool" sortKey="tool" sort={fpSort} onSort={toggleFpSort} className={DATA_TABLE_HEAD_CLASSES} />
+                  <SortableHead label="Occurrences" sortKey="occurrences" sort={fpSort} onSort={toggleFpSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
+                  <SortableHead label="Sessions Affected" sortKey="sessions" sort={fpSort} onSort={toggleFpSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {sortRows(failurePatterns, fpSort.key, fpSort.dir).slice(0, 10).map((fp, i) => (
                   <TableRow key={i} className="cursor-pointer hover:bg-muted/50" onClick={() => { onAgentFilter?.(fp.agent); onTabChange('tools'); }}>
-                    <TableCell>
-                      <Badge variant="outline" style={{ borderColor: AGENT_COLORS[fp.agent], color: AGENT_COLORS[fp.agent] }} className="text-xs">
+                    <TableCell className={DATA_TABLE_CELL_CLASSES}>
+                      <CompactBadge variant="outline" style={{ borderColor: AGENT_COLORS[fp.agent], color: AGENT_COLORS[fp.agent] }}>
                         {AGENT_LABELS[fp.agent] ?? fp.agent}
-                      </Badge>
+                      </CompactBadge>
                     </TableCell>
-                    <TableCell className="font-mono text-sm">{fp.tool}</TableCell>
-                    <TableCell className="text-right text-sm text-red-600">{fp.occurrences}</TableCell>
-                    <TableCell className="text-right text-sm">{fp.sessions}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-mono`}>{fp.tool}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right text-red-600`}>{fp.occurrences}</TableCell>
+                    <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{fp.sessions}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -2052,7 +2112,9 @@ function TeamTab({ team, loading }: { team: TeamAnalytics | null; loading: boole
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Task 2 (ai-dev-tool-ux): team-summary stats are dense enough to pack
+          6–8 per row on 1920/2560 screens without feeling cramped. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8 gap-4">
         <Card>
           <CardContent className="pt-4">
             <div className="text-2xl font-bold">{team.total_users}</div>
@@ -2088,52 +2150,55 @@ function TeamTab({ team, loading }: { team: TeamAnalytics | null; loading: boole
         <CardHeader><CardTitle>Per-User Breakdown</CardTitle></CardHeader>
         <CardContent>
           <Table>
+            <caption className="sr-only">
+              Per-user breakdown of AI coding activity.
+            </caption>
             <TableHeader>
               <TableRow>
-                <TableHead>User</TableHead>
-                <TableHead className="text-right">Sessions</TableHead>
-                <TableHead className="text-right">Completion</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead className="text-right">Wasted</TableHead>
-                <TableHead className="text-right">Tool Success</TableHead>
-                <TableHead className="text-right">Active Days</TableHead>
-                <TableHead>Agents</TableHead>
-                <TableHead>Top Projects</TableHead>
+                <TableHead className={DATA_TABLE_HEAD_CLASSES}>User</TableHead>
+                <TableHead className={`${DATA_TABLE_HEAD_CLASSES} text-right`}>Sessions</TableHead>
+                <TableHead className={`${DATA_TABLE_HEAD_CLASSES} text-right`}>Completion</TableHead>
+                <TableHead className={`${DATA_TABLE_HEAD_CLASSES} text-right`}>Cost</TableHead>
+                <TableHead className={`${DATA_TABLE_HEAD_CLASSES} text-right`}>Wasted</TableHead>
+                <TableHead className={`${DATA_TABLE_HEAD_CLASSES} text-right`}>Tool Success</TableHead>
+                <TableHead className={`${DATA_TABLE_HEAD_CLASSES} text-right`}>Active Days</TableHead>
+                <TableHead className={DATA_TABLE_HEAD_CLASSES}>Agents</TableHead>
+                <TableHead className={DATA_TABLE_HEAD_CLASSES}>Top Projects</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {team.users.map(u => (
                 <TableRow key={u.username}>
-                  <TableCell className="font-medium">{u.username}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-medium`}>{u.username}</TableCell>
+                  <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>
                     {u.completed_sessions}/{u.total_sessions}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>
                     <span className={u.completion_rate >= 0.8 ? 'text-green-600' : u.completion_rate >= 0.5 ? 'text-yellow-600' : 'text-red-600'}>
                       {(u.completion_rate * 100).toFixed(0)}%
                     </span>
                   </TableCell>
-                  <TableCell className="text-right">${u.total_cost.toFixed(2)}</TableCell>
-                  <TableCell className="text-right text-red-500">${u.wasted_cost.toFixed(2)}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>${u.total_cost.toFixed(2)}</TableCell>
+                  <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right text-red-500`}>${u.wasted_cost.toFixed(2)}</TableCell>
+                  <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>
                     <span className={u.tool_success_rate >= 0.95 ? 'text-green-600' : 'text-yellow-600'}>
                       {(u.tool_success_rate * 100).toFixed(1)}%
                     </span>
                   </TableCell>
-                  <TableCell className="text-right">{u.active_days}</TableCell>
-                  <TableCell>
+                  <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{u.active_days}</TableCell>
+                  <TableCell className={DATA_TABLE_CELL_CLASSES}>
                     <div className="flex gap-1">
                       {u.agents_used.map(a => (
-                        <Badge key={a} variant="outline" className="text-xs" style={{ borderColor: AGENT_COLORS[a], color: AGENT_COLORS[a] }}>
+                        <CompactBadge key={a} variant="outline" style={{ borderColor: AGENT_COLORS[a], color: AGENT_COLORS[a] }}>
                           {AGENT_LABELS[a] || a}
-                        </Badge>
+                        </CompactBadge>
                       ))}
                     </div>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={DATA_TABLE_CELL_CLASSES}>
                     <div className="flex gap-1 flex-wrap">
                       {u.top_projects.map(p => (
-                        <Badge key={p} variant="secondary" className="text-xs">{p}</Badge>
+                        <CompactBadge key={p} variant="secondary">{p}</CompactBadge>
                       ))}
                     </div>
                   </TableCell>
@@ -2277,7 +2342,7 @@ function WorkspaceTab() {
       {section === 'active' && (
         !activeSessions ? <TabSkeleton label="Checking active sessions..." cards={2} /> :
         activeSessions.length === 0 ? (
-          <EmptyState icon="~" title="No active sessions" description="No Claude Code sessions have been active in the last 30 minutes." />
+          <EmptyState fullCard icon="~" title="No active sessions" description="No Claude Code sessions have been active in the last 30 minutes." />
         ) : (
           <div className="space-y-2">
             <span className="text-sm text-muted-foreground">{activeSessions.length} active session{activeSessions.length > 1 ? 's' : ''}</span>
@@ -2308,7 +2373,7 @@ function WorkspaceTab() {
       {section === 'memory' && (
         !memoryProjects ? <TabSkeleton label="Loading memory files..." cards={3} /> :
         memoryProjects.length === 0 ? (
-          <EmptyState icon="[]" title="No memory files" description="Claude Code memory files will appear here once created. Memory helps Claude remember context across sessions." />
+          <EmptyState fullCard icon="[]" title="No memory files" description="Claude Code memory files will appear here once created. Memory helps Claude remember context across sessions." />
         ) : (
           <div className="space-y-4">
             {memoryProjects.map(proj => (
@@ -2323,7 +2388,7 @@ function WorkspaceTab() {
                       <div className="flex items-center justify-between mb-2">
                         <div>
                           <span className="text-sm font-medium">{mem.name}</span>
-                          {mem.type !== 'index' && <Badge variant="secondary" className="ml-2 text-xs">{mem.type}</Badge>}
+                          {mem.type !== 'index' && <CompactBadge variant="secondary" className="ml-2">{mem.type}</CompactBadge>}
                         </div>
                         <button
                           onClick={() => { setEditingMemory(mem); setEditContent(mem.content); }}
@@ -2370,7 +2435,7 @@ function WorkspaceTab() {
       {section === 'plans' && (
         !plans ? <TabSkeleton label="Loading plans..." cards={2} /> :
         plans.length === 0 ? (
-          <EmptyState icon="{ }" title="No plans" description="Plans are created by Claude Code when working on complex tasks. They'll appear here automatically." />
+          <EmptyState fullCard icon="{ }" title="No plans" description="Plans are created by Claude Code when working on complex tasks. They'll appear here automatically." />
         ) : (
           <div className="flex gap-4 min-h-[500px]">
             {/* Left pane — plan list */}
@@ -2415,7 +2480,7 @@ function WorkspaceTab() {
       {section === 'tasks' && (
         !tasks ? <TabSkeleton label="Loading tasks..." table /> :
         tasks.length === 0 ? (
-          <EmptyState icon="#" title="No tasks" description="Tasks are created by Claude Code to track work progress. Start a coding session to see tasks here." />
+          <EmptyState fullCard icon="#" title="No tasks" description="Tasks are created by Claude Code to track work progress. Start a coding session to see tasks here." />
         ) : (
           <div className="space-y-2">
             <div className="flex gap-4 text-sm text-muted-foreground">
@@ -2502,21 +2567,24 @@ function WorkspaceTab() {
                 </CardHeader>
                 <CardContent>
                   <Table>
+                    <caption className="sr-only">
+                      Installed Claude Code plugins.
+                    </caption>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Plugin</TableHead>
-                        <TableHead>Scope</TableHead>
-                        <TableHead>Version</TableHead>
-                        <TableHead>Installed</TableHead>
+                        <TableHead className={DATA_TABLE_HEAD_CLASSES}>Plugin</TableHead>
+                        <TableHead className={DATA_TABLE_HEAD_CLASSES}>Scope</TableHead>
+                        <TableHead className={DATA_TABLE_HEAD_CLASSES}>Version</TableHead>
+                        <TableHead className={DATA_TABLE_HEAD_CLASSES}>Installed</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {settings.plugins.map((p, i) => (
                         <TableRow key={i}>
-                          <TableCell className="text-sm font-mono">{p.name}</TableCell>
-                          <TableCell className="text-sm">{p.scope}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{p.version || '-'}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{p.installedAt ? new Date(p.installedAt).toLocaleDateString() : '-'}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-mono`}>{p.name}</TableCell>
+                          <TableCell className={DATA_TABLE_CELL_CLASSES}>{p.scope}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-muted-foreground`}>{p.version || '-'}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-muted-foreground`}>{p.installedAt ? new Date(p.installedAt).toLocaleDateString() : '-'}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -2547,7 +2615,7 @@ function WorkspaceTab() {
           {/* MCP Servers */}
           {kiroSection === 'mcp' && (
             kiroWorkspace.mcpServers.length === 0 ? (
-              <EmptyState icon="<>" title="No MCP servers" description="Configure MCP servers in ~/.kiro/settings/mcp.json to connect external tools." />
+              <EmptyState fullCard icon="<>" title="No MCP servers" description="Configure MCP servers in ~/.kiro/settings/mcp.json to connect external tools." />
             ) : (
               <Card>
                 <CardHeader className="pb-2">
@@ -2555,12 +2623,15 @@ function WorkspaceTab() {
                 </CardHeader>
                 <CardContent>
                   <Table>
+                    <caption className="sr-only">
+                      Kiro MCP servers with their command and enabled status.
+                    </caption>
                     <TableHeader>
                       <TableRow>
-                        <SortableHead label="Server" sortKey="name" sort={kiroMcpSort} onSort={toggleKiroMcpSort} />
-                        <SortableHead label="Command" sortKey="command" sort={kiroMcpSort} onSort={toggleKiroMcpSort} />
-                        <SortableHead label="Status" sortKey="disabled" sort={kiroMcpSort} onSort={toggleKiroMcpSort} />
-                        <SortableHead label="Disabled Tools" sortKey="disabledToolCount" sort={kiroMcpSort} onSort={toggleKiroMcpSort} className="text-right" />
+                        <SortableHead label="Server" sortKey="name" sort={kiroMcpSort} onSort={toggleKiroMcpSort} className={DATA_TABLE_HEAD_CLASSES} />
+                        <SortableHead label="Command" sortKey="command" sort={kiroMcpSort} onSort={toggleKiroMcpSort} className={DATA_TABLE_HEAD_CLASSES} />
+                        <SortableHead label="Status" sortKey="disabled" sort={kiroMcpSort} onSort={toggleKiroMcpSort} className={DATA_TABLE_HEAD_CLASSES} />
+                        <SortableHead label="Disabled Tools" sortKey="disabledToolCount" sort={kiroMcpSort} onSort={toggleKiroMcpSort} className={`${DATA_TABLE_HEAD_CLASSES} text-right`} />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -2569,14 +2640,14 @@ function WorkspaceTab() {
                         return s[k as keyof KiroMcpServer] as string | number;
                       }).map(s => (
                         <TableRow key={s.name}>
-                          <TableCell className="text-sm font-mono font-medium">{s.name}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground font-mono">{s.command}</TableCell>
-                          <TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-mono font-medium`}>{s.name}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-muted-foreground font-mono`}>{s.command}</TableCell>
+                          <TableCell className={DATA_TABLE_CELL_CLASSES}>
                             {s.disabled
-                              ? <Badge variant="secondary" className="text-xs">Disabled</Badge>
-                              : <Badge variant="outline" className="text-xs text-green-600 border-green-600">Active</Badge>}
+                              ? <CompactBadge variant="secondary">Disabled</CompactBadge>
+                              : <CompactBadge variant="outline" className="text-green-600 border-green-600">Active</CompactBadge>}
                           </TableCell>
-                          <TableCell className="text-right text-sm">{s.disabledToolCount > 0 ? s.disabledToolCount : '-'}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-right`}>{s.disabledToolCount > 0 ? s.disabledToolCount : '-'}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -2589,7 +2660,7 @@ function WorkspaceTab() {
           {/* Agents */}
           {kiroSection === 'agents' && (
             kiroWorkspace.agents.length === 0 ? (
-              <EmptyState icon="@" title="No agents configured" description="Add agent configurations in ~/.kiro/agents/ to customize Kiro's behavior." />
+              <EmptyState fullCard icon="@" title="No agents configured" description="Add agent configurations in ~/.kiro/agents/ to customize Kiro's behavior." />
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {kiroWorkspace.agents.map(a => (
@@ -2612,7 +2683,7 @@ function WorkspaceTab() {
           {/* Powers */}
           {kiroSection === 'powers' && (
             kiroWorkspace.powers.length === 0 ? (
-              <EmptyState icon="+" title="No powers installed" description="Install powers from the Kiro registry to extend functionality." />
+              <EmptyState fullCard icon="+" title="No powers installed" description="Install powers from the Kiro registry to extend functionality." />
             ) : (
               <Card>
                 <CardHeader className="pb-2">
@@ -2622,15 +2693,15 @@ function WorkspaceTab() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Power</TableHead>
-                        <TableHead>Registry</TableHead>
+                        <TableHead className={DATA_TABLE_HEAD_CLASSES}>Power</TableHead>
+                        <TableHead className={DATA_TABLE_HEAD_CLASSES}>Registry</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {kiroWorkspace.powers.map(p => (
                         <TableRow key={p.name}>
-                          <TableCell className="text-sm font-mono font-medium">{p.name}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{p.registryId}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-mono font-medium`}>{p.name}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-muted-foreground`}>{p.registryId}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -2643,7 +2714,7 @@ function WorkspaceTab() {
           {/* Extensions */}
           {kiroSection === 'extensions' && (
             kiroWorkspace.extensions.length === 0 ? (
-              <EmptyState icon="[]" title="No extensions found" description="Kiro extensions will appear here once installed." />
+              <EmptyState fullCard icon="[]" title="No extensions found" description="Kiro extensions will appear here once installed." />
             ) : (
               <Card>
                 <CardHeader className="pb-2">
@@ -2651,19 +2722,22 @@ function WorkspaceTab() {
                 </CardHeader>
                 <CardContent>
                   <Table>
+                    <caption className="sr-only">
+                      Installed Kiro extensions.
+                    </caption>
                     <TableHeader>
                       <TableRow>
-                        <SortableHead label="Extension" sortKey="name" sort={kiroExtSort} onSort={toggleKiroExtSort} />
-                        <SortableHead label="ID" sortKey="id" sort={kiroExtSort} onSort={toggleKiroExtSort} />
-                        <SortableHead label="Version" sortKey="version" sort={kiroExtSort} onSort={toggleKiroExtSort} />
+                        <SortableHead label="Extension" sortKey="name" sort={kiroExtSort} onSort={toggleKiroExtSort} className={DATA_TABLE_HEAD_CLASSES} />
+                        <SortableHead label="ID" sortKey="id" sort={kiroExtSort} onSort={toggleKiroExtSort} className={DATA_TABLE_HEAD_CLASSES} />
+                        <SortableHead label="Version" sortKey="version" sort={kiroExtSort} onSort={toggleKiroExtSort} className={DATA_TABLE_HEAD_CLASSES} />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {sortRows(kiroWorkspace.extensions, kiroExtSort.key, kiroExtSort.dir).map(e => (
                         <TableRow key={`${e.id}-${e.version}`}>
-                          <TableCell className="text-sm font-medium">{e.name}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground font-mono">{e.id}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{e.version}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} font-medium`}>{e.name}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-muted-foreground font-mono`}>{e.id}</TableCell>
+                          <TableCell className={`${DATA_TABLE_CELL_CLASSES} text-muted-foreground`}>{e.version}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -2727,7 +2801,7 @@ function AdvancedSection({ advanced, failurePatterns, loading, onTabChange, onAg
       >
         <span className={`transition-transform ${expanded ? 'rotate-90' : ''}`}>&#x25B6;</span>
         Advanced Analytics
-        {advanced?.mcp.servers.length ? <Badge variant="secondary" className="text-[10px] ml-1">{advanced.mcp.servers.length} MCP</Badge> : null}
+        {advanced?.mcp.servers.length ? <CompactBadge variant="secondary" className="ml-1">{advanced.mcp.servers.length} MCP</CompactBadge> : null}
       </button>
       {expanded && (
         <div className="mt-4">
@@ -2781,7 +2855,25 @@ function StatCard({ title, value, accent, onClick, trend, trendLabel, tooltip, l
     : accent === 'green' ? 'text-green-600 dark:text-green-400'
     : '';
   return (
-    <Card className={onClick ? 'cursor-pointer hover:border-primary/50 transition-colors' : ''} onClick={onClick}>
+    <Card
+      className={onClick
+        ? 'cursor-pointer hover:border-primary/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+        : ''}
+      onClick={onClick}
+      // Task 4A (ai-dev-tool-ux): make clickable stat cards keyboard-reachable
+      // with a visible focus ring. Non-clickable cards stay inert.
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-label={onClick ? `${title}: ${value}` : undefined}
+      onKeyDown={onClick
+        ? (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onClick();
+            }
+          }
+        : undefined}
+    >
       <CardContent className="pt-4 pb-3 relative">
         {loading && (
           <div className="absolute top-2 right-2 h-3 w-3 rounded-full border-[1.5px] border-muted-foreground/30 border-t-muted-foreground animate-spin" />
@@ -2801,18 +2893,6 @@ function StatCard({ title, value, accent, onClick, trend, trendLabel, tooltip, l
             {trendLabel && <span className="text-muted-foreground">{trendLabel}</span>}
           </p>
         )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function EmptyState({ title, description, icon }: { title: string; description?: string; icon?: string }) {
-  return (
-    <Card>
-      <CardContent className="pt-10 pb-10 text-center">
-        <div className="text-3xl mb-3 opacity-30">{icon ?? '--'}</div>
-        <p className="text-sm font-medium text-muted-foreground">{title}</p>
-        {description && <p className="text-xs text-muted-foreground/70 mt-1 max-w-sm mx-auto">{description}</p>}
       </CardContent>
     </Card>
   );
@@ -3030,7 +3110,22 @@ export const CodingAgentsPage: React.FC = () => {
     //  * space-y-6 is the "default" rung of the tight/default/section spacing scale
     //    proposed for this branch. Inner card/grid spacing is intentionally left
     //    untouched here — that belongs to Task 3.
-    <div className="mx-auto w-full max-w-[1400px] xl:max-w-[1600px] 2xl:max-w-[1800px] px-4 md:px-6 lg:px-8 py-6 space-y-6">
+    // Task 4B (ai-dev-tool-ux): a11y landmarks.
+    //  * <main> makes the page a discoverable landmark for screen readers.
+    //  * The sibling skip link (rendered first) lets keyboard users jump past
+    //    the sticky tab bar and header toolbar directly into tab content.
+    <>
+      <a
+        href="#ai-dev-tools-tabpanel"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-3 focus:py-2 focus:rounded-md focus:bg-background focus:border focus:border-primary focus:shadow-lg focus:text-sm focus:font-medium"
+      >
+        Skip to main content
+      </a>
+      <main
+        role="main"
+        aria-label="AI Dev Tools"
+        className="mx-auto w-full max-w-[1400px] xl:max-w-[1600px] 2xl:max-w-[1800px] px-4 md:px-6 lg:px-8 py-6 space-y-6"
+      >
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">AI Dev Tools</h1>
@@ -3093,17 +3188,27 @@ export const CodingAgentsPage: React.FC = () => {
           </CardContent>
         </Card>
       ) : (
-        <Tabs value={activeTab} onValueChange={navigateTab}>
-          <TabsList className="flex-wrap">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="sessions">Sessions</TabsTrigger>
-            <TabsTrigger value="projects">Projects</TabsTrigger>
-            <TabsTrigger value="costs">Costs</TabsTrigger>
-            <TabsTrigger value="performance">Performance</TabsTrigger>
-            <TabsTrigger value="tools">Tools</TabsTrigger>
-            {team?.is_multi_user && <TabsTrigger value="team">Team</TabsTrigger>}
-            <TabsTrigger value="workspace">Workspace</TabsTrigger>
-          </TabsList>
+        <Tabs value={activeTab} onValueChange={navigateTab} id="ai-dev-tools-tabpanel">
+          {/*
+            Task 4A (ai-dev-tool-ux): sticky tab bar so navigation stays
+            visible while scrolling long tabs (Sessions at 200+ rows is the
+            worst case). Sticky is relative to SidebarInset (the scroll
+            container); backdrop-blur prevents content from bleeding through.
+            Slight negative margin-x + padding aligns the bar with the page
+            shell's px-4/md:px-6/lg:px-8 gutters without double-padding.
+          */}
+          <div className="sticky top-0 z-20 -mx-4 md:-mx-6 lg:-mx-8 px-4 md:px-6 lg:px-8 bg-background/85 backdrop-blur border-b">
+            <TabsList className="flex-wrap bg-transparent p-0 h-auto gap-1 py-2" aria-label="AI Dev Tools sections">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="sessions">Sessions</TabsTrigger>
+              <TabsTrigger value="projects">Projects</TabsTrigger>
+              <TabsTrigger value="costs">Costs</TabsTrigger>
+              <TabsTrigger value="performance">Performance</TabsTrigger>
+              <TabsTrigger value="tools">Tools</TabsTrigger>
+              {team?.is_multi_user && <TabsTrigger value="team">Team</TabsTrigger>}
+              <TabsTrigger value="workspace">Workspace</TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="overview" className="mt-4">
             <OverviewTab stats={stats} agents={agents} onTabChange={setActiveTab} rangePreset={rangePreset} onRangeChange={setRangePreset} onAgentFilter={handleAgentFilter} />
@@ -3151,6 +3256,7 @@ export const CodingAgentsPage: React.FC = () => {
           </TabsContent>
         </Tabs>
       )}
-    </div>
+      </main>
+    </>
   );
 };
