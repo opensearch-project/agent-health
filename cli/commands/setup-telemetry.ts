@@ -244,6 +244,9 @@ function buildRcBlock(endpoint: string): string {
     `export OTEL_TRACES_EXPORTER=otlp`,
     `export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`,
     `export OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}`,
+    '',
+    `# cc-otel: Launch Claude Code with telemetry enabled`,
+    `alias cc-otel="export AWS_PROFILE=Bedrock && export CLAUDE_CODE_USE_BEDROCK=1 && export DISABLE_PROMPT_CACHING=1 && export DISABLE_ERROR_REPORTING=1 && export DISABLE_TELEMETRY=0 && export AWS_REGION=us-east-1 && export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 && export CLAUDE_CODE_ENABLE_TELEMETRY=1 && export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1 && export OTEL_METRICS_EXPORTER=otlp && export OTEL_LOGS_EXPORTER=otlp && export OTEL_TRACES_EXPORTER=otlp && export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf && export OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint} && claude"`,
     RC_BLOCK_END,
   ];
   return '\n' + lines.join('\n') + '\n';
@@ -263,6 +266,7 @@ export function createSetupTelemetryCommand(): Command {
     .option('--skip-rc', 'Print env vars without writing to shell rc file')
     .option('--status', 'Check current telemetry configuration status')
     .option('--deploy', 'Deploy the CloudFormation stack before configuring telemetry')
+    .option('--force', 'Replace existing telemetry block in shell rc file')
     .action(async (options: {
       stack: string;
       region?: string;
@@ -272,6 +276,7 @@ export function createSetupTelemetryCommand(): Command {
       skipRc?: boolean;
       status?: boolean;
       deploy?: boolean;
+      force?: boolean;
     }) => {
       console.log(chalk.cyan.bold('\n  Agent Health — Claude Code Telemetry Setup\n'));
 
@@ -412,8 +417,17 @@ export function createSetupTelemetryCommand(): Command {
       }
 
       if (rcFileHasTelemetryBlock(rcPath)) {
-        console.log(chalk.yellow(`\n  ⚠ Telemetry block already exists in ${rcPath}`));
-        console.log(chalk.gray(`    To update, remove the block between "${RC_BLOCK_START}" and "${RC_BLOCK_END}", then re-run this command.\n`));
+        if (options.force) {
+          // Remove existing block and replace with new one
+          const content = readFileSync(rcPath, 'utf-8');
+          const regex = new RegExp(`${RC_BLOCK_START}[\\s\\S]*?${RC_BLOCK_END}\\n?`, 'g');
+          const cleaned = content.replace(regex, '');
+          writeFileSync(rcPath, cleaned + buildRcBlock(endpoint), 'utf-8');
+          console.log(chalk.green(`\n  ✓ Telemetry env vars updated in ${rcPath}`));
+        } else {
+          console.log(chalk.yellow(`\n  ⚠ Telemetry block already exists in ${rcPath}`));
+          console.log(chalk.gray(`    Use --force to replace it, or manually remove the block between "${RC_BLOCK_START}" and "${RC_BLOCK_END}".\n`));
+        }
       } else {
         appendFileSync(rcPath, buildRcBlock(endpoint));
         console.log(chalk.green(`\n  ✓ Telemetry env vars written to ${rcPath}`));
@@ -422,9 +436,9 @@ export function createSetupTelemetryCommand(): Command {
       // Step 5: Next steps
       console.log(chalk.cyan.bold('\n  Next steps:\n'));
       console.log(chalk.gray(`    1. Reload your shell:  ${chalk.white(`source ${rcPath}`)}`));
-      console.log(chalk.gray(`    2. Start Claude Code:  ${chalk.white('claude')}`));
+      console.log(chalk.gray(`    2. Start Claude Code:  ${chalk.white('cc-otel')} (launches Claude with telemetry)`));
       console.log(chalk.gray(`    3. View traces:        ${chalk.white('http://localhost:4001/coding-agents')}`));
-      console.log(chalk.gray(`\n    Telemetry flows automatically. No restart of the API Gateway needed.\n`));
+      console.log(chalk.gray(`\n    The ${chalk.white('cc-otel')} alias combines Bedrock auth + OTel telemetry + Claude launch.\n`));
     });
 
   return command;

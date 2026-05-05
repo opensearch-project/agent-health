@@ -39,7 +39,8 @@
     "cli/dist/",
     "server/dist/",
     "lib/dist/",
-    "dist/"
+    "dist/",
+    "deployment/cloudformation/"
   ],
   "scripts": {
     "dev": "vite",
