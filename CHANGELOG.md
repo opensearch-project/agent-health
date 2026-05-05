@@ -14,6 +14,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Pre-existing test failures: add missing `fast-check` dev dependency and fix incomplete mocks in `app.test.ts` ([#153](https://github.com/opensearch-project/agent-health/pull/153))
 
 ### Added
+- Responsive UX pass for the AI Dev Tools page (`/coding-agents`): responsive page shell + `xl`/`2xl` breakpoint scaling on per-agent and chart grids, shared primitives (`SectionHeader`, `FilterBar`, `DataTable`, `CompactBadge`, `EmptyState`), sticky tab bar, keyboard focus rings on clickable stat cards, a11y landmarks (skip link, `<main>`, `aria-sort`, `aria-label`, table captions)
 - Amazon Strands connector for Bedrock Agent Runtime integration (`services/connectors/strands/`)
 - LangGraph REST connector for non-AG-UI LangGraph instances (`services/connectors/langgraph/`)
 - Dashboard homepage gradient background, stats summary bar, and chart area gradient fills ([#153](https://github.com/opensearch-project/agent-health/pull/153))
