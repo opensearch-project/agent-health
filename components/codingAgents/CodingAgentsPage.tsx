@@ -3022,7 +3022,15 @@ export const CodingAgentsPage: React.FC = () => {
   }, [activeTab, rangePreset]);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl">
+    // Task 1 (AI Dev Tool UX): responsive page shell.
+    //  * mx-auto centers the content (previously flush-left against the sidebar).
+    //  * max-w scales with the breakpoint so 1440/1920/4K monitors use their space
+    //    instead of leaving a void to the right of max-w-7xl (1280px).
+    //  * px steps with the breakpoint; py stays constant.
+    //  * space-y-6 is the "default" rung of the tight/default/section spacing scale
+    //    proposed for this branch. Inner card/grid spacing is intentionally left
+    //    untouched here — that belongs to Task 3.
+    <div className="mx-auto w-full max-w-[1400px] xl:max-w-[1600px] 2xl:max-w-[1800px] px-4 md:px-6 lg:px-8 py-6 space-y-6">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">AI Dev Tools</h1>
