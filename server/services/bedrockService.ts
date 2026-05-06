@@ -11,7 +11,7 @@ import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-r
 import config from '../config';
 import { TrajectoryStep, ImprovementStrategy, Evaluator, EvaluationMetrics } from '@/types';
 import { debug } from '@/lib/debug';
-import { getDefaultEvaluator } from '../prompts/evaluatorTemplates.js';
+import { getDefaultEvaluator } from '@/server/prompts/evaluatorTemplates';
 
 // ============================================================================
 // Types

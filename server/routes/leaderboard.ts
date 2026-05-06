@@ -10,15 +10,15 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { storageClientMiddleware, requireStorageClient } from '../middleware/storageClient';
-import { codingAgentRegistry as _registry } from '../services/codingAgents';
-import type { DateRange } from '../services/codingAgents/types';
-import type { RankingMetric, LeaderboardConfig } from '../services/codingAgents/leaderboard/types';
-import { syncSessions, getSyncStatus } from '../services/codingAgents/leaderboard/ingestion';
-import { getTeamStats, getUserStats, getProjectStats, getTrends } from '../services/codingAgents/leaderboard/teamAnalytics';
-import { getRankings } from '../services/codingAgents/leaderboard/rankings';
-import { getBadgeDefinitions, getUserBadges } from '../services/codingAgents/leaderboard/badges';
-import { getRecommendations, getTeamInsights } from '../services/codingAgents/leaderboard/recommendations';
+import { storageClientMiddleware, requireStorageClient } from '@/server/middleware/storageClient';
+import { codingAgentRegistry as _registry } from '@/server/services/codingAgents';
+import type { DateRange } from '@/server/services/codingAgents/types';
+import type { RankingMetric, LeaderboardConfig } from '@/server/services/codingAgents/leaderboard/types';
+import { syncSessions, getSyncStatus } from '@/server/services/codingAgents/leaderboard/ingestion';
+import { getTeamStats, getUserStats, getProjectStats, getTrends } from '@/server/services/codingAgents/leaderboard/teamAnalytics';
+import { getRankings } from '@/server/services/codingAgents/leaderboard/rankings';
+import { getBadgeDefinitions, getUserBadges } from '@/server/services/codingAgents/leaderboard/badges';
+import { getRecommendations, getTeamInsights } from '@/server/services/codingAgents/leaderboard/recommendations';
 
 const router = Router();
 

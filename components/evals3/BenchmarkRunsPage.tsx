@@ -38,7 +38,7 @@ import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
 import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getLabelColor, formatDate, getModelName } from '@/lib/utils';
-import { Breadcrumbs } from './Breadcrumbs';
+import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import {
   computeVersionData,
   getSelectedVersionData,
@@ -46,7 +46,7 @@ import {
   filterRunsByVersion,
   VersionData,
 } from '@/lib/benchmarkVersionUtils';
-import { RunConfigForExecution } from '../BenchmarkEditor';
+import { RunConfigForExecution } from '@/components/BenchmarkEditor';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

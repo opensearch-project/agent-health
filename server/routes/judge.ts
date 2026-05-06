@@ -10,14 +10,14 @@
 import { Request, Response, Router } from 'express';
 import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bedrock';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-import { evaluateTrajectory, parseBedrockError } from '../services/bedrockService';
-import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '../services/judgeService';
-import { loadConfigSync } from '../../lib/config/index';
-import serverConfig from '../config';
+import { evaluateTrajectory, parseBedrockError } from '@/server/services/bedrockService';
+import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/server/services/judgeService';
+import { loadConfigSync } from '@/lib/config/index';
+import serverConfig from '@/server/config';
 import { debug } from '@/lib/debug';
-import { getStorageModule } from '../adapters/index.js';
-import { getDefaultEvaluator, getSystemEvaluatorById, isSystemEvaluatorId } from '../prompts/evaluatorTemplates.js';
-import type { Evaluator } from '../../types/index.js';
+import { getStorageModule } from '@/server/adapters';
+import { getDefaultEvaluator, getSystemEvaluatorById, isSystemEvaluatorId } from '@/server/prompts/evaluatorTemplates';
+import type { Evaluator } from '@/types';
 
 const router = Router();
 

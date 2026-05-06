@@ -14,7 +14,7 @@ import config from '../config';
 import { buildEvaluationPrompt, JudgeRequest, JudgeResponse } from './bedrockService';
 import { debug } from '@/lib/debug';
 import type { Evaluator } from '@/types';
-import { getDefaultEvaluator } from '../prompts/evaluatorTemplates.js';
+import { getDefaultEvaluator } from '@/server/prompts/evaluatorTemplates';
 
 // ============================================================================
 // Main Evaluation Function

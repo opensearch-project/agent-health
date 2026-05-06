@@ -12,9 +12,9 @@
 
 import { Router, Request, Response } from 'express';
 import { debug } from '@/lib/debug';
-import { getStorageModule } from '../../adapters/index.js';
-import { SYSTEM_EVALUATORS, toEvaluator, isSystemEvaluatorId, getSystemEvaluatorById } from '../../prompts/evaluatorTemplates.js';
-import type { Evaluator, StorageMetadata } from '../../../types/index.js';
+import { getStorageModule } from '@/server/adapters';
+import { SYSTEM_EVALUATORS, toEvaluator, isSystemEvaluatorId, getSystemEvaluatorById } from '@/server/prompts/evaluatorTemplates';
+import type { Evaluator, StorageMetadata } from '@/types';
 
 const router = Router();
 

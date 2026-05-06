@@ -30,8 +30,8 @@ import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage'
 import { Benchmark, BenchmarkRun, TestCase } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatRelativeTime, getModelName } from '@/lib/utils';
-import { BenchmarkEditor } from '../BenchmarkEditor';
-import { Breadcrumbs } from './Breadcrumbs';
+import { BenchmarkEditor } from '@/components/BenchmarkEditor';
+import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────

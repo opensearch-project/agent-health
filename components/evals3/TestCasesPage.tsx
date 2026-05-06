@@ -29,9 +29,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { asyncTestCaseStorage, asyncRunStorage, asyncBenchmarkStorage } from '@/services/storage';
 import { TestCase, TestCaseRun, Benchmark } from '@/types';
 import { formatRelativeTime } from '@/lib/utils';
-import { TestCaseEditor } from '../TestCaseEditor';
-import { QuickRunModal } from '../QuickRunModal';
-import { Breadcrumbs } from './Breadcrumbs';
+import { TestCaseEditor } from '@/components/TestCaseEditor';
+import { QuickRunModal } from '@/components/QuickRunModal';
+import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────

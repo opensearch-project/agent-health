@@ -58,7 +58,7 @@ import { startMeasure, endMeasure } from '@/lib/performance';
 import { cn } from '@/lib/utils';
 import { TraceFlyoutContent } from './TraceFlyoutContent';
 import MetricsOverview, { FilterAction } from './MetricsOverview';
-import { useSidebarCollapse } from '../Layout';
+import { useSidebarCollapse } from '@/components/Layout';
 
 // ==================== Types ====================
 

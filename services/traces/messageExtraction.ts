@@ -27,9 +27,11 @@ export function extractMessagesFromSpans(
   const isClaudeCode = serviceName === 'claude-code' ||
     spans.some(s => s.attributes?.['service.name'] === 'claude-code');
 
-  const sorted = [...spans].sort(
-    (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
-  );
+  const sorted = [...spans]
+    .filter(s => s.startTime && !isNaN(new Date(s.startTime).getTime()))
+    .sort(
+      (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+    );
 
   const messages: ConversationMessage[] = [];
 

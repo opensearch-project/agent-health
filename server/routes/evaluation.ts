@@ -12,13 +12,13 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { getStorageModule } from '../adapters/index.js';
-import { SAMPLE_TEST_CASES } from '../../cli/demo/sampleTestCases.js';
-import { runSingleUseCase } from '../../services/benchmarkRunner.js';
-import { loadConfigSync } from '../../lib/config/index.js';
+import { getStorageModule } from '@/server/adapters';
+import { SAMPLE_TEST_CASES } from '../../cli/demo/sampleTestCases';
+import { runSingleUseCase } from '@/services/benchmarkRunner';
+import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { debug } from '@/lib/debug';
-import type { BenchmarkRun, TestCase } from '../../types/index.js';
+import type { BenchmarkRun, TestCase } from '@/types';
 
 const router = Router();
 
