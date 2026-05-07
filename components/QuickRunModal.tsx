@@ -158,7 +158,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
         const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`);
         if (response.ok) {
           const data = await response.json();
-          setEvaluators(data.items || []);
+          setEvaluators(data.evaluators || []);
         }
       } catch (error) {
         console.error('Failed to load evaluators:', error);
@@ -341,12 +341,12 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
               {/* Evaluator Selection */}
               <div className="space-y-1">
                 <Label className="text-xs">Evaluator</Label>
-                <Select value={selectedEvaluatorId || ''} onValueChange={val => setSelectedEvaluatorId(val || undefined)}>
+                <Select value={selectedEvaluatorId || '__default__'} onValueChange={val => setSelectedEvaluatorId(val === '__default__' ? undefined : val)}>
                   <SelectTrigger className="w-44 h-8">
                     <SelectValue placeholder="RCA Default" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">RCA Default</SelectItem>
+                    <SelectItem value="__default__">RCA Default</SelectItem>
                     {evaluators.map(evaluator => (
                       <SelectItem key={evaluator.id} value={evaluator.id}>
                         {evaluator.name} {evaluator.isSystem ? '(System)' : ''}

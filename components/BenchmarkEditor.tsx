@@ -105,7 +105,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
         const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`);
         if (response.ok) {
           const data = await response.json();
-          setEvaluators(data.items || []);
+          setEvaluators(data.evaluators || []);
         }
       } catch (error) {
         console.error('Failed to load evaluators:', error);
@@ -477,14 +477,14 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
                         <div className="space-y-2">
                           <Label>Evaluator (Optional)</Label>
                           <Select
-                            value={run.evaluatorId || ''}
-                            onValueChange={val => handleUpdateRun(run.id, { evaluatorId: val || undefined })}
+                            value={run.evaluatorId || '__default__'}
+                            onValueChange={val => handleUpdateRun(run.id, { evaluatorId: val === '__default__' ? undefined : val })}
                           >
                             <SelectTrigger>
                               <SelectValue placeholder="RCA Default" />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="">RCA Default</SelectItem>
+                              <SelectItem value="__default__">RCA Default</SelectItem>
                               {evaluators.map(evaluator => (
                                 <SelectItem key={evaluator.id} value={evaluator.id}>
                                   {evaluator.name} {evaluator.isSystem ? '(System)' : ''}

@@ -256,6 +256,11 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                               <Link to="/evaluations/runs" className="text-xs">Evaluation Runs</Link>
                             </SidebarMenuSubButton>
                           </SidebarMenuSubItem>
+                          <SidebarMenuSubItem>
+                            <SidebarMenuSubButton asChild isActive={location.pathname.startsWith("/evaluators")} data-testid="nav-evaluators" className="h-8">
+                              <Link to="/evaluators" className="text-xs">Evaluators</Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
                         </SidebarMenuSub>
                       </CollapsibleContent>
                     </SidebarMenuItem>
