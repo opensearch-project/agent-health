@@ -49,6 +49,11 @@ function ensureDir(dir: string): void {
   }
 }
 
+/** Sanitize an ID to prevent path traversal (strips directory components) */
+function sanitizeId(id: string): string {
+  return path.basename(id);
+}
+
 function readJsonFile<T>(filePath: string): T | null {
   try {
     if (!fs.existsSync(filePath)) return null;
@@ -97,7 +102,7 @@ class FileTestCaseOperations implements ITestCaseOperations {
   private get dir() { return path.join(this.baseDir, 'test-cases'); }
 
   private docPath(id: string, version: number): string {
-    return path.join(this.dir, `${id}-v${version}.json`);
+    return path.join(this.dir, `${sanitizeId(id)}-v${version}.json`);
   }
 
   /**
@@ -250,7 +255,7 @@ class FileBenchmarkOperations implements IBenchmarkOperations {
   private get dir() { return path.join(this.baseDir, 'benchmarks'); }
 
   private docPath(id: string): string {
-    return path.join(this.dir, `${id}.json`);
+    return path.join(this.dir, `${sanitizeId(id)}.json`);
   }
 
   async getAll(options?: PaginationOptions): Promise<{ items: Benchmark[]; total: number }> {
@@ -368,7 +373,7 @@ class FileRunOperations implements IRunOperations {
   private get dir() { return path.join(this.baseDir, 'runs'); }
 
   private docPath(id: string): string {
-    return path.join(this.dir, `${id}.json`);
+    return path.join(this.dir, `${sanitizeId(id)}.json`);
   }
 
   async getAll(options?: PaginationOptions): Promise<{ items: TestCaseRun[]; total: number }> {
@@ -592,7 +597,7 @@ class FileEvaluatorOperations implements IEvaluatorOperations {
   private get dir() { return path.join(this.baseDir, 'evaluators'); }
 
   private docPath(id: string, version: number): string {
-    return path.join(this.dir, `${id}-v${version}.json`);
+    return path.join(this.dir, `${sanitizeId(id)}-v${version}.json`);
   }
 
   async getAll(options?: PaginationOptions): Promise<{ items: Evaluator[]; total: number }> {
