@@ -49,6 +49,7 @@
     "uuid": "^14.0.0",
     "fast-xml-parser": ">=5.7.2",
     "postcss": ">=8.5.7",
-    "langsmith": ">=0.5.26"
+    "langsmith": ">=0.5.26",
+    "hono": ">=4.12.16"
   }
 }
