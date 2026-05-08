@@ -13,7 +13,8 @@
 
 import { Router, Request, Response } from 'express';
 import { loadConfigSync } from '@/lib/config/index';
-import type { AgentConfig, ModelConfig, ConnectorProtocol } from '@/types/index.js';
+import type { AgentConfig, ModelConfig } from '@/types/index.js';
+import { VALID_CONNECTOR_TYPES } from '@/lib/constants';
 import { addCustomAgent, removeCustomAgent, getCustomAgents } from '@/server/services/customAgentStore';
 import { getRemoteServers } from '@/server/services/codingAgents/remoteConfig';
 import fs from 'fs';
@@ -62,14 +63,7 @@ router.get('/api/agents', (req: Request, res: Response) => {
   }
 });
 
-const VALID_CONNECTOR_TYPES: ConnectorProtocol[] = [
-  'agui-streaming',
-  'rest',
-  'openai-compatible',
-  'subprocess',
-  'claude-code',
-  'mock',
-];
+// VALID_CONNECTOR_TYPES imported from @/lib/constants (single source of truth)
 
 /**
  * POST /api/agents/custom - Add a custom agent endpoint
