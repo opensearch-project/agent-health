@@ -157,7 +157,7 @@ async function runBenchmarkForAgent(
           startedRunId = event.runId;
         } else if (event.type === 'progress') {
           const current = event.currentTestCaseIndex + 1;
-          const completed = (event as any).completedCount ?? 0;
+          const completed = event.completedCount ?? 0;
           const testCaseName = event.currentTestCase?.name || `Test ${current}`;
 
           if (event.result) {
@@ -523,8 +523,10 @@ export function createBenchmarkCommand(): Command {
             const createSpinner = ora('Creating benchmark...').start();
             const existingBenchmark = await api.findBenchmark(benchmarkName);
             if (existingBenchmark) {
-              benchmark = existingBenchmark;
-              createSpinner.succeed(`Reusing existing benchmark: ${benchmark.name} (${benchmark.id})`);
+              benchmark = await api.updateBenchmark(existingBenchmark.id, {
+                testCaseIds: bulkResult.testCases.map(tc => tc.id),
+              });
+              createSpinner.succeed(`Updated existing benchmark: ${benchmark.name} (${benchmark.id})`);
             } else {
               benchmark = await api.createBenchmark({
                 name: benchmarkName,

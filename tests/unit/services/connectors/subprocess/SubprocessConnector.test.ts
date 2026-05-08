@@ -335,6 +335,56 @@ describe('SubprocessConnector', () => {
       expect(steps.length).toBeGreaterThan(0);
       expect(steps[steps.length - 1].type).toBe('tool_result');
       expect(steps[steps.length - 1].content).toContain('Error');
+      expect(steps[steps.length - 1].content).toContain('Error occurred');
+    });
+
+    it('should not emit response step when exit code is non-zero', () => {
+      const steps = connector.parseResponse({
+        stdout: 'some output',
+        stderr: 'fatal error',
+        exitCode: 1,
+      });
+
+      // Should only have the error step, not a response step
+      expect(steps).toHaveLength(1);
+      expect(steps[0].type).toBe('tool_result');
+      expect(steps[0].content).toContain('fatal error');
+    });
+
+    it('should include stdout in error message when stderr is empty and exit code is non-zero', () => {
+      const steps = connector.parseResponse({
+        stdout: 'partial output before crash',
+        stderr: '',
+        exitCode: 1,
+      });
+
+      expect(steps).toHaveLength(1);
+      expect(steps[0].type).toBe('tool_result');
+      expect(steps[0].content).toContain('stdout: partial output before crash');
+      expect(steps[0].content).toContain('Process exited with code 1');
+    });
+
+    it('should show (no output) when both stdout and stderr are empty on failure', () => {
+      const steps = connector.parseResponse({
+        stdout: '',
+        stderr: '',
+        exitCode: 1,
+      });
+
+      expect(steps).toHaveLength(1);
+      expect(steps[0].type).toBe('tool_result');
+      expect(steps[0].content).toContain('(no output)');
+    });
+
+    it('should include exit code in error message', () => {
+      const steps = connector.parseResponse({
+        stdout: '',
+        stderr: 'segfault',
+        exitCode: 139,
+      });
+
+      expect(steps).toHaveLength(1);
+      expect(steps[0].content).toContain('Process exited with code 139');
     });
   });
 

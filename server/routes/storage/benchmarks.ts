@@ -993,6 +993,7 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
             res.write(`data: ${JSON.stringify({
               type: 'progress',
               currentTestCaseIndex: completedCount - 1,
+              completedCount,
               totalTestCases: benchmark.testCaseIds.length,
               currentTestCase: { id: testCaseId, name: tc?.name || testCaseId },
               result: { status: result.status, error: result.error },

@@ -296,8 +296,8 @@ export class SubprocessConnector extends BaseConnector {
       }
     }
 
-    // Text parsing - treat entire output as response
-    if (data.stdout.trim()) {
+    // Text parsing - treat entire output as response (only on success)
+    if (data.stdout.trim() && data.exitCode === 0) {
       steps.push(this.createStep('response', data.stdout.trim()));
     }
 
@@ -305,7 +305,9 @@ export class SubprocessConnector extends BaseConnector {
     if (data.exitCode !== 0) {
       const errorContent = data.stderr.trim()
         ? `Error: Process exited with code ${data.exitCode}. ${data.stderr.trim()}`
-        : `Error: Process exited with code ${data.exitCode} (no output)`;
+        : data.stdout.trim()
+          ? `Error: Process exited with code ${data.exitCode}. stdout: ${data.stdout.trim()}`
+          : `Error: Process exited with code ${data.exitCode} (no output)`;
       steps.push(this.createStep('tool_result', errorContent, {
         status: ToolCallStatus.FAILURE,
       }));

@@ -37,7 +37,7 @@ export interface HealthResponse {
  */
 export type BenchmarkExecutionEvent =
   | { type: 'started'; runId: string; testCases: Array<{ id: string; name: string; status: string }> }
-  | { type: 'progress'; currentTestCaseIndex: number; totalTestCases: number; currentTestCase: { id: string; name: string }; result?: any }
+  | { type: 'progress'; currentTestCaseIndex: number; totalTestCases: number; currentTestCase: { id: string; name: string }; completedCount?: number; result?: any }
   | { type: 'completed'; run: BenchmarkRun }
   | { type: 'cancelled'; run: BenchmarkRun }
   | { type: 'error'; error: string; runId?: string };
@@ -683,6 +683,28 @@ export class ApiClient {
     if (!res.ok) {
       const errorBody = await res.text();
       throw new Error(`Failed to create benchmark: ${errorBody}`);
+    }
+
+    return res.json();
+  }
+
+  /**
+   * Update an existing benchmark
+   */
+  async updateBenchmark(id: string, input: {
+    name?: string;
+    description?: string;
+    testCaseIds?: string[];
+  }): Promise<Benchmark> {
+    const res = await fetch(`${this.baseUrl}/api/storage/benchmarks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+
+    if (!res.ok) {
+      const errorBody = await res.text();
+      throw new Error(`Failed to update benchmark: ${errorBody}`);
     }
 
     return res.json();

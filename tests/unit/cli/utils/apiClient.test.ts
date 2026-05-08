@@ -1287,4 +1287,89 @@ describe('ApiClient', () => {
       );
     });
   });
+
+  describe('updateBenchmark', () => {
+    it('should PUT to the correct endpoint with updated fields', async () => {
+      const updatedBenchmark = { id: 'bench-1', name: 'Benchmark 1', testCaseIds: ['tc-new-1', 'tc-new-2'] };
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(updatedBenchmark),
+      });
+
+      const result = await client.updateBenchmark('bench-1', {
+        testCaseIds: ['tc-new-1', 'tc-new-2'],
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `${baseUrl}/api/storage/benchmarks/bench-1`,
+        expect.objectContaining({
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ testCaseIds: ['tc-new-1', 'tc-new-2'] }),
+        })
+      );
+      expect(result).toEqual(updatedBenchmark);
+    });
+
+    it('should throw error on failure', async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        text: jest.fn().mockResolvedValue('Not found'),
+      });
+
+      await expect(client.updateBenchmark('bench-1', { name: 'New Name' })).rejects.toThrow(
+        'Failed to update benchmark: Not found'
+      );
+    });
+  });
+
+  describe('findBenchmark', () => {
+    it('should return benchmark when found by ID', async () => {
+      const benchmark = { id: 'bench-1', name: 'Benchmark 1', runs: [] };
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(benchmark),
+      });
+
+      const result = await client.findBenchmark('bench-1');
+
+      expect(result).toEqual(benchmark);
+    });
+
+    it('should fall back to name match when ID not found', async () => {
+      const benchmarks = [
+        { id: 'bench-1', name: 'My Benchmark' },
+        { id: 'bench-2', name: 'Other Benchmark' },
+      ];
+      // First call (getBenchmark by ID) returns 404
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+      });
+      // Second call (listBenchmarks) returns list
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ benchmarks }),
+      });
+
+      const result = await client.findBenchmark('My Benchmark');
+
+      expect(result).toEqual(benchmarks[0]);
+    });
+
+    it('should return null when not found by ID or name', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ benchmarks: [] }),
+      });
+
+      const result = await client.findBenchmark('nonexistent');
+
+      expect(result).toBeNull();
+    });
+  });
 });
