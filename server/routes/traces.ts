@@ -11,7 +11,7 @@
  */
 
 import { Request, Response, Router } from 'express';
-import { fetchTraces, checkTracesHealth, classifyOpenSearchError, type ErrorCategory } from '../services/tracesService.js';
+import { fetchTraces, checkTracesHealth, classifyOpenSearchError, validateAwsCredentials, type ErrorCategory } from '../services/tracesService.js';
 import {
   getSampleSpansForRunIds,
   getSampleSpansByTraceId,
@@ -150,6 +150,19 @@ router.get('/api/traces/health', async (req: Request, res: Response) => {
         message: 'Observability data source not configured. Sample trace data available.',
         sampleTraceCount: getAllSampleTraceSpans().length,
       });
+    }
+
+    // Proactive credential check for SigV4 auth
+    if (config.authType === 'sigv4') {
+      const credError = await validateAwsCredentials(config.awsProfile);
+      if (credError) {
+        return res.json({
+          status: 'error',
+          error: credError,
+          errorCategory: 'auth' as ErrorCategory,
+          suggestion: `Run \`aws sso login --profile ${config.awsProfile || 'default'}\` or refresh your AWS credentials.`,
+        });
+      }
     }
 
     let client;

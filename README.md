@@ -260,7 +260,7 @@ export default {
       endpoint: "http://localhost:8000/agent",
       connectorType: "rest",  // or "agui-streaming", "langgraph", "strands", "subprocess"
       models: ["claude-sonnet-4"],
-      useTraces: true,        // Enable OpenTelemetry trace collection
+      useTraces: true,        // Enable OpenTelemetry trace collection (default: false)
     }
   ],
 };

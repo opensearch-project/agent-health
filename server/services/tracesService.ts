@@ -89,12 +89,18 @@ export interface HealthStatus {
 export function classifyOpenSearchError(error: any): { category: ErrorCategory; message: string; suggestion: string } {
   const statusCode = error.meta?.statusCode;
   const message = error.message || 'Unknown error';
+  const bodyMessage = error.meta?.body?.message || '';
 
-  if (statusCode === 401 || statusCode === 403) {
+  // Detect expired/invalid credentials (may come as 401, 403, or in error message)
+  const isTokenError = /security token.*invalid|token.*expired|ExpiredToken|InvalidIdentityToken|credentials.*expired/i
+    .test(message + bodyMessage);
+
+  if (statusCode === 401 || statusCode === 403 || isTokenError) {
+    const detail = isTokenError ? 'AWS security token is expired or invalid' : `Authentication failed (HTTP ${statusCode})`;
     return {
       category: 'auth',
-      message: `Authentication failed (HTTP ${statusCode})`,
-      suggestion: 'AWS credentials may be expired or invalid. Run `aws sts get-caller-identity` to verify, then refresh with `aws sso login` or update your credentials.',
+      message: detail,
+      suggestion: 'AWS credentials may be expired. Run `aws sts get-caller-identity --profile <your-profile>` to verify, then refresh with `aws sso login --profile <your-profile>` or update your credentials.',
     };
   }
 
@@ -318,6 +324,36 @@ export async function fetchTraces(
     nextCursor,
     hasMore
   };
+}
+
+/**
+ * Proactively validate AWS credentials for a SigV4-authenticated cluster.
+ * Returns null if credentials are valid, or an error message if expired/invalid.
+ * Resolves credentials via the provider chain — if they can't be resolved, they're bad.
+ */
+export async function validateAwsCredentials(profile?: string): Promise<string | null> {
+  try {
+    const { fromNodeProviderChain } = await import('@aws-sdk/credential-providers');
+
+    const provider = fromNodeProviderChain({
+      ...(profile && { profile }),
+    });
+
+    const creds = await provider();
+
+    // Check if credentials have an expiration and it's in the past
+    if (creds.expiration && creds.expiration.getTime() < Date.now()) {
+      return `AWS credentials expired at ${creds.expiration.toISOString()} (profile: ${profile || 'default'}). Run \`aws sso login --profile ${profile || 'default'}\` or refresh your credentials.`;
+    }
+
+    return null; // Credentials resolved successfully
+  } catch (error: any) {
+    const msg = error.message || String(error);
+    if (/expired|invalid.*token|no.*credentials|could not load/i.test(msg)) {
+      return `AWS credentials expired or invalid (profile: ${profile || 'default'}). Run \`aws sso login --profile ${profile || 'default'}\` or refresh your credentials.`;
+    }
+    return `AWS credential check failed: ${msg}`;
+  }
 }
 
 /**

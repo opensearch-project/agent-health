@@ -12,8 +12,9 @@ import 'dotenv/config';
 import { ChildProcess } from 'child_process';
 import config from './config/index.js';
 import { createApp } from './app.js';
-import { getStorageConfigFromFile } from './services/configService.js';
+import { getStorageConfigFromFile, getObservabilityConfigFromFile } from './services/configService.js';
 import { findObservioRoot, isPortFree, spawnObservioAgent, OBSERVIO_PORT } from './services/observioAgent.js';
+import { validateAwsCredentials } from './services/tracesService.js';
 
 // Register server-side connectors (subprocess, claude-code)
 // This import has side effects that register connectors with the registry
@@ -89,6 +90,18 @@ async function startServer() {
           console.log(`   OpenSearch Storage: ${storageEndpoint}`);
         } else {
           console.log(`   OpenSearch Storage: NOT CONFIGURED`);
+        }
+
+        // Proactive credential check for SigV4 clusters (non-blocking)
+        const obsConfig = getObservabilityConfigFromFile();
+        if (obsConfig?.authType === 'sigv4') {
+          validateAwsCredentials(obsConfig.awsProfile).then(credError => {
+            if (credError) {
+              console.warn(`\n  ⚠️  AWS CREDENTIALS ISSUE: ${credError}\n`);
+            } else {
+              console.log(`   AWS Credentials: ✓ valid (profile: ${obsConfig.awsProfile || 'default'})`);
+            }
+          }).catch(() => { /* non-fatal */ });
         }
         console.log('');
 

@@ -233,19 +233,16 @@ async function testEndpoint(endpoint: string): Promise<{ ok: boolean; message: s
 }
 
 /**
- * Build the env block to append to the rc file
+ * Build the env block to append to the rc file.
+ *
+ * IMPORTANT: Only the alias should set OTEL env vars — they are scoped to Claude Code sessions.
+ * Global exports would pollute the environment for other processes (Agent Health server,
+ * Observio agent) which read their own .env files and should not be overridden by shell vars.
  */
 function buildRcBlock(endpoint: string): string {
   const lines = [
     RC_BLOCK_START,
-    `export CLAUDE_CODE_ENABLE_TELEMETRY=1`,
-    `export OTEL_METRICS_EXPORTER=otlp`,
-    `export OTEL_LOGS_EXPORTER=otlp`,
-    `export OTEL_TRACES_EXPORTER=otlp`,
-    `export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`,
-    `export OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}`,
-    '',
-    `# cc-otel: Launch Claude Code with telemetry enabled`,
+    `# cc-otel: Launch Claude Code with telemetry enabled (env vars are alias-scoped)`,
     `alias cc-otel="export AWS_PROFILE=Bedrock && export CLAUDE_CODE_USE_BEDROCK=1 && export DISABLE_PROMPT_CACHING=1 && export DISABLE_ERROR_REPORTING=1 && export DISABLE_TELEMETRY=0 && export AWS_REGION=us-east-1 && export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 && export CLAUDE_CODE_ENABLE_TELEMETRY=1 && export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1 && export OTEL_METRICS_EXPORTER=otlp && export OTEL_LOGS_EXPORTER=otlp && export OTEL_TRACES_EXPORTER=otlp && export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf && export OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint} && claude"`,
     RC_BLOCK_END,
   ];
