@@ -70,6 +70,7 @@ const navItems = [
 const testingSubItems = [
   { to: "/benchmarks", label: "Benchmarks", tooltip: "Define success criteria and scoring", testId: "nav-benchmarks" },
   { to: "/test-cases", label: "Test Cases", tooltip: "Create and manage test inputs", testId: "nav-test-cases" },
+  { to: "/evaluators", label: "Evaluators", tooltip: "Manage evaluation criteria and scoring methods", testId: "nav-evaluators" },
 ];
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
@@ -79,7 +80,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   // Determine if testing section should be open based on current path
   const isTestingPath = location.pathname.startsWith("/test-cases") ||
-                      location.pathname.startsWith("/benchmarks");
+                      location.pathname.startsWith("/benchmarks") ||
+                      location.pathname.startsWith("/evaluators");
   // Keep testing dropdown always open
   const [testingOpen, setTestingOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -252,6 +254,11 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                           <SidebarMenuSubItem>
                             <SidebarMenuSubButton asChild isActive={location.pathname === "/evaluations/runs" || /\/evaluations\/benchmarks\/[^/]+\/runs\/[^/]+/.test(location.pathname)} data-testid="nav-evals3-runs" className="h-8">
                               <Link to="/evaluations/runs" className="text-xs">Evaluation Runs</Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                          <SidebarMenuSubItem>
+                            <SidebarMenuSubButton asChild isActive={location.pathname.startsWith("/evaluators")} data-testid="nav-evaluators" className="h-8">
+                              <Link to="/evaluators" className="text-xs">Evaluators</Link>
                             </SidebarMenuSubButton>
                           </SidebarMenuSubItem>
                         </SidebarMenuSub>

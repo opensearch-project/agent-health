@@ -192,6 +192,8 @@ export function buildRadarData(
   stats: CombinedStats,
   evalTrends: EvalTrendPoint[] | null,
 ): Array<Record<string, number | string>> {
+  if (efficiency.agents.length === 0) return [];
+
   const hasEval = evalTrends && evalTrends.length > 0;
   const dims = hasEval ? RADAR_DIMS_WITH_EVAL : RADAR_DIMS_NO_EVAL;
 

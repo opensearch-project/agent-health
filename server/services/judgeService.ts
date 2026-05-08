@@ -12,8 +12,9 @@
 
 import config from '../config';
 import { buildEvaluationPrompt, JudgeRequest, JudgeResponse } from './bedrockService';
-import { JUDGE_SYSTEM_PROMPT } from '../prompts/judgePrompt';
 import { debug } from '@/lib/debug';
+import type { Evaluator } from '@/types';
+import { getDefaultEvaluator } from '@/server/prompts/evaluatorTemplates';
 
 // ============================================================================
 // Main Evaluation Function
@@ -23,14 +24,20 @@ import { debug } from '@/lib/debug';
  * Evaluate agent trajectory using any OpenAI-compatible LLM endpoint
  * @param request - The judge request containing trajectory and expected outcomes
  * @param modelId - Model name forwarded to the endpoint (e.g. "gpt-4o", "ollama/llama3")
+ * @param evaluator - Optional evaluator to use (falls back to default RCA evaluator)
  */
 export async function evaluateWithOpenAICompatible(
   request: JudgeRequest,
-  modelId: string
+  modelId: string,
+  evaluator?: Evaluator
 ): Promise<JudgeResponse> {
   const { trajectory, expectedOutcomes, expectedTrajectory, logs } = request;
 
+  // Use default evaluator if none provided (backward compatibility)
+  const effectiveEvaluator = evaluator || getDefaultEvaluator();
+
   debug('JudgeService', '========== OPENAI-COMPATIBLE JUDGE REQUEST ==========');
+  debug('JudgeService', 'Evaluator:', effectiveEvaluator.name, `(${effectiveEvaluator.id})`);
   debug('JudgeService', 'Trajectory steps:', trajectory.length);
   debug('JudgeService', 'Expected outcomes:', expectedOutcomes?.length || 0);
   debug('JudgeService', 'Model:', modelId);
@@ -39,14 +46,18 @@ export async function evaluateWithOpenAICompatible(
   const userPrompt = buildEvaluationPrompt(trajectory, expectedOutcomes, expectedTrajectory, logs);
   debug('JudgeService', 'Prompt built, length:', userPrompt.length, 'characters');
 
+  // Get inference config from evaluator with fallback defaults
+  const temperature = effectiveEvaluator.inferenceConfig?.temperature ?? 0.1;
+  const maxTokens = effectiveEvaluator.inferenceConfig?.maxTokens ?? 4096;
+
   const body = {
     model: modelId,
     messages: [
-      { role: 'system', content: JUDGE_SYSTEM_PROMPT },
+      { role: 'system', content: effectiveEvaluator.systemPrompt },
       { role: 'user', content: userPrompt },
     ],
-    temperature: 0.1,
-    max_tokens: 4096,
+    temperature,
+    max_tokens: maxTokens,
   };
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -97,19 +108,31 @@ export async function evaluateWithOpenAICompatible(
   debug('JudgeService', '========== OPENAI-COMPATIBLE JUDGE RESPONSE ==========');
   debug('JudgeService', 'Pass/Fail Status:', result.pass_fail_status?.toUpperCase() || 'MISSING');
 
-  // Handle both simplified format (accuracy at top level) and legacy format (accuracy in metrics)
-  const accuracy = result.accuracy ?? result.metrics?.accuracy ?? 0;
-  debug('JudgeService', 'Accuracy:', accuracy);
+  // Extract metrics dynamically based on evaluator's scoring config
+  const metrics: Record<string, number> = {};
+
+  for (const metricDef of effectiveEvaluator.scoringConfig.metrics) {
+    const metricName = metricDef.name;
+    // Check top-level first (new format), then nested metrics object (legacy)
+    const value = (result as any)[metricName] ?? result.metrics?.[metricName];
+    if (value !== undefined && value !== null) {
+      const parsed = typeof value === 'number' ? value : parseFloat(value);
+      if (Number.isFinite(parsed)) {
+        metrics[metricName] = parsed;
+        debug('JudgeService', `Metric '${metricName}':`, parsed);
+      } else {
+        debug('JudgeService', `Warning: Metric '${metricName}' has invalid value:`, value);
+      }
+    } else {
+      debug('JudgeService', `Warning: Metric '${metricName}' not found in judge response`);
+    }
+  }
+
   debug('JudgeService', 'Improvement Strategies:', result.improvement_strategies?.length ?? 0, 'items');
 
   return {
     passFailStatus: (result.pass_fail_status || 'failed') as 'passed' | 'failed',
-    metrics: {
-      accuracy,
-      faithfulness: result.metrics?.faithfulness,
-      latency_score: result.metrics?.latency_score,
-      trajectory_alignment_score: result.metrics?.trajectory_alignment_score,
-    },
+    metrics,
     llmJudgeReasoning: result.reasoning,
     improvementStrategies: result.improvement_strategies || [],
     duration,

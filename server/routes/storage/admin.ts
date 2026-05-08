@@ -14,7 +14,7 @@
 import { Router, Request, Response } from 'express';
 import { isStorageAvailable, requireStorageClient, INDEXES } from '../../middleware/storageClient.js';
 import { INDEX_MAPPINGS } from '../../constants/indexMappings';
-import { getStorageModule, testStorageConnection, isFileStorage, setStorageModule, getStorageState, OpenSearchStorageModule, FileStorageModule } from '../../adapters/index.js';
+import { getStorageModule, testStorageConnection, isFileStorage, setStorageModule, getStorageState, OpenSearchStorageModule, FileStorageModule, FileSessionMetadataOperations } from '../../adapters/index.js';
 import type { StorageState } from '../../adapters/index.js';
 import { resolveStorageConfig } from '../../middleware/dataSourceConfig.js';
 import { createOpenSearchClient, configToCacheKey } from '../../services/opensearchClientFactory.js';
@@ -315,7 +315,7 @@ router.post('/api/storage/config/storage', async (req: Request, res: Response) =
       error: null,
       configuredEndpoint: endpoint,
     };
-    setStorageModule(new OpenSearchStorageModule(client), state);
+    setStorageModule(new OpenSearchStorageModule(client, new FileSessionMetadataOperations()), state);
 
     const hasFixFailures = setupResult.fixResults?.some((f) => f.status === 'failed') ?? false;
     const hadIssues = setupResult.validationResults.some((r) => r.status === 'needs_reindex');

@@ -99,6 +99,7 @@ jest.mock('@/server/middleware/dataSourceConfig', () => ({
     benchmarks: 'evals_experiments',
     runs: 'evals_runs',
     analytics: 'evals_analytics',
+    evaluators: 'evals_evaluators',
   },
   DEFAULT_OTEL_INDEXES: {
     traces: 'otel-v1-apm-span-*',

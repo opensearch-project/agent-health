@@ -252,7 +252,8 @@ describe('Judge Routes', () => {
           trajectory: expect.any(Array),
           expectedOutcomes: expect.any(Array),
         }),
-        expect.any(String) // Resolved model ID from config
+        expect.any(String), // Resolved model ID from config
+        expect.objectContaining({ id: 'system-rca-default' }) // Default evaluator
       );
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -355,7 +356,8 @@ describe('Judge Routes', () => {
           trajectory: expect.any(Array),
           expectedOutcomes: expect.any(Array),
         }),
-        expect.any(String) // Resolved model ID
+        expect.any(String), // Resolved model ID
+        expect.objectContaining({ id: 'system-rca-default' }) // Default evaluator
       );
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({

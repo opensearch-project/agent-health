@@ -38,10 +38,10 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/componen
 import { asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { TestCase, EvaluationReport } from '@/types';
 import { getLabelColor, formatDate, formatRelativeTime, getModelName } from '@/lib/utils';
-import { QuickRunModal } from '../QuickRunModal';
-import { TestCaseEditor } from '../TestCaseEditor';
-import { Breadcrumbs } from './Breadcrumbs';
-import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
+import { QuickRunModal } from '@/components/QuickRunModal';
+import { TestCaseEditor } from '@/components/TestCaseEditor';
+import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
+import { TestCaseInspectorPanel } from '@/components/evals3/TestCaseInspectorPanel';
 
 type TimeRange = '1h' | '6h' | '1d' | '7d' | '30d' | 'all';
 const TIME_OPTIONS: { value: TimeRange; label: string }[] = [

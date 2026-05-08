@@ -77,4 +77,47 @@ describe('FileStorageModule', () => {
       });
     });
   });
+
+  describe('sessionMetadata', () => {
+    it('should return null for nonexistent session', async () => {
+      const result = await mod.sessionMetadata.get('claude-code', 'nonexistent');
+      expect(result).toBeNull();
+    });
+
+    it('should put and get metadata', async () => {
+      const saved = await mod.sessionMetadata.put('claude-code', 's1', {
+        status: 'interesting',
+        notes: 'great session',
+        rating: 5,
+      });
+
+      expect(saved.agentKind).toBe('claude-code');
+      expect(saved.sessionId).toBe('s1');
+      expect(saved.status).toBe('interesting');
+      expect((saved as any).notes).toBe('great session');
+      expect((saved as any).rating).toBe(5);
+      expect(saved.updatedAt).toBeDefined();
+
+      const fetched = await mod.sessionMetadata.get('claude-code', 's1');
+      expect(fetched).toEqual(saved);
+    });
+
+    it('should merge on subsequent put', async () => {
+      await mod.sessionMetadata.put('claude-code', 's2', { status: 'normal', bookmarked: true });
+      const merged = await mod.sessionMetadata.put('claude-code', 's2', { status: 'problematic', rating: 3 });
+
+      expect((merged as any).bookmarked).toBe(true);
+      expect(merged.status).toBe('problematic');
+      expect((merged as any).rating).toBe(3);
+    });
+
+    it('should list all metadata docs', async () => {
+      await mod.sessionMetadata.put('claude-code', 'a', { x: 1 });
+      await mod.sessionMetadata.put('kiro', 'b', { x: 2 });
+
+      const { items, total } = await mod.sessionMetadata.list();
+      expect(total).toBe(2);
+      expect(items.map(i => i.sessionId).sort()).toEqual(['a', 'b']);
+    });
+  });
 });

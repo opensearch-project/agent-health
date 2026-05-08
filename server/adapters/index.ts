@@ -278,6 +278,6 @@ export function isFileStorage(): boolean {
 // ============================================================================
 
 export { STORAGE_INDEXES, DEFAULT_OTEL_INDEXES };
-export { FileStorageModule } from './file/StorageModule.js';
+export { FileStorageModule, FileSessionMetadataOperations } from './file/StorageModule.js';
 export { OpenSearchStorageModule } from './opensearch/StorageModule.js';
-export type { IStorageModule } from './types.js';
+export type { IStorageModule, ISessionMetadataOperations } from './types.js';

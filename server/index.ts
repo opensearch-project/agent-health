@@ -124,7 +124,7 @@ async function startServer() {
 
       server.on('error', (err: NodeJS.ErrnoException) => {
         server.close();
-        if (err.code === 'EADDRINUSE' && port <= PORT + MAX_PORT_ATTEMPTS) {
+        if (err.code === 'EADDRINUSE' && port < PORT + MAX_PORT_ATTEMPTS) {
           console.log(`  Port ${port} is in use, trying ${port + 1}...`);
           resolve(tryListen(port + 1));
         } else {

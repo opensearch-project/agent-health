@@ -216,6 +216,70 @@ async function listBenchmarks(format: OutputFormat, config: ResolvedConfig): Pro
 }
 
 /**
+ * List all available evaluators via server API
+ */
+async function listEvaluators(format: OutputFormat, config: ResolvedConfig): Promise<void> {
+  const serverResult = await ensureServer(config.server);
+  const cleanup = createServerCleanup(serverResult, config.server.reuseExistingServer === false);
+
+  try {
+    const client = new ApiClient(serverResult.baseUrl);
+    const response = await client.listEvaluators();
+
+    if (format !== 'markdown') {
+      displayStorageWarnings(response.meta);
+    }
+
+    if (format === 'json') {
+      console.log(formatJson(response));
+      return;
+    }
+
+    const headers = ['ID', 'Name', 'Type', 'Metrics', 'Version'];
+    const rows = response.evaluators.map((ev: any) => {
+      const isSystem = ev.isSystem || ev.id.startsWith('system-');
+      return [
+        ev.id.substring(0, 28) + (ev.id.length > 28 ? '...' : ''),
+        ev.name,
+        isSystem ? 'System' : 'Custom',
+        ev.scoringConfig?.metrics?.length?.toString() || '?',
+        `v${ev.currentVersion || 1}`,
+      ];
+    });
+
+    if (format === 'markdown') {
+      console.log(formatMarkdownTable(headers, rows));
+      return;
+    }
+
+    const table = new Table({
+      head: headers.map(h => chalk.cyan(h)),
+      colWidths: [30, 25, 12, 12, 10],
+      wordWrap: true,
+    });
+    for (const row of rows) {
+      table.push(row);
+    }
+
+    console.log(chalk.bold('\nAvailable Evaluators:\n'));
+    console.log(table.toString());
+
+    const { meta } = response;
+    if (meta.realDataCount > 0 || meta.sampleDataCount > 0) {
+      console.log(chalk.gray(`\n  Total: ${response.total} evaluators (${meta.realDataCount} custom, ${meta.sampleDataCount} system)\n`));
+    } else {
+      console.log(chalk.gray(`\n  Total: ${response.total} evaluators\n`));
+    }
+  } catch (error: any) {
+    console.error(chalk.red(`\n  Error: ${error.message}`));
+    console.log(chalk.gray('  Is the server running? Start with: npm run dev:server\n'));
+    process.exit(1);
+  } finally {
+    cleanup();
+  }
+}
+
+/**
  * List all registered connectors (local registry)
  *
  * Note: Connectors are loaded from the local registry since they're
@@ -322,7 +386,7 @@ async function listModels(format: OutputFormat, config: ResolvedConfig): Promise
 export function createListCommand(): Command {
   const command = new Command('list')
     .description('List available resources')
-    .argument('<resource>', 'Resource type: agents, test-cases, benchmarks, connectors, models')
+    .argument('<resource>', 'Resource type: agents, test-cases, benchmarks, evaluators, connectors, models')
     .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
     .action(async (resource: string, options: { output: string }) => {
       const format = parseOutputFormat(options.output);
@@ -348,6 +412,10 @@ export function createListCommand(): Command {
         case 'bench':
           await listBenchmarks(format, config);
           break;
+        case 'evaluators':
+        case 'eval':
+          await listEvaluators(format, config);
+          break;
         case 'connectors':
           listConnectors(format);
           break;
@@ -356,7 +424,7 @@ export function createListCommand(): Command {
           break;
         default:
           console.error(chalk.red(`\n  Unknown resource type: ${resource}`));
-          console.log(chalk.gray('  Available: agents, test-cases, benchmarks, connectors, models\n'));
+          console.log(chalk.gray('  Available: agents, test-cases, benchmarks, evaluators, connectors, models\n'));
           process.exit(1);
       }
     });

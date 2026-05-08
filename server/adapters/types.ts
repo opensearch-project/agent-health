@@ -16,6 +16,7 @@ import type {
   BenchmarkRun,
   TestCaseRun,
   RunAnnotation,
+  SessionMetadata,
   OpenSearchLog,
   Span,
   HealthStatus,
@@ -23,6 +24,7 @@ import type {
   DataSourceConfig,
   StorageClusterConfig,
   ObservabilityClusterConfig,
+  Evaluator,
 } from '../../types/index.js';
 
 // ============================================================================
@@ -159,6 +161,19 @@ export interface IAnalyticsOperations {
 }
 
 /**
+ * Evaluator CRUD operations
+ */
+export interface IEvaluatorOperations {
+  getAll(options?: PaginationOptions): Promise<{ items: Evaluator[]; total: number }>;
+  getById(id: string): Promise<Evaluator | null>;
+  getVersions(id: string): Promise<Evaluator[]>;
+  getVersion(id: string, version: number): Promise<Evaluator | null>;
+  create(evaluator: Partial<Evaluator>): Promise<Evaluator>;
+  update(id: string, updates: Partial<Evaluator>): Promise<Evaluator>;
+  delete(id: string): Promise<{ deleted: number }>;
+}
+
+/**
  * Logs query operations
  */
 export interface ILogsOperations {
@@ -181,18 +196,29 @@ export interface IMetricsOperations {
   // Future: Add metrics query operations
 }
 
+/**
+ * @experimental Session metadata operations (generic sidecar for coding agent sessions)
+ */
+export interface ISessionMetadataOperations {
+  get(agentKind: string, sessionId: string): Promise<SessionMetadata | null>;
+  put(agentKind: string, sessionId: string, data: Record<string, unknown>): Promise<SessionMetadata>;
+  list(options?: PaginationOptions): Promise<{ items: SessionMetadata[]; total: number }>;
+}
+
 // ============================================================================
 // Storage Module Interface
 // ============================================================================
 
 /**
- * Storage module - handles test cases, benchmarks, runs, and analytics
+ * Storage module - handles test cases, benchmarks, runs, analytics, and evaluators
  */
 export interface IStorageModule {
   testCases: ITestCaseOperations;
   benchmarks: IBenchmarkOperations;
   runs: IRunOperations;
   analytics: IAnalyticsOperations;
+  evaluators: IEvaluatorOperations;
+  sessionMetadata: ISessionMetadataOperations;
   health(): Promise<HealthStatus>;
   isConfigured(): boolean;
 }

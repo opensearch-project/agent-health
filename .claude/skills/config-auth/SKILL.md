@@ -51,10 +51,17 @@ Agent Health uses **two separate config systems** for different purposes. Unders
     "authType": "sigv4",
     "awsProfile": "default",
     "awsRegion": "us-west-2",
-    "awsService": "es"
+    "awsService": "es",
+    "tracesIndex": "otel-v1-apm-span-*"
   }
 }
 ```
+
+**Observability config** is where Agent Health reads OTel traces from. This is configured by:
+1. `npx @opensearch-project/agent-health setup-telemetry` (writes to JSON automatically)
+2. Manual edit of `agent-health.config.json` (add `observability` block with endpoint + auth)
+
+The `tracesIndex` field defaults to `otel-v1-apm-span-*` if omitted. See `/instrument-otel` skill for the full instrumentation flow.
 
 **Auth types** (`server/services/opensearchClientFactory.ts`):
 

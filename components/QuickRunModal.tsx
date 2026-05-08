@@ -13,8 +13,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { TestCase, TrajectoryStep } from '@/types';
+import { TestCase, TrajectoryStep, Evaluator } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { ENV_CONFIG } from '@/lib/config';
 import { parseLabels } from '@/lib/labels';
 import { runServerEvaluation, ServerEvaluationReport } from '@/services/client/evaluationApi';
 import { asyncTestCaseStorage } from '@/services/storage';
@@ -38,6 +39,8 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
     () => DEFAULT_CONFIG.agents[0]?.key
   );
   const [selectedModelId, setSelectedModelId] = useState('claude-sonnet-4.5');
+  const [selectedEvaluatorId, setSelectedEvaluatorId] = useState<string | undefined>();
+  const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
 
   // Ad-hoc run fields (when no testCase)
   const [adHocPrompt, setAdHocPrompt] = useState('');
@@ -148,6 +151,22 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
     };
   }, []);
 
+  // Load evaluators
+  useEffect(() => {
+    const loadEvaluators = async () => {
+      try {
+        const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`);
+        if (response.ok) {
+          const data = await response.json();
+          setEvaluators(data.evaluators || []);
+        }
+      } catch (error) {
+        console.error('Failed to load evaluators:', error);
+      }
+    };
+    loadEvaluators();
+  }, []);
+
   const effectivePrompt = testCase ? testCase.initialPrompt : adHocPrompt;
   const effectiveName = testCase ? testCase.name : (adHocName || 'Ad-hoc Run');
 
@@ -191,6 +210,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
           modelId: selectedModelId,
           testCaseId: testCase?.id,
           testCase: runTestCase,
+          evaluatorId: selectedEvaluatorId,
         },
         (step) => setCurrentSteps(prev => [...prev, step])
       );
@@ -312,6 +332,24 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                         value={agent.key}
                       >
                         {agent.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Evaluator Selection */}
+              <div className="space-y-1">
+                <Label className="text-xs">Evaluator</Label>
+                <Select value={selectedEvaluatorId || '__default__'} onValueChange={val => setSelectedEvaluatorId(val === '__default__' ? undefined : val)}>
+                  <SelectTrigger className="w-44 h-8">
+                    <SelectValue placeholder="RCA Default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">RCA Default</SelectItem>
+                    {evaluators.map(evaluator => (
+                      <SelectItem key={evaluator.id} value={evaluator.id}>
+                        {evaluator.name} {evaluator.isSystem ? '(System)' : ''}
                       </SelectItem>
                     ))}
                   </SelectContent>

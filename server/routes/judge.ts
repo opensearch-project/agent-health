@@ -10,11 +10,14 @@
 import { Request, Response, Router } from 'express';
 import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bedrock';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-import { evaluateTrajectory, parseBedrockError } from '../services/bedrockService';
-import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '../services/judgeService';
-import { loadConfigSync } from '../../lib/config/index';
-import serverConfig from '../config';
+import { evaluateTrajectory, parseBedrockError } from '@/server/services/bedrockService';
+import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/server/services/judgeService';
+import { loadConfigSync } from '@/lib/config/index';
+import serverConfig from '@/server/config';
 import { debug } from '@/lib/debug';
+import { getStorageModule } from '@/server/adapters';
+import { getDefaultEvaluator, getSystemEvaluatorById, isSystemEvaluatorId } from '@/server/prompts/evaluatorTemplates';
+import type { Evaluator } from '@/types';
 
 const router = Router();
 
@@ -166,7 +169,7 @@ router.get('/api/judge/bedrock-models', async (_req: Request, res: Response) => 
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
   try {
-    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId } = req.body;
+    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId } = req.body;
 
     // Validate required fields
     if (!trajectory || !Array.isArray(trajectory) || trajectory.length === 0) {
@@ -181,19 +184,47 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       });
     }
 
-    // Determine provider from model config
-    // Look up by model key first, then by model_id for full Bedrock model IDs
+    // Load evaluator if specified, otherwise use default
+    let evaluator: Evaluator;
+    if (evaluatorId) {
+      debug('JudgeAPI', 'Loading evaluator:', evaluatorId);
+      // Check system evaluators first (they aren't stored in the storage backend)
+      if (isSystemEvaluatorId(evaluatorId)) {
+        const systemEval = getSystemEvaluatorById(evaluatorId);
+        if (!systemEval) {
+          return res.status(400).json({
+            error: `System evaluator not found: ${evaluatorId}`
+          });
+        }
+        evaluator = systemEval;
+      } else {
+        const storage = getStorageModule();
+        const loadedEvaluator = await storage.evaluators.getById(evaluatorId);
+        if (!loadedEvaluator) {
+          return res.status(400).json({
+            error: `Evaluator not found: ${evaluatorId}`
+          });
+        }
+        evaluator = loadedEvaluator;
+      }
+    } else {
+      debug('JudgeAPI', 'Using default evaluator (backward compatible)');
+      evaluator = getDefaultEvaluator();
+    }
+
+    // Determine provider from evaluator's inferenceConfig or model config
+    // Priority: evaluator.inferenceConfig.provider > modelConfig.provider > 'bedrock'
     const config = loadConfigSync();
     let modelConfig = config.models[modelId];
     if (!modelConfig) {
       // Try to find by model_id (in case full Bedrock ID was passed)
       modelConfig = Object.values(config.models).find(m => m.model_id === modelId);
     }
-    const provider = modelConfig?.provider || 'bedrock';
+    const provider = evaluator.inferenceConfig?.provider || modelConfig?.provider || 'bedrock';
 
-    // Use the resolved model_id from config, not the key
-    const resolvedModelId = modelConfig?.model_id || modelId;
-    debug('JudgeAPI', 'Using provider:', provider, 'model:', resolvedModelId);
+    // Use the resolved model_id: evaluator override > config > provided
+    const resolvedModelId = evaluator.inferenceConfig?.modelId || modelConfig?.model_id || modelId;
+    debug('JudgeAPI', 'Using provider:', provider, 'model:', resolvedModelId, 'evaluator:', evaluator.name);
 
     // Route to appropriate provider
     if (provider === 'demo') {
@@ -206,7 +237,8 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       debug('JudgeAPI', 'OpenAI-compatible provider - calling endpoint');
       const result = await evaluateWithOpenAICompatible(
         { trajectory, expectedOutcomes, expectedTrajectory, logs },
-        resolvedModelId
+        resolvedModelId,
+        evaluator
       );
       return res.json(result);
     }
@@ -217,7 +249,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       expectedOutcomes,
       expectedTrajectory,
       logs
-    }, resolvedModelId);
+    }, resolvedModelId, evaluator);
 
     res.json(result);
 

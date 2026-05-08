@@ -275,7 +275,7 @@ export async function executeRun(
             bedrockModelId,
             testCase,
             () => {}, // No debug callback needed
-            { registry: connectorRegistry }
+            { registry: connectorRegistry, evaluatorId: run.evaluatorId }
           );
 
           // Save the report to OpenSearch and get the actual stored ID
@@ -490,7 +490,8 @@ export async function runSingleUseCase(
   run: BenchmarkRun,
   testCase: TestCase,
   storage: IStorageModule,
-  onStep?: (step: any) => void
+  onStep?: (step: any) => void,
+  evaluatorId?: string
 ): Promise<string> {
   const agentConfig = buildAgentConfigForRun(run);
   const bedrockModelId = getBedrockModelId(run.modelId);
@@ -502,7 +503,7 @@ export async function runSingleUseCase(
     bedrockModelId,
     testCase,
     onStep || (() => {}),
-    { registry: connectorRegistry }
+    { registry: connectorRegistry, evaluatorId }
   );
 
   const savedReport = await saveReportWithModule(storage, report);

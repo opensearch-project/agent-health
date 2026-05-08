@@ -96,6 +96,7 @@ jest.mock('@/server/adapters/index', () => ({
   }),
   OpenSearchStorageModule: jest.fn().mockImplementation(() => ({ type: 'opensearch' })),
   FileStorageModule: jest.fn().mockImplementation(() => ({ type: 'file' })),
+  FileSessionMetadataOperations: jest.fn().mockImplementation(() => ({ type: 'file-session-metadata' })),
 }));
 
 // Mock indexInitializer

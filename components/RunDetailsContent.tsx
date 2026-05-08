@@ -29,10 +29,14 @@ import {
   Target,
   Hash,
   Maximize2,
+  FlaskConical,
+  Shield,
+  Brain,
+  ListChecks,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { EvaluationReport, RunAnnotation, TestCase, TestCasePerformanceMetrics, Span, TimeRange, TraceMetrics } from '@/types';
+import { EvaluationReport, RunAnnotation, TestCase, TestCasePerformanceMetrics, Span, TimeRange, TraceMetrics, Evaluator } from '@/types';
 import { fetchRunMetrics, formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import { TrajectoryView } from './TrajectoryView';
 import { RawEventsPanel } from './RawEventsPanel';
@@ -42,6 +46,7 @@ import TraceFullScreenView from './traces/TraceFullScreenView';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
 import { fetchTracesByRunIds, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { ENV_CONFIG } from '@/lib/config';
 import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { callBedrockJudge } from '@/services/evaluation';
@@ -65,6 +70,19 @@ interface RunDetailsContentProps {
   hideMetrics?: boolean;
 }
 
+const EVALUATOR_ICONS: Record<string, React.ComponentType<any>> = {
+  'system-rca-default': FlaskConical,
+  'system-factuality': Target,
+  'system-tool-usage': ListChecks,
+  'system-reasoning-depth': Brain,
+  'system-safety': Shield,
+};
+
+const getEvaluatorIcon = (evaluatorId: string) => {
+  const Icon = EVALUATOR_ICONS[evaluatorId];
+  return Icon ? Icon : FlaskConical;
+};
+
 export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   report,
   className = '',
@@ -77,6 +95,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   const [annotations, setAnnotations] = useState<RunAnnotation[]>([]);
   const [newAnnotation, setNewAnnotation] = useState('');
   const [testCase, setTestCase] = useState<TestCase | null>(null);
+  const [evaluator, setEvaluator] = useState<Evaluator | null>(null);
   const [trajectoryViewMode, setTrajectoryViewMode] = useState<'processed' | 'raw'>('processed');
   const [traceMetrics, setTraceMetrics] = useState<TraceMetrics | null>(null);
   const [traceMetricsLoading, setTraceMetricsLoading] = useState(false);
@@ -290,6 +309,21 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     asyncTestCaseStorage.getById(report.testCaseId).then(tc => setTestCase(tc));
     asyncRunStorage.getAnnotationsByReport(report.id).then(setAnnotations);
   }, [report.id, report.testCaseId]);
+
+  // Load evaluator if evaluatorId is present
+  useEffect(() => {
+    if (report.evaluatorId) {
+      fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators/${report.evaluatorId}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(evaluatorData => setEvaluator(evaluatorData))
+        .catch(err => {
+          console.warn('Failed to load evaluator:', err);
+          setEvaluator(null);
+        });
+    } else {
+      setEvaluator(null);
+    }
+  }, [report.evaluatorId]);
 
   // Fetch trace metrics when runId is available
   useEffect(() => {
@@ -534,12 +568,33 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             </CardContent>
           </Card>
 
-          <Card className="bg-muted/50 col-span-2">
-            <CardContent className="p-2">
-              <div className="text-[10px] text-muted-foreground mb-0.5">Accuracy</div>
-              <div className="text-xs font-semibold text-blue-700 dark:text-blue-400">{liveReport.metrics.accuracy}%</div>
-            </CardContent>
-          </Card>
+          {/* Dynamic Metrics from Evaluator */}
+          {evaluator ? (
+            evaluator.scoringConfig.metrics.map((metric, idx) => {
+              const metricValue = (liveReport.metrics as any)[metric.name];
+              const displayValue = metricValue != null ? `${metricValue}%` : '—';
+              return (
+                <Card key={metric.name} className="bg-muted/50 col-span-2">
+                  <CardContent className="p-2">
+                    <div className="text-[10px] text-muted-foreground mb-0.5 capitalize">
+                      {metric.name.replace(/_/g, ' ')}
+                    </div>
+                    <div className="text-xs font-semibold text-blue-700 dark:text-blue-400">
+                      {displayValue}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
+          ) : (
+            /* Fallback for legacy runs without evaluator */
+            <Card className="bg-muted/50 col-span-2">
+              <CardContent className="p-2">
+                <div className="text-[10px] text-muted-foreground mb-0.5">Accuracy</div>
+                <div className="text-xs font-semibold text-blue-700 dark:text-blue-400">{liveReport.metrics.accuracy}%</div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Non-trace-mode: show Latency and Steps */}
           {!isTraceMode && (
@@ -776,6 +831,27 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 <Card><CardContent className="p-4">
                   <div className="text-xs text-muted-foreground mb-1">Model</div>
                   <div className="text-sm">{modelDisplayName}</div>
+                </CardContent></Card>
+                <Card><CardContent className="p-4">
+                  <div className="text-xs text-muted-foreground mb-1">Evaluator</div>
+                  <div className="text-sm flex items-center gap-1.5">
+                    {evaluator ? (
+                      <>
+                        {React.createElement(getEvaluatorIcon(evaluator.id), { className: 'h-3.5 w-3.5 text-muted-foreground' })}
+                        <span>{evaluator.name}</span>
+                        {evaluator.isSystem && (
+                          <Badge variant="secondary" className="ml-1 text-[10px]">System</Badge>
+                        )}
+                      </>
+                    ) : report.evaluatorId ? (
+                      <span className="text-muted-foreground italic">Loading...</span>
+                    ) : (
+                      <>
+                        {React.createElement(FlaskConical, { className: 'h-3.5 w-3.5 text-muted-foreground' })}
+                        <span className="text-muted-foreground">RCA Default</span>
+                      </>
+                    )}
+                  </div>
                 </CardContent></Card>
                 <Card><CardContent className="p-4">
                   <div className="text-xs text-muted-foreground mb-1">Timestamp</div>
@@ -1103,6 +1179,41 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </TabsContent>
 
           <TabsContent value="judge" className="p-6 mt-0 space-y-6">
+            {/* Evaluator Info */}
+            {evaluator && (
+              <div>
+                <h3 className="text-lg font-semibold mb-3">Evaluator</h3>
+                <Card><CardContent className="p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    {React.createElement(getEvaluatorIcon(evaluator.id), { className: 'h-5 w-5 text-muted-foreground' })}
+                    <span className="font-semibold">{evaluator.name}</span>
+                    {evaluator.isSystem && (
+                      <Badge variant="secondary" className="text-xs">System</Badge>
+                    )}
+                  </div>
+                  {evaluator.description && (
+                    <p className="text-sm text-muted-foreground">{evaluator.description}</p>
+                  )}
+                  <div className="pt-2 border-t">
+                    <div className="text-xs text-muted-foreground mb-2">Scoring Metrics</div>
+                    <div className="space-y-1">
+                      {evaluator.scoringConfig.metrics.map((metric) => (
+                        <div key={metric.name} className="flex items-center justify-between text-sm">
+                          <span className="capitalize">{metric.name.replace(/_/g, ' ')}</span>
+                          <span className="text-muted-foreground">
+                            Weight: {metric.weight} | Scale: {metric.scale}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Pass Threshold: {evaluator.scoringConfig.passThreshold}%
+                    </div>
+                  </div>
+                </CardContent></Card>
+              </div>
+            )}
+
             {/* LLM Judge Reasoning */}
             <div>
               <h3 className="text-lg font-semibold mb-3">LLM Judge Reasoning</h3>

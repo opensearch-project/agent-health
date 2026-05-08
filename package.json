@@ -1,6 +1,6 @@
 {
   "name": "@opensearch-project/agent-health",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "Agent Evaluation and Observability Framework",
   "license": "Apache-2.0",
@@ -170,6 +170,7 @@
   "overrides": {
     "minimatch": "^10.2.4",
     "fast-xml-parser": ">=5.7.2",
+    "basic-ftp": ">=5.3.1",
     "uuid": "$uuid",
     "@anthropic-ai/claude-agent-sdk": {
       "zod": "$zod"

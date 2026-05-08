@@ -369,6 +369,8 @@ export function createSetupTelemetryCommand(): Command {
         }
       }
 
+      validateInput(endpoint, 'endpoint');
+
       // Step: Test OTLP connectivity
       console.log(chalk.gray('\n  Testing OTLP endpoint connectivity...'));
       const connectivity = await testEndpoint(endpoint);

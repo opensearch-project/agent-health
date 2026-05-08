@@ -31,6 +31,7 @@ jest.mock('@/server/routes/observability', () => ({ __esModule: true, default: '
 jest.mock('@/server/routes/config', () => ({ __esModule: true, default: 'configRoutes' }));
 jest.mock('@/server/routes/evaluation', () => ({ __esModule: true, default: 'evaluationRoutes' }));
 jest.mock('@/server/routes/debug', () => ({ __esModule: true, default: 'debugRoutes' }));
+jest.mock('@/server/routes/sessionAnnotations', () => ({ __esModule: true, default: 'sessionAnnotationsRoutes' }));
 
 describe('Routes Aggregator', () => {
   beforeEach(() => {

@@ -34,6 +34,7 @@ export const STORAGE_INDEXES = {
   benchmarks: 'evals_experiments',
   runs: 'evals_runs',
   analytics: 'evals_analytics',
+  evaluators: 'evals_evaluators',
 } as const;
 
 /**

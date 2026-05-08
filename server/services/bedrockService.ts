@@ -9,9 +9,9 @@
 
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import config from '../config';
-import { TrajectoryStep, ImprovementStrategy } from '@/types';
-import { JUDGE_SYSTEM_PROMPT } from '../prompts/judgePrompt';
+import { TrajectoryStep, ImprovementStrategy, Evaluator, EvaluationMetrics } from '@/types';
 import { debug } from '@/lib/debug';
+import { getDefaultEvaluator } from '@/server/prompts/evaluatorTemplates';
 
 // ============================================================================
 // Types
@@ -26,12 +26,7 @@ export interface JudgeRequest {
 
 export interface JudgeResponse {
   passFailStatus: 'passed' | 'failed';
-  metrics: {
-    accuracy: number;
-    faithfulness?: number;
-    latency_score?: number;
-    trajectory_alignment_score?: number;
-  };
+  metrics: EvaluationMetrics;
   llmJudgeReasoning: string;
   improvementStrategies: ImprovementStrategy[];
   duration: number;
@@ -156,18 +151,24 @@ Please evaluate the agent's performance and provide your assessment in the JSON 
  * Evaluate agent trajectory using AWS Bedrock LLM Judge
  * @param request - The judge request containing trajectory and expected outcomes
  * @param modelId - Optional model ID to use for evaluation (falls back to config.BEDROCK_MODEL_ID)
+ * @param evaluator - Optional evaluator to use (falls back to default RCA evaluator)
  */
 export async function evaluateTrajectory(
   request: JudgeRequest,
-  modelId?: string
+  modelId?: string,
+  evaluator?: Evaluator
 ): Promise<JudgeResponse> {
   const { trajectory, expectedOutcomes, expectedTrajectory, logs } = request;
+
+  // Use default evaluator if none provided (backward compatibility)
+  const effectiveEvaluator = evaluator || getDefaultEvaluator();
 
   // Use provided modelId or fall back to configured default
   const effectiveModelId = modelId || config.BEDROCK_MODEL_ID;
 
   debug('JudgeAPI', '========== BEDROCK JUDGE REQUEST ==========');
   debug('JudgeAPI', 'Received evaluation request');
+  debug('JudgeAPI', 'Evaluator:', effectiveEvaluator.name, `(${effectiveEvaluator.id})`);
   debug('JudgeAPI', 'Trajectory steps:', trajectory.length);
   debug('JudgeAPI', 'Expected outcomes:', expectedOutcomes?.length || 0);
   debug('JudgeAPI', 'Expected trajectory steps:', expectedTrajectory?.length || 0);
@@ -198,7 +199,13 @@ export async function evaluateTrajectory(
 
   debug('JudgeAPI', 'Prompt built, length:', userPrompt.length, 'characters');
 
-  // Create Bedrock command
+  // Get inference config from evaluator with fallback defaults
+  const temperature = effectiveEvaluator.inferenceConfig?.temperature ?? 0.1;
+  const maxTokens = effectiveEvaluator.inferenceConfig?.maxTokens ?? 4096;
+
+  debug('JudgeAPI', 'Inference config - temperature:', temperature, 'maxTokens:', maxTokens);
+
+  // Create Bedrock command using evaluator's system prompt
   const command = new ConverseCommand({
     modelId: effectiveModelId,
     messages: [
@@ -207,10 +214,10 @@ export async function evaluateTrajectory(
         content: [{ text: userPrompt }],
       },
     ],
-    system: [{ text: JUDGE_SYSTEM_PROMPT }],
+    system: [{ text: effectiveEvaluator.systemPrompt }],
     inferenceConfig: {
-      maxTokens: 4096,
-      temperature: 0.1,
+      maxTokens,
+      temperature,
     },
   });
 
@@ -255,9 +262,26 @@ export async function evaluateTrajectory(
   debug('JudgeAPI', '========== BEDROCK JUDGE RESPONSE ==========');
   debug('JudgeAPI', 'Pass/Fail Status:', result.pass_fail_status?.toUpperCase() || 'MISSING');
 
-  // Handle both new simplified format (accuracy at top level) and legacy format (accuracy in metrics)
-  const accuracy = result.accuracy ?? result.metrics?.accuracy ?? 0;
-  debug('JudgeAPI', 'Accuracy:', accuracy);
+  // Extract metrics dynamically based on evaluator's scoring config
+  const metrics: Record<string, number> = {};
+
+  for (const metricDef of effectiveEvaluator.scoringConfig.metrics) {
+    const metricName = metricDef.name;
+    // Check top-level first (new format), then nested metrics object (legacy)
+    const value = (result as any)[metricName] ?? result.metrics?.[metricName];
+    if (value !== undefined && value !== null) {
+      const parsed = typeof value === 'number' ? value : parseFloat(value);
+      if (Number.isFinite(parsed)) {
+        metrics[metricName] = parsed;
+        debug('JudgeAPI', `Metric '${metricName}':`, parsed);
+      } else {
+        debug('JudgeAPI', `Warning: Metric '${metricName}' has invalid value:`, value);
+      }
+    } else {
+      debug('JudgeAPI', `Warning: Metric '${metricName}' not found in judge response`);
+    }
+  }
+
   debug('JudgeAPI', 'Improvement Strategies:', result.improvement_strategies?.length ?? 0, 'items');
   if (result.improvement_strategies?.length) {
     result.improvement_strategies.forEach((s, i) => {
@@ -266,16 +290,10 @@ export async function evaluateTrajectory(
   }
   debug('JudgeAPI', 'Evaluation completed successfully');
 
-  // Return structured response - simplified metrics
+  // Return structured response with dynamic metrics
   return {
     passFailStatus: (result.pass_fail_status || 'failed') as 'passed' | 'failed',
-    metrics: {
-      accuracy: accuracy,
-      // Legacy metrics (may be present in old responses, optional)
-      faithfulness: result.metrics?.faithfulness,
-      latency_score: result.metrics?.latency_score,
-      trajectory_alignment_score: result.metrics?.trajectory_alignment_score,
-    },
+    metrics,
     llmJudgeReasoning: result.reasoning,
     improvementStrategies: result.improvement_strategies || [],
     duration,

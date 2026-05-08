@@ -73,7 +73,7 @@ export interface TracesResponse {
   hasMore?: boolean; // Whether more results are available
 }
 
-export type ErrorCategory = 'auth' | 'connection' | 'index_not_found' | 'unknown';
+export type ErrorCategory = 'auth' | 'connection' | 'index_not_found' | 'not_configured' | 'unknown';
 
 export interface HealthStatus {
   status: 'ok' | 'error';

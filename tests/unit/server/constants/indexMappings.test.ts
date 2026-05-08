@@ -66,8 +66,8 @@ describe('indexMappings', () => {
       expect(INDEX_MAPPINGS).toBeDefined();
     });
 
-    it('should have 4 index mappings', () => {
-      expect(Object.keys(INDEX_MAPPINGS).length).toBe(4);
+    it('should have 5 index mappings', () => {
+      expect(Object.keys(INDEX_MAPPINGS).length).toBe(5);
     });
 
     it('should match getIndexMappings output', () => {

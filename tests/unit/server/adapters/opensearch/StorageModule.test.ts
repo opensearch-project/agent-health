@@ -96,7 +96,8 @@ describe('OpenSearchStorageModule', () => {
     const { OpenSearchStorageModule } = await import(
       '@/server/adapters/opensearch/StorageModule'
     );
-    mod = new OpenSearchStorageModule(mockClient as any);
+    const mockSessionMetadata = { get: jest.fn(), put: jest.fn(), list: jest.fn() };
+    mod = new OpenSearchStorageModule(mockClient as any, mockSessionMetadata as any);
   });
 
   // ==========================================================================

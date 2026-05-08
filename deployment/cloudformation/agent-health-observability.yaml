@@ -19,11 +19,13 @@ Description: >-
 Parameters:
   DomainName:
     Type: String
-    Default: agent-health-traces
-    Description: Name for the OpenSearch Service domain
+    Default: ah-traces
+    Description: >-
+      Name for the OpenSearch Service domain. Keep ≤21 chars because OSIS
+      pipeline names are "${DomainName}-traces" with a 28-char max.
     AllowedPattern: '[a-z][a-z0-9\-]+'
     MinLength: 3
-    MaxLength: 28
+    MaxLength: 21
 
   InstanceType:
     Type: String
@@ -57,18 +59,20 @@ Parameters:
     MinValue: 1
     MaxValue: 96
 
-  MasterUserARN:
+  AdminRoleARN:
     Type: String
     Description: >-
-      IAM ARN for the OpenSearch FGAC master user (used for security plugin admin).
-      Defaults to the account root; override with your IAM role ARN for direct access.
+      Optional IAM role ARN to grant OpenSearch all_access (e.g., your Admin role).
+      The domain master user is always the internal RoleMappingFunctionRole;
+      this parameter adds an additional role with full access via backend role mapping.
     Default: ''
 
 # =============================================================================
 # Conditions
 # =============================================================================
 Conditions:
-  HasMasterUserARN: !Not [!Equals [!Ref MasterUserARN, '']]
+  HasAdminRoleARN: !Not [!Equals [!Ref AdminRoleARN, '']]
+  # Note: Domain MasterUserARN is always RoleMappingFunctionRole (not conditional)
 
 # =============================================================================
 # Resources
@@ -76,10 +80,53 @@ Conditions:
 Resources:
 
   # ---------------------------------------------------------------------------
+  # IAM Role — FGAC Role Mapping Custom Resource (also used as MasterUserARN)
+  # Defined first because the OpenSearch domain references it as master user.
+  # ---------------------------------------------------------------------------
+  RoleMappingFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${DomainName}-${AWS::Region}-role-mapping-cr-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: OpenSearchAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'es:ESHttp*'
+                Resource:
+                  - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${DomainName}/*'
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+      Tags:
+        - Key: agent-health
+          Value: observability
+        - Key: ManagedBy
+          Value: AgentHealthCFN
+
+  # ---------------------------------------------------------------------------
   # OpenSearch Service Domain
   # ---------------------------------------------------------------------------
   OpenSearchDomain:
     Type: AWS::OpenSearchService::Domain
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       DomainName: !Ref DomainName
       EngineVersion: OpenSearch_3.5
@@ -107,10 +154,7 @@ Resources:
         Enabled: true
         InternalUserDatabaseEnabled: false
         MasterUserOptions:
-          MasterUserARN: !If
-            - HasMasterUserARN
-            - !Ref MasterUserARN
-            - !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+          MasterUserARN: !GetAtt RoleMappingFunctionRole.Arn
       # "Only use fine-grained access control" — open domain policy,
       # all authorization is handled by the OpenSearch Security plugin (FGAC).
       AccessPolicies:
@@ -133,7 +177,7 @@ Resources:
   OSISPipelineRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${DomainName}-osis-pipeline-role'
+      RoleName: !Sub '${DomainName}-${AWS::Region}-osis-pipeline-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -153,6 +197,11 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${DomainName}'
                   - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${DomainName}/*'
+      Tags:
+        - Key: agent-health
+          Value: observability
+        - Key: ManagedBy
+          Value: AgentHealthCFN
 
   # ---------------------------------------------------------------------------
   # IAM Role — Ingestion (for agents pushing telemetry via SigV4)
@@ -160,7 +209,7 @@ Resources:
   IngestionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${DomainName}-ingestion-role'
+      RoleName: !Sub '${DomainName}-${AWS::Region}-ingestion-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -179,6 +228,11 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:osis:${AWS::Region}:${AWS::AccountId}:pipeline/${DomainName}-traces'
                   - !Sub 'arn:aws:osis:${AWS::Region}:${AWS::AccountId}:pipeline/${DomainName}-logs'
+      Tags:
+        - Key: agent-health
+          Value: observability
+        - Key: ManagedBy
+          Value: AgentHealthCFN
 
   # ---------------------------------------------------------------------------
   # OpenSearch Ingestion (OSIS) Pipeline — OTLP Traces → OpenSearch
@@ -233,6 +287,8 @@ Resources:
       Tags:
         - Key: agent-health
           Value: observability
+        - Key: ManagedBy
+          Value: AgentHealthCFN
 
   # ---------------------------------------------------------------------------
   # OpenSearch Ingestion (OSIS) Pipeline — OTLP Logs → OpenSearch
@@ -261,6 +317,8 @@ Resources:
       Tags:
         - Key: agent-health
           Value: observability
+        - Key: ManagedBy
+          Value: AgentHealthCFN
 
   # ---------------------------------------------------------------------------
   # OTLP Ingestion — API Gateway + Lambda → OpenSearch (direct)
@@ -271,7 +329,7 @@ Resources:
   OTLPIngestLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${DomainName}-otlp-ingest-lambda-role'
+      RoleName: !Sub '${DomainName}-${AWS::Region}-otlp-ingest-lambda-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -309,6 +367,11 @@ Resources:
                   - 'logs:CreateLogStream'
                   - 'logs:PutLogEvents'
                 Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+      Tags:
+        - Key: agent-health
+          Value: observability
+        - Key: ManagedBy
+          Value: AgentHealthCFN
 
   OTLPIngestFunction:
     Type: AWS::Lambda::Function
@@ -475,6 +538,131 @@ Resources:
       Tags:
         - Key: agent-health
           Value: observability
+        - Key: ManagedBy
+          Value: AgentHealthCFN
+
+  # ---------------------------------------------------------------------------
+  # Custom Resource — Map IAM Roles to OpenSearch FGAC Backend Roles
+  # Maps the OSIS pipeline role and Lambda ingest role to 'all_access' so they
+  # can write to OpenSearch indices. Runs once during stack create/update.
+  # ---------------------------------------------------------------------------
+  RoleMappingFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: OpenSearchDomain
+    Properties:
+      FunctionName: !Sub '${DomainName}-fgac-role-mapping'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      MemorySize: 128
+      Role: !GetAtt RoleMappingFunctionRole.Arn
+      Environment:
+        Variables:
+          OPENSEARCH_ENDPOINT: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
+          OSIS_ROLE_ARN: !GetAtt OSISPipelineRole.Arn
+          LAMBDA_ROLE_ARN: !GetAtt OTLPIngestLambdaRole.Arn
+          ADMIN_ROLE_ARN: !If
+            - HasAdminRoleARN
+            - !Ref AdminRoleARN
+            - !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+      Code:
+        ZipFile: |
+          """Custom Resource — maps IAM role ARNs to OpenSearch all_access backend role."""
+          import json
+          import os
+          import urllib.request
+          from botocore.auth import SigV4Auth
+          from botocore.awsrequest import AWSRequest
+          from botocore.session import Session
+
+          OS_ENDPOINT = os.environ['OPENSEARCH_ENDPOINT']
+          REGION = os.environ.get('AWS_REGION', 'us-east-1')
+          OSIS_ROLE_ARN = os.environ['OSIS_ROLE_ARN']
+          LAMBDA_ROLE_ARN = os.environ['LAMBDA_ROLE_ARN']
+          ADMIN_ROLE_ARN = os.environ.get('ADMIN_ROLE_ARN', '')
+          session = Session()
+
+          def _creds():
+              c = session.get_credentials()
+              return c.resolve_credentials() if hasattr(c, 'resolve_credentials') else c
+
+          def _signed_request(method, path, body=None):
+              url = OS_ENDPOINT + path
+              headers = {'Content-Type': 'application/json'}
+              request = AWSRequest(method=method, url=url, data=body or '', headers=headers)
+              SigV4Auth(_creds(), 'es', REGION).add_auth(request)
+              req = urllib.request.Request(url, data=(body or '').encode('utf-8'), method=method,
+                                           headers={k: v for k, v in dict(request.headers).items()})
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      return resp.status, json.loads(resp.read().decode('utf-8', errors='replace'))
+              except urllib.error.HTTPError as e:
+                  return e.code, json.loads(e.read().decode('utf-8', errors='replace'))
+
+          def _send_cfn_response(event, context, status, reason=''):
+              body = json.dumps({
+                  'Status': status,
+                  'Reason': reason or f'See CloudWatch Log Stream: {context.log_stream_name}',
+                  'PhysicalResourceId': context.log_stream_name,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+              })
+              req = urllib.request.Request(event['ResponseURL'], data=body.encode('utf-8'),
+                                           method='PUT', headers={'Content-Type': ''})
+              urllib.request.urlopen(req)
+
+          def handler(event, context):
+              print(f"Event: {json.dumps(event)}")
+              try:
+                  if event['RequestType'] == 'Delete':
+                      _send_cfn_response(event, context, 'SUCCESS')
+                      return
+                  # Get current mapping for all_access
+                  status, current = _signed_request('GET', '/_plugins/_security/api/rolesmapping/all_access')
+                  print(f"Current mapping (status={status}): {json.dumps(current)}")
+                  if status == 200:
+                      backend_roles = current.get('all_access', {}).get('backend_roles', [])
+                  else:
+                      backend_roles = []
+                  # Add our roles if not already present
+                  roles_to_map = [r for r in [OSIS_ROLE_ARN, LAMBDA_ROLE_ARN, ADMIN_ROLE_ARN] if r]
+                  for role in roles_to_map:
+                      if role not in backend_roles:
+                          backend_roles.append(role)
+                  # PUT the updated mapping
+                  payload = json.dumps({'backend_roles': backend_roles})
+                  status, resp = _signed_request('PUT', '/_plugins/_security/api/rolesmapping/all_access', payload)
+                  print(f"PUT mapping (status={status}): {json.dumps(resp)}")
+                  if status in (200, 201):
+                      _send_cfn_response(event, context, 'SUCCESS')
+                  else:
+                      _send_cfn_response(event, context, 'FAILED', f'OpenSearch returned {status}: {json.dumps(resp)}')
+              except Exception as e:
+                  print(f"Error: {e}")
+                  _send_cfn_response(event, context, 'FAILED', str(e))
+      Tags:
+        - Key: agent-health
+          Value: observability
+        - Key: ManagedBy
+          Value: AgentHealthCFN
+
+  RoleMappingCustomResource:
+    Type: Custom::OpenSearchRoleMapping
+    DependsOn:
+      - OpenSearchDomain
+      - OSISPipelineRole
+      - OTLPIngestLambdaRole
+      - RoleMappingFunction
+    Properties:
+      ServiceToken: !GetAtt RoleMappingFunction.Arn
+      # Include role ARNs so CFN re-triggers on changes
+      OSISRoleArn: !GetAtt OSISPipelineRole.Arn
+      LambdaRoleArn: !GetAtt OTLPIngestLambdaRole.Arn
+      AdminRoleArn: !If
+        - HasAdminRoleARN
+        - !Ref AdminRoleARN
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:root'
 
   OTLPIngestApi:
     Type: AWS::ApiGatewayV2::Api
@@ -488,6 +676,9 @@ Resources:
           - POST
         AllowHeaders:
           - content-type
+      Tags:
+        agent-health: observability
+        ManagedBy: AgentHealthCFN
 
   OTLPIngestApiIntegration:
     Type: AWS::ApiGatewayV2::Integration

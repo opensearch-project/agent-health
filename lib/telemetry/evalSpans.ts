@@ -315,7 +315,7 @@ export function emitDeferredTestCaseSpan(
   // If an agent traceId is provided, create the span within the same trace
   // so it appears as a sibling of the agent's root span in the trace tree.
   let parentCtx: Context | undefined;
-  if (agentTraceId) {
+  if (agentTraceId && /^[0-9a-f]{32}$/i.test(agentTraceId)) {
     const remoteSpanContext: SpanContext = {
       traceId: agentTraceId,
       // Use a valid synthetic spanId — an all-zero spanId is considered invalid

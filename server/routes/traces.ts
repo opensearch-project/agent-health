@@ -11,7 +11,7 @@
  */
 
 import { Request, Response, Router } from 'express';
-import { fetchTraces, checkTracesHealth, classifyOpenSearchError } from '../services/tracesService.js';
+import { fetchTraces, checkTracesHealth, classifyOpenSearchError, type ErrorCategory } from '../services/tracesService.js';
 import {
   getSampleSpansForRunIds,
   getSampleSpansByTraceId,
@@ -31,6 +31,10 @@ const router = Router();
 router.post('/api/traces', async (req: Request, res: Response) => {
   try {
     const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor } = req.body;
+
+    if (sessionId !== undefined && typeof sessionId !== 'string') {
+      return res.status(400).json({ error: 'sessionId must be a string' });
+    }
 
     // Validate request - allow time range queries for live tailing
     const hasTimeRange = startTime || endTime;
@@ -54,7 +58,7 @@ router.post('/api/traces', async (req: Request, res: Response) => {
     // 2. Query live OpenSearch traces (independent of sample logic)
     let realSpans: Span[] = [];
     let warning: string | undefined;
-    let warningCategory: string | undefined;
+    let warningCategory: ErrorCategory | undefined;
     let suggestion: string | undefined;
     let nextCursor: string | null = null;
     let hasMore: boolean = false;

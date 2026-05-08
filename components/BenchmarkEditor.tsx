@@ -14,9 +14,10 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Benchmark, TestCase, RunConfigInput } from '@/types';
+import { Benchmark, TestCase, RunConfigInput, Evaluator } from '@/types';
 import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { ENV_CONFIG } from '@/lib/config';
 
 interface BenchmarkEditorProps {
   benchmark: Benchmark | null;
@@ -37,6 +38,7 @@ interface RunConfig {
   description?: string;
   agentKey: string;
   modelId: string;
+  evaluatorId?: string;
   headers?: Record<string, string>;
 }
 
@@ -61,6 +63,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
   const [allTestCases, setAllTestCases] = useState<TestCase[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
 
   // Track if test cases changed from original (will create new version)
   const testCasesChanged = useMemo(() => {
@@ -93,6 +96,22 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
       }
     };
     loadTestCases();
+  }, []);
+
+  // Load evaluators
+  useEffect(() => {
+    const loadEvaluators = async () => {
+      try {
+        const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`);
+        if (response.ok) {
+          const data = await response.json();
+          setEvaluators(data.evaluators || []);
+        }
+      } catch (error) {
+        console.error('Failed to load evaluators:', error);
+      }
+    };
+    loadEvaluators();
   }, []);
 
   function createDefaultRun(): RunConfig {
@@ -453,6 +472,29 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
                               </SelectContent>
                             </Select>
                           </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Evaluator (Optional)</Label>
+                          <Select
+                            value={run.evaluatorId || '__default__'}
+                            onValueChange={val => handleUpdateRun(run.id, { evaluatorId: val === '__default__' ? undefined : val })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="RCA Default" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__default__">RCA Default</SelectItem>
+                              {evaluators.map(evaluator => (
+                                <SelectItem key={evaluator.id} value={evaluator.id}>
+                                  {evaluator.name} {evaluator.isSystem ? '(System)' : ''}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            Choose evaluation criteria for judging agent performance
+                          </p>
                         </div>
                       </div>
                     </CardContent>

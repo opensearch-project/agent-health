@@ -12,7 +12,7 @@
 
 import type { StorageClusterConfig } from '../../types/index.js';
 import type { StorageState } from '../adapters/index.js';
-import { setStorageModule, setStorageError, FileStorageModule, OpenSearchStorageModule } from '../adapters/index.js';
+import { setStorageModule, setStorageError, FileStorageModule, FileSessionMetadataOperations, OpenSearchStorageModule } from '../adapters/index.js';
 import { createOpenSearchClient, configToCacheKey } from './opensearchClientFactory.js';
 import { ensureIndexesWithValidation } from './indexInitializer.js';
 
@@ -73,7 +73,7 @@ export async function initializeStorageFromConfig(
       }
     }
 
-    const osModule = new OpenSearchStorageModule(client);
+    const osModule = new OpenSearchStorageModule(client, new FileSessionMetadataOperations());
     const state: StorageState = {
       backend: 'opensearch',
       configKey,

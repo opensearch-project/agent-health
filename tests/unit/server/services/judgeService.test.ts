@@ -216,7 +216,8 @@ describe('evaluateWithOpenAICompatible', () => {
 
     expect(result.passFailStatus).toBe('failed');
     expect(result.metrics.accuracy).toBe(42);
-    expect(result.metrics.faithfulness).toBe(55);
+    // faithfulness is not extracted because it's not in the default evaluator's scoringConfig
+    expect(result.metrics.faithfulness).toBeUndefined();
   });
 });
 

@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionTracesView from './SessionTracesView';
+import SessionAnnotationsTab from './SessionAnnotationsTab';
 import { PerformancePulseSection, EvalTrendPoint } from './PerformancePulse';
 // Task 3A/3B/3C: shared primitives for the AI Dev Tools page.
 import {
@@ -1025,6 +1026,7 @@ function SessionDetailPanel({ session, onClose }: { session: Session; onClose: (
           <TabsList className="mb-3">
             <TabsTrigger value="messages">Messages</TabsTrigger>
             <TabsTrigger value="traces">Traces</TabsTrigger>
+            <TabsTrigger value="annotations">Annotations</TabsTrigger>
           </TabsList>
 
           <TabsContent value="messages">
@@ -1104,6 +1106,10 @@ function SessionDetailPanel({ session, onClose }: { session: Session; onClose: (
 
           <TabsContent value="traces">
             <SessionTracesView sessionId={session.session_id} />
+          </TabsContent>
+
+          <TabsContent value="annotations">
+            <SessionAnnotationsTab agentKind={session.agent} sessionId={session.session_id} />
           </TabsContent>
         </Tabs>
       </div>

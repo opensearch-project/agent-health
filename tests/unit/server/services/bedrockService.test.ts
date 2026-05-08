@@ -300,10 +300,11 @@ describe('BedrockService', () => {
       const result = await evaluateTrajectory(request);
 
       expect(result.metrics.accuracy).toBe(0.8);
-      expect(result.metrics.faithfulness).toBe(0.9);
+      // faithfulness is not extracted because it's not in the default evaluator's scoringConfig
+      expect(result.metrics.faithfulness).toBeUndefined();
     });
 
-    it('should default accuracy to 0 when missing', async () => {
+    it('should omit accuracy when missing from judge response', async () => {
       mockSend.mockResolvedValue({
         output: {
           message: {
@@ -318,7 +319,8 @@ describe('BedrockService', () => {
 
       const result = await evaluateTrajectory(request);
 
-      expect(result.metrics.accuracy).toBe(0);
+      // With dynamic metrics, missing metrics are omitted (not defaulted to 0)
+      expect(result.metrics.accuracy).toBeUndefined();
     });
 
     it('should default passFailStatus to failed when missing', async () => {

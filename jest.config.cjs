@@ -17,6 +17,10 @@ module.exports = {
     '^@/server/services/configService$': '<rootDir>/__mocks__/@/server/services/configService.ts',
     '^\\.\\./services/configService\\.js$': '<rootDir>/__mocks__/@/server/services/configService.ts',
     '^\\.\\./\\.\\./services/configService\\.js$': '<rootDir>/__mocks__/@/server/services/configService.ts',
+    // Mock observioAgent to avoid import.meta.url issues in Jest
+    '^@/server/services/observioAgent$': '<rootDir>/__mocks__/@/server/services/observioAgent.ts',
+    '^\\.\\./services/observioAgent\\.js$': '<rootDir>/__mocks__/@/server/services/observioAgent.ts',
+    '^\\.\\./\\.\\./services/observioAgent\\.js$': '<rootDir>/__mocks__/@/server/services/observioAgent.ts',
     // Mock version utility to avoid import.meta.url issues in Jest
     '^@/server/utils/version$': '<rootDir>/__mocks__/@/server/utils/version.ts',
     '^\\.\\./utils/version$': '<rootDir>/__mocks__/@/server/utils/version.ts',

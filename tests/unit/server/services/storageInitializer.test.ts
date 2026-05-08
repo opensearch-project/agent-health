@@ -20,6 +20,7 @@ jest.mock('@/server/adapters/index', () => ({
   setStorageModule: mockSetStorageModule,
   setStorageError: mockSetStorageError,
   FileStorageModule: jest.fn().mockImplementation(() => ({ type: 'file' })),
+  FileSessionMetadataOperations: jest.fn().mockImplementation(() => ({ type: 'file-session-metadata' })),
   OpenSearchStorageModule: jest.fn().mockImplementation(() => ({ type: 'opensearch' })),
 }));
 

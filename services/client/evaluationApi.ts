@@ -27,6 +27,8 @@ export interface ServerEvaluationRequest {
   testCase?: TestCase;
   /** Optional endpoint override */
   agentEndpoint?: string;
+  /** Optional evaluator ID for custom evaluation criteria */
+  evaluatorId?: string;
 }
 
 /**

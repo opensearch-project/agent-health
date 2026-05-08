@@ -10,7 +10,7 @@
  * Follows the server-mediated architecture pattern.
  */
 
-import type { Benchmark, BenchmarkRun, BenchmarkProgress, RunConfigInput, TestCaseRun, StorageMetadata, AgentConfig, ModelConfig, TestCase } from '@/types/index.js';
+import type { Benchmark, BenchmarkRun, BenchmarkProgress, RunConfigInput, TestCaseRun, StorageMetadata, AgentConfig, ModelConfig, TestCase, Evaluator } from '@/types/index.js';
 
 /**
  * Error thrown when the server sends an explicit error event via SSE.
@@ -487,6 +487,27 @@ export class ApiClient {
   }
 
   /**
+   * List all evaluators (system + custom)
+   */
+  async listEvaluators(): Promise<{ evaluators: Evaluator[]; total: number; meta: StorageMetadata }> {
+    const res = await fetch(`${this.baseUrl}/api/storage/evaluators`);
+    if (!res.ok) {
+      throw new Error(`Failed to list evaluators: ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    return {
+      evaluators: data.evaluators || [],
+      total: data.total || 0,
+      meta: data.meta || {
+        storageConfigured: false,
+        storageReachable: false,
+        realDataCount: data.customCount || 0,
+        sampleDataCount: data.systemCount || 0,
+      },
+    };
+  }
+
+  /**
    * List all configured agents
    */
   async listAgents(): Promise<AgentConfig[]> {
@@ -509,6 +530,7 @@ export class ApiClient {
     const data = await res.json();
     return data.models || [];
   }
+
 
   /**
    * Get a single test case by ID
@@ -552,12 +574,13 @@ export class ApiClient {
     testCaseId: string,
     agentKey: string,
     modelId: string,
-    onProgress?: (event: EvaluationProgressEvent) => void
+    onProgress?: (event: EvaluationProgressEvent) => void,
+    evaluatorId?: string
   ): Promise<EvaluationResult> {
     const res = await fetch(`${this.baseUrl}/api/evaluate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testCaseId, agentKey, modelId }),
+      body: JSON.stringify({ testCaseId, agentKey, modelId, evaluatorId }),
     });
 
     if (!res.ok) {
