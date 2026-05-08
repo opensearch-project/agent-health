@@ -310,7 +310,7 @@ Resources:
             - opensearch:
                 hosts:
                   - "https://${OpenSearchDomain.DomainEndpoint}"
-                index: "otel-logs-%%{yyyy.MM.dd}"
+                index: "otel-logs-%{yyyy.MM.dd}"
                 aws:
                   sts_role_arn: "${OSISPipelineRole.Arn}"
                   region: "${AWS::Region}"

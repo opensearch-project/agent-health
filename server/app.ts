@@ -22,6 +22,7 @@ import type { OpenSearchExporterConfig } from '@/lib/telemetry';
 // Register server-side connectors (subprocess, claude-code)
 // This import has side effects that register connectors with the registry
 import '@/services/connectors/server';
+import { connectorRegistry } from '@/services/connectors/registry';
 
 /**
  * Resolve storage config at startup (no request context available).
@@ -58,6 +59,14 @@ export async function createApp(): Promise<Express> {
   await migrateYamlToJsonIfNeeded();
 
   const config = await loadConfig();
+
+  // Register user-defined connectors from config (so they work in benchmark execution)
+  if (config.connectors?.length) {
+    for (const connector of config.connectors) {
+      connectorRegistry.register(connector);
+    }
+    console.log(`[app] Registered ${config.connectors.length} user connector(s) from config`);
+  }
 
   // Initialize evaluation telemetry (OTel span emission).
   // Prefer the observability data source for direct OpenSearch export — this

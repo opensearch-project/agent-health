@@ -302,9 +302,12 @@ export class SubprocessConnector extends BaseConnector {
     }
 
     // Add error if non-zero exit code
-    if (data.exitCode !== 0 && data.stderr.trim()) {
-      steps.push(this.createStep('tool_result', `Error: ${data.stderr.trim()}`, {
-        status: 'FAILURE' as any,
+    if (data.exitCode !== 0) {
+      const errorContent = data.stderr.trim()
+        ? `Error: Process exited with code ${data.exitCode}. ${data.stderr.trim()}`
+        : `Error: Process exited with code ${data.exitCode} (no output)`;
+      steps.push(this.createStep('tool_result', errorContent, {
+        status: ToolCallStatus.FAILURE,
       }));
     }
 

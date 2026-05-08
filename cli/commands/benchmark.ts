@@ -157,18 +157,20 @@ async function runBenchmarkForAgent(
           startedRunId = event.runId;
         } else if (event.type === 'progress') {
           const current = event.currentTestCaseIndex + 1;
+          const completed = (event as any).completedCount ?? 0;
           const testCaseName = event.currentTestCase?.name || `Test ${current}`;
-          spinner.text = `${agent.name}: ${testCaseName} (${current}/${totalTestCases})`;
 
           if (event.result) {
             const status = event.result.status === 'completed' ? chalk.green('✓') : chalk.red('✗');
-            spinner.text = `${agent.name}: ${testCaseName} ${status} (${current}/${totalTestCases})`;
+            spinner.text = `${agent.name}: ${testCaseName} ${status} (${completed}/${totalTestCases} evaluated)`;
 
             // Show per-test-case errors in verbose mode
             if (verbose && event.result.status === 'failed' && event.result.error) {
               spinner.info(`${agent.name}: ${testCaseName} ${chalk.red('✗')} - ${event.result.error}`);
-              spinner.start(`${agent.name}: (${current}/${totalTestCases})`);
+              spinner.start(`${agent.name}: (${completed}/${totalTestCases} evaluated)`);
             }
+          } else {
+            spinner.text = `${agent.name}: ${testCaseName} — evaluating... (${completed}/${totalTestCases} done)`;
           }
         }
       }
@@ -505,7 +507,7 @@ export function createBenchmarkCommand(): Command {
         let benchmark: Benchmark | null = null;
 
         if (fileMode) {
-          // File mode: import test cases from JSON file and create benchmark
+          // File mode: import test cases from JSON file and create/reuse benchmark
           const importSpinner = ora(`Loading test cases from ${filePath}...`).start();
           try {
             const validatedTestCases = loadAndValidateTestCasesFile(filePath!);
@@ -516,15 +518,21 @@ export function createBenchmarkCommand(): Command {
             const bulkResult = await api.bulkCreateTestCases(validatedTestCases);
             uploadSpinner.succeed(`Imported ${bulkResult.created} test cases`);
 
-            // Create benchmark from imported test case IDs
+            // Reuse existing benchmark with same name, or create a new one
             const benchmarkName = (options.file && options.name) ? options.name : `file-${Date.now()}`;
             const createSpinner = ora('Creating benchmark...').start();
-            benchmark = await api.createBenchmark({
-              name: benchmarkName,
-              description: `Imported from ${filePath}`,
-              testCaseIds: bulkResult.testCases.map(tc => tc.id),
-            });
-            createSpinner.succeed(`Created benchmark: ${benchmark.name}`);
+            const existingBenchmark = await api.findBenchmark(benchmarkName);
+            if (existingBenchmark) {
+              benchmark = existingBenchmark;
+              createSpinner.succeed(`Reusing existing benchmark: ${benchmark.name} (${benchmark.id})`);
+            } else {
+              benchmark = await api.createBenchmark({
+                name: benchmarkName,
+                description: `Imported from ${filePath}`,
+                testCaseIds: bulkResult.testCases.map(tc => tc.id),
+              });
+              createSpinner.succeed(`Created benchmark: ${benchmark.name}`);
+            }
           } catch (error) {
             importSpinner.fail(`File import failed: ${error instanceof Error ? error.message : error}`);
             process.exit(1);

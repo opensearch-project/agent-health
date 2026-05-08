@@ -562,7 +562,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                   ) : (
                     <XCircle size={12} />
                   )}
-                  {liveReport.passFailStatus?.toUpperCase() || liveReport.status.toUpperCase()}
+                  {liveReport.passFailStatus?.toUpperCase() || (liveReport.status === 'failed' ? 'FAIL' : liveReport.status.toUpperCase())}
                 </div>
               )}
             </CardContent>

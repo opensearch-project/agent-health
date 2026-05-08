@@ -48,6 +48,7 @@ function getResultStatus(runResult: { status: string }, report: EvaluationReport
   if (runResult.status === 'pending') return 'pending';
   if (report?.passFailStatus === 'passed') return 'passed';
   if (report?.passFailStatus === 'failed') return 'failed';
+  if (report?.status === 'failed') return 'failed';
   if (runResult.status === 'completed') return report ? 'passed' : 'failed';
   return 'failed';
 }
