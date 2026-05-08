@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+- Connector type drift: use single source of truth (`CONNECTOR_TYPE_INFO`) in server validation and Settings UI instead of hardcoded arrays ([#176](https://github.com/opensearch-project/agent-health/pull/176))
+
 ## [0.4.0] - 2025-05-05
 
 ### Fixed
