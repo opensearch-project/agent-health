@@ -195,11 +195,14 @@ export async function runEvaluationWithConnector(
 
     // Execute afterResponse hook if defined
     if (agent.hooks?.afterResponse) {
+      debug('Eval', `Executing afterResponse hook for agent "${agent.key}"`);
       try {
         const hookContext: AfterResponseContext = {
-          response: result.rawEvents?.[0] || {},
+          response: (result.rawEvents?.length ? result.rawEvents[result.rawEvents.length - 1] : null) || result.metadata || {},
           trajectory: result.trajectory,
           runId: result.runId || undefined,
+          rawEvents: result.rawEvents || [],
+          metadata: result.metadata,
         };
         const hookResult = await executeAfterResponseHook(agent.hooks, hookContext, agent.key);
 
@@ -215,9 +218,16 @@ export async function runEvaluationWithConnector(
           runId: hookResult.runId
         });
       } catch (hookError: any) {
-        console.error(`[Eval] afterResponse hook failed for agent ${agent.key}:`, hookError.message);
-        debug('Eval', `afterResponse hook error, using pre-hook result`);
-        // Continue with pre-hook result — don't let hook failure kill the evaluation
+        const errorMsg = hookError instanceof Error ? hookError.message : String(hookError);
+        console.error(`[Eval] afterResponse hook failed for agent "${agent.key}":`, errorMsg);
+        debug('Eval', `afterResponse hook error details:`, {
+          agent: agent.key,
+          error: errorMsg,
+          rawEventsCount: result.rawEvents?.length ?? 0,
+          hasMetadata: !!result.metadata,
+        });
+        // Re-throw so the caller knows the hook failed — don't silently swallow
+        throw hookError instanceof Error ? hookError : new Error(errorMsg);
       }
     }
 

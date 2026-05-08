@@ -53,6 +53,10 @@ export interface AfterResponseContext {
   response: any;
   trajectory: TrajectoryStep[];
   runId?: string;
+  /** Full array of raw events from the connector (protocol-specific) */
+  rawEvents?: any[];
+  /** Connector metadata (e.g., threadId, sessionId, exitCode) */
+  metadata?: Record<string, any>;
 }
 
 export interface BuildTrajectoryContext {

@@ -715,7 +715,7 @@ describe('Evaluation Service Index', () => {
       );
     });
 
-    it('should continue with pre-hook result when afterResponse hook throws', async () => {
+    it('should propagate error when afterResponse hook throws', async () => {
       const agentWithAfterHook = {
         ...mockAgent,
         hooks: {
@@ -749,14 +749,9 @@ describe('Evaluation Service Index', () => {
         { registry: mockRegistry }
       );
 
-      // Should succeed with original trajectory, not fail
-      expect(result.status).toBe('completed');
-      expect(result.trajectory).toEqual(originalTrajectory);
-      // Should have logged the hook error
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('afterResponse hook failed'),
-        expect.stringContaining('Hook exploded')
-      );
+      // Should fail with the hook error surfaced
+      expect(result.status).toBe('failed');
+      expect(result.llmJudgeReasoning).toContain('Hook exploded');
     });
   });
 });

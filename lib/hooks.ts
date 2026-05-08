@@ -72,6 +72,14 @@ export async function executeAfterResponseHook(
     return context;
   }
 
+  debug('Hooks', `Executing afterResponse hook for agent "${agentKey}"`, {
+    hasResponse: !!context.response && Object.keys(context.response).length > 0,
+    trajectorySteps: context.trajectory.length,
+    runId: context.runId,
+    rawEventsCount: context.rawEvents?.length ?? 0,
+    hasMetadata: !!context.metadata,
+  });
+
   try {
     const result = await hooks.afterResponse(context);
 
@@ -86,6 +94,10 @@ export async function executeAfterResponseHook(
       throw new Error('afterResponse hook must return an object with a "trajectory" array field');
     }
 
+    debug('Hooks', `afterResponse hook for "${agentKey}" completed`, {
+      runId: result.runId,
+      trajectorySteps: result.trajectory.length,
+    });
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
