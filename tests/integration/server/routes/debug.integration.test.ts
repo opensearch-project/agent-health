@@ -19,20 +19,17 @@
  *   - Backend server running: npm run dev:server
  */
 
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
+
 const TEST_TIMEOUT = 30000;
+const BASE_URL = getTestBackendUrl();
 
-const getTestConfig = () => {
-  return {
-    backendUrl: process.env.TEST_BACKEND_URL || 'http://localhost:4001',
-  };
-};
-
-const checkBackend = async (backendUrl: string): Promise<boolean> => {
+const checkBackend = async (): Promise<boolean> => {
   try {
     // Check both health and the debug endpoint itself
     const [healthRes, debugRes] = await Promise.all([
-      fetch(`${backendUrl}/health`),
-      fetch(`${backendUrl}/api/debug`),
+      fetch(`${BASE_URL}/health`),
+      fetch(`${BASE_URL}/api/debug`),
     ]);
     return healthRes.ok && debugRes.ok;
   } catch {
@@ -42,15 +39,13 @@ const checkBackend = async (backendUrl: string): Promise<boolean> => {
 
 describe('Debug API Integration Tests', () => {
   let backendAvailable = false;
-  let config: ReturnType<typeof getTestConfig>;
 
   beforeAll(async () => {
-    config = getTestConfig();
-    backendAvailable = await checkBackend(config.backendUrl);
+    backendAvailable = await checkBackend();
     if (!backendAvailable) {
       console.warn(
         'Backend not available at',
-        config.backendUrl,
+        BASE_URL,
         '- skipping integration tests'
       );
     }
@@ -59,7 +54,7 @@ describe('Debug API Integration Tests', () => {
   // Reset debug to false after each test to avoid side effects
   afterEach(async () => {
     if (!backendAvailable) return;
-    await fetch(`${config.backendUrl}/api/debug`, {
+    await fetch(`${BASE_URL}/api/debug`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
@@ -72,7 +67,7 @@ describe('Debug API Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/debug`);
+        const response = await fetch(`${BASE_URL}/api/debug`);
 
         expect(response.ok).toBe(true);
         expect(response.status).toBe(200);
@@ -88,7 +83,7 @@ describe('Debug API Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/debug`);
+        const response = await fetch(`${BASE_URL}/api/debug`);
         expect(response.headers.get('content-type')).toMatch(/application\/json/);
       },
       TEST_TIMEOUT
@@ -101,7 +96,7 @@ describe('Debug API Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/debug`, {
+        const response = await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: true }),
@@ -120,14 +115,14 @@ describe('Debug API Integration Tests', () => {
         if (!backendAvailable) return;
 
         // Enable first
-        await fetch(`${config.backendUrl}/api/debug`, {
+        await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: true }),
         });
 
         // Disable
-        const response = await fetch(`${config.backendUrl}/api/debug`, {
+        const response = await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: false }),
@@ -145,7 +140,7 @@ describe('Debug API Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/debug`, {
+        const response = await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: 'yes' }),
@@ -163,7 +158,7 @@ describe('Debug API Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/debug`, {
+        const response = await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),
@@ -184,26 +179,26 @@ describe('Debug API Integration Tests', () => {
         if (!backendAvailable) return;
 
         // Enable
-        await fetch(`${config.backendUrl}/api/debug`, {
+        await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: true }),
         });
 
         // Verify via GET
-        const getResponse = await fetch(`${config.backendUrl}/api/debug`);
+        const getResponse = await fetch(`${BASE_URL}/api/debug`);
         const getData = await getResponse.json();
         expect(getData.enabled).toBe(true);
 
         // Disable
-        await fetch(`${config.backendUrl}/api/debug`, {
+        await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: false }),
         });
 
         // Verify via GET
-        const getResponse2 = await fetch(`${config.backendUrl}/api/debug`);
+        const getResponse2 = await fetch(`${BASE_URL}/api/debug`);
         const getData2 = await getResponse2.json();
         expect(getData2.enabled).toBe(false);
       },
@@ -216,12 +211,12 @@ describe('Debug API Integration Tests', () => {
         if (!backendAvailable) return;
 
         // Enable twice
-        await fetch(`${config.backendUrl}/api/debug`, {
+        await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: true }),
         });
-        const response = await fetch(`${config.backendUrl}/api/debug`, {
+        const response = await fetch(`${BASE_URL}/api/debug`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: true }),

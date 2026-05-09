@@ -192,7 +192,7 @@ jobs:
           echo $! > server.pid
           echo "Server PID: $(cat server.pid)"
         env:
-          PORT: 4001
+          AGENT_HEALTH_PORT: 4001
 
       - name: Wait for server to be healthy
         run: |
@@ -212,7 +212,7 @@ jobs:
       - name: Run integration tests with coverage
         run: npm run test:integration -- --coverage --coverageReporters=json-summary --coverageReporters=json --coverageDirectory=coverage-integration 2>&1 | tee integration-test-output.txt
         env:
-          TEST_BACKEND_URL: http://localhost:4001
+          AGENT_HEALTH_PORT: 4001
 
       - name: Stop backend server
         if: always()

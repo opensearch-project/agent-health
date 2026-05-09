@@ -17,7 +17,9 @@
  *   npm test -- --testPathPattern=benchmarkRunner
  */
 
-const BASE_URL = 'http://localhost:4001';
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
+
+const BASE_URL = getTestBackendUrl();
 
 // Performance thresholds (in milliseconds)
 const PERFORMANCE_THRESHOLDS = {

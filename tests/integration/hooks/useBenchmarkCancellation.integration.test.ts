@@ -20,8 +20,9 @@
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
 
-const BASE_URL = 'http://localhost:4001';
+const BASE_URL = getTestBackendUrl();
 
 // Check if backend is available
 const checkBackend = async (): Promise<boolean> => {

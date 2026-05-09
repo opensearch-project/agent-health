@@ -23,6 +23,7 @@ import { PerformanceOverlay } from './components/PerformanceOverlay';
 import { CodingAgentsPage } from './components/codingAgents/CodingAgentsPage';
 import { EvaluatorsPage } from './components/EvaluatorsPage';
 import { EvaluatorEditPage } from './components/EvaluatorEditPage';
+import { AssistantChat } from './components/assistant-ui/AssistantChat';
 
 // Evals 3 — Evaluations
 import { BenchmarksPage4 as Evals3Benchmarks } from './components/evals3/BenchmarksPage';
@@ -138,6 +139,9 @@ function App() {
 
             {/* Coding Agent Analytics */}
             <Route path="/coding-agents" element={<CodingAgentsPage />} />
+
+            {/* AI Assistant */}
+            <Route path="/assistant" element={<AssistantChat />} />
             {/* Redirects for deprecated routes */}
             <Route path="/evals" element={<Navigate to="/test-cases" replace />} />
             <Route path="/run" element={<Navigate to="/test-cases" replace />} />

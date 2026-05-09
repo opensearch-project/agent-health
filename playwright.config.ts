@@ -5,6 +5,9 @@
 
 import { defineConfig, devices } from '@playwright/test';
 
+const backendPort = process.env.AGENT_HEALTH_PORT || '4001';
+const devPort = process.env.AGENT_HEALTH_DEV_PORT || '4000';
+
 /**
  * Playwright configuration for E2E testing of AgentEval UI
  * @see https://playwright.dev/docs/test-configuration
@@ -28,10 +31,10 @@ export default defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    /* In CI, use production server on 4001; in local dev, use Vite dev server on 4000 */
+    /* In CI, use production server; in local dev, use Vite dev server */
     baseURL: process.env.CI
-      ? 'http://localhost:4001'
-      : (process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:4000'),
+      ? `http://localhost:${backendPort}`
+      : (process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${devPort}`),
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
@@ -56,20 +59,20 @@ export default defineConfig({
   webServer: process.env.CI
     ? {
         command: 'npm run server',
-        url: 'http://localhost:4001',
+        url: `http://localhost:${backendPort}`,
         reuseExistingServer: false,
         timeout: 120000,
       }
     : [
         {
           command: 'npm run dev:server',
-          url: 'http://localhost:4001/health',
+          url: `http://localhost:${backendPort}/health`,
           reuseExistingServer: true,
           timeout: 120000,
         },
         {
           command: 'npm run dev',
-          url: 'http://localhost:4000',
+          url: `http://localhost:${devPort}`,
           reuseExistingServer: true,
           timeout: 120000,
         },
