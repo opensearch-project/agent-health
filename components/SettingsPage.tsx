@@ -34,7 +34,7 @@ import {
   type ConfigStatus,
   type SaveStorageConfigResult,
 } from '@/lib/dataSourceConfig';
-import { DEFAULT_CONFIG, refreshConfig, CONNECTOR_TYPE_INFO, ConnectorTypeInfo } from '@/lib/constants';
+import { DEFAULT_CONFIG, refreshConfig, CONNECTOR_TYPE_INFO, type ConnectorTypeInfo } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 
 interface StorageStats {
@@ -1048,7 +1048,7 @@ export const SettingsPage: React.FC = () => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {(Object.entries(CONNECTOR_TYPE_INFO) as [ConnectorProtocol, ConnectorTypeInfo][]).map(([type, info]) => (
+                    {(Object.entries(CONNECTOR_TYPE_INFO) as [ConnectorProtocol, ConnectorTypeInfo][]).map(([type]) => (
                       <SelectItem key={type} value={type}>
                         {type === 'agui-streaming' ? `${type} (default)` : type}
                       </SelectItem>
@@ -1119,7 +1119,7 @@ export const SettingsPage: React.FC = () => {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {(Object.entries(CONNECTOR_TYPE_INFO) as [ConnectorProtocol, ConnectorTypeInfo][]).map(([type, info]) => (
+                            {(Object.entries(CONNECTOR_TYPE_INFO) as [ConnectorProtocol, ConnectorTypeInfo][]).map(([type]) => (
                               <SelectItem key={type} value={type}>
                                 {type === 'agui-streaming' ? `${type} (default)` : type}
                               </SelectItem>

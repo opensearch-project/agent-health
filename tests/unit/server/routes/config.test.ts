@@ -291,7 +291,7 @@ describe('Config Routes', () => {
       expect(mockAddCustomAgent).not.toHaveBeenCalled();
     });
 
-    it('accepts all valid connectorType values from CONNECTOR_TYPE_INFO', () => {
+    it('accepts all valid connectorType values from VALID_CONNECTOR_TYPES', () => {
       const handler = getRouteHandler(configRoutes, 'post', '/api/agents/custom');
 
       // Use the shared constant — ensures test stays in sync with code
