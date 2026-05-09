@@ -24,6 +24,7 @@ import codingAgentsRoutes from './codingAgents';
 import claudeCodeWorkspaceRoutes from './claudeCodeWorkspace';
 import sessionAnnotationsRoutes from './sessionAnnotations';
 import { codingAnalyticsEnabled } from '../services/codingAgents';
+import assistantRoutes from './assistant';
 
 const router = Router();
 
@@ -45,6 +46,7 @@ router.use(observabilityRoutes); // /api/observability/*
 router.use(configRoutes);        // /api/agents, /api/models
 router.use(evaluationRoutes);    // /api/evaluate
 router.use(debugRoutes);         // /api/debug
+router.use(assistantRoutes);     // /api/assistant/*
 
 // Coding Agent Analytics — only mount when feature is enabled
 if (codingAnalyticsEnabled) {

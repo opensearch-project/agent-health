@@ -21,24 +21,23 @@
  *   npm run test:integration -- --testPathPattern=evaluation.integration
  */
 
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
+
 const TEST_TIMEOUT = 60000;
+const BASE_URL = getTestBackendUrl();
 
-const getTestConfig = () => ({
-  backendUrl: process.env.TEST_BACKEND_URL || 'http://localhost:4001',
-});
-
-const checkBackend = async (backendUrl: string): Promise<boolean> => {
+const checkBackend = async (): Promise<boolean> => {
   try {
-    const response = await fetch(`${backendUrl}/health`);
+    const response = await fetch(`${BASE_URL}/health`);
     return response.ok;
   } catch {
     return false;
   }
 };
 
-const checkStorage = async (backendUrl: string): Promise<boolean> => {
+const checkStorage = async (): Promise<boolean> => {
   try {
-    const response = await fetch(`${backendUrl}/api/storage/health`);
+    const response = await fetch(`${BASE_URL}/api/storage/health`);
     if (!response.ok) return false;
     const data = await response.json();
     return data.status === 'ok';
@@ -127,22 +126,20 @@ function buildInlineTestCase(testCaseId: string) {
 describe('Evaluate Route Integration Tests', () => {
   let backendAvailable = false;
   let storageAvailable = false;
-  let config: ReturnType<typeof getTestConfig>;
   const createdReportIds: string[] = [];
   const createdTestCaseIds: string[] = [];
 
   beforeAll(async () => {
-    config = getTestConfig();
-    backendAvailable = await checkBackend(config.backendUrl);
+    backendAvailable = await checkBackend();
     if (!backendAvailable) {
       console.warn(
         'Backend not available at',
-        config.backendUrl,
+        BASE_URL,
         '- skipping evaluate route integration tests'
       );
       return;
     }
-    storageAvailable = await checkStorage(config.backendUrl);
+    storageAvailable = await checkStorage();
     if (!storageAvailable) {
       console.warn('OpenSearch storage not available - skipping evaluate route integration tests');
     }
@@ -153,7 +150,7 @@ describe('Evaluate Route Integration Tests', () => {
     // Clean up any reports created during tests
     for (const id of createdReportIds) {
       try {
-        await fetch(`${config.backendUrl}/api/storage/runs/${id}`, { method: 'DELETE' });
+        await fetch(`${BASE_URL}/api/storage/runs/${id}`, { method: 'DELETE' });
       } catch {
         // Ignore cleanup errors
       }
@@ -161,7 +158,7 @@ describe('Evaluate Route Integration Tests', () => {
     // Clean up any test cases created as a side effect of evaluation
     for (const id of createdTestCaseIds) {
       try {
-        await fetch(`${config.backendUrl}/api/storage/test-cases/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        await fetch(`${BASE_URL}/api/storage/test-cases/${encodeURIComponent(id)}`, { method: 'DELETE' });
       } catch {
         // Ignore cleanup errors
       }
@@ -195,7 +192,7 @@ describe('Evaluate Route Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/evaluate`, {
+        const response = await fetch(`${BASE_URL}/api/evaluate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ testCaseId: 'some-id', modelId: 'demo-model' }),
@@ -213,7 +210,7 @@ describe('Evaluate Route Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/evaluate`, {
+        const response = await fetch(`${BASE_URL}/api/evaluate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agentKey: 'demo', modelId: 'demo-model' }),
@@ -233,7 +230,7 @@ describe('Evaluate Route Integration Tests', () => {
         createdTestCaseIds.push(testCaseId);
         const testCase = buildInlineTestCase(testCaseId);
 
-        const response = await fetch(`${config.backendUrl}/api/evaluate`, {
+        const response = await fetch(`${BASE_URL}/api/evaluate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -265,7 +262,7 @@ describe('Evaluate Route Integration Tests', () => {
         createdTestCaseIds.push(testCaseId);
         const testCase = buildInlineTestCase(testCaseId);
 
-        const response = await fetch(`${config.backendUrl}/api/evaluate`, {
+        const response = await fetch(`${BASE_URL}/api/evaluate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -308,7 +305,7 @@ describe('Evaluate Route Integration Tests', () => {
         const testCase = buildInlineTestCase(testCaseId);
 
         // 1. Run the evaluation
-        const evalResponse = await fetch(`${config.backendUrl}/api/evaluate`, {
+        const evalResponse = await fetch(`${BASE_URL}/api/evaluate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -329,7 +326,7 @@ describe('Evaluate Route Integration Tests', () => {
 
         // 2. Verify the run is retrievable by test case ID
         const runsResponse = await fetch(
-          `${config.backendUrl}/api/storage/runs/by-test-case/${testCaseId}`
+          `${BASE_URL}/api/storage/runs/by-test-case/${testCaseId}`
         );
 
         expect(runsResponse.status).toBe(200);
@@ -353,7 +350,7 @@ describe('Evaluate Route Integration Tests', () => {
         createdTestCaseIds.push(testCaseId);
         const testCase = buildInlineTestCase(testCaseId);
 
-        const evalResponse = await fetch(`${config.backendUrl}/api/evaluate`, {
+        const evalResponse = await fetch(`${BASE_URL}/api/evaluate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -393,7 +390,7 @@ describe('Evaluate Route Integration Tests', () => {
         const testCase = buildInlineTestCase(testCaseId);
 
         // Trigger a pre-SSE 400 error
-        await fetch(`${config.backendUrl}/api/evaluate`, {
+        await fetch(`${BASE_URL}/api/evaluate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -405,7 +402,7 @@ describe('Evaluate Route Integration Tests', () => {
 
         // Verify no run was persisted for this unique test case ID
         const runsResponse = await fetch(
-          `${config.backendUrl}/api/storage/runs/by-test-case/${testCaseId}`
+          `${BASE_URL}/api/storage/runs/by-test-case/${testCaseId}`
         );
         const runsData = await runsResponse.json();
         const matchingRuns = (runsData.runs as any[]).filter(

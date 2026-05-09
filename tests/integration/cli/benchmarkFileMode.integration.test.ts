@@ -20,9 +20,10 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { ApiClient } from '@/cli/utils/apiClient';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
 
 const TEST_TIMEOUT = 30000;
-const BASE_URL = process.env.TEST_BACKEND_URL || 'http://localhost:4001';
+const BASE_URL = getTestBackendUrl();
 
 const checkBackend = async (): Promise<boolean> => {
   try {

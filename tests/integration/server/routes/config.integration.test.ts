@@ -32,15 +32,14 @@ const DEFAULT_AGENT_COUNT = 4;
  */
 const MIN_DEFAULT_MODEL_COUNT = 3;
 
-// Test configuration
-const getTestConfig = () => ({
-  backendUrl: process.env.TEST_BACKEND_URL || 'http://localhost:4001',
-});
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
+
+const BASE_URL = getTestBackendUrl();
 
 // Helper to check if backend is available
-const checkBackend = async (backendUrl: string): Promise<boolean> => {
+const checkBackend = async (): Promise<boolean> => {
   try {
-    const response = await fetch(`${backendUrl}/health`);
+    const response = await fetch(`${BASE_URL}/health`);
     return response.ok;
   } catch {
     return false;
@@ -49,15 +48,13 @@ const checkBackend = async (backendUrl: string): Promise<boolean> => {
 
 describe('Config Endpoints Integration Tests', () => {
   let backendAvailable = false;
-  let config: ReturnType<typeof getTestConfig>;
 
   beforeAll(async () => {
-    config = getTestConfig();
-    backendAvailable = await checkBackend(config.backendUrl);
+    backendAvailable = await checkBackend();
     if (!backendAvailable) {
       console.warn(
         'Backend not available at',
-        config.backendUrl,
+        BASE_URL,
         '- skipping integration tests'
       );
     }
@@ -69,7 +66,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/agents`);
+        const response = await fetch(`${BASE_URL}/api/agents`);
 
         expect(response.ok).toBe(true);
         expect(response.status).toBe(200);
@@ -87,7 +84,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/agents`);
+        const response = await fetch(`${BASE_URL}/api/agents`);
         const data = await response.json();
 
         // The critical assertion: createApp() must have called loadConfig()
@@ -105,7 +102,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/agents`);
+        const response = await fetch(`${BASE_URL}/api/agents`);
         const data = await response.json();
 
         for (const agent of data.agents) {
@@ -124,7 +121,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/agents`);
+        const response = await fetch(`${BASE_URL}/api/agents`);
         const data = await response.json();
 
         const demoAgent = data.agents.find(
@@ -141,7 +138,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/agents`);
+        const response = await fetch(`${BASE_URL}/api/agents`);
         const data = await response.json();
 
         expect(data.meta).toBeDefined();
@@ -155,7 +152,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/agents`);
+        const response = await fetch(`${BASE_URL}/api/agents`);
         const data = await response.json();
 
         for (const agent of data.agents) {
@@ -171,8 +168,8 @@ describe('Config Endpoints Integration Tests', () => {
         if (!backendAvailable) return;
 
         const [r1, r2] = await Promise.all([
-          fetch(`${config.backendUrl}/api/agents`).then((r) => r.json()),
-          fetch(`${config.backendUrl}/api/agents`).then((r) => r.json()),
+          fetch(`${BASE_URL}/api/agents`).then((r) => r.json()),
+          fetch(`${BASE_URL}/api/agents`).then((r) => r.json()),
         ]);
 
         expect(r1.total).toBe(r2.total);
@@ -198,20 +195,20 @@ describe('Config Endpoints Integration Tests', () => {
       // Best-effort cleanup: delete all agents created during this suite
       for (const key of createdKeys) {
         try {
-          await fetch(`${config.backendUrl}/api/agents/custom/${key}`, { method: 'DELETE' });
+          await fetch(`${BASE_URL}/api/agents/custom/${key}`, { method: 'DELETE' });
         } catch {
           // Ignore cleanup errors
         }
       }
       // Also delete by name in case key tracking missed one
       try {
-        const response = await fetch(`${config.backendUrl}/api/agents`);
+        const response = await fetch(`${BASE_URL}/api/agents`);
         const data = await response.json();
         const testAgent = data.agents.find(
           (a: { name: string }) => a.name === TEST_AGENT.name,
         );
         if (testAgent) {
-          await fetch(`${config.backendUrl}/api/agents/custom/${testAgent.key}`, {
+          await fetch(`${BASE_URL}/api/agents/custom/${testAgent.key}`, {
             method: 'DELETE',
           });
         }
@@ -226,7 +223,7 @@ describe('Config Endpoints Integration Tests', () => {
         if (!backendAvailable) return;
 
         // 1. Create custom agent
-        const createResponse = await fetch(`${config.backendUrl}/api/agents/custom`, {
+        const createResponse = await fetch(`${BASE_URL}/api/agents/custom`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(TEST_AGENT),
@@ -241,7 +238,7 @@ describe('Config Endpoints Integration Tests', () => {
         createdKeys.push(created.key);
 
         // 2. Verify it appears in the agents list
-        const listResponse = await fetch(`${config.backendUrl}/api/agents`);
+        const listResponse = await fetch(`${BASE_URL}/api/agents`);
         const listData = await listResponse.json();
         const found = listData.agents.find(
           (a: { key: string }) => a.key === created.key,
@@ -251,13 +248,13 @@ describe('Config Endpoints Integration Tests', () => {
 
         // 3. Delete the agent
         const deleteResponse = await fetch(
-          `${config.backendUrl}/api/agents/custom/${created.key}`,
+          `${BASE_URL}/api/agents/custom/${created.key}`,
           { method: 'DELETE' },
         );
         expect(deleteResponse.status).toBe(204);
 
         // 4. Verify it no longer appears
-        const listAfterDelete = await fetch(`${config.backendUrl}/api/agents`);
+        const listAfterDelete = await fetch(`${BASE_URL}/api/agents`);
         const dataAfterDelete = await listAfterDelete.json();
         const notFound = dataAfterDelete.agents.find(
           (a: { key: string }) => a.key === created.key,
@@ -272,7 +269,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const createResponse = await fetch(`${config.backendUrl}/api/agents/custom`, {
+        const createResponse = await fetch(`${BASE_URL}/api/agents/custom`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -290,7 +287,7 @@ describe('Config Endpoints Integration Tests', () => {
         createdKeys.push(created.key);
 
         // Verify the fields are returned in the agents list
-        const listResponse = await fetch(`${config.backendUrl}/api/agents`);
+        const listResponse = await fetch(`${BASE_URL}/api/agents`);
         const listData = await listResponse.json();
         const found = listData.agents.find((a: { key: string }) => a.key === created.key);
         expect(found).toBeDefined();
@@ -298,7 +295,7 @@ describe('Config Endpoints Integration Tests', () => {
         expect(found.useTraces).toBe(true);
 
         // Cleanup
-        await fetch(`${config.backendUrl}/api/agents/custom/${created.key}`, { method: 'DELETE' });
+        await fetch(`${BASE_URL}/api/agents/custom/${created.key}`, { method: 'DELETE' });
       },
       TEST_TIMEOUT,
     );
@@ -308,7 +305,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const createResponse = await fetch(`${config.backendUrl}/api/agents/custom`, {
+        const createResponse = await fetch(`${BASE_URL}/api/agents/custom`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -324,7 +321,7 @@ describe('Config Endpoints Integration Tests', () => {
         createdKeys.push(created.key);
 
         // Cleanup
-        await fetch(`${config.backendUrl}/api/agents/custom/${created.key}`, { method: 'DELETE' });
+        await fetch(`${BASE_URL}/api/agents/custom/${created.key}`, { method: 'DELETE' });
       },
       TEST_TIMEOUT,
     );
@@ -334,7 +331,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const createResponse = await fetch(`${config.backendUrl}/api/agents/custom`, {
+        const createResponse = await fetch(`${BASE_URL}/api/agents/custom`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -357,7 +354,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/models`);
+        const response = await fetch(`${BASE_URL}/api/models`);
 
         expect(response.ok).toBe(true);
         expect(response.status).toBe(200);
@@ -375,7 +372,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/models`);
+        const response = await fetch(`${BASE_URL}/api/models`);
         const data = await response.json();
 
         expect(data.total).toBeGreaterThanOrEqual(MIN_DEFAULT_MODEL_COUNT);
@@ -389,7 +386,7 @@ describe('Config Endpoints Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/api/models`);
+        const response = await fetch(`${BASE_URL}/api/models`);
         const data = await response.json();
 
         for (const model of data.models) {

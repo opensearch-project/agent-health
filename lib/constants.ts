@@ -241,6 +241,13 @@ export const DEFAULT_CONFIG: AppConfig = {
       context_window: 200000,
       max_output_tokens: 4096
     },
+    "claude-code-judge": {
+      model_id: "claude-code-judge",
+      display_name: "Claude Code (Judge)",
+      provider: "claude-code",
+      context_window: 200000,
+      max_output_tokens: 16384
+    },
     "gpt-4o": {
       model_id: "gpt-4o",
       display_name: "GPT-4o",

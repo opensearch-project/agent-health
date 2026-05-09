@@ -333,3 +333,118 @@ This pattern means:
 - **Routes are backend-agnostic** - the same route code works with file storage or OpenSearch
 - **Swapping backends is a one-line change** at startup via `setStorageModule()`
 - **Testing is simple** - inject a mock `IStorageModule` for unit tests
+
+## Claude Code Judge
+
+The Claude Code judge is an alternative evaluation provider that spawns the `claude` CLI to evaluate agent trajectories, giving the judge access to full tool use and the AGENT_HEALTH.md skill context.
+
+### How It Works
+
+```
+┌──────────┐      spawn        ┌──────────────┐     stdout      ┌──────────┐
+│  Server   │ ───────────────▶│  claude CLI   │ ─────────────▶ │  JSON    │
+│ judge.ts  │   --print        │  (subprocess) │  JudgeResponse │  parse   │
+└──────────┘   --output-format │               │                └──────────┘
+               json            └──────────────┘
+```
+
+- **Provider key**: `'claude-code'` in the `JudgeProvider` union type
+- **Model ID**: `claude-code-judge` in `DEFAULT_CONFIG.models`
+- **Service**: `server/services/claudeCodeJudgeService.ts`
+- **Route branch**: `server/routes/judge.ts` — `if (provider === 'claude-code')`
+
+### Key Details
+
+- Spawns `claude --print --output-format json --dangerously-skip-permissions --append-system-prompt <system-prompt>`
+- System prompt combines `JUDGE_SYSTEM_PROMPT` from `server/prompts/judgePrompt.ts` with AGENT_HEALTH.md skill content
+- Pipes `buildEvaluationPrompt()` output (same as Bedrock) to stdin
+- Parses JSON from stdout into `JudgeResponse` shape (handles bare JSON and markdown-wrapped)
+- Inherits `AWS_PROFILE` and `AWS_REGION` from process environment
+- 3-minute timeout per evaluation
+
+## AI Assistant
+
+The AI Assistant provides conversational help powered by Claude Code CLI (with Bedrock/LiteLLM fallback). Two UI interfaces share one backend.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Frontend (React)                                  │
+│                                                                         │
+│  ┌───────────────────┐    ┌──────────────────────┐                     │
+│  │  AssistantModal    │    │   AssistantChat       │                    │
+│  │  (floating "?")    │    │   (/assistant route)  │                    │
+│  └────────┬──────────┘    └──────────┬───────────┘                     │
+│           │                          │                                  │
+│           └──────────┬───────────────┘                                  │
+│                      ▼                                                  │
+│           ┌──────────────────┐                                         │
+│           │ AssistantProvider │                                         │
+│           │ (runtime context) │                                         │
+│           └────────┬─────────┘                                         │
+│                    ▼                                                    │
+│           ┌──────────────────┐                                         │
+│           │useAssistantRuntime│                                        │
+│           │ (ChatModelAdapter)│                                        │
+│           └────────┬─────────┘                                         │
+│                    ▼                                                    │
+│           ┌──────────────────┐                                         │
+│           │  assistantApi.ts  │  ← ReadableStream SSE consumption      │
+│           └────────┬─────────┘                                         │
+└────────────────────┼───────────────────────────────────────────────────┘
+                     │ POST /api/assistant/chat (SSE)
+                     ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Backend (Express)                                │
+│                                                                        │
+│  ┌──────────────────┐    ┌──────────────────────────┐                 │
+│  │ assistant.ts      │───▶│ assistantService.ts       │                │
+│  │ (SSE route)       │    │ (session mgmt + streaming)│                │
+│  └──────────────────┘    └────────────┬─────────────┘                 │
+│                                       │                                │
+│                          ┌────────────┼────────────┐                  │
+│                          ▼            ▼            ▼                   │
+│                    ┌──────────┐ ┌──────────┐ ┌──────────┐            │
+│                    │claude CLI│ │ Bedrock  │ │ LiteLLM  │            │
+│                    │(primary) │ │(fallback)│ │(fallback)│            │
+│                    └──────────┘ └──────────┘ └──────────┘            │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Streaming Pipeline
+
+The end-to-end streaming pipeline converts Claude CLI NDJSON output to real-time UI updates:
+
+1. **Claude CLI** outputs NDJSON lines: `{"type":"assistant","subtype":"text","content":"Hello"}`
+2. **assistantService.ts** parses NDJSON → calls `onDelta(content)` callback
+3. **assistant.ts route** converts to SSE: `data: {"type":"delta","content":"Hello"}\n\n`
+4. **assistantApi.ts** reads SSE via `ReadableStream` → buffers on `\n\n` → calls `onChunk(content)`
+5. **ChatModelAdapter** (in `useAssistantRuntime.ts`) accumulates text → yields `{ content: [{ type: "text", text }] }`
+6. **assistant-ui Thread** renders incrementally with auto-scroll and typing indicator
+
+### Session Management
+
+- In-memory `Map<sessionId, Session>` with 30-minute TTL
+- Periodic cleanup every 5 minutes (timer uses `unref()` to not block process exit)
+- Sessions persist across page navigation within the same browser session
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/assistant/chat` | POST | Stream assistant response (SSE) |
+| `/api/assistant/session/:sessionId` | DELETE | Clear session history |
+| `/api/assistant/health` | GET | Check Claude CLI availability |
+
+### UI Components
+
+| Component | Location | Library Primitive |
+|-----------|----------|-------------------|
+| `AssistantModal` | `components/assistant-ui/AssistantModal.tsx` | `AssistantModalPrimitive` |
+| `AssistantChat` | `components/assistant-ui/AssistantChat.tsx` | `ThreadPrimitive` |
+| `AssistantProvider` | `components/assistant-ui/AssistantProvider.tsx` | `AssistantRuntimeProvider` |
+
+- **AssistantModal**: Floating "?" button fixed bottom-right, opens 500x400 popup. Mobile-responsive (full viewport on small screens).
+- **AssistantChat**: Full-page chat at `/assistant` route with welcome screen and suggested prompts.
+- **AssistantProvider**: Mounted once in `Layout.tsx`, provides shared runtime context to both interfaces.

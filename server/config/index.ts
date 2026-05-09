@@ -9,12 +9,13 @@
  */
 
 import { StorageConfig } from '@/types';
+import { resolveBackendPort } from '@/lib/portConfig';
 
 // ============================================================================
 // Server Configuration
 // ============================================================================
 
-export const PORT = parseInt(process.env.PORT || process.env.BACKEND_PORT || process.env.VITE_BACKEND_PORT || '4001', 10);
+export const PORT = resolveBackendPort();
 
 // ============================================================================
 // AWS Configuration

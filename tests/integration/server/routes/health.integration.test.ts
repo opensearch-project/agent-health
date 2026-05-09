@@ -18,19 +18,15 @@
  *   - Backend server running: npm run dev:server
  */
 
-const TEST_TIMEOUT = 30000;
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
 
-// Test configuration
-const getTestConfig = () => {
-  return {
-    backendUrl: process.env.TEST_BACKEND_URL || 'http://localhost:4001',
-  };
-};
+const TEST_TIMEOUT = 30000;
+const BASE_URL = getTestBackendUrl();
 
 // Helper to check if backend is available
-const checkBackend = async (backendUrl: string): Promise<boolean> => {
+const checkBackend = async (): Promise<boolean> => {
   try {
-    const response = await fetch(`${backendUrl}/health`);
+    const response = await fetch(`${BASE_URL}/health`);
     return response.ok;
   } catch {
     return false;
@@ -39,15 +35,13 @@ const checkBackend = async (backendUrl: string): Promise<boolean> => {
 
 describe('Health Endpoint Integration Tests', () => {
   let backendAvailable = false;
-  let config: ReturnType<typeof getTestConfig>;
 
   beforeAll(async () => {
-    config = getTestConfig();
-    backendAvailable = await checkBackend(config.backendUrl);
+    backendAvailable = await checkBackend();
     if (!backendAvailable) {
       console.warn(
         'Backend not available at',
-        config.backendUrl,
+        BASE_URL,
         '- skipping integration tests'
       );
     }
@@ -59,7 +53,7 @@ describe('Health Endpoint Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/health`);
+        const response = await fetch(`${BASE_URL}/health`);
 
         expect(response.ok).toBe(true);
         expect(response.status).toBe(200);
@@ -75,7 +69,7 @@ describe('Health Endpoint Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/health`);
+        const response = await fetch(`${BASE_URL}/health`);
         const data = await response.json();
 
         // Version should be a valid semver string
@@ -91,7 +85,7 @@ describe('Health Endpoint Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/health`);
+        const response = await fetch(`${BASE_URL}/health`);
         const data = await response.json();
 
         expect(data.service).toBe('agent-health');
@@ -104,7 +98,7 @@ describe('Health Endpoint Integration Tests', () => {
       async () => {
         if (!backendAvailable) return;
 
-        const response = await fetch(`${config.backendUrl}/health`);
+        const response = await fetch(`${BASE_URL}/health`);
         const data = await response.json();
 
         // Verify complete response structure
@@ -126,7 +120,7 @@ describe('Health Endpoint Integration Tests', () => {
         if (!backendAvailable) return;
 
         const startTime = Date.now();
-        const response = await fetch(`${config.backendUrl}/health`);
+        const response = await fetch(`${BASE_URL}/health`);
         const endTime = Date.now();
 
         expect(response.ok).toBe(true);
@@ -141,9 +135,9 @@ describe('Health Endpoint Integration Tests', () => {
         if (!backendAvailable) return;
 
         const responses = await Promise.all([
-          fetch(`${config.backendUrl}/health`).then((r) => r.json()),
-          fetch(`${config.backendUrl}/health`).then((r) => r.json()),
-          fetch(`${config.backendUrl}/health`).then((r) => r.json()),
+          fetch(`${BASE_URL}/health`).then((r) => r.json()),
+          fetch(`${BASE_URL}/health`).then((r) => r.json()),
+          fetch(`${BASE_URL}/health`).then((r) => r.json()),
         ]);
 
         // All responses should be identical

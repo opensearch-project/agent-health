@@ -123,6 +123,15 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Benchmark traces tab layout and default view mode ([#108](https://github.com/opensearch-project/agent-health/pull/108))
 - Sidebar spacing and Evals menu interaction behavior ([#108](https://github.com/opensearch-project/agent-health/pull/108))
 - TypeScript compilation errors from merge conflict resolution ([#108](https://github.com/opensearch-project/agent-health/pull/108))
+- Claude Code as agent evaluator: new `'claude-code'` judge provider that spawns `claude` CLI to evaluate trajectories with full tool access and AGENT_HEALTH.md skill context
+- AI Assistant floating popup: `AssistantModalPrimitive`-based "?" button on every page with streaming chat powered by Claude Code CLI
+- AI Assistant full chat page at `/assistant` route with welcome screen, suggested prompts, and `ThreadPrimitive`-based conversation interface
+- Assistant backend service with in-memory session management, 30-min TTL, NDJSON stream parsing, and Bedrock/LiteLLM fallback
+- SSE streaming endpoints: `POST /api/assistant/chat`, `DELETE /api/assistant/session/:sessionId`, `GET /api/assistant/health`
+- Client-side assistant API (`assistantApi.ts`) with SSE stream consumption and chunk buffering
+- `useAssistantRuntime` hook implementing `ChatModelAdapter` with queue-based async generator for real-time streaming
+- `AssistantProvider` component wrapping app in `AssistantRuntimeProvider` for shared runtime context
+- Unit, integration, and Playwright E2E tests for all new assistant and Claude Code judge components
 - AWS SigV4 authentication support for OpenSearch clusters with `ClusterAuthType` (`none` | `basic` | `sigv4`) ([#85](https://github.com/opensearch-project/agent-health/pull/85))
 - OpenSearch client factory (`opensearchClientFactory.ts`) for centralized client creation with basic, none, or SigV4 auth ([#85](https://github.com/opensearch-project/agent-health/pull/85))
 - Mapping validation service to detect incompatible field types in OpenSearch indexes ([#85](https://github.com/opensearch-project/agent-health/pull/85))

@@ -41,7 +41,8 @@ const MAX_PORT_ATTEMPTS = 10;
  * Start the Express server, auto-incrementing port if already in use
  */
 export async function startServer(options: StartOptions): Promise<number> {
-  process.env.VITE_BACKEND_PORT = String(options.port);
+  // Set environment variables for the server
+  process.env.AGENT_HEALTH_PORT = String(options.port);
   if (options.headless) process.env.AGENT_HEALTH_HEADLESS = '1';
   if (options.apiKey) process.env.AGENT_HEALTH_API_KEY = options.apiKey;
 

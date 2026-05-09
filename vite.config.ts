@@ -52,15 +52,15 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.OPENSEARCH_FETCH_DELAY_MS': JSON.stringify(env.OPENSEARCH_FETCH_DELAY_MS),
     },
     server: {
-      port: parseInt(env.VITE_PORT || '4000'),
+      port: parseInt(env.AGENT_HEALTH_DEV_PORT || '4000'),
       host: true,
       proxy: {
         '/api': {
-          target: `http://localhost:${env.BACKEND_PORT || '4001'}`,
+          target: `http://localhost:${env.AGENT_HEALTH_PORT || '4001'}`,
           changeOrigin: true
         },
         '/health': {
-          target: `http://localhost:${env.BACKEND_PORT || '4001'}`,
+          target: `http://localhost:${env.AGENT_HEALTH_PORT || '4001'}`,
           changeOrigin: true
         }
       }

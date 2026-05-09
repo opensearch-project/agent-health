@@ -12,7 +12,23 @@ export type Difficulty = 'Easy' | 'Medium' | 'Hard';
 export type DateFormatVariant = 'date' | 'datetime' | 'detailed';
 
 // Judge provider determines which backend service handles evaluation
-export type JudgeProvider = 'demo' | 'bedrock' | 'openai-compatible';
+export type JudgeProvider = 'demo' | 'bedrock' | 'openai-compatible' | 'litellm' | 'claude-code';
+
+// ============ AI Assistant Types ============
+
+export interface AssistantMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface AssistantContext {
+  currentUrl?: string;
+  benchmarkId?: string;
+  runId?: string;
+  traceId?: string;
+  testCaseId?: string;
+}
 
 // Connector protocol for agent communication
 export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code' | 'strands' | 'langgraph' | 'mock';
