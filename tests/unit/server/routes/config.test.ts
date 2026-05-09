@@ -7,6 +7,7 @@ import { Request, Response } from 'express';
 import configRoutes from '@/server/routes/config';
 import { loadConfigSync } from '@/lib/config/index';
 import { addCustomAgent, removeCustomAgent, getCustomAgents, clearCustomAgents } from '@/server/services/customAgentStore';
+import { VALID_CONNECTOR_TYPES } from '@/lib/constants';
 
 // Mock config loader
 jest.mock('@/lib/config/index', () => ({
@@ -290,11 +291,11 @@ describe('Config Routes', () => {
       expect(mockAddCustomAgent).not.toHaveBeenCalled();
     });
 
-    it('accepts all valid connectorType values', () => {
-      const validTypes = ['agui-streaming', 'rest', 'openai-compatible', 'subprocess', 'claude-code', 'mock'] as const;
+    it('accepts all valid connectorType values from VALID_CONNECTOR_TYPES', () => {
       const handler = getRouteHandler(configRoutes, 'post', '/api/agents/custom');
 
-      for (const connectorType of validTypes) {
+      // Use the shared constant — ensures test stays in sync with code
+      for (const connectorType of VALID_CONNECTOR_TYPES) {
         jest.clearAllMocks();
         const { req, res } = createMocks({
           name: 'Agent',
@@ -306,6 +307,34 @@ describe('Config Routes', () => {
         const addedAgent = mockAddCustomAgent.mock.calls[0][0];
         expect(addedAgent.connectorType).toBe(connectorType);
       }
+    });
+
+    it('accepts strands connector type', () => {
+      const { req, res } = createMocks({
+        name: 'Strands Agent',
+        endpoint: 'http://localhost:9000',
+        connectorType: 'strands',
+      });
+      const handler = getRouteHandler(configRoutes, 'post', '/api/agents/custom');
+      handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const addedAgent = mockAddCustomAgent.mock.calls[0][0];
+      expect(addedAgent.connectorType).toBe('strands');
+    });
+
+    it('accepts langgraph connector type', () => {
+      const { req, res } = createMocks({
+        name: 'LangGraph Agent',
+        endpoint: 'http://localhost:8000',
+        connectorType: 'langgraph',
+      });
+      const handler = getRouteHandler(configRoutes, 'post', '/api/agents/custom');
+      handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const addedAgent = mockAddCustomAgent.mock.calls[0][0];
+      expect(addedAgent.connectorType).toBe('langgraph');
     });
 
     it('coerces non-boolean useTraces to false (truthy non-true values)', () => {
