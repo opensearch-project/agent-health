@@ -80,7 +80,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Bump version to 0.2.0
 
 ### Added
-- Observio sample agent — a reference ReAct agent for practicing agent health improvements (based on [osd-agents](https://github.com/opensearch-project/OpenSearch-Dashboards/tree/main/packages/osd-agents))
+- Observio sample agent — a reference ReAct agent for practicing agent health improvements, based on [osd-agents](https://github.com/opensearch-project/OpenSearch-Dashboards/tree/main/packages/osd-agents)
 - Docker configuration files for local development stack with OpenSearch and OTEL pipeline ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - Collapsible section for built-in agents and debug settings to SettingsPage ([#115](https://github.com/opensearch-project/agent-health/pull/115))
 - AWS Bedrock model discovery endpoint and updated model pricing ([#115](https://github.com/opensearch-project/agent-health/pull/115))

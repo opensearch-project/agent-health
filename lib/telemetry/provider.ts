@@ -13,7 +13,7 @@
 
 import { trace, type Tracer } from '@opentelemetry/api';
 import { NodeTracerProvider, BatchSpanProcessor, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { EVAL_TRACER_NAME } from './constants.js';
 import { OpenSearchSpanExporter, type OpenSearchExporterConfig } from './opensearchExporter.js';
