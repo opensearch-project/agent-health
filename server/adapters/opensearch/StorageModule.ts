@@ -531,7 +531,13 @@ class OpenSearchRunOperations implements IRunOperations {
   async getById(id: string): Promise<TestCaseRun | null> {
     try {
       const result = await this.client.get({ index: this.index, id });
-      return result.body.found ? result.body._source as TestCaseRun : null;
+      if (!result.body.found) return null;
+      const doc = result.body._source as any;
+      // Normalize: storage uses 'traceId' but app layer expects 'runId'
+      if (doc.traceId && !doc.runId) {
+        doc.runId = doc.traceId;
+      }
+      return doc as TestCaseRun;
     } catch (error: any) {
       if (error.meta?.statusCode === 404) return null;
       throw error;

@@ -51,6 +51,7 @@ import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { callBedrockJudge } from '@/services/evaluation';
 import { tracePollingManager } from '@/services/traces/tracePoller';
+import { getResultStatus as getSharedResultStatus, StatusIcon as SharedStatusIcon, StatusLabel as SharedStatusLabel } from '@/components/evals3/ResultStatus';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Card, CardContent } from '@/components/ui/card';
@@ -545,26 +546,21 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
               <div className="text-[10px] text-muted-foreground mb-0.5">Status</div>
               {reportLoading ? (
                 <Loader2 className="animate-spin text-muted-foreground" size={12} />
-              ) : liveReport.metricsStatus === 'pending' ? (
-                <div className="flex items-center gap-1 text-xs font-semibold text-yellow-700 dark:text-yellow-400">
-                  {traceSpans.length > 0 ? (
-                    <><Loader2 className="animate-spin" size={12} /> JUDGING</>
-                  ) : (
-                    <><Clock size={12} /> PENDING</>
-                  )}
-                </div>
-              ) : (
-                <div className={`flex items-center gap-1 text-xs font-semibold ${
-                  liveReport.passFailStatus === 'passed' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'
-                }`}>
-                  {liveReport.passFailStatus === 'passed' ? (
-                    <CheckCircle2 size={12} />
-                  ) : (
-                    <XCircle size={12} />
-                  )}
-                  {liveReport.passFailStatus?.toUpperCase() || (liveReport.status === 'failed' ? 'FAIL' : liveReport.status.toUpperCase())}
-                </div>
-              )}
+              ) : (() => {
+                const derivedStatus = getSharedResultStatus(
+                  { status: liveReport.status },
+                  liveReport,
+                );
+                // Refine: if metricsStatus is pending but we already have traces, it's judging
+                const finalStatus = derivedStatus === 'pending_traces' && traceSpans.length > 0
+                  ? 'pending_judgment' : derivedStatus;
+                return (
+                  <div className="flex items-center gap-1 text-xs font-semibold">
+                    <SharedStatusIcon status={finalStatus} size={12} />
+                    <SharedStatusLabel status={finalStatus} />
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
 

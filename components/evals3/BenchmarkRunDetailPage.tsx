@@ -18,8 +18,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  CheckCircle2, XCircle, Loader2, Clock, ChevronDown,
-  ChevronRight, Calendar, Ban,
+  Loader2, ChevronDown, ChevronRight, Calendar, Ban,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -28,11 +27,10 @@ import { Benchmark, BenchmarkRun, TestCase, EvaluationReport } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getLabelColor, formatDate, getModelName } from '@/lib/utils';
 import { RunDetailsFlyout } from './RunDetailsFlyout';
+import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
 import { Breadcrumbs } from './Breadcrumbs';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-type ResultStatus = 'passed' | 'failed' | 'running' | 'pending';
 
 interface TestCaseResult {
   testCaseId: string;
@@ -41,37 +39,6 @@ interface TestCaseResult {
   report: EvaluationReport | null;
   status: ResultStatus;
   accuracy: number | null;
-}
-
-function getResultStatus(runResult: { status: string }, report: EvaluationReport | null): ResultStatus {
-  if (runResult.status === 'running') return 'running';
-  if (runResult.status === 'pending') return 'pending';
-  if (report?.passFailStatus === 'passed') return 'passed';
-  if (report?.passFailStatus === 'failed') return 'failed';
-  if (report?.status === 'failed') return 'failed';
-  if (runResult.status === 'completed') return report ? 'passed' : 'failed';
-  return 'failed';
-}
-
-
-function StatusIcon({ status }: { status: ResultStatus }) {
-  switch (status) {
-    case 'passed': return <CheckCircle2 size={14} className="text-green-500" />;
-    case 'failed': return <XCircle size={14} className="text-red-500" />;
-    case 'running': return <Loader2 size={14} className="text-blue-600 dark:text-blue-400 animate-spin" />;
-    case 'pending': return <Clock size={14} className="text-muted-foreground" />;
-  }
-}
-
-function StatusLabel({ status }: { status: ResultStatus }) {
-  const config: Record<ResultStatus, { label: string; cls: string }> = {
-    passed: { label: 'PASS', cls: 'text-green-500' },
-    failed: { label: 'FAIL', cls: 'text-red-500' },
-    running: { label: 'RUNNING', cls: 'text-blue-600 dark:text-blue-400' },
-    pending: { label: 'PENDING', cls: 'text-muted-foreground' },
-  };
-  const c = config[status];
-  return <span className={`text-[11px] font-semibold ${c.cls}`}>{c.label}</span>;
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -138,7 +105,8 @@ export const BenchmarkRunDetailPage: React.FC = () => {
   const passCount = results.filter(r => r.status === 'passed').length;
   const failCount = results.filter(r => r.status === 'failed').length;
   const totalCount = results.length;
-  const passRate = totalCount > 0 ? Math.round((passCount / totalCount) * 100) : 0;
+  const judgedCount = passCount + failCount;
+  const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
   const avgAccuracy = results.filter(r => r.accuracy !== null).length > 0
     ? Math.round(results.reduce((s, r) => s + (r.accuracy ?? 0), 0) / results.filter(r => r.accuracy !== null).length)
     : null;

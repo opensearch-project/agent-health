@@ -22,7 +22,7 @@
 
 import { trace, context, type Tracer, type Context, type Span } from '@opentelemetry/api';
 import { NodeTracerProvider, BatchSpanProcessor, type SpanExporter } from '@opentelemetry/sdk-trace-node';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { OpenSearchSpanExporter } from './opensearchExporter';
 

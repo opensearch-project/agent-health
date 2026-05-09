@@ -622,20 +622,19 @@ export class BaseAGUIAdapter {
       // Pass the messages array directly as the first parameter
       // Pass additional inputs if agent supports it (check parameter count)
       // Extract modelId from forwardedProps if it exists
-      if (this.agent.processMessageWithCallbacks.length >= 3) {
-        await this.agent.processMessageWithCallbacks(messages, callbacks, {
-          state: fullInput?.state,
-          context: fullInput?.context,
-          tools: fullInput?.tools, // Pass client tools from AG UI
-          threadId: fullInput?.threadId,
-          runId: fullInput?.runId,
-          requestId, // Pass request ID for logging correlation
-          modelId: fullInput?.forwardedProps?.modelId, // Extract modelId from forwardedProps
-          otelContext: (fullInput as any)?._otelContext, // OTel context for child spans
-        });
-      } else {
-        await this.agent.processMessageWithCallbacks(messages, callbacks);
-      }
+      // Always pass additional inputs (otelContext, tools, etc.) — the agent
+      // ignores the third arg if it doesn't use it, but Function.length is unreliable
+      // with optional/default parameters after TypeScript compilation.
+      await this.agent.processMessageWithCallbacks(messages, callbacks, {
+        state: fullInput?.state,
+        context: fullInput?.context,
+        tools: fullInput?.tools,
+        threadId: fullInput?.threadId,
+        runId: fullInput?.runId,
+        requestId,
+        modelId: fullInput?.forwardedProps?.modelId,
+        otelContext: (fullInput as any)?._otelContext,
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error('Error in agent streaming', {

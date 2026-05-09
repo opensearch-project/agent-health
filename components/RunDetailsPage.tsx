@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, Calendar, CheckCircle2, XCircle, BarChart3, PanelLeftClose, PanelLeft, Clock, Loader2, StopCircle, Ban, Timer, Download, GitCompare } from 'lucide-react';
+import { getResultStatus, StatusIcon, StatusLabel } from '@/components/evals3/ResultStatus';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -134,8 +135,7 @@ const Sidebar = ({ context, selectedItem, onSelectItem, onToggleCollapse, isColl
           const testCase = getTestCase(testCaseId);
           const isSelected = selectedItem === testCaseId;
 
-          const isPassed = report?.passFailStatus === 'passed';
-          const isFailed = report?.passFailStatus === 'failed' || result.status === 'failed';
+          const resultStatus = getResultStatus(result, report);
 
           return (
             <Card
@@ -153,20 +153,7 @@ const Sidebar = ({ context, selectedItem, onSelectItem, onToggleCollapse, isColl
                 <div className="flex items-start gap-3">
                   {/* Status Icon */}
                   <div className="mt-0.5">
-                    {isPassed && <CheckCircle2 size={18} className="text-green-700 dark:text-green-400" />}
-                    {isFailed && <XCircle size={18} className="text-red-700 dark:text-red-400" />}
-                    {!isPassed && !isFailed && result.status === 'running' && (
-                      <Loader2 size={18} className="text-blue-700 dark:text-blue-400 animate-spin" />
-                    )}
-                    {!isPassed && !isFailed && result.status === 'pending' && (
-                      <Clock size={18} className="text-yellow-700 dark:text-yellow-400" />
-                    )}
-                    {!isPassed && !isFailed && result.status === 'cancelled' && (
-                      <Ban size={18} className="text-orange-700 dark:text-orange-400" />
-                    )}
-                    {!isPassed && !isFailed && result.status !== 'running' && result.status !== 'pending' && result.status !== 'cancelled' && (
-                      <div className="w-[18px] h-[18px] rounded-full border-2 border-muted-foreground/30" />
-                    )}
+                    <StatusIcon status={resultStatus} size={18} />
                   </div>
 
                   {/* Content */}
@@ -424,24 +411,14 @@ export const RunDetailsPage: React.FC = () => {
 
     Object.values(experimentRun.results || {}).forEach(result => {
       total++;
+      const report = result.reportId ? reportsMap[result.reportId] : null;
+      const status = getResultStatus(result, report || null);
 
-      if (result.status === 'pending') {
-        pending++;
-      } else if (result.status === 'running') {
-        running++;
-      } else if (result.status === 'completed' && result.reportId) {
-        const rep = reportsMap[result.reportId];
-        if (rep) {
-          if (rep.passFailStatus === 'passed') {
-            passed++;
-          } else {
-            failed++;
-          }
-        } else {
-          pending++; // Report not loaded yet
-        }
-      } else if (result.status === 'failed') {
-        failed++;
+      switch (status) {
+        case 'passed': passed++; break;
+        case 'failed': failed++; break;
+        case 'running': running++; break;
+        default: pending++; break;
       }
     });
 

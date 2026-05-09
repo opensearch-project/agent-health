@@ -12,42 +12,24 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { CheckCircle2, XCircle, Loader2, Clock, Calendar, GitCompare } from 'lucide-react';
+import { Loader2, Clock, XCircle, Calendar, GitCompare } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { Benchmark, BenchmarkRun, TestCase, EvaluationReport } from '@/types';
+import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
 import { Breadcrumbs } from './Breadcrumbs';
-
-type ResultStatus = 'passed' | 'failed' | 'running' | 'pending';
 
 interface TestCaseResult {
   testCaseId: string;
   testCase: TestCase | null;
   reportId: string | null;
   status: ResultStatus;
-}
-
-function getResultStatus(runResult: { status: string }): ResultStatus {
-  if (runResult.status === 'running') return 'running';
-  if (runResult.status === 'pending') return 'pending';
-  if (runResult.status === 'completed') return 'passed';
-  if (runResult.status === 'failed' || runResult.status === 'cancelled') return 'failed';
-  return 'pending';
-}
-
-function StatusIcon({ status, size = 14 }: { status: ResultStatus; size?: number }) {
-  switch (status) {
-    case 'passed': return <CheckCircle2 size={size} className="text-green-500" />;
-    case 'failed': return <XCircle size={size} className="text-red-500" />;
-    case 'running': return <Loader2 size={size} className="text-blue-500 animate-spin" />;
-    case 'pending': return <Clock size={size} className="text-muted-foreground" />;
-  }
 }
 
 
@@ -81,18 +63,16 @@ export const RunInspectorPage: React.FC = () => {
       const testCases = await asyncTestCaseStorage.getByIds(tcIds);
       const tcMap = new Map(testCases.map(tc => [tc.id, tc]));
 
-      // Load each report to get the real pass/fail status
+      // Load each report to get the real pass/fail/pending status
       const resultRows: TestCaseResult[] = await Promise.all(tcIds.map(async (tcId) => {
         const runResult = bmRun.results[tcId];
-        let status: ResultStatus = getResultStatus(runResult);
-        // Override with report's actual passFailStatus
+        let report: EvaluationReport | null = null;
         if (runResult?.reportId) {
           try {
-            const report = await asyncRunStorage.getReportById(runResult.reportId);
-            if (report?.passFailStatus === 'failed') status = 'failed';
-            else if (report?.passFailStatus === 'passed') status = 'passed';
+            report = await asyncRunStorage.getReportById(runResult.reportId) || null;
           } catch { /* fallback to execution status */ }
         }
+        const status = getResultStatus(runResult, report);
         return { testCaseId: tcId, testCase: tcMap.get(tcId) || null, reportId: runResult?.reportId || null, status };
       }));
 
@@ -127,7 +107,8 @@ export const RunInspectorPage: React.FC = () => {
   const passCount = results.filter(r => r.status === 'passed').length;
   const failCount = results.filter(r => r.status === 'failed').length;
   const totalCount = results.length;
-  const passRate = totalCount > 0 ? Math.round((passCount / totalCount) * 100) : 0;
+  const judgedCount = passCount + failCount;
+  const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
   const selectedResult = results.find(r => r.testCaseId === selectedTcId) || null;
 
   if (loading || !benchmark || !run) {
@@ -209,11 +190,7 @@ export const RunInspectorPage: React.FC = () => {
                     <span className={`text-xs flex-1 min-w-0 truncate ${isSelected ? 'font-semibold' : 'font-medium'}`}>
                       {tc?.name || r.testCaseId}
                     </span>
-                    <span className={`text-[10px] font-semibold shrink-0 ${
-                      r.status === 'passed' ? 'text-green-500' : r.status === 'failed' ? 'text-red-500' : 'text-muted-foreground'
-                    }`}>
-                      {r.status === 'passed' ? 'PASS' : r.status === 'failed' ? 'FAIL' : r.status.toUpperCase()}
-                    </span>
+                    <StatusLabel status={r.status} />
                   </div>
                 );
               })}
@@ -240,9 +217,13 @@ export const RunInspectorPage: React.FC = () => {
               <div className="flex items-center justify-center h-full text-muted-foreground">
                 <div className="text-center">
                   {selectedResult.status === 'running' ? (
-                    <><Loader2 size={32} className="mx-auto mb-3 text-blue-500 animate-spin" /><p className="text-sm">Running...</p></>
+                    <><Loader2 size={32} className="mx-auto mb-3 text-blue-500 animate-spin" /><p className="text-sm">Running agent...</p></>
+                  ) : selectedResult.status === 'pending_traces' ? (
+                    <><Loader2 size={32} className="mx-auto mb-3 text-amber-500 animate-spin" /><p className="text-sm">Agent done — waiting for traces...</p></>
+                  ) : selectedResult.status === 'pending_judgment' ? (
+                    <><Loader2 size={32} className="mx-auto mb-3 text-purple-500 animate-spin" /><p className="text-sm">Running LLM judge...</p></>
                   ) : selectedResult.status === 'pending' ? (
-                    <><Clock size={32} className="mx-auto mb-3 text-amber-500" /><p className="text-sm">Pending</p></>
+                    <><Clock size={32} className="mx-auto mb-3 text-muted-foreground" /><p className="text-sm">Pending</p></>
                   ) : (
                     <><XCircle size={32} className="mx-auto mb-3 opacity-20" /><p className="text-sm">No report available</p></>
                   )}
