@@ -1,6 +1,6 @@
 # Agent Health - AI Assistant Instructions
 
-Use these instructions to evaluate and improve your agent using the agent-health CLI.
+Use these instructions to evaluate and improve your agent using the agent-health CLI and server APIs.
 
 ---
 
@@ -183,7 +183,7 @@ Repeat until all high-priority issues are resolved.
       }],
       "trajectory": [
         { "type": "thinking", "content": "Agent's reasoning..." },
-        { "type": "action", "toolName": "search", "toolArgs": {...} },
+        { "type": "action", "toolName": "search", "toolArgs": {} },
         { "type": "tool_result", "content": "...", "status": "SUCCESS" },
         { "type": "response", "content": "Final answer..." }
       ]
@@ -202,3 +202,175 @@ Repeat until all high-priority issues are resolved.
 4. **Compare trajectories** between passing and failing cases
 5. **Make incremental changes** - one fix, then re-test
 6. **Don't over-engineer** - fix the specific issue identified
+
+---
+
+## Server API Reference
+
+The Agent Health server runs on port 4001 and exposes the following REST APIs. All endpoints return JSON unless noted (SSE endpoints return `text/event-stream`).
+
+### Health & Configuration
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Health check → `{ status: 'ok', version, service: 'agent-health' }` |
+| GET | `/api/agents` | List all agents → `{ agents: AgentConfig[], total }` |
+| POST | `/api/agents/custom` | Add custom agent → `{ name, endpoint, connectorType?, useTraces? }` |
+| DELETE | `/api/agents/custom/:id` | Remove custom agent |
+| GET | `/api/models` | List all models → `{ models: ModelConfig[], total }` |
+| GET | `/api/debug` | Debug status → `{ enabled: boolean }` |
+| POST | `/api/debug` | Toggle debug → `{ enabled: boolean }` |
+
+### Agent Execution & Evaluation
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/agent` | Proxy agent request (SSE) → `{ endpoint, payload, headers?, agentKey? }` |
+| POST | `/api/evaluate` | Run evaluation (SSE) → `{ testCaseId?, testCase?, agentKey, modelId }` |
+
+### Judge
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/judge` | Evaluate trajectory → `{ trajectory, expectedOutcomes?, modelId }` → `{ passFailStatus, metrics, llmJudgeReasoning, improvementStrategies }` |
+| GET | `/api/judge/litellm-models` | List LiteLLM models → `{ models: string[], endpoint, configured }` |
+
+### Traces & Metrics
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/traces` | Fetch traces → `{ traceId?, runIds?, startTime?, endTime?, size? }` → `{ spans, total, hasMore }` |
+| GET | `/api/traces/health` | Traces health → `{ status: 'ok' \| 'error' }` |
+| GET | `/api/metrics/:runId` | Run metrics → `{ totalTokens, costUsd, durationMs, llmCalls, toolCalls }` |
+| POST | `/api/metrics/batch` | Batch metrics → `{ runIds: string[] }` → `{ metrics[], aggregate }` |
+
+### Logs
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/logs` | Fetch logs → `{ runId?, query?, startTime?, endTime?, size? }` → `{ logs[], total }` |
+
+### Observability
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/observability/health` | Check observability data source health |
+| POST | `/api/observability/test-connection` | Test connection to observability cluster |
+| GET | `/api/observability/defaults` | Get default OTEL index patterns |
+
+### Storage: Test Cases
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/storage/test-cases` | List test cases (latest versions). Query: `ids?`, `fields?`, `size?`, `after?` |
+| GET | `/api/storage/test-cases/:id` | Get latest version of test case |
+| GET | `/api/storage/test-cases/:id/versions` | Get all versions |
+| GET | `/api/storage/test-cases/:id/versions/:version` | Get specific version |
+| POST | `/api/storage/test-cases` | Create test case (v1) |
+| PUT | `/api/storage/test-cases/:id` | Update (creates new version) |
+| DELETE | `/api/storage/test-cases/:id` | Delete all versions |
+| POST | `/api/storage/test-cases/bulk` | Bulk create |
+
+### Storage: Benchmarks
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/storage/benchmarks` | List benchmarks. Query: `fields?`, `size?` |
+| GET | `/api/storage/benchmarks/:id` | Get by ID. Query: `fields?`, `runsSize?`, `runsOffset?` |
+| GET | `/api/storage/benchmarks/:id/export` | Export test cases as JSON |
+| POST | `/api/storage/benchmarks` | Create → `{ name, description?, testCaseIds }` |
+| PUT | `/api/storage/benchmarks/:id` | Update |
+| PATCH | `/api/storage/benchmarks/:id/metadata` | Update metadata |
+| DELETE | `/api/storage/benchmarks/:id` | Delete |
+| POST | `/api/storage/benchmarks/:id/execute` | Execute benchmark (SSE) → `{ runConfig: RunConfigInput }` |
+| DELETE | `/api/storage/benchmarks/:id/runs/:runId` | Delete specific run |
+| POST | `/api/storage/benchmarks/:id/cancel` | Cancel execution |
+| POST | `/api/storage/benchmarks/:id/refresh-all-stats` | Recompute all run stats |
+
+### Storage: Runs (TestCaseRun)
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/storage/runs` | List runs. Query: `size?`, `from?`, `fields?` |
+| GET | `/api/storage/runs/:id` | Get run by ID |
+| POST | `/api/storage/runs` | Create run |
+| PATCH | `/api/storage/runs/:id` | Update run |
+| DELETE | `/api/storage/runs/:id` | Delete run |
+| POST | `/api/storage/runs/search` | Search with filters |
+| GET | `/api/storage/runs/by-test-case/:testCaseId` | Runs for test case |
+| GET | `/api/storage/runs/by-benchmark/:benchmarkId` | Runs for benchmark |
+| GET | `/api/storage/runs/by-benchmark-run/:benchmarkId/:runId` | Results for benchmark run |
+| GET | `/api/storage/runs/iterations/:benchmarkId/:testCaseId` | Iterations for test case in benchmark |
+| POST | `/api/storage/runs/:id/annotations` | Add annotation |
+
+### Storage: Analytics
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/storage/analytics` | Query analytics. Filters: `experimentId?`, `testCaseId?`, `agentId?`, `modelId?` |
+| GET | `/api/storage/analytics/aggregations` | Aggregated metrics |
+| POST | `/api/storage/analytics/search` | Complex search with aggregations |
+
+### Storage: Reports
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/storage/benchmarks/:id/report` | Download report. Query: `format?` ('json'\|'html'\|'pdf') |
+
+### Storage: Admin
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/storage/health` | Storage backend health |
+| POST | `/api/storage/test-connection` | Test storage connection |
+| POST | `/api/storage/init` | Initialize indexes |
+| GET | `/api/storage/config/status` | Config status |
+| POST | `/api/storage/config/storage` | Update storage config |
+| POST | `/api/storage/config/observability` | Update observability config |
+
+### Assistant (NEW)
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/assistant/chat` | Chat with AI assistant (SSE) → `{ sessionId, message, context }` → `{ type: 'delta'\|'done', content }` |
+| DELETE | `/api/assistant/session/:sessionId` | Clear session |
+| GET | `/api/assistant/health` | Check assistant availability |
+
+---
+
+## UI Pages
+
+| Page | Route | Description |
+|---|---|---|
+| Dashboard | `/` | Overview with agent stats, recent runs, system health |
+| Benchmarks | `/benchmarks` | List all benchmarks with pass rates, run counts |
+| Benchmark Detail | `/benchmarks/:id` | Benchmark runs, test case results, comparison |
+| Run Detail | `/benchmarks/:benchmarkId/runs/:runId` | Individual run results with trajectory, judge reasoning |
+| Traces | `/traces` | OpenTelemetry trace explorer with timeline/flow views |
+| Settings | `/settings` | Configure agents, models, storage, observability connections |
+| Use Cases | `/settings` (tab) | Manage test cases (create, edit, version) |
+| Assistant | `/assistant` | Full-page AI chat interface for help and analysis |
+
+---
+
+## Common Tasks
+
+### Ask about a benchmark's results
+"What's the pass rate for benchmark bench-xxx? Which test cases are failing and why?"
+→ The assistant will query `/api/storage/benchmarks/:id` and `/api/storage/runs/by-benchmark/:id`
+
+### Interpret judge reasoning
+"Why did test case tc-xxx fail in run run-xxx? What should I fix?"
+→ The assistant reads `llmJudgeReasoning` and `improvementStrategies` from the run
+
+### Write a test case
+"Help me write a test case for testing log search with time filters"
+→ The assistant creates a test case with prompt, context, expectedOutcomes, and labels
+
+### Analyze traces
+"What are the most expensive LLM calls in run run-xxx?"
+→ The assistant queries `/api/traces` and `/api/metrics/:runId` to find token-heavy spans
+
+### Compare runs
+"Compare the results of run A vs run B in benchmark bench-xxx"
+→ The assistant fetches both runs and diffs pass/fail status, accuracy, and strategies

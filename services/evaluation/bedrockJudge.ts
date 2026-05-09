@@ -52,7 +52,7 @@ export async function callBedrockJudge(
 ): Promise<JudgeResult> {
   const maxRetries = 10;
   const baseDelay = 1000; // 1 second
-  const judgeApiUrl = ENV_CONFIG.judgeApiUrl || 'http://localhost:4001/api/judge';
+  const judgeApiUrl = ENV_CONFIG.judgeApiUrl || `http://localhost:${process.env?.AGENT_HEALTH_PORT || '4001'}/api/judge`;
 
   console.log('[BedrockJudge] Sending request to backend proxy...');
   console.log('[BedrockJudge] Trajectory steps:', trajectory.length);

@@ -14,6 +14,7 @@ import { pathToFileURL } from 'url';
 import type { AgentConfig, ModelConfig } from '@/types';
 import type { AgentConnector } from '@/services/connectors/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { DEFAULT_BACKEND_PORT } from '@/lib/portConfig';
 import type {
   UserConfig,
   UserAgentConfig,
@@ -31,7 +32,7 @@ import type {
  * Follows Playwright's webServer pattern
  */
 export const DEFAULT_SERVER_CONFIG: ResolvedServerConfig = {
-  port: 4001,
+  port: DEFAULT_BACKEND_PORT,
   reuseExistingServer: !process.env.CI,
   startTimeout: 30000,
 };

@@ -29,3 +29,9 @@ export {
   putSessionMetadata,
   listSessionMetadata,
 } from './sessionAnnotationsApi';
+
+export {
+  streamAssistantChat,
+  clearAssistantSession,
+  checkAssistantHealth,
+} from './assistantApi';

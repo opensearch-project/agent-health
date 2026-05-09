@@ -41,7 +41,9 @@ export interface EnvConfig {
   otelExporterHeaders: string;
 }
 
-const BACKEND_URL = 'http://localhost:4001';
+import { DEFAULT_BACKEND_PORT } from '@/lib/portConfig';
+
+const BACKEND_URL = `http://localhost:${DEFAULT_BACKEND_PORT}`;
 
 export const ENV_CONFIG: EnvConfig = {
   backendUrl: BACKEND_URL,

@@ -20,7 +20,10 @@
  *   - OR run against a real OpenSearch cluster
  */
 
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
+
 const TEST_TIMEOUT = 30000;
+const BASE_URL = getTestBackendUrl();
 
 // Test configuration - uses environment or defaults
 const getTestConfig = () => {
@@ -28,14 +31,13 @@ const getTestConfig = () => {
     endpoint: process.env.TEST_OPENSEARCH_ENDPOINT || 'https://localhost:9200',
     username: process.env.TEST_OPENSEARCH_USERNAME || 'admin',
     password: process.env.TEST_OPENSEARCH_PASSWORD || 'admin',
-    backendUrl: process.env.TEST_BACKEND_URL || 'http://localhost:4001',
   };
 };
 
 // Helper to check if backend is available
-const checkBackend = async (backendUrl: string): Promise<boolean> => {
+const checkBackend = async (): Promise<boolean> => {
   try {
-    const response = await fetch(`${backendUrl}/api/health`);
+    const response = await fetch(`${BASE_URL}/api/health`);
     return response.ok;
   } catch {
     return false;
@@ -65,11 +67,11 @@ describe('Storage Client Middleware Integration Tests', () => {
 
   beforeAll(async () => {
     config = getTestConfig();
-    backendAvailable = await checkBackend(config.backendUrl);
+    backendAvailable = await checkBackend();
     if (!backendAvailable) {
       console.warn(
         'Backend not available at',
-        config.backendUrl,
+        BASE_URL,
         '- skipping integration tests'
       );
     }
@@ -82,7 +84,7 @@ describe('Storage Client Middleware Integration Tests', () => {
         if (!backendAvailable) return;
 
         const response = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/health`,
+          `${BASE_URL}/api/storage/health`,
           config
         );
 
@@ -103,7 +105,7 @@ describe('Storage Client Middleware Integration Tests', () => {
         if (!backendAvailable) return;
 
         // Request without X-Storage-* headers
-        const response = await fetch(`${config.backendUrl}/api/storage/health`);
+        const response = await fetch(`${BASE_URL}/api/storage/health`);
 
         expect(response.ok).toBe(true);
         const data = await response.json();
@@ -123,7 +125,7 @@ describe('Storage Client Middleware Integration Tests', () => {
         if (!backendAvailable) return;
 
         const response = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/stats`,
+          `${BASE_URL}/api/storage/stats`,
           config
         );
 
@@ -151,7 +153,7 @@ describe('Storage Client Middleware Integration Tests', () => {
         if (!backendAvailable) return;
 
         const response = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/test-cases`,
+          `${BASE_URL}/api/storage/test-cases`,
           config
         );
 
@@ -173,7 +175,7 @@ describe('Storage Client Middleware Integration Tests', () => {
         if (!backendAvailable) return;
 
         const response = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/experiments`,
+          `${BASE_URL}/api/storage/experiments`,
           config
         );
 
@@ -195,7 +197,7 @@ describe('Storage Client Middleware Integration Tests', () => {
         if (!backendAvailable) return;
 
         const response = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/runs`,
+          `${BASE_URL}/api/storage/runs`,
           config
         );
 
@@ -218,11 +220,11 @@ describe('Storage Client Middleware Integration Tests', () => {
 
         // Make two requests with same credentials
         const response1 = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/health`,
+          `${BASE_URL}/api/storage/health`,
           config
         );
         const response2 = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/health`,
+          `${BASE_URL}/api/storage/health`,
           config
         );
 
@@ -240,7 +242,7 @@ describe('Storage Client Middleware Integration Tests', () => {
 
         // Make requests with different credentials
         const response1 = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/health`,
+          `${BASE_URL}/api/storage/health`,
           config
         );
 
@@ -249,7 +251,7 @@ describe('Storage Client Middleware Integration Tests', () => {
           endpoint: 'https://different-endpoint:9200',
         };
         const response2 = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/health`,
+          `${BASE_URL}/api/storage/health`,
           differentConfig
         );
 
@@ -275,7 +277,7 @@ describe('Storage Client Middleware Integration Tests', () => {
         };
 
         const response = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/health`,
+          `${BASE_URL}/api/storage/health`,
           invalidConfig
         );
 
@@ -301,7 +303,7 @@ describe('Storage Client Middleware Integration Tests', () => {
         };
 
         const response = await fetchWithStorageHeaders(
-          `${config.backendUrl}/api/storage/health`,
+          `${BASE_URL}/api/storage/health`,
           invalidConfig
         );
 

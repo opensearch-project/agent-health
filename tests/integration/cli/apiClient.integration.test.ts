@@ -10,6 +10,7 @@
  */
 
 import { ApiClient } from '@/cli/utils/apiClient';
+import { getTestBackendUrl } from '@/tests/integration/testConfig';
 
 describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
   let originalFetch: typeof global.fetch;
@@ -31,7 +32,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
         headers: new Headers(),
       });
 
-      const client = new ApiClient('http://localhost:4001');
+      const client = new ApiClient(getTestBackendUrl());
 
       await expect(
         client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' })
@@ -46,7 +47,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
         headers: new Headers(),
       });
 
-      const client = new ApiClient('http://localhost:4001');
+      const client = new ApiClient(getTestBackendUrl());
 
       await expect(
         client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' })
@@ -62,7 +63,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
         headers: new Headers(),
       });
 
-      const client = new ApiClient('http://localhost:4001');
+      const client = new ApiClient(getTestBackendUrl());
 
       await expect(
         client.runEvaluation('tc-123', 'demo', 'model-1')
@@ -100,7 +101,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
         headers: new Headers(),
       });
 
-      const client = new ApiClient('http://localhost:4001');
+      const client = new ApiClient(getTestBackendUrl());
       await client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' });
 
       // Reader should be cancelled in finally block
@@ -129,7 +130,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
         headers: new Headers(),
       });
 
-      const client = new ApiClient('http://localhost:4001');
+      const client = new ApiClient(getTestBackendUrl());
 
       // Should throw, but reader should still be cancelled
       await expect(
@@ -169,7 +170,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
         headers: new Headers(),
       });
 
-      const client = new ApiClient('http://localhost:4001');
+      const client = new ApiClient(getTestBackendUrl());
 
       // Should not throw even if cancel fails
       const result = await client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' });
@@ -209,7 +210,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
         headers: new Headers(),
       });
 
-      const client = new ApiClient('http://localhost:4001');
+      const client = new ApiClient(getTestBackendUrl());
       await client.runEvaluation('tc-123', 'demo', 'model-1');
 
       expect(mockCancel).toHaveBeenCalled();
@@ -240,7 +241,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
         headers: new Headers(),
       });
 
-      const client = new ApiClient('http://localhost:4001');
+      const client = new ApiClient(getTestBackendUrl());
 
       await expect(
         client.runEvaluation('tc-123', 'demo', 'model-1')

@@ -6,19 +6,25 @@
 /**
  * OTel TracerProvider for the Observio sample agent.
  *
- * Exports spans via OTLP/HTTP to an OSIS pipeline endpoint, which routes
- * them to the same OpenSearch cluster that Agent Health reads traces from.
+ * Supports two export modes:
+ *   1. Direct OpenSearch — writes spans directly to the Agent Health cluster
+ *      (preferred, uses OPENSEARCH_LOGS_ENDPOINT)
+ *   2. OTLP/HTTP — exports via OTLP to an OSI pipeline endpoint
+ *      (fallback, uses OTEL_EXPORTER_OTLP_ENDPOINT)
  *
  * Configuration (via .env):
- *   OTEL_EXPORTER_OTLP_ENDPOINT — OSIS pipeline URL (required for telemetry)
+ *   OPENSEARCH_LOGS_ENDPOINT — OpenSearch cluster URL (preferred)
+ *   OPENSEARCH_LOGS_USERNAME / OPENSEARCH_LOGS_PASSWORD — basic auth
+ *   OTEL_EXPORTER_OTLP_ENDPOINT — OTLP pipeline URL (fallback)
  *   OTEL_SERVICE_NAME — service name (default: observio-sample-agent)
  *   OTEL_ENABLED — set to 'false' to disable (default: enabled)
  */
 
 import { trace, context, type Tracer, type Context, type Span } from '@opentelemetry/api';
-import { NodeTracerProvider, BatchSpanProcessor } from '@opentelemetry/sdk-trace-node';
+import { NodeTracerProvider, BatchSpanProcessor, type SpanExporter } from '@opentelemetry/sdk-trace-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { resourceFromAttributes } from '@opentelemetry/resources';
+import { OpenSearchSpanExporter } from './opensearchExporter';
 
 export const OBSERVIO_TRACER_NAME = 'observio-sample-agent';
 
@@ -26,7 +32,7 @@ let provider: NodeTracerProvider | null = null;
 
 /**
  * Initialize OTel telemetry for the observio agent.
- * Exports spans via OTLP/HTTP to the configured OSIS pipeline endpoint.
+ * Prefers direct OpenSearch export; falls back to OTLP/HTTP.
  */
 export function initTelemetry(): void {
   if (provider) return;
@@ -37,9 +43,25 @@ export function initTelemetry(): void {
     return;
   }
 
+  // Determine exporter: prefer direct OpenSearch, fallback to OTLP
+  let exporter: SpanExporter;
+  const osEndpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;
   const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
-  if (!otlpEndpoint) {
-    console.log('[Telemetry] Observio telemetry disabled (OTEL_EXPORTER_OTLP_ENDPOINT not set)');
+
+  if (osEndpoint) {
+    exporter = new OpenSearchSpanExporter({
+      endpoint: osEndpoint,
+      username: process.env.OPENSEARCH_LOGS_USERNAME,
+      password: process.env.OPENSEARCH_LOGS_PASSWORD,
+      indexName: process.env.OPENSEARCH_LOGS_TRACES_INDEX?.replace('*', '000001') || 'otel-v1-apm-span-000001',
+      tlsSkipVerify: true,
+    });
+    console.log(`[Telemetry] Observio telemetry enabled → OpenSearch (${osEndpoint})`);
+  } else if (otlpEndpoint) {
+    exporter = new OTLPTraceExporter({ url: otlpEndpoint });
+    console.log(`[Telemetry] Observio telemetry enabled → OTLP (${otlpEndpoint})`);
+  } else {
+    console.log('[Telemetry] Observio telemetry disabled (no OPENSEARCH_LOGS_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT)');
     return;
   }
 
@@ -50,13 +72,11 @@ export function initTelemetry(): void {
   });
 
   const spanProcessors = [
-    new BatchSpanProcessor(new OTLPTraceExporter({ url: otlpEndpoint })),
+    new BatchSpanProcessor(exporter),
   ];
 
   provider = new NodeTracerProvider({ resource, spanProcessors });
   provider.register();
-
-  console.log(`[Telemetry] Observio telemetry enabled → OTLP (${otlpEndpoint})`);
 }
 
 /**
