@@ -68,3 +68,9 @@ export { connectorRegistry, registerConnector } from '../services/connectors/reg
 
 // ConnectorRegistry type for custom implementations
 export type { ConnectorRegistry } from '../services/connectors/types.js';
+
+// Test Case SDK (for writing .eval.ts files)
+export { testCase } from './testCases/testCase.js';
+export { defineTestCases } from './testCases/defineTestCases.js';
+export { defineTestSuite } from './testCases/defineTestSuite.js';
+export type { TestCaseInput, TestCaseDefaults, TestSuiteInput } from './testCases/types.js';

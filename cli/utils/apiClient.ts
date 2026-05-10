@@ -98,6 +98,13 @@ export interface BulkCreateTestCasesResponse {
   testCases: Array<{ id: string; name: string }>;
 }
 
+export interface BulkUpsertTestCasesResponse {
+  created: number;
+  updated: number;
+  errors: number;
+  testCases: Array<{ id: string; name: string }>;
+}
+
 /**
  * API Client for Agent Health server
  */
@@ -460,6 +467,32 @@ export class ApiClient {
         errorMessage = errorBody;
       }
       throw new Error(`Failed to bulk create test cases: ${errorMessage}`);
+    }
+
+    return res.json();
+  }
+
+  /**
+   * Bulk upsert test cases (for code-sourced .eval.ts files).
+   * Matches by name: existing → update, new → create.
+   */
+  async bulkUpsertTestCases(testCases: object[]): Promise<BulkUpsertTestCasesResponse> {
+    const res = await fetch(`${this.baseUrl}/api/storage/test-cases/bulk-upsert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCases }),
+    });
+
+    if (!res.ok) {
+      const errorBody = await res.text();
+      let errorMessage: string;
+      try {
+        const parsed = JSON.parse(errorBody);
+        errorMessage = parsed.error || errorBody;
+      } catch {
+        errorMessage = errorBody;
+      }
+      throw new Error(`Failed to bulk upsert test cases: ${errorMessage}`);
     }
 
     return res.json();

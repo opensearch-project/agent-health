@@ -11,7 +11,7 @@
  */
 
 import { testCaseStorage as opensearchTestCases, StorageTestCase } from './opensearchClient';
-import type { TestCase, TestCaseVersion, AgentContextItem, AgentToolDefinition, Difficulty } from '@/types';
+import type { TestCase, TestCaseVersion, AgentContextItem, AgentToolDefinition, Difficulty, TestCaseSource } from '@/types';
 import { buildLabels, parseLabels } from '@/lib/labels';
 
 // Input type for creating a test case
@@ -45,6 +45,7 @@ export interface CreateTestCaseInput {
   tags?: string[];
   author?: string;
   isPromoted?: boolean;
+  source?: TestCaseSource;
 }
 
 // Input type for updating a test case

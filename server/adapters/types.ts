@@ -101,6 +101,17 @@ export interface ITestCaseOperations {
    * See cli/commands/benchmark.ts for usage.
    */
   bulkCreate(testCases: Partial<TestCase>[]): Promise<{ created: number; errors: number; testCases: TestCase[] }>;
+  /**
+   * Bulk upsert test cases by name.
+   * If a test case with the same name exists, updates it (new version).
+   * If not, creates a new one. Used by code-sourced (.eval.ts) test cases.
+   */
+  bulkUpsert(testCases: Partial<TestCase>[]): Promise<{ created: number; updated: number; errors: number; testCases: TestCase[] }>;
+  /**
+   * Find a test case by exact name match.
+   * Returns null if no test case with that name exists.
+   */
+  getByName(name: string): Promise<TestCase | null>;
 }
 
 /**

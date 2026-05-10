@@ -258,6 +258,17 @@ export interface TestCaseVersion {
   }[];
 }
 
+/**
+ * Tracks the origin of a test case definition.
+ * - 'code': Defined in a .eval.ts file (git is source of truth, read-only in UI)
+ * - 'managed': Created via UI, JSON import, or CLI (OpenSearch is source of truth)
+ */
+export interface TestCaseSource {
+  type: 'code' | 'managed';
+  /** File path relative to project root (only for code-sourced test cases) */
+  file?: string;
+}
+
 // TestCase is referred to as "Use Case" in the UI
 export interface TestCase {
   id: string;
@@ -279,6 +290,9 @@ export interface TestCase {
   // Versioning
   currentVersion: number;           // Latest version number
   versions: TestCaseVersion[];      // All versions (immutable history)
+
+  // Source tracking
+  source?: TestCaseSource;          // undefined = 'managed' (backward compat)
 
   // Metadata
   isPromoted: boolean;              // Available for experiments

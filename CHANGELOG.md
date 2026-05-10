@@ -14,6 +14,12 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Pre-existing test failures: add missing `fast-check` dev dependency and fix incomplete mocks in `app.test.ts` ([#153](https://github.com/opensearch-project/agent-health/pull/153))
 
 ### Added
+- Test Case SDK: `defineTestCases()`, `defineTestSuite()`, `testCase()` helpers for writing evaluation test cases in TypeScript code (`lib/testCases/`)
+- Code-sourced test cases: `.eval.ts` files are the source of truth, synced to OpenSearch via `bulkUpsert`, shown as read-only in UI with "Code" badge
+- SDK documentation (`docs/SDK.md`) and working examples (`cli/demo/sample-rca.eval.ts`, `cli/demo/sample-kubernetes.eval.ts`)
+- `benchmark -f` now supports `.ts`/`.js`/`.mjs` files in addition to `.json` (auto-detected by extension)
+- `POST /api/storage/test-cases/bulk-upsert` endpoint for idempotent name-based upsert
+- `TestCaseSource` type with `source.type: 'code' | 'managed'` field on TestCase
 - Amazon Strands connector for Bedrock Agent Runtime integration (`services/connectors/strands/`)
 - LangGraph REST connector for non-AG-UI LangGraph instances (`services/connectors/langgraph/`)
 - Dashboard homepage gradient background, stats summary bar, and chart area gradient fills ([#153](https://github.com/opensearch-project/agent-health/pull/153))

@@ -236,6 +236,36 @@ class FileTestCaseOperations implements ITestCaseOperations {
     }
     return { created, errors, testCases: createdTestCases };
   }
+
+  async getByName(name: string): Promise<TestCase | null> {
+    const { items } = await this.getAll();
+    return items.find(tc => tc.name === name) || null;
+  }
+
+  async bulkUpsert(testCases: Partial<TestCase>[]): Promise<{ created: number; updated: number; errors: number; testCases: TestCase[] }> {
+    let created = 0;
+    let updated = 0;
+    let errors = 0;
+    const results: TestCase[] = [];
+
+    for (const tc of testCases) {
+      try {
+        const existing = tc.name ? await this.getByName(tc.name) : null;
+        if (existing) {
+          const result = await this.update(existing.id, tc);
+          results.push(result);
+          updated++;
+        } else {
+          const result = await this.create(tc);
+          results.push(result);
+          created++;
+        }
+      } catch {
+        errors++;
+      }
+    }
+    return { created, updated, errors, testCases: results };
+  }
 }
 
 // ============================================================================

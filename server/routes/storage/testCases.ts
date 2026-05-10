@@ -383,4 +383,29 @@ router.post('/api/storage/test-cases/bulk', async (req: Request, res: Response) 
   }
 });
 
+// POST /api/storage/test-cases/bulk-upsert - Bulk upsert (for code-sourced test cases)
+router.post('/api/storage/test-cases/bulk-upsert', async (req: Request, res: Response) => {
+  try {
+    const { testCases } = req.body;
+    if (!Array.isArray(testCases)) {
+      return res.status(400).json({ error: 'testCases must be an array' });
+    }
+
+    // Check for demo- prefixes
+    const hasDemoIds = testCases.some((tc: any) => tc.id && isSampleId(tc.id));
+    if (hasDemoIds) {
+      return res.status(400).json({ error: 'Cannot upsert test cases with demo- prefix (reserved for sample data)' });
+    }
+
+    const storage = getStorageModule();
+    const result = await storage.testCases.bulkUpsert(testCases);
+
+    debug('StorageAPI', `Bulk upsert: ${result.created} created, ${result.updated} updated`);
+    res.json({ created: result.created, updated: result.updated, errors: result.errors, testCases: result.testCases });
+  } catch (error: any) {
+    console.error('[StorageAPI] Bulk upsert test cases failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

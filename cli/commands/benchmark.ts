@@ -62,16 +62,40 @@ function getDefaultModel(config: ResolvedConfig): string {
 }
 
 /**
- * Check if a string looks like a file path (ends with .json)
+ * Supported test case file extensions
+ */
+const CODE_EXTENSIONS = ['.ts', '.js', '.mjs'];
+const JSON_EXTENSIONS = ['.json'];
+
+/**
+ * Check if a string looks like a file path (ends with supported extension)
  */
 export function isFilePath(value: string): boolean {
-  return value.toLowerCase().endsWith('.json');
+  const lower = value.toLowerCase();
+  return [...JSON_EXTENSIONS, ...CODE_EXTENSIONS].some(ext => lower.endsWith(ext));
 }
 
 /**
- * Load and validate test cases from a JSON file
+ * Load and validate test cases from a file.
+ * Auto-detects format by extension:
+ * - .json: JSON parse + Zod validation
+ * - .ts/.js/.mjs: Dynamic ESM import (code-sourced)
+ *
+ * Returns the source type so callers can route to bulkCreate vs bulkUpsert.
  */
-export function loadAndValidateTestCasesFile(filePath: string): ValidatedTestCaseInput[] {
+export async function loadAndValidateTestCasesFile(filePath: string): Promise<{
+  testCases: ValidatedTestCaseInput[];
+  source: 'code' | 'managed';
+}> {
+  const ext = filePath.toLowerCase().slice(filePath.lastIndexOf('.'));
+
+  if (CODE_EXTENSIONS.includes(ext)) {
+    const { loadTestCasesFromModule } = await import('@/lib/testCases/loader.js');
+    const testCases = await loadTestCasesFromModule(filePath);
+    return { testCases, source: 'code' };
+  }
+
+  // JSON files (default path)
   let raw: string;
   try {
     raw = readFileSync(filePath, 'utf-8');
@@ -92,7 +116,7 @@ export function loadAndValidateTestCasesFile(filePath: string): ValidatedTestCas
     throw new Error(`Validation failed for ${filePath}:\n  ${msgs}`);
   }
 
-  return result.data;
+  return { testCases: result.data, source: 'managed' };
 }
 
 /**
@@ -501,16 +525,33 @@ export function createBenchmarkCommand(): Command {
         let benchmark: Benchmark | null = null;
 
         if (fileMode) {
-          // File mode: import test cases from JSON file and create benchmark
+          // File mode: import test cases from file and create benchmark
           const importSpinner = ora(`Loading test cases from ${filePath}...`).start();
           try {
-            const validatedTestCases = loadAndValidateTestCasesFile(filePath!);
+            const { testCases: validatedTestCases, source } = await loadAndValidateTestCasesFile(filePath!);
             importSpinner.succeed(`Validated ${validatedTestCases.length} test cases from file`);
 
-            // Bulk create via server
+            // Upload via server — use upsert for code-sourced, create for managed
             const uploadSpinner = ora('Importing test cases to server...').start();
-            const bulkResult = await api.bulkCreateTestCases(validatedTestCases);
-            uploadSpinner.succeed(`Imported ${bulkResult.created} test cases`);
+            let testCaseIds: string[];
+
+            if (source === 'code') {
+              // Code-sourced: attach source metadata and upsert by name
+              const relativePath = filePath!;
+              const withSource = validatedTestCases.map(tc => ({
+                ...tc,
+                source: { type: 'code' as const, file: relativePath },
+              }));
+              const upsertResult = await api.bulkUpsertTestCases(withSource);
+              uploadSpinner.succeed(
+                `Synced ${upsertResult.created} new, ${upsertResult.updated} updated test cases`
+              );
+              testCaseIds = upsertResult.testCases.map(tc => tc.id);
+            } else {
+              const bulkResult = await api.bulkCreateTestCases(validatedTestCases);
+              uploadSpinner.succeed(`Imported ${bulkResult.created} test cases`);
+              testCaseIds = bulkResult.testCases.map(tc => tc.id);
+            }
 
             // Create benchmark from imported test case IDs
             const benchmarkName = (options.file && options.name) ? options.name : `file-${Date.now()}`;
@@ -518,7 +559,7 @@ export function createBenchmarkCommand(): Command {
             benchmark = await api.createBenchmark({
               name: benchmarkName,
               description: `Imported from ${filePath}`,
-              testCaseIds: bulkResult.testCases.map(tc => tc.id),
+              testCaseIds,
             });
             createSpinner.succeed(`Created benchmark: ${benchmark.name}`);
           } catch (error) {

@@ -286,7 +286,14 @@ export const TestCasesPage4: React.FC = () => {
       <tr key={tc.id} className="border-b hover:bg-muted/50 cursor-pointer transition-colors"
         onClick={() => navigate(`/evaluations/test-cases/${tc.id}`)}>
         <td className={`px-2 py-1.5 align-middle ${indent ? 'pl-7' : ''}`}>
-          <div className="text-xs font-medium truncate max-w-[220px]">{tc.name}</div>
+          <div className="flex items-center gap-1">
+            <span className="text-xs font-medium truncate max-w-[200px]">{tc.name}</span>
+            {tc.source?.type === 'code' && (
+              <Badge className="text-[7px] px-0.5 py-0 bg-teal-100 text-teal-700 border-teal-300 dark:bg-teal-500/15 dark:text-teal-400 dark:border-teal-500/30 shrink-0">
+                Code
+              </Badge>
+            )}
+          </div>
           {tc.labels && tc.labels.length > 0 && (
             <div className="flex items-center gap-0.5 mt-0.5">
               {tc.labels.slice(0, 2).map(l => <Badge key={l} variant="outline" className="text-[8px] px-1 py-0">{l}</Badge>)}
@@ -324,10 +331,12 @@ export const TestCasesPage4: React.FC = () => {
               onClick={e => { e.stopPropagation(); setRunningTestCase(tc); }}>
               <Play size={11} />
             </Button>
-            <Button variant="ghost" size="icon" className="h-6 w-6" title="Edit"
-              onClick={e => { e.stopPropagation(); setEditingTestCase(tc); setShowEditor(true); }}>
-              <Pencil size={11} />
-            </Button>
+            {tc.source?.type !== 'code' && (
+              <Button variant="ghost" size="icon" className="h-6 w-6" title="Edit"
+                onClick={e => { e.stopPropagation(); setEditingTestCase(tc); setShowEditor(true); }}>
+                <Pencil size={11} />
+              </Button>
+            )}
           </div>
         </td>
       </tr>
