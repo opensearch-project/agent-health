@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Play, Save, Star, CheckCircle2, XCircle, Loader2, ExternalLink, Clock, RefreshCw, Info } from 'lucide-react';
+import { X, Play, Save, Star, CheckCircle2, XCircle, Loader2, ExternalLink, Clock, RefreshCw, Info, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -52,6 +52,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   const [reportId, setReportId] = useState<string | null>(null);
   const [report, setReport] = useState<ServerEvaluationReport | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showBuiltInAgents, setShowBuiltInAgents] = useState(false);
 
   // OpenAI-compatible dynamic model discovery
   const [openaiCompatModels, setOpenaiCompatModels] = useState<string[]>([]);
@@ -335,10 +336,17 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                         ))}
                       </SelectGroup>
                     )}
-                    {/* Built-in agents */}
+                    {/* Built-in agents (collapsed by default) */}
                     <SelectGroup>
-                      <SelectLabel className="text-xs">Built-in</SelectLabel>
-                      {DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).map(agent => (
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground w-full"
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowBuiltInAgents(!showBuiltInAgents); }}
+                      >
+                        <ChevronRight size={12} className={showBuiltInAgents ? 'rotate-90 transition-transform' : 'transition-transform'} />
+                        Built-in ({DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).length})
+                      </button>
+                      {showBuiltInAgents && DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).map(agent => (
                         <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
                       ))}
                     </SelectGroup>

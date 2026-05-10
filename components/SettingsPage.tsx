@@ -74,8 +74,7 @@ export const SettingsPage: React.FC = () => {
 
   const [debugMode, setDebugMode] = useState(false);
   const [currentTheme, setCurrentTheme] = useState<Theme>('dark');
-  const hasCustomAgents = DEFAULT_CONFIG.agents.some(a => a.isCustom);
-  const [showBuiltInAgents, setShowBuiltInAgents] = useState(!hasCustomAgents);
+  const [showBuiltInAgents, setShowBuiltInAgents] = useState(true);
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 

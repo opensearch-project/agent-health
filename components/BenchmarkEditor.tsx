@@ -64,6 +64,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
   const [categories, setCategories] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
+  const [showBuiltInAgents, setShowBuiltInAgents] = useState(false);
 
   // Track if test cases changed from original (will create new version)
   const testCasesChanged = useMemo(() => {
@@ -454,10 +455,17 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
                                     ))}
                                   </SelectGroup>
                                 )}
-                                {/* Built-in agents */}
+                                {/* Built-in agents (collapsed by default) */}
                                 <SelectGroup>
-                                  <SelectLabel className="text-xs">Built-in</SelectLabel>
-                                  {DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).map(agent => (
+                                  <button
+                                    type="button"
+                                    className="flex items-center gap-1 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground w-full"
+                                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowBuiltInAgents(!showBuiltInAgents); }}
+                                  >
+                                    <ChevronRight size={12} className={showBuiltInAgents ? 'rotate-90 transition-transform' : 'transition-transform'} />
+                                    Built-in ({DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).length})
+                                  </button>
+                                  {showBuiltInAgents && DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).map(agent => (
                                     <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
                                   ))}
                                 </SelectGroup>
