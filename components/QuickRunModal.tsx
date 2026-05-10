@@ -326,14 +326,22 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {DEFAULT_CONFIG.agents.map(agent => (
-                      <SelectItem
-                        key={agent.key}
-                        value={agent.key}
-                      >
-                        {agent.name}
-                      </SelectItem>
-                    ))}
+                    {/* Custom agents first (if any exist) */}
+                    {DEFAULT_CONFIG.agents.filter(a => a.builtIn === false).length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel className="text-xs">Your Agents</SelectLabel>
+                        {DEFAULT_CONFIG.agents.filter(a => a.builtIn === false).map(agent => (
+                          <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                    {/* Built-in agents */}
+                    <SelectGroup>
+                      <SelectLabel className="text-xs">Built-in</SelectLabel>
+                      {DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).map(agent => (
+                        <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
+                      ))}
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               </div>

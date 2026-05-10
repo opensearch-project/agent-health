@@ -97,6 +97,7 @@ export interface AgentConfig {
   connectorConfig?: Record<string, any>; // Connector-specific configuration
   hooks?: AgentHooks; // Lifecycle hooks for custom setup/transform logic
   isCustom?: boolean; // True for user-added custom endpoints (not from config file)
+  builtIn?: boolean; // True for built-in agents shipped with the tool
 }
 
 /**
@@ -680,6 +681,8 @@ export interface StorageMetadata {
   realDataCount: number;
   /** Count of items from built-in sample data */
   sampleDataCount: number;
+  /** Whether sample/demo data was included in this response */
+  sampleDataIncluded?: boolean;
   /** Optional warning messages (e.g., connection errors) */
   warnings?: string[];
 }

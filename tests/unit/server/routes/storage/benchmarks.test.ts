@@ -221,7 +221,7 @@ describe('Experiments Storage Routes', () => {
         total: 1,
       });
 
-      const { req, res } = createMocks();
+      const { req, res } = createMocks({}, {}, { includeSample: 'true' });
       const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks');
 
       await handler(req, res);

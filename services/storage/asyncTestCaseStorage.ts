@@ -176,15 +176,17 @@ class AsyncTestCaseStorage {
    * @param options.summary - true to fetch lightweight summary (no context/expectedOutcomes)
    * @param options.size - page size for pagination
    * @param options.after - cursor token for next page
+   * @param options.includeSample - whether to include sample/demo data
    */
-  async getAll(options: { summary?: boolean; size: number; after?: string }): Promise<TestCasePage>;
-  async getAll(options?: { summary?: boolean; size?: number; after?: string }): Promise<TestCase[]>;
-  async getAll(options?: { summary?: boolean; size?: number; after?: string }): Promise<TestCase[] | TestCasePage> {
+  async getAll(options: { summary?: boolean; size: number; after?: string; includeSample?: boolean }): Promise<TestCasePage>;
+  async getAll(options?: { summary?: boolean; size?: number; after?: string; includeSample?: boolean }): Promise<TestCase[]>;
+  async getAll(options?: { summary?: boolean; size?: number; after?: string; includeSample?: boolean }): Promise<TestCase[] | TestCasePage> {
     const isPaginated = options?.size !== undefined;
     const result = await opensearchTestCases.getAll({
       fields: options?.summary ? 'summary' : undefined,
       size: options?.size,
       after: options?.after,
+      includeSample: options?.includeSample,
     });
     const testCases = result.testCases.map(toTestCase);
     // Sort by lastActivity (max of lastRunAt, updatedAt, createdAt) descending

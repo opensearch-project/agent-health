@@ -208,8 +208,9 @@ export const testCaseStorage = {
    * @param options.fields - 'summary' for lightweight list-view payload
    * @param options.size - page size for pagination
    * @param options.after - cursor token for next page
+   * @param options.includeSample - whether to include sample/demo data
    */
-  async getAll(options?: { fields?: 'summary'; size?: number; after?: string }): Promise<{
+  async getAll(options?: { fields?: 'summary'; size?: number; after?: string; includeSample?: boolean }): Promise<{
     testCases: StorageTestCase[];
     total: number;
     after?: string | null;
@@ -219,6 +220,7 @@ export const testCaseStorage = {
     if (options?.fields) params.append('fields', options.fields);
     if (options?.size) params.append('size', options.size.toString());
     if (options?.after) params.append('after', options.after);
+    if (options?.includeSample !== undefined) params.append('includeSample', String(options.includeSample));
     const query = params.toString() ? `?${params.toString()}` : '';
     return request('GET', `/test-cases${query}`);
   },
@@ -306,9 +308,13 @@ export const testCaseStorage = {
 export const benchmarkStorage = {
   /**
    * Get all benchmarks
+   * @param options.includeSample - whether to include sample/demo data
    */
-  async getAll(): Promise<StorageBenchmark[]> {
-    const result = await request<{ benchmarks: StorageBenchmark[]; total: number }>('GET', '/benchmarks');
+  async getAll(options?: { includeSample?: boolean }): Promise<StorageBenchmark[]> {
+    const params = new URLSearchParams();
+    if (options?.includeSample !== undefined) params.append('includeSample', String(options.includeSample));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const result = await request<{ benchmarks: StorageBenchmark[]; total: number }>('GET', `/benchmarks${query}`);
     return result.benchmarks;
   },
 

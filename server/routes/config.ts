@@ -14,7 +14,7 @@
 import { Router, Request, Response } from 'express';
 import { loadConfigSync } from '@/lib/config/index';
 import type { AgentConfig, ModelConfig } from '@/types/index.js';
-import { VALID_CONNECTOR_TYPES } from '@/lib/constants';
+import { VALID_CONNECTOR_TYPES, BUILT_IN_AGENT_KEYS } from '@/lib/constants';
 import { addCustomAgent, removeCustomAgent, getCustomAgents } from '@/server/services/customAgentStore';
 import { getRemoteServers } from '@/server/services/codingAgents/remoteConfig';
 import fs from 'fs';
@@ -48,14 +48,38 @@ function validateEndpointUrl(url: string): string | null {
 router.get('/api/agents', (req: Request, res: Response) => {
   try {
     const config = loadConfigSync();
-    // Strip hooks (functions can't be serialized to JSON)
-    const configAgents = config.agents.map(({ hooks, ...rest }) => rest);
-    const customAgents = getCustomAgents();
-    const agents = [...configAgents, ...customAgents];
+    // Strip hooks (functions can't be serialized to JSON) and mark builtIn
+    const configAgents = config.agents.map(({ hooks, ...rest }) => ({
+      ...rest,
+      builtIn: BUILT_IN_AGENT_KEYS.has(rest.key) && !rest.isCustom,
+    }));
+    const customAgents = getCustomAgents().map(agent => ({
+      ...agent,
+      builtIn: false,
+    }));
+
+    let agents = [...configAgents, ...customAgents];
+
+    // Support optional ?filter=custom|builtin query param
+    const filter = req.query?.filter as string | undefined;
+    if (filter === 'custom') {
+      agents = agents.filter(a => !a.builtIn);
+    } else if (filter === 'builtin') {
+      agents = agents.filter(a => a.builtIn);
+    }
+
+    const customCount = customAgents.length;
+    const builtInCount = configAgents.filter(a => a.builtIn).length;
+
     res.json({
       agents,
       total: agents.length,
-      meta: { source: 'config' },
+      meta: {
+        source: 'config',
+        hasCustomAgents: customCount > 0,
+        customCount,
+        builtInCount,
+      },
     });
   } catch (error: any) {
     console.error('[ConfigAPI] List agents failed:', error.message);

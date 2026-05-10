@@ -74,6 +74,7 @@ export const SettingsPage: React.FC = () => {
 
   const [debugMode, setDebugMode] = useState(false);
   const [currentTheme, setCurrentTheme] = useState<Theme>('dark');
+  const [showBuiltInAgents, setShowBuiltInAgents] = useState(false);
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -964,9 +965,16 @@ export const SettingsPage: React.FC = () => {
         <CardContent className="space-y-4">
           {/* Built-in Agents */}
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground uppercase tracking-wide">Built-in Agents</Label>
+            <button
+              type="button"
+              onClick={() => setShowBuiltInAgents(!showBuiltInAgents)}
+              className="flex items-center gap-1 text-xs text-muted-foreground uppercase tracking-wide hover:text-foreground"
+            >
+              {showBuiltInAgents ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              Built-in Agents ({DEFAULT_CONFIG.agents.filter(a => !a.isCustom).length})
+            </button>
 
-            {DEFAULT_CONFIG.agents.filter(a => !a.isCustom).map((agent) => {
+            {showBuiltInAgents && DEFAULT_CONFIG.agents.filter(a => !a.isCustom).map((agent) => {
 
               return (
                 <div

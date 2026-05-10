@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Benchmark, TestCase, RunConfigInput, Evaluator } from '@/types';
 import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
@@ -445,11 +445,22 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                {DEFAULT_CONFIG.agents.map(agent => (
-                                  <SelectItem key={agent.key} value={agent.key}>
-                                    {agent.name}
-                                  </SelectItem>
-                                ))}
+                                {/* Custom agents first (if any exist) */}
+                                {DEFAULT_CONFIG.agents.filter(a => a.builtIn === false).length > 0 && (
+                                  <SelectGroup>
+                                    <SelectLabel className="text-xs">Your Agents</SelectLabel>
+                                    {DEFAULT_CONFIG.agents.filter(a => a.builtIn === false).map(agent => (
+                                      <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                )}
+                                {/* Built-in agents */}
+                                <SelectGroup>
+                                  <SelectLabel className="text-xs">Built-in</SelectLabel>
+                                  {DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).map(agent => (
+                                    <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
+                                  ))}
+                                </SelectGroup>
                               </SelectContent>
                             </Select>
                           </div>

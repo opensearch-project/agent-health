@@ -111,7 +111,7 @@ describe('Test Cases Storage Routes', () => {
         total: 1,
       });
 
-      const { req, res } = createMocks();
+      const { req, res } = createMocks({}, {}, { includeSample: 'true' });
       const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
 
       await handler(req, res);
@@ -769,7 +769,7 @@ describe('Test Cases Storage Routes', () => {
         createdAt: '2024-01-01T00:00:00Z',
       });
 
-      const { req, res } = createMocks({}, {}, { fields: 'summary', ids: 'tc-123,demo-test-case-1' });
+      const { req, res } = createMocks({}, {}, { fields: 'summary', ids: 'tc-123,demo-test-case-1', includeSample: 'true' });
       const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
 
       await handler(req, res);

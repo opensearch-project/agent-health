@@ -67,6 +67,9 @@ export const BROWSER_SAFE_CONNECTORS = (Object.entries(CONNECTOR_TYPE_INFO) as [
   .filter(([, info]) => !info.serverOnly)
   .map(([type]) => type);
 
+/** Keys of built-in agents shipped with the tool. */
+export const BUILT_IN_AGENT_KEYS = new Set(['demo', 'observio', 'claude-code', 'strands', 'langgraph-rest']);
+
 /**
  * Get Claude Code connector environment variables at runtime.
  * Evaluated lazily so env vars are read when needed, not at module load time.
@@ -288,6 +291,13 @@ export const MOCK_TOOLS = [
 ];
 
 /**
+ * Metadata about agents, updated when refreshConfig() succeeds.
+ */
+export let agentsMeta: { hasCustomAgents: boolean; customCount: number; builtInCount: number } = {
+  hasCustomAgents: false, customCount: 0, builtInCount: 0,
+};
+
+/**
  * Config change listeners.
  * App.tsx subscribes so that any refreshConfig() call triggers a
  * React re-render, making updated agents/models visible in all components.
@@ -314,8 +324,15 @@ export async function refreshConfig(): Promise<void> {
       fetch('/api/models'),
     ]);
     if (agentsRes.ok) {
-      const { agents } = await agentsRes.json();
+      const { agents, meta } = await agentsRes.json();
       DEFAULT_CONFIG.agents = agents;
+      if (meta) {
+        agentsMeta = {
+          hasCustomAgents: meta.hasCustomAgents ?? false,
+          customCount: meta.customCount ?? 0,
+          builtInCount: meta.builtInCount ?? 0,
+        };
+      }
     }
     if (modelsRes.ok) {
       const { models: modelsArray } = await modelsRes.json();

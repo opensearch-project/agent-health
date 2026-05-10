@@ -351,6 +351,12 @@ router.get('/api/storage/benchmarks', async (req: Request, res: Response) => {
       }
     }
 
+    // Determine whether to include sample data
+    const includeSampleParam = req.query.includeSample as string | undefined;
+    const shouldIncludeSample = includeSampleParam === 'true' ? true
+      : includeSampleParam === 'false' ? false
+      : realData.length === 0;
+
     // Sort real data by updatedAt descending (most recently modified first)
     // Falls back to createdAt if updatedAt is missing
     const sortedRealData = realData.sort((a, b) => {
@@ -360,11 +366,13 @@ router.get('/api/storage/benchmarks', async (req: Request, res: Response) => {
     });
 
     // Sort and normalize sample data by updatedAt descending
-    const sortedSampleData = [...SAMPLE_BENCHMARKS].map(normalizeBenchmark).sort((a, b) => {
-      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
-      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
-      return bTime - aTime;
-    });
+    const sortedSampleData = shouldIncludeSample
+      ? [...SAMPLE_BENCHMARKS].map(normalizeBenchmark).sort((a, b) => {
+          const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+          const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+          return bTime - aTime;
+        })
+      : [];
 
     // User data first, then sample data
     const allData = [...sortedRealData, ...sortedSampleData];
@@ -375,6 +383,7 @@ router.get('/api/storage/benchmarks', async (req: Request, res: Response) => {
       storageReachable,
       realDataCount: realData.length,
       sampleDataCount: sortedSampleData.length,
+      sampleDataIncluded: shouldIncludeSample,
       ...(warnings.length > 0 && { warnings }),
     };
 

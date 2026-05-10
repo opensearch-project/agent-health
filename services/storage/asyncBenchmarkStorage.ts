@@ -132,9 +132,10 @@ class AsyncBenchmarkStorage {
 
   /**
    * Get all benchmarks, sorted by updatedAt descending (most recently active first)
+   * @param options.includeSample - whether to include sample/demo data
    */
-  async getAll(): Promise<Benchmark[]> {
-    const stored = await opensearchBenchmarks.getAll();
+  async getAll(options?: { includeSample?: boolean }): Promise<Benchmark[]> {
+    const stored = await opensearchBenchmarks.getAll(options);
     const benchmarks = stored.map(toBenchmark);
     // Sort by updatedAt descending (most recently active first), fallback to createdAt
     return benchmarks.sort((a, b) =>

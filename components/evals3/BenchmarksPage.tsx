@@ -156,6 +156,7 @@ export const BenchmarksPage4: React.FC = () => {
   // Editor/Import state
   const [showEditor, setShowEditor] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [showSampleData, setShowSampleData] = useState(false);
 
   // Sort state for Benchmarks tab
   const [bmSort, setBmSort] = useState<{ field: BmSortField; dir: SortDir }>({ field: 'runs', dir: 'desc' });
@@ -163,8 +164,8 @@ export const BenchmarksPage4: React.FC = () => {
   const loadData = useCallback(async () => {
     try {
       const [bms, tcs] = await Promise.all([
-        asyncBenchmarkStorage.getAll(),
-        asyncTestCaseStorage.getAll(),
+        asyncBenchmarkStorage.getAll({ includeSample: showSampleData }),
+        asyncTestCaseStorage.getAll({ includeSample: showSampleData }),
       ]);
       setBenchmarks(bms);
       setTestCases(tcs as TestCase[]);
@@ -173,7 +174,7 @@ export const BenchmarksPage4: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showSampleData]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -330,6 +331,27 @@ export const BenchmarksPage4: React.FC = () => {
           <Button size="sm" onClick={() => setShowEditor(true)} className="h-7 gap-1.5 text-xs">
             <Plus size={12} /> New Benchmark
           </Button>
+          {/* Sample data toggle */}
+          {!showSampleData && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSampleData(true)}
+              className="h-7 text-xs text-muted-foreground"
+            >
+              Show sample data
+            </Button>
+          )}
+          {showSampleData && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSampleData(false)}
+              className="h-7 text-xs text-muted-foreground"
+            >
+              Hide sample data
+            </Button>
+          )}
           {/* Refresh */}
           <Button variant="outline" size="sm" onClick={loadData} disabled={loading} className="h-7">
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />

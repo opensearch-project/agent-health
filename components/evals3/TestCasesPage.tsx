@@ -110,6 +110,7 @@ export const TestCasesPage4: React.FC = () => {
   const [showEditor, setShowEditor] = useState(false);
   const [editingTestCase, setEditingTestCase] = useState<TestCase | null>(null);
   const [runningTestCase, setRunningTestCase] = useState<TestCase | null>(null);
+  const [showSampleData, setShowSampleData] = useState(false);
 
   // Sort
   const [sort, setSort] = useState<{ field: SortField; dir: SortDir }>({ field: 'created', dir: 'desc' });
@@ -117,12 +118,12 @@ export const TestCasesPage4: React.FC = () => {
   const loadDefinitions = useCallback(async () => {
     try {
       const [tcs, counts, bms] = await Promise.all([
-        asyncTestCaseStorage.getAll(), asyncRunStorage.getRunCountsByTestCase(), asyncBenchmarkStorage.getAll(),
+        asyncTestCaseStorage.getAll({ includeSample: showSampleData }), asyncRunStorage.getRunCountsByTestCase(), asyncBenchmarkStorage.getAll({ includeSample: showSampleData }),
       ]);
       setTestCases(tcs as TestCase[]); setRunCounts(counts); setBenchmarks(bms);
     } catch (err) { console.error('Failed:', err); }
     finally { setLoading(false); }
-  }, []);
+  }, [showSampleData]);
 
   useEffect(() => { loadDefinitions(); }, [loadDefinitions]);
 
@@ -361,6 +362,27 @@ export const TestCasesPage4: React.FC = () => {
           <Button size="sm" onClick={() => { setEditingTestCase(null); setShowEditor(true); }} className="h-7 gap-1.5 text-xs">
             <Plus size={12} /> New Test Case
           </Button>
+          {/* Sample data toggle */}
+          {!showSampleData && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSampleData(true)}
+              className="h-7 text-xs text-muted-foreground"
+            >
+              Show sample data
+            </Button>
+          )}
+          {showSampleData && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSampleData(false)}
+              className="h-7 text-xs text-muted-foreground"
+            >
+              Hide sample data
+            </Button>
+          )}
         </>}
       />
       {/* ── Header ────────────────────────────────────── */}
