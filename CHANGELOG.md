@@ -9,6 +9,10 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+- Hide sample data by default when customer has real evaluation data; add "Show sample data" toggle
+- Collapse built-in agents when custom agents exist; group agent dropdowns (Your Agents / Built-in)
+
 ### Fixed
 - Connector type drift: use single source of truth (`CONNECTOR_TYPE_INFO`) in server validation and Settings UI instead of hardcoded arrays ([#176](https://github.com/opensearch-project/agent-health/pull/176))
 
