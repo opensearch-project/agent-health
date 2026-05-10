@@ -156,7 +156,7 @@ export const BenchmarksPage4: React.FC = () => {
   // Editor/Import state
   const [showEditor, setShowEditor] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [showSampleData, setShowSampleData] = useState(false);
+  const [showSampleData, setShowSampleData] = useState<boolean | undefined>(undefined);
 
   // Sort state for Benchmarks tab
   const [bmSort, setBmSort] = useState<{ field: BmSortField; dir: SortDir }>({ field: 'runs', dir: 'desc' });
@@ -164,8 +164,8 @@ export const BenchmarksPage4: React.FC = () => {
   const loadData = useCallback(async () => {
     try {
       const [bms, tcs] = await Promise.all([
-        asyncBenchmarkStorage.getAll({ includeSample: showSampleData }),
-        asyncTestCaseStorage.getAll({ includeSample: showSampleData }),
+        asyncBenchmarkStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
+        asyncTestCaseStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
       ]);
       setBenchmarks(bms);
       setTestCases(tcs as TestCase[]);
@@ -332,17 +332,7 @@ export const BenchmarksPage4: React.FC = () => {
             <Plus size={12} /> New Benchmark
           </Button>
           {/* Sample data toggle */}
-          {!showSampleData && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowSampleData(true)}
-              className="h-7 text-xs text-muted-foreground"
-            >
-              Show sample data
-            </Button>
-          )}
-          {showSampleData && (
+          {showSampleData === true ? (
             <Button
               variant="ghost"
               size="sm"
@@ -350,6 +340,15 @@ export const BenchmarksPage4: React.FC = () => {
               className="h-7 text-xs text-muted-foreground"
             >
               Hide sample data
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSampleData(true)}
+              className="h-7 text-xs text-muted-foreground"
+            >
+              Show sample data
             </Button>
           )}
           {/* Refresh */}

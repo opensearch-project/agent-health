@@ -110,7 +110,7 @@ export const TestCasesPage4: React.FC = () => {
   const [showEditor, setShowEditor] = useState(false);
   const [editingTestCase, setEditingTestCase] = useState<TestCase | null>(null);
   const [runningTestCase, setRunningTestCase] = useState<TestCase | null>(null);
-  const [showSampleData, setShowSampleData] = useState(false);
+  const [showSampleData, setShowSampleData] = useState<boolean | undefined>(undefined);
 
   // Sort
   const [sort, setSort] = useState<{ field: SortField; dir: SortDir }>({ field: 'created', dir: 'desc' });
@@ -118,7 +118,7 @@ export const TestCasesPage4: React.FC = () => {
   const loadDefinitions = useCallback(async () => {
     try {
       const [tcs, counts, bms] = await Promise.all([
-        asyncTestCaseStorage.getAll({ includeSample: showSampleData }), asyncRunStorage.getRunCountsByTestCase(), asyncBenchmarkStorage.getAll({ includeSample: showSampleData }),
+        asyncTestCaseStorage.getAll({ includeSample: showSampleData === true ? true : undefined }), asyncRunStorage.getRunCountsByTestCase(), asyncBenchmarkStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
       ]);
       setTestCases(tcs as TestCase[]); setRunCounts(counts); setBenchmarks(bms);
     } catch (err) { console.error('Failed:', err); }
@@ -363,17 +363,7 @@ export const TestCasesPage4: React.FC = () => {
             <Plus size={12} /> New Test Case
           </Button>
           {/* Sample data toggle */}
-          {!showSampleData && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowSampleData(true)}
-              className="h-7 text-xs text-muted-foreground"
-            >
-              Show sample data
-            </Button>
-          )}
-          {showSampleData && (
+          {showSampleData === true ? (
             <Button
               variant="ghost"
               size="sm"
@@ -381,6 +371,15 @@ export const TestCasesPage4: React.FC = () => {
               className="h-7 text-xs text-muted-foreground"
             >
               Hide sample data
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSampleData(true)}
+              className="h-7 text-xs text-muted-foreground"
+            >
+              Show sample data
             </Button>
           )}
         </>}

@@ -146,10 +146,12 @@ router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
     }
 
     // Determine whether to include sample data
+    // Use totalCount (overall storage count) rather than realData.length (current page)
     const includeSampleParam = req.query.includeSample as string | undefined;
+    const hasRealData = totalCount != null ? totalCount > 0 : realData.length > 0;
     const shouldIncludeSample = includeSampleParam === 'true' ? true
       : includeSampleParam === 'false' ? false
-      : realData.length === 0;
+      : !hasRealData;
 
     // Sort real data by lastActivity (max of lastRunAt, updatedAt, createdAt) descending
     const lastActivity = (tc: any): number => Math.max(

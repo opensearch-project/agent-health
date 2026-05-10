@@ -68,8 +68,9 @@ router.get('/api/agents', (req: Request, res: Response) => {
       agents = agents.filter(a => a.builtIn);
     }
 
-    const customCount = customAgents.length;
-    const builtInCount = configAgents.filter(a => a.builtIn).length;
+    const allAgents = [...configAgents, ...customAgents];
+    const builtInCount = allAgents.filter(a => a.builtIn).length;
+    const customCount = allAgents.filter(a => !a.builtIn).length;
 
     res.json({
       agents,
