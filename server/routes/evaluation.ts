@@ -93,7 +93,8 @@ function toTestCase(sample: typeof SAMPLE_TEST_CASES[0]): TestCase {
  * }
  *
  * SSE events:
- * - { type: 'started', testCase, agent }
+ * - { type: 'started', testCase, agent, reportId }
+ * - { type: 'heartbeat' }
  * - { type: 'step', stepIndex, step: { type, content, toolName?, toolArgs? } }
  * - { type: 'completed', report: { id, status, passFailStatus, metrics, ... }, reportId }
  * - { type: 'error', error }
@@ -185,6 +186,24 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
 
   const storage = getStorageModule();
 
+  // Pre-persist a placeholder run so the client can poll if SSE disconnects
+  let preCreatedReportId: string | null = null;
+  try {
+    const placeholder = await storage.runs.create({
+      testCaseId: testCase.id,
+      agentId: agent.key,
+      modelId: modelId,
+      status: 'running',
+    } as any);
+    preCreatedReportId = placeholder.id;
+    debug('EvalAPI', 'Pre-created placeholder run:', preCreatedReportId);
+  } catch (e: any) {
+    debug('EvalAPI', 'Failed to pre-create placeholder (non-fatal):', e.message);
+  }
+
+  let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  let clientDisconnected = false;
+
   try {
     // Set up SSE streaming for progress updates
     res.setHeader('Content-Type', 'text/event-stream');
@@ -192,8 +211,21 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
-    // Send started event
-    res.write(`data: ${JSON.stringify({ type: 'started', testCase: testCase.name, agent: agent.name })}\n\n`);
+    // Heartbeat to keep connection alive during long-running evaluations
+    heartbeatInterval = setInterval(() => {
+      if (!res.writableEnded && !clientDisconnected) {
+        res.write(`data: ${JSON.stringify({ type: 'heartbeat' })}\n\n`);
+      }
+    }, 15000);
+
+    // Track client disconnect — but don't abort the evaluation
+    req.on('close', () => {
+      clientDisconnected = true;
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+    });
+
+    // Send started event with reportId for polling fallback
+    res.write(`data: ${JSON.stringify({ type: 'started', testCase: testCase.name, agent: agent.name, reportId: preCreatedReportId })}\n\n`);
 
     // Run the evaluation with step progress
     let stepCount = 0;
@@ -203,22 +235,24 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
       storage,
       (step) => {
         stepCount++;
-        // Send full step content for UI rendering
-        res.write(`data: ${JSON.stringify({
-          type: 'step',
-          stepIndex: stepCount - 1,
-          step: {
-            id: step.id,
-            type: step.type,
-            content: step.content,
-            toolName: step.toolName,
-            toolArgs: step.toolArgs,
-            status: step.status,
-            timestamp: step.timestamp,
-          },
-        })}\n\n`);
+        if (!clientDisconnected && !res.writableEnded) {
+          res.write(`data: ${JSON.stringify({
+            type: 'step',
+            stepIndex: stepCount - 1,
+            step: {
+              id: step.id,
+              type: step.type,
+              content: step.content,
+              toolName: step.toolName,
+              toolArgs: step.toolArgs,
+              status: step.status,
+              timestamp: step.timestamp,
+            },
+          })}\n\n`);
+        }
       },
-      evaluatorId
+      evaluatorId,
+      preCreatedReportId || undefined
     );
 
     // Fetch the completed report via adapter
@@ -228,31 +262,42 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
       throw new Error('Report not found after save');
     }
 
-    // Send completed event with reportId for navigation
-    res.write(`data: ${JSON.stringify({
-      type: 'completed',
-      reportId,
-      report: {
-        id: report.id,
-        status: report.status,
-        passFailStatus: report.passFailStatus,
-        metricsStatus: report.metricsStatus,
-        metrics: report.metrics,
-        trajectorySteps: report.trajectory?.length || 0,
-        llmJudgeReasoning: report.llmJudgeReasoning,
-        improvementStrategies: report.improvementStrategies,
-      },
-    })}\n\n`);
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
 
-    res.end();
+    // Send completed event (only if client is still connected)
+    if (!clientDisconnected && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({
+        type: 'completed',
+        reportId,
+        report: {
+          id: report.id,
+          status: report.status,
+          passFailStatus: report.passFailStatus,
+          metricsStatus: report.metricsStatus,
+          metrics: report.metrics,
+          trajectorySteps: report.trajectory?.length || 0,
+          llmJudgeReasoning: report.llmJudgeReasoning,
+          improvementStrategies: report.improvementStrategies,
+        },
+      })}\n\n`);
+      res.end();
+    }
   } catch (error: any) {
     console.error('[EvaluationAPI] Evaluation failed:', error.message);
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+
+    // Update placeholder run with failed status
+    if (preCreatedReportId) {
+      try {
+        await storage.runs.update(preCreatedReportId, { status: 'failed' } as any);
+      } catch { /* best-effort */ }
+    }
 
     // If headers already sent, send error as SSE event
-    if (res.headersSent) {
+    if (res.headersSent && !clientDisconnected && !res.writableEnded) {
       res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
       res.end();
-    } else {
+    } else if (!res.headersSent) {
       res.status(500).json({ error: error.message });
     }
   }

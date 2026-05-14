@@ -31,10 +31,11 @@ const mockClient = {} as any;
 
 // Mock storage module (used for runSingleUseCase path)
 const mockRunsCreate = jest.fn();
+const mockRunsUpdate = jest.fn();
 const mockTestCasesUpdate = jest.fn().mockResolvedValue(undefined);
 const mockTestCasesGetById = jest.fn().mockResolvedValue({ id: 'tc-1', name: 'Test' });
 const mockStorageModule = {
-  runs: { create: mockRunsCreate },
+  runs: { create: mockRunsCreate, update: mockRunsUpdate },
   testCases: { update: mockTestCasesUpdate, getById: mockTestCasesGetById },
 } as any;
 
@@ -172,6 +173,7 @@ describe('Experiment Runner', () => {
     mockUpdateRunWithClient.mockReset();
     mockGetCustomAgents.mockReturnValue([]);
     mockRunsCreate.mockReset();
+    mockRunsUpdate.mockReset();
     mockTestCasesUpdate.mockResolvedValue(undefined);
     mockTestCasesGetById.mockResolvedValue({ id: 'tc-1', name: 'Test' });
   });
@@ -1023,6 +1025,33 @@ describe('Experiment Runner', () => {
         expect.any(Function),
         expect.objectContaining({ registry: expect.any(Object) })
       );
+    });
+
+    it('should update existing report when existingReportId is provided', async () => {
+      const testCase = createTestCase('tc-1');
+      const run = createBenchmarkRun('run-1');
+
+      mockRunEvaluationWithConnector.mockResolvedValue({
+        id: 'report-1',
+        status: 'completed',
+        passFailStatus: 'passed',
+        trajectory: [{ type: 'response', content: 'Done' }],
+        metrics: { accuracy: 0.9 },
+        llmJudgeReasoning: 'Good job',
+        runId: 'trace-123',
+      });
+      mockRunsUpdate.mockResolvedValue({ id: 'existing-report-id', timestamp: '2024-01-01T00:00:00Z' });
+
+      const reportId = await runSingleUseCase(run, testCase, mockStorageModule, undefined, undefined, 'existing-report-id');
+
+      expect(reportId).toBe('existing-report-id');
+      expect(mockRunsUpdate).toHaveBeenCalledWith('existing-report-id', expect.objectContaining({
+        status: 'completed',
+        passFailStatus: 'passed',
+        llmJudgeReasoning: 'Good job',
+        traceId: 'trace-123',
+      }));
+      expect(mockRunsCreate).not.toHaveBeenCalled();
     });
   });
 

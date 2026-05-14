@@ -1372,4 +1372,195 @@ describe('ApiClient', () => {
       expect(result).toBeNull();
     });
   });
+
+  describe('pollReportStatus', () => {
+    it('should poll until report reaches completed status', async () => {
+      let callCount = 0;
+      mockFetch.mockImplementation(() => {
+        callCount++;
+        const status = callCount >= 3 ? 'completed' : 'running';
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            id: 'report-123',
+            status,
+            passFailStatus: status === 'completed' ? 'passed' : undefined,
+            metrics: status === 'completed' ? { accuracy: 85 } : undefined,
+            trajectory: [{ type: 'action', content: 'test' }],
+            llmJudgeReasoning: status === 'completed' ? 'Good job' : undefined,
+          }),
+        });
+      });
+
+      const result = await client.pollReportStatus('report-123', 30000);
+
+      expect(result).toBeDefined();
+      expect(result!.id).toBe('report-123');
+      expect(result!.status).toBe('completed');
+      expect(result!.passFailStatus).toBe('passed');
+      expect(callCount).toBeGreaterThanOrEqual(3);
+    });
+
+    it('should return null if report is not found', async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 404,
+      });
+
+      const result = await client.pollReportStatus('nonexistent', 10000);
+      expect(result).toBeNull();
+    });
+
+    it('should return report on failed status', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          id: 'report-fail',
+          status: 'failed',
+          trajectory: [],
+          llmJudgeReasoning: 'Execution failed',
+        }),
+      });
+
+      const result = await client.pollReportStatus('report-fail', 10000);
+      expect(result).toBeDefined();
+      expect(result!.status).toBe('failed');
+    });
+  });
+
+  describe('runEvaluation - SSE disconnect recovery', () => {
+    function createSSEStream(events: any[], disconnectAfter?: number) {
+      const encoder = new TextEncoder();
+      let eventIndex = 0;
+
+      return new ReadableStream({
+        pull(controller) {
+          if (disconnectAfter !== undefined && eventIndex >= disconnectAfter) {
+            controller.error(new Error('network disconnect'));
+            return;
+          }
+          if (eventIndex < events.length) {
+            const data = `data: ${JSON.stringify(events[eventIndex])}\n\n`;
+            controller.enqueue(encoder.encode(data));
+            eventIndex++;
+          } else {
+            controller.close();
+          }
+        },
+      });
+    }
+
+    it('should fall back to polling when SSE stream disconnects after started event', async () => {
+      const sseEvents = [
+        { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-poll-1' },
+        { type: 'step', stepIndex: 0, step: { type: 'action', content: 'doing stuff' } },
+      ];
+
+      // First call: SSE eval endpoint — disconnects after 2 events
+      mockFetch.mockImplementationOnce(() => Promise.resolve({
+        ok: true,
+        body: createSSEStream(sseEvents, 2),
+      }));
+
+      // Subsequent calls: polling for report status
+      let pollCount = 0;
+      mockFetch.mockImplementation(() => {
+        pollCount++;
+        const status = pollCount >= 2 ? 'completed' : 'running';
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            id: 'report-poll-1',
+            status,
+            passFailStatus: status === 'completed' ? 'passed' : undefined,
+            metrics: { accuracy: 90 },
+            trajectory: [{ type: 'action', content: 'test' }],
+            llmJudgeReasoning: 'Recovered via polling',
+          }),
+        });
+      });
+
+      const result = await client.runEvaluation('tc-1', 'observio', 'claude-sonnet-4');
+
+      expect(result).toBeDefined();
+      expect(result.id).toBe('report-poll-1');
+      expect(result.status).toBe('completed');
+    });
+
+    it('should ignore heartbeat events and complete normally', async () => {
+      const sseEvents = [
+        { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-hb-1' },
+        { type: 'heartbeat' },
+        { type: 'step', stepIndex: 0, step: { type: 'action', content: 'working' } },
+        { type: 'heartbeat' },
+        { type: 'completed', report: { id: 'report-hb-1', status: 'completed', passFailStatus: 'passed', metrics: { accuracy: 95 }, trajectorySteps: 1, llmJudgeReasoning: 'Good' } },
+      ];
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        body: createSSEStream(sseEvents),
+      });
+
+      const progressEvents: any[] = [];
+      const result = await client.runEvaluation('tc-1', 'observio', 'claude-sonnet-4', (e) => progressEvents.push(e));
+
+      expect(result.status).toBe('completed');
+      // Heartbeat events should NOT be forwarded to onProgress
+      expect(progressEvents.some(e => e.type === 'heartbeat')).toBe(false);
+      // But started, step, completed should be
+      expect(progressEvents.some(e => e.type === 'started')).toBe(true);
+      expect(progressEvents.some(e => e.type === 'step')).toBe(true);
+    });
+
+    it('should throw ServerError without polling fallback', async () => {
+      const sseEvents = [
+        { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-err-1' },
+        { type: 'error', error: 'Agent endpoint unreachable' },
+      ];
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        body: createSSEStream(sseEvents),
+      });
+
+      await expect(
+        client.runEvaluation('tc-1', 'observio', 'claude-sonnet-4')
+      ).rejects.toThrow('Agent endpoint unreachable');
+    });
+
+    it('should poll when stream ends without completed event', async () => {
+      const sseEvents = [
+        { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-noend-1' },
+        { type: 'step', stepIndex: 0, step: { type: 'action', content: 'working' } },
+        // Stream ends without 'completed' event
+      ];
+
+      // First call: SSE
+      mockFetch.mockImplementationOnce(() => Promise.resolve({
+        ok: true,
+        body: createSSEStream(sseEvents),
+      }));
+
+      // Polling calls
+      mockFetch.mockImplementation(() => Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          id: 'report-noend-1',
+          status: 'completed',
+          passFailStatus: 'failed',
+          metrics: { accuracy: 40 },
+          trajectory: [{ type: 'action', content: 'test' }],
+          llmJudgeReasoning: 'Incomplete execution',
+        }),
+      }));
+
+      const result = await client.runEvaluation('tc-1', 'observio', 'claude-sonnet-4');
+      expect(result.id).toBe('report-noend-1');
+      expect(result.status).toBe('completed');
+    });
+  });
 });
