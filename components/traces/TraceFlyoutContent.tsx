@@ -30,6 +30,7 @@ import {
   List,
   GitBranch,
   Info,
+  ClipboardCheck,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -209,6 +210,7 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
       if (category === 'agent') return name.includes('agent');
       if (category === 'llm') return name.includes('llm') || name.includes('bedrock') || name.includes('converse');
       if (category === 'tool') return name.includes('tool') || span.attributes?.['gen_ai.tool.name'];
+      if (category === 'eval') return span.attributes?.['gen_ai.operation.name'] === 'evaluation' || name.includes('test_case') || name.includes('test_suite_run');
       if (category === 'error') return span.status === 'ERROR';
       return false;
     });
@@ -264,6 +266,10 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
         return isDarkMode
           ? { backgroundColor: 'rgba(245, 158, 11, 0.15)', color: 'rgb(251, 191, 36)', border: '1px solid rgba(245, 158, 11, 0.4)' }
           : { backgroundColor: 'rgb(254, 243, 199)', color: 'rgb(146, 64, 14)', border: '1px solid rgb(252, 211, 77)' };
+      case 'eval':
+        return isDarkMode
+          ? { backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'rgb(110, 231, 183)', border: '1px solid rgba(16, 185, 129, 0.4)' }
+          : { backgroundColor: 'rgb(209, 250, 229)', color: 'rgb(6, 95, 70)', border: '1px solid rgb(110, 231, 183)' };
       case 'error':
         return isDarkMode
           ? { backgroundColor: 'rgba(239, 68, 68, 0.15)', color: 'rgb(248, 113, 113)', border: '1px solid rgba(239, 68, 68, 0.4)' }
@@ -544,6 +550,47 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
                   <span className="font-normal">Tool Calls</span>
                   <span className="text-[10px] opacity-70 ml-auto">{formatDuration(spanStats.byCategory.tool.duration)}</span>
                   {expandedSummary === 'tool' ? (
+                    <ChevronDown size={11} />
+                  ) : (
+                    <ChevronRight size={11} />
+                  )}
+                </button>
+              )}
+              {spanStats.byCategory.eval?.count > 0 && (
+                <button
+                  onClick={() => handleSummaryClick('eval')}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border-2 transition-all cursor-pointer flex-1"
+                  style={
+                    expandedSummary === 'eval'
+                      ? document.documentElement.classList.contains('dark')
+                        ? { backgroundColor: 'rgba(16, 185, 129, 0.25)', color: 'rgb(167, 243, 208)', border: '2px solid rgba(16, 185, 129, 0.6)' }
+                        : { backgroundColor: 'rgb(209, 250, 229)', color: 'rgb(6, 78, 59)', border: '2px solid rgb(52, 211, 153)' }
+                      : document.documentElement.classList.contains('dark')
+                        ? { backgroundColor: 'rgba(16, 185, 129, 0.12)', color: 'rgb(110, 231, 183)', border: '2px solid rgba(16, 185, 129, 0.35)' }
+                        : { backgroundColor: 'rgb(236, 253, 245)', color: 'rgb(6, 95, 70)', border: '2px solid rgb(110, 231, 183)' }
+                  }
+                  onMouseEnter={(e) => {
+                    if (expandedSummary !== 'eval') {
+                      const isDark = document.documentElement.classList.contains('dark');
+                      e.currentTarget.style.backgroundColor = isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgb(209, 250, 229)';
+                      e.currentTarget.style.borderColor = isDark ? 'rgba(16, 185, 129, 0.5)' : 'rgb(52, 211, 153)';
+                      e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (expandedSummary !== 'eval') {
+                      const isDark = document.documentElement.classList.contains('dark');
+                      e.currentTarget.style.backgroundColor = isDark ? 'rgba(16, 185, 129, 0.12)' : 'rgb(236, 253, 245)';
+                      e.currentTarget.style.borderColor = isDark ? 'rgba(16, 185, 129, 0.35)' : 'rgb(110, 231, 183)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }
+                  }}
+                >
+                  <ClipboardCheck size={11} className="flex-shrink-0" />
+                  <span className="font-medium">{spanStats.byCategory.eval.count}</span>
+                  <span className="font-normal">Eval</span>
+                  <span className="text-[10px] opacity-70 ml-auto">{formatDuration(spanStats.byCategory.eval.duration)}</span>
+                  {expandedSummary === 'eval' ? (
                     <ChevronDown size={11} />
                   ) : (
                     <ChevronRight size={11} />
