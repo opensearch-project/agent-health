@@ -88,6 +88,13 @@ describe('getCategoryMeta', () => {
     expect(meta.color).toContain('amber');
   });
 
+  it('returns metadata for EVAL category', () => {
+    const meta = getCategoryMeta('EVAL');
+    expect(meta.label).toBe('Eval');
+    expect(meta.icon).toBe('ClipboardCheck');
+    expect(meta.color).toContain('emerald');
+  });
+
   it('returns metadata for ERROR category', () => {
     const meta = getCategoryMeta('ERROR');
     expect(meta.label).toBe('Error');
@@ -160,6 +167,14 @@ describe('getSpanCategory', () => {
       });
       expect(getSpanCategory(span)).toBe('TOOL');
     });
+
+    it('returns EVAL for evaluation operation', () => {
+      const span = createSpan({
+        spanId: '1',
+        attributes: { [ATTR_GEN_AI_OPERATION_NAME]: 'evaluation' },
+      });
+      expect(getSpanCategory(span)).toBe('EVAL');
+    });
   });
 
   describe('Name-based fallback categorization', () => {
@@ -201,6 +216,16 @@ describe('getSpanCategory', () => {
     it('returns AGENT for generateResponse spans', () => {
       const span = createSpan({ spanId: '1', name: 'GenerateResponse' });
       expect(getSpanCategory(span)).toBe('AGENT');
+    });
+
+    it('returns EVAL for test_suite_run spans', () => {
+      const span = createSpan({ spanId: '1', name: 'test_suite_run My Benchmark' });
+      expect(getSpanCategory(span)).toBe('EVAL');
+    });
+
+    it('returns EVAL for test_case spans', () => {
+      const span = createSpan({ spanId: '1', name: 'test_case' });
+      expect(getSpanCategory(span)).toBe('EVAL');
     });
 
     it('returns OTHER for unknown spans', () => {
@@ -253,6 +278,32 @@ describe('buildDisplayName', () => {
     });
     const name = buildDisplayName(span, 'TOOL');
     expect(name).toBe('execute_tool SearchDocsTool');
+  });
+
+  it('builds EVAL display name with test case name', () => {
+    const span = createSpan({
+      spanId: '1',
+      name: 'test_case',
+      attributes: {
+        [ATTR_GEN_AI_OPERATION_NAME]: 'evaluation',
+        'test.case.name': 'Login Flow Test',
+      },
+    });
+    const name = buildDisplayName(span, 'EVAL');
+    expect(name).toBe('evaluation Login Flow Test');
+  });
+
+  it('builds EVAL display name with suite name fallback', () => {
+    const span = createSpan({
+      spanId: '1',
+      name: 'test_suite_run My Benchmark',
+      attributes: {
+        [ATTR_GEN_AI_OPERATION_NAME]: 'evaluation',
+        'test.suite.name': 'My Benchmark',
+      },
+    });
+    const name = buildDisplayName(span, 'EVAL');
+    expect(name).toBe('evaluation My Benchmark');
   });
 
   it('returns span name for ERROR category', () => {

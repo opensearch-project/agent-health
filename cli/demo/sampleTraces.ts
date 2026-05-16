@@ -1644,10 +1644,81 @@ function generateBudgetTripVietnamSpans(): Span[] {
 }
 
 /**
+ * Generate eval spans for the Weekend Trip trace (demo-trace-001)
+ *
+ * Evaluation spans emitted by Agent Health after judging the agent's output.
+ * Uses OTel GenAI semantic conventions for evaluation:
+ * - test_suite_run: root eval span covering the full benchmark run
+ * - test_case: child span for a single test case evaluation result
+ *
+ * These spans share the same traceId as the agent spans so they appear
+ * together in the trace viewer — matching real production behavior.
+ */
+function generateEvalSpans(): Span[] {
+  const traceId = 'demo-trace-001';
+  const baseTime = BASE_TIME + 9000; // After agent completes (8500ms)
+
+  return [
+    // Root eval span: test_suite_run
+    {
+      traceId,
+      spanId: 'span-001-eval-suite',
+      name: 'test_suite_run Travel Planning Benchmark',
+      startTime: new Date(baseTime).toISOString(),
+      endTime: new Date(baseTime + 3200).toISOString(),
+      duration: 3200,
+      status: 'OK',
+      attributes: {
+        'service.name': 'agent-health-eval',
+        'gen_ai.operation.name': 'evaluation',
+        'test.suite.name': 'Travel Planning Benchmark',
+        'test.suite.run.id': 'demo-eval-run-001',
+      },
+    },
+    // Child eval span: test_case
+    {
+      traceId,
+      spanId: 'span-001-eval-case',
+      parentSpanId: 'span-001-eval-suite',
+      name: 'test_case',
+      startTime: new Date(baseTime + 100).toISOString(),
+      endTime: new Date(baseTime + 3100).toISOString(),
+      duration: 3000,
+      status: 'OK',
+      attributes: {
+        'service.name': 'agent-health-eval',
+        'gen_ai.operation.name': 'evaluation',
+        'test.suite.name': 'Travel Planning Benchmark',
+        'test.suite.run.id': 'demo-eval-run-001',
+        'test.case.id': 'demo-tc-001',
+        'test.case.name': 'Weekend Getaway Planning',
+        'test.case.result.status': 'pass',
+        'test.case.input': 'Plan a weekend getaway to Napa Valley for two people',
+        'test.case.output': 'Here is your complete Napa Valley weekend itinerary...',
+        'gen_ai.request.id': 'demo-agent-run-001',
+      },
+      events: [
+        {
+          name: 'gen_ai.evaluation.result',
+          time: new Date(baseTime + 3000).toISOString(),
+          attributes: {
+            'gen_ai.evaluation.name': 'accuracy',
+            'gen_ai.evaluation.score.value': 0.92,
+            'gen_ai.evaluation.score.label': 'pass',
+            'gen_ai.evaluation.explanation': 'Agent correctly identified weather, events, and bookings for Napa Valley weekend trip.',
+          },
+        },
+      ],
+    },
+  ];
+}
+
+/**
  * All sample trace spans
  */
 export const SAMPLE_TRACE_SPANS: Span[] = [
   ...generateWeekendTripSpans(),
+  ...generateEvalSpans(),
   ...generateJapanTripSpans(),
   ...generateBudgetTripSpans(),
   ...generateBudgetTripVietnamSpans(),
