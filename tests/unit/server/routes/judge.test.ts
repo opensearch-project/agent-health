@@ -9,6 +9,7 @@ import { evaluateTrajectory, parseBedrockError } from '@/server/services/bedrock
 import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/server/services/judgeService';
 import { evaluateWithLiteLLM, parseLiteLLMError } from '@/server/services/litellmJudgeService';
 import { evaluateWithClaudeCode, parseClaudeCodeError } from '@/server/services/claudeCodeJudgeService';
+import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
 
 // Mock the AWS Bedrock client
 const mockSend = jest.fn();
@@ -41,6 +42,12 @@ jest.mock('@/server/services/claudeCodeJudgeService', () => ({
   parseClaudeCodeError: jest.fn(),
 }));
 
+// Mock the agentic judge service
+jest.mock('@/server/services/agenticJudgeService', () => ({
+  evaluateWithAgenticJudge: jest.fn(),
+  parseAgenticJudgeError: jest.fn(),
+}));
+
 const mockEvaluateTrajectory = evaluateTrajectory as jest.MockedFunction<typeof evaluateTrajectory>;
 const mockParseBedrockError = parseBedrockError as jest.MockedFunction<typeof parseBedrockError>;
 const mockEvaluateWithOpenAICompatible = evaluateWithOpenAICompatible as jest.MockedFunction<typeof evaluateWithOpenAICompatible>;
@@ -49,6 +56,8 @@ const mockEvaluateWithLiteLLM = evaluateWithLiteLLM as jest.MockedFunction<typeo
 const mockParseLiteLLMError = parseLiteLLMError as jest.MockedFunction<typeof parseLiteLLMError>;
 const mockEvaluateWithClaudeCode = evaluateWithClaudeCode as jest.MockedFunction<typeof evaluateWithClaudeCode>;
 const mockParseClaudeCodeError = parseClaudeCodeError as jest.MockedFunction<typeof parseClaudeCodeError>;
+const mockEvaluateWithAgenticJudge = evaluateWithAgenticJudge as jest.MockedFunction<typeof evaluateWithAgenticJudge>;
+const mockParseAgenticJudgeError = parseAgenticJudgeError as jest.MockedFunction<typeof parseAgenticJudgeError>;
 
 // Helper to create mock request/response
 function createMocks(body: any = {}) {
@@ -507,6 +516,116 @@ describe('Judge Routes', () => {
       // The mocks are from the re-exported judgeService module
       expect(mockEvaluateWithLiteLLM).toBeDefined();
       expect(mockParseLiteLLMError).toBeDefined();
+    });
+
+    it('routes to evaluateWithAgenticJudge when provider is agentic', async () => {
+      mockEvaluateWithAgenticJudge.mockResolvedValue({
+        passFailStatus: 'passed',
+        metrics: { accuracy: 95 },
+        llmJudgeReasoning: 'Agentic judge evaluation',
+        improvementStrategies: [],
+        duration: 8000,
+      });
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'search' }],
+        expectedOutcomes: ['Identify issue'],
+        modelId: 'agentic-claude-code', // Uses provider: 'agentic' in DEFAULT_CONFIG
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(mockEvaluateWithAgenticJudge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trajectory: expect.any(Array),
+          expectedOutcomes: expect.any(Array),
+        }),
+        expect.objectContaining({
+          backend: 'claude-code',
+        })
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          passFailStatus: 'passed',
+          metrics: expect.objectContaining({ accuracy: 95 }),
+        })
+      );
+    });
+
+    it('routes agentic-custom to custom backend', async () => {
+      mockEvaluateWithAgenticJudge.mockResolvedValue({
+        passFailStatus: 'passed',
+        metrics: { accuracy: 88 },
+        llmJudgeReasoning: 'Custom agentic evaluation',
+        improvementStrategies: [],
+        duration: 6000,
+      });
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'test' }],
+        expectedOutcomes: ['Test outcome'],
+        modelId: 'agentic-custom', // Uses provider: 'agentic', backend: 'custom'
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(mockEvaluateWithAgenticJudge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trajectory: expect.any(Array),
+        }),
+        expect.objectContaining({
+          backend: 'custom',
+        })
+      );
+    });
+
+    it('does NOT call other services when provider is agentic', async () => {
+      mockEvaluateWithAgenticJudge.mockResolvedValue({
+        passFailStatus: 'passed',
+        metrics: { accuracy: 90 },
+        llmJudgeReasoning: 'OK',
+        improvementStrategies: [],
+        duration: 5000,
+      });
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'test' }],
+        expectedOutcomes: ['Test outcome'],
+        modelId: 'agentic-claude-code',
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(mockEvaluateTrajectory).not.toHaveBeenCalled();
+      expect(mockEvaluateWithClaudeCode).not.toHaveBeenCalled();
+      expect(mockEvaluateWithOpenAICompatible).not.toHaveBeenCalled();
+      expect(mockEvaluateWithLiteLLM).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 with agentic judge error message on failure', async () => {
+      const error = new Error('Agentic judge timed out');
+      mockEvaluateWithAgenticJudge.mockRejectedValue(error);
+      mockParseAgenticJudgeError.mockReturnValue('Agentic judge evaluation timed out (10 min limit).');
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action' }],
+        expectedOutcomes: ['Test'],
+        modelId: 'agentic-claude-code',
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(mockParseAgenticJudgeError).toHaveBeenCalledWith(error);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining('Judge evaluation failed'),
+        })
+      );
     });
   });
 });

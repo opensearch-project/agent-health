@@ -148,7 +148,7 @@ export const BenchmarksPage4: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
-  const [selectedAgent, setSelectedAgent] = useState<string>(() => DEFAULT_CONFIG.agents.find(a => a.enabled !== false)?.key || 'all');
+  const [selectedAgent, setSelectedAgent] = useState<string>('all');
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);

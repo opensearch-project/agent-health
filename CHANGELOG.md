@@ -13,11 +13,15 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Observio sample agent: port auto-increment when default port 3001 is in use (up to 10 attempts)
 - Observio sample agent: configurable `REACT_MAX_ITERATIONS` via environment variable (default: 100)
 - Parent server dynamically detects observio agent's actual bound port and patches `/api/agents` endpoint
+- Agentic judge provider: evaluate trajectories using an agent with tool access (Claude Code or custom endpoint)
+- Shared `JudgeModelSelect` component: groups judge models by provider (Bedrock, Agentic, Claude Code, OpenAI-compatible, LiteLLM, Demo)
+- Informational banner in "Create Test Case" flow explaining required fields
 
 ### Changed
 - Rewrite First Run Experience as a narrative landing: promise-driven hero with two primary CTAs, four-step horizontal journey (Explore → Connect → Evaluate → Improve & scale), four outcome-framed value cards, and a subtle scale moment with Docker and CloudFormation install commands. Replaces the previous two-card "How it works" + "Getting Started" layout. Preserves all existing CTAs, install commands, optional coding agents banner, and `data-testid="first-run-experience"`.
 - Hide sample data by default when customer has real evaluation data; add "Show sample data" toggle
 - Collapse built-in agents when custom agents exist; group agent dropdowns (Your Agents / Built-in)
+- Default agent filter to "All Agents" on benchmarks and runs pages instead of first enabled agent
 
 ### Security
 - Fix Dependabot vulnerabilities: add npm overrides for hono (>=4.12.18), fast-uri (>=3.1.2), and ip-address (>=10.1.1)

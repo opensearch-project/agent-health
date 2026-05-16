@@ -33,13 +33,13 @@ test.describe('Navigation', () => {
 
   test('should navigate to Test Cases page', async ({ page }) => {
     await page.click('[data-testid="nav-evals3-test-cases"]');
-    await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 10000 });
+    await expect(page.locator('[data-testid="test-cases-page"]')).toBeVisible();
     await expect(page.locator('[data-testid="test-cases-title"]')).toHaveText('Test Cases');
   });
 
   test('should navigate to Benchmarks page', async ({ page }) => {
     await page.click('[data-testid="nav-evals3-benchmarks"]');
-    await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 10000 });
+    await expect(page.locator('[data-testid="benchmarks-page"]')).toBeVisible();
     await expect(page.locator('[data-testid="benchmarks-title"]')).toHaveText('Benchmarks');
   });
 
@@ -64,6 +64,34 @@ test.describe('Navigation', () => {
   test('should display OpenSearch logo and branding', async ({ page }) => {
     // Check for the OpenSearch branding text
     await expect(page.locator('text=OpenSearch AgentHealth')).toBeVisible();
+  });
+
+  test('should display navigation items in correct order', async ({ page }) => {
+    // Get all sidebar menu button labels in order
+    const sidebar = page.locator('[data-testid="sidebar"]');
+    const menuItems = sidebar.locator('[data-testid^="nav-"]');
+
+    // Expected order: Overview, Agent Traces, Evaluations, AI Dev Tools, Assistant, Settings
+    const expectedOrder = [
+      'nav-overview',
+      'nav-agent-traces',
+      'nav-evals3-benchmarks',
+      'nav-evals3-test-cases',
+      'nav-evals3-runs',
+      'nav-evaluators',
+      'nav-coding-agents',
+      'nav-assistant',
+      'nav-settings',
+    ];
+
+    const actualTestIds: string[] = [];
+    const count = await menuItems.count();
+    for (let i = 0; i < count; i++) {
+      const testId = await menuItems.nth(i).getAttribute('data-testid');
+      if (testId) actualTestIds.push(testId);
+    }
+
+    expect(actualTestIds).toEqual(expectedOrder);
   });
 });
 

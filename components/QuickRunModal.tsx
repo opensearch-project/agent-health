@@ -98,6 +98,9 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
     demo: 'Demo',
     bedrock: 'AWS Bedrock',
     'openai-compatible': 'OpenAI-compatible',
+    'claude-code': 'Claude Code',
+    litellm: 'LiteLLM',
+    agentic: 'Agentic Judge',
   };
 
   const fetchOpenaiCompatModels = useCallback(async () => {
@@ -377,10 +380,14 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                 <div className="flex items-center gap-1">
                   <Label className="text-xs">Judge Model</Label>
                   <span
-                    className={`text-muted-foreground cursor-default ${selectedModelProvider === 'openai-compatible' ? 'text-blue-500 dark:text-blue-400' : ''}`}
+                    className={`text-muted-foreground cursor-default ${selectedModelProvider === 'openai-compatible' ? 'text-blue-500 dark:text-blue-400' : selectedModelProvider === 'agentic' ? 'text-purple-500 dark:text-purple-400' : ''}`}
                     title={
                       selectedModelProvider === 'openai-compatible'
                         ? 'OpenAI-compatible — set OPENAI_COMPATIBLE_ENDPOINT and OPENAI_COMPATIBLE_API_KEY in .env. Click ↻ to discover available models.'
+                        : selectedModelProvider === 'agentic'
+                        ? 'Agentic Judge — uses an agent with tool access to evaluate trajectories. Supports Claude Code or custom endpoints.'
+                        : selectedModelProvider === 'claude-code'
+                        ? 'Claude Code — spawns the claude CLI to evaluate trajectories.'
                         : 'Select the LLM used to judge agent trajectories'
                     }
                   >

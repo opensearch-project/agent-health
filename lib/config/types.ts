@@ -35,7 +35,7 @@ export interface UserModelConfig {
   key: string;
   model_id: string;
   display_name: string;
-  provider?: 'bedrock' | 'demo' | 'openai-compatible' | 'litellm' | 'claude-code';
+  provider?: 'bedrock' | 'demo' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic';
   context_window?: number;
   max_output_tokens?: number;
 }
@@ -53,9 +53,13 @@ export type ReporterConfig =
  * Judge configuration
  */
 export interface JudgeConfig {
-  provider?: 'bedrock' | 'demo' | 'openai-compatible' | 'litellm' | 'claude-code';
+  provider?: 'bedrock' | 'demo' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic';
   model?: string;
   region?: string;
+  /** Endpoint for custom/agentic judge (e.g., REST endpoint or subprocess command) */
+  endpoint?: string;
+  /** Connector type for agentic judge (reuses agent connector infrastructure) */
+  connectorType?: 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code';
 }
 
 /**

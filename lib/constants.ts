@@ -251,6 +251,20 @@ export const DEFAULT_CONFIG: AppConfig = {
       context_window: 200000,
       max_output_tokens: 16384
     },
+    "agentic-claude-code": {
+      model_id: "agentic-claude-code",
+      display_name: "Claude Code (Agentic)",
+      provider: "agentic",
+      context_window: 200000,
+      max_output_tokens: 16384
+    },
+    "agentic-custom": {
+      model_id: "agentic-custom",
+      display_name: "Custom Agentic Judge",
+      provider: "agentic",
+      context_window: 200000,
+      max_output_tokens: 16384
+    },
     "gpt-4o": {
       model_id: "gpt-4o",
       display_name: "GPT-4o",

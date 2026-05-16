@@ -97,7 +97,7 @@ jobs:
           files: coverage/lcov.info
           flags: unit
           name: unit-tests
-          fail_ci_if_error: false
+          fail_ci_if_error: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
@@ -292,7 +292,7 @@ jobs:
           directory: coverage-integration/
           flags: integration
           name: integration-tests
-          fail_ci_if_error: false
+          fail_ci_if_error: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
