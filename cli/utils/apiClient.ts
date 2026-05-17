@@ -664,11 +664,17 @@ export class ApiClient {
       // Stream disconnected — fall back to polling if we have a reportId
       if (reportId) {
         console.warn(`[ApiClient] SSE stream disconnected: ${streamError instanceof Error ? streamError.message : streamError}`);
-        console.warn(`[ApiClient] Falling back to polling for report ${reportId}...`);
+        console.warn(`[ApiClient] Falling back to polling for report ${reportId} — server is still processing in the background...`);
 
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Notify any progress listener so the CLI/UI can update its spinner
+        onProgress?.({ type: 'reconnecting', reportId } as any);
 
-        const polledResult = await this.pollReportStatus(reportId);
+        // No artificial delay before polling: pollUntilTerminal already waits
+        // 5s between fetches and the report may already be complete on the server.
+        const polledResult = await this.pollReportStatus(reportId, undefined, (report) => {
+          // Forward intermediate polled status as a progress event
+          onProgress?.({ type: 'polling', reportId: report.id, status: report.status } as any);
+        });
         if (polledResult) {
           return polledResult;
         }
@@ -687,7 +693,10 @@ export class ApiClient {
       // Stream ended without completed event — try polling
       if (reportId) {
         console.warn('[ApiClient] SSE stream ended without completion event, polling for status...');
-        const polledResult = await this.pollReportStatus(reportId);
+        onProgress?.({ type: 'reconnecting', reportId } as any);
+        const polledResult = await this.pollReportStatus(reportId, undefined, (report) => {
+          onProgress?.({ type: 'polling', reportId: report.id, status: report.status } as any);
+        });
         if (polledResult) {
           return polledResult;
         }
@@ -701,12 +710,20 @@ export class ApiClient {
   /**
    * Poll for a single evaluation report's completion status.
    * Used as fallback when the SSE stream disconnects during evaluation.
+   *
+   * @param reportId   The reportId returned from the SSE 'started' event
+   * @param timeoutMs  Max time to keep polling (defaults to 10 minutes)
+   * @param onPoll     Optional callback fired on every poll cycle with the latest report
    */
-  async pollReportStatus(reportId: string, timeoutMs = 600000): Promise<EvaluationResult | null> {
+  async pollReportStatus(
+    reportId: string,
+    timeoutMs: number = 600000,
+    onPoll?: (report: TestCaseRun) => void
+  ): Promise<EvaluationResult | null> {
     const report = await this.pollUntilTerminal(
       () => this.getReportById(reportId),
       (r) => !!r.status && ['completed', 'failed', 'cancelled'].includes(r.status),
-      { timeoutMs }
+      { timeoutMs, onPoll }
     );
 
     if (!report) return null;

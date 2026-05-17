@@ -278,4 +278,171 @@ describe('evaluationApi', () => {
       ).rejects.toThrow('Buffer error');
     });
   });
+
+  describe('runServerEvaluation - SSE disconnect recovery', () => {
+    const mockReport = {
+      id: 'report-recover',
+      status: 'completed',
+      passFailStatus: 'passed',
+      metrics: { accuracy: 91 },
+      trajectorySteps: 2,
+      llmJudgeReasoning: 'Recovered via polling',
+    };
+
+    function streamThatErrors(events: any[], errorAfter: number): ReadableStream<Uint8Array> {
+      const encoder = new TextEncoder();
+      let i = 0;
+      return new ReadableStream({
+        pull(controller) {
+          if (i >= errorAfter) {
+            controller.error(new Error('network disconnect'));
+            return;
+          }
+          if (i < events.length) {
+            controller.enqueue(encoder.encode(sseData(events[i])));
+            i++;
+          } else {
+            controller.close();
+          }
+        },
+      });
+    }
+
+    it('should fall back to polling when SSE drops after started event', async () => {
+      const sseStream = streamThatErrors(
+        [
+          { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-recover' },
+          { type: 'step', stepIndex: 0, step: { type: 'action', content: 'doing' } },
+        ],
+        2,
+      );
+
+      // First call: SSE; subsequent: storage polling.
+      let pollCount = 0;
+      global.fetch = jest.fn()
+        .mockResolvedValueOnce({ ok: true, body: sseStream })
+        .mockImplementation(() => {
+          pollCount++;
+          const status = pollCount >= 2 ? 'completed' : 'running';
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({
+              id: 'report-recover',
+              status,
+              passFailStatus: status === 'completed' ? 'passed' : undefined,
+              metrics: { accuracy: 91 },
+              trajectory: [{ type: 'action' }, { type: 'response' }],
+              llmJudgeReasoning: 'Recovered via polling',
+            }),
+          });
+        });
+
+      const onReconnect = jest.fn();
+      const onPoll = jest.fn();
+
+      const result = await runServerEvaluation(
+        { agentKey: 'test', modelId: 'test', testCaseId: 'tc-1' },
+        { onReconnect, onPoll },
+      );
+
+      expect(onReconnect).toHaveBeenCalledWith('report-recover', expect.any(String));
+      expect(onPoll.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(result.reportId).toBe('report-recover');
+      expect(result.report.status).toBe('completed');
+      expect(result.report.passFailStatus).toBe('passed');
+    }, 30000);
+
+    it('should NOT poll if a server error event arrived before the stream dropped', async () => {
+      // Server explicitly told us this failed — polling would be wrong.
+      const sseStream = streamThatErrors(
+        [
+          { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-x' },
+          { type: 'error', error: 'Agent endpoint unreachable' },
+        ],
+        2,
+      );
+
+      global.fetch = jest.fn().mockResolvedValueOnce({ ok: true, body: sseStream });
+
+      const onReconnect = jest.fn();
+      await expect(
+        runServerEvaluation(
+          { agentKey: 'test', modelId: 'test', testCaseId: 'tc-1' },
+          { onReconnect },
+        ),
+      ).rejects.toThrow('Agent endpoint unreachable');
+      expect(onReconnect).not.toHaveBeenCalled();
+    });
+
+    it('should ignore heartbeat events when computing the result', async () => {
+      const mockStream = createMockSSEStream([
+        sseData({ type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-hb' }),
+        sseData({ type: 'heartbeat' }),
+        sseData({ type: 'step', stepIndex: 0, step: { type: 'action', content: 'x' } }),
+        sseData({ type: 'heartbeat' }),
+        sseData({ type: 'completed', reportId: 'report-hb', report: { ...mockReport, id: 'report-hb' } }),
+      ]);
+
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, body: mockStream });
+
+      const onStep = jest.fn();
+      const result = await runServerEvaluation(
+        { agentKey: 'test', modelId: 'test', testCaseId: 'tc-1' },
+        { onStep },
+      );
+
+      // Heartbeats should not show up as steps
+      expect(onStep).toHaveBeenCalledTimes(1);
+      expect(result.reportId).toBe('report-hb');
+    });
+
+    it('should poll when the stream ends without a completed event', async () => {
+      const sseStream = createMockSSEStream([
+        sseData({ type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-noend' }),
+        sseData({ type: 'step', stepIndex: 0, step: { type: 'action', content: 'x' } }),
+        // No completed event
+      ]);
+
+      global.fetch = jest.fn()
+        .mockResolvedValueOnce({ ok: true, body: sseStream })
+        .mockImplementation(() => Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            id: 'report-noend',
+            status: 'completed',
+            passFailStatus: 'failed',
+            metrics: { accuracy: 30 },
+            trajectory: [{ type: 'action' }],
+            llmJudgeReasoning: 'Incomplete on stream side',
+          }),
+        }));
+
+      const result = await runServerEvaluation(
+        { agentKey: 'test', modelId: 'test', testCaseId: 'tc-1' },
+      );
+      expect(result.reportId).toBe('report-noend');
+      expect(result.report.passFailStatus).toBe('failed');
+    });
+
+    it('should return cached completed result if stream errors AFTER completion', async () => {
+      // Edge case: server sent completed, then TCP RST before EOF.
+      // We must not throw — the result is valid.
+      const sseStream = streamThatErrors(
+        [
+          { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-late' },
+          { type: 'completed', reportId: 'report-late', report: { ...mockReport, id: 'report-late' } },
+        ],
+        2,
+      );
+
+      global.fetch = jest.fn().mockResolvedValueOnce({ ok: true, body: sseStream });
+
+      const result = await runServerEvaluation(
+        { agentKey: 'test', modelId: 'test', testCaseId: 'tc-1' },
+      );
+      expect(result.reportId).toBe('report-late');
+    });
+  });
 });

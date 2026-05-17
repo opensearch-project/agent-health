@@ -16,6 +16,8 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Agentic judge provider: evaluate trajectories using an agent with tool access (Claude Code or custom endpoint)
 - Shared `JudgeModelSelect` component: groups judge models by provider (Bedrock, Agentic, Claude Code, OpenAI-compatible, LiteLLM, Demo)
 - Informational banner in "Create Test Case" flow explaining required fields
+- SSE disconnect recovery for ad-hoc evaluations: server pre-persists a placeholder run and emits its `reportId` in the `started` event; clients fall back to polling `GET /api/storage/runs/:id` if the stream drops mid-evaluation. Applies to both CLI (`agent-health run`) and UI (`QuickRunModal`). The QuickRunModal now shows a "reconnecting…" hint while polling. ([#197](https://github.com/opensearch-project/agent-health/pull/197))
+- 15-second SSE heartbeat events to keep long-running evaluation connections alive through TCP idle timeouts.
 
 ### Changed
 - Rewrite First Run Experience as a narrative landing: promise-driven hero with two primary CTAs, four-step horizontal journey (Explore → Connect → Evaluate → Improve & scale), four outcome-framed value cards, and a subtle scale moment with Docker and CloudFormation install commands. Replaces the previous two-card "How it works" + "Getting Started" layout. Preserves all existing CTAs, install commands, optional coding agents banner, and `data-testid="first-run-experience"`.

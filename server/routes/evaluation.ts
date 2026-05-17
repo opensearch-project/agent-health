@@ -18,7 +18,7 @@ import { runSingleUseCase } from '@/services/benchmarkRunner';
 import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { debug } from '@/lib/debug';
-import type { BenchmarkRun, TestCase } from '@/types';
+import type { BenchmarkRun, TestCase, TestCaseRun } from '@/types';
 
 const router = Router();
 
@@ -186,23 +186,54 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
 
   const storage = getStorageModule();
 
-  // Pre-persist a placeholder run so the client can poll if SSE disconnects
+  // Pre-persist a placeholder run so the client can poll if SSE disconnects.
+  // We use the same field shape as `saveReportWithModule` (storage-layer names like
+  // agentId/traceId) so the placeholder is forward-compatible with the final update.
+  // This is also the shape that the listing pages and pollReportStatus expect.
   let preCreatedReportId: string | null = null;
   try {
     const placeholder = await storage.runs.create({
       testCaseId: testCase.id,
+      testCaseVersion: testCase.currentVersion,
+      // Both names so app-side and storage-side queries can find the record
+      agentKey: agent.key,
+      agentName: agent.name,
       agentId: agent.key,
+      agentEndpoint: agentEndpoint || agent.endpoint,
       modelId: modelId,
+      modelName: model.display_name || modelId,
+      evaluatorId,
       status: 'running',
-    } as any);
+      trajectory: [],
+      metrics: {},
+      llmJudgeReasoning: '',
+      timestamp: new Date().toISOString(),
+    } as Partial<TestCaseRun>);
     preCreatedReportId = placeholder.id;
     debug('EvalAPI', 'Pre-created placeholder run:', preCreatedReportId);
   } catch (e: any) {
-    debug('EvalAPI', 'Failed to pre-create placeholder (non-fatal):', e.message);
+    // Storage may not be configured — disconnect recovery will be unavailable
+    // but the evaluation can still proceed. Surface this clearly.
+    console.warn(
+      '[EvaluationAPI] Could not pre-create placeholder run — ' +
+      'SSE disconnect recovery will be unavailable for this request. ' +
+      `Reason: ${e.message}`
+    );
   }
 
   let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   let clientDisconnected = false;
+  let cleanupDone = false;
+
+  // Single cleanup path — idempotent so it's safe to call from any branch.
+  const cleanup = () => {
+    if (cleanupDone) return;
+    cleanupDone = true;
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+  };
 
   try {
     // Set up SSE streaming for progress updates
@@ -218,10 +249,11 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
       }
     }, 15000);
 
-    // Track client disconnect — but don't abort the evaluation
+    // Track client disconnect — but don't abort the evaluation.
+    // The server keeps running so the report still gets persisted.
     req.on('close', () => {
       clientDisconnected = true;
-      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      cleanup();
     });
 
     // Send started event with reportId for polling fallback
@@ -262,7 +294,7 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
       throw new Error('Report not found after save');
     }
 
-    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    cleanup();
 
     // Send completed event (only if client is still connected)
     if (!clientDisconnected && !res.writableEnded) {
@@ -284,12 +316,15 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
     }
   } catch (error: any) {
     console.error('[EvaluationAPI] Evaluation failed:', error.message);
-    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    cleanup();
 
-    // Update placeholder run with failed status
+    // Update placeholder run with failed status so the UI/polling can see it
     if (preCreatedReportId) {
       try {
-        await storage.runs.update(preCreatedReportId, { status: 'failed' } as any);
+        await storage.runs.update(preCreatedReportId, {
+          status: 'failed',
+          llmJudgeReasoning: `Evaluation error: ${error.message}`,
+        } as Partial<TestCaseRun>);
       } catch { /* best-effort */ }
     }
 

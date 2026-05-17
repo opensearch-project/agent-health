@@ -9,6 +9,7 @@ import {
   BenchmarkProgress,
   AgentConfig,
   TestCase,
+  TestCaseRun,
   EvaluationReport,
   RunConfigInput,
   RunPerformanceMetrics,
@@ -507,10 +508,13 @@ export async function runSingleUseCase(
     { registry: connectorRegistry, evaluatorId }
   );
 
-  // If a placeholder run was pre-created, update it instead of creating a new one
+  // If a placeholder run was pre-created, update it instead of creating a new one.
+  // We use the storage-layer field names (traceId, etc.) to match `saveReportWithModule`
+  // for consistency — the IStorageModule operations accept Partial<TestCaseRun> nominally
+  // but the codebase convention is to pass the storage-shaped doc directly.
   let savedReport: any;
   if (existingReportId) {
-    const updated = await storage.runs.update(existingReportId, {
+    const updates = {
       status: report.status,
       passFailStatus: report.passFailStatus,
       traceId: report.runId,
@@ -526,7 +530,8 @@ export async function runSingleUseCase(
       traceError: report.traceError,
       spans: report.spans,
       connectorProtocol: report.connectorProtocol,
-    } as any);
+    } as Partial<TestCaseRun>;
+    const updated = await storage.runs.update(existingReportId, updates);
     savedReport = { ...report, id: updated.id, timestamp: updated.timestamp };
   } else {
     savedReport = await saveReportWithModule(storage, report);
