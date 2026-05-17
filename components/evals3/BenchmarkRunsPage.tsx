@@ -30,6 +30,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { JudgeModelSelect } from '@/components/JudgeModelSelect';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
@@ -806,14 +807,10 @@ export const BenchmarkRunsPage2: React.FC = () => {
                 </div>
                 <div className="space-y-2">
                   <Label>Judge Model</Label>
-                  <Select value={runConfigValues.modelId} onValueChange={val => setRunConfigValues(prev => ({ ...prev, modelId: val }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(DEFAULT_CONFIG.models).map(([key, model]) => (
-                        <SelectItem key={key} value={key}>{model.display_name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <JudgeModelSelect
+                    value={runConfigValues.modelId}
+                    onValueChange={val => setRunConfigValues(prev => ({ ...prev, modelId: val }))}
+                  />
                 </div>
               </div>
               <div className="flex justify-end gap-2 pt-2">

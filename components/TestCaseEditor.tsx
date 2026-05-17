@@ -338,6 +338,20 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
           {editorMode === 'form' && (
           <ScrollArea className="h-[60vh] px-6 py-4">
             <div className="space-y-4">
+              {/* Info banner for new test cases */}
+              {!testCase && (
+                <div className="rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/30 p-3 text-xs text-muted-foreground space-y-1">
+                  <p className="font-medium text-foreground">Create a new test case</p>
+                  <p>A test case defines a scenario to evaluate your agent against. Provide:</p>
+                  <ul className="list-disc list-inside space-y-0.5 ml-1">
+                    <li><span className="font-medium">Name</span> — a short identifier for this scenario</li>
+                    <li><span className="font-medium">Initial Prompt</span> — the user query sent to the agent</li>
+                    <li><span className="font-medium">Expected Outcomes</span> — what the agent should accomplish (used by the judge to evaluate)</li>
+                  </ul>
+                  <p className="pt-1">Optionally add labels, description, and context data to provide the agent with additional information.</p>
+                </div>
+              )}
+
               {/* Required Fields */}
               <div className="space-y-3">
                 <div className="space-y-1">

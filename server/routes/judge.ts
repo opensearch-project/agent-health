@@ -14,6 +14,7 @@ import { evaluateTrajectory, parseBedrockError } from '@/server/services/bedrock
 import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/server/services/judgeService';
 import { evaluateWithLiteLLM, parseLiteLLMError } from '@/server/services/litellmJudgeService';
 import { evaluateWithClaudeCode, parseClaudeCodeError } from '@/server/services/claudeCodeJudgeService';
+import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
 import { loadConfigSync } from '@/lib/config/index';
 import serverConfig from '@/server/config';
 import { debug } from '@/lib/debug';
@@ -243,6 +244,20 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       return res.json(result);
     }
 
+    if (provider === 'agentic') {
+      debug('JudgeAPI', 'Agentic judge provider - running agent-based evaluation');
+      const judgeConfig = config.judge || {};
+      const backend = resolvedModelId === 'agentic-custom' ? 'custom' : 'claude-code';
+      const result = await evaluateWithAgenticJudge(
+        { trajectory, expectedOutcomes, expectedTrajectory, logs },
+        {
+          backend,
+          endpoint: judgeConfig.endpoint,
+        }
+      );
+      return res.json(result);
+    }
+
     if (provider === 'openai-compatible') {
       debug('JudgeAPI', 'OpenAI-compatible provider - calling endpoint');
       const result = await evaluateWithOpenAICompatible(
@@ -288,13 +303,15 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       }
     })();
 
-    const errorMessage = provider === 'claude-code'
-      ? parseClaudeCodeError(error)
-      : provider === 'litellm'
-        ? parseLiteLLMError(error)
-        : provider === 'openai-compatible'
-          ? parseOpenAICompatibleError(error)
-          : parseBedrockError(error);
+    const errorMessage = provider === 'agentic'
+      ? parseAgenticJudgeError(error)
+      : provider === 'claude-code'
+        ? parseClaudeCodeError(error)
+        : provider === 'litellm'
+          ? parseLiteLLMError(error)
+          : provider === 'openai-compatible'
+            ? parseOpenAICompatibleError(error)
+            : parseBedrockError(error);
 
     res.status(500).json({
       error: `Judge evaluation failed: ${errorMessage}`,

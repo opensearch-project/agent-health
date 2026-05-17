@@ -14,6 +14,7 @@ import { Progress } from '@/components/ui/progress';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { JudgeModelSelect } from '@/components/JudgeModelSelect';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -859,21 +860,10 @@ export const BenchmarksPage: React.FC = () => {
 
                 <div className="space-y-2">
                   <Label>Judge Model</Label>
-                  <Select
+                  <JudgeModelSelect
                     value={runConfigValues.modelId}
                     onValueChange={val => setRunConfigValues(prev => ({ ...prev, modelId: val }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(DEFAULT_CONFIG.models).map(([key, model]) => (
-                        <SelectItem key={key} value={key}>
-                          {model.display_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
                 </div>
               </div>
 

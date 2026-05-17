@@ -67,15 +67,13 @@ export const useSidebarCollapse = () => {
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Overview", tooltip: "Dashboard and quick stats", testId: "nav-overview" },
   { to: "/agent-traces", icon: Activity, label: "Agent Traces", tooltip: "View and debug agent executions", testId: "nav-agent-traces" },
+];
+
+const navItemsAfterEvaluation = [
   { to: "/coding-agents", icon: BarChart3, label: "AI Dev Tools", tooltip: "Claude Code, Kiro & Codex analytics", testId: "nav-coding-agents" },
   { to: "/assistant", icon: MessageSquare, label: "Assistant", tooltip: "AI assistant for help and analysis", testId: "nav-assistant" },
 ];
 
-const testingSubItems = [
-  { to: "/benchmarks", label: "Benchmarks", tooltip: "Define success criteria and scoring", testId: "nav-benchmarks" },
-  { to: "/test-cases", label: "Test Cases", tooltip: "Create and manage test inputs", testId: "nav-test-cases" },
-  { to: "/evaluators", label: "Evaluators", tooltip: "Manage evaluation criteria and scoring methods", testId: "nav-evaluators" },
-];
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
@@ -199,7 +197,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu className="space-y-1">
-                {navItems.filter(item => item.to !== '/coding-agents' || features.codingAgentAnalytics).map((item) => (
+                {navItems.map((item) => (
                   <SidebarMenuItem key={item.to}>
                     <SidebarMenuButton
                       asChild
@@ -281,6 +279,23 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+
+                {navItemsAfterEvaluation.filter(item => item.to !== '/coding-agents' || features.codingAgentAnalytics).map((item) => (
+                  <SidebarMenuItem key={item.to}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location.pathname === item.to}
+                      tooltip={isCollapsed ? item.label : undefined}
+                      data-testid={item.testId}
+                      className="h-9"
+                    >
+                      <Link to={item.to} className={isCollapsed ? 'justify-center' : ''}>
+                        <item.icon className="h-3.5 w-3.5" />
+                        {!isCollapsed && <span className="text-xs">{item.label}</span>}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
 
                 <SidebarMenuItem>
                   <SidebarMenuButton

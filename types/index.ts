@@ -12,7 +12,7 @@ export type Difficulty = 'Easy' | 'Medium' | 'Hard';
 export type DateFormatVariant = 'date' | 'datetime' | 'detailed';
 
 // Judge provider determines which backend service handles evaluation
-export type JudgeProvider = 'demo' | 'bedrock' | 'openai-compatible' | 'litellm' | 'claude-code';
+export type JudgeProvider = 'demo' | 'bedrock' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic';
 
 // ============ AI Assistant Types ============
 

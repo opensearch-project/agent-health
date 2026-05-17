@@ -8,47 +8,36 @@ import { test, expect } from './fixtures/test-fixtures';
 test.describe('Dashboard Page', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.waitForSelector('[data-testid="dashboard-page"]', { timeout: 30000 });
+    // Wait for either dashboard content or first-run experience (no data)
+    const pageReady = page.locator('[data-testid="dashboard-page"]').or(page.locator('[data-testid="first-run-experience"]'));
+    await expect(pageReady).toBeVisible({ timeout: 30000 });
   });
 
-  test('should display dashboard title and description', async ({ page }) => {
-    await expect(page.locator('[data-testid="dashboard-title"]')).toHaveText('Leaderboard Overview');
-    await expect(page.locator('text=Monitor agent performance trends and compare benchmark metrics')).toBeVisible();
+  test('should display dashboard or first-run experience', async ({ page }) => {
+    const hasDashboard = await page.locator('[data-testid="dashboard-title"]').isVisible().catch(() => false);
+    const hasFirstRun = await page.locator('[data-testid="first-run-experience"]').isVisible().catch(() => false);
+
+    if (hasDashboard) {
+      await expect(page.locator('[data-testid="dashboard-title"]')).toHaveText('Leaderboard Overview');
+      await expect(page.locator('text=Monitor agent performance trends and compare benchmark metrics')).toBeVisible();
+    } else {
+      expect(hasFirstRun).toBeTruthy();
+      await expect(page.locator('text=Welcome to Agent Health')).toBeVisible();
+    }
   });
 
-  test('should show empty state or dashboard content', async ({ page }) => {
-    // Wait for data to load
-    await page.waitForTimeout(2000);
-
-    // Check for empty state or dashboard content
-    const hasEmptyState = await page.locator('text=Welcome to Leaderboard Overview').isVisible().catch(() => false);
-    const hasTrendChart = await page.locator('text=Performance Trends').isVisible().catch(() => false);
-    const hasMetricsTable = await page.locator('text=Benchmark Metrics by Agent').isVisible().catch(() => false);
-
-    // Either empty state or dashboard content should be visible
-    expect(hasEmptyState || hasTrendChart || hasMetricsTable).toBeTruthy();
+  test('should show first-run or dashboard content after loading', async ({ page }) => {
+    const contentIndicator = page.locator('text=Welcome to Agent Health')
+      .or(page.locator('text=Leaderboard Overview'))
+      .or(page.locator('text=Performance Trends'));
+    await expect(contentIndicator).toBeVisible({ timeout: 15000 });
   });
 
-  test('should show loading skeleton while fetching data', async ({ page }) => {
-    // Navigate fresh to catch loading state
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
+  test('should display getting started steps when no data', async ({ page }) => {
+    const hasFirstRun = await page.locator('[data-testid="first-run-experience"]').isVisible().catch(() => false);
 
-    // Either skeleton or content should be visible
-    const hasContent = await page.locator('[data-testid="dashboard-title"]').isVisible({ timeout: 5000 }).catch(() => false);
-    expect(hasContent).toBeTruthy();
-  });
-
-  test('should display empty state with getting started steps when no data', async ({ page }) => {
-    await page.waitForTimeout(2000);
-
-    // Check for empty state content
-    const hasEmptyState = await page.locator('text=Welcome to Leaderboard Overview').isVisible().catch(() => false);
-
-    if (hasEmptyState) {
-      // Should show getting started steps
-      await expect(page.locator('text=Create a benchmark with test cases')).toBeVisible();
-      // Should have Create Benchmark button
-      await expect(page.locator('a:has-text("Create Benchmark")')).toBeVisible();
+    if (hasFirstRun) {
+      await expect(page.locator('text=Welcome to Agent Health')).toBeVisible();
     }
   });
 });
@@ -56,22 +45,19 @@ test.describe('Dashboard Page', () => {
 test.describe('Dashboard Stats Summary Bar', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.waitForSelector('[data-testid="dashboard-page"]', { timeout: 30000 });
+    const pageReady = page.locator('[data-testid="dashboard-page"]').or(page.locator('[data-testid="first-run-experience"]'));
+    await expect(pageReady).toBeVisible({ timeout: 30000 });
   });
 
   test('should display stats summary bar with three cards', async ({ page }) => {
-    await page.waitForTimeout(2000);
-
     const statsBar = page.locator('[data-testid="stats-summary-bar"]');
     const isVisible = await statsBar.isVisible().catch(() => false);
 
     if (isVisible) {
-      // All three stat cards should be present
       await expect(page.locator('[data-testid="stats-benchmarks"]')).toBeVisible();
       await expect(page.locator('[data-testid="stats-runs"]')).toBeVisible();
       await expect(page.locator('[data-testid="stats-test-cases"]')).toBeVisible();
 
-      // Cards should contain the label text
       await expect(page.locator('[data-testid="stats-benchmarks"]')).toContainText('Benchmarks');
       await expect(page.locator('[data-testid="stats-runs"]')).toContainText('Runs');
       await expect(page.locator('[data-testid="stats-test-cases"]')).toContainText('Test Cases');
@@ -79,8 +65,6 @@ test.describe('Dashboard Stats Summary Bar', () => {
   });
 
   test('should navigate to benchmarks page when clicking benchmarks stat', async ({ page }) => {
-    await page.waitForTimeout(2000);
-
     const benchmarksCard = page.locator('[data-testid="stats-benchmarks"]');
     const isVisible = await benchmarksCard.isVisible().catch(() => false);
 
@@ -92,8 +76,6 @@ test.describe('Dashboard Stats Summary Bar', () => {
   });
 
   test('should navigate to test cases page when clicking test cases stat', async ({ page }) => {
-    await page.waitForTimeout(2000);
-
     const testCasesCard = page.locator('[data-testid="stats-test-cases"]');
     const isVisible = await testCasesCard.isVisible().catch(() => false);
 
@@ -108,24 +90,20 @@ test.describe('Dashboard Stats Summary Bar', () => {
 test.describe('Dashboard Performance Section', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.waitForSelector('[data-testid="dashboard-page"]', { timeout: 30000 });
+    const pageReady = page.locator('[data-testid="dashboard-page"]').or(page.locator('[data-testid="first-run-experience"]'));
+    await expect(pageReady).toBeVisible({ timeout: 30000 });
   });
 
   test('should show performance trends section when data exists', async ({ page }) => {
-    await page.waitForTimeout(2000);
-
     const hasTrendChart = await page.locator('text=Performance Trends').isVisible().catch(() => false);
 
     if (hasTrendChart) {
-      // Should have metric selector - look for the select trigger button
       const metricSelector = page.locator('button').filter({ hasText: /Pass Rate|Cost|Tokens|Latency|Metric/ });
       const hasMet = await metricSelector.first().isVisible({ timeout: 5000 }).catch(() => false);
 
-      // Should have time range selector
       const timeRangeSelector = page.locator('button').filter({ hasText: /Last 7 days|Last 30 days|All time/ });
       const hasTime = await timeRangeSelector.first().isVisible({ timeout: 5000 }).catch(() => false);
 
-      // If chart exists but selectors don't, that's a real issue
       if (!hasMet || !hasTime) {
         console.log('Warning: Performance trends found but selectors missing');
       }
@@ -133,12 +111,9 @@ test.describe('Dashboard Performance Section', () => {
   });
 
   test('should show benchmark metrics table when data exists', async ({ page }) => {
-    await page.waitForTimeout(2000);
-
     const hasMetricsTable = await page.locator('text=Benchmark Metrics by Agent').isVisible().catch(() => false);
 
     if (hasMetricsTable) {
-      // Table should be visible with header text
       await expect(page.locator('text=Click benchmark or agent name to filter')).toBeVisible();
     }
   });

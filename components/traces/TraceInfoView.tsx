@@ -12,7 +12,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { Clock, Bot, MessageSquare, Wrench, XCircle, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { Clock, Bot, MessageSquare, Wrench, XCircle, ChevronDown, ChevronRight, X, ClipboardCheck } from 'lucide-react';
 import { Span } from '@/types';
 import { cn } from '@/lib/utils';
 import { getTheme } from '@/lib/theme';
@@ -98,6 +98,7 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
       if (category === 'agent') return name.includes('agent');
       if (category === 'llm') return name.includes('llm') || name.includes('bedrock') || name.includes('converse');
       if (category === 'tool') return name.includes('tool') || span.attributes?.['gen_ai.tool.name'];
+      if (category === 'eval') return span.category === 'EVAL';
       if (category === 'error') return span.status === 'ERROR';
       return false;
     });
@@ -153,6 +154,10 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
         return isDarkMode
           ? { backgroundColor: 'rgba(245, 158, 11, 0.15)', color: 'rgb(251, 191, 36)', border: '1px solid rgba(245, 158, 11, 0.4)' }
           : { backgroundColor: 'rgb(254, 243, 199)', color: 'rgb(146, 64, 14)', border: '1px solid rgb(252, 211, 77)' };
+      case 'eval':
+        return isDarkMode
+          ? { backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'rgb(110, 231, 183)', border: '1px solid rgba(16, 185, 129, 0.4)' }
+          : { backgroundColor: 'rgb(209, 250, 229)', color: 'rgb(6, 95, 70)', border: '1px solid rgb(110, 231, 183)' };
       case 'error':
         return isDarkMode
           ? { backgroundColor: 'rgba(239, 68, 68, 0.15)', color: 'rgb(248, 113, 113)', border: '1px solid rgba(239, 68, 68, 0.4)' }
@@ -173,6 +178,8 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
         return 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-500/10 dark:text-purple-300 dark:border-purple-500/30';
       case 'tool':
         return 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30';
+      case 'eval':
+        return 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-500/10 dark:text-emerald-300 dark:border-emerald-500/30';
       case 'error':
         return 'bg-red-100 text-red-800 border-red-300 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/30';
       default:
@@ -368,6 +375,27 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
               <span className="font-normal">Tool Calls</span>
               <span className="text-[10px] opacity-70 ml-auto">{formatDuration(spanStats.byCategory.tool.duration)}</span>
               {expandedSummary === 'tool' ? (
+                <ChevronDown size={11} />
+              ) : (
+                <ChevronRight size={11} />
+              )}
+            </button>
+          )}
+          {spanStats.byCategory.eval?.count > 0 && (
+            <button
+              onClick={() => handleSummaryClick('eval')}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border-2 transition-all cursor-pointer',
+                expandedSummary === 'eval'
+                  ? 'bg-emerald-100 text-emerald-900 border-emerald-400 dark:bg-emerald-500/20 dark:text-emerald-200 dark:border-emerald-500/50'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:border-emerald-500/30 hover:bg-emerald-100 hover:border-emerald-400 hover:shadow-md dark:hover:bg-emerald-500/20 dark:hover:border-emerald-500/50'
+              )}
+            >
+              <ClipboardCheck size={11} className="flex-shrink-0" />
+              <span className="font-medium">{spanStats.byCategory.eval.count}</span>
+              <span className="font-normal">Eval</span>
+              <span className="text-[10px] opacity-70 ml-auto">{formatDuration(spanStats.byCategory.eval.duration)}</span>
+              {expandedSummary === 'eval' ? (
                 <ChevronDown size={11} />
               ) : (
                 <ChevronRight size={11} />

@@ -109,7 +109,7 @@ export const EvalRunsPage: React.FC = () => {
   // Filters
   const [search, setSearch] = useState('');
   const [timeRange, setTimeRange] = useState<TimeRange>('30d');
-  const [selectedAgent, setSelectedAgent] = useState(() => DEFAULT_CONFIG.agents.find(a => a.enabled !== false)?.key || 'all');
+  const [selectedAgent, setSelectedAgent] = useState('all');
 
   // View
   const [viewMode, setViewMode] = useState<ViewMode>('flat');

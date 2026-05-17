@@ -5,34 +5,158 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Zap, Activity, Gauge, TrendingUp, ArrowRight, Server, Database, Copy, Check, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
+import {
+  Zap,
+  Server,
+  Compass,
+  Plug,
+  Gauge,
+  TrendingUp,
+  Eye,
+  Ruler,
+  Bug,
+  LineChart,
+  ArrowRight,
+  Copy,
+  Check,
+  Terminal,
+  Cloud,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 import { loadSampleData } from '@/config/sampleData';
-import { CodingAgentsBanner } from './CodingAgentsBanner';
-
+import { cn } from '@/lib/utils';
 /**
- * First Run Experience component
+ * First Run Experience (Overview landing page when no data is configured).
  *
- * Displayed when users have no configured storage cluster.
- * Progressive onboarding flow:
- * 1. Explore sample data (primary CTA - no setup needed)
- * 2. Connect your agent
- * 3. Enable trace collection (Docker / AWS)
- * 4. Persist evaluations (OpenSearch storage)
+ * Narrative-first surface for users who do not yet understand agent
+ * observability. Structure:
+ *  1. Hero — promise + two primary CTAs.
+ *  2. Journey — Explore → Connect → Evaluate → Improve & Scale.
+ *  3. Value — four outcome-framed statements.
+ *  4. Scale moment — subtle path to self-hosted / managed deployment.
  */
 interface FirstRunExperienceProps {
+  /** Conditionally render the "Also available: AI Dev Tools" footer strip. */
   showCodingAgentsBanner?: boolean;
 }
 
-export const FirstRunExperience: React.FC<FirstRunExperienceProps> = ({ showCodingAgentsBanner }) => {
+// -----------------------------------------------------------------------------
+// Command constants (preserved verbatim from previous FRE implementation)
+// -----------------------------------------------------------------------------
+
+const DOCKER_INSTALL_CMD =
+  'curl -fsSL https://raw.githubusercontent.com/opensearch-project/agent-health/main/scripts/install.sh | bash';
+
+const CFN_CREATE_STACK_CMD =
+  'aws cloudformation create-stack --stack-name AgentHealthObservability --template-body file://deployment/cloudformation/agent-health-observability.yaml --capabilities CAPABILITY_NAMED_IAM';
+
+const CFN_CONFIGURE_CMD =
+  'npx @opensearch-project/agent-health configure --from-stack AgentHealthObservability';
+
+// -----------------------------------------------------------------------------
+// Content (single source of truth for copy)
+// -----------------------------------------------------------------------------
+
+const JOURNEY_STEPS = [
+  {
+    icon: Compass,
+    title: 'Explore',
+    copy: 'See a working agent in action, with real traces and evaluations. No setup.',
+  },
+  {
+    icon: Plug,
+    title: 'Connect',
+    copy: 'Point Agent Health at your agent. Runs locally, no infrastructure needed.',
+  },
+  {
+    icon: Gauge,
+    title: 'Evaluate',
+    copy: 'Run it against benchmarks. An AI judge scores accuracy, cost, and reasoning.',
+  },
+  {
+    icon: TrendingUp,
+    title: 'Improve & scale',
+    copy: 'Send telemetry, catch regressions, and persist history as your agent grows.',
+  },
+] as const;
+
+const VALUE_CARDS = [
+  {
+    icon: Eye,
+    title: 'Understand what your agent is doing',
+    copy: 'Step-by-step execution shows every tool call, model response, and decision.',
+  },
+  {
+    icon: Ruler,
+    title: 'Measure accuracy and cost',
+    copy: 'Built-in evaluators score quality against expected outcomes and track token cost per run.',
+  },
+  {
+    icon: Bug,
+    title: 'Debug failures with real data',
+    copy: 'Jump from a failed evaluation straight into the exact run that produced it.',
+  },
+  {
+    icon: LineChart,
+    title: 'Improve performance over time',
+    copy: 'Compare runs across versions to see what got better, what regressed, and why.',
+  },
+] as const;
+
+// -----------------------------------------------------------------------------
+// Copyable code block
+// -----------------------------------------------------------------------------
+
+interface CopyableCommandProps {
+  command: string;
+  label: string;
+  copiedId: string | null;
+  onCopy: (text: string, id: string) => void;
+  id: string;
+}
+
+const CopyableCommand: React.FC<CopyableCommandProps> = ({
+  command,
+  label,
+  copiedId,
+  onCopy,
+  id,
+}) => {
+  const isCopied = copiedId === id;
+  return (
+    <div className="relative">
+      <div className="bg-secondary rounded-lg p-3 pr-10 font-mono text-xs break-all">
+        {command}
+      </div>
+      <button
+        type="button"
+        onClick={() => onCopy(command, id)}
+        className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
+        aria-label={label}
+      >
+        {isCopied ? (
+          <Check className="h-3.5 w-3.5 text-green-500" />
+        ) : (
+          <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+        )}
+      </button>
+    </div>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// Main component
+// -----------------------------------------------------------------------------
+
+export const FirstRunExperience: React.FC<FirstRunExperienceProps> = ({
+  showCodingAgentsBanner,
+}) => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
-  const [isStep3Expanded, setIsStep3Expanded] = useState(false);
-  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const [sampleDataError, setSampleDataError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Clean up timeout on unmount
   useEffect(() => {
     return () => {
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
@@ -41,21 +165,17 @@ export const FirstRunExperience: React.FC<FirstRunExperienceProps> = ({ showCodi
 
   const handleViewSampleData = async () => {
     setIsLoading(true);
+    setSampleDataError(null);
     try {
       await loadSampleData();
-
-      // Navigate to dashboard (which will now show data)
-      // The page will reload and ensure data state is re-evaluated
       navigate('/agent-traces');
-
-      // Force a page reload to ensure data state is re-evaluated
+      // Force a full reload so data state is re-evaluated against sample data.
       window.location.reload();
     } catch (error) {
       console.error('[FirstRunExperience] Failed to load sample data:', error);
-
-      // Show error message using alert (simple fallback)
-      alert('Failed to load sample data. Please try again or contact support if the issue persists.');
-
+      setSampleDataError(
+        'Failed to load sample data. Please try again or contact support if the issue persists.',
+      );
       setIsLoading(false);
     }
   };
@@ -63,396 +183,248 @@ export const FirstRunExperience: React.FC<FirstRunExperienceProps> = ({ showCodi
   const handleCopy = async (text: string, id: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedCommand(id);
+      setCopiedId(id);
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopiedCommand(null), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      // Fallback for environments where clipboard API isn't available
+      // Leave the command visible and selectable on clipboard API failure.
       console.warn('[FirstRunExperience] Clipboard API not available');
     }
   };
 
-  const dockerCommand = 'curl -fsSL https://raw.githubusercontent.com/opensearch-project/agent-health/main/scripts/install.sh | bash';
-  const aiPrompt = 'Clone opensearch-project/agent-health, run docker compose up -d, copy .env.docker to .env, then run npx @opensearch-project/agent-health';
-  const cfnCliCommand = 'aws cloudformation create-stack --stack-name AgentHealthObservability --template-body file://deployment/cloudformation/agent-health-observability.yaml --capabilities CAPABILITY_NAMED_IAM';
-
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-16" data-testid="first-run-experience">
-      {/* Hero Section */}
-      <div className="text-center space-y-6">
-        <div className="space-y-4">
-          <h1 className="text-4xl font-bold tracking-tight">
-            Welcome to Agent Health
-          </h1>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Explore sample benchmarks, connect your agent, and set up observability — at your own pace.
+    <div
+      className="p-6 max-w-6xl mx-auto space-y-14"
+      data-testid="first-run-experience"
+    >
+      {/* ================================================================== */}
+      {/* HERO                                                                */}
+      {/* ================================================================== */}
+      <section className="text-center space-y-5 pt-2">
+        <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-[1.1] max-w-3xl mx-auto">
+          Know if your agent is actually working.
+        </h1>
+        <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+          Agents are non-deterministic. See, measure, and improve them locally in under a minute — no setup required.
+        </p>
+
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          <Button
+            size="lg"
+            onClick={handleViewSampleData}
+            disabled={isLoading}
+            aria-busy={isLoading}
+            className="w-full sm:w-auto bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
+          >
+            <Zap className="mr-1 h-5 w-5" />
+            {isLoading ? 'Loading…' : 'Explore sample data'}
+          </Button>
+          <Button size="lg" variant="outline" asChild className="w-full sm:w-auto">
+            <Link to="/settings">
+              <Server className="mr-1 h-5 w-5" />
+              Connect your agent
+            </Link>
+          </Button>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            document
+              .getElementById('self-host')
+              ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+          className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Terminal className="h-3.5 w-3.5" />
+          <span>When ready — self-host with Docker or manage in AWS</span>
+          <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+        </button>
+
+        {sampleDataError && (
+          <p
+            role="alert"
+            className="text-sm text-destructive max-w-md mx-auto"
+          >
+            {sampleDataError}
           </p>
-        </div>
+        )}
+      </section>
 
-        <div className="pt-2 space-y-4">
-          <div className="flex items-center justify-center gap-3 flex-wrap">
-            <Button
-              size="lg"
-              onClick={handleViewSampleData}
-              disabled={isLoading}
-              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
-            >
-              <Zap className="mr-2 h-5 w-5" />
-              {isLoading ? 'Loading...' : 'Explore Sample Data'}
-            </Button>
-
-            <Button
-              size="lg"
-              variant="outline"
-              asChild
-            >
-              <Link to="/settings">
-                <Server className="mr-2 h-5 w-5" />
-                Connect Your Agent
-              </Link>
-            </Button>
-
-            <Button
-              size="lg"
-              variant="outline"
-              className="text-muted-foreground"
-              onClick={() => {
-                setIsStep3Expanded(true);
-                setTimeout(() => {
-                  document.getElementById('step-3-docker')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }, 100);
-              }}
-            >
-              <Terminal className="mr-2 h-5 w-5" />
-              Docker Compose
-            </Button>
-
-            <Button
-              size="lg"
-              variant="outline"
-              className="text-muted-foreground"
-              onClick={() => {
-                setIsStep3Expanded(true);
-                setTimeout(() => {
-                  document.getElementById('step-3-aws')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }, 100);
-              }}
-            >
-              <Database className="mr-2 h-5 w-5" />
-              AWS CloudFormation
-            </Button>
+      {/* ================================================================== */}
+      {/* ALSO AVAILABLE                                                      */}
+      {/* ================================================================== */}
+      {showCodingAgentsBanner && (
+        <Link
+          to="/coding-agents"
+          className="group flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/40 px-5 py-3 text-sm hover:border-purple-500/40 hover:bg-background/60 transition-colors"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground truncate">
+              <span className="font-medium text-foreground">Also available:</span>{' '}
+              AI Dev Tools analytics for Claude Code, Kiro, and Codex.
+            </span>
           </div>
+          <span className="inline-flex items-center gap-1 text-xs text-purple-400 group-hover:text-purple-300 shrink-0">
+            View analytics
+            <ArrowRight className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform" />
+          </span>
+        </Link>
+      )}
 
-          <p className="text-sm text-muted-foreground">No setup required — explore pre-loaded benchmarks, traces, and evaluations.</p>
-
-          {showCodingAgentsBanner && (
-            <div className="max-w-2xl mx-auto pt-2">
-              <CodingAgentsBanner />
-            </div>
-          )}
+      {/* ================================================================== */}
+      {/* JOURNEY                                                             */}
+      {/* ================================================================== */}
+      <section aria-labelledby="journey-heading" className="space-y-6">
+        <div className="text-center">
+          <h2 id="journey-heading" className="text-2xl font-semibold tracking-tight">
+            From zero to trusted agent, in four steps.
+          </h2>
         </div>
-      </div>
 
-      {/* Two-Card Layout */}
-      <div className="grid gap-8 lg:grid-cols-2">
-        {/* Left Card: Workflow */}
-        <Card>
-          <CardContent className="pt-6 space-y-6">
-            <div className="space-y-2">
-              <h2 className="text-xl font-semibold">How it works</h2>
-              <p className="text-sm text-muted-foreground">
-                A continuous cycle that drives measurable improvement:
-              </p>
-            </div>
-
-            {/* Workflow Icons */}
-            <div className="relative pb-6">
-              <div className="flex items-center justify-center gap-2 py-2">
-                <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                  <Activity className="h-5 w-5 text-blue-500" />
-                </div>
-                <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-                  <Gauge className="h-5 w-5 text-purple-500" />
-                </div>
-                <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                <div className="w-10 h-10 rounded-full bg-violet-500/20 flex items-center justify-center">
-                  <TrendingUp className="h-5 w-5 text-violet-500" />
-                </div>
-              </div>
-
-              {/* U-shaped return arrow underneath - spans from first to last circle center */}
-              <svg
-                className="absolute left-1/2 -translate-x-1/2 bottom-0"
-                width="184"
-                height="32"
-                viewBox="0 0 184 32"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 lg:gap-0 relative">
+          {JOURNEY_STEPS.map((step, index) => {
+            const Icon = step.icon;
+            const isLast = index === JOURNEY_STEPS.length - 1;
+            return (
+              <div
+                key={step.title}
+                className={cn(
+                  'relative flex flex-col gap-3 px-4 lg:px-5',
+                  // Vertical rail on mobile (left-border), horizontal connector on desktop.
+                  'lg:border-l-0 border-l border-dashed border-border pl-6 lg:pl-5 ml-4 lg:ml-0',
+                )}
               >
-                <path
-                  d="M 164 4 L 164 22 Q 164 26 160 26 L 24 26 Q 20 26 20 22 L 20 4"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  fill="none"
-                  className="text-muted-foreground/40"
-                  strokeDasharray="3 3"
-                />
-                <path
-                  d="M 17 8 L 20 4 L 23 8"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  fill="none"
-                  className="text-muted-foreground/40"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </div>
-
-            {/* Workflow Details */}
-            <div className="space-y-5">
-              <Link to="/agent-traces" className="flex items-start gap-3 group hover:bg-accent/50 rounded-lg p-2 -m-2 transition-colors">
-                <Activity className="h-5 w-5 text-blue-500 mt-0.5 flex-shrink-0" />
-                <div className="space-y-1">
-                  <h3 className="text-sm font-semibold group-hover:text-primary">Trace</h3>
-                  <p className="text-sm text-muted-foreground">
-                    See exactly what your agent did.
-                  </p>
-                </div>
-              </Link>
-
-              <Link to="/benchmarks" className="flex items-start gap-3 group hover:bg-accent/50 rounded-lg p-2 -m-2 transition-colors">
-                <Gauge className="h-5 w-5 text-purple-500 mt-0.5 flex-shrink-0" />
-                <div className="space-y-1">
-                  <h3 className="text-sm font-semibold group-hover:text-primary">Evaluate</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Benchmark and measure quality before production.
-                  </p>
-                </div>
-              </Link>
-
-              <Link to="/runs/demo-report-001?tab=judge" className="flex items-start gap-3 group hover:bg-accent/50 rounded-lg p-2 -m-2 transition-colors">
-                <TrendingUp className="h-5 w-5 text-violet-500 mt-0.5 flex-shrink-0" />
-                <div className="space-y-1">
-                  <h3 className="text-sm font-semibold group-hover:text-primary">Improve</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Make informed decisions with recorded history.
-                  </p>
-                </div>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Right Card: Getting Started Steps */}
-        <Card>
-          <CardContent className="pt-6 space-y-6">
-            <div className="space-y-2">
-              <h2 className="text-xl font-semibold">Getting Started</h2>
-              <p className="text-sm text-muted-foreground">
-                Go at your own pace — start exploring, then connect when ready.
-              </p>
-            </div>
-
-            <div className="space-y-5">
-              {/* Step 1: Explore Sample Data */}
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-sm font-semibold text-blue-500">1</span>
-                </div>
-                <div className="space-y-2 flex-1">
-                  <h3 className="text-sm font-semibold">Explore Sample Data</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Pre-loaded benchmarks, traces, and evaluations — no setup needed.
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleViewSampleData}
-                    disabled={isLoading}
-                    className="text-blue-500 border-blue-500/30 hover:bg-blue-500/10"
-                  >
-                    {isLoading ? 'Loading...' : 'Explore'}
-                    {!isLoading && <ArrowRight className="ml-1 h-3.5 w-3.5" />}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Step 2: Connect Your Agent */}
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-sm font-semibold text-purple-500">2</span>
-                </div>
-                <div className="space-y-2 flex-1">
-                  <h3 className="text-sm font-semibold">Connect Your Agent</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Configure your agent endpoint and connector type to run your own evaluations.
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    asChild
-                    className="text-purple-500 border-purple-500/30 hover:bg-purple-500/10"
-                  >
-                    <Link to="/settings">
-                      Configure
-                      <ArrowRight className="ml-1 h-3.5 w-3.5" />
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-
-              {/* Step 3: Enable Trace Collection */}
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-violet-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-sm font-semibold text-violet-500">3</span>
-                </div>
-                <div className="space-y-2 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold">Enable Trace Collection</h3>
-                    <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">optional</span>
+                {/* Icon + number */}
+                <div className="flex items-center gap-3">
+                  <div className="relative w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+                    <Icon className="h-5 w-5" />
+                    <span className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-background border border-border text-[11px] font-semibold flex items-center justify-center text-muted-foreground">
+                      {index + 1}
+                    </span>
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    Set up an observability pipeline to collect OpenTelemetry traces from your agents.
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setIsStep3Expanded(!isStep3Expanded)}
-                    className="text-violet-500 border-violet-500/30 hover:bg-violet-500/10"
-                  >
-                    {isStep3Expanded ? 'Hide options' : 'View options'}
-                    {isStep3Expanded
-                      ? <ChevronUp className="ml-1 h-3.5 w-3.5" />
-                      : <ChevronDown className="ml-1 h-3.5 w-3.5" />
-                    }
-                  </Button>
-
-                  {/* Expandable deployment options */}
-                  {isStep3Expanded && (
-                    <div className="mt-3 space-y-4">
-                      {/* Docker option */}
-                      <div id="step-3-docker" className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Terminal className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Self-hosted (Docker)</span>
-                        </div>
-                        <div className="relative">
-                          <div className="bg-secondary rounded-lg p-3 pr-10 font-mono text-xs break-all">
-                            {dockerCommand}
-                          </div>
-                          <button
-                            onClick={() => handleCopy(dockerCommand, 'docker')}
-                            className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
-                            type="button"
-                            aria-label="Copy command"
-                          >
-                            {copiedCommand === 'docker'
-                              ? <Check className="h-3.5 w-3.5 text-green-500" />
-                              : <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                            }
-                          </button>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground">Or paste this into your AI coding tool:</p>
-                          <div className="relative">
-                            <div className="bg-secondary rounded-lg p-3 pr-10 font-mono text-xs italic">
-                              &ldquo;{aiPrompt}&rdquo;
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleCopy(aiPrompt, 'ai')}
-                              className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
-                              aria-label="Copy prompt"
-                            >
-                              {copiedCommand === 'ai'
-                                ? <Check className="h-3.5 w-3.5 text-green-500" />
-                                : <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                              }
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* AWS option */}
-                      <div id="step-3-aws" className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Database className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AWS Managed (CloudFormation)</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">Deploy via CLI:</p>
-                        <div className="relative">
-                          <div className="bg-secondary rounded-lg p-3 pr-10 font-mono text-xs">
-                            {cfnCliCommand}
-                          </div>
-                          <button
-                            onClick={() => handleCopy(cfnCliCommand, 'cfn-cli')}
-                            className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
-                            type="button"
-                            aria-label="Copy command"
-                          >
-                            {copiedCommand === 'cfn-cli'
-                              ? <Check className="h-3.5 w-3.5 text-green-500" />
-                              : <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                            }
-                          </button>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Then auto-configure Agent Health:
-                        </p>
-                        <div className="relative">
-                          <div className="bg-secondary rounded-lg p-3 pr-10 font-mono text-xs">
-                            npx @opensearch-project/agent-health configure --from-stack AgentHealthObservability
-                          </div>
-                          <button
-                            onClick={() => handleCopy('npx @opensearch-project/agent-health configure --from-stack AgentHealthObservability', 'cfn')}
-                            className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-muted transition-colors"
-                            type="button"
-                            aria-label="Copy command"
-                          >
-                            {copiedCommand === 'cfn'
-                              ? <Check className="h-3.5 w-3.5 text-green-500" />
-                              : <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                            }
-                          </button>
-                        </div>
-                      </div>
+                  {/* Horizontal connector (desktop only) */}
+                  {!isLast && (
+                    <div
+                      aria-hidden
+                      className="hidden lg:flex flex-1 items-center gap-1"
+                    >
+                      <div className="flex-1 h-px bg-gradient-to-r from-purple-500/40 to-transparent" />
+                      <ArrowRight className="h-3.5 w-3.5 text-purple-500/60 shrink-0" />
                     </div>
                   )}
                 </div>
-              </div>
 
-              {/* Step 4: Persist Evaluations */}
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-sm font-semibold text-green-500">4</span>
-                </div>
-                <div className="space-y-2 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold">Persist Evaluations</h3>
-                    <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">optional</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Store evaluation results in OpenSearch for history, trends, and team collaboration.
+                <div className="space-y-1">
+                  <h3 className="text-base font-semibold">{step.title}</h3>
+                  <p className="text-sm text-muted-foreground leading-snug">
+                    {step.copy}
                   </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    asChild
-                    className="text-green-500 border-green-500/30 hover:bg-green-500/10"
-                  >
-                    <Link to="/settings#storage">
-                      Configure
-                      <ArrowRight className="ml-1 h-3.5 w-3.5" />
-                    </Link>
-                  </Button>
                 </div>
               </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ================================================================== */}
+      {/* VALUE                                                               */}
+      {/* ================================================================== */}
+      <section aria-labelledby="value-heading" className="space-y-6">
+        <div className="text-center">
+          <h2 id="value-heading" className="text-2xl font-semibold tracking-tight">
+            What you get, out of the box.
+          </h2>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {VALUE_CARDS.map(({ icon: Icon, title, copy }) => (
+            <div
+              key={title}
+              className="p-5 rounded-xl border border-border bg-card/50 hover:border-purple-500/40 hover:-translate-y-0.5 transition-all"
+            >
+              <div className="w-9 h-9 rounded-lg bg-purple-500/10 text-purple-400 flex items-center justify-center mb-3">
+                <Icon className="h-[18px] w-[18px]" />
+              </div>
+              <h3 className="text-sm font-semibold mb-1.5 leading-snug">
+                {title}
+              </h3>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {copy}
+              </p>
             </div>
-          </CardContent>
-        </Card>
-      </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ================================================================== */}
+      {/* SCALE MOMENT                                                        */}
+      {/* ================================================================== */}
+      <section
+        id="self-host"
+        aria-labelledby="scale-heading"
+        className="relative rounded-2xl border border-border p-6 sm:p-8 overflow-hidden bg-gradient-to-br from-purple-500/[0.06] via-transparent to-blue-500/[0.04] scroll-mt-24"
+      >
+        <h2 id="scale-heading" className="text-xl font-semibold tracking-tight mb-2">
+          When your agent graduates from prototype.
+        </h2>
+        <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
+          Local is great for testing. Production traffic is a different beast. When the data gets
+          big — thousands of runs, months of history, cross-team comparisons — Agent Health scales
+          with you. Persist evaluations, stream high-volume telemetry, and keep a long-term record
+          of how your agent is evolving.
+        </p>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          {/* Self-hosted */}
+          <div className="rounded-xl border border-border/60 bg-background/40 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Terminal className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Self-hosted (Docker)
+              </span>
+            </div>
+            <CopyableCommand
+              command={DOCKER_INSTALL_CMD}
+              label="Copy Docker install command"
+              id="docker"
+              copiedId={copiedId}
+              onCopy={handleCopy}
+            />
+            <p className="text-xs text-muted-foreground">
+              Clones the repo, brings up the stack, and launches Agent Health locally.
+            </p>
+          </div>
+
+          {/* Managed */}
+          <div className="rounded-xl border border-border/60 bg-background/40 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Cloud className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Managed (CloudFormation)
+              </span>
+            </div>
+            <CopyableCommand
+              command={CFN_CREATE_STACK_CMD}
+              label="Copy CloudFormation create-stack command"
+              id="cfn-create"
+              copiedId={copiedId}
+              onCopy={handleCopy}
+            />
+            <CopyableCommand
+              command={CFN_CONFIGURE_CMD}
+              label="Copy Agent Health configure command"
+              id="cfn-configure"
+              copiedId={copiedId}
+              onCopy={handleCopy}
+            />
+            <p className="text-xs text-muted-foreground">
+              Provisions observability storage, then auto-configures Agent Health.
+            </p>
+          </div>
+        </div>
+      </section>
     </div>
   );
 };

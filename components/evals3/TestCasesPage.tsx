@@ -336,7 +336,7 @@ export const TestCasesPage4: React.FC = () => {
   };
 
   return (
-    <div className="p-4 h-full flex flex-col">
+    <div className="p-4 h-full flex flex-col" data-testid="test-cases-page">
       <Breadcrumbs
         items={[
           { label: 'Evaluations', href: '/evaluations/benchmarks' },
@@ -386,7 +386,7 @@ export const TestCasesPage4: React.FC = () => {
       />
       {/* ── Header ────────────────────────────────────── */}
       <div className="mb-4">
-        <h2 className="text-xl font-bold">Test Cases</h2>
+        <h2 className="text-xl font-bold" data-testid="test-cases-title">Test Cases</h2>
         <p className="text-[11px] text-muted-foreground mt-0.5">{testCases.length} test cases · Define prompts and expected outcomes</p>
       </div>
 

@@ -51,15 +51,15 @@ export async function navigateToPage(
 ): Promise<void> {
   const sidebarLinks: Record<string, string> = {
     'Overview': 'nav-overview',
-    'Test Cases': 'nav-test-cases',
-    'Benchmarks': 'nav-benchmarks',
+    'Test Cases': 'nav-evals3-test-cases',
+    'Benchmarks': 'nav-evals3-benchmarks',
     'Agent Traces': 'nav-agent-traces',
     'Settings': 'nav-settings',
   };
 
   const testId = sidebarLinks[pageName];
   await page.click(`[data-testid="${testId}"]`);
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
 }
 
 // Helper to clear test data

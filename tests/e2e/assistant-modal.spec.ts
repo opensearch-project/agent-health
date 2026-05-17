@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Assistant Modal', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
   });
 
   test('"?" button renders on the dashboard page', async ({ page }) => {
@@ -25,14 +25,14 @@ test.describe('Assistant Modal', () => {
 
   test('"?" button renders on benchmarks page', async ({ page }) => {
     await page.goto('/benchmarks');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     const trigger = page.locator('[data-testid="assistant-modal-trigger"]');
     await expect(trigger).toBeVisible({ timeout: 10000 });
   });
 
   test('"?" button renders on settings page', async ({ page }) => {
     await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     const trigger = page.locator('[data-testid="assistant-modal-trigger"]');
     await expect(trigger).toBeVisible({ timeout: 10000 });
   });
@@ -80,7 +80,7 @@ test.describe('Assistant Modal', () => {
 
     // Navigate to another page
     await page.goto('/benchmarks');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
     // The trigger should still be visible
     await expect(page.locator('[data-testid="assistant-modal-trigger"]')).toBeVisible({ timeout: 10000 });

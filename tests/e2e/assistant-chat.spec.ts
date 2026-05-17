@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Assistant Chat Page', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/assistant');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="assistant-chat-page"]', { timeout: 30000 });
   });
 
   test('renders the full-page chat interface', async ({ page }) => {
@@ -28,10 +28,10 @@ test.describe('Assistant Chat Page', () => {
   });
 
   test('shows suggested prompts', async ({ page }) => {
-    await expect(page.locator('text=Benchmark Results')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('text=Write a Test Case')).toBeVisible();
-    await expect(page.locator('text=Analyze Traces')).toBeVisible();
-    await expect(page.locator('text=Improve Agent')).toBeVisible();
+    await expect(page.getByText('Benchmark Results', { exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Write a Test Case', { exact: true })).toBeVisible();
+    await expect(page.getByText('Analyze Traces', { exact: true })).toBeVisible();
+    await expect(page.getByText('Improve Agent', { exact: true })).toBeVisible();
   });
 
   test('has input field and send button', async ({ page }) => {
@@ -45,7 +45,7 @@ test.describe('Assistant Chat Page', () => {
   test('is accessible via sidebar navigation', async ({ page }) => {
     // Go to home first
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
     // Click the Assistant nav item
     const navLink = page.locator('[data-testid="nav-assistant"]');
