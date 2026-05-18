@@ -1428,6 +1428,38 @@ describe('ApiClient', () => {
       expect(result).toBeDefined();
       expect(result!.status).toBe('failed');
     });
+
+    it('should call onPoll callback on every poll cycle while waiting', async () => {
+      let callCount = 0;
+      mockFetch.mockImplementation(() => {
+        callCount++;
+        const status = callCount >= 3 ? 'completed' : 'running';
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            id: 'report-poll',
+            status,
+            passFailStatus: status === 'completed' ? 'passed' : undefined,
+            metrics: { accuracy: 90 },
+            trajectory: [],
+            llmJudgeReasoning: status === 'completed' ? 'done' : undefined,
+          }),
+        });
+      });
+
+      const observed: string[] = [];
+      const result = await client.pollReportStatus('report-poll', 30000, (r) => {
+        observed.push(r.status as string);
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.status).toBe('completed');
+      // Should have observed the running→completed transition
+      expect(observed.length).toBeGreaterThanOrEqual(2);
+      expect(observed[0]).toBe('running');
+      expect(observed[observed.length - 1]).toBe('completed');
+    }, 30000);
   });
 
   describe('runEvaluation - SSE disconnect recovery', () => {
@@ -1561,6 +1593,90 @@ describe('ApiClient', () => {
       const result = await client.runEvaluation('tc-1', 'observio', 'claude-sonnet-4');
       expect(result.id).toBe('report-noend-1');
       expect(result.status).toBe('completed');
+    });
+
+    it('should emit synthetic reconnecting + polling events through onProgress on disconnect', async () => {
+      // SSE drops after 2 events; client should emit:
+      //   1. The original started/step events
+      //   2. A synthetic { type: 'reconnecting', reportId } once polling starts
+      //   3. One or more { type: 'polling', reportId, status } events per poll cycle
+      const sseEvents = [
+        { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-syn-1' },
+        { type: 'step', stepIndex: 0, step: { type: 'action', content: 'x' } },
+      ];
+      mockFetch.mockImplementationOnce(() => Promise.resolve({
+        ok: true,
+        body: createSSEStream(sseEvents, 2),
+      }));
+
+      let pollCount = 0;
+      mockFetch.mockImplementation(() => {
+        pollCount++;
+        const status = pollCount >= 2 ? 'completed' : 'running';
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            id: 'report-syn-1',
+            status,
+            passFailStatus: status === 'completed' ? 'passed' : undefined,
+            metrics: { accuracy: 80 },
+            trajectory: [{ type: 'action' }],
+            llmJudgeReasoning: status === 'completed' ? 'ok' : undefined,
+          }),
+        });
+      });
+
+      const progressEvents: any[] = [];
+      const result = await client.runEvaluation(
+        'tc-1', 'observio', 'claude-sonnet-4',
+        (e) => progressEvents.push(e),
+      );
+
+      expect(result.status).toBe('completed');
+      // The original SSE events should be forwarded
+      expect(progressEvents.some(e => e.type === 'started')).toBe(true);
+      expect(progressEvents.some(e => e.type === 'step')).toBe(true);
+      // The synthetic reconnect + polling lifecycle events must also appear
+      const reconnect = progressEvents.find(e => e.type === 'reconnecting');
+      expect(reconnect).toBeDefined();
+      expect(reconnect.reportId).toBe('report-syn-1');
+      const polling = progressEvents.filter(e => e.type === 'polling');
+      expect(polling.length).toBeGreaterThanOrEqual(1);
+      expect(polling[0].reportId).toBe('report-syn-1');
+      expect(polling.map(e => e.status)).toEqual(
+        expect.arrayContaining(['running']),
+      );
+    }, 30000);
+
+    it('should emit reconnecting event when stream ends without completion', async () => {
+      const sseEvents = [
+        { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-noend-2' },
+        // No completed, no error — stream just ends.
+      ];
+      mockFetch.mockImplementationOnce(() => Promise.resolve({
+        ok: true,
+        body: createSSEStream(sseEvents),
+      }));
+      mockFetch.mockImplementation(() => Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          id: 'report-noend-2',
+          status: 'completed',
+          passFailStatus: 'passed',
+          metrics: { accuracy: 100 },
+          trajectory: [],
+          llmJudgeReasoning: 'fine',
+        }),
+      }));
+
+      const progressEvents: any[] = [];
+      await client.runEvaluation(
+        'tc-1', 'observio', 'claude-sonnet-4',
+        (e) => progressEvents.push(e),
+      );
+      expect(progressEvents.some(e => e.type === 'reconnecting' && e.reportId === 'report-noend-2')).toBe(true);
     });
   });
 });
