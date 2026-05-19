@@ -76,6 +76,37 @@ export const BROWSER_SAFE_CONNECTORS = (Object.entries(CONNECTOR_TYPE_INFO) as [
 export const BUILT_IN_AGENT_KEYS = new Set(['demo', 'observio', 'claude-code', 'strands', 'langgraph-rest']);
 
 /**
+ * Ordered list of preferred default agent keys, used when picking an initial
+ * agent for popups/forms (e.g. QuickRunModal). The first entry that exists in
+ * `DEFAULT_CONFIG.agents` (and is enabled) wins.
+ *
+ * `observio` is preferred because it's a fully-featured local sample agent
+ * users can run end-to-end without external infra.
+ */
+export const PREFERRED_DEFAULT_AGENT_KEYS = ['observio', 'demo'] as const;
+
+/**
+ * Pick a sensible default agent key.
+ *
+ * Resolution order:
+ *  1. First entry in PREFERRED_DEFAULT_AGENT_KEYS that exists and is enabled
+ *  2. First enabled agent in DEFAULT_CONFIG.agents
+ *  3. First agent in DEFAULT_CONFIG.agents (even if disabled)
+ *  4. Empty string
+ */
+export function getPreferredDefaultAgentKey(): string {
+  const agents = DEFAULT_CONFIG.agents || [];
+  const isEnabled = (a: { enabled?: boolean }) => a.enabled !== false;
+  for (const preferred of PREFERRED_DEFAULT_AGENT_KEYS) {
+    const found = agents.find(a => a.key === preferred && isEnabled(a));
+    if (found) return found.key;
+  }
+  const firstEnabled = agents.find(isEnabled);
+  if (firstEnabled) return firstEnabled.key;
+  return agents[0]?.key || '';
+}
+
+/**
  * Get Claude Code connector environment variables at runtime.
  * Evaluated lazily so env vars are read when needed, not at module load time.
  */

@@ -15,6 +15,8 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
+import { usePersistedSet } from '@/hooks/usePersistedSet';
+import { PREFS_KEYS } from '@/lib/preferences';
 import { useNavigate } from 'react-router-dom';
 import {
   ChevronRight, ChevronDown, CheckCircle2, XCircle,
@@ -96,12 +98,12 @@ export const TestCasesPage4: React.FC = () => {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [runCounts, setRunCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [viewMode, setViewMode] = usePersistedState<'flat' | 'grouped'>('test-cases:viewMode', 'flat');
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [timeRange, setTimeRange] = usePersistedState<TimeRange>('test-cases:timeRange', '7d');
+  const [search, setSearch] = usePersistedState<string>('test-cases:search', '');
+  const [viewMode, setViewMode] = usePersistedState<'flat' | 'grouped'>(PREFS_KEYS.viewMode, 'flat');
+  const [collapsedGroups, setCollapsedGroups] = usePersistedSet<string>('test-cases:collapsedGroups');
+  const [timeRange, setTimeRange] = usePersistedState<TimeRange>(PREFS_KEYS.timeRange, '7d');
   const [openPopoverId, setOpenPopoverId] = useState<string | null>(null);
-  const [selectedBenchmark, setSelectedBenchmark] = usePersistedState<string>('test-cases:selectedBenchmark', 'all');
+  const [selectedBenchmark, setSelectedBenchmark] = usePersistedState<string>(PREFS_KEYS.benchmarkFilter, 'all');
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -154,7 +156,7 @@ export const TestCasesPage4: React.FC = () => {
   // Filtered test cases
   const filteredTcs = useMemo(() => {
     let list = testCases;
-    if (search) { const q = search.toLowerCase(); list = list.filter(tc => tc.name.toLowerCase().includes(q) || tc.initialPrompt?.toLowerCase().includes(q) || tc.description?.toLowerCase().includes(q)); }
+    if (search) { const q = search.toLowerCase(); list = list.filter(tc => (tc.name || '').toLowerCase().includes(q) || tc.initialPrompt?.toLowerCase().includes(q) || tc.description?.toLowerCase().includes(q)); }
     if (selectedBenchmark !== 'all') {
       const bm = benchmarks.find(b => b.id === selectedBenchmark);
       if (bm) {
@@ -323,6 +325,7 @@ export const TestCasesPage4: React.FC = () => {
         <td className="px-2 py-1.5 align-middle text-right">
           <div className="inline-flex items-center gap-0.5">
             <Button variant="ghost" size="icon" className="h-6 w-6" title="Run"
+              data-testid="test-case-run-button"
               onClick={e => { e.stopPropagation(); setRunningTestCase(tc); }}>
               <Play size={11} />
             </Button>

@@ -15,7 +15,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { TestCase, TrajectoryStep, Evaluator } from '@/types';
-import { DEFAULT_CONFIG } from '@/lib/constants';
+import { DEFAULT_CONFIG, getPreferredDefaultAgentKey } from '@/lib/constants';
+import { PREFS_KEYS } from '@/lib/preferences';
 import { ENV_CONFIG } from '@/lib/config';
 import { parseLabels } from '@/lib/labels';
 import { runServerEvaluation, ServerEvaluationReport } from '@/services/client/evaluationApi';
@@ -35,11 +36,15 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
 }) => {
   const navigate = useNavigate();
 
-  // Agent/Model selection - persisted across sessions
+  // Agent/Model selection — persisted across sessions under shared `prefs:*`
+  // keys so the choice is reused on every other page that has a run-config
+  // dropdown (NewRunPage, BenchmarkRunsPage, BenchmarkEditor).
+  // Default prefers `observio` so the popup arrives pre-populated with a
+  // working sample agent the user can run immediately.
   const [selectedAgentKey, setSelectedAgentKey] = usePersistedState(
-    'quick-run:agentKey', DEFAULT_CONFIG.agents[0]?.key || ''
+    PREFS_KEYS.agentKey, getPreferredDefaultAgentKey()
   );
-  const [selectedModelId, setSelectedModelId] = usePersistedState('quick-run:modelId', 'claude-sonnet-4.5');
+  const [selectedModelId, setSelectedModelId] = usePersistedState(PREFS_KEYS.modelId, 'claude-sonnet-4.5');
   const [selectedEvaluatorId, setSelectedEvaluatorId] = usePersistedState<string | undefined>('quick-run:evaluatorId', undefined);
   const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
 
@@ -71,6 +76,19 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   const [bedrockDiscoveryError, setBedrockDiscoveryError] = useState<string | null>(null);
 
   const selectedAgent = DEFAULT_CONFIG.agents.find(a => a.key === selectedAgentKey);
+
+  // If the persisted agent key no longer matches any known agent (e.g. config
+  // changed since the value was stored, or the stored value is empty), fall
+  // back to the preferred default. This guarantees the popup is always opened
+  // with a usable agent pre-populated.
+  useEffect(() => {
+    if (!selectedAgent) {
+      const fallback = getPreferredDefaultAgentKey();
+      if (fallback && fallback !== selectedAgentKey) {
+        setSelectedAgentKey(fallback);
+      }
+    }
+  }, [selectedAgent, selectedAgentKey, setSelectedAgentKey]);
 
   // Group models by provider for the dropdown (includes dynamically discovered OpenAI-compatible models)
   const modelsByProvider = Object.entries(DEFAULT_CONFIG.models).reduce((acc, [key, model]) => {
@@ -338,7 +356,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
               <div className="space-y-1">
                 <Label className="text-xs">Agent</Label>
                 <Select value={selectedAgentKey} onValueChange={setSelectedAgentKey}>
-                  <SelectTrigger className="w-48 h-8">
+                  <SelectTrigger className="w-48 h-8" data-testid="quickrun-agent-select">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -361,9 +379,23 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                         <ChevronRight size={12} className={showBuiltInAgents ? 'rotate-90 transition-transform' : 'transition-transform'} />
                         Built-in ({DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).length})
                       </button>
-                      {showBuiltInAgents && DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).map(agent => (
-                        <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
-                      ))}
+                      {DEFAULT_CONFIG.agents.filter(a => a.builtIn !== false).map(agent => {
+                        // Always render the currently-selected built-in so the
+                        // <SelectValue /> trigger has its label even while the
+                        // built-in section is collapsed. Hide the others using
+                        // CSS so toggling the section doesn't lose state.
+                        const isSelected = agent.key === selectedAgentKey;
+                        const hidden = !showBuiltInAgents && !isSelected;
+                        return (
+                          <SelectItem
+                            key={agent.key}
+                            value={agent.key}
+                            className={hidden ? 'hidden' : ''}
+                          >
+                            {agent.name}
+                          </SelectItem>
+                        );
+                      })}
                     </SelectGroup>
                   </SelectContent>
                 </Select>

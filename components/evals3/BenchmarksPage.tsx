@@ -16,6 +16,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
+import { PREFS_KEYS } from '@/lib/preferences';
 import { useNavigate } from 'react-router-dom';
 import {
   Play, CheckCircle2, XCircle, Loader2, Clock, Search, X, RefreshCw,
@@ -147,9 +148,9 @@ export const BenchmarksPage4: React.FC = () => {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [timeRange, setTimeRange] = usePersistedState<TimeRange>('benchmarks:timeRange', 'all');
-  const [selectedAgent, setSelectedAgent] = usePersistedState<string>('benchmarks:selectedAgent', 'all');
+  const [search, setSearch] = usePersistedState<string>('benchmarks:search', '');
+  const [timeRange, setTimeRange] = usePersistedState<TimeRange>(PREFS_KEYS.timeRange, 'all');
+  const [selectedAgent, setSelectedAgent] = usePersistedState<string>(PREFS_KEYS.agentFilter, 'all');
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -237,7 +238,7 @@ export const BenchmarksPage4: React.FC = () => {
     let list = timeFilteredBenchmarks;
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(b => b.name.toLowerCase().includes(q));
+      list = list.filter(b => (b.name || '').toLowerCase().includes(q));
     }
     const dir = bmSort.dir === 'asc' ? 1 : -1;
     return [...list].sort((a, b) => {

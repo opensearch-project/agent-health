@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { usePersistedState } from '@/hooks/usePersistedState';
 import { Link } from 'react-router-dom';
 import { Rocket, X, Info, HelpCircle, BarChart3, Play, FileText } from 'lucide-react';
 import { asyncRunStorage, asyncExperimentStorage, asyncTestCaseStorage } from '@/services/storage';
@@ -181,10 +182,10 @@ export const Dashboard: React.FC = () => {
   // Check if sample data is active
   const isSampleMode = isSampleDataActive();
 
-  // Filter state
-  const [filters, setFilters] = useState<DashboardFilter>({});
-  const [timeRange, setTimeRange] = useState<TimeRange>('7d');
-  const [selectedMetric, setSelectedMetric] = useState<TrendMetric>('passRate');
+  // Filter state — persisted across sessions
+  const [filters, setFilters] = usePersistedState<DashboardFilter>('dashboard:filters', {});
+  const [timeRange, setTimeRange] = usePersistedState<TimeRange>('dashboard:timeRange', '7d');
+  const [selectedMetric, setSelectedMetric] = usePersistedState<TrendMetric>('dashboard:selectedMetric', 'passRate');
 
   // Apply gradient background to the scrollable main container
   useEffect(() => {

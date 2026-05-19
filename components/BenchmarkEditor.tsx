@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
+import { PREFS_KEYS } from '@/lib/preferences';
 import { X, ChevronRight, ChevronLeft, Plus, Trash2, Check, Loader2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -123,8 +124,8 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
     let agentKey = defaultAgent.key;
     let modelId = Object.keys(DEFAULT_CONFIG.models)[0] || 'claude-sonnet-4.5';
     try {
-      const storedAgent = localStorage.getItem('agent-health:quick-run:agentKey');
-      const storedModel = localStorage.getItem('agent-health:quick-run:modelId');
+      const storedAgent = localStorage.getItem('agent-health:' + PREFS_KEYS.agentKey);
+      const storedModel = localStorage.getItem('agent-health:' + PREFS_KEYS.modelId);
       if (storedAgent) agentKey = JSON.parse(storedAgent);
       if (storedModel) modelId = JSON.parse(storedModel);
     } catch { /* use defaults */ }

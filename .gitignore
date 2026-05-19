@@ -56,3 +56,5 @@ agent-health-data/
 # AI-agent generated specification files (keep steering shared)
 .kiro/*
 !.kiro/steering/
+# pi-web local agent state (artifacts, uploads)
+.pi/

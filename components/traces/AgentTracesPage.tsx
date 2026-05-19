@@ -14,6 +14,11 @@
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { usePersistedState } from '@/hooks/usePersistedState';
+import { PREFS_KEYS } from '@/lib/preferences';
+
+// Note: legacy `agentTraces.*` keys are migrated centrally by
+// `migrateLegacyPreferences()` in lib/preferences.ts at app boot.
 import {
   Search,
   RefreshCw,
@@ -301,22 +306,21 @@ export const AgentTracesPage: React.FC = () => {
   // Sidebar collapse control
   const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
   
-  // Filter state
-  const [selectedAgent, setSelectedAgent] = useState<string>('all');
-  const [textSearch, setTextSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [timeRange, setTimeRange] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('agentTraces.timeRange') || '1440';
-    }
-    return '1440';
-  });
+  // Filter state — persisted across sessions. The agent filter is shared
+  // with other list pages via `prefs:agentFilter`; the time range is
+  // page-specific because it's expressed in minutes.
+  const [selectedAgent, setSelectedAgent] = usePersistedState<string>(PREFS_KEYS.agentFilter, 'all');
+  const [textSearch, setTextSearch] = usePersistedState<string>('agent-traces:textSearch', '');
+  // Seed debouncedSearch with the persisted textSearch so the initial query
+  // includes any restored search text without waiting for the debounce timer.
+  const [debouncedSearch, setDebouncedSearch] = useState<string>(() => textSearch);
+  const [timeRange, setTimeRange] = usePersistedState<string>('agent-traces:timeRange', '1440');
 
   // Advanced filter state
   const [filterPopoverOpen, setFilterPopoverOpen] = useState(false);
   const [rootSpanSuggestOpen, setRootSpanSuggestOpen] = useState(false);
   const [serviceSuggestOpen, setServiceSuggestOpen] = useState(false);
-  const [filters, setFilters] = useState<{
+  const [filters, setFilters] = usePersistedState<{
     status: string;
     service: string;
     rootSpan: string;
@@ -329,7 +333,7 @@ export const AgentTracesPage: React.FC = () => {
     spanCountMax: string;
     timeWindowStart: string;
     timeWindowEnd: string;
-  }>({
+  }>('agent-traces:filters', {
     status: 'all',
     service: '',
     rootSpan: '',
@@ -406,18 +410,8 @@ export const AgentTracesPage: React.FC = () => {
     return () => clearTimeout(timer);
   }, [textSearch]);
 
-  // Persist filter selections to localStorage
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('agentTraces.selectedAgent', selectedAgent);
-    }
-  }, [selectedAgent]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('agentTraces.timeRange', timeRange);
-    }
-  }, [timeRange]);
+  // Persist filter selections to localStorage — handled by usePersistedState above.
+  // (legacy `agentTraces.*` keys are migrated once on mount; see initialization block)
 
   // Convert spans to trace table rows
   const processSpansToTraces = useCallback((allSpans: Span[]): TraceTableRow[] => {

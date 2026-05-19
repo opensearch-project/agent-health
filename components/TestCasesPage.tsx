@@ -139,6 +139,7 @@ const TestCaseCard = ({ testCase, runCount, onClick, onRun, onEdit, onDelete, is
               size="sm"
               onClick={(e) => { e.stopPropagation(); onRun(); }}
               title="Run test case"
+              data-testid="test-case-run-button"
             >
               <Play size={14} />
             </Button>

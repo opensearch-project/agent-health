@@ -16,6 +16,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
+import { PREFS_KEYS } from '@/lib/preferences';
 import { useNavigate } from 'react-router-dom';
 import {
   Loader2, Plus, X, FileText, FolderOpen, Tag, Database, ArrowRight, ArrowLeft,
@@ -59,9 +60,10 @@ export const NewRunPage: React.FC = () => {
   const [labelInput, setLabelInput] = useState('');
   const [labels, setLabels] = useState<string[]>([]);
 
-  // Configuration (Step 2) - persisted across sessions
-  const [agentKey, setAgentKey] = usePersistedState('new-run:agentKey', DEFAULT_CONFIG.agents.find(a => a.enabled !== false)?.key || '');
-  const [modelId, setModelId] = usePersistedState('new-run:modelId', Object.keys(DEFAULT_CONFIG.models)[0] || '');
+  // Configuration (Step 2) - persisted across sessions, shared with QuickRunModal
+  // and other run-config dropdowns via the `prefs:*` namespace.
+  const [agentKey, setAgentKey] = usePersistedState(PREFS_KEYS.agentKey, DEFAULT_CONFIG.agents.find(a => a.enabled !== false)?.key || '');
+  const [modelId, setModelId] = usePersistedState(PREFS_KEYS.modelId, Object.keys(DEFAULT_CONFIG.models)[0] || '');
   const [concurrency, setConcurrency] = usePersistedState('new-run:concurrency', 1);
   const [runName, setRunName] = useState('');
   const [benchmarkAssociation, setBenchmarkAssociation] = useState('none');

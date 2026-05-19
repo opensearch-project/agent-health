@@ -17,6 +17,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
+import { PREFS_KEYS } from '@/lib/preferences';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   GitCompare, Calendar, CheckCircle2, XCircle, Play,
@@ -274,8 +275,8 @@ export const BenchmarkRunsPage2: React.FC = () => {
     let defaultAgent = DEFAULT_CONFIG.agents[0]?.key || '';
     let defaultModel = Object.keys(DEFAULT_CONFIG.models)[0] || '';
     try {
-      const storedAgent = localStorage.getItem('agent-health:quick-run:agentKey');
-      const storedModel = localStorage.getItem('agent-health:quick-run:modelId');
+      const storedAgent = localStorage.getItem('agent-health:' + PREFS_KEYS.agentKey);
+      const storedModel = localStorage.getItem('agent-health:' + PREFS_KEYS.modelId);
       if (storedAgent) defaultAgent = JSON.parse(storedAgent);
       if (storedModel) defaultModel = JSON.parse(storedModel);
     } catch { /* use defaults */ }

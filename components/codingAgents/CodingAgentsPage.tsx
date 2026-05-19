@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { usePersistedState } from '@/hooks/usePersistedState';
 import { ENV_CONFIG } from '@/lib/config';
 import { RefreshCw } from 'lucide-react';
 import {
@@ -1125,9 +1126,9 @@ function SessionsTab({ range, loading: initialLoading, initialProject, initialAg
   const [sessions, setSessions] = useState<Session[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
-  const [agentFilter, setAgentFilter] = useState<string>(initialAgent ?? 'all');
-  const [completedFilter, setCompletedFilter] = useState<string>('all');
-  const [projectFilter, setProjectFilter] = useState<string>(initialProject ?? '');
+  const [agentFilter, setAgentFilter] = usePersistedState<string>('coding-agents:sessions:agentFilter', initialAgent ?? 'all');
+  const [completedFilter, setCompletedFilter] = usePersistedState<string>('coding-agents:sessions:completedFilter', 'all');
+  const [projectFilter, setProjectFilter] = usePersistedState<string>('coding-agents:sessions:projectFilter', initialProject ?? '');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(initialLoading);
@@ -2240,9 +2241,9 @@ function TeamTab({ team, loading }: { team: TeamAnalytics | null; loading: boole
 // ─── Workspace Tab (Multi-agent) ─────────────────────────────────────────────
 
 function WorkspaceTab() {
-  const [agentTab, setAgentTab] = useState<'claude-code' | 'kiro'>('claude-code');
+  const [agentTab, setAgentTab] = usePersistedState<'claude-code' | 'kiro'>('coding-agents:workspace:agentTab', 'claude-code');
   // Claude Code state
-  const [section, setSection] = useState<'active' | 'memory' | 'plans' | 'tasks' | 'settings'>('active');
+  const [section, setSection] = usePersistedState<'active' | 'memory' | 'plans' | 'tasks' | 'settings'>('coding-agents:workspace:section', 'active');
   const [activeSessions, setActiveSessions] = useState<ActiveSessionInfo[] | null>(null);
   const [memoryProjects, setMemoryProjects] = useState<MemoryProject[] | null>(null);
   const [plans, setPlans] = useState<PlanFile[] | null>(null);
@@ -2952,12 +2953,13 @@ export const CodingAgentsPage: React.FC = () => {
   const [evalTrends, setEvalTrends] = useState<EvalTrendPoint[] | null>(null);
   const [team, setTeam] = useState<TeamAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
-  // Read initial tab from URL query param (e.g., ?tab=workspace)
-  const [activeTab, setActiveTab] = useState(() => {
+  // Top-level page state — `activeTab` is overridden by `?tab=` query param if present
+  // (link-driven navigation wins), otherwise we restore the user's last selection.
+  const [activeTab, setActiveTab] = usePersistedState<string>('coding-agents:activeTab', (() => {
     try { return new URLSearchParams(window.location.search).get('tab') || 'sessions'; } catch { return 'sessions'; }
-  });
+  })());
   const [error, setError] = useState<string | null>(null);
-  const [rangePreset, setRangePreset] = useState<DateRangePreset>('today');
+  const [rangePreset, setRangePreset] = usePersistedState<DateRangePreset>('coding-agents:rangePreset', 'today');
   const [refreshKey, setRefreshKey] = useState(0);
   const [sessionProjectFilter, setSessionProjectFilter] = useState<string | undefined>();
   const [sessionAgentFilter, setSessionAgentFilter] = useState<string | undefined>();

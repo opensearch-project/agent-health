@@ -22,9 +22,9 @@ test.describe('User Preferences Persistence', () => {
       await page.reload();
       await page.waitForSelector('h2', { timeout: 30000 });
 
-      // Verify localStorage has the persisted value
+      // Verify localStorage has the persisted value (now shared via prefs:viewMode)
       const storedViewMode = await page.evaluate(() =>
-        localStorage.getItem('agent-health:eval-runs:viewMode')
+        localStorage.getItem('agent-health:prefs:viewMode')
       );
       expect(storedViewMode).toBe(JSON.stringify('grouped'));
     });
@@ -33,9 +33,9 @@ test.describe('User Preferences Persistence', () => {
       await page.goto('/evaluations/runs');
       await page.waitForSelector('h2', { timeout: 30000 });
 
-      // Set localStorage directly to simulate prior selection
+      // Set localStorage directly to simulate prior selection (now shared via prefs:timeRange)
       await page.evaluate(() => {
-        localStorage.setItem('agent-health:eval-runs:timeRange', JSON.stringify('7d'));
+        localStorage.setItem('agent-health:prefs:timeRange', JSON.stringify('7d'));
       });
 
       await page.reload();
@@ -43,7 +43,7 @@ test.describe('User Preferences Persistence', () => {
 
       // Verify the persisted value is still in storage
       const stored = await page.evaluate(() =>
-        localStorage.getItem('agent-health:eval-runs:timeRange')
+        localStorage.getItem('agent-health:prefs:timeRange')
       );
       expect(stored).toBe(JSON.stringify('7d'));
     });
@@ -66,7 +66,7 @@ test.describe('User Preferences Persistence', () => {
       await page.waitForSelector('h2:has-text("Test Cases")', { timeout: 30000 });
 
       const stored = await page.evaluate(() =>
-        localStorage.getItem('agent-health:test-cases:viewMode')
+        localStorage.getItem('agent-health:prefs:viewMode')
       );
       expect(stored).toBe(JSON.stringify('grouped'));
     });
@@ -98,9 +98,9 @@ test.describe('User Preferences Persistence', () => {
       await page.goto('/evaluations/benchmarks');
       await page.waitForSelector('h2', { timeout: 30000 });
 
-      // Set preferences via localStorage
+      // Set preferences via localStorage (timeRange is now shared)
       await page.evaluate(() => {
-        localStorage.setItem('agent-health:benchmarks:timeRange', JSON.stringify('7d'));
+        localStorage.setItem('agent-health:prefs:timeRange', JSON.stringify('7d'));
         localStorage.setItem(
           'agent-health:benchmarks:sort',
           JSON.stringify({ field: 'score', dir: 'desc' })
@@ -111,7 +111,7 @@ test.describe('User Preferences Persistence', () => {
       await page.waitForSelector('h2', { timeout: 30000 });
 
       const timeRange = await page.evaluate(() =>
-        localStorage.getItem('agent-health:benchmarks:timeRange')
+        localStorage.getItem('agent-health:prefs:timeRange')
       );
       const sort = await page.evaluate(() =>
         localStorage.getItem('agent-health:benchmarks:sort')
@@ -129,21 +129,18 @@ test.describe('User Preferences Persistence', () => {
       await page.waitForSelector('h2:has-text("Test Cases")', { timeout: 30000 });
 
       await page.evaluate(() => {
-        localStorage.setItem('agent-health:quick-run:agentKey', JSON.stringify('langgraph'));
-        localStorage.setItem('agent-health:quick-run:modelId', JSON.stringify('claude-sonnet-4.5'));
+        localStorage.setItem('agent-health:prefs:agentKey', JSON.stringify('langgraph'));
+        localStorage.setItem('agent-health:prefs:modelId', JSON.stringify('claude-sonnet-4.5'));
       });
 
-      // Navigate to new-run page — it should pick up the same preferences
+      // Navigate to new-run page — it reads the same shared keys
       await page.goto('/evaluations/new-run');
       await page.waitForSelector('h2', { timeout: 30000 });
 
-      const agentKey = await page.evaluate(() =>
-        localStorage.getItem('agent-health:new-run:agentKey')
-      );
-      // NewRunPage has its own key but the BenchmarkEditor reads from quick-run:*
-      // Verify the shared keys exist
+      // Both QuickRunModal and NewRunPage now write to `prefs:agentKey`/`prefs:modelId`,
+      // so a value seeded by either is visible to the other.
       const sharedAgent = await page.evaluate(() =>
-        localStorage.getItem('agent-health:quick-run:agentKey')
+        localStorage.getItem('agent-health:prefs:agentKey')
       );
       expect(sharedAgent).toBe(JSON.stringify('langgraph'));
     });
@@ -169,10 +166,10 @@ test.describe('User Preferences Persistence', () => {
       await page.goto('/evaluations/runs');
       await page.waitForSelector('h2', { timeout: 30000 });
 
-      // Write corrupted data
+      // Write corrupted data on the shared keys (timeRange and viewMode are now shared)
       await page.evaluate(() => {
-        localStorage.setItem('agent-health:eval-runs:timeRange', 'not-valid-json{{{');
-        localStorage.setItem('agent-health:eval-runs:viewMode', '');
+        localStorage.setItem('agent-health:prefs:timeRange', 'not-valid-json{{{');
+        localStorage.setItem('agent-health:prefs:viewMode', '');
       });
 
       // Reload — should not crash, should fall back to defaults
