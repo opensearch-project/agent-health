@@ -238,7 +238,7 @@ export const BenchmarksPage4: React.FC = () => {
     let list = timeFilteredBenchmarks;
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(b => (b.name || '').toLowerCase().includes(q));
+      list = list.filter(b => (b.name ?? '').toLowerCase().includes(q));
     }
     const dir = bmSort.dir === 'asc' ? 1 : -1;
     return [...list].sort((a, b) => {

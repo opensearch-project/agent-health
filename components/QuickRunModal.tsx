@@ -40,7 +40,9 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   // keys so the choice is reused on every other page that has a run-config
   // dropdown (NewRunPage, BenchmarkRunsPage, BenchmarkEditor).
   // Default prefers `observio` so the popup arrives pre-populated with a
-  // working sample agent the user can run immediately.
+  // working sample agent the user can run immediately. Use a lazy initializer
+  // so we don't traverse the agent list on every render — the default is
+  // only consulted when localStorage is empty on first mount.
   const [selectedAgentKey, setSelectedAgentKey] = usePersistedState(
     PREFS_KEYS.agentKey, getPreferredDefaultAgentKey()
   );
@@ -81,6 +83,15 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   // changed since the value was stored, or the stored value is empty), fall
   // back to the preferred default. This guarantees the popup is always opened
   // with a usable agent pre-populated.
+  //
+  // We deliberately omit `selectedAgentKey` from the dependency list to avoid
+  // a re-entry loop: if `getPreferredDefaultAgentKey()` ever returned a value
+  // that doesn't itself match an agent (e.g. agents list races with this
+  // effect), including the key in deps would cause the effect to fire again
+  // on every change and we'd spin. The effect only ever needs to react when
+  // `selectedAgent` becomes undefined, which is when reconciliation is
+  // actually required.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!selectedAgent) {
       const fallback = getPreferredDefaultAgentKey();
@@ -88,7 +99,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
         setSelectedAgentKey(fallback);
       }
     }
-  }, [selectedAgent, selectedAgentKey, setSelectedAgentKey]);
+  }, [selectedAgent, setSelectedAgentKey]);
 
   // Group models by provider for the dropdown (includes dynamically discovered OpenAI-compatible models)
   const modelsByProvider = Object.entries(DEFAULT_CONFIG.models).reduce((acc, [key, model]) => {

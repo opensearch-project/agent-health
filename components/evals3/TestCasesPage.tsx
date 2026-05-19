@@ -156,7 +156,7 @@ export const TestCasesPage4: React.FC = () => {
   // Filtered test cases
   const filteredTcs = useMemo(() => {
     let list = testCases;
-    if (search) { const q = search.toLowerCase(); list = list.filter(tc => (tc.name || '').toLowerCase().includes(q) || tc.initialPrompt?.toLowerCase().includes(q) || tc.description?.toLowerCase().includes(q)); }
+    if (search) { const q = search.toLowerCase(); list = list.filter(tc => (tc.name ?? '').toLowerCase().includes(q) || tc.initialPrompt?.toLowerCase().includes(q) || tc.description?.toLowerCase().includes(q)); }
     if (selectedBenchmark !== 'all') {
       const bm = benchmarks.find(b => b.id === selectedBenchmark);
       if (bm) {

@@ -181,9 +181,9 @@ export const EvalRunsPage: React.FC = () => {
         if (search) {
           const q = search.toLowerCase();
           if (
-            !(run.name || '').toLowerCase().includes(q) &&
-            !(run.id || '').toLowerCase().includes(q) &&
-            !(bm.name || '').toLowerCase().includes(q) &&
+            !(run.name ?? '').toLowerCase().includes(q) &&
+            !(run.id ?? '').toLowerCase().includes(q) &&
+            !(bm.name ?? '').toLowerCase().includes(q) &&
             !agentName.toLowerCase().includes(q)
           ) continue;
         }
