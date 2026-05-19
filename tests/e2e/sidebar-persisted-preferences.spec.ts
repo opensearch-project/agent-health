@@ -144,6 +144,32 @@ test.describe('Sidebar pages — persisted preferences round-trip', () => {
       }
       expect(await getPref(page, 'test-cases:search')).toBe(JSON.stringify('persisted-search-tc'));
     });
+
+    test('view-mode toggle lives in the page header with Grouped listed first', async ({ page }) => {
+      await page.goto('/evaluations/test-cases');
+      await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
+
+      // Both buttons must be present
+      const grouped = page.locator('[data-testid="viewmode-grouped"]');
+      const flat = page.locator('[data-testid="viewmode-flat"]');
+      await expect(grouped).toBeVisible();
+      await expect(flat).toBeVisible();
+
+      // Visual order: Grouped sits to the LEFT of Flat (greater x means right).
+      const groupedBox = await grouped.boundingBox();
+      const flatBox = await flat.boundingBox();
+      expect(groupedBox).not.toBeNull();
+      expect(flatBox).not.toBeNull();
+      expect(groupedBox!.x).toBeLessThan(flatBox!.x);
+
+      // Clicking Grouped persists `prefs:viewMode` and survives a reload.
+      await grouped.click();
+      await page.waitForTimeout(200);
+      expect(await getPref(page, 'prefs:viewMode')).toBe(JSON.stringify('grouped'));
+      await page.reload();
+      await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
+      expect(await getPref(page, 'prefs:viewMode')).toBe(JSON.stringify('grouped'));
+    });
   });
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -209,11 +235,12 @@ test.describe('Sidebar pages — persisted preferences round-trip', () => {
   // Agent Traces — /agent-traces
   // ─────────────────────────────────────────────────────────────────────────
   test.describe('Agent Traces (/agent-traces)', () => {
-    test('persists selectedAgent, timeRange, textSearch and structured filters', async ({ page }) => {
-      // Agent filter is shared via `prefs:agentFilter`; time range stays
-      // page-specific because it uses minute-based units.
-      await setPref(page, 'prefs:agentFilter', 'observio');
-      await setPref(page, 'agent-traces:timeRange', '60');
+    test('persists selectedAgent (page-specific), shared timeRange, textSearch and structured filters', async ({ page }) => {
+      // Agent filter is page-specific (its option values are telemetry
+      // service names, which don't match the agent-config keys used by
+      // the eval list pages). Time range is shared via `prefs:timeRange`.
+      await setPref(page, 'agent-traces:selectedAgent', 'observio-agent');
+      await setPref(page, 'prefs:timeRange', '1h');
       await setPref(page, 'agent-traces:textSearch', 'connection refused');
       await setPref(page, 'agent-traces:filters', {
         status: 'error',
@@ -234,33 +261,22 @@ test.describe('Sidebar pages — persisted preferences round-trip', () => {
       await page.waitForLoadState('domcontentloaded');
       await page.waitForTimeout(500);
 
-      expect(await getPref(page, 'prefs:agentFilter')).toBe(JSON.stringify('observio'));
-      expect(await getPref(page, 'agent-traces:timeRange')).toBe(JSON.stringify('60'));
+      expect(await getPref(page, 'agent-traces:selectedAgent')).toBe(JSON.stringify('observio-agent'));
+      expect(await getPref(page, 'prefs:timeRange')).toBe(JSON.stringify('1h'));
       expect(await getPref(page, 'agent-traces:textSearch')).toBe(JSON.stringify('connection refused'));
       const filters = JSON.parse((await getPref(page, 'agent-traces:filters'))!);
       expect(filters.status).toBe('error');
       expect(filters.service).toBe('svc');
     });
 
-    test('migrates legacy `agentTraces.*` keys on first load', async ({ page }) => {
-      // Wipe new keys and seed pre-namespacing legacy keys (no `agent-health:` prefix)
-      await clearAllPrefs(page);
-      await page.evaluate(() => {
-        localStorage.setItem('agentTraces.selectedAgent', 'legacy-agent');
-        localStorage.setItem('agentTraces.timeRange', '4320');
-      });
-
+    test('shared `prefs:timeRange` is also picked up by Agent Traces', async ({ page }) => {
+      await setPref(page, 'prefs:timeRange', '1h');
       await page.goto('/agent-traces');
       await page.waitForLoadState('domcontentloaded');
       await page.waitForTimeout(500);
-
-      // Agent filter goes straight to the shared `prefs:agentFilter`
-      expect(await getPref(page, 'prefs:agentFilter')).toBe(JSON.stringify('legacy-agent'));
-      // Time range stays page-specific
-      expect(await getPref(page, 'agent-traces:timeRange')).toBe(JSON.stringify('4320'));
-      // Legacy keys are removed
-      expect(await page.evaluate(() => localStorage.getItem('agentTraces.selectedAgent'))).toBeNull();
-      expect(await page.evaluate(() => localStorage.getItem('agentTraces.timeRange'))).toBeNull();
+      // Agent Traces reads the shared key and converts it to a minute-based
+      // cutoff internally; the localStorage value itself is unchanged.
+      expect(await getPref(page, 'prefs:timeRange')).toBe(JSON.stringify('1h'));
     });
   });
 
@@ -327,17 +343,43 @@ test.describe('Sidebar pages — persisted preferences round-trip', () => {
 
       // Visit each list page and verify the shared key is unchanged —
       // i.e. no page is silently overwriting it with a per-page default.
+      // Agent Traces is included because it now reads `prefs:timeRange`
+      // (its agent filter remains page-specific because the value space
+      // there is telemetry service names, not agent config keys).
       const visits = [
         { url: '/evaluations/benchmarks', selector: '[data-testid="benchmarks-page"]' },
         { url: '/evaluations/test-cases', selector: '[data-testid="test-cases-page"]' },
         { url: '/evaluations/runs', selector: 'h2' },
+        { url: '/agent-traces', selector: 'h2' },
       ];
       for (const { url, selector } of visits) {
         await page.goto(url);
         await page.waitForSelector(selector, { timeout: 30000 });
         await page.waitForTimeout(300);
         expect(await getPref(page, 'prefs:timeRange')).toBe(JSON.stringify('7d'));
+      }
+      // Agent filter is verified only on the eval list pages where it's
+      // semantically meaningful (Agent Traces uses a different value space).
+      const evalVisits = [
+        { url: '/evaluations/benchmarks', selector: '[data-testid="benchmarks-page"]' },
+        { url: '/evaluations/runs', selector: 'h2' },
+      ];
+      for (const { url, selector } of evalVisits) {
+        await page.goto(url);
+        await page.waitForSelector(selector, { timeout: 30000 });
+        await page.waitForTimeout(300);
         expect(await getPref(page, 'prefs:agentFilter')).toBe(JSON.stringify('observio'));
+      }
+      // viewMode is shared by Test Cases + Eval Runs only (Benchmarks has
+      // no flat/grouped switch).
+      const viewModeVisits = [
+        { url: '/evaluations/test-cases', selector: '[data-testid="test-cases-page"]' },
+        { url: '/evaluations/runs', selector: 'h2' },
+      ];
+      for (const { url, selector } of viewModeVisits) {
+        await page.goto(url);
+        await page.waitForSelector(selector, { timeout: 30000 });
+        await page.waitForTimeout(300);
         expect(await getPref(page, 'prefs:viewMode')).toBe(JSON.stringify('grouped'));
       }
     });

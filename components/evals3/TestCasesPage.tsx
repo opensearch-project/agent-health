@@ -359,6 +359,34 @@ export const TestCasesPage4: React.FC = () => {
               {benchmarks.map(bm => <SelectItem key={bm.id} value={bm.id}>{bm.name}</SelectItem>)}
             </SelectContent>
           </Select>
+          {/* View mode toggle (Grouped first — it's the default mental model) */}
+          <div className="flex items-center border border-border rounded-md overflow-hidden h-7" data-testid="viewmode-toggle">
+            <button data-testid="viewmode-grouped" onClick={() => setViewMode('grouped')} className={`px-2 h-full text-xs flex items-center gap-1 transition-colors ${viewMode === 'grouped' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+              <Layers size={12} /> Grouped
+            </button>
+            <button data-testid="viewmode-flat" onClick={() => setViewMode('flat')} className={`px-2 h-full text-xs flex items-center gap-1 transition-colors ${viewMode === 'flat' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+              <List size={12} /> Flat
+            </button>
+          </div>
+          {/* Expand/Collapse All — only in grouped mode */}
+          {viewMode === 'grouped' && (
+            <div className="flex items-center border border-border rounded-md overflow-hidden h-7">
+              <button
+                onClick={() => setCollapsedGroups(new Set())}
+                className="px-2 h-full text-xs flex items-center gap-1 transition-colors text-muted-foreground hover:text-foreground"
+                title="Expand all"
+              >
+                <ChevronsUpDown size={12} />
+              </button>
+              <button
+                onClick={() => setCollapsedGroups(new Set(groupedData.map(g => g.id)))}
+                className="px-2 h-full text-xs flex items-center gap-1 transition-colors text-muted-foreground hover:text-foreground"
+                title="Collapse all"
+              >
+                <ChevronsDownUp size={12} />
+              </button>
+            </div>
+          )}
           <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
           <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={isImporting} className="h-7 gap-1.5 text-xs font-normal">
             <Upload size={12} /> {isImporting ? 'Importing...' : 'Import JSON'}
@@ -392,40 +420,6 @@ export const TestCasesPage4: React.FC = () => {
       <div className="mb-4">
         <h2 className="text-xl font-bold" data-testid="test-cases-title">Test Cases</h2>
         <p className="text-[11px] text-muted-foreground mt-0.5">{testCases.length} test cases · Define prompts and expected outcomes</p>
-      </div>
-
-      {/* ── View Toggle ──────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          {/* View mode toggle */}
-          <div className="flex items-center border border-border rounded-md overflow-hidden">
-            <button onClick={() => setViewMode('flat')} className={`px-2 py-1 text-xs flex items-center gap-1 transition-colors ${viewMode === 'flat' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
-              <List size={12} /> Flat
-            </button>
-            <button onClick={() => setViewMode('grouped')} className={`px-2 py-1 text-xs flex items-center gap-1 transition-colors ${viewMode === 'grouped' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
-              <Layers size={12} /> Grouped
-            </button>
-          </div>
-          {/* Expand/Collapse All — separate group, only in grouped mode */}
-          {viewMode === 'grouped' && (
-            <div className="flex items-center border border-border rounded-md overflow-hidden">
-              <button
-                onClick={() => setCollapsedGroups(new Set())}
-                className="px-2 py-1 text-xs flex items-center gap-1 transition-colors text-muted-foreground hover:text-foreground"
-                title="Expand all"
-              >
-                <ChevronsUpDown size={12} />
-              </button>
-              <button
-                onClick={() => setCollapsedGroups(new Set(groupedData.map(g => g.id)))}
-                className="px-2 py-1 text-xs flex items-center gap-1 transition-colors text-muted-foreground hover:text-foreground"
-                title="Collapse all"
-              >
-                <ChevronsDownUp size={12} />
-              </button>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* ── Table ──────────────────────────────────────────────────── */}

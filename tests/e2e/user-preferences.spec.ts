@@ -11,8 +11,9 @@ test.describe('User Preferences Persistence', () => {
       await page.goto('/evaluations/runs');
       await page.waitForSelector('h2', { timeout: 30000 });
 
-      // Default is 'flat' — switch to 'grouped'
-      const groupedButton = page.locator('button:has-text("Grouped")');
+      // Default is 'flat' — switch to 'grouped' (use the testid-scoped
+      // selector so we don't accidentally hit a sidebar item).
+      const groupedButton = page.locator('[data-testid="viewmode-grouped"]').first();
       if (await groupedButton.isVisible()) {
         await groupedButton.click();
         await page.waitForTimeout(300);
@@ -54,8 +55,8 @@ test.describe('User Preferences Persistence', () => {
       await page.goto('/evaluations/test-cases');
       await page.waitForSelector('h2:has-text("Test Cases")', { timeout: 30000 });
 
-      // Switch to grouped
-      const groupedButton = page.locator('button:has-text("Grouped")');
+      // Switch to grouped (testid-scoped selector).
+      const groupedButton = page.locator('[data-testid="viewmode-grouped"]').first();
       if (await groupedButton.isVisible()) {
         await groupedButton.click();
         await page.waitForTimeout(300);

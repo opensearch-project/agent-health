@@ -15,10 +15,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
-import { PREFS_KEYS } from '@/lib/preferences';
-
-// Note: legacy `agentTraces.*` keys are migrated centrally by
-// `migrateLegacyPreferences()` in lib/preferences.ts at app boot.
+import { PREFS_KEYS, SharedTimeRange, sharedTimeRangeToMinutes } from '@/lib/preferences';
 import {
   Search,
   RefreshCw,
@@ -306,15 +303,19 @@ export const AgentTracesPage: React.FC = () => {
   // Sidebar collapse control
   const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
   
-  // Filter state — persisted across sessions. The agent filter is shared
-  // with other list pages via `prefs:agentFilter`; the time range is
-  // page-specific because it's expressed in minutes.
-  const [selectedAgent, setSelectedAgent] = usePersistedState<string>(PREFS_KEYS.agentFilter, 'all');
+  // Filter state — persisted across sessions.
+  //   * Time range is shared with the eval list pages via `prefs:timeRange`,
+  //     using the unified `'1h' | '6h' | '1d' | '7d' | '30d' | 'all'` enum;
+  //     we convert to a "minutes ago" cutoff for the OTel query below.
+  //   * Agent filter is page-specific because AgentTracesPage's options come
+  //     from telemetry service names rather than agent config keys.
+  const [selectedAgent, setSelectedAgent] = usePersistedState<string>('agent-traces:selectedAgent', 'all');
   const [textSearch, setTextSearch] = usePersistedState<string>('agent-traces:textSearch', '');
   // Seed debouncedSearch with the persisted textSearch so the initial query
   // includes any restored search text without waiting for the debounce timer.
   const [debouncedSearch, setDebouncedSearch] = useState<string>(() => textSearch);
-  const [timeRange, setTimeRange] = usePersistedState<string>('agent-traces:timeRange', '1440');
+  const [timeRange, setTimeRange] = usePersistedState<SharedTimeRange>(PREFS_KEYS.timeRange, '1d');
+  const minutesAgo = sharedTimeRangeToMinutes(timeRange);
 
   // Advanced filter state
   const [filterPopoverOpen, setFilterPopoverOpen] = useState(false);
@@ -390,16 +391,14 @@ export const AgentTracesPage: React.FC = () => {
     return [{ value: 'all', label: 'All Agents' }, ...agents];
   })();
 
-  // Time range options
-  const timeRangeOptions = [
-    { value: '15', label: 'Last 15m' },
-    { value: '60', label: 'Last 1hr' },
-    { value: '180', label: 'Last 3hr' },
-    { value: '360', label: 'Last 6hr' },
-    { value: '720', label: 'Last 12hr' },
-    { value: '1440', label: 'Last 1d' },
-    { value: '4320', label: 'Last 3d' },
-    { value: '10080', label: 'Last 7d' },
+  // Time range options — unified with eval list pages.
+  const timeRangeOptions: { value: SharedTimeRange; label: string }[] = [
+    { value: '1h', label: 'Last 1h' },
+    { value: '6h', label: 'Last 6h' },
+    { value: '1d', label: 'Last 1d' },
+    { value: '7d', label: 'Last 7d' },
+    { value: '30d', label: 'Last 30d' },
+    { value: 'all', label: 'All time' },
   ];
 
   // Debounce text search
@@ -500,7 +499,7 @@ export const AgentTracesPage: React.FC = () => {
 
     try {
       const result = await fetchRecentTraces({
-        minutesAgo: parseInt(timeRange),
+        minutesAgo: minutesAgo,
         serviceName: selectedAgent !== 'all' ? selectedAgent : undefined,
         textSearch: debouncedSearch || undefined,
         size: 100,
@@ -539,7 +538,7 @@ export const AgentTracesPage: React.FC = () => {
 
     try {
       const result = await fetchRecentTraces({
-        minutesAgo: parseInt(timeRange),
+        minutesAgo: minutesAgo,
         serviceName: selectedAgent !== 'all' ? selectedAgent : undefined,
         textSearch: debouncedSearch || undefined,
         size: 100,
@@ -765,7 +764,7 @@ export const AgentTracesPage: React.FC = () => {
     // Create 20 time buckets for the selected time range
     const numBuckets = 20;
     const now = Date.now();
-    const timeRangeMs = parseInt(timeRange) * 60 * 1000;
+    const timeRangeMs = minutesAgo * 60 * 1000;
     const bucketSize = timeRangeMs / numBuckets;
 
     const errorBuckets = Array(numBuckets).fill(0);
@@ -1218,7 +1217,7 @@ export const AgentTracesPage: React.FC = () => {
               </Select>
 
               {/* Time Range */}
-              <Select value={timeRange} onValueChange={setTimeRange}>
+              <Select value={timeRange} onValueChange={(v) => setTimeRange(v as SharedTimeRange)}>
                 <SelectTrigger className="w-[85px] h-7 text-xs">
                   <SelectValue />
                 </SelectTrigger>

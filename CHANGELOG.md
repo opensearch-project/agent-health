@@ -11,14 +11,18 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 - Cross-page user preferences are now stored under a single shared `agent-health:prefs:*` namespace, so picking a value once is reflected on every other page that exposes the same control. Shared keys:
-  - `prefs:timeRange` — Benchmarks / Test Cases / Evaluation Runs.
-  - `prefs:agentFilter` — Benchmarks / Evaluation Runs / Agent Traces filter dropdowns (default `'all'`).
+  - `prefs:timeRange` — Benchmarks / Test Cases / Evaluation Runs / Agent Traces (Agent Traces converts the shared `'1h' | '6h' | '1d' | '7d' | '30d' | 'all'` enum to its internal minute-based query cutoff).
+  - `prefs:agentFilter` — Benchmarks and Evaluation Runs filter dropdowns (default `'all'`). Not Agent Traces — its dropdown options are telemetry service names which live in a different value space than the eval pages' agent-config keys.
   - `prefs:benchmarkFilter` — Test Cases benchmark filter (default `'all'`).
   - `prefs:viewMode` — Test Cases / Evaluation Runs (`'flat' | 'grouped'`).
   - `prefs:agentKey` and `prefs:modelId` — run-config selection (QuickRunModal, NewRunPage; BenchmarkRunsPage and BenchmarkEditor read the same keys).
-  - On first load `migrateLegacyPreferences()` (in `lib/preferences.ts`, called once at app boot from `App.tsx`) scavenges values from the old per-page keys (`quick-run:agentKey`, `eval-runs:timeRange`, `benchmarks:selectedAgent`, etc.) and from the pre-namespacing `agentTraces.*` raw keys, then deletes the legacy keys so the shared key is the single source of truth.
-  - Page-specific values that don't share semantics (Dashboard time range, Agent Traces minute-based time range, all sort orders, all advanced filters, all search inputs, collapsed groups, EvalRuns benchmark / model filter sets and pass-rate range) stay under their per-page keys.
-  - Coverage: 13 unit tests in `tests/unit/lib/preferences.test.ts` for the migration, plus 18 e2e tests in `tests/e2e/sidebar-persisted-preferences.spec.ts` (including a cross-page sync test that walks Eval Runs → Benchmarks → Test Cases and verifies the shared `prefs:timeRange` is honoured on every page).
+  - The storage layout is intentionally flat — each preference is its own JSON-encoded localStorage entry under `agent-health:prefs:*`, so the bundle is portable. `lib/preferences.ts` exports `getPreferencesSnapshot()`, `applyPreferencesSnapshot()` and `clearPreferences()` for one-call dump / restore / reset, which is the natural shape to send to a server-side preference store later.
+  - Page-specific values that don't share semantics across pages stay under their per-page keys: Dashboard's narrower (`7d`/`30d`/`all`) time range, Agent Traces' page-specific agent filter (telemetry service name space), all sort orders, all advanced filters, all search inputs, collapsed groups, EvalRuns benchmark/model filter sets and pass-rate range.
+  - Coverage: 14 unit tests in `tests/unit/lib/preferences.test.ts` for the shared API (snapshot / apply / clear, time-range conversion, forward-compat for unknown keys, quota-exceeded resilience), 9 unit tests for `usePersistedSet`, 4 e2e tests for the QuickRunModal default-agent behaviour, and 19 e2e tests in `tests/e2e/sidebar-persisted-preferences.spec.ts` (including a cross-page sync test that walks Eval Runs → Benchmarks → Test Cases → Agent Traces and verifies `prefs:timeRange` stays consistent, plus a UI-position test confirming the view-toggle is in the page header with Grouped listed first).
+
+### Changed
+- Test Cases and Evaluation Runs pages: the flat / grouped view toggle now lives in the page header (next to search and filters) rather than in a separate row below the title — matches the Benchmarks layout for a consistent feel. **Grouped is listed first** in both pages.
+- Agent Traces page: time-range options unified with the eval list pages (`Last 1h`, `Last 6h`, `Last 1d`, `Last 7d`, `Last 30d`, `All time`) so the shared `prefs:timeRange` carries cleanly across them. The previous minute-granularity options (15m, 3h, 6h, 12h, 3d) are no longer offered; `'all'` is treated as a 90-day cutoff at query time.
 - Persist input preferences across all sidebar pages so filters, sorts, search queries and view modes survive reloads and SPA navigation. Newly-persisted state, all under the unified `agent-health:` localStorage namespace and powered by `usePersistedState` (and the new `usePersistedSet` helper for `Set<string>`-shaped state):
     - **Dashboard `/`** — `dashboard:timeRange`, `dashboard:selectedMetric`, `dashboard:filters`.
     - **Benchmarks `/evaluations/benchmarks`** — `benchmarks:search` (already had `timeRange`, `selectedAgent`, `sort`).

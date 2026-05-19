@@ -640,6 +640,15 @@ export const EvalRunsPage: React.FC = () => {
               {TIME_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
             </SelectContent>
           </Select>
+          {/* View mode toggle (Grouped first — default mental model) */}
+          <div className="flex items-center border border-border rounded-md overflow-hidden h-7" data-testid="viewmode-toggle">
+            <button data-testid="viewmode-grouped" onClick={() => setViewMode('grouped')} className={`px-2 h-full text-xs flex items-center gap-1 transition-colors ${viewMode === 'grouped' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+              <Layers size={11} /> Grouped
+            </button>
+            <button data-testid="viewmode-flat" onClick={() => setViewMode('flat')} className={`px-2 h-full text-xs flex items-center gap-1 transition-colors ${viewMode === 'flat' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+              <List size={11} /> Flat
+            </button>
+          </div>
           <Button variant="outline" size="sm" onClick={loadData} disabled={loading} className="h-7">
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
           </Button>
@@ -759,17 +768,8 @@ export const EvalRunsPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── Inline Metrics Bar ──────────────────────────────────── */}
-      {/* ── View Toggle ────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center border border-border rounded-md overflow-hidden">
-          <button onClick={() => setViewMode('grouped')} className={`px-2 py-1 text-xs flex items-center gap-1 transition-colors ${viewMode === 'grouped' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
-            <Layers size={11} /> Grouped
-          </button>
-          <button onClick={() => setViewMode('flat')} className={`px-2 py-1 text-xs flex items-center gap-1 transition-colors ${viewMode === 'flat' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
-            <List size={11} /> Flat
-          </button>
-        </div>
+      {/* ── Inline Metrics Bar (view toggle moved into header) ── */}
+      <div className="flex items-center justify-end mb-2">
         <span className="text-[10px] text-muted-foreground">{totalRuns} run{totalRuns !== 1 ? 's' : ''}</span>
       </div>
 

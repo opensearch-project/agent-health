@@ -6,12 +6,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
 import { refreshConfig, subscribeConfigChange } from '@/lib/constants';
-import { migrateLegacyPreferences } from '@/lib/preferences';
-
-// Run preference migration synchronously at module load — must happen
-// before any component renders so that `usePersistedState` reads the
-// already-migrated `prefs:*` keys on first hydration.
-migrateLegacyPreferences();
 import { initializeTheme } from '@/lib/theme';
 import { ENV_CONFIG } from '@/lib/config';
 import { Layout } from './components/Layout';

@@ -7,7 +7,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { migrateLegacyPreferences, PREFS_KEYS } from '@/lib/preferences';
+import {
+  PREFS_KEYS,
+  applyPreferencesSnapshot,
+  clearPreferences,
+  getPreferencesSnapshot,
+  sharedTimeRangeToMinutes,
+} from '@/lib/preferences';
 
 const PREFIX = 'agent-health:';
 
@@ -19,104 +25,140 @@ function get(key: string): unknown {
   return raw === null ? null : JSON.parse(raw);
 }
 
-describe('migrateLegacyPreferences', () => {
+describe('preferences', () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
-  it('is a no-op when no legacy keys exist', () => {
-    migrateLegacyPreferences();
-    for (const key of Object.values(PREFS_KEYS)) {
-      expect(get(key)).toBeNull();
-    }
+  describe('PREFS_KEYS', () => {
+    it('exposes a stable, namespaced key for every shared preference', () => {
+      // The shape of these constants is part of the public contract:
+      // call sites and exported snapshots reference them by string.
+      expect(PREFS_KEYS).toEqual({
+        agentKey: 'prefs:agentKey',
+        modelId: 'prefs:modelId',
+        timeRange: 'prefs:timeRange',
+        agentFilter: 'prefs:agentFilter',
+        benchmarkFilter: 'prefs:benchmarkFilter',
+        viewMode: 'prefs:viewMode',
+      });
+    });
   });
 
-  it('migrates `quick-run:agentKey` into `prefs:agentKey` and removes the legacy key', () => {
-    set('quick-run:agentKey', 'observio');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.agentKey)).toBe('observio');
-    expect(localStorage.getItem(PREFIX + 'quick-run:agentKey')).toBeNull();
+  describe('sharedTimeRangeToMinutes', () => {
+    it('translates each enum value to the expected minute count', () => {
+      expect(sharedTimeRangeToMinutes('1h')).toBe(60);
+      expect(sharedTimeRangeToMinutes('6h')).toBe(360);
+      expect(sharedTimeRangeToMinutes('1d')).toBe(1440);
+      expect(sharedTimeRangeToMinutes('7d')).toBe(10080);
+      expect(sharedTimeRangeToMinutes('30d')).toBe(43200);
+    });
+
+    it("treats 'all' as a 90-day window so the AgentTraces query still has a finite cutoff", () => {
+      expect(sharedTimeRangeToMinutes('all')).toBe(60 * 24 * 90);
+    });
   });
 
-  it('prefers `quick-run:agentKey` over `new-run:agentKey`', () => {
-    set('quick-run:agentKey', 'observio');
-    set('new-run:agentKey', 'demo');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.agentKey)).toBe('observio');
+  describe('getPreferencesSnapshot', () => {
+    it('returns an empty object when nothing is stored', () => {
+      expect(getPreferencesSnapshot()).toEqual({});
+    });
+
+    it('returns every known preference as a JSON-decoded value', () => {
+      set(PREFS_KEYS.agentKey, 'observio');
+      set(PREFS_KEYS.modelId, 'claude-sonnet-4.5');
+      set(PREFS_KEYS.timeRange, '7d');
+      set(PREFS_KEYS.agentFilter, 'all');
+      set(PREFS_KEYS.benchmarkFilter, 'bm-123');
+      set(PREFS_KEYS.viewMode, 'grouped');
+
+      expect(getPreferencesSnapshot()).toEqual({
+        [PREFS_KEYS.agentKey]: 'observio',
+        [PREFS_KEYS.modelId]: 'claude-sonnet-4.5',
+        [PREFS_KEYS.timeRange]: '7d',
+        [PREFS_KEYS.agentFilter]: 'all',
+        [PREFS_KEYS.benchmarkFilter]: 'bm-123',
+        [PREFS_KEYS.viewMode]: 'grouped',
+      });
+    });
+
+    it('skips entries with malformed JSON without throwing', () => {
+      set(PREFS_KEYS.agentKey, 'observio');
+      localStorage.setItem(PREFIX + PREFS_KEYS.timeRange, 'not-json{{{');
+      expect(getPreferencesSnapshot()).toEqual({
+        [PREFS_KEYS.agentKey]: 'observio',
+      });
+    });
+
+    it('ignores non-prefs keys in the namespace', () => {
+      // Set a non-prefs key — it must NOT appear in the snapshot
+      localStorage.setItem(PREFIX + 'eval-runs:search', JSON.stringify('foo'));
+      set(PREFS_KEYS.agentKey, 'observio');
+      const snap = getPreferencesSnapshot();
+      expect(snap).toEqual({ [PREFS_KEYS.agentKey]: 'observio' });
+      expect((snap as Record<string, unknown>)['eval-runs:search']).toBeUndefined();
+    });
   });
 
-  it('falls back to `new-run:agentKey` when `quick-run:agentKey` is absent', () => {
-    set('new-run:agentKey', 'demo');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.agentKey)).toBe('demo');
+  describe('applyPreferencesSnapshot', () => {
+    it('writes every known key into localStorage as JSON-encoded values', () => {
+      applyPreferencesSnapshot({
+        [PREFS_KEYS.agentKey]: 'observio',
+        [PREFS_KEYS.timeRange]: '30d',
+        [PREFS_KEYS.viewMode]: 'grouped',
+      });
+      expect(get(PREFS_KEYS.agentKey)).toBe('observio');
+      expect(get(PREFS_KEYS.timeRange)).toBe('30d');
+      expect(get(PREFS_KEYS.viewMode)).toBe('grouped');
+    });
+
+    it('overwrites any existing value for known keys', () => {
+      set(PREFS_KEYS.agentKey, 'demo');
+      applyPreferencesSnapshot({ [PREFS_KEYS.agentKey]: 'observio' });
+      expect(get(PREFS_KEYS.agentKey)).toBe('observio');
+    });
+
+    it('ignores unknown keys for forward-compatibility', () => {
+      applyPreferencesSnapshot({
+        [PREFS_KEYS.agentKey]: 'observio',
+        'prefs:future-key-we-have-not-added-yet': 'someValue',
+      });
+      expect(get(PREFS_KEYS.agentKey)).toBe('observio');
+      expect(localStorage.getItem(PREFIX + 'prefs:future-key-we-have-not-added-yet')).toBeNull();
+    });
+
+    it('round-trips with getPreferencesSnapshot()', () => {
+      const original = {
+        [PREFS_KEYS.agentKey]: 'observio',
+        [PREFS_KEYS.timeRange]: '7d',
+        [PREFS_KEYS.viewMode]: 'flat',
+      };
+      applyPreferencesSnapshot(original);
+      expect(getPreferencesSnapshot()).toEqual(original);
+    });
+
+    it('does not throw when localStorage rejects writes (quota / disabled)', () => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = jest.fn(() => { throw new Error('quota exceeded'); });
+      expect(() => applyPreferencesSnapshot({ [PREFS_KEYS.agentKey]: 'observio' })).not.toThrow();
+      Storage.prototype.setItem = original;
+    });
   });
 
-  it('does not overwrite an existing `prefs:*` value', () => {
-    set(PREFS_KEYS.agentKey, 'observio');
-    set('quick-run:agentKey', 'demo');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.agentKey)).toBe('observio');
-    // Legacy key is still removed once a value has been seen
-    expect(localStorage.getItem(PREFIX + 'quick-run:agentKey')).toBeNull();
-  });
+  describe('clearPreferences', () => {
+    it('removes every shared key from localStorage', () => {
+      for (const key of Object.values(PREFS_KEYS)) {
+        set(key, 'sentinel');
+      }
+      clearPreferences();
+      expect(getPreferencesSnapshot()).toEqual({});
+    });
 
-  it('migrates the most-relevant legacy timeRange and clears the rest', () => {
-    set('eval-runs:timeRange', '7d');
-    set('benchmarks:timeRange', 'all');
-    set('test-cases:timeRange', '30d');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.timeRange)).toBe('7d');
-    expect(localStorage.getItem(PREFIX + 'eval-runs:timeRange')).toBeNull();
-    expect(localStorage.getItem(PREFIX + 'benchmarks:timeRange')).toBeNull();
-    expect(localStorage.getItem(PREFIX + 'test-cases:timeRange')).toBeNull();
-  });
-
-  it('migrates agent filter from any of the three list pages', () => {
-    set('benchmarks:selectedAgent', 'observio');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.agentFilter)).toBe('observio');
-  });
-
-  it('migrates legacy unprefixed `agentTraces.selectedAgent` directly into `prefs:agentFilter`', () => {
-    // Pre-namespacing key, no JSON wrapping
-    localStorage.setItem('agentTraces.selectedAgent', 'observio');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.agentFilter)).toBe('observio');
-    expect(localStorage.getItem('agentTraces.selectedAgent')).toBeNull();
-  });
-
-  it('migrates legacy unprefixed `agentTraces.timeRange` to the page-specific key', () => {
-    localStorage.setItem('agentTraces.timeRange', '4320');
-    migrateLegacyPreferences();
-    // Page-specific key (not shared, units differ)
-    expect(get('agent-traces:timeRange')).toBe('4320');
-    expect(localStorage.getItem('agentTraces.timeRange')).toBeNull();
-  });
-
-  it('migrates viewMode preference', () => {
-    set('test-cases:viewMode', 'grouped');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.viewMode)).toBe('grouped');
-  });
-
-  it('migrates benchmarkFilter preference', () => {
-    set('test-cases:selectedBenchmark', 'bm-123');
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.benchmarkFilter)).toBe('bm-123');
-  });
-
-  it('is idempotent when called multiple times', () => {
-    set('quick-run:agentKey', 'observio');
-    migrateLegacyPreferences();
-    migrateLegacyPreferences();
-    migrateLegacyPreferences();
-    expect(get(PREFS_KEYS.agentKey)).toBe('observio');
-  });
-
-  it('does not crash when localStorage throws (quota / disabled)', () => {
-    const original = Storage.prototype.setItem;
-    Storage.prototype.setItem = jest.fn(() => { throw new Error('quota exceeded'); });
-    expect(() => migrateLegacyPreferences()).not.toThrow();
-    Storage.prototype.setItem = original;
+    it('leaves non-prefs keys alone', () => {
+      set(PREFS_KEYS.agentKey, 'observio');
+      localStorage.setItem(PREFIX + 'eval-runs:search', JSON.stringify('foo'));
+      clearPreferences();
+      expect(localStorage.getItem(PREFIX + 'eval-runs:search')).toBe(JSON.stringify('foo'));
+    });
   });
 });
