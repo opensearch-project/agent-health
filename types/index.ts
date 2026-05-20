@@ -97,6 +97,18 @@ export interface AgentConfig {
     intervalMs?: number;   // Polling interval in ms (default: 10000)
     maxAttempts?: number;  // Max polling attempts (default: 30, ~5 min total)
   };
+  /**
+   * OTel `service.name` resource attribute that this agent reports under.
+   * Defaults to {@link AgentConfig.key} when not set, which is correct for
+   * agents whose OTel SDK uses the same identifier as the config key (e.g.
+   * `claude-code`). Override only when the agent's OTel service name differs
+   * from its config key, e.g. `observio` -> `observio-sample-agent`.
+   *
+   * Used by the Agent Traces page to translate the user's cross-page agent
+   * filter (`agent-health:prefs:agentFilter`, which stores agent keys) into
+   * the actual `service.name` to filter by in OpenSearch queries.
+   */
+  traceServiceName?: string;
   connectorType?: ConnectorProtocol; // Connector protocol (defaults to 'agui-streaming')
   connectorConfig?: Record<string, any>; // Connector-specific configuration
   hooks?: AgentHooks; // Lifecycle hooks for custom setup/transform logic

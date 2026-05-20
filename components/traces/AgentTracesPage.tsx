@@ -304,12 +304,13 @@ export const AgentTracesPage: React.FC = () => {
   const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
   
   // Filter state — persisted across sessions.
-  //   * Time range is shared with the eval list pages via `prefs:timeRange`,
-  //     using the unified `'1h' | '6h' | '1d' | '7d' | '30d' | 'all'` enum;
-  //     we convert to a "minutes ago" cutoff for the OTel query below.
-  //   * Agent filter is page-specific because AgentTracesPage's options come
-  //     from telemetry service names rather than agent config keys.
-  const [selectedAgent, setSelectedAgent] = usePersistedState<string>('agent-traces:selectedAgent', 'all');
+  //   * Agent filter is shared with the eval list pages via `prefs:agentFilter`.
+  //     The dropdown values are agent config keys (e.g. `'observio'`); when
+  //     querying OpenSearch we translate the key to the agent's actual OTel
+  //     `service.name` via {@link AgentConfig.traceServiceName} (falling back
+  //     to the key itself when the field is unset).
+  //   * Time range is shared via `prefs:timeRange`.
+  const [selectedAgent, setSelectedAgent] = usePersistedState<string>(PREFS_KEYS.agentFilter, 'all');
   const [textSearch, setTextSearch] = usePersistedState<string>('agent-traces:textSearch', '');
   // Seed debouncedSearch with the persisted textSearch so the initial query
   // includes any restored search text without waiting for the debounce timer.
@@ -385,11 +386,27 @@ export const AgentTracesPage: React.FC = () => {
   // Get unique service names from agents config (no memo — recomputes when
   // parent App re-renders after refreshConfig(), keeping custom agents visible)
   const agentOptions = (() => {
+    // Use agent.key as the dropdown value so the filter is consistent with
+    // the eval list pages and the shared `prefs:agentFilter` localStorage
+    // key carries cleanly across all of them. Display name stays human-
+    // readable.
     const agents = DEFAULT_CONFIG.agents
       .filter(a => a.enabled !== false)
-      .map(a => ({ value: a.name, label: a.name }));
+      .map(a => ({ value: a.key, label: a.name }));
     return [{ value: 'all', label: 'All Agents' }, ...agents];
   })();
+
+  /**
+   * Translate the selected agent key (e.g. 'observio') into the OTel
+   * `service.name` value to filter on (e.g. 'observio-sample-agent').
+   * Falls back to the key itself when no override is set, which is correct
+   * for agents whose OTel SDK uses the same identifier (e.g. `claude-code`).
+   */
+  const selectedAgentServiceName = useMemo(() => {
+    if (selectedAgent === 'all') return undefined;
+    const cfg = DEFAULT_CONFIG.agents.find(a => a.key === selectedAgent);
+    return cfg?.traceServiceName ?? selectedAgent;
+  }, [selectedAgent]);
 
   // Time range options — unified with eval list pages.
   const timeRangeOptions: { value: SharedTimeRange; label: string }[] = [
@@ -500,7 +517,7 @@ export const AgentTracesPage: React.FC = () => {
     try {
       const result = await fetchRecentTraces({
         minutesAgo: minutesAgo,
-        serviceName: selectedAgent !== 'all' ? selectedAgent : undefined,
+        serviceName: selectedAgentServiceName,
         textSearch: debouncedSearch || undefined,
         size: 100,
       });
@@ -539,7 +556,7 @@ export const AgentTracesPage: React.FC = () => {
     try {
       const result = await fetchRecentTraces({
         minutesAgo: minutesAgo,
-        serviceName: selectedAgent !== 'all' ? selectedAgent : undefined,
+        serviceName: selectedAgentServiceName,
         textSearch: debouncedSearch || undefined,
         size: 100,
         cursor: currentCursor,

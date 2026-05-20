@@ -235,11 +235,13 @@ test.describe('Sidebar pages — persisted preferences round-trip', () => {
   // Agent Traces — /agent-traces
   // ─────────────────────────────────────────────────────────────────────────
   test.describe('Agent Traces (/agent-traces)', () => {
-    test('persists selectedAgent (page-specific), shared timeRange, textSearch and structured filters', async ({ page }) => {
-      // Agent filter is page-specific (its option values are telemetry
-      // service names, which don't match the agent-config keys used by
-      // the eval list pages). Time range is shared via `prefs:timeRange`.
-      await setPref(page, 'agent-traces:selectedAgent', 'observio-agent');
+    test('persists shared agent filter, shared timeRange, textSearch and structured filters', async ({ page }) => {
+      // Both agent filter and time range are shared with the eval list pages
+      // (agent filter via `prefs:agentFilter`, time range via
+      // `prefs:timeRange`). The dropdown stores the agent's *config key* and
+      // AgentTracesPage internally translates to the OTel `service.name`
+      // via `AgentConfig.traceServiceName` at query time.
+      await setPref(page, 'prefs:agentFilter', 'observio');
       await setPref(page, 'prefs:timeRange', '1h');
       await setPref(page, 'agent-traces:textSearch', 'connection refused');
       await setPref(page, 'agent-traces:filters', {
@@ -261,7 +263,7 @@ test.describe('Sidebar pages — persisted preferences round-trip', () => {
       await page.waitForLoadState('domcontentloaded');
       await page.waitForTimeout(500);
 
-      expect(await getPref(page, 'agent-traces:selectedAgent')).toBe(JSON.stringify('observio-agent'));
+      expect(await getPref(page, 'prefs:agentFilter')).toBe(JSON.stringify('observio'));
       expect(await getPref(page, 'prefs:timeRange')).toBe(JSON.stringify('1h'));
       expect(await getPref(page, 'agent-traces:textSearch')).toBe(JSON.stringify('connection refused'));
       const filters = JSON.parse((await getPref(page, 'agent-traces:filters'))!);
@@ -358,13 +360,15 @@ test.describe('Sidebar pages — persisted preferences round-trip', () => {
         await page.waitForTimeout(300);
         expect(await getPref(page, 'prefs:timeRange')).toBe(JSON.stringify('7d'));
       }
-      // Agent filter is verified only on the eval list pages where it's
-      // semantically meaningful (Agent Traces uses a different value space).
-      const evalVisits = [
+      // Agent filter is verified across all three pages — it's now shared
+      // with Agent Traces too because that page stores the agent *key* and
+      // translates to the OTel `service.name` internally.
+      const agentFilterVisits = [
         { url: '/evaluations/benchmarks', selector: '[data-testid="benchmarks-page"]' },
         { url: '/evaluations/runs', selector: 'h2' },
+        { url: '/agent-traces', selector: 'h2' },
       ];
-      for (const { url, selector } of evalVisits) {
+      for (const { url, selector } of agentFilterVisits) {
         await page.goto(url);
         await page.waitForSelector(selector, { timeout: 30000 });
         await page.waitForTimeout(300);

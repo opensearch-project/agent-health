@@ -173,6 +173,11 @@ export const DEFAULT_CONFIG: AppConfig = {
       connectorType: "agui-streaming",
       headers: {},
       useTraces: true,
+      // OTel `service.name` differs from the agent key for the observio sample
+      // agent (see observio-sample-agent/src/telemetry/provider.ts), so the
+      // Agent Traces page translates `prefs:agentFilter == 'observio'` to a
+      // service-name filter of 'observio-sample-agent' at query time.
+      traceServiceName: "observio-sample-agent",
     },
     {
       key: "claude-code",
