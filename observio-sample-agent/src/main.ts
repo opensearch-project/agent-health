@@ -25,8 +25,11 @@ import { AgentFactory } from './agents/agent_factory';
 import { Logger } from './utils/logger';
 import { ConfigLoader } from './config/config_loader';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables — own dir first, then parent project .env
+// (matches main_ag_ui.ts so observio inherits the agent-health config when
+// run as a built-in agent and falls back to its own .env when standalone).
+dotenv.config(); // observio-sample-agent/.env
+dotenv.config({ path: '../.env' }); // parent project .env (won't override existing vars)
 
 // Main execution
 async function main() {

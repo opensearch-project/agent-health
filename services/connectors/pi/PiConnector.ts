@@ -59,6 +59,8 @@ export class PiConnector extends SubprocessConnector {
   readonly type = 'pi' as const;
   override readonly name = 'Pi (pi.dev)';
 
+  override traceContext = { propagateEnv: true, serviceName: 'pi-agent' };
+
   private piOutputBuffer = '';
   private piThinkingBuffer = '';
   private piTextBuffer = '';

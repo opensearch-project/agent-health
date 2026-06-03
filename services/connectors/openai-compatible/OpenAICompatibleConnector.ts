@@ -71,6 +71,8 @@ interface ChatCompletionResponse {
 export class OpenAICompatibleConnector extends BaseConnector {
   readonly type = 'openai-compatible' as const;
   readonly name = 'OpenAI-compatible';
+
+  override traceContext = { propagateHeader: true };
   readonly supportsStreaming = false;
 
   /**
@@ -128,7 +130,7 @@ export class OpenAICompatibleConnector extends BaseConnector {
   ): Promise<ConnectorResponse> {
     const payload = request.payload || this.buildPayload(request);
     const headers = this.buildAuthHeaders(auth);
-
+    this.injectTraceparentHeaders(headers);
     this.debug('Executing OpenAI-compatible request');
     this.debug('Endpoint:', endpoint);
     this.debug('Model:', payload.model);

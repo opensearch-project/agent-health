@@ -585,6 +585,15 @@ export interface TraceQueryParams {
   serviceName?: string;
   textSearch?: string;
   cursor?: string; // For pagination
+  /**
+   * Strategy C (opt-in): include any spans where `serviceName` matches AND
+   * `startTime` falls within `[startedAt, endedAt]`. Used by the run-report
+   * Traces tab as a fallback for agents that don't propagate W3C trace context
+   * (TRACEPARENT) and don't tag spans with `gen_ai.request.id` matching our
+   * runId. May surface unrelated spans (concurrent runs, cross-team noise).
+   * See AGENTS.md → Trace correlation conventions.
+   */
+  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number }>;
 }
 
 export interface ConversationMessage {

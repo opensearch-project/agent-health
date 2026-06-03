@@ -72,6 +72,8 @@ export class KiroConnector extends SubprocessConnector {
   override readonly type = 'kiro' as const;
   override readonly name = 'Kiro CLI';
 
+  override traceContext = { propagateEnv: true, serviceName: 'kiro-agent' };
+
   /** Carry-over for a partial last line on stderr stream */
   private stderrLineBuffer = '';
 

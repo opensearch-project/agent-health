@@ -64,6 +64,14 @@ export interface TracesQueryOptions {
   serviceName?: string;
   textSearch?: string;
   cursor?: string; // For pagination: encoded search_after values
+  /**
+   * Strategy C (opt-in): include any spans where
+   *   `serviceName` matches AND `startTime` falls within `[startedAt, endedAt]`.
+   * Used as a fallback for agents that don't propagate W3C trace context
+   * (TRACEPARENT) and don't tag spans with `gen_ai.request.id` matching our
+   * runId. May surface unrelated spans (concurrent runs, cross-team noise).
+   */
+  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number }>;
 }
 
 export interface TracesResponse {
@@ -216,29 +224,74 @@ export async function fetchTraces(
   client: Client,
   indexPattern: string = 'otel-v1-apm-span-*'
 ): Promise<TracesResponse> {
-  const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor } = options;
+  const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor, agents } = options;
 
   // For live tailing, we allow queries with just time range + optional filters
   const hasTimeRange = startTime || endTime;
-  const hasIdFilter = traceId || (runIds && runIds.length > 0) || sessionId;
+  const hasIdFilter = traceId || (runIds && runIds.length > 0) || sessionId || (agents && agents.length > 0);
 
   if (!hasIdFilter && !hasTimeRange) {
-    throw new Error('Either traceId, runIds, sessionId, or time range is required');
+    throw new Error('Either traceId, runIds, sessionId, agents, or time range is required');
   }
 
-  debug('TracesService', 'Fetching traces:', { traceId, runIds: runIds?.length, serviceName, textSearch, size, cursor: cursor ? 'present' : 'none' });
+  debug('TracesService', 'Fetching traces:', { traceId, runIds: runIds?.length, agents: agents?.length, serviceName, textSearch, size, cursor: cursor ? 'present' : 'none' });
 
-  // Build OpenSearch query
+  // Build OpenSearch query.
+  //
+  // Correlation strategies (see AGENTS.md → Trace correlation conventions):
+  //   A. traceId  —  W3C-propagated agents share traceId with the eval span
+  //   B. runIds   —  agents tag spans with gen_ai.request.id == runId
+  //   C. agents   —  service.name + time-window fallback (opt-in, may be noisy)
+  //
+  // When the caller wants any-of-these (run-report Traces tab), we OR them via
+  // bool.should so spans matching any single strategy are returned.
+  const useUnion =
+    [
+      !!traceId,
+      !!(runIds && runIds.length > 0),
+      !!(agents && agents.length > 0),
+    ].filter(Boolean).length > 1;
+
   const must: any[] = [];
+  const should: any[] = [];
+  const sink = useUnion ? should : must;
 
   if (traceId) {
-    must.push({ term: { 'traceId': traceId } });
+    sink.push({ term: { 'traceId': traceId } });
   }
 
   if (runIds && runIds.length > 0) {
-    must.push({
+    sink.push({
       terms: { 'span.attributes.gen_ai@request@id': runIds }
     });
+  }
+
+  if (agents && agents.length > 0) {
+    for (const a of agents) {
+      sink.push({
+        bool: {
+          must: [
+            {
+              bool: {
+                should: [
+                  { term: { 'serviceName': a.serviceName } },
+                  { term: { 'span.attributes.gen_ai@agent@name': a.serviceName } },
+                ],
+                minimum_should_match: 1,
+              },
+            },
+            {
+              range: {
+                'startTime': {
+                  gte: new Date(a.startedAt).toISOString(),
+                  lte: new Date(a.endedAt).toISOString(),
+                },
+              },
+            },
+          ],
+        },
+      });
+    }
   }
 
   if (sessionId) {
@@ -279,7 +332,9 @@ export async function fetchTraces(
   const body: any = {
     size,
     sort: [{ 'startTime': { order: 'desc' } }],  // Most recent first for live tailing
-    query: { bool: { must } }
+    query: useUnion
+      ? { bool: { must, should, minimum_should_match: 1 } }
+      : { bool: { must } }
   };
 
   // Add cursor for pagination (search_after in OpenSearch)

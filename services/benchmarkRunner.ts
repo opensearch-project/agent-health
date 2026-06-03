@@ -53,7 +53,8 @@ import {
   finalizeTestSuiteRunSpan,
   emitDeferredTestCaseSpan,
 } from '@/lib/telemetry';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { SpanStatusCode, context, trace } from '@opentelemetry/api';
+import { ATTR_AGENT_HEALTH_AGENT_RUN_ID } from '@/lib/telemetry/constants';
 
 /**
  * Safely load config with fallback to defaults.
@@ -286,8 +287,19 @@ export async function executeRun(
         debug('BenchmarkRunner', `[${testCaseId}] Starting evaluation (${completedCount}/${totalTestCases} completed)`);
         const testCaseStartTime = Date.now();
 
-        // OTel case span will be started after evaluation (when we know the agentRunId)
+        // Start the OTel `test_case` span BEFORE running the agent so the eval
+        // span is the active OTel context when the connector spawns/calls the
+        // agent. Connectors with `traceContext.propagateEnv/Header` inject
+        // TRACEPARENT, making the agent's root span a child of this eval span
+        // (single trace tree). agentRunId is unknown at this point — set as
+        // attribute later when the report comes back.
         let caseSpan: import('@opentelemetry/api').Span | undefined;
+        let caseSpanContext: import('@opentelemetry/api').Context | undefined;
+        if (suiteContext) {
+          const r = startTestCaseSpan(suiteContext, testCase, benchmark, run);
+          caseSpan = r?.span;
+          caseSpanContext = r?.context;
+        }
 
         // Set status to running
         run.results[testCaseId] = { reportId: '', status: 'running' };
@@ -312,13 +324,18 @@ export async function executeRun(
           } else {
             // Run the evaluation using connector. Pass skipJudge when a
             // deterministic body is going to decide pass/fail.
-            report = await runEvaluationWithConnector(
+            // Wrap in context.with(caseSpanContext) so the connector sees the
+            // eval span as active and propagates W3C trace context to the agent.
+            const runEval = () => runEvaluationWithConnector(
               agentConfig,
               bedrockModelId,
               testCase,
               () => {},
               { registry: connectorRegistry, evaluatorId: run.evaluatorId, skipJudge: hasDeterministicEval }
             );
+            report = caseSpanContext
+              ? await context.with(caseSpanContext, runEval)
+              : await runEval();
           }
 
           // If the test has a deterministic body, run it inside a
@@ -394,16 +411,17 @@ export async function executeRun(
             pendingTracePolls.push(pollPromise.catch(() => {}));
           }
 
-          // Start and finalize OTel case span (now that we know the agentRunId)
-          if (suiteContext) {
-            const caseSpanResult = startTestCaseSpan(
-              suiteContext, testCase, benchmark, run, savedReport.runId
-            );
-            caseSpan = caseSpanResult?.span;
-            if (caseSpan && savedReport.metricsStatus !== 'pending') {
+          // Finalize the eval test_case span. agentRunId is now known (it
+          // wasn't when we started the span before invoking the agent).
+          if (caseSpan) {
+            caseSpan.setAttribute(ATTR_AGENT_HEALTH_AGENT_RUN_ID, savedReport.runId || '');
+            if (savedReport.metricsStatus !== 'pending') {
               addEvaluationResultEvents(caseSpan, savedReport);
               finalizeTestCaseSpan(caseSpan, savedReport);
-            } else if (caseSpan) {
+            } else {
+              // Trace-mode: judge runs later when polled spans arrive. End span
+              // as-is so the trace tree is closed; the late-completion path at
+              // line ~832 emits a separate span with the final metrics.
               caseSpan.end();
             }
           }
@@ -619,14 +637,26 @@ export async function runSingleUseCase(
   const bedrockModelId = getBedrockModelId(run.modelId);
   const startTime = new Date();
 
-  // Run the evaluation using connector
-  const report = await runEvaluationWithConnector(
+  // Start the OTel `test_case` span BEFORE running the agent so the eval span
+  // is the active OTel context when the connector spawns/calls the agent.
+  // Connectors with `traceContext.propagateEnv/Header` inject TRACEPARENT,
+  // making the agent's root span a child of this eval span (single trace tree).
+  const standaloneBenchmark = { name: `standalone:${agentConfig.name || agentConfig.key}` } as Benchmark;
+  const caseSpanResult = startTestCaseSpan(context.active(), testCase, standaloneBenchmark, run);
+  const caseSpan = caseSpanResult?.span;
+  const caseSpanContext = caseSpanResult?.context;
+
+  // Run the evaluation using connector, with the eval span as active context.
+  const runEval = () => runEvaluationWithConnector(
     agentConfig,
     bedrockModelId,
     testCase,
     onStep || (() => {}),
     { registry: connectorRegistry, evaluatorId }
   );
+  const report = caseSpanContext
+    ? await context.with(caseSpanContext, runEval)
+    : await runEval();
 
   // If a placeholder run was pre-created, update it instead of creating a new one.
   // We use the storage-layer field names (traceId, etc.) to match `saveReportWithModule`
@@ -684,17 +714,18 @@ export async function runSingleUseCase(
     }
   }
 
-  // Emit OTel eval span for this standalone test run (if telemetry enabled and not pending judge)
-  if (savedReport.metricsStatus !== 'pending') {
-    emitDeferredTestCaseSpan(
-      testCase,
-      savedReport,
-      { name: `standalone:${agentConfig.name || agentConfig.key}` },
-      run.id,
-      savedReport.runId,
-      startTime,
-      new Date()
-    );
+  // Finalize the eval test_case span. agentRunId is now known.
+  // For trace-mode runs (metricsStatus='pending'), judge runs later when
+  // polled spans arrive — we end the span as-is here so its trace tree is
+  // closed; the late-completion path emits a separate span with final metrics.
+  if (caseSpan) {
+    caseSpan.setAttribute(ATTR_AGENT_HEALTH_AGENT_RUN_ID, savedReport.runId || '');
+    if (savedReport.metricsStatus !== 'pending') {
+      addEvaluationResultEvents(caseSpan, savedReport);
+      finalizeTestCaseSpan(caseSpan, savedReport);
+    } else {
+      caseSpan.end();
+    }
   }
 
   return savedReport.id;

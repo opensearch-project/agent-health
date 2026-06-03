@@ -25,6 +25,8 @@ import type {
 export class RESTConnector extends BaseConnector {
   readonly type = 'rest' as const;
   readonly name = 'REST API';
+
+  override traceContext = { propagateHeader: true };
   readonly supportsStreaming = false;
 
   /**
@@ -53,6 +55,7 @@ export class RESTConnector extends BaseConnector {
     // Use pre-built payload from hook if available, otherwise build fresh
     const payload = request.payload || this.buildPayload(request);
     const headers = this.buildAuthHeaders(auth);
+    this.injectTraceparentHeaders(headers);
 
     this.debug('Executing REST request');
     this.debug('Endpoint:', endpoint);

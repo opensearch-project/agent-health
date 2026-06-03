@@ -156,7 +156,7 @@ describe('tracesService', () => {
     it('should throw error when no filter provided', async () => {
       const client = createMockClient();
       await expect(fetchTraces({}, client)).rejects.toThrow(
-        'Either traceId, runIds, sessionId, or time range is required'
+        'Either traceId, runIds, sessionId, agents, or time range is required'
       );
     });
 

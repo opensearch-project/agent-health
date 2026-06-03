@@ -30,15 +30,22 @@ const router = Router();
  */
 router.post('/api/traces', async (req: Request, res: Response) => {
   try {
-    const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor } = req.body;
+    const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor, agents } = req.body;
 
     if (sessionId !== undefined && typeof sessionId !== 'string') {
       return res.status(400).json({ error: 'sessionId must be a string' });
     }
+    if (agents !== undefined && (!Array.isArray(agents) || agents.some((a: any) =>
+        !a || typeof a.serviceName !== 'string' ||
+        typeof a.startedAt !== 'number' || typeof a.endedAt !== 'number'))) {
+      return res.status(400).json({
+        error: 'agents must be an array of { serviceName: string, startedAt: number, endedAt: number }'
+      });
+    }
 
     // Validate request - allow time range queries for live tailing
     const hasTimeRange = startTime || endTime;
-    const hasIdFilter = traceId || (runIds && runIds.length > 0) || sessionId;
+    const hasIdFilter = traceId || (runIds && runIds.length > 0) || sessionId || (agents && agents.length > 0);
 
     if (!hasIdFilter && !hasTimeRange) {
       return res.status(400).json({
@@ -64,10 +71,10 @@ router.post('/api/traces', async (req: Request, res: Response) => {
     let hasMore: boolean = false;
     const obs = getObservabilityClient(req);
 
-    if (obs && (traceId || (runIds && runIds.length > 0) || sessionId || startTime || endTime)) {
+    if (obs && (traceId || (runIds && runIds.length > 0) || sessionId || startTime || endTime || (agents && agents.length > 0))) {
       try {
         const result = await fetchTraces(
-          { traceId, runIds, sessionId, startTime, endTime, size, serviceName, textSearch, cursor },
+          { traceId, runIds, sessionId, startTime, endTime, size, serviceName, textSearch, cursor, agents },
           obs.client,
           obs.indexes.traces
         );

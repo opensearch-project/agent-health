@@ -95,6 +95,29 @@ export type ConnectorProgressCallback = (step: TrajectoryStep) => void;
  */
 export type ConnectorRawEventCallback = (event: any) => void;
 
+// ============ Trace Context Propagation ============
+
+/**
+ * Per-connector configuration for propagating OTel trace context to the
+ * downstream agent, so the agent's spans become children of agent-health's
+ * `test_case` eval span (single trace tree).
+ *
+ * Strategies (see docs/AGENT.md → "Trace correlation conventions"):
+ *   A. propagateEnv     — inject W3C TRACEPARENT env var into subprocess
+ *   A. propagateHeader  — inject W3C `traceparent` HTTP header into request
+ *   C. serviceName      — OpenSearch `service.name` to look for as a
+ *                          time-window fallback when A/B don't apply
+ *                          (opt-in via UI toggle on the run report).
+ */
+export interface TraceContextStrategy {
+  /** Inject W3C TRACEPARENT env var into the subprocess (Strategy A). */
+  propagateEnv?: boolean;
+  /** Inject W3C `traceparent` HTTP header (Strategy A). */
+  propagateHeader?: boolean;
+  /** Service name this connector's agent emits under in OpenSearch (Strategy C). */
+  serviceName?: string;
+}
+
 // ============ Connector Interface ============
 
 /**
@@ -141,6 +164,12 @@ export interface AgentConnector {
    * Optional health check for the connector
    */
   healthCheck?(endpoint: string, auth: ConnectorAuth): Promise<boolean>;
+
+  /**
+   * Optional trace-context propagation strategy. Defaults provided by each
+   * connector class; users may override per-agent via `connectorConfig.traceContext`.
+   */
+  traceContext?: TraceContextStrategy;
 }
 
 // ============ Subprocess Connector Types ============

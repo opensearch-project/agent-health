@@ -43,6 +43,13 @@ export class SubprocessConnector extends BaseConnector {
   override readonly name: string = 'Subprocess (CLI)';
   readonly supportsStreaming = true;
 
+  /**
+   * Default trace-context strategy for subprocess agents: propagate via the
+   * W3C TRACEPARENT env var. Subclasses (Claude Code, Kiro, Pi) override
+   * `serviceName` to point at their OpenSearch service.name for Strategy C.
+   */
+  override traceContext = { propagateEnv: true };
+
   protected config: SubprocessConfig;
 
   constructor(config?: Partial<SubprocessConfig>) {

@@ -29,6 +29,8 @@ import { AGUIToTrajectoryConverter, computeTrajectoryFromRawEvents } from '@/ser
 export class AGUIStreamingConnector extends BaseConnector {
   readonly type = 'agui-streaming' as const;
   readonly name = 'AG-UI Streaming';
+
+  override traceContext = { propagateHeader: true };
   readonly supportsStreaming = true;
 
   /**
@@ -57,6 +59,7 @@ export class AGUIStreamingConnector extends BaseConnector {
     const hasPrebuiltPayload = !!request.payload;
     const payload = request.payload || this.buildPayload(request);
     const headers = this.buildAuthHeaders(auth);
+    this.injectTraceparentHeaders(headers);
     const trajectory: TrajectoryStep[] = [];
     const rawEvents: AGUIEvent[] = [];
     const converter = new AGUIToTrajectoryConverter();

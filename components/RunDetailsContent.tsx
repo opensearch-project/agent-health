@@ -45,7 +45,7 @@ import TraceVisualization from './traces/TraceVisualization';
 import ViewToggle, { ViewMode } from './traces/ViewToggle';
 import TraceFullScreenView from './traces/TraceFullScreenView';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
-import { fetchTracesByRunIds, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
+import { fetchTracesByRunIds, fetchTracesForRun, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
@@ -112,6 +112,10 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   const [tracesLoading, setTracesLoading] = useState(false);
   const [tracesError, setTracesError] = useState<string | null>(null);
   const [tracesFetched, setTracesFetched] = useState(false);
+  // Strategy C (opt-in): include all spans from the agent's service during the
+  // run's wall-clock window. Falls back to runId-based correlation only when
+  // disabled. See AGENTS.md → Trace correlation conventions.
+  const [includeWindowFallback, setIncludeWindowFallback] = useState(false);
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'summary';
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -373,8 +377,36 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     setTracesError(null);
 
     try {
-      console.info('[RunDetails] Fetching traces for runId:', report.runId);
-      const result = await fetchTracesByRunIds([report.runId]);
+      // Resolve the agent's OpenSearch service.name for the time-window
+      // fallback (Strategy C). Mirrors connector-side `traceContext.serviceName`
+      // defaults; users running custom agents can extend this map.
+      const protocolToServiceName: Record<string, string> = {
+        'claude-code': 'claude-code-agent',
+        'kiro': 'kiro-agent',
+        'pi': 'pi-agent',
+        'agui-streaming': 'observio-sample-agent',
+      };
+      const serviceName =
+        (report.connectorProtocol && protocolToServiceName[report.connectorProtocol]) ||
+        (report.agentKey ? `${report.agentKey}-agent` : undefined);
+
+      // Run wall-clock window: derive from saved timestamp − durationMs.
+      // Add slack on either side for clock skew + late-arriving spans.
+      const SLACK_MS = 60_000;
+      const endedAt = Date.parse(report.timestamp || '') || Date.now();
+      const durationMs = report.performanceMetrics?.durationMs ?? 0;
+      const startedAt = endedAt - Math.max(durationMs, 0) - SLACK_MS;
+      const windowAgents = serviceName
+        ? [{ serviceName, startedAt, endedAt: endedAt + SLACK_MS }]
+        : undefined;
+
+      console.info('[RunDetails] Fetching traces for runId:', report.runId,
+        includeWindowFallback ? `(+window fallback for ${serviceName})` : '');
+      const result = await fetchTracesForRun({
+        runId: report.runId,
+        includeWindowFallback,
+        windowAgents,
+      });
       
       console.info('[RunDetails] Trace fetch result:', {
         spansCount: result.spans?.length || 0,
@@ -414,6 +446,15 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     if (tracesFetched || tracesLoading) return;
     await fetchTracesForReport();
   };
+
+  // Re-fetch when the user toggles the time-window fallback on/off.
+  // Skipped on initial mount (tracesFetched is false then anyway).
+  useEffect(() => {
+    if (tracesFetched) {
+      void fetchTracesForReport();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeWindowFallback]);
 
   const handleToggleExpand = (spanId: string) => {
     setExpandedSpans(prev => {
@@ -1032,6 +1073,18 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                   <h3 className="text-lg font-semibold">Traces</h3>
                   {spanTree.length > 0 && !tracesLoading && (
                     <div className="flex items-center gap-2">
+                      <label
+                        className="flex items-center gap-1.5 text-xs text-muted-foreground select-none cursor-pointer"
+                        title="Show all spans from this agent's service.name during the run's time window. May surface unrelated spans from concurrent runs or other users."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={includeWindowFallback}
+                          onChange={(e) => setIncludeWindowFallback(e.target.checked)}
+                          className="h-3.5 w-3.5 cursor-pointer"
+                        />
+                        Include all agent spans in window
+                      </label>
                       <ViewToggle viewMode={traceViewMode} onChange={setTraceViewMode} />
                       <Button
                         variant="outline"

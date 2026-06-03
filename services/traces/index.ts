@@ -66,6 +66,34 @@ export async function fetchTracesByRunIds(runIds: string[]): Promise<TraceSearch
 }
 
 /**
+ * Fetch traces correlated with a single test-case run, using all available
+ * correlation strategies (see AGENTS.md → Trace correlation conventions):
+ *
+ *   A. traceId  — W3C-propagated agents share traceId with the eval span
+ *   B. runId    — agents tag spans with `gen_ai.request.id == runId`
+ *   C. agents   — service.name + time-window fallback (opt-in / `includeWindowFallback`)
+ *
+ * Strategies A and B are always safe (no false positives). Strategy C is
+ * opt-in because it can surface concurrent runs of the same agent and
+ * cross-team noise on a shared cluster.
+ */
+export async function fetchTracesForRun(params: {
+  runId: string;
+  evalTraceId?: string;
+  includeWindowFallback?: boolean;
+  windowAgents?: Array<{ serviceName: string; startedAt: number; endedAt: number }>;
+  size?: number;
+}): Promise<TraceSearchResult> {
+  const { runId, evalTraceId, includeWindowFallback, windowAgents, size = 1000 } = params;
+  const query: TraceQueryParams = { runIds: [runId], size };
+  if (evalTraceId) query.traceId = evalTraceId;
+  if (includeWindowFallback && windowAgents && windowAgents.length > 0) {
+    query.agents = windowAgents;
+  }
+  return fetchTraces(query);
+}
+
+/**
  * Fetch recent traces for live tailing
  */
 export async function fetchRecentTraces(options: {
