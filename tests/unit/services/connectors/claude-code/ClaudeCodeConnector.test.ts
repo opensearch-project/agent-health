@@ -242,8 +242,10 @@ describe('ClaudeCodeConnector', () => {
       const progressSteps: TrajectoryStep[] = [];
 
       setTimeout(() => {
+        // Claude Code emits tool results as user-role messages with
+        // tool_result content blocks (not top-level tool_result events).
         mockProcess.stdout.emit('data', Buffer.from(
-          '{"type":"tool_result","content":"File contents here","is_error":false}\n'
+          '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"File contents here","is_error":false}]}}\n'
         ));
         mockProcess.emit('close', 0, null);
       }, 10);
@@ -269,7 +271,7 @@ describe('ClaudeCodeConnector', () => {
 
       setTimeout(() => {
         mockProcess.stdout.emit('data', Buffer.from(
-          '{"type":"tool_result","content":"Error message","is_error":true}\n'
+          '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"Error message","is_error":true}]}}\n'
         ));
         mockProcess.emit('close', 0, null);
       }, 10);
