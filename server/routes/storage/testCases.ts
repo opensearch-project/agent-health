@@ -370,7 +370,20 @@ router.delete('/api/storage/test-cases/:id', async (req: Request, res: Response)
   }
 });
 
-// POST /api/storage/test-cases/bulk - Bulk create
+// POST /api/storage/test-cases/bulk - Bulk import
+//
+// Auto-routes based on `sourceFile`:
+//  - Any incoming test case has `sourceFile` set (SDK / code-imported) →
+//    `bulkUpsert` semantics: dedup by `(name, sourceFile)`, version-bump on
+//    `sourceHash` drift, reuse existing TestCase IDs across runs of the same
+//    .eval.js file. This is what stops `benchmark.testCaseIds` from growing
+//    unbounded when a user re-runs the same SDK file via `npx agent-health
+//    benchmark -f file.eval.js`.
+//  - Otherwise (JSON imports / UI uploads) → strict `bulkCreate`. Pre-existing
+//    callers don't carry `sourceFile`, so behaviour is unchanged for them.
+//
+// The response shape is a superset of both modes: `created` is always present,
+// `updated` and `unchanged` are present only on the upsert path.
 router.post('/api/storage/test-cases/bulk', async (req: Request, res: Response) => {
   try {
     const { testCases } = req.body;
@@ -385,12 +398,29 @@ router.post('/api/storage/test-cases/bulk', async (req: Request, res: Response) 
     }
 
     const storage = getStorageModule();
-    const result = await storage.testCases.bulkCreate(testCases);
 
+    const hasSourceFile = testCases.some(tc => typeof tc?.sourceFile === 'string' && tc.sourceFile.length > 0);
+    if (hasSourceFile) {
+      const result = await storage.testCases.bulkUpsert(testCases);
+      debug(
+        'StorageAPI',
+        `Bulk upserted: ${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged`
+      );
+      res.json({
+        created: result.created,
+        updated: result.updated,
+        unchanged: result.unchanged,
+        errors: 0,
+        testCases: result.testCases,
+      });
+      return;
+    }
+
+    const result = await storage.testCases.bulkCreate(testCases);
     debug('StorageAPI', `Bulk created ${result.created} test cases`);
     res.json({ created: result.created, errors: result.errors, testCases: result.testCases });
   } catch (error: any) {
-    console.error('[StorageAPI] Bulk create test cases failed:', error.message);
+    console.error('[StorageAPI] Bulk import test cases failed:', error.message);
     res.status(500).json({ error: error.message });
   }
 });

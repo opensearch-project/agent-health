@@ -91,12 +91,22 @@ export interface EvaluationResult {
 }
 
 /**
- * Response from bulk creating test cases
+ * Response from bulk importing test cases.
+ *
+ * The same `/api/storage/test-cases/bulk` endpoint serves two modes:
+ *  - JSON imports / UI uploads (no `sourceFile`) → `created` / `errors` only.
+ *  - SDK / code imports (`sourceFile` set on at least one item) → also returns
+ *    `updated` and `unchanged` from the underlying `bulkUpsert`. Callers can
+ *    branch on `typeof updated !== 'undefined'` to render the upsert summary.
  */
 export interface BulkCreateTestCasesResponse {
   created: number;
   errors: number;
   testCases: Array<{ id: string; name: string }>;
+  /** Present only on the SDK / code-import upsert path. */
+  updated?: number;
+  /** Present only on the SDK / code-import upsert path. */
+  unchanged?: number;
 }
 
 /**
