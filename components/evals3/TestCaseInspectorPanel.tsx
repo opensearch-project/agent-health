@@ -17,6 +17,7 @@ import { EvaluationReport, TestCase } from '@/types';
 import { RunDetailsContent } from '../RunDetailsContent';
 import { type ResultStatus } from './ResultStatus';
 import { getRunDisplayName } from '@/lib/utils';
+import { CollapsibleTestCaseDefinition } from './CollapsibleTestCaseDefinition';
 
 interface TestCaseInspectorPanelProps {
   report: EvaluationReport;
@@ -68,6 +69,14 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
           {report.agentName || '—'} · {report.modelName || '—'}
         </div>
       </div>
+
+      {/* Reusable definition collapsible — same widget on both
+          TestCaseDetailPage and RunInspectorPage so users get the
+          identical right-pane experience whether they came from a
+          test-case run or a benchmark run. Defaults closed; clicking
+          the header opens it to show file path (SDK) or full JSON
+          (no truncation). */}
+      <CollapsibleTestCaseDefinition testCase={testCase} />
 
       {/* Tabs — directly into content, no extra chrome */}
       <div className="flex-1 overflow-hidden">

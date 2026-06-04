@@ -39,6 +39,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { useSidebarCollapse } from '@/components/Layout';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -80,6 +81,7 @@ function getStatus(r: EvaluationReport): ResultStatus {
 export const TestCaseDetailPage: React.FC = () => {
   const { testCaseId } = useParams<{ testCaseId: string }>();
   const navigate = useNavigate();
+  const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
 
   const [testCase, setTestCase] = useState<TestCase | null>(null);
   const [runs, setRuns] = useState<EvaluationReport[]>([]);
@@ -146,6 +148,17 @@ export const TestCaseDetailPage: React.FC = () => {
   }, [testCaseId, navigate]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Auto-collapse the global app sidebar while inspecting a single test case.
+  // Run pages are dense, multi-pane views; the global nav competes with the
+  // page's own left list (test runs / test cases). Restore on unmount so
+  // navigating back to /evaluations/test-cases / / etc. shows the full nav.
+  useEffect(() => {
+    const prev = isCollapsed;
+    setIsCollapsed(true);
+    return () => setIsCollapsed(prev);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load evaluators once for the run config dialog.
   useEffect(() => {

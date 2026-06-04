@@ -20,6 +20,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/componen
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { Benchmark, BenchmarkRun, TestCase, EvaluationReport } from '@/types';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
+import { useSidebarCollapse } from '@/components/Layout';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
@@ -40,6 +41,7 @@ interface TestCaseResult {
 export const RunInspectorPage: React.FC = () => {
   const { benchmarkId, runId } = useParams<{ benchmarkId: string; runId: string }>();
   const navigate = useNavigate();
+  const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
 
   const [benchmark, setBenchmark] = useState<Benchmark | null>(null);
   const [run, setRun] = useState<BenchmarkRun | null>(null);
@@ -112,6 +114,17 @@ export const RunInspectorPage: React.FC = () => {
   }, [benchmarkId, runId, navigate]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Auto-collapse the global app sidebar while inspecting a benchmark run.
+  // Run pages are dense, multi-pane views; the global nav competes with the
+  // page's own left list (test cases). Restore on unmount so navigating back
+  // to /evaluations/benchmarks etc. shows the full nav.
+  useEffect(() => {
+    const prev = isCollapsed;
+    setIsCollapsed(true);
+    return () => setIsCollapsed(prev);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load report when selection changes
   useEffect(() => {
