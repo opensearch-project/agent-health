@@ -46,7 +46,7 @@ import type {
 /**
  * Default Kiro configuration.
  *
- * `--agent-engine v2` is required so slash commands like `/cp-oncall ...`
+ * `--agent-engine v2` is required so slash commands like `/<slash-command> ...`
  * route through the agent registry. The default (v1) non-interactive parser
  * treats `/<word>` as an unknown subcommand and exits early.
  *

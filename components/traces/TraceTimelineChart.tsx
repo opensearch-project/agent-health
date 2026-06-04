@@ -303,8 +303,15 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
   }, [chartHeight]);
 
   return (
-    <div 
-      className="relative overflow-hidden h-full"
+    <div
+      // overflow-x-hidden preserves the timeline pan UX (drag to translate the
+      // chart along the time axis without showing the off-screen chart edges).
+      // overflow-y-auto engages a real vertical scrollbar when chartHeight
+      // exceeds the parent's viewport — previously this was just `overflow-hidden`
+      // which clipped tall traces and made the top of the tree unreachable in
+      // fullscreen mode (the only place where the chart's parent has a fixed
+      // height short enough for chartHeight to overflow it).
+      className="relative overflow-x-hidden overflow-y-auto h-full"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}

@@ -20,7 +20,7 @@
  *     this whole effort exists to prevent.
  *
  *   - Argument quoting / `inputMode: 'arg'` round-trip through `spawn(..., {
- *     shell: true })`. Slash-prefixed prompts (e.g. `/cp-oncall ...`) and
+ *     shell: true })`. Slash-prefixed prompts (e.g. `/my-agent ...`) and
  *     prompts with embedded quotes are easy to break here.
  *
  *   - The interaction between `--agent-engine v2` and `--no-interactive`.

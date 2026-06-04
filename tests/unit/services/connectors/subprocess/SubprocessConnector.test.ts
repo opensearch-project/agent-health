@@ -942,7 +942,7 @@ describe('SubprocessConnector', () => {
   //      silently ignored — args/inputMode never apply).
   //   2. When `inputMode: 'arg'`, the prompt MUST be shell-quoted before being
   //      handed to spawn(..., { shell: true }) — spaces/slashes in the prompt
-  //      were getting word-split by /bin/sh, causing "/cp-oncall investigate
+  //      were getting word-split by /bin/sh, causing "/my-agent investigate
   //      <url>" to arrive at the child as 3 separate args.
   //   3. With `outputParser: 'streaming'`, the connector should emit one
   //      `assistant` step per clean stdout line in real time, AND a final
@@ -954,7 +954,7 @@ describe('SubprocessConnector', () => {
         testCase: mockTestCase,
         modelId: 'm',
         connectorConfig: {
-          args: ['chat', '--agent', 'cp-oncall', '--no-interactive'],
+          args: ['chat', '--agent', 'demo-agent', '--no-interactive'],
           inputMode: 'arg',
         },
       };
@@ -968,12 +968,12 @@ describe('SubprocessConnector', () => {
 
       const [cmd, args] = (spawn as jest.Mock).mock.calls[0];
       expect(cmd).toBe('kiro-cli');
-      expect(args.slice(0, 4)).toEqual(['chat', '--agent', 'cp-oncall', '--no-interactive']);
+      expect(args.slice(0, 4)).toEqual(['chat', '--agent', 'demo-agent', '--no-interactive']);
     });
 
     it('honors inputMode: "arg" from connectorConfig and appends a quoted prompt', async () => {
       const request: ConnectorRequest = {
-        testCase: { ...mockTestCase, initialPrompt: '/cp-oncall investigate https://example.com', context: [] },
+        testCase: { ...mockTestCase, initialPrompt: '/my-agent investigate https://example.com', context: [] },
         modelId: 'm',
         connectorConfig: { args: ['chat'], inputMode: 'arg' },
       };
@@ -990,7 +990,7 @@ describe('SubprocessConnector', () => {
       // Single shell-quoted argument carrying the entire prompt
       expect(last.startsWith("'")).toBe(true);
       expect(last.endsWith("'")).toBe(true);
-      expect(last).toContain('/cp-oncall investigate https://example.com');
+      expect(last).toContain('/my-agent investigate https://example.com');
       expect(args).toHaveLength(2); // ['chat', "'<prompt>'"], NOT 4 word-split tokens
     });
 

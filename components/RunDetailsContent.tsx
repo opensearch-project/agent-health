@@ -113,10 +113,13 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   const [tracesLoading, setTracesLoading] = useState(false);
   const [tracesError, setTracesError] = useState<string | null>(null);
   const [tracesFetched, setTracesFetched] = useState(false);
-  // Strategy C (opt-in): include all spans from the agent's service during the
-  // run's wall-clock window. Falls back to runId-based correlation only when
-  // disabled. See AGENTS.md → Trace correlation conventions.
-  const [includeWindowFallback, setIncludeWindowFallback] = useState(false);
+  // Strategy C (always-on): include all spans from the agent's service during
+  // the run's wall-clock window. Was opt-in via a checkbox originally, but in
+  // practice the run-report Traces tab landed effectively empty (just the
+  // eval `test_case` span) until the user noticed and clicked the toggle
+  // — the noise risk that motivated opt-in (concurrent runs, cross-team
+  // traffic on a shared OTel cluster) is a smaller cost than the user-visible
+  // "empty" state we always ship by default. See AGENTS.md → Trace correlation.
   const [searchParams] = useSearchParams();
   // Default to the Trajectory tab — the prior "summary" / Overview tab has
   // been removed because everything it surfaced (agent, model, evaluator,
@@ -412,10 +415,10 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
         : undefined;
 
       console.info('[RunDetails] Fetching traces for runId:', report.runId,
-        includeWindowFallback ? `(+window fallback for ${serviceName})` : '');
+        windowAgents ? `(+window fallback for ${serviceName})` : '');
       const result = await fetchTracesForRun({
         runId: report.runId,
-        includeWindowFallback,
+        includeWindowFallback: true,
         windowAgents,
       });
       
@@ -457,15 +460,6 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     if (tracesFetched || tracesLoading) return;
     await fetchTracesForReport();
   };
-
-  // Re-fetch when the user toggles the time-window fallback on/off.
-  // Skipped on initial mount (tracesFetched is false then anyway).
-  useEffect(() => {
-    if (tracesFetched) {
-      void fetchTracesForReport();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [includeWindowFallback]);
 
   const handleToggleExpand = (spanId: string) => {
     setExpandedSpans(prev => {
@@ -925,18 +919,6 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                   <h3 className="text-lg font-semibold">Traces</h3>
                   {spanTree.length > 0 && !tracesLoading && (
                     <div className="flex items-center gap-2">
-                      <label
-                        className="flex items-center gap-1.5 text-xs text-muted-foreground select-none cursor-pointer"
-                        title="Show all spans from this agent's service.name during the run's time window. May surface unrelated spans from concurrent runs or other users."
-                      >
-                        <input
-                          type="checkbox"
-                          checked={includeWindowFallback}
-                          onChange={(e) => setIncludeWindowFallback(e.target.checked)}
-                          className="h-3.5 w-3.5 cursor-pointer"
-                        />
-                        Include all agent spans in window
-                      </label>
                       <ViewToggle viewMode={traceViewMode} onChange={setTraceViewMode} />
                       <Button
                         variant="outline"

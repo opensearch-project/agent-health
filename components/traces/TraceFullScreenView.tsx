@@ -279,23 +279,18 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
               bottom of the fullscreen overlay rather than the page body.
               This means it never overlaps the trace list behind the
               fullscreen and the user gets the same flat-attribute UX in
-              both inline and fullscreen modes. */}
+              both inline and fullscreen modes.
+
+              The fullscreen dialog already owns the only close (X) in
+              this overlay — putting another X on the drawer was redundant
+              and confusing. To dismiss the drawer the user clicks the
+              span row again (deselect) or hits Esc. */}
           {selectedSpan && (
             <div
               className="absolute inset-x-0 bottom-0 h-[55vh] bg-background border-t shadow-2xl flex flex-col z-20 animate-in slide-in-from-bottom-4 duration-200"
               role="dialog"
               aria-label="Span details"
             >
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 right-2 h-7 w-7 z-10"
-                onClick={() => onSelectSpan?.(null)}
-                aria-label="Close span details"
-                title="Close (Esc)"
-              >
-                <XIcon size={14} />
-              </Button>
               <SimpleSpanAttributesTable span={selectedSpan} />
             </div>
           )}

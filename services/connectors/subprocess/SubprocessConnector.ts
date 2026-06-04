@@ -144,7 +144,7 @@ export class SubprocessConnector extends BaseConnector {
       // command line by /bin/sh. That means we MUST shell-quote the prompt
       // string ourselves — otherwise spaces in the prompt cause it to be
       // word-split by the shell, and the child binary sees multiple
-      // arguments instead of one. (e.g. "/cp-oncall investigate <url>"
+      // arguments instead of one. (e.g. "/my-agent investigate <url>"
       // would arrive as 3 args, breaking CLIs that treat the first
       // unrecognized token as a subcommand.)
       const shellQuote = (s: string): string => `'${String(s).replace(/'/g, `'\\''`)}'`;

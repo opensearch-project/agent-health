@@ -89,8 +89,8 @@ afterEach(() => {
 
 const customEvaluator: Evaluator = {
   id: 'eval-test-1',
-  name: 'CP Oncall Correctness',
-  description: 'Evaluates CP oncall agents on routing accuracy.',
+  name: 'RCA Correctness',
+  description: 'Evaluates RCA agents on routing accuracy.',
   isSystem: false,
   systemPrompt:
     '- If the issue\'s CTI Type is "Data Plane" -> route correctly\n- DP1: Search\n- DP2: Node Drop',
@@ -274,8 +274,8 @@ describe('EvaluatorEditPage — edit existing custom evaluator', () => {
     });
 
     // Existing values populated
-    expect((screen.getByDisplayValue('CP Oncall Correctness') as HTMLInputElement).value).toBe(
-      'CP Oncall Correctness',
+    expect((screen.getByDisplayValue('RCA Correctness') as HTMLInputElement).value).toBe(
+      'RCA Correctness',
     );
 
     // Mock version history is rendered with the right id
