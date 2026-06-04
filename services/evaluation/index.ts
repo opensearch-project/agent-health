@@ -15,6 +15,7 @@ import { AGUIToTrajectoryConverter, consumeSSEStream, buildAgentPayload } from '
 import { AGUIEvent } from '@/types/agui';
 import { generateMockTrajectory } from './mockTrajectory';
 import { callBedrockJudge } from './bedrockJudge';
+import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/judgeAccessor';
 
 // Re-export for use by experimentRunner when calling judge after trace polling
 export { callBedrockJudge };
@@ -341,6 +342,13 @@ export async function runEvaluationWithConnector(
       trajectory: fullTrajectory,
       metrics: judgment.metrics,
       llmJudgeReasoning: judgment.llmJudgeReasoning,
+      // Unified judge surface (Option-B BC: legacy field above kept).
+      matcherResults: [
+        buildJudgeMatcherEntry(judgment, {
+          claim: formatExpectedOutcomesAsClaim(testCase.expectedOutcomes),
+          model: judgeModelId,
+        }),
+      ],
       improvementStrategies: judgment.improvementStrategies,
       llmJudgeResponse,
       runId: agentRunId || undefined,
@@ -582,6 +590,13 @@ export async function runEvaluation(
       trajectory: fullTrajectory,
       metrics: judgment.metrics,
       llmJudgeReasoning: judgment.llmJudgeReasoning,
+      // Unified judge surface (Option-B BC: legacy field above kept).
+      matcherResults: [
+        buildJudgeMatcherEntry(judgment, {
+          claim: formatExpectedOutcomesAsClaim(testCase.expectedOutcomes),
+          model: judgeModelId,
+        }),
+      ],
       improvementStrategies: judgment.improvementStrategies,
       llmJudgeResponse,
       openSearchLogs: logs,

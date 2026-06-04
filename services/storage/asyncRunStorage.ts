@@ -301,6 +301,7 @@ class AsyncRunStorage {
     if (updates.logs !== undefined) storageUpdates.logs = updates.logs;
     if (updates.runId !== undefined) storageUpdates.traceId = updates.runId;
     if (updates.improvementStrategies !== undefined) storageUpdates.improvementStrategies = updates.improvementStrategies;
+    if ((updates as any).matcherResults !== undefined) (storageUpdates as any).matcherResults = (updates as any).matcherResults;
 
     // Map metrics
     if (updates.metrics) {

@@ -384,6 +384,15 @@ export interface TestCaseRun {
   passFailStatus?: PassFailStatus; // LLM judge determination of pass/fail
   trajectory: TrajectoryStep[];
   metrics: EvaluationMetrics;
+  /**
+   * @deprecated Use `getJudgeReasoningText(report)` /
+   * `getJudgeMatcherResults(report)` from `lib/matchers/judgeAccessor`.
+   * The canonical judge surface is now `matcherResults[]` with
+   * `method: 'llm-judge'`. This flat-string field is kept as an
+   * Option-B backward-compat shim — it carries the most recent judge
+   * reasoning so old direct readers keep working, but new code MUST
+   * use the accessor.
+   */
   llmJudgeReasoning: string;
   improvementStrategies?: ImprovementStrategy[];
   llmJudgeResponse?: LLMJudgeResponse; // Storage: Raw Bedrock judge response

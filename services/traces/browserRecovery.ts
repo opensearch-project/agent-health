@@ -22,6 +22,10 @@ import type { EvaluationReport, TestCase } from '@/types';
 import { tracePollingManager } from '@/services/traces/tracePoller';
 import { asyncRunStorage } from '@/services/storage';
 import { callBedrockJudge } from '@/services/evaluation';
+import {
+  buildJudgeMatcherEntry,
+  formatExpectedOutcomesAsClaim,
+} from '@/lib/matchers/judgeAccessor';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 
 /**
@@ -70,6 +74,13 @@ export function ensureTracePollingForReport(
             passFailStatus: judgment.passFailStatus,
             metrics: judgment.metrics,
             llmJudgeReasoning: judgment.llmJudgeReasoning,
+            // Unified judge surface (issue #230 follow-up).
+            matcherResults: [
+              buildJudgeMatcherEntry(judgment, {
+                claim: formatExpectedOutcomesAsClaim(testCase.expectedOutcomes),
+                model: judgeModelId,
+              }),
+            ],
             improvementStrategies: judgment.improvementStrategies,
           });
 

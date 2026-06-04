@@ -11,6 +11,7 @@
 
 import type { TrajectoryStep, SkillAssertionResult, SkillGradingResult } from '@/types';
 import { debug } from '@/lib/debug';
+import { getJudgeReasoningText } from '@/lib/matchers/judgeAccessor';
 
 interface GradeOptions {
   trajectory: TrajectoryStep[];
@@ -86,6 +87,6 @@ async function gradeOneAssertion(
   return {
     text: assertion,
     passed: result.passFailStatus === 'passed',
-    evidence: result.llmJudgeReasoning || 'No reasoning provided',
+    evidence: getJudgeReasoningText(result) || 'No reasoning provided',
   };
 }

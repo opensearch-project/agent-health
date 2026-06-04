@@ -5,6 +5,7 @@
 
 import type { ReportData, ReportRunData, FormatterOptions } from '@/services/report/types';
 import type { TestCaseComparisonRow, TrajectoryStep, EvaluationReport, ImprovementStrategy } from '@/types';
+import { getJudgeReasoningText } from '@/lib/matchers/judgeAccessor';
 
 // ============ Utility Functions ============
 
@@ -782,8 +783,9 @@ function renderTestCaseDetails(
         `;
       }
 
-      const reasoning = report.llmJudgeReasoning
-        ? `<h3>LLM Judge Reasoning</h3><div class="judge-reasoning">${escapeHtml(report.llmJudgeReasoning)}</div>`
+      const reasoningText = getJudgeReasoningText(report);
+      const reasoning = reasoningText
+        ? `<h3>Judge Reasoning</h3><div class="judge-reasoning">${escapeHtml(reasoningText)}</div>`
         : '';
 
       const strategies = renderImprovementStrategies(report.improvementStrategies || []);

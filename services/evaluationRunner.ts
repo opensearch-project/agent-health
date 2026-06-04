@@ -23,6 +23,8 @@ import {
   emptyTracesAccessor,
   unavailableTracesAccessor,
   buildTracesAccessor,
+  buildJudgeMatcherEntry,
+  formatExpectedOutcomesAsClaim,
 } from '@/lib/matchers/index';
 import type { TracesAccessor } from '@/lib/matchers/index';
 import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } from '@/lib/testCases/types';
@@ -318,12 +320,14 @@ export async function executeEvaluationRun(
               (report as any).passFailStatus = anyFailed ? 'failed' : 'passed';
               (report as any).evaluationType = 'deterministic';
               (report as any).matcherResults = matcherResults;
-              // Clear the trace-mode placeholder llmJudgeReasoning that
-              // was set when the report was initialized in trace mode.
-              // Deterministic verdicts come from matcherResults, not the
-              // LLM judge, so the placeholder “Waiting for traces to
-              // become available…” would otherwise bleed through to the
-              // UI's Judge Reasoning panel and confuse users.
+              // Option B BC shim: legacy `llmJudgeReasoning` field is a
+              // derived view of `matcherResults`. SDK runs use the
+              // matcher session as the source of truth (multiple
+              // `judge()` calls each become a separate [llm-judge]
+              // entry), so we leave the legacy flat-string field empty.
+              // External readers that haven't migrated to
+              // `getJudgeMatcherResults()` see '' — a clear signal that
+              // judge data lives in `matcherResults`.
               (report as any).llmJudgeReasoning = '';
               (report as any).metrics = anyFailed
                 ? { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 }
@@ -339,9 +343,7 @@ export async function executeEvaluationRun(
               (report as any).evaluationType = 'deterministic';
               (report as any).assertionError = evalError.message;
               (report as any).matcherResults = matcherResults;
-              // Same as the success branch above: clear the trace-mode
-              // placeholder so the UI doesn't show “Waiting for traces…”
-              // alongside a deterministic failure verdict.
+              // See success branch above for the Option B BC rationale.
               (report as any).llmJudgeReasoning = '';
               (report as any).metrics = { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 };
             }
@@ -551,6 +553,16 @@ async function waitForTracesAndJudge(
               passFailStatus: judgment.passFailStatus,
               metrics: judgment.metrics,
               llmJudgeReasoning: judgment.llmJudgeReasoning,
+              // Unified judge surface (issue #230 follow-up).
+              // The deterministic path doesn't reach here — trace-mode
+              // judge runs only when the test case has no SDK body —
+              // so there are no pre-existing matcherResults to merge with.
+              matcherResults: [
+                buildJudgeMatcherEntry(judgment, {
+                  claim: formatExpectedOutcomesAsClaim(testCase.expectedOutcomes),
+                  model: judgeModelId,
+                }),
+              ],
               improvementStrategies: judgment.improvementStrategies,
             } as any);
 
