@@ -16,6 +16,8 @@
  */
 
 import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { CheckCircle2, XCircle, ChevronDown, ChevronRight, Brain, Code2, Activity, Wrench } from 'lucide-react';
 import type { MatcherResult, MatcherMethod } from '@/lib/matchers/types';
 import { Badge } from '@/components/ui/badge';
@@ -75,16 +77,31 @@ interface RowProps {
 }
 
 const MatcherRow: React.FC<RowProps> = ({ result }) => {
+  const judgeStrategies = (result as any).improvementStrategies as Array<{
+    category: string;
+    issue: string;
+    recommendation: string;
+    priority: 'high' | 'medium' | 'low';
+  }> | undefined;
+  const judgeMetrics = (result as any).judgeMetrics as Record<string, number | undefined> | undefined;
   const hasDetail =
     !!result.errorMessage ||
     !!result.reasoning ||
     result.actual !== undefined ||
-    result.expected !== undefined;
-  const [open, setOpen] = useState(!result.pass && hasDetail);
+    result.expected !== undefined ||
+    (judgeStrategies && judgeStrategies.length > 0) ||
+    (judgeMetrics && Object.keys(judgeMetrics).filter(k => k !== 'accuracy').length > 0);
+  const [open, setOpen] = useState((result.method === 'llm-judge' || !result.pass) && hasDetail);
   const meta = METHOD_META[result.method] ?? METHOD_META['code-assertion'];
+  // Visual accent: judge rows get a subtle left border in the brand purple
+  // so they stand out from the chai code-assertion noise.
+  const accent =
+    result.method === 'llm-judge'
+      ? 'border-l-2 border-l-purple-400/50 dark:border-l-purple-500/40'
+      : '';
 
   return (
-    <div className="px-3 py-2">
+    <div className={`px-3 py-2 ${accent}`}>
       <div
         role={hasDetail ? 'button' : undefined}
         tabIndex={hasDetail ? 0 : -1}
@@ -144,8 +161,28 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
             </div>
           )}
           {result.reasoning && (
-            <div className="text-muted-foreground whitespace-pre-wrap">
-              <span className="font-semibold text-foreground">reasoning:</span> {result.reasoning}
+            <div>
+              <div className="font-semibold text-foreground mb-1">reasoning</div>
+              {result.method === 'llm-judge' && hasRealMarkdown(result.reasoning) ? (
+                // Render as markdown so headers, bullets, and bold formatting
+                // from the Bedrock judge come through as structure rather than
+                // literal `**` / `-` characters in plain prose. Only kicks in
+                // when the content actually has markdown syntax — plain prose
+                // with a single leading `1.` would otherwise be turned into a
+                // standalone <ol><li>…</li></ol>, which prose-pl-4 indents
+                // and visually splits the reasoning into multiple boxes.
+                <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-sm prose-headings:font-semibold prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-p:leading-relaxed prose-strong:text-foreground prose-code:text-opensearch-blue prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-ul:my-1 prose-ul:pl-4 prose-ol:my-1 prose-ol:pl-4 prose-li:my-0.5 text-muted-foreground">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {result.reasoning}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                // Plain prose-with-newlines — keep blank-line separators
+                // visible without inflating prose padding/list styling.
+                <div className="text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                  {result.reasoning}
+                </div>
+              )}
             </div>
           )}
           {result.expected !== undefined && (
@@ -158,6 +195,45 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
             <div>
               <span className="font-semibold">actual:</span>{' '}
               <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.actual)}</code>
+            </div>
+          )}
+          {/* llm-judge enriched fields — extra metrics + improvement
+              strategies. Rendered inline so SDK `judge()` calls don't lose
+              data the legacy auto-judge path used to surface in dedicated
+              report-level cards. */}
+          {judgeMetrics && Object.entries(judgeMetrics).filter(([k]) => k !== 'accuracy').length > 0 && (
+            <div className="pt-1">
+              <span className="font-semibold">metrics:</span>{' '}
+              {Object.entries(judgeMetrics)
+                .filter(([k, v]) => k !== 'accuracy' && typeof v === 'number')
+                .map(([k, v]) => (
+                  <code key={k} className="bg-muted px-1 py-0.5 rounded mr-1">
+                    {k}: {String(v)}
+                  </code>
+                ))}
+            </div>
+          )}
+          {judgeStrategies && judgeStrategies.length > 0 && (
+            <div className="pt-1 space-y-1">
+              <div className="font-semibold text-foreground">improvement strategies ({judgeStrategies.length}):</div>
+              {judgeStrategies.map((s, i) => {
+                const tone =
+                  s.priority === 'high'
+                    ? 'border-red-300 dark:border-red-900 bg-red-50/40 dark:bg-red-950/20'
+                    : s.priority === 'medium'
+                    ? 'border-yellow-300 dark:border-yellow-900 bg-yellow-50/40 dark:bg-yellow-950/20'
+                    : 'border-blue-300 dark:border-blue-900 bg-blue-50/40 dark:bg-blue-950/20';
+                return (
+                  <div key={i} className={`border rounded p-2 ${tone}`}>
+                    <div className="flex items-baseline gap-2 mb-0.5">
+                      <span className="text-xs uppercase font-semibold tracking-wide">{s.priority}</span>
+                      <span className="text-xs text-muted-foreground">[{s.category}]</span>
+                    </div>
+                    <div className="text-foreground"><span className="font-semibold">issue:</span> {s.issue}</div>
+                    <div className="text-muted-foreground"><span className="font-semibold text-foreground">recommendation:</span> {s.recommendation}</div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -179,4 +255,38 @@ function formatValue(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+/**
+ * Heuristic: does this string contain syntax that the user wrote with the
+ * intent of being formatted as Markdown (bold, headings, fenced code, real
+ * bullet lists with multiple items, links)?
+ *
+ * The Bedrock judge often returns plain prose with one leading numbered
+ * sentence (`1. 'X' - Fully achieved`) and a trailing summary paragraph.
+ * Run through ReactMarkdown that becomes <p>…</p><ol><li>…</li></ol><p>…</p>
+ * — the single-item indented <ol> visually fragments the reasoning into
+ * what looks like "another box later". For prose-with-newlines like that
+ * we'd rather render plain text (whitespace-pre-wrap) so it stays one
+ * contiguous block.
+ */
+function hasRealMarkdown(text: string): boolean {
+  if (!text) return false;
+  // Bold / italic markers
+  if (/\*\*[^*\n]+\*\*/.test(text)) return true;
+  if (/__[^_\n]+__/.test(text)) return true;
+  // Headings
+  if (/^#{1,6}\s+\S/m.test(text)) return true;
+  // Fenced code blocks or inline code
+  if (/```/.test(text)) return true;
+  if (/`[^`\n]+`/.test(text)) return true;
+  // Markdown links / images
+  if (/!?\[[^\]]+\]\([^)]+\)/.test(text)) return true;
+  // Real bullet list (>=2 consecutive lines starting with `- ` or `* `)
+  if (/(^|\n)[*\-]\s+\S.*\n[*\-]\s+/.test(text)) return true;
+  // Real numbered list (>=2 consecutive numbered lines)
+  if (/(^|\n)\d+\.\s+\S.*\n\d+\.\s+/.test(text)) return true;
+  // Block quote
+  if (/^>\s/m.test(text)) return true;
+  return false;
 }
