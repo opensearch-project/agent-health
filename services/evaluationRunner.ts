@@ -17,7 +17,14 @@ import type { IStorageModule } from '@/server/adapters/types';
 import { runEvaluationWithConnector, callBedrockJudge } from '@/services/evaluation';
 import { connectorRegistry } from '@/services/connectors/server';
 import { v4 as uuidv4 } from 'uuid';
-import { startSession, endSession, emptyTracesAccessor } from '@/lib/matchers/index';
+import {
+  startSession,
+  endSession,
+  emptyTracesAccessor,
+  unavailableTracesAccessor,
+  buildTracesAccessor,
+} from '@/lib/matchers/index';
+import type { TracesAccessor } from '@/lib/matchers/index';
 import type { EvalResult, TrajectoryAccessor, TestFixtures } from '@/lib/testCases/types';
 import { judge } from '@/lib/testCases/judge';
 import { expect } from '@/lib/matchers/expect';
@@ -27,6 +34,7 @@ import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { debug } from '@/lib/debug';
 import { tracePollingManager } from './traces/tracePoller';
+import { fetchSpansForRun } from './traces/fetchSpansForRun';
 import { CancellationToken, createCancellationToken } from './benchmarkRunner';
 
 export type { CancellationToken } from './benchmarkRunner';
@@ -217,13 +225,19 @@ export async function executeEvaluationRun(
               durationMs: report.performanceMetrics?.durationMs ?? 0,
             });
 
+            // Pre-load the traces fixture for the body. See issue #230:
+            // when useTraces is true the fixture must reflect real OTel
+            // data — or fail loudly if it can't — instead of silently
+            // returning zeros that make `lessThan(N)` matchers pass.
+            const tracesAccessor = await loadTracesAccessor(agentConfig, report.runId);
+
             const session = startSession();
             try {
               // Backward-compat: legacy 1-arg bodies receive the EvalResult
               // directly. New 1-arg bodies that destructure receive the
               // fixtures object. We pass the result twice via Object.assign
               // so both shapes work transparently.
-              const fixtures = buildFixtures(evalResult);
+              const fixtures = buildFixtures(evalResult, tracesAccessor);
               const arg = Object.assign(evalResult, { ...fixtures, result: evalResult }) as any;
               await evalFn(arg);
               const matcherResults = endSession();
@@ -231,6 +245,13 @@ export async function executeEvaluationRun(
               (report as any).passFailStatus = anyFailed ? 'failed' : 'passed';
               (report as any).evaluationType = 'deterministic';
               (report as any).matcherResults = matcherResults;
+              // Clear the trace-mode placeholder llmJudgeReasoning that
+              // was set when the report was initialized in trace mode.
+              // Deterministic verdicts come from matcherResults, not the
+              // LLM judge, so the placeholder “Waiting for traces to
+              // become available…” would otherwise bleed through to the
+              // UI's Judge Reasoning panel and confuse users.
+              (report as any).llmJudgeReasoning = '';
               (report as any).metrics = anyFailed
                 ? { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 }
                 : { accuracy: 100, faithfulness: 100, latency_score: 100, trajectory_alignment_score: 100 };
@@ -240,6 +261,10 @@ export async function executeEvaluationRun(
               (report as any).evaluationType = 'deterministic';
               (report as any).assertionError = evalError.message;
               (report as any).matcherResults = matcherResults;
+              // Same as the success branch above: clear the trace-mode
+              // placeholder so the UI doesn't show “Waiting for traces…”
+              // alongside a deterministic failure verdict.
+              (report as any).llmJudgeReasoning = '';
               (report as any).metrics = { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 };
             }
           }
@@ -599,14 +624,60 @@ function buildEvalResult(input: {
 
 /**
  * Build the fixtures object passed to the new Playwright-style test body.
- * The traces fixture is currently always empty \u2014 a follow-up commit will
- * pre-load real OTel data when agentConfig.useTraces is set.
+ * The traces fixture is constructed by {@link loadTracesAccessor} prior
+ * to this call — see issue #230.
  */
-function buildFixtures(result: EvalResult): TestFixtures {
+function buildFixtures(result: EvalResult, traces: TracesAccessor): TestFixtures {
   return {
     result,
     judge,
-    traces: emptyTracesAccessor(),
+    traces,
     expect,
   };
+}
+
+/**
+ * Construct the appropriate `TracesAccessor` for a deterministic eval body.
+ *
+ * Three modes (see lib/matchers/traces.ts):
+ *   - `useTraces: false`    → silent zeros (opt-out preserved)
+ *   - `useTraces: true`, no runId or fetch yields no spans
+ *                            → loud-failure accessor (throws on read)
+ *   - `useTraces: true`, spans available
+ *                            → real `buildTracesAccessor(spans)`
+ *
+ * Issue #230: previously this always returned `emptyTracesAccessor()`,
+ * which made `expect(traces.totalTokens).to.be.lessThan(N)` pass against
+ * `0` regardless of actual token usage — a silent false-pass.
+ *
+ * The error reason is specific so users can act on it:
+ *   - missing runId  → `agent has useTraces=true but produced no runId…`
+ *   - fetch failed   → `fetch failed for runId=…: <last error message>`
+ *   - empty backend  → `no spans found for runId=… after polling — verify the
+ *                       agent's OTel exporter is reachable`
+ */
+async function loadTracesAccessor(
+  agentConfig: AgentConfig,
+  runId: string | undefined
+): Promise<TracesAccessor> {
+  if (!agentConfig.useTraces) {
+    return emptyTracesAccessor();
+  }
+  if (!runId) {
+    return unavailableTracesAccessor(
+      'agent has useTraces=true but produced no runId for trace correlation'
+    );
+  }
+  const polling = agentConfig.tracePolling ?? {};
+  const result = await fetchSpansForRun(runId, {
+    maxAttempts: polling.maxAttempts,
+    intervalMs: polling.intervalMs,
+  });
+  if (result.spans.length === 0) {
+    const reason = result.lastError
+      ? `fetch failed for runId=${runId}: ${result.lastError}`
+      : `no spans found for runId=${runId} after polling — verify the agent's OTel exporter is reachable`;
+    return unavailableTracesAccessor(reason);
+  }
+  return buildTracesAccessor(result.spans);
 }

@@ -6,9 +6,17 @@
 /**
  * `traces` fixture — read-only access to the OTel traces emitted by the
  * agent during this run. Pre-loaded by the runner before the test body
- * starts; sync access from inside the body. When the agent has no
- * traces available (useTraces=false or fetch failed), every accessor
- * returns 0 / empty so user matchers don't blow up.
+ * starts; sync access from inside the body.
+ *
+ * Three construction modes (the runner picks one):
+ *   - `buildTracesAccessor(spans)` — real spans available, real numbers.
+ *   - `emptyTracesAccessor()` — agent opted out (`useTraces=false`).
+ *     Every accessor returns 0/[] so user matchers don't blow up.
+ *   - `unavailableTracesAccessor(reason)` — agent opted in (`useTraces=true`)
+ *     but spans were not fetchable (no runId, fetch failed, or polling
+ *     timed out). Every accessor *throws* so silent false-passes like
+ *     `expect(traces.totalTokens).to.be.lessThan(10_000)` against an
+ *     empty fixture become loud failures (see issue #230).
  *
  * Built on top of `services/traces/index.ts:fetchTracesByRunIds` —
  * the runner is responsible for invoking that and constructing the
@@ -30,7 +38,11 @@ export interface TracesAccessor {
   spans: ReadonlyArray<Span>;
 }
 
-/** Empty accessor used when no traces are available. */
+/**
+ * Empty accessor — silent zeros. Used when the agent opted out of traces
+ * (`useTraces: false`). Reading any accessor returns `0` / `[]` so user
+ * matchers in opt-out scenarios don't throw.
+ */
 export function emptyTracesAccessor(): TracesAccessor {
   return {
     totalTokens: 0,
@@ -39,6 +51,29 @@ export function emptyTracesAccessor(): TracesAccessor {
     spanDuration: () => 0,
     spans: [],
   };
+}
+
+/**
+ * Loud-failure accessor — every read throws. Used when the agent opted
+ * in to traces (`useTraces: true`) but spans were not retrievable. This
+ * turns the silent false-pass described in issue #230 into an actionable
+ * error, e.g.:
+ *
+ *   Error: traces fixture unavailable: no spans found for runId=…
+ *
+ * Construction never throws — only attribute / method access does.
+ */
+export function unavailableTracesAccessor(reason: string): TracesAccessor {
+  const fail = (): never => {
+    throw new Error(`traces fixture unavailable: ${reason}`);
+  };
+  return {
+    get totalTokens(): number { return fail(); },
+    get totalCost(): number { return fail(); },
+    get toolCalls(): ReadonlyArray<{ name: string; durationMs: number }> { return fail(); },
+    get spans(): ReadonlyArray<Span> { return fail(); },
+    spanDuration(_name: string): number { return fail(); },
+  } as TracesAccessor;
 }
 
 /** Build a TracesAccessor from a flat list of spans. */

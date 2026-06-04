@@ -799,7 +799,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             <FileText size={14} className="mr-2" /> Overview
           </TabsTrigger>
           <TabsTrigger value="trajectory" className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue">
-            <GitBranch size={14} className="mr-2" /> Conversation History
+            <GitBranch size={14} className="mr-2" /> Test Case Output
             <Badge variant="secondary" className="ml-2">{trajectory.length}</Badge>
           </TabsTrigger>
           <TabsTrigger
@@ -983,7 +983,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           <TabsContent value="trajectory" className="p-6 mt-0">
             {/* Header with Toggle */}
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Conversation History</h3>
+              <h3 className="text-lg font-semibold">Test Case Output</h3>
               <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
                 <button
                   onClick={() => setTrajectoryViewMode('processed')}
@@ -1225,17 +1225,28 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
               <MatcherResultsPanel results={liveReport.matcherResults} />
             )}
 
-            {/* LLM Judge Reasoning */}
-            <div>
-              <h3 className="text-lg font-semibold mb-3">LLM Judge Reasoning</h3>
-              <Card><CardContent className="p-4">
-                <div className="prose dark:prose-invert max-w-none prose-headings:text-sm prose-p:text-sm prose-p:leading-relaxed prose-code:text-opensearch-blue prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-ul:text-sm prose-ol:text-sm">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {liveReport.llmJudgeReasoning}
-                  </ReactMarkdown>
-                </div>
-              </CardContent></Card>
-            </div>
+            {/* Judge Reasoning — only render when there's meaningful judge
+                output. Deterministic runs (verdict from matcherResults, not
+                an LLM judge) get an empty `llmJudgeReasoning`; pending
+                trace-mode runs still carry the “Waiting for traces…”
+                placeholder, which is shown in the trace-mode banner above
+                rather than as a verdict. Either way the dedicated card
+                here would just be noise. */}
+            {(liveReport as any).evaluationType !== 'deterministic'
+              && liveReport.llmJudgeReasoning
+              && liveReport.llmJudgeReasoning.trim().length > 0
+              && !/^Waiting for traces/i.test(liveReport.llmJudgeReasoning) && (
+              <div>
+                <h3 className="text-lg font-semibold mb-3">Judge Reasoning</h3>
+                <Card><CardContent className="p-4">
+                  <div className="prose dark:prose-invert max-w-none prose-headings:text-sm prose-p:text-sm prose-p:leading-relaxed prose-code:text-opensearch-blue prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-ul:text-sm prose-ol:text-sm">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {liveReport.llmJudgeReasoning}
+                    </ReactMarkdown>
+                  </div>
+                </CardContent></Card>
+              </div>
+            )}
 
             {/* Improvement Strategies */}
             {liveReport.improvementStrategies && liveReport.improvementStrategies.length > 0 && (

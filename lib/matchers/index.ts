@@ -5,7 +5,7 @@
 
 export { expect } from './expect.js';
 export type { TracesAccessor } from './traces.js';
-export { buildTracesAccessor, emptyTracesAccessor } from './traces.js';
+export { buildTracesAccessor, emptyTracesAccessor, unavailableTracesAccessor } from './traces.js';
 export type { MatcherResult, MatcherMethod } from './types.js';
 export {
   startSession,

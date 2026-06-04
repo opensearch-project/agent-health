@@ -194,8 +194,8 @@ compatibility with code written against the original PR.
 
 ### Traces fixture
 
-The runner pre-loads OTel data into the `traces` fixture before invoking the
-body, so all access is sync:
+The runner pre-loads OTel data into the `traces` fixture before invoking
+the body when the agent has `useTraces: true`, so all access is sync:
 
 ```javascript
 expect(traces.totalTokens).to.be.lessThan(10_000);
@@ -205,8 +205,32 @@ expect(traces.toolCalls).to.have.length.greaterThan(0);
 expect(traces.spans).to.have.length.greaterThan(0);   // raw access for power users
 ```
 
-When no traces are available (`useTraces: false` agent or fetch failure) every
-accessor returns 0 / empty so user matchers don't throw.
+Availability rules:
+
+- **Agent has `useTraces: false`** — every accessor returns `0` / `[]`. This
+  is the opt-out path; assertions like `traces.totalTokens === 0` are still
+  meaningful (they assert “I didn't expect any traces”).
+- **Agent has `useTraces: true` and spans were fetched** — accessors return
+  the real aggregated values.
+- **Agent has `useTraces: true` but spans were not retrievable** — every
+  read **throws** with a specific reason:
+  - `agent has useTraces=true but produced no runId for trace correlation`
+  - `fetch failed for runId=…: <underlying error message>` (transient or
+    persistent backend errors)
+  - `no spans found for runId=… after polling — verify the agent's OTel
+    exporter is reachable`
+
+  This turns the silent false-pass described in [#230] into an actionable
+  failure.
+
+Polling is bounded so the test body never blocks for long: by default
+10 attempts at 1s each (~10s budget). Override per agent via the
+`tracePolling.intervalMs` / `tracePolling.maxAttempts` fields, or globally
+via the `TRACE_POLL_INTERVAL_MS` / `TRACE_POLL_MAX_ATTEMPTS` env vars (the
+same vars the judge poller honours). A hard ceiling of 60 attempts is
+enforced regardless of configuration.
+
+[#230]: https://github.com/opensearch-project/agent-health/issues/230
 
 ---
 
@@ -281,6 +305,6 @@ keeping it user-supplied lets you opt in without breaking anyone else.
 - [x] No-prompt mode (skip agent invocation entirely)
 - [x] Per-matcher results — chai recording plugin + judge() + traces helper
 - [x] UI breakdown panel
+- [x] Real traces pre-loading from OTel exporter (#230)
 - [ ] `defineEvaluator()` for #186-style mechanical / external verification
-- [ ] Real traces pre-loading from OTel exporter (currently always empty)
 - [ ] `expect.soft()` to collect-all-failures instead of bail-on-first
