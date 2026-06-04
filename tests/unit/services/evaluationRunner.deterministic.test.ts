@@ -69,6 +69,13 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
     storage = createMockStorage();
   });
 
+  afterEach(() => {
+    // Restore any spies (notably global.fetch in the evaluator-binding
+    // tests below) so we don't leak mocks into other suites and create
+    // order-dependent failures.
+    jest.restoreAllMocks();
+  });
+
   it('calls evaluate function instead of LLM judge when evaluateFnMap has entry', async () => {
     const evaluateFn: EvaluateFn = jest.fn();
     const evaluateFnMap = new Map<string, EvaluateFn>([['tc-1', evaluateFn]]);
@@ -324,5 +331,146 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
 
     // Connector WAS called — prompt is present
     expect(mockRunEval).toHaveBeenCalledTimes(1);
+  });
+
+  it('binds run.evaluatorId onto the judge fixture so destructured judge() inherits it (UI-equivalent)', async () => {
+    // This is the regression test for the SDK ↔ UI evaluator-parity gap.
+    // The runner must hand the test body a `judge` whose POST body to
+    // /api/judge carries `run.evaluatorId` automatically — exactly what
+    // the UI "Run Test" path does via callBedrockJudge → /api/judge.
+    //
+    // We capture the `judge` fixture the runner passes to the test body,
+    // mock global.fetch, and assert the request body's `evaluatorId`
+    // matches the run-level value without the body explicitly passing it.
+
+    let capturedJudge: any;
+    const evaluateFn: EvaluateFn = (fixtures: any) => {
+      capturedJudge = fixtures.judge;
+    };
+    const evaluateFnMap = new Map<string, EvaluateFn>([['tc-eval', evaluateFn]]);
+
+    const testCase: TestCase = {
+      id: 'tc-eval',
+      name: 'Eval-bound test',
+      initialPrompt: 'Investigate',
+      context: [],
+    } as unknown as TestCase;
+
+    const run: EvaluationRun = {
+      id: 'run-eval-1',
+      agentKey: 'test-agent',
+      modelId: 'claude-sonnet',
+      evaluatorId: 'system-rca-default',
+      status: 'running',
+      results: {},
+      createdAt: new Date().toISOString(),
+    } as unknown as EvaluationRun;
+
+    mockRunEval.mockResolvedValue({
+      id: 'report-eval-1',
+      trajectory: [{ type: 'response', content: 'final' }],
+      rawEvents: [],
+      status: 'completed',
+      performanceMetrics: { durationMs: 50 },
+    });
+    (storage.runs.create as jest.Mock).mockImplementation((report: any) =>
+      Promise.resolve({ ...report, id: 'report-eval-1' }),
+    );
+
+    await executeEvaluationRun(run, [testCase], {
+      storageModule: storage,
+      evaluateFnMap,
+      onProgress: jest.fn(),
+    });
+
+    expect(capturedJudge).toBeDefined();
+
+    // Spy on global.fetch so jest.restoreAllMocks() in afterEach puts
+    // the original back — prevents leakage into other tests.
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ passFailStatus: 'passed', metrics: { accuracy: 100 }, llmJudgeReasoning: '' }),
+      text: async () => '',
+    });
+    jest.spyOn(global, 'fetch').mockImplementation(fetchMock as unknown as typeof fetch);
+
+    await capturedJudge(
+      { trajectory: [{ type: 'response', content: 'x' }] },
+      'identifies the issue',
+    );
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.evaluatorId).toBe('system-rca-default');
+
+    // Per-call override still wins over the bound run-level evaluator —
+    // matches UI behaviour where users can pick a different evaluator
+    // for a specific test.
+    fetchMock.mockClear();
+    await capturedJudge(
+      { trajectory: [{ type: 'response', content: 'x' }] },
+      'claim',
+      { evaluatorId: 'override-eval' },
+    );
+    const overrideInit = fetchMock.mock.calls[0][1] as RequestInit;
+    const overrideBody = JSON.parse(overrideInit.body as string);
+    expect(overrideBody.evaluatorId).toBe('override-eval');
+  });
+
+  it('does not set evaluatorId on the body when run.evaluatorId is undefined (server uses default)', async () => {
+    let capturedJudge: any;
+    const evaluateFn: EvaluateFn = (fixtures: any) => {
+      capturedJudge = fixtures.judge;
+    };
+    const evaluateFnMap = new Map<string, EvaluateFn>([['tc-default', evaluateFn]]);
+
+    const testCase: TestCase = {
+      id: 'tc-default',
+      name: 'Default-evaluator test',
+      initialPrompt: 'Run',
+      context: [],
+    } as unknown as TestCase;
+
+    const run: EvaluationRun = {
+      id: 'run-default',
+      agentKey: 'test-agent',
+      modelId: 'claude-sonnet',
+      // evaluatorId intentionally omitted
+      status: 'running',
+      results: {},
+      createdAt: new Date().toISOString(),
+    } as unknown as EvaluationRun;
+
+    mockRunEval.mockResolvedValue({
+      id: 'r',
+      trajectory: [],
+      rawEvents: [],
+      status: 'completed',
+      performanceMetrics: { durationMs: 1 },
+    });
+    (storage.runs.create as jest.Mock).mockImplementation((report: any) =>
+      Promise.resolve({ ...report, id: 'r' }),
+    );
+
+    await executeEvaluationRun(run, [testCase], {
+      storageModule: storage,
+      evaluateFnMap,
+      onProgress: jest.fn(),
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ passFailStatus: 'passed', metrics: { accuracy: 100 }, llmJudgeReasoning: '' }),
+      text: async () => '',
+    });
+    jest.spyOn(global, 'fetch').mockImplementation(fetchMock as unknown as typeof fetch);
+
+    await capturedJudge({ trajectory: [{ type: 'response', content: 'x' }] }, 'claim');
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect('evaluatorId' in body).toBe(false);
   });
 });

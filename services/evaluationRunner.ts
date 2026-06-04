@@ -29,7 +29,7 @@ import {
 } from '@/lib/matchers/index';
 import type { TracesAccessor } from '@/lib/matchers/index';
 import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } from '@/lib/testCases/types';
-import { judge } from '@/lib/testCases/judge';
+import { judge, bindJudge } from '@/lib/testCases/judge';
 import { expect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
 import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
@@ -172,7 +172,14 @@ export async function executeEvaluationRun(
     hookDescriptors,
     () => ({
       result: {} as any,            // overwritten by runner with real EvalResult
-      judge,
+      // Bind run-level evaluator + judge model so destructured `judge`
+      // calls in the test body inherit the run's evaluator selection,
+      // matching the UI "Run Test" path. Per-call options on
+      // `judge(result, claim, { evaluatorId })` still win.
+      judge: bindJudge({
+        evaluatorId: run.evaluatorId,
+        model: bedrockModelId,
+      }),
       traces: emptyTracesAccessor(),
       expect,
       testInfo: { name: '' },       // overwritten by orchestrator
@@ -718,6 +725,14 @@ function buildEvalResult(input: {
  * Build the fixtures object passed to the new Playwright-style test body.
  * The traces fixture is constructed by {@link loadTracesAccessor} prior
  * to this call — see issue #230.
+ *
+ * NOTE: As of the lifecycle-hooks merge, the live path goes through
+ * `hookOrchestrator.beforeTest()` which constructs fixtures via the
+ * factory passed to `createHookOrchestrator(...)`. That factory binds
+ * the run-level `evaluatorId` and judge `model` onto `judge` via
+ * `bindJudge(...)`. This standalone `buildFixtures()` is kept for any
+ * future caller that doesn't use the orchestrator and intentionally
+ * wants a no-defaults `judge`.
  */
 function buildFixtures(result: EvalResult, traces: TracesAccessor): TestFixtures {
   return {

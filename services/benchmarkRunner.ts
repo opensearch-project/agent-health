@@ -37,7 +37,7 @@ import {
 } from '@/lib/matchers/index';
 import type { TracesAccessor } from '@/lib/matchers/index';
 import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } from '@/lib/testCases/types';
-import { judge as judgeFn } from '@/lib/testCases/judge';
+import { judge as judgeFn, bindJudge } from '@/lib/testCases/judge';
 import { expect as ahExpect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
 import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
@@ -237,6 +237,11 @@ export async function executeRun(
   const benchmarkTestCases = benchmark.testCaseIds
     .map(id => testCaseMap.get(id))
     .filter((tc): tc is TestCase => !!tc);
+  // Resolve the run-level Bedrock model id once — used to bind the judge
+  // fixture to the same model the UI "Run Test" path would use, alongside
+  // run.evaluatorId. Computed here (not inside the per-test-case loop)
+  // so the orchestrator factory can capture it in its closure.
+  const runLevelBedrockModelId = getBedrockModelId(run.modelId);
   const hookDescriptors: TestDescriptor[] = benchmarkTestCases.map(tc => {
     const scope = testHookScopes?.get(tc.id);
     return {
@@ -251,7 +256,14 @@ export async function executeRun(
     hookDescriptors,
     () => ({
       result: {} as any,
-      judge: judgeFn,
+      // Bind run-level evaluator + judge model so destructured `judge`
+      // calls in the test body inherit the run's evaluator selection,
+      // matching the UI "Run Test" path. Per-call options on
+      // `judge(result, claim, { evaluatorId })` still win.
+      judge: bindJudge({
+        evaluatorId: run.evaluatorId,
+        model: runLevelBedrockModelId,
+      }),
       traces: emptyTracesAccessor(),
       expect: ahExpect,
       testInfo: { name: '' },
