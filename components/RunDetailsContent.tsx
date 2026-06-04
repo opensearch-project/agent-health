@@ -1024,7 +1024,16 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             )}
           </TabsContent>
 
-          <TabsContent value="logs" className="p-6 mt-0 flex-1 flex flex-col min-h-0">
+          {/*
+           * NOTE: use data-[state=active]:* prefixes for the flex/min-h-0 layout
+           * classes. Without them, the unconditional `flex` class wins over
+           * radix's `[hidden]` attribute (same specificity, later in source
+           * order) and the *inactive* panel keeps a non-zero height — which
+           * shows up as a phantom gap above the active tab's content (e.g.
+           * the LLM Judge / Annotations tabs would render with ~48px – 430px
+           * of empty space depending on the trace panel's intrinsic size).
+           */}
+          <TabsContent value="logs" className="p-6 mt-0 data-[state=active]:flex-1 data-[state=active]:flex data-[state=active]:flex-col data-[state=active]:min-h-0">
             {isTraceMode ? (
               /* TRACE MODE: Show trace visualization */
               <div className="space-y-4 flex-1 flex flex-col min-h-0">
@@ -1293,9 +1302,8 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </TabsContent>
 
           <TabsContent value="annotations" className="p-6 mt-0 space-y-4">
-            <h3 className="text-lg font-semibold mb-4">Annotations</h3>
-
-            {/* Add Annotation */}
+            {/* Add Annotation — the tab itself is already labelled
+               "Annotations", so we don't repeat the heading inside. */}
             <Card><CardContent className="p-4">
               <Textarea
                 value={newAnnotation}
