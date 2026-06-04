@@ -25,10 +25,11 @@ import {
   buildTracesAccessor,
 } from '@/lib/matchers/index';
 import type { TracesAccessor } from '@/lib/matchers/index';
-import type { EvalResult, TrajectoryAccessor, TestFixtures } from '@/lib/testCases/types';
+import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } from '@/lib/testCases/types';
 import { judge } from '@/lib/testCases/judge';
 import { expect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
+import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
 import { loadConfigSync } from '@/lib/config/index';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getCustomAgents } from '@/server/services/customAgentStore';
@@ -59,6 +60,19 @@ export interface ExecuteEvaluationRunOptions {
     error?: string;
   }) => Promise<void>;
   evaluateFnMap?: Map<string, (result: any) => Promise<void> | void>;
+  /**
+   * SDK lifecycle hooks (`beforeAll`/`afterAll`/`beforeEach`/`afterEach`)
+   * registered by code-imported eval files, keyed by the absolute file
+   * path the loader resolved. When omitted or empty, hooks are a no-op.
+   */
+  hooksByFile?: Map<string, RegisteredHook[]>;
+  /**
+   * Per-test-case scope info (sourceFile + describePath) so the
+   * orchestrator can look up the right scope chain. Required to be
+   * present for code-imported test cases that have hooks registered;
+   * tests missing from the map fall through to file-level hooks only.
+   */
+  testHookScopes?: Map<string, { sourceFile?: string; describePath?: string }>;
 }
 
 /**
@@ -107,7 +121,7 @@ export async function executeEvaluationRun(
   testCases: TestCase[],
   options: ExecuteEvaluationRunOptions
 ): Promise<EvaluationRun> {
-  const { cancellationToken, storageModule, onProgress, onTestCaseComplete, evaluateFnMap } = options;
+  const { cancellationToken, storageModule, onProgress, onTestCaseComplete, evaluateFnMap, hooksByFile, testHookScopes } = options;
   const totalTestCases = testCases.length;
   const concurrency = run.concurrency ?? 1;
   const runStartTime = Date.now();
@@ -135,6 +149,33 @@ export async function executeEvaluationRun(
   // Resolve model ID
   const modelConfig = config.models[run.modelId];
   const bedrockModelId = modelConfig?.model_id || run.modelId;
+
+  // Build the hook orchestrator once per run. The factory hands the
+  // orchestrator a fresh `TestFixtures` skeleton on demand; it stamps
+  // `testInfo` and `provisioned` and adds `provide` for `beforeEach`.
+  // Tests with no hooks pay zero cost — createHookOrchestrator returns a
+  // no-op when hooksByFile is empty.
+  const hookDescriptors: TestDescriptor[] = testCases.map(tc => {
+    const scope = testHookScopes?.get(tc.id);
+    return {
+      testCaseId: tc.id,
+      name: tc.name,
+      sourceFile: scope?.sourceFile,
+      describePath: scope?.describePath,
+    };
+  });
+  const hookOrchestrator = createHookOrchestrator(
+    hooksByFile,
+    hookDescriptors,
+    () => ({
+      result: {} as any,            // overwritten by runner with real EvalResult
+      judge,
+      traces: emptyTracesAccessor(),
+      expect,
+      testInfo: { name: '' },       // overwritten by orchestrator
+      provisioned: {},
+    }),
+  );
 
   // Initialize results if not already set
   if (!run.results) {
@@ -230,16 +271,48 @@ export async function executeEvaluationRun(
             // data — or fail loudly if it can't — instead of silently
             // returning zeros that make `lessThan(N)` matchers pass.
             const tracesAccessor = await loadTracesAccessor(agentConfig, report.runId);
+            // Look up the scope for this test (file + describePath). Code
+            // imports always populate this; ad-hoc / non-code paths get
+            // an undefined scope which the orchestrator handles as a
+            // file-less, top-level test (no hooks match).
+            const scope = testHookScopes?.get(testCaseId);
+            const desc: TestDescriptor = {
+              testCaseId,
+              name: testCase.name,
+              sourceFile: scope?.sourceFile,
+              describePath: scope?.describePath,
+            };
 
             const session = startSession();
+            // Run beforeAll/beforeEach. Hook results are folded into the
+            // matcher session so the per-matcher UI shows them.
+            const before = await hookOrchestrator.beforeTest(desc);
+            for (const r of before.matcherResults) {
+              (session.results as any).push(r);
+            }
+            // Stamp the per-test fixtures (with testInfo+provisioned+
+            // potentially provide-from-beforeEach) over the EvalResult
+            // object so legacy 1-arg bodies and modern destructuring
+            // bodies both work. Overlay the per-run tracesAccessor too —
+            // the orchestrator's noop factory returns an empty one.
+            const fixtures: TestFixtures = {
+              ...before.fixtures,
+              result: evalResult,
+              traces: tracesAccessor,
+            };
+            const arg = Object.assign(evalResult, { ...fixtures, result: evalResult }) as any;
+
             try {
-              // Backward-compat: legacy 1-arg bodies receive the EvalResult
-              // directly. New 1-arg bodies that destructure receive the
-              // fixtures object. We pass the result twice via Object.assign
-              // so both shapes work transparently.
-              const fixtures = buildFixtures(evalResult, tracesAccessor);
-              const arg = Object.assign(evalResult, { ...fixtures, result: evalResult }) as any;
-              await evalFn(arg);
+              if (!before.aborted) {
+                await evalFn(arg);
+              }
+              // Always run afterEach/afterAll — even when the body or a
+              // beforeEach threw. Errors there become MatcherResult
+              // entries on the test, not runner crashes.
+              const after = await hookOrchestrator.afterTest(desc, fixtures);
+              for (const r of after) {
+                (session.results as any).push(r);
+              }
               const matcherResults = endSession();
               const anyFailed = matcherResults.some(m => !m.pass);
               (report as any).passFailStatus = anyFailed ? 'failed' : 'passed';
@@ -256,6 +329,11 @@ export async function executeEvaluationRun(
                 ? { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 }
                 : { accuracy: 100, faithfulness: 100, latency_score: 100, trajectory_alignment_score: 100 };
             } catch (evalError: any) {
+              // Body threw: still run afterEach/afterAll so cleanup happens.
+              const after = await hookOrchestrator.afterTest(desc, fixtures);
+              for (const r of after) {
+                (session.results as any).push(r);
+              }
               const matcherResults = endSession();
               (report as any).passFailStatus = 'failed';
               (report as any).evaluationType = 'deterministic';
@@ -633,6 +711,12 @@ function buildFixtures(result: EvalResult, traces: TracesAccessor): TestFixtures
     judge,
     traces,
     expect,
+    // Defaults for tests that bypass the orchestrator (none today — the
+    // runner always goes through `hookOrchestrator.beforeTest()` which
+    // overwrites these). Kept here so the function still returns a
+    // complete TestFixtures and is safe for any future caller.
+    testInfo: { name: '' },
+    provisioned: {},
   };
 }
 

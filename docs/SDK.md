@@ -63,7 +63,70 @@ async function ({ result, judge, traces, expect }) { ... }
 `expect` is also exported at the top level for convenience. Both are the same
 function.
 
-### 3. Matchers record structured verdicts
+### 3. Lifecycle hooks (`beforeEach` / `afterEach` / `beforeAll` / `afterAll`)
+
+For *side-effecting* per-test setup with a teardown step — the kind that
+a connector can't express because connectors are pure request-shapers
+with no lifecycle — the SDK provides Playwright-style hooks. Use them
+for things like materializing a temp workspace, seeding a database,
+starting a sandbox, or writing a fixture file the agent's tools open.
+
+```javascript
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { test, beforeAll, afterAll, beforeEach, afterEach, expect } = require('@opensearch-project/agent-health');
+
+let suiteRoot;
+beforeAll(() => {
+  suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'my-suite-'));
+});
+afterAll(() => fs.rmSync(suiteRoot, { recursive: true, force: true }));
+
+beforeEach(({ provide, testInfo }) => {
+  const dir = fs.mkdtempSync(path.join(suiteRoot, `${testInfo.name}-`));
+  provide('workspaceDir', dir);
+});
+afterEach(({ provisioned }) => {
+  fs.rmSync(provisioned.workspaceDir, { recursive: true, force: true });
+});
+
+test('uses workspace', { prompt: '...' }, async ({ result, provisioned }) => {
+  expect(fs.existsSync(provisioned.workspaceDir)).to.equal(true);
+});
+```
+
+Key points:
+
+- **Scope.** Hooks attach to the file they're declared in (top level) or
+  to the surrounding `describe()` block. Nested describes inherit outer
+  hooks; ordering is outer-→inner for `beforeAll`/`beforeEach`, and
+  inner-→outer for `afterEach`/`afterAll`.
+- **Once-per-scope guarantee.** `beforeAll` runs exactly once, even when
+  the runner dispatches tests in parallel — the orchestrator uses a
+  promise-based once-latch and all parallel arrivals await it. `afterAll`
+  uses a remaining-tests counter and fires when the last test in the
+  scope completes.
+- **Always-runs teardown.** `afterEach` and `afterAll` run even when the
+  body or `beforeEach` threw. Hook errors don't crash the runner; they
+  surface as `MatcherResult` entries on the test (visible in the same
+  per-matcher panel as your assertion failures).
+- **`provide(key, value)`** is the only way to surface a value from
+  `beforeEach` to the body. Don't mutate `testInfo` and don't rely on
+  closure variables for per-test state — those don't survive parallelism.
+  The `provisioned` bag is per-test (each test gets a fresh empty object),
+  so concurrent tests are isolated.
+- **`testInfo`** is read-only metadata: `{ name, benchmarkPath, sourceFile,
+  testCaseId }`. Useful for naming temp resources or tagging logs.
+- **`test.beforeEach(...)`** is also accepted as an equivalent alias for
+  `beforeEach(...)`, mirroring Playwright's surface.
+
+Hooks are a no-op when no test in the run uses them — the orchestrator
+is short-circuited to a noop variant and existing tests pay zero cost.
+
+See the demo at [`evals/sdk-hooks-demo.eval.js`](../evals/sdk-hooks-demo.eval.js).
+
+### 4. Matchers record structured verdicts
 
 Every `expect(...).to.X(...)` call, every `judge(result, ...)` call, and every
 traces helper produces one **MatcherResult**. The runner collects them and
@@ -306,5 +369,6 @@ keeping it user-supplied lets you opt in without breaking anyone else.
 - [x] Per-matcher results — chai recording plugin + judge() + traces helper
 - [x] UI breakdown panel
 - [x] Real traces pre-loading from OTel exporter (#230)
+- [x] Lifecycle hooks (`beforeEach`/`afterEach`/`beforeAll`/`afterAll`) with `provide()` for per-test out-of-band provisioning ([#229](https://github.com/opensearch-project/agent-health/issues/229))
 - [ ] `defineEvaluator()` for #186-style mechanical / external verification
 - [ ] `expect.soft()` to collect-all-failures instead of bail-on-first

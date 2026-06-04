@@ -83,8 +83,17 @@ export type { ConnectorRegistry } from '../services/connectors/types.js';
 // minor release without a deprecation cycle. Pin your @opensearch-project/
 // agent-health version if you depend on it. To suppress the runtime warning
 // emitted when the SDK is first used, set `AGENT_HEALTH_SUPPRESS_EXPERIMENTAL=1`.
-export { test, describe, judge } from './testCases/index.js';
-export type { TestOptions, CodeTestCase, EvalResult } from './testCases/types.js';
+export { test, describe, beforeAll, afterAll, beforeEach, afterEach, judge } from './testCases/index.js';
+export type {
+  TestOptions,
+  CodeTestCase,
+  EvalResult,
+  TestFixtures,
+  TestInfo,
+  HookKind,
+  HookFn,
+  RegisteredHook,
+} from './testCases/types.js';
 
 // Per-matcher results: chai-based `expect` with our recording plugin and
 // custom matchers (haveCalledTool, haveStepsOfType, haveOutputMatching,

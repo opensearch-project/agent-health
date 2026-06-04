@@ -992,6 +992,10 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
     // file to materialize the test bodies. The runner picks them up via
     // ExecuteRunOptions.evaluateFnMap and runs the matcher session.
     let evaluateFnMap: Map<string, (fixtures: any) => Promise<void> | void> | undefined;
+    // Hooks + scopes also need to be re-resolved here (mirrors the
+    // evaluation-runs route) so the runner can build a HookOrchestrator.
+    let hooksByFile: Map<string, import('../../../lib/testCases/types.js').RegisteredHook[]> | undefined;
+    let testHookScopes: Map<string, { sourceFile?: string; describePath?: string }> | undefined;
     try {
       // Re-fetch full test cases (including sourceFile) directly from storage —
       // the testCaseMap built earlier only carries (id, name) for performance.
@@ -1018,6 +1022,8 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
       if (codeFilesToLoad.size > 0) {
         const { loadTestCasesFromModule } = await import('../../../lib/testCases/loader.js');
         const map = new Map<string, (fixtures: any) => Promise<void> | void>();
+        const hookMap = new Map<string, import('../../../lib/testCases/types.js').RegisteredHook[]>();
+        const scopeMap = new Map<string, { sourceFile?: string; describePath?: string }>();
         // Build a name+sourceFile lookup from the freshly-fetched docs
         const tcByNameAndFile = new Map<string, any>();
         for (const tc of fullTestCases) {
@@ -1035,9 +1041,17 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
               const stored = tcByNameAndFile.get(`${sourceFile}\u0000${tc.name}`);
               if (stored && tc.evaluate && benchmark.testCaseIds.includes(stored.id)) {
                 map.set(stored.id, tc.evaluate as any);
+                // Capture (file, describePath) for hook scope lookup at run time.
+                scopeMap.set(stored.id, {
+                  sourceFile: loaded.filePath,
+                  describePath: tc.benchmarkPath,
+                });
               } else if (!stored) {
                 console.log(`[StorageAPI]   miss: no stored test case for sourceFile=${sourceFile} name=${tc.name}`);
               }
+            }
+            if (loaded.hooks.length > 0) {
+              hookMap.set(loaded.filePath, loaded.hooks);
             }
           } catch (loadErr: any) {
             console.warn(`[StorageAPI] Failed to re-resolve code file ${filePath} for SDK runs: ${loadErr.message}`);
@@ -1049,6 +1063,8 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
         } else {
           console.log(`[StorageAPI] SDK fnMap built with 0 entries — no test cases matched`);
         }
+        if (hookMap.size > 0) hooksByFile = hookMap;
+        if (scopeMap.size > 0) testHookScopes = scopeMap;
       }
     } catch (err: any) {
       console.warn(`[StorageAPI] SDK fn-map re-resolution failed (non-fatal): ${err.message}`);
@@ -1071,6 +1087,8 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
           client,
           storageModule: storage,
           evaluateFnMap,
+          hooksByFile,
+          testHookScopes,
           onTestCaseComplete: async (testCaseId, result) => {
             // Stream per-test-case result to the client
             const tc = testCaseMap.get(testCaseId);

@@ -89,6 +89,80 @@ export interface TestFixtures {
   judge: typeof import('./judge.js').judge;
   traces: TracesAccessor;
   expect: typeof import('../matchers/expect.js').expect;
+  /**
+   * Static, read-only metadata about the currently-executing test. Useful
+   * for naming temp dirs, logging, and routing — never mutate.
+   */
+  testInfo: TestInfo;
+  /**
+   * Values made available by `beforeEach` hooks via `provide(key, value)`.
+   * Always present (empty when no hooks ran). Read-only from the test body.
+   */
+  provisioned: Readonly<Record<string, unknown>>;
+  /**
+   * Only present inside `beforeEach` hooks. Stores a value into the
+   * provisioned bag for this test. Calling `provide()` outside a
+   * `beforeEach` is a no-op (kept loose so hooks/body share one fixture
+   * shape without a separate `HookFixtures` type at every call site).
+   */
+  provide?: (key: string, value: unknown) => void;
+}
+
+/**
+ * Static metadata about a test execution, exposed via `fixtures.testInfo`
+ * and `hookContext.testInfo`. Frozen at the start of the test so hooks and
+ * body see the same values.
+ */
+export interface TestInfo {
+  /** Test name as registered with `test(name, ...)`. */
+  name: string;
+  /**
+   * Joined describe path, e.g. `'A > B'`. `undefined` when the test was
+   * registered outside any describe block.
+   */
+  benchmarkPath?: string;
+  /**
+   * The eval source file the test was loaded from (the absolute path the
+   * loader resolved). `undefined` for tests registered outside the loader
+   * (e.g. unit tests that call `test()` directly).
+   */
+  sourceFile?: string;
+  /**
+   * Storage id of the test case for this run. `undefined` when the
+   * orchestrator runs without a backing storage layer (unit tests).
+   */
+  testCaseId?: string;
+}
+
+/**
+ * Lifecycle hook kinds, modelled after Playwright. `beforeAll`/`afterAll`
+ * run once per scope (file or describe); `beforeEach`/`afterEach` run
+ * around every matching test in the scope.
+ */
+export type HookKind = 'beforeAll' | 'afterAll' | 'beforeEach' | 'afterEach';
+
+/**
+ * The function signature accepted by every hook. Receives the same
+ * fixtures object the test body sees. `beforeEach` may call
+ * `fixtures.provide(key, value)` to expose values to the body / `afterEach`.
+ */
+export type HookFn = (fixtures: TestFixtures) => Promise<void> | void;
+
+/**
+ * One registered hook, captured at registration time. The scope chain is
+ * the joined describe path (`undefined` at file top level), exactly
+ * matching how `test()` records `benchmarkPath`.
+ */
+export interface RegisteredHook {
+  kind: HookKind;
+  fn: HookFn;
+  /** File path the hook was registered from (set by the loader). */
+  sourceFile?: string;
+  /**
+   * Joined describe path the hook lives in, e.g. `'A > B'`. `undefined`
+   * means the hook is file-scoped (outside any describe).
+   */
+  describePath?: string;
 }
 
 export interface EvalResult {

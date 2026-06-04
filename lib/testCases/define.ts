@@ -3,9 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { CodeTestCase, TestOptions, EvalResult } from './types.js';
+import type {
+  CodeTestCase,
+  TestOptions,
+  EvalResult,
+  HookFn,
+  HookKind,
+  RegisteredHook,
+} from './types.js';
 
 const registries = new Map<string, CodeTestCase[]>();
+// Hooks live in a parallel registry keyed by file path, exactly matching
+// the test() registry. The HookOrchestrator filters by describePath at
+// run time. Cross-file hooks never leak — the loader resets per file.
+const hookRegistries = new Map<string, RegisteredHook[]>();
 let activeFile: string | null = null;
 const DEFAULT_KEY = '__default__';
 
@@ -40,6 +51,9 @@ export function setActiveFile(filePath: string): void {
   activeFile = filePath;
   if (!registries.has(filePath)) {
     registries.set(filePath, []);
+  }
+  if (!hookRegistries.has(filePath)) {
+    hookRegistries.set(filePath, []);
   }
 }
 
@@ -169,11 +183,129 @@ export function getRegisteredTests(filePath?: string): CodeTestCase[] {
   return [...registries.values()].flatMap(r => [...r]);
 }
 
+/**
+ * Return all hooks registered for the given file (or every file when no
+ * argument is given). Returns a snapshot — mutating the result has no
+ * effect on the registry.
+ */
+export function getRegisteredHooks(filePath?: string): RegisteredHook[] {
+  if (filePath) return [...(hookRegistries.get(filePath) ?? [])];
+  return [...hookRegistries.values()].flatMap(r => [...r]);
+}
+
 export function clearRegistry(filePath?: string): void {
   if (filePath) {
     registries.delete(filePath);
+    hookRegistries.delete(filePath);
   } else {
     registries.clear();
+    hookRegistries.clear();
   }
   activeFile = null;
+}
+
+/**
+ * Internal helper used by the four public hook registrars below.
+ *
+ * Captures the live `(activeFile, [...describeStack])` so the orchestrator
+ * can filter hooks by scope at run time. Multiple hooks of the same kind
+ * in the same scope are allowed and run in registration order (reversed
+ * for `afterEach`/`afterAll`, mirroring Playwright/Jest).
+ */
+function registerHook(kind: HookKind, fn: HookFn): void {
+  emitExperimentalWarningOnce();
+  if (typeof fn !== 'function') {
+    throw new Error(`${kind}() requires a function as its first argument`);
+  }
+  const key = activeFile ?? DEFAULT_KEY;
+  if (!hookRegistries.has(key)) {
+    hookRegistries.set(key, []);
+  }
+  const describePath = describeStack.length > 0 ? describeStack.join(' > ') : undefined;
+  hookRegistries.get(key)!.push({
+    kind,
+    fn,
+    sourceFile: activeFile ?? undefined,
+    describePath,
+  });
+}
+
+/**
+ * Register a hook that runs **once** before the first test in its scope.
+ *
+ * Scope is the surrounding `describe(...)` block, or the whole file when
+ * called at the top level. With parallel test execution (the runner
+ * dispatches up to `concurrency` tests at once), the orchestrator uses a
+ * once-latch so all parallel arrivals await the same `beforeAll` promise.
+ *
+ * @example
+ *   beforeAll(async () => {
+ *     await fs.mkdir('/tmp/agent-health-fixtures', { recursive: true });
+ *   });
+ */
+export function beforeAll(fn: HookFn): void { registerHook('beforeAll', fn); }
+
+/**
+ * Register a hook that runs **once** after the last test in its scope.
+ *
+ * Always runs, even when every test in the scope failed. The orchestrator
+ * uses a remaining-test counter (decremented on each test completion,
+ * regardless of pass/fail) and triggers `afterAll` when it hits zero.
+ *
+ * @example
+ *   afterAll(async () => {
+ *     await fs.rm('/tmp/agent-health-fixtures', { recursive: true });
+ *   });
+ */
+export function afterAll(fn: HookFn): void { registerHook('afterAll', fn); }
+
+/**
+ * Register a hook that runs **before each test** in its scope.
+ *
+ * Receives the same fixtures object the body will see, plus a
+ * `provide(key, value)` function for stashing values that the test body
+ * (and `afterEach`) can read via `fixtures.provisioned[key]`. Each test
+ * gets its own provisioned bag, so concurrent tests are isolated.
+ *
+ * @example
+ *   beforeEach(async ({ provide, testInfo }) => {
+ *     const dir = await fs.mkdtemp(`/tmp/${testInfo.name}-`);
+ *     provide('workspaceDir', dir);
+ *   });
+ */
+export function beforeEach(fn: HookFn): void { registerHook('beforeEach', fn); }
+
+/**
+ * Register a hook that runs **after each test** in its scope.
+ *
+ * Always runs, even when the test body or a `beforeEach` threw. Reads
+ * provisioned values via `fixtures.provisioned[key]` for cleanup. Errors
+ * thrown from `afterEach` are captured as MatcherResult entries on the
+ * test — they don't crash the runner.
+ *
+ * @example
+ *   afterEach(async ({ provisioned }) => {
+ *     if (provisioned.workspaceDir) {
+ *       await fs.rm(provisioned.workspaceDir as string, { recursive: true, force: true });
+ *     }
+ *   });
+ */
+export function afterEach(fn: HookFn): void { registerHook('afterEach', fn); }
+
+// Playwright-style sugar: `test.beforeEach(fn)` etc.
+//
+// Declaration merging here gives TypeScript users typed access to the four
+// hook registrars *and* installs them as properties on the runtime `test`
+// function value. Both `import { beforeEach }` and `test.beforeEach` route
+// to the same internal registerHook() call.
+// eslint-disable-next-line @typescript-eslint/no-namespace
+export namespace test {
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  export const beforeAll: (fn: HookFn) => void = (fn) => registerHook('beforeAll', fn);
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  export const afterAll: (fn: HookFn) => void = (fn) => registerHook('afterAll', fn);
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  export const beforeEach: (fn: HookFn) => void = (fn) => registerHook('beforeEach', fn);
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  export const afterEach: (fn: HookFn) => void = (fn) => registerHook('afterEach', fn);
 }

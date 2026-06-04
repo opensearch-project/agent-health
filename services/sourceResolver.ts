@@ -10,7 +10,7 @@ import type { IStorageModule } from '@/server/adapters/types';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 import { getCategoryFromLabels, getDifficultyFromLabels } from '@/lib/testCaseLabels';
 import { debug } from '@/lib/debug';
-import type { EvalResult } from '@/lib/testCases/types';
+import type { EvalResult, RegisteredHook } from '@/lib/testCases/types';
 
 /**
  * The signature of a test body. Accepts both legacy `(result)` form and
@@ -25,6 +25,20 @@ export interface ResolvedSources {
   sources: TestCaseSource[];
   deduplicatedCount: number;
   evaluateFnMap: Map<string, EvaluateFn>;
+  /**
+   * Lifecycle hooks (`beforeAll`/`afterAll`/`beforeEach`/`afterEach`)
+   * registered by code-imported eval files, keyed by the absolute file
+   * path the loader resolved. Empty when no code sources or none of them
+   * declared hooks. Plumbed into the runner to build a `HookOrchestrator`.
+   */
+  hooksByFile: Map<string, RegisteredHook[]>;
+  /**
+   * Per-test-case metadata the runner needs to look up the right scope
+   * chain for hooks: which file it came from, and which describe path
+   * (`undefined` for tests at file top level). Only populated for
+   * code-imported test cases.
+   */
+  testHookScopes: Map<string, { sourceFile?: string; describePath?: string }>;
 }
 
 export async function resolveTestCaseSources(
@@ -34,6 +48,8 @@ export async function resolveTestCaseSources(
   const allTestCases: TestCase[] = [];
   const updatedSources: TestCaseSource[] = [];
   const evaluateFnMap = new Map<string, EvaluateFn>();
+  const hooksByFile = new Map<string, RegisteredHook[]>();
+  const testHookScopes = new Map<string, { sourceFile?: string; describePath?: string }>();
 
   for (const source of sources) {
     switch (source.type) {
@@ -67,11 +83,17 @@ export async function resolveTestCaseSources(
       }
 
       case 'code-import': {
-        const { testCases, fnMap } = await resolveCodeImport(source.filenames, storage);
+        const { testCases, fnMap, hooksByFile: codeHooks, testScopes } = await resolveCodeImport(source.filenames, storage);
         const testCaseIds = testCases.map((tc) => tc.id);
         allTestCases.push(...testCases);
         for (const [id, fn] of fnMap) {
           evaluateFnMap.set(id, fn);
+        }
+        for (const [file, hooks] of codeHooks) {
+          hooksByFile.set(file, hooks);
+        }
+        for (const [id, scope] of testScopes) {
+          testHookScopes.set(id, scope);
         }
         updatedSources.push({ ...source, testCaseIds });
         debug('SourceResolver', `Code-imported ${testCases.length} test cases from ${source.filenames.length} file(s)`);
@@ -113,6 +135,8 @@ export async function resolveTestCaseSources(
     sources: updatedSources,
     deduplicatedCount,
     evaluateFnMap,
+    hooksByFile,
+    testHookScopes,
   };
 }
 
@@ -153,10 +177,17 @@ async function resolveFileImport(filenames: string[], storage: IStorageModule): 
 async function resolveCodeImport(
   filenames: string[],
   storage: IStorageModule
-): Promise<{ testCases: TestCase[]; fnMap: Map<string, EvaluateFn> }> {
+): Promise<{
+  testCases: TestCase[];
+  fnMap: Map<string, EvaluateFn>;
+  hooksByFile: Map<string, RegisteredHook[]>;
+  testScopes: Map<string, { sourceFile?: string; describePath?: string }>;
+}> {
   const { loadTestCasesFromModule } = await import('@/lib/testCases/loader');
   const allTestCases: TestCase[] = [];
   const fnMap = new Map<string, EvaluateFn>();
+  const hooksByFile = new Map<string, RegisteredHook[]>();
+  const testScopes = new Map<string, { sourceFile?: string; describePath?: string }>();
 
   for (const filename of filenames) {
     if (!fs.existsSync(filename)) {
@@ -196,10 +227,26 @@ async function resolveCodeImport(
       if (loadedTc?.evaluate) {
         fnMap.set(stored.id, loadedTc.evaluate);
       }
+      // Record the (file, describePath) scope for every code-imported test
+      // case so the orchestrator can look up the right hook chain at run
+      // time. We key on the absolute file path the loader resolved —
+      // matches `RegisteredHook.sourceFile` exactly.
+      if (loadedTc) {
+        testScopes.set(stored.id, {
+          sourceFile: loaded.filePath,
+          describePath: loadedTc.benchmarkPath,
+        });
+      }
     });
+
+    // `loaded.hooks` is guaranteed by the loader, but be defensive for
+    // older mocks / partial loaders that don't return it.
+    if (loaded.hooks && loaded.hooks.length > 0) {
+      hooksByFile.set(loaded.filePath, loaded.hooks);
+    }
   }
 
-  return { testCases: allTestCases, fnMap };
+  return { testCases: allTestCases, fnMap, hooksByFile, testScopes };
 }
 
 async function resolveDirectoryImport(dirPaths: string[], storage: IStorageModule): Promise<TestCase[]> {

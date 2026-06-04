@@ -33,10 +33,11 @@ import {
   buildTracesAccessor,
 } from '@/lib/matchers/index';
 import type { TracesAccessor } from '@/lib/matchers/index';
-import type { EvalResult, TrajectoryAccessor, TestFixtures } from '@/lib/testCases/types';
+import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } from '@/lib/testCases/types';
 import { judge as judgeFn } from '@/lib/testCases/judge';
 import { expect as ahExpect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
+import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
 import { v4 as uuidv4 } from 'uuid';
 import { loadConfigSync } from '@/lib/config/index';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -117,6 +118,14 @@ export interface ExecuteRunOptions {
    * session, recording per-matcher verdicts on the report.
    */
   evaluateFnMap?: Map<string, (fixtures: any) => Promise<void> | void>;
+  /**
+   * SDK lifecycle hooks (`beforeAll`/`afterAll`/`beforeEach`/`afterEach`)
+   * registered by code-imported eval files, keyed by absolute file path.
+   * Empty / undefined => no-op orchestrator (existing tests unaffected).
+   */
+  hooksByFile?: Map<string, RegisteredHook[]>;
+  /** Per-test-case scope info (sourceFile + describePath) for hook lookup. */
+  testHookScopes?: Map<string, { sourceFile?: string; describePath?: string }>;
 }
 
 /**
@@ -189,7 +198,7 @@ export async function executeRun(
   options: ExecuteRunOptions
 ): Promise<BenchmarkRun> {
   const totalTestCases = benchmark.testCaseIds.length;
-  const { cancellationToken, client, storageModule, onTestCaseComplete, evaluateFnMap } = options;
+  const { cancellationToken, client, storageModule, onTestCaseComplete, evaluateFnMap, hooksByFile, testHookScopes } = options;
   const concurrency = run.concurrency ?? 1;
   const runStartTime = Date.now();
 
@@ -216,6 +225,36 @@ export async function executeRun(
     allTestCases = await getAllTestCasesWithClient(client);
   }
   const testCaseMap = new Map(allTestCases.map((tc: any) => [tc.id, tc]));
+
+  // Build the hook orchestrator once per run. Returns a no-op when no
+  // hooks were registered (the common case for existing tests). The
+  // factory passed here is a fresh-skeleton builder — the runner
+  // overwrites `result` with the real EvalResult inside the matcher
+  // session block, and the orchestrator stamps `testInfo`/`provisioned`.
+  const benchmarkTestCases = benchmark.testCaseIds
+    .map(id => testCaseMap.get(id))
+    .filter((tc): tc is TestCase => !!tc);
+  const hookDescriptors: TestDescriptor[] = benchmarkTestCases.map(tc => {
+    const scope = testHookScopes?.get(tc.id);
+    return {
+      testCaseId: tc.id,
+      name: tc.name,
+      sourceFile: scope?.sourceFile,
+      describePath: scope?.describePath,
+    };
+  });
+  const hookOrchestrator = createHookOrchestrator(
+    hooksByFile,
+    hookDescriptors,
+    () => ({
+      result: {} as any,
+      judge: judgeFn,
+      traces: emptyTracesAccessor(),
+      expect: ahExpect,
+      testInfo: { name: '' },
+      provisioned: {},
+    }),
+  );
 
   // Mutable counters for tracking progress across concurrent tasks.
   // SAFETY: JavaScript is single-threaded — the ++ operator and variable reads
@@ -359,10 +398,36 @@ export async function executeRun(
             // data — or fail loudly if it can't — instead of silently
             // returning zeros that make `lessThan(N)` matchers pass.
             const tracesAccessor = await loadTracesAccessor(agentConfig, report.runId);
-            const fixtures = buildFixtures(evalResult, tracesAccessor);
+            const scope = testHookScopes?.get(testCaseId);
+            const desc: TestDescriptor = {
+              testCaseId,
+              name: testCase.name,
+              sourceFile: scope?.sourceFile,
+              describePath: scope?.describePath,
+            };
             const session = startSession();
+            // Run beforeAll/beforeEach hooks first — outcomes folded into
+            // the matcher session so they show up next to body assertions.
+            const before = await hookOrchestrator.beforeTest(desc);
+            for (const r of before.matcherResults) {
+              (session.results as any).push(r);
+            }
+            // Overlay the per-run tracesAccessor (#230) over what the
+            // orchestrator returned. The orchestrator's noop factory
+            // always returns an empty traces accessor.
+            const fixtures: TestFixtures = {
+              ...before.fixtures,
+              result: evalResult,
+              traces: tracesAccessor,
+            };
             try {
-              await evalFn(Object.assign(evalResult, { ...fixtures, result: evalResult }));
+              if (!before.aborted) {
+                await evalFn(Object.assign(evalResult, { ...fixtures, result: evalResult }));
+              }
+              const after = await hookOrchestrator.afterTest(desc, fixtures);
+              for (const r of after) {
+                (session.results as any).push(r);
+              }
               const matcherResults = endSession();
               const anyFailed = matcherResults.some(m => !m.pass);
               (report as any).passFailStatus = anyFailed ? 'failed' : 'passed';
@@ -377,6 +442,10 @@ export async function executeRun(
                 ? { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 }
                 : { accuracy: 100, faithfulness: 100, latency_score: 100, trajectory_alignment_score: 100 };
             } catch (evalError: any) {
+              const after = await hookOrchestrator.afterTest(desc, fixtures);
+              for (const r of after) {
+                (session.results as any).push(r);
+              }
               const matcherResults = endSession();
               (report as any).passFailStatus = 'failed';
               (report as any).evaluationType = 'deterministic';
@@ -1039,6 +1108,8 @@ function buildFixtures(result: EvalResult, traces: TracesAccessor): TestFixtures
     judge: judgeFn,
     traces,
     expect: ahExpect,
+    testInfo: { name: '' },
+    provisioned: {},
   };
 }
 
