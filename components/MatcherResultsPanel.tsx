@@ -87,6 +87,8 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
   const hasDetail =
     !!result.errorMessage ||
     !!result.reasoning ||
+    !!result.model ||
+    !!result.description ||
     result.actual !== undefined ||
     result.expected !== undefined ||
     (judgeStrategies && judgeStrategies.length > 0) ||
@@ -155,6 +157,14 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
 
       {open && hasDetail && (
         <div className="mt-2 pl-6 space-y-1.5 text-xs">
+          {result.description && (
+            <div>
+              <span className="font-semibold">description:</span>{' '}
+              <span className="text-muted-foreground whitespace-pre-wrap break-words">
+                {result.description}
+              </span>
+            </div>
+          )}
           {result.errorMessage && (
             <div className="text-red-600 dark:text-red-400">
               <span className="font-semibold">error:</span> {result.errorMessage}
@@ -198,6 +208,12 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
             <div>
               <span className="font-semibold">actual:</span>{' '}
               <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.actual)}</code>
+            </div>
+          )}
+          {result.model && (
+            <div className="text-muted-foreground">
+              <span className="font-semibold text-foreground">model:</span>{' '}
+              <code className="bg-muted px-1 py-0.5 rounded">{result.model}</code>
             </div>
           )}
           {/* llm-judge enriched fields — extra metrics + improvement
