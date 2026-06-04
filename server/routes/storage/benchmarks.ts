@@ -138,6 +138,7 @@ async function computeStatsForRun(
   let passed = 0;
   let failed = 0;
   let pending = 0;
+  let errored = 0;
   const total = Object.keys(run.results || {}).length;
 
   // Fetch reports to get passFailStatus
@@ -195,6 +196,14 @@ async function computeStatsForRun(
             return;
           }
 
+          // Evaluator could not produce a verdict (issue #242). Excluded
+          // from passed/failed so misconfigured evaluators don't poison
+          // aggregate pass rates.
+          if (report.metricsStatus === 'error') {
+            errored++;
+            return;
+          }
+
           if (report.passFailStatus === 'passed') {
             passed++;
           } else {
@@ -228,7 +237,7 @@ async function computeStatsForRun(
     });
   }
 
-  return { passed, failed, pending, total };
+  return { passed, failed, pending, errored, total };
 }
 
 /**

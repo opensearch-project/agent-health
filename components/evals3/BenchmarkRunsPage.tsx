@@ -23,7 +23,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   GitCompare, Calendar, CheckCircle2, XCircle, Play,
   Trash2, Plus, X, Loader2, Circle, Check, ChevronRight, Clock,
-  StopCircle, Ban, Columns2, LayoutPanelTop, Pencil,
+  StopCircle, Ban, Columns2, LayoutPanelTop, Pencil, AlertTriangle,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -235,7 +235,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
   // ─── Run Stats ───────────────────────────────────────────────────────────
 
-  const getRunStats = useCallback((run: BenchmarkRun): RunStats & { running: number } => {
+  const getRunStats = useCallback((run: BenchmarkRun): RunStats & { running: number; errored: number } => {
     let running = 0;
     Object.values(run.results || {}).forEach(r => { if (r.status === 'running') running++; });
 
@@ -243,6 +243,9 @@ export const BenchmarkRunsPage2: React.FC = () => {
       return {
         passed: run.stats.passed, failed: run.stats.failed,
         pending: Math.max(0, run.stats.pending - running), running,
+        // `errored` is optional on older stored runs (issue #242 added it).
+        // Fall back to 0 so existing benchmarks render without a NaN badge.
+        errored: run.stats.errored ?? 0,
         total: run.stats.total,
       };
     }
@@ -253,7 +256,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
       else if (r.status === 'failed' || r.status === 'cancelled') failed++;
       else pending++;
     });
-    return { passed, failed, pending, running, total: Object.keys(run.results || {}).length };
+    return { passed, failed, pending, running, errored: 0, total: Object.keys(run.results || {}).length };
   }, []);
 
   const hasPendingEvaluations = useMemo(() => {
@@ -631,6 +634,14 @@ export const BenchmarkRunsPage2: React.FC = () => {
                               <span className="flex items-center gap-1 text-red-700 dark:text-red-400">
                                 <XCircle size={14} /> {stats.failed}
                               </span>
+                              {stats.errored > 0 && (
+                                <span
+                                  className="flex items-center gap-1 text-amber-600 dark:text-amber-500"
+                                  title="Evaluator could not run (e.g. judge validation error). Excluded from pass-rate aggregation."
+                                >
+                                  <AlertTriangle size={14} /> {stats.errored}
+                                </span>
+                              )}
                               <span className="text-muted-foreground">/ {stats.total}</span>
                             </div>
                           )}

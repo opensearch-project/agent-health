@@ -52,7 +52,7 @@ describe('refreshBenchmarkRunStatsByReportId', () => {
 
     expect(updateRunCalls).toHaveLength(1);
     expect(updateRunCalls[0].runId).toBe('run-1');
-    expect(updateRunCalls[0].updates.stats).toEqual({ passed: 1, failed: 1, pending: 0, total: 2 });
+    expect(updateRunCalls[0].updates.stats).toEqual({ passed: 1, failed: 1, pending: 0, errored: 0, total: 2 });
   });
 
   it('counts pending/calculating reports as pending', async () => {
@@ -72,7 +72,7 @@ describe('refreshBenchmarkRunStatsByReportId', () => {
 
     await refreshBenchmarkRunStatsByReportId(storage, 'bm-1', 'r1');
 
-    expect(updateRunCalls[0].updates.stats).toEqual({ passed: 1, failed: 1, pending: 2, total: 4 });
+    expect(updateRunCalls[0].updates.stats).toEqual({ passed: 1, failed: 1, pending: 2, errored: 0, total: 4 });
   });
 
   it('counts failed-but-no-report results as failed (boot-recovery path)', async () => {
@@ -89,7 +89,7 @@ describe('refreshBenchmarkRunStatsByReportId', () => {
 
     await refreshBenchmarkRunStatsByReportId(storage, 'bm-1', 'r1');
 
-    expect(updateRunCalls[0].updates.stats).toEqual({ passed: 1, failed: 1, pending: 1, total: 3 });
+    expect(updateRunCalls[0].updates.stats).toEqual({ passed: 1, failed: 1, pending: 1, errored: 0, total: 3 });
   });
 
   it('is a no-op when benchmark not found', async () => {
@@ -112,7 +112,7 @@ describe('refreshBenchmarkRunStatsByReportId', () => {
 
     await refreshBenchmarkRunStatsByReportId(storage, 'bm-1', 'r1');
     expect(storage.benchmarks.updateRun).toHaveBeenCalledWith('bm-1', 'run-1', expect.objectContaining({
-      stats: { passed: 0, failed: 0, pending: 1, total: 1 },
+      stats: { passed: 0, failed: 0, pending: 1, errored: 0, total: 1 },
     }));
   });
 });
@@ -138,7 +138,7 @@ describe('refreshBenchmarkRunStatsByRunId', () => {
 
     expect(updateRunCalls).toHaveLength(1);
     expect(updateRunCalls[0].runId).toBe('run-2');
-    expect(updateRunCalls[0].updates.stats).toEqual({ passed: 1, failed: 1, pending: 0, total: 2 });
+    expect(updateRunCalls[0].updates.stats).toEqual({ passed: 1, failed: 1, pending: 0, errored: 0, total: 2 });
   });
 
   it('is a no-op when runId not found', async () => {

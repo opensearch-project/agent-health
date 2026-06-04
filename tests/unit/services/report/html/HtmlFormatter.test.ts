@@ -251,7 +251,7 @@ describe('HtmlFormatter', () => {
       },
     };
     const output = await formatter.generate(data);
-    expect(output.content).not.toContain('LLM Judge Reasoning');
+    expect(output.content).not.toContain('Judge Reasoning');
   });
 
   it('should handle report without improvement strategies', async () => {

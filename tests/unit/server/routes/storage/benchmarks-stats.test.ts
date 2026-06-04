@@ -153,7 +153,7 @@ describe('Benchmark Stats Backfill', () => {
       const runWithStaleStats: Partial<BenchmarkRun> = {
         id: 'run-2',
         status: 'completed',
-        stats: { passed: 1, failed: 0, pending: 1, total: 2 }, // STALE: shows 1 pending
+        stats: { passed: 1, failed: 0, pending: 1, errored: 0, total: 2 }, // STALE: shows 1 pending
         results: {
           'tc-1': { reportId: 'report-1', status: 'completed' },
           'tc-2': { reportId: 'report-2', status: 'completed' }, // Actually completed
@@ -190,7 +190,7 @@ describe('Benchmark Stats Backfill', () => {
       const runWithCorrectStats: Partial<BenchmarkRun> = {
         id: 'run-3',
         status: 'completed',
-        stats: { passed: 2, failed: 0, pending: 0, total: 2 }, // Correct
+        stats: { passed: 2, failed: 0, pending: 0, errored: 0, total: 2 }, // Correct
         results: {
           'tc-1': { reportId: 'report-1', status: 'completed' },
           'tc-2': { reportId: 'report-2', status: 'completed' },
@@ -220,7 +220,7 @@ describe('Benchmark Stats Backfill', () => {
       const runWithPendingTrace: Partial<BenchmarkRun> = {
         id: 'run-4',
         status: 'completed',
-        stats: { passed: 1, failed: 0, pending: 1, total: 2 }, // Correct (1 still pending traces)
+        stats: { passed: 1, failed: 0, pending: 1, errored: 0, total: 2 }, // Correct (1 still pending traces)
         results: {
           'tc-1': { reportId: 'report-1', status: 'completed' },
           'tc-2': { reportId: 'report-2', status: 'completed' }, // Completed but traces pending
@@ -263,7 +263,7 @@ describe('Benchmark Stats Backfill', () => {
             {
               id: 'run-1',
               status: 'completed',
-              stats: { passed: 0, failed: 0, pending: 2, total: 2 }, // Stale
+              stats: { passed: 0, failed: 0, pending: 2, errored: 0, total: 2 }, // Stale
               results: {
                 'tc-1': { reportId: 'report-1', status: 'completed' },
                 'tc-2': { reportId: 'report-2', status: 'completed' },
@@ -272,7 +272,7 @@ describe('Benchmark Stats Backfill', () => {
             {
               id: 'run-2',
               status: 'completed',
-              stats: { passed: 1, failed: 0, pending: 1, total: 2 }, // Stale
+              stats: { passed: 1, failed: 0, pending: 1, errored: 0, total: 2 }, // Stale
               results: {
                 'tc-1': { reportId: 'report-3', status: 'completed' },
                 'tc-2': { reportId: 'report-4', status: 'completed' },
@@ -329,7 +329,7 @@ describe('Benchmark Stats Backfill', () => {
             {
               id: 'run-target',
               status: 'completed',
-              stats: { passed: 0, failed: 0, pending: 2, total: 2 }, // Stale
+              stats: { passed: 0, failed: 0, pending: 2, errored: 0, total: 2 }, // Stale
               results: {
                 'tc-1': { reportId: 'report-1', status: 'completed' },
                 'tc-2': { reportId: 'report-2', status: 'completed' },
@@ -338,7 +338,7 @@ describe('Benchmark Stats Backfill', () => {
             {
               id: 'run-other',
               status: 'completed',
-              stats: { passed: 1, failed: 1, pending: 0, total: 2 }, // Correct
+              stats: { passed: 1, failed: 1, pending: 0, errored: 0, total: 2 }, // Correct
               results: {
                 'tc-1': { reportId: 'report-3', status: 'completed' },
                 'tc-2': { reportId: 'report-4', status: 'completed' },
@@ -369,6 +369,7 @@ describe('Benchmark Stats Backfill', () => {
           passed: 1,
           failed: 1,
           pending: 0,
+          errored: 0,
           total: 2,
         });
         expect(mockBenchmarkUpdateRun).toHaveBeenCalledTimes(1); // Only target run updated
@@ -489,7 +490,7 @@ describe('Benchmark Stats Backfill', () => {
       const router = await import('@/server/routes/storage/benchmarks');
       app.use(router.default);
 
-      const stats = { passed: 3, failed: 1, pending: 0, total: 4 };
+      const stats = { passed: 3, failed: 1, pending: 0, errored: 0, total: 4 };
       const response = await request(app)
         .patch('/api/storage/benchmarks/bench-8/runs/run-1/stats')
         .send(stats);
@@ -507,7 +508,7 @@ describe('Benchmark Stats Backfill', () => {
       const router = await import('@/server/routes/storage/benchmarks');
       app.use(router.default);
 
-      const stats = { passed: 1, failed: 0, pending: 0, total: 1 };
+      const stats = { passed: 1, failed: 0, pending: 0, errored: 0, total: 1 };
       const response = await request(app)
         .patch('/api/storage/benchmarks/bench-9/runs/missing-run/stats')
         .send(stats);
@@ -532,7 +533,7 @@ describe('Benchmark Stats Backfill', () => {
       const router = await import('@/server/routes/storage/benchmarks');
       app.use(router.default);
 
-      const stats = { passed: 1, failed: 0, pending: 0, total: 1 };
+      const stats = { passed: 1, failed: 0, pending: 0, errored: 0, total: 1 };
       const response = await request(app)
         .patch('/api/storage/benchmarks/demo-bench/runs/run-1/stats')
         .send(stats);

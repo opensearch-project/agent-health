@@ -60,7 +60,15 @@ function getTimeThreshold(range: TimeRange): Date | null {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function computeScore(run: BenchmarkRun): number | null {
-  if (run.stats && run.stats.total > 0) return Math.round((run.stats.passed / run.stats.total) * 100);
+  if (run.stats && run.stats.total > 0) {
+    // Issue #242: errored runs (evaluator couldn't produce a verdict) are
+    // excluded from both numerator and denominator so a misconfigured
+    // judge doesn't drag the score down to 0%.
+    const errored = run.stats.errored ?? 0;
+    const evaluable = Math.max(0, run.stats.total - errored);
+    if (evaluable === 0) return null;
+    return Math.round((run.stats.passed / evaluable) * 100);
+  }
   const results = Object.values(run.results || {});
   if (results.length === 0) return null;
   const completed = results.filter(r => r.status === 'completed').length;

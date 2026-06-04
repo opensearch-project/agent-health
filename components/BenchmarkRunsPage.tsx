@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, GitCompare, Calendar, CheckCircle2, XCircle, Play, Trash2, Plus, X, Loader2, Circle, Check, ChevronRight, ChevronDown, Clock, StopCircle, Ban, Timer } from 'lucide-react';
+import { ArrowLeft, GitCompare, Calendar, CheckCircle2, XCircle, Play, Trash2, Plus, X, Loader2, Circle, Check, ChevronRight, ChevronDown, Clock, StopCircle, Ban, Timer, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -291,6 +291,8 @@ export const BenchmarkRunsPage: React.FC = () => {
         passed: run.stats.passed,
         failed: run.stats.failed,
         pending: run.stats.pending - running, // Adjust pending to exclude running
+        // `errored` (issue #242) is optional on older stored runs.
+        errored: run.stats.errored ?? 0,
         running,
         total: run.stats.total,
       };
@@ -930,6 +932,15 @@ export const BenchmarkRunsPage: React.FC = () => {
                                   <XCircle size={14} />
                                   {stats.failed}
                                 </span>
+                                {(stats as any).errored > 0 && (
+                                  <span
+                                    className="flex items-center gap-1 text-amber-600 dark:text-amber-500"
+                                    title="Evaluator could not run (e.g. judge validation error). Excluded from pass-rate aggregation."
+                                  >
+                                    <AlertTriangle size={14} />
+                                    {(stats as any).errored}
+                                  </span>
+                                )}
                                 <span className="text-muted-foreground">
                                   / {stats.total}
                                 </span>

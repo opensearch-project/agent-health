@@ -13,10 +13,10 @@
  */
 
 import React from 'react';
-import { CheckCircle2, XCircle, Loader2, Clock } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Clock, AlertTriangle } from 'lucide-react';
 import type { EvaluationReport } from '@/types';
 
-export type ResultStatus = 'passed' | 'failed' | 'running' | 'pending' | 'pending_traces' | 'pending_judgment';
+export type ResultStatus = 'passed' | 'failed' | 'errored' | 'running' | 'pending' | 'pending_traces' | 'pending_judgment';
 
 /**
  * Derive the display status from execution status + report state.
@@ -33,8 +33,10 @@ export function getResultStatus(
   if (report?.metricsStatus === 'pending') return 'pending_traces';
   if (report?.metricsStatus === 'calculating') return 'pending_judgment';
 
-  // Judge/trace evaluation failed — treat as failed
-  if (report?.metricsStatus === 'error') return 'failed';
+  // Issue #242: judge/trace evaluation failed before producing a verdict.
+  // Surface as a distinct 'errored' status so users don't conflate
+  // "evaluator misconfigured" with "agent answered wrong".
+  if (report?.metricsStatus === 'error') return 'errored';
 
   // Agent execution completed and metrics ready — check judgment result
   if (report?.passFailStatus === 'passed') return 'passed';
@@ -54,6 +56,7 @@ export function StatusIcon({ status, size = 14 }: { status: ResultStatus; size?:
   switch (status) {
     case 'passed': return <CheckCircle2 size={size} className="text-green-500" />;
     case 'failed': return <XCircle size={size} className="text-red-500" />;
+    case 'errored': return <AlertTriangle size={size} className="text-amber-500" />;
     case 'running': return <Loader2 size={size} className="text-blue-500 animate-spin" />;
     case 'pending_traces': return <Loader2 size={size} className="text-amber-500 animate-spin" />;
     case 'pending_judgment': return <Loader2 size={size} className="text-purple-500 animate-spin" />;
@@ -68,6 +71,7 @@ export function StatusLabel({ status }: { status: ResultStatus }) {
   const config: Record<ResultStatus, { label: string; cls: string }> = {
     passed: { label: 'PASSED', cls: 'text-green-500' },
     failed: { label: 'FAILED', cls: 'text-red-500' },
+    errored: { label: 'ERRORED', cls: 'text-amber-500' },
     running: { label: 'RUNNING', cls: 'text-blue-500' },
     pending_traces: { label: 'PENDING', cls: 'text-amber-500' },
     pending_judgment: { label: 'JUDGING', cls: 'text-purple-500' },
@@ -88,5 +92,6 @@ export function getStatusDescription(status: ResultStatus): string {
     case 'pending': return 'Pending';
     case 'passed': return 'Passed';
     case 'failed': return 'Failed';
+    case 'errored': return 'Evaluator could not run';
   }
 }
