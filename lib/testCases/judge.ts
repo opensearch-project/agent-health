@@ -181,6 +181,15 @@ export async function judge(
     reasoning: verdict.reasoning,
     model: options?.model,
     errorMessage: verdict.passFailStatus === 'failed' ? verdict.reasoning : undefined,
+    // Preserve the rest of the judge payload — these were silently
+    // dropped before, which made SDK `judge()` calls strictly less
+    // informative than the legacy auto-judge path. See MatcherResult.
+    ...(Array.isArray(result.improvementStrategies) && result.improvementStrategies.length > 0
+      ? { improvementStrategies: result.improvementStrategies }
+      : {}),
+    ...(result.metrics && typeof result.metrics === 'object'
+      ? { judgeMetrics: { ...result.metrics } }
+      : {}),
   });
 
   if (verdict.passFailStatus === 'failed') {

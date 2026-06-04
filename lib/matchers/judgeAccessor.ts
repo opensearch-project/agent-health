@@ -130,6 +130,15 @@ export function buildJudgeMatcherEntry(
     reasoning,
     ...(options?.model ? { model: options.model } : {}),
     ...(pass ? {} : { errorMessage: reasoning }),
+    // Carry the rest of the judge payload through so SDK
+    // `getJudgeMatcherResults()` consumers see the same data the
+    // legacy report-level fields used to expose. See MatcherResult.
+    ...(Array.isArray(judgeResult.improvementStrategies) && judgeResult.improvementStrategies.length > 0
+      ? { improvementStrategies: judgeResult.improvementStrategies }
+      : {}),
+    ...(judgeResult.metrics && typeof judgeResult.metrics === 'object'
+      ? { judgeMetrics: { ...judgeResult.metrics } as any }
+      : {}),
   };
 }
 
@@ -200,6 +209,12 @@ export interface JudgeResultLike {
   metrics: { accuracy?: number; [k: string]: number | undefined };
   llmJudgeReasoning: string;
   judgeDurationMs?: number;
+  improvementStrategies?: Array<{
+    category: string;
+    issue: string;
+    recommendation: string;
+    priority: 'high' | 'medium' | 'low';
+  }>;
 }
 
 // ─── internal helpers ───────────────────────────────────────────────────────

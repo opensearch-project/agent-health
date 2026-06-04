@@ -173,6 +173,26 @@ export function getIndexMappings(): IndexMappings {
               score: { type: 'float' },
               reasoning: { type: 'text' },
               model: { type: 'keyword' },
+              // llm-judge enriched fields (per-call equivalents of the
+              // legacy report-level `improvementStrategies` and the rest
+              // of `metrics`). See lib/matchers/types.ts.
+              improvementStrategies: {
+                type: 'nested',
+                properties: {
+                  category: { type: 'keyword' },
+                  issue: { type: 'text' },
+                  recommendation: { type: 'text' },
+                  priority: { type: 'keyword' },
+                },
+              },
+              judgeMetrics: {
+                properties: {
+                  accuracy: { type: 'float' },
+                  faithfulness: { type: 'float' },
+                  latency_score: { type: 'float' },
+                  trajectory_alignment_score: { type: 'float' },
+                },
+              },
             },
           },
           spans: { type: 'object', enabled: false },

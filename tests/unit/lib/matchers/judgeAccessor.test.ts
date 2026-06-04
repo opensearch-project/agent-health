@@ -236,6 +236,31 @@ describe('recordJudgeMatcherResult — the write helper', () => {
     });
     expect(entry.score).toBeUndefined();
   });
+
+  it('preserves improvementStrategies and judgeMetrics on the matcher entry (no truncation — follow-up to the unification)', () => {
+    const report: any = {};
+    const strategies = [
+      { category: 'Reasoning', issue: 'x', recommendation: 'y', priority: 'high' as const },
+      { category: 'Communication', issue: 'p', recommendation: 'q', priority: 'medium' as const },
+    ];
+    const entry = recordJudgeMatcherResult(
+      report,
+      {
+        passFailStatus: 'failed' as const,
+        metrics: { accuracy: 0, faithfulness: 30, latency_score: 80, trajectory_alignment_score: 50 },
+        llmJudgeReasoning: 'reasoning',
+        improvementStrategies: strategies,
+        judgeDurationMs: 1234,
+      },
+      { claim: 'finds the bug' }
+    );
+    expect(entry.improvementStrategies).toEqual(strategies);
+    expect((entry as any).judgeMetrics).toEqual({
+      accuracy: 0, faithfulness: 30, latency_score: 80, trajectory_alignment_score: 50,
+    });
+    // Round-trip through the read accessor preserves them too.
+    expect(getJudgeMatcherResults(report)[0].improvementStrategies).toEqual(strategies);
+  });
 });
 
 describe('formatExpectedOutcomesAsClaim — string[] and legacy object shapes', () => {
