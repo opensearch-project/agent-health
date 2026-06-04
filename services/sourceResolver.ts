@@ -216,6 +216,20 @@ async function resolveCodeImport(
         labels,
         sourceFile,
         sourceHash: tc.hash,
+        // Forward expectedOutcomes / expectedTrajectory so server-side
+        // evaluators (`-e <evaluator>`, /api/evaluate) can grade the run
+        // even when the test was authored as a code-based .eval.js. Inline
+        // judge() inside the body still works without these (it ships
+        // claims directly in the request payload), but persisting them on
+        // the test case is what closes issue #245's missing-validation
+        // path: without forwarding, the server evaluator throws
+        // "Missing required field: expectedOutcomes" and the run is
+        // reported as a `completed` 0% pass-rate with a misleading reason.
+        ...(tc.options.expectedOutcomes ? { expectedOutcomes: tc.options.expectedOutcomes } : {}),
+        ...(tc.options.expectedTrajectory ? { expectedTrajectory: tc.options.expectedTrajectory } : {}),
+        // Description fed in via test() options also flows here — it was
+        // already supported in the type but never forwarded.
+        ...(tc.options.description ? { description: tc.options.description } : {}),
       };
     });
 

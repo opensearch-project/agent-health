@@ -58,3 +58,7 @@ agent-health-data/
 !.kiro/steering/
 # pi-web local agent state (artifacts, uploads)
 .pi/
+
+# V-suffixed cp-oncall evals are local sandboxes / SDK feature tours;
+# they pollute storage with throwaway test cases on every run.
+evals/cp-oncall-V*.eval.js

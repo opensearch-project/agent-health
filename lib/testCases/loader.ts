@@ -38,6 +38,13 @@ export function computeTestCaseHash(tc: CodeTestCase): string {
     context: tc.options.context,
     labels: tc.options.labels,
     description: tc.options.description,
+    // Include the new expected* fields so editing them invalidates the
+    // sourceHash and the upsert path picks up the change. Without this,
+    // a user adding `expectedOutcomes: [...]` to an existing test would
+    // see the test case stay on its old version and the new outcomes
+    // would never reach storage.
+    expectedOutcomes: tc.options.expectedOutcomes,
+    expectedTrajectory: tc.options.expectedTrajectory,
   });
   return createHash('sha256').update(content).digest('hex');
 }

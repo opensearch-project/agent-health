@@ -37,6 +37,33 @@ export interface TestOptions {
   labels?: string[];
   /** Per-test timeout override in milliseconds. */
   timeout?: number;
+  /**
+   * Plain-text descriptions of expected agent behaviour, used by the
+   * server-side LLM judge and by importers/exporters that round-trip
+   * test cases through JSON. Forwarded to the persisted test case so
+   * server evaluators (`-e <evaluator>`) can grade against the same
+   * criteria a human reviewer would write into the JSON form.
+   *
+   * Inline `judge(result, criteria)` from a test body does NOT need this
+   * field — the body passes the claim directly to /api/judge. Set this
+   * when you want the criteria to (a) live with the test definition for
+   * non-code consumers, or (b) be available to a server-side evaluator
+   * that runs alongside or instead of the body.
+   */
+  expectedOutcomes?: string[];
+  /**
+   * Optional reference trajectory for trajectory-alignment evaluators and
+   * Golden Path comparison. Leave undefined when the test only cares about
+   * outcome quality, not the specific path the agent took.
+   *
+   * Shape mirrors `TestCase.expectedTrajectory` in `@/types` so the
+   * upsert path can forward without coercion.
+   */
+  expectedTrajectory?: {
+    step: number;
+    description: string;
+    requiredTools: string[];
+  }[];
 }
 
 /**
