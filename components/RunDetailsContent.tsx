@@ -43,6 +43,7 @@ import { RawEventsPanel } from './RawEventsPanel';
 import { MatcherResultsPanel } from './MatcherResultsPanel';
 import { getJudgeReasoningText, getJudgeMatcherResults } from '@/lib/matchers/judgeAccessor';
 import TraceVisualization from './traces/TraceVisualization';
+import SimpleSpanAttributesTable from './traces/SimpleSpanAttributesTable';
 import ViewToggle, { ViewMode } from './traces/ViewToggle';
 import TraceFullScreenView from './traces/TraceFullScreenView';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
@@ -53,6 +54,7 @@ import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
 import { RunScore } from '@/components/RunScore';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { callBedrockJudge } from '@/services/evaluation';
+import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { tracePollingManager } from '@/services/traces/tracePoller';
 import { getResultStatus as getSharedResultStatus, StatusIcon as SharedStatusIcon, StatusLabel as SharedStatusLabel } from '@/components/evals3/ResultStatus';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -259,10 +261,10 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             console.info(`[RunDetails] Report ${liveReport.id} updated with judge results`);
           } catch (error) {
             console.error(`[RunDetails] Failed to judge report ${liveReport.id}:`, error);
-            await asyncRunStorage.updateReport(liveReport.id, {
-              metricsStatus: 'error',
-              traceError: `Judge evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            });
+            await asyncRunStorage.updateReport(liveReport.id, buildEvaluatorErrorPatch(
+              'judge_failed',
+              error,
+            ) as any);
 
             // Update local state
             const freshReport = await asyncRunStorage.getReportById(liveReport.id);
@@ -404,12 +406,23 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
         (report.connectorProtocol && protocolToServiceName[report.connectorProtocol]) ||
         (report.agentKey ? `${report.agentKey}-agent` : undefined);
 
-      // Run wall-clock window: derive from saved timestamp − durationMs.
-      // Add slack on either side for clock skew + late-arriving spans.
+      // Run wall-clock window for the time-window-fallback correlation
+      // (Strategy C). We derive `[startedAt, endedAt]` from the saved report's
+      // metadata. Two important quirks:
+      //  - report.timestamp is when the run was *saved* (after agent + judge),
+      //    not when it started. Treating it as endedAt is correct.
+      //  - performanceMetrics.durationMs is missing on older runs (the field
+      //    was added later). When it's missing we'd compute a tiny
+      //    centered-on-timestamp window and miss every agent span. So when
+      //    durationMs is unknown we fall back to a 30-minute lookback — wide
+      //    enough to cover any realistic agent run, narrow enough to keep
+      //    cross-team noise on a shared OTel cluster minimal.
       const SLACK_MS = 60_000;
+      const FALLBACK_LOOKBACK_MS = 30 * 60_000;
       const endedAt = Date.parse(report.timestamp || '') || Date.now();
       const durationMs = report.performanceMetrics?.durationMs ?? 0;
-      const startedAt = endedAt - Math.max(durationMs, 0) - SLACK_MS;
+      const lookbackMs = durationMs > 0 ? durationMs + SLACK_MS : FALLBACK_LOOKBACK_MS;
+      const startedAt = endedAt - lookbackMs;
       const windowAgents = serviceName
         ? [{ serviceName, startedAt, endedAt: endedAt + SLACK_MS }]
         : undefined;
@@ -866,8 +879,16 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </TabsTrigger>
         </TabsList>
 
-        <ScrollArea className="flex-1">
-          <TabsContent value="trajectory" className="p-6 mt-0">
+        {/* Inner flex container for the active TabsContent. The Traces tab
+            (value="logs") manages its own internal scroll on the chart and
+            wants a constrained height — wrapping it in a ScrollArea here lets
+            the chart's intrinsic height push the page scroll, which makes
+            tall trace trees overflow the dialog/page viewport. The other
+            tabs (Trajectory / LLM Judge / Annotations) are simple top-down
+            documents, so they get their own `overflow-y-auto` per-TabsContent
+            instead of relying on a shared scroll container. */}
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+          <TabsContent value="trajectory" className="p-6 mt-0 overflow-y-auto">
             {/* Header with Toggle */}
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Test Case Output</h3>
@@ -977,12 +998,17 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                   </Card>
                 )}
 
-                {/* Trace visualization */}
+                {/* Trace visualization. Span details now slide up from the
+                    bottom of the trace card (`absolute bottom-0` overlay)
+                    rather than appearing as an adjacent side panel. The
+                    side panel cramped the timeline at typical viewport
+                    widths; the bottom drawer matches the fullscreen UX so
+                    inline and fullscreen feel like the same surface. */}
                 {spanTree.length > 0 && !tracesLoading && (
                   <div className="space-y-4 flex-1 flex flex-col min-h-0">
                     <Card className="flex-1 flex flex-col min-h-0">
                       <CardContent className="p-0 flex-1 flex flex-col min-h-0">
-                        <div className="flex-1 min-h-0">
+                        <div className="flex-1 min-h-0 relative">
                           <TraceVisualization
                             spanTree={spanTree}
                             timeRange={timeRange}
@@ -993,9 +1019,23 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                             onSelectSpan={setSelectedSpan}
                             expandedSpans={expandedSpans}
                             onToggleExpand={handleToggleExpand}
-                            showSpanDetailsPanel={true}
+                            showSpanDetailsPanel={false}
                             runId={report.runId}
                           />
+                          {/* Bottom drawer for selected span details. Same
+                              SimpleSpanAttributesTable as fullscreen, so the
+                              user gets the same flat attribute table + the
+                              Pretty/Raw toggle in both surfaces. Click the
+                              row again to deselect, or press Esc. */}
+                          {selectedSpan && (
+                            <div
+                              className="absolute inset-x-0 bottom-0 h-[55%] bg-background border-t shadow-2xl flex flex-col z-20 animate-in slide-in-from-bottom-4 duration-200"
+                              role="dialog"
+                              aria-label="Span details"
+                            >
+                              <SimpleSpanAttributesTable span={selectedSpan} />
+                            </div>
+                          )}
                         </div>
                       </CardContent>
                     </Card>
@@ -1071,7 +1111,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             )}
           </TabsContent>
 
-          <TabsContent value="judge" className="p-6 mt-0 space-y-6">
+          <TabsContent value="judge" className="p-6 mt-0 space-y-6 overflow-y-auto">
             {/* Evaluator Info */}
             {evaluator && (
               <div>
@@ -1183,7 +1223,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             )}
           </TabsContent>
 
-          <TabsContent value="annotations" className="p-6 mt-0 space-y-4">
+          <TabsContent value="annotations" className="p-6 mt-0 space-y-4 overflow-y-auto">
             <h3 className="text-lg font-semibold mb-4">Annotations</h3>
 
             {/* Add Annotation */}
@@ -1235,7 +1275,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
               </div>
             )}
           </TabsContent>
-        </ScrollArea>
+        </div>
       </Tabs>
     </div>
   );
