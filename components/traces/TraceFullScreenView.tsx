@@ -244,8 +244,14 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
           </div>
         </FullScreenDialogHeader>
 
-        {/* Main content area */}
-        <div className="flex-1 flex flex-col overflow-hidden relative">
+        {/* Main content area.
+            `min-h-0` is required so this flex child can shrink below its
+            content height — without it, a tall trace tree silently
+            overflows past the dialog viewport and the user can't scroll
+            up to the top of the tree (the inner overflow-auto on the
+            chart wrapper never receives a constrained parent height,
+            so its scrollbar never engages). */}
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
           {spanTree.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
               <Activity size={48} className="mb-4 opacity-20" />

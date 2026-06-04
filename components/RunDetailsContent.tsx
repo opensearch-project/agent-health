@@ -117,9 +117,19 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   // disabled. See AGENTS.md → Trace correlation conventions.
   const [includeWindowFallback, setIncludeWindowFallback] = useState(false);
   const [searchParams] = useSearchParams();
-  const initialTab = searchParams.get('tab') || 'summary';
+  // Default to the Trajectory tab — the prior "summary" / Overview tab has
+  // been removed because everything it surfaced (agent, model, evaluator,
+  // timestamp, duration) is already visible in the compact run-card header
+  // above the tab strip on TestCaseInspectorPanel and on the legacy
+  // /runs/:runId page header. Keeping a near-empty Overview was extra
+  // navigation friction with no payoff.
+  const initialTab = searchParams.get('tab') || 'trajectory';
   const [activeTab, setActiveTab] = useState(initialTab);
-  const [traceViewMode, setTraceViewMode] = useState<ViewMode>('info');
+  // Default the Traces sub-view to the trace tree (was 'info'). This is the
+  // view users want first — the per-span info card is one click away on the
+  // tree itself, but landing on it bypasses the tree entirely and obscures
+  // the structure of the trace.
+  const [traceViewMode, setTraceViewMode] = useState<ViewMode>('tree');
   const [traceFullscreenOpen, setTraceFullscreenOpen] = useState(false);
 
   // Live report state for auto-refresh when judge completes
@@ -836,9 +846,6 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="w-full justify-start rounded-none border-b bg-card h-auto p-0">
-          <TabsTrigger value="summary" className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue">
-            <FileText size={14} className="mr-2" /> Overview
-          </TabsTrigger>
           <TabsTrigger value="trajectory" className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue">
             <GitBranch size={14} className="mr-2" /> Test Case Output
             <Badge variant="secondary" className="ml-2">{trajectory.length}</Badge>
@@ -865,162 +872,6 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
         </TabsList>
 
         <ScrollArea className="flex-1">
-          <TabsContent value="summary" className="p-6 mt-0 space-y-6">
-            {/* Run Info — hidden when used inside TestCaseInspectorPanel (already in compact bar) */}
-            {!hideMetrics && (
-            <div>
-              <h3 className="text-lg font-semibold mb-3">Run Information</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <Card><CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground mb-1">Agent</div>
-                  <div className="text-sm">{report.agentName}</div>
-                </CardContent></Card>
-                <Card><CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground mb-1">Model</div>
-                  <div className="text-sm">{modelDisplayName}</div>
-                </CardContent></Card>
-                <Card><CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground mb-1">Evaluator</div>
-                  <div className="text-sm flex items-center gap-1.5">
-                    {evaluator ? (
-                      <>
-                        {React.createElement(getEvaluatorIcon(evaluator.id), { className: 'h-3.5 w-3.5 text-muted-foreground' })}
-                        <span>{evaluator.name}</span>
-                        {evaluator.isSystem && (
-                          <Badge variant="secondary" className="ml-1 text-[10px]">System</Badge>
-                        )}
-                      </>
-                    ) : report.evaluatorId ? (
-                      <span className="text-muted-foreground italic">Loading...</span>
-                    ) : (
-                      <>
-                        {React.createElement(FlaskConical, { className: 'h-3.5 w-3.5 text-muted-foreground' })}
-                        <span className="text-muted-foreground">RCA Default</span>
-                      </>
-                    )}
-                  </div>
-                </CardContent></Card>
-                <Card><CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground mb-1">Timestamp</div>
-                  <div className="text-sm flex items-center">
-                    <Clock size={12} className="mr-1.5 text-muted-foreground" />
-                    {formatDate(report.timestamp, 'detailed')}
-                  </div>
-                </CardContent></Card>
-                <Card><CardContent className="p-4">
-                  <div className="text-xs text-muted-foreground mb-1">Total Steps</div>
-                  <div className="text-sm">{trajectory.length}</div>
-                </CardContent></Card>
-              </div>
-
-              {/* View All Reports Link */}
-              {showViewAllReports && onViewAllReports && (
-                <Button
-                  variant="link"
-                  onClick={onViewAllReports}
-                  className="mt-4 p-0 h-auto text-opensearch-blue hover:text-emerald-300"
-                >
-                  View all reports <ExternalLink size={14} className="ml-1" />
-                </Button>
-              )}
-            </div>
-            )}
-
-            {/* Test Case Info */}
-            {testCase && (
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-lg font-semibold">Expected Behavior</h3>
-                  {onEditTestCase && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onEditTestCase(testCase)}
-                      className="gap-1.5"
-                    >
-                      <Pencil size={14} />
-                      Edit Test Case
-                    </Button>
-                  )}
-                </div>
-                <Card><CardContent className="p-4 space-y-4">
-                  {/* Header with badges */}
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <Badge variant="outline" className={getDifficultyColor(testCase.difficulty)}>
-                      {testCase.difficulty}
-                    </Badge>
-                    <Badge variant="outline" className={getLabelColor(`category:${testCase.category}`)}>
-                      {testCase.category}
-                    </Badge>
-                    {testCase.subcategory && (
-                      <Badge variant="outline" className={getLabelColor(`subcategory:${testCase.subcategory}`)}>
-                        {testCase.subcategory}
-                      </Badge>
-                    )}
-                    <Badge variant="outline" className="bg-slate-500/5 text-slate-400 border-slate-500/20">
-                      <Hash size={10} className="mr-1" />
-                      v{testCase.currentVersion || 1}
-                    </Badge>
-                  </div>
-
-                  {/* Description */}
-                  {testCase.description && (
-                    <p className="text-sm text-muted-foreground">{testCase.description}</p>
-                  )}
-
-                  {/* Initial Prompt */}
-                  <Card className="bg-muted/50"><CardContent className="p-3">
-                    <div className="text-xs text-muted-foreground mb-1.5">Initial Prompt</div>
-                    <p className="text-sm">{testCase.initialPrompt}</p>
-                  </CardContent></Card>
-
-                  {/* Expected Outcomes */}
-                  {testCase.expectedOutcomes && testCase.expectedOutcomes.length > 0 && (
-                    <div>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-                        <Target size={12} />
-                        Expected Outcomes ({testCase.expectedOutcomes.length})
-                      </div>
-                      <div className="space-y-2">
-                        {testCase.expectedOutcomes.map((outcome, index) => (
-                          <div
-                            key={index}
-                            className="flex items-start gap-2 text-sm pl-2 border-l-2 border-opensearch-blue/30"
-                          >
-                            <CheckCircle2 size={14} className="text-opensearch-blue mt-0.5 shrink-0" />
-                            <span>{outcome}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Context (if any) */}
-                  {testCase.context && testCase.context.length > 0 && (
-                    <div>
-                      <div className="text-xs text-muted-foreground mb-2">
-                        Context ({testCase.context.length} items)
-                      </div>
-                      <div className="space-y-2">
-                        {testCase.context.map((ctx, index) => (
-                          <Card key={index} className="bg-muted/30">
-                            <CardContent className="p-2">
-                              <div className="text-xs text-muted-foreground">{ctx.description}</div>
-                              <div className="text-sm font-mono truncate" title={ctx.value}>
-                                {ctx.value.slice(0, 100) + (ctx.value.length > 100 ? '...' : '')}
-                              </div>
-                            </CardContent>
-                          </Card>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </CardContent></Card>
-              </div>
-            )}
-
-          </TabsContent>
-
           <TabsContent value="trajectory" className="p-6 mt-0">
             {/* Header with Toggle */}
             <div className="flex items-center justify-between mb-4">

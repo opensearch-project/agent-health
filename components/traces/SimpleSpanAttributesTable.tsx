@@ -26,14 +26,33 @@ interface SimpleSpanAttributesTableProps {
 
 /**
  * Stringify any attribute value (including objects/arrays) into a
- * human-readable cell value. Long JSON gets pretty-printed.
+ * human-readable cell value.
+ *
+ * `mode='pretty'` (default) will additionally try to parse string values
+ * that look like JSON (e.g. `gen_ai.tool.input` is often a serialized
+ * payload like `'{"query":"x"}'`) and reformat them with 2-space indent.
+ * `mode='raw'` returns string values verbatim and uses compact JSON for
+ * objects/arrays — useful when copy-pasting into another tool.
  */
-function valueToString(v: unknown): string {
+function valueToString(v: unknown, mode: 'pretty' | 'raw' = 'pretty'): string {
   if (v === null || v === undefined) return '';
-  if (typeof v === 'string') return v;
+  if (typeof v === 'string') {
+    if (mode === 'pretty') {
+      const trimmed = v.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+          (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          return JSON.stringify(JSON.parse(trimmed), null, 2);
+        } catch {
+          // Not actually JSON — fall through to the raw string.
+        }
+      }
+    }
+    return v;
+  }
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   try {
-    return JSON.stringify(v, null, 2);
+    return JSON.stringify(v, mode === 'pretty' ? null : undefined, mode === 'pretty' ? 2 : undefined);
   } catch {
     return String(v);
   }
@@ -42,6 +61,11 @@ function valueToString(v: unknown): string {
 const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ span }) => {
   const [filter, setFilter] = useState('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // Default to pretty so JSON-shaped attribute strings (e.g. tool.input,
+  // tool.output, request bodies dumped into attributes) come out indented.
+  // Toggle to 'raw' to see what's literally on the span — useful when
+  // copying into another tool that expects the original wire format.
+  const [valueMode, setValueMode] = useState<'pretty' | 'raw'>('pretty');
 
   const duration = useMemo(
     () => new Date(span.endTime).getTime() - new Date(span.startTime).getTime(),
@@ -54,11 +78,11 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
     const attrs = span.attributes || {};
     const list = Object.entries(attrs).map(([k, v]) => ({
       key: k,
-      value: valueToString(v),
+      value: valueToString(v, valueMode),
     }));
     list.sort((a, b) => a.key.localeCompare(b.key));
     return list;
-  }, [span.attributes]);
+  }, [span.attributes, valueMode]);
 
   const filtered = useMemo(() => {
     if (!filter.trim()) return entries;
@@ -129,9 +153,11 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
         </span>
       </div>
 
-      {/* Filter input — tables of 27+ rows benefit from a quick filter. */}
-      <div className="px-3 py-2 border-b bg-background">
-        <div className="relative max-w-sm">
+      {/* Filter input + Pretty/Raw toggle. Tables of 27+ rows benefit from
+          a quick filter; the toggle controls how JSON-shaped values render
+          (formatted vs. verbatim). */}
+      <div className="px-3 py-2 border-b bg-background flex items-center gap-3">
+        <div className="relative flex-1 max-w-sm">
           <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Filter attributes…"
@@ -139,6 +165,28 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
             onChange={(e) => setFilter(e.target.value)}
             className="h-7 pl-7 text-[11px]"
           />
+        </div>
+        <div className="inline-flex items-center rounded-md border bg-muted p-0.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setValueMode('pretty')}
+            className={`h-6 px-2 text-[10px] font-medium rounded-sm transition-colors ${
+              valueMode === 'pretty' ? 'bg-background shadow-sm' : 'hover:bg-background/50 text-muted-foreground'
+            }`}
+            title="Pretty-print JSON-shaped values"
+          >
+            Pretty
+          </button>
+          <button
+            type="button"
+            onClick={() => setValueMode('raw')}
+            className={`h-6 px-2 text-[10px] font-medium rounded-sm transition-colors ${
+              valueMode === 'raw' ? 'bg-background shadow-sm' : 'hover:bg-background/50 text-muted-foreground'
+            }`}
+            title="Show values verbatim (no JSON reformatting)"
+          >
+            Raw
+          </button>
         </div>
       </div>
 
