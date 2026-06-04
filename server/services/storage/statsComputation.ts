@@ -17,6 +17,8 @@ export interface RunStats {
   passed: number;
   failed: number;
   pending: number;
+  /** Evaluator could not produce a verdict (issue #242). Excluded from passed/failed. */
+  errored?: number;
   total: number;
 }
 
@@ -42,6 +44,7 @@ export async function computeStatsForRun(
   let passed = 0;
   let failed = 0;
   let pending = 0;
+  let errored = 0;
   const total = Object.keys(run.results || {}).length;
 
   if (reportIds.length > 0) {
@@ -85,6 +88,12 @@ export async function computeStatsForRun(
             return;
           }
 
+          // Evaluator never produced a verdict (issue #242). Bucket separately.
+          if (report.metricsStatus === 'error') {
+            errored++;
+            return;
+          }
+
           if (report.passFailStatus === 'passed') {
             passed++;
           } else {
@@ -117,5 +126,5 @@ export async function computeStatsForRun(
     });
   }
 
-  return { passed, failed, pending, total };
+  return { passed, failed, pending, errored, total };
 }

@@ -108,7 +108,7 @@ const RunJudgeCard: React.FC<{
           <CollapsibleTrigger className="w-full">
             <div className="flex items-center gap-2 py-1 rounded hover:bg-muted/50 transition-colors">
               {reasoningOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              <span className="text-xs font-medium">LLM Judge Reasoning</span>
+              <span className="text-xs font-medium">Judge Reasoning</span>
             </div>
           </CollapsibleTrigger>
           <CollapsibleContent>

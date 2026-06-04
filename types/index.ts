@@ -865,6 +865,16 @@ export interface RunStats {
   failed: number;
   /** Number of test cases still pending (running, or report not yet available) */
   pending: number;
+  /**
+   * Number of test cases where the *evaluator* could not produce a verdict
+   * (e.g. judge validation error, trace polling timeout, post-trace callback
+   * failed). Excluded from `passed` and `failed` so a misconfigured evaluator
+   * doesn't silently poison aggregate pass rates.
+   *
+   * Optional for backward-compat: older stored runs predate this field and
+   * read as 0.
+   */
+  errored?: number;
   /** Total number of test cases in the run */
   total: number;
 }

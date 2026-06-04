@@ -157,8 +157,12 @@ export const EvalRunDetailPage: React.FC = () => {
 
   const agentName = DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey)?.name || run.agentKey;
   const modelName = getModelName(run.modelId);
-  const stats = run.stats || { passed: 0, failed: 0, total: 0, pending: 0 };
-  const passRate = stats.total > 0 ? Math.round((stats.passed / stats.total) * 100) : 0;
+  const stats = run.stats || { passed: 0, failed: 0, total: 0, pending: 0, errored: 0 };
+  const errored = stats.errored ?? 0;
+  // Pass rate ignores errored runs entirely (issue #242): they had no
+  // verdict, so neither numerator nor denominator should include them.
+  const evaluable = Math.max(0, stats.total - errored);
+  const passRate = evaluable > 0 ? Math.round((stats.passed / evaluable) * 100) : 0;
 
   const results = Object.entries(run.results || {}).map(([testCaseId, result]) => {
     const snapshot = run.testCaseSnapshots?.find(s => s.id === testCaseId);
@@ -233,15 +237,31 @@ export const EvalRunDetailPage: React.FC = () => {
               <div className="text-2xl font-bold text-red-600">{stats.failed}</div>
               <div className="text-xs text-muted-foreground">Failed</div>
             </div>
+            {errored > 0 && (
+              <div
+                className="text-center"
+                title="Evaluator could not produce a verdict (e.g. judge validation error). Excluded from pass-rate."
+              >
+                <div className="text-2xl font-bold text-amber-600">{errored}</div>
+                <div className="text-xs text-muted-foreground">Errored</div>
+              </div>
+            )}
             <div className="text-center">
               <div className="text-2xl font-bold">{stats.total}</div>
               <div className="text-xs text-muted-foreground">Total</div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold">{passRate}%</div>
-              <div className="text-xs text-muted-foreground">Pass Rate</div>
+              <div className="text-xs text-muted-foreground">
+                Pass Rate{errored > 0 ? ' †' : ''}
+              </div>
             </div>
           </div>
+          {errored > 0 && (
+            <div className="text-[11px] text-muted-foreground -mt-2">
+              † Pass rate excludes {errored} errored run{errored === 1 ? '' : 's'} (evaluator could not produce a verdict).
+            </div>
+          )}
 
           {/* Sources */}
           {run.sources && run.sources.length > 0 && (

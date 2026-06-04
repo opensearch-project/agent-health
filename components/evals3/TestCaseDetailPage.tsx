@@ -811,13 +811,13 @@ export const TestCaseDetailPage: React.FC = () => {
 // ── Live run right-panel ────────────────────────────────────────────────────────
 // Mirrors the *exact* tab layout of the saved-run inspector
 // (`TestCaseInspectorPanel` → `RunDetailsContent`) — same compact header,
-// same Overview / Conversation History / Traces / LLM Judge / Annotations
+// same Overview / Test Case Output / Traces / LLM Judge / Annotations
 // tabs, same icons and styling — so the right panel doesn't visually shift
 // when the run finishes and we swap the synthetic running entry for the
 // real saved report.
 //
 // While the run is in flight:
-//   * Conversation History is the default tab and streams trajectory steps
+//   * Test Case Output is the default tab and streams trajectory steps
 //     live (TrajectoryView with `loading={true}` + auto-scroll).
 //   * Overview shows the test case definition (input prompt + expected
 //     outcomes) since metrics aren't computed yet.
@@ -835,7 +835,7 @@ interface LiveRunPanelProps {
 const LiveRunPanel: React.FC<LiveRunPanelProps> = ({
   testCase, steps, runName, agentKey, modelId, error, reconnect,
 }) => {
-  // Default tab is Conversation History so the user immediately sees the
+  // Default tab is Test Case Output so the user immediately sees the
   // streaming trajectory — that's the whole point of running inline.
   const [activeTab, setActiveTab] = useState<string>('trajectory');
 
@@ -899,7 +899,7 @@ const LiveRunPanel: React.FC<LiveRunPanelProps> = ({
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="w-full justify-start rounded-none border-b bg-card h-auto p-0">
           <TabsTrigger value="trajectory" className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue">
-            <GitBranch size={14} className="mr-2" /> Conversation History
+            <GitBranch size={14} className="mr-2" /> Test Case Output
             <Badge variant="secondary" className="ml-2">{steps.length}</Badge>
           </TabsTrigger>
           <TabsTrigger value="logs" className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue">
@@ -913,7 +913,7 @@ const LiveRunPanel: React.FC<LiveRunPanelProps> = ({
           </TabsTrigger>
         </TabsList>
 
-        {/* Conversation History — the live, streaming trajectory. This is the
+        {/* Test Case Output — the live, streaming trajectory. This is the
             default (and only meaningful) live tab; everything else needs the
             run to finish before there's anything to show. */}
         <TabsContent value="trajectory" className="flex-1 overflow-hidden mt-0">
@@ -924,7 +924,7 @@ const LiveRunPanel: React.FC<LiveRunPanelProps> = ({
                 {testCase.initialPrompt || '—'}
               </div>
             </div>
-            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Conversation History</h3>
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Test Case Output</h3>
             <TrajectoryView steps={steps} loading={true} />
           </div>
         </TabsContent>

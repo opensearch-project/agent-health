@@ -24,6 +24,7 @@ import {
 import type { Client } from '@opensearch-project/opensearch';
 import type { IStorageModule } from '@/server/adapters/types';
 import { runEvaluationWithConnector, callBedrockJudge } from './evaluation';
+import { buildEvaluatorErrorPatch } from './evaluation/evaluatorError';
 import { connectorRegistry } from '@/services/connectors/server';
 import {
   startSession,
@@ -881,10 +882,10 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
         } catch (error) {
           console.error(`[BenchmarkRunner] Failed to judge report ${report.id}:`, error instanceof Error ? error.message : error);
           // Still mark as error
-          await storage.runs.update(report.id, {
-            metricsStatus: 'error',
-            traceError: `Judge evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          } as any);
+          await storage.runs.update(report.id, buildEvaluatorErrorPatch(
+            'judge_failed',
+            error,
+          ) as any);
 
           // Update parent benchmark run stats (error counts as failed)
           if (report.experimentId) {
@@ -966,10 +967,10 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
           }
         } catch (error) {
           console.error(`[BenchmarkRunner] Failed to judge report ${report.id}:`, error instanceof Error ? error.message : error);
-          await updateRunWithClient(client, report.id, {
-            metricsStatus: 'error',
-            traceError: `Judge evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          });
+          await updateRunWithClient(client, report.id, buildEvaluatorErrorPatch(
+            'judge_failed',
+            error,
+          ) as any);
           if (report.experimentId) {
             await updateBenchmarkRunStatsForReport(client, report.experimentId, report.id);
           }
@@ -1010,15 +1011,19 @@ async function refreshBenchmarkRunStats(
       .map((r: any) => r.reportId)
       .filter(Boolean) as string[];
 
-    let passed = 0, failed = 0, pending = 0;
+    let passed = 0, failed = 0, pending = 0, errored = 0;
     const total = Object.keys(targetRun.results || {}).length;
 
     for (const rid of reportIds) {
       try {
         const report = await storage.runs.getById(rid);
         if (!report) { pending++; continue; }
-        if ((report as any).metricsStatus === 'pending' || (report as any).metricsStatus === 'calculating') {
+        const ms = (report as any).metricsStatus;
+        if (ms === 'pending' || ms === 'calculating') {
           pending++;
+        } else if (ms === 'error') {
+          // Evaluator failed to produce a verdict (issue #242).
+          errored++;
         } else if (report.passFailStatus === 'passed') {
           passed++;
         } else {
@@ -1031,7 +1036,7 @@ async function refreshBenchmarkRunStats(
     pending += total - reportIds.length;
 
     await storage.benchmarks.updateRun(benchmarkId, targetRun.id, {
-      stats: { passed, failed, pending, total },
+      stats: { passed, failed, pending, errored, total },
     } as any);
   } catch (err) {
     console.warn(`[BenchmarkRunner] Failed to refresh stats for benchmark ${benchmarkId}:`, err instanceof Error ? err.message : err);

@@ -54,6 +54,7 @@ import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
 import { RunScore } from '@/components/RunScore';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { callBedrockJudge } from '@/services/evaluation';
+import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { tracePollingManager } from '@/services/traces/tracePoller';
 import { getResultStatus as getSharedResultStatus, StatusIcon as SharedStatusIcon, StatusLabel as SharedStatusLabel } from '@/components/evals3/ResultStatus';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -260,18 +261,14 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             console.info(`[RunDetails] Report ${liveReport.id} updated with judge results`);
           } catch (error) {
             console.error(`[RunDetails] Failed to judge report ${liveReport.id}:`, error);
-            // Pre-#242 fallback recovery (this PR doesn't pull in the
-            // dedicated evaluatorError helper from PR #242). Same shape:
-            // surface the error in the judge reasoning field, mark the
-            // run's metricsStatus as 'error', AND record traceError so the
-            // trace-mode error banner shows the real failure reason instead
-            // of "Unknown error".
-            const message = error instanceof Error ? error.message : String(error);
-            await asyncRunStorage.updateReport(liveReport.id, {
-              metricsStatus: 'error',
-              llmJudgeReasoning: message,
-              traceError: message,
-            } as any);
+            // Issue #242: convert the failure into a kind-tagged "evaluator
+            // could not run" patch — zeroed metrics, cleared passFailStatus,
+            // bolded `**Evaluator could not run.**` heading in the judge
+            // surface, and `traceError` machine-greppable as `kind=judge_failed`.
+            await asyncRunStorage.updateReport(liveReport.id, buildEvaluatorErrorPatch(
+              'judge_failed',
+              error,
+            ) as any);
 
             // Update local state
             const freshReport = await asyncRunStorage.getReportById(liveReport.id);

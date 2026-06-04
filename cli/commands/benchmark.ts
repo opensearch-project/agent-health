@@ -198,17 +198,24 @@ async function runBenchmarkForAgent(
     // Use pass rate from shared calculation
     const passRate = stats.passRate;
 
+    // Issue #242: when the evaluator couldn't produce verdicts on some runs,
+    // call them out explicitly so users don't conflate "evaluator misconfigured"
+    // with "agent scored 0".
+    const erroredSuffix = stats.errored > 0
+      ? chalk.yellow(` (${stats.errored} errored — evaluator could not run)`)
+      : '';
+
     if (passRate >= 80) {
       spinner.succeed(
-        `${agent.name}: ${chalk.green(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
+        `${agent.name}: ${chalk.green(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
       );
     } else if (passRate >= 50) {
       spinner.warn(
-        `${agent.name}: ${chalk.yellow(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
+        `${agent.name}: ${chalk.yellow(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
       );
     } else {
       spinner.fail(
-        `${agent.name}: ${chalk.red(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
+        `${agent.name}: ${chalk.red(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
       );
     }
   } catch (error) {

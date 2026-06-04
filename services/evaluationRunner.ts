@@ -15,6 +15,7 @@ import {
 } from '@/types';
 import type { IStorageModule } from '@/server/adapters/types';
 import { runEvaluationWithConnector, callBedrockJudge } from '@/services/evaluation';
+import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { connectorRegistry } from '@/services/connectors/server';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -571,10 +572,10 @@ async function waitForTracesAndJudge(
             resolve();
           } catch (error) {
             console.error(`[EvaluationRunner] Failed to judge report ${report.id}:`, error instanceof Error ? error.message : error);
-            await storage.runs.update(report.id, {
-              metricsStatus: 'error',
-              traceError: `Judge evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            } as any).catch(() => {});
+            await storage.runs.update(report.id, buildEvaluatorErrorPatch(
+              'judge_failed',
+              error,
+            ) as any).catch(() => {});
             resolve(); // Don't fail the whole run, just mark metrics as error
           }
         },

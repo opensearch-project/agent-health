@@ -28,7 +28,7 @@
  *        - A synthetic `RUNNING` row with a `Live` badge is pinned at
  *          the top of the runs list.
  *        - The right pane shows a `LiveRunPanel` with the *same* tab
- *          strip as the saved-run inspector — Conversation History
+ *          strip as the saved-run inspector — Test Case Output
  *          (active by default), Traces, LLM Judge, Annotations — but
  *          *no Overview tab*, since the Definition section to the left
  *          already covers that information.
@@ -321,7 +321,7 @@ test.describe('Test Case Detail — inline live-run UX (PR #228)', () => {
 
       // ── LiveRunPanel tab strip assertions ──────────────────────────
       // The right pane mounts a Tabs component with exactly four tabs:
-      // Conversation History (active), Traces, LLM Judge, Annotations.
+      // Test Case Output (active), Traces, LLM Judge, Annotations.
       // The Overview tab was deliberately removed because the Definition
       // section to the left already covers that information.
       //
@@ -331,14 +331,14 @@ test.describe('Test Case Detail — inline live-run UX (PR #228)', () => {
       // (The saved-run inspector — which has its own Overview tab — only
       // mounts after the run completes; for in-flight runs we know the
       // page can't have one.)
-      const conversationHistoryTab = page.getByRole('tab', {
+      const testCaseOutputTab = page.getByRole('tab', {
         selected: true,
-        name: /^Conversation History/,
+        name: /^Test Case Output/,
       });
-      await expect(conversationHistoryTab).toBeVisible({ timeout: 10_000 });
+      await expect(testCaseOutputTab).toBeVisible({ timeout: 10_000 });
 
       // The four tabs the LiveRunPanel renders.
-      await expect(page.getByRole('tab', { name: /^Conversation History/ })).toHaveCount(1);
+      await expect(page.getByRole('tab', { name: /^Test Case Output/ })).toHaveCount(1);
       await expect(page.getByRole('tab', { name: /^Traces$/ })).toHaveCount(1);
       await expect(page.getByRole('tab', { name: /^LLM Judge$/ })).toHaveCount(1);
       await expect(page.getByRole('tab', { name: /^Annotations$/ })).toHaveCount(1);
@@ -370,10 +370,10 @@ test.describe('Test Case Detail — inline live-run UX (PR #228)', () => {
       await page.getByLabel(/run name/i).fill(`E2E-Placeholders-${Date.now()}`);
       await page.getByRole('button', { name: /^start run$/i }).click();
 
-      // Wait for the LiveRunPanel to mount (Conversation History is
+      // Wait for the LiveRunPanel to mount (Test Case Output is
       // selected by default while running).
       await expect(
-        page.getByRole('tab', { selected: true, name: /^Conversation History/ }),
+        page.getByRole('tab', { selected: true, name: /^Test Case Output/ }),
       ).toBeVisible({ timeout: 15_000 });
 
       // Traces tab placeholder.
@@ -394,11 +394,11 @@ test.describe('Test Case Detail — inline live-run UX (PR #228)', () => {
         page.getByText(/Annotations are available after the run is saved/i),
       ).toBeVisible();
 
-      // Going back to Conversation History shows the live trajectory
-      // chrome (INPUT prompt + CONVERSATION HISTORY heading).
-      await page.getByRole('tab', { name: /^Conversation History/ }).click();
+      // Going back to Test Case Output shows the live trajectory
+      // chrome (INPUT prompt + TEST CASE OUTPUT heading).
+      await page.getByRole('tab', { name: /^Test Case Output/ }).click();
       await expect(page.getByText(/^INPUT$/i).first()).toBeVisible();
-      await expect(page.getByText(/^CONVERSATION HISTORY$/i).first()).toBeVisible();
+      await expect(page.getByText(/^TEST CASE OUTPUT$/i).first()).toBeVisible();
     } finally {
       await releaseStream();
       await tc.cleanup();

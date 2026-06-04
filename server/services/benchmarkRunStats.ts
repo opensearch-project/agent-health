@@ -47,6 +47,7 @@ async function computeAndPersistStats(
   let passed = 0;
   let failed = 0;
   let pending = 0;
+  let errored = 0;
   const total = Object.keys(targetRun.results || {}).length;
 
   for (const rid of reportIds) {
@@ -59,6 +60,10 @@ async function computeAndPersistStats(
       const ms = (report as any).metricsStatus;
       if (ms === 'pending' || ms === 'calculating') {
         pending++;
+      } else if (ms === 'error') {
+        // Evaluator could not produce a verdict (issue #242). Excluded from
+        // passed/failed so misconfigured judge runs don't poison pass rates.
+        errored++;
       } else if (report.passFailStatus === 'passed') {
         passed++;
       } else {
@@ -82,7 +87,7 @@ async function computeAndPersistStats(
   }
 
   await storage.benchmarks.updateRun(benchmarkId, targetRun.id, {
-    stats: { passed, failed, pending, total },
+    stats: { passed, failed, pending, errored, total },
   } as any);
 }
 

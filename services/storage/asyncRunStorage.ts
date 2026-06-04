@@ -294,7 +294,12 @@ class AsyncRunStorage {
 
     // Map fields from EvaluationReport to StorageRun format
     if (updates.status !== undefined) storageUpdates.status = updates.status;
-    if (updates.passFailStatus !== undefined) storageUpdates.passFailStatus = updates.passFailStatus;
+    // `passFailStatus` accepts an explicit `null` to clear a stale verdict
+    // on a run that just transitioned to `metricsStatus: 'error'` (issue
+    // #242). Without this, `buildEvaluatorErrorPatch`'s `passFailStatus: null`
+    // would still be filtered out by a strict `!== undefined` check and the
+    // persisted document would keep its previous 'passed'/'failed' value.
+    if ((updates as any).passFailStatus !== undefined) storageUpdates.passFailStatus = (updates as any).passFailStatus;
     if (updates.llmJudgeReasoning !== undefined) storageUpdates.llmJudgeReasoning = updates.llmJudgeReasoning;
     if (updates.trajectory !== undefined) storageUpdates.trajectory = updates.trajectory;
     if (updates.rawEvents !== undefined) storageUpdates.rawEvents = updates.rawEvents;

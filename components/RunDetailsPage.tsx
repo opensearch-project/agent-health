@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { ArrowLeft, Calendar, CheckCircle2, XCircle, BarChart3, PanelLeftClose, PanelLeft, Clock, Loader2, StopCircle, Ban, Timer, Download, GitCompare } from 'lucide-react';
+import { ArrowLeft, Calendar, CheckCircle2, XCircle, BarChart3, PanelLeftClose, PanelLeft, Clock, Loader2, StopCircle, Ban, Timer, Download, GitCompare, AlertTriangle } from 'lucide-react';
 import { getResultStatus, StatusIcon, StatusLabel } from '@/components/evals3/ResultStatus';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -408,6 +408,7 @@ export const RunDetailsPage: React.FC = () => {
     const { experimentRun, reportsMap } = experimentContext;
     let passed = 0;
     let failed = 0;
+    let errored = 0;
     let pending = 0;
     let running = 0;
     let total = 0;
@@ -420,12 +421,13 @@ export const RunDetailsPage: React.FC = () => {
       switch (status) {
         case 'passed': passed++; break;
         case 'failed': failed++; break;
+        case 'errored': errored++; break;
         case 'running': running++; break;
         default: pending++; break;
       }
     });
 
-    return { passed, failed, pending, running, total };
+    return { passed, failed, errored, pending, running, total };
   };
 
   // Download report in specified format (JSON/HTML/PDF) via server API
@@ -624,6 +626,15 @@ export const RunDetailsPage: React.FC = () => {
                 <XCircle size={16} />
                 {stats.failed}
               </span>
+              {(stats as any).errored > 0 && (
+                <span
+                  className="flex items-center gap-1 text-amber-600 dark:text-amber-500"
+                  title="Evaluator could not run (e.g. judge validation error). Excluded from pass-rate aggregation."
+                >
+                  <AlertTriangle size={16} />
+                  {(stats as any).errored}
+                </span>
+              )}
               <span className="text-muted-foreground">/ {stats.total}</span>
             </div>
           )}

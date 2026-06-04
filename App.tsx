@@ -139,6 +139,7 @@ function App() {
             <Route path="/evaluations/runs" element={<Evals3EvalRuns />} />
             <Route path="/evaluations/runs/new" element={<Evals3NewRun />} />
             <Route path="/evaluations/runs/:runId" element={<Evals3EvalRunDetail />} />
+            <Route path="/evaluations/runs/:runId/inspect" element={<Evals3RunInspector />} />
             <Route path="/evaluations/benchmarks/:benchmarkId/runs" element={<Evals3BenchmarkRuns />} />
             <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId" element={<Navigate to="inspect" replace />} />
             <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId/inspect" element={<Evals3RunInspector />} />

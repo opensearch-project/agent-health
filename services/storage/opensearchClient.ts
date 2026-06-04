@@ -92,7 +92,7 @@ export interface StorageBenchmarkRunConfig {
   results?: Record<string, { reportId: string; status: string; error?: string }>;
   status?: string;
   error?: string;
-  stats?: { passed: number; failed: number; pending: number; total: number };
+  stats?: { passed: number; failed: number; pending: number; total: number; errored?: number };
 }
 
 export interface StorageBenchmark {

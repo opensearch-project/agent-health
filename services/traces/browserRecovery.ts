@@ -26,6 +26,7 @@ import {
   buildJudgeMatcherEntry,
   formatExpectedOutcomesAsClaim,
 } from '@/lib/matchers/judgeAccessor';
+import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 
 /**
@@ -89,10 +90,10 @@ export function ensureTracePollingForReport(
             if (fresh) options.onUpdated(fresh);
           }
         } catch (err) {
-          await asyncRunStorage.updateReport(report.id, {
-            metricsStatus: 'error',
-            traceError: `Judge evaluation failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-          }).catch(() => { /* swallow \u2014 nothing more to do */ });
+          await asyncRunStorage.updateReport(report.id, buildEvaluatorErrorPatch(
+            'judge_failed',
+            err,
+          ) as any).catch(() => { /* swallow \u2014 nothing more to do */ });
 
           if (options?.onError) options.onError(err instanceof Error ? err : new Error(String(err)));
           if (options?.onUpdated) {
