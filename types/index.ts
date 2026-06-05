@@ -152,9 +152,33 @@ export interface AgentConfig {
   headers?: Record<string, string>; // Custom headers for agent endpoint (e.g., AWS credentials)
   auth?: ConnectorAuthConfig; // Explicit auth config (preferred over headers inference)
   useTraces?: boolean; // When true, fetch traces instead of logs for evaluation
-  tracePolling?: { // Configurable trace polling settings (used when useTraces: true)
-    intervalMs?: number;   // Polling interval in ms (default: 10000)
-    maxAttempts?: number;  // Max polling attempts (default: 30, ~5 min total)
+  /**
+   * Configurable trace polling settings (used when `useTraces: true`).
+   *
+   * Two distinct polling paths honour these values, with different defaults
+   * because they have different ergonomic constraints:
+   *
+   *   - **Judge poller** (`services/traces/tracePoller.ts`, runs in the
+   *     background after the agent finishes, before the LLM judge fires)
+   *     defaults to `intervalMs: 10000` and `maxAttempts: 60` — a 10-minute
+   *     total budget that's fine because the user already sees a "pending"
+   *     badge while it polls.
+   *   - **SDK pre-load** (`services/traces/fetchSpansForRun.ts`, runs
+   *     synchronously inside a deterministic test body before the body's
+   *     first assertion) defaults to `intervalMs: 1000` and `maxAttempts:
+   *     10` — a ~10-second total budget so the test isn't blocked.
+   *
+   * Both paths additionally honour `TRACE_POLL_INTERVAL_MS` and
+   * `TRACE_POLL_MAX_ATTEMPTS` env vars (the env vars override the
+   * code defaults), and both enforce a hard ceiling of 60 attempts so
+   * a misconfigured agent can't lock a test for an unbounded time.
+   *
+   * Setting either field on this object overrides the path's own default
+   * for that specific agent on both paths.
+   */
+  tracePolling?: {
+    intervalMs?: number;
+    maxAttempts?: number;
   };
   /**
    * OTel `service.name` resource attribute that this agent reports under.

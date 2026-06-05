@@ -28,10 +28,12 @@
   "bin": {
     "agent-health": "./bin/cli.js"
   },
-  "main": "./lib/dist/index.js",
+  "main": "./lib/dist/lib/index.js",
+  "types": "./lib/dist/lib/index.d.ts",
   "exports": {
     ".": {
-      "import": "./lib/dist/index.js"
+      "types": "./lib/dist/lib/index.d.ts",
+      "import": "./lib/dist/lib/index.js"
     }
   },
   "files": [
@@ -40,7 +42,10 @@
     "server/dist/",
     "lib/dist/",
     "dist/",
-    "deployment/cloudformation/"
+    "deployment/cloudformation/",
+    "docs/",
+    "examples/",
+    "tsconfig.lib.json"
   ],
   "scripts": {
     "dev": "vite",
@@ -64,7 +69,8 @@
     "test:e2e:report": "playwright show-report",
     "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
     "build:cli": "esbuild cli/index.ts --bundle --platform=node --format=esm --outdir=cli/dist --packages=external --external:inquirer",
-    "build:lib": "esbuild lib/index.ts lib/config/index.ts --bundle --platform=node --format=esm --outdir=lib/dist --packages=external",
+    "build:lib": "rm -rf lib/dist && tsc -p tsconfig.lib.json && tsc-alias -p tsconfig.lib.json --resolve-full-paths",
+    "build:lib:legacy": "esbuild lib/index.ts lib/config/index.ts --bundle --platform=node --format=esm --outdir=lib/dist --packages=external",
     "build:all": "npm run build && npm run build:server && npm run build:cli && npm run build:lib",
     "start:observio": "cd observio-sample-agent && npm install --legacy-peer-deps --silent && npm run start:ag-ui",
     "dev:all": "npm run dev:server",

@@ -88,7 +88,11 @@ beforeEach(({ provide, testInfo }) => {
   provide('workspaceDir', dir);
 });
 afterEach(({ provisioned }) => {
-  fs.rmSync(provisioned.workspaceDir, { recursive: true, force: true });
+  // afterEach always runs — even when beforeEach failed before the
+  // provide() call — so guard before reaching for the value.
+  if (typeof provisioned.workspaceDir === 'string') {
+    fs.rmSync(provisioned.workspaceDir, { recursive: true, force: true });
+  }
 });
 
 test('uses workspace', { prompt: '...' }, async ({ result, provisioned }) => {

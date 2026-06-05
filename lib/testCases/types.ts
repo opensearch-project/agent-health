@@ -128,9 +128,11 @@ export interface TestFixtures {
   provisioned: Readonly<Record<string, unknown>>;
   /**
    * Only present inside `beforeEach` hooks. Stores a value into the
-   * provisioned bag for this test. Calling `provide()` outside a
-   * `beforeEach` is a no-op (kept loose so hooks/body share one fixture
-   * shape without a separate `HookFixtures` type at every call site).
+   * provisioned bag for this test. The orchestrator handed to the test
+   * body and `afterEach` does NOT include `provide` (it's `undefined`),
+   * so referencing `fixtures.provide` outside `beforeEach` is a runtime
+   * error — not a no-op. Read provisioned values via
+   * `fixtures.provisioned[key]` instead.
    */
   provide?: (key: string, value: unknown) => void;
 }

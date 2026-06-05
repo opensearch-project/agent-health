@@ -895,18 +895,56 @@ export function createBenchmarkCommand(): Command {
                 if (sdkSourceFile && existingIds.length > 0) {
                   const canonicalNames = new Set(spec.testCaseNames);
                   const canonicalIdSet = new Set(tcIds);
-                  const fetched = await Promise.all(
-                    existingIds.map(id => api.getTestCase(id).catch(() => null))
+                  // Distinguish three outcomes per fetch so a transient
+                  // network blip can never silently delete a valid benchmark
+                  // reference:
+                  //   - { kind: 'found', tc }   → evaluate the prune predicate
+                  //   - { kind: 'missing' }     → confirmed 404, drop the dangling ref
+                  //   - { kind: 'error', err }  → fetch threw (network / 5xx);
+                  //                              KEEP the id, log a warning,
+                  //                              skip pruning for this item
+                  type FetchResult =
+                    | { kind: 'found'; tc: TestCase }
+                    | { kind: 'missing' }
+                    | { kind: 'error'; err: unknown };
+                  const fetched: FetchResult[] = await Promise.all(
+                    existingIds.map(async (id): Promise<FetchResult> => {
+                      try {
+                        // api.getTestCase returns null on 404 and throws on
+                        // any other non-OK / network failure — we rely on
+                        // that distinction here.
+                        const tc = await api.getTestCase(id);
+                        return tc ? { kind: 'found', tc } : { kind: 'missing' };
+                      } catch (err) {
+                        return { kind: 'error', err };
+                      }
+                    })
                   );
+                  let transientErrors = 0;
                   prunedIds = existingIds.filter((id, i) => {
-                    const tc = fetched[i];
-                    if (!tc) return false; // dangling ref — drop
+                    const r = fetched[i];
+                    if (r.kind === 'error') {
+                      transientErrors++;
+                      return true; // keep — don't prune on transient failures
+                    }
+                    if (r.kind === 'missing') {
+                      return false; // confirmed 404 — drop dangling ref
+                    }
+                    const tc = r.tc;
                     const isStaleSdkBloat =
                       tc.sourceFile === sdkSourceFile &&
                       canonicalNames.has(tc.name) &&
                       !canonicalIdSet.has(id);
                     return !isStaleSdkBloat;
                   });
+                  if (transientErrors > 0) {
+                    console.log(
+                      chalk.yellow(
+                        `  Note: ${transientErrors} TestCase fetch(es) failed during self-heal — ` +
+                          `keeping those IDs to avoid corrupting benchmark.testCaseIds on a network blip.`
+                      )
+                    );
+                  }
                   const droppedCount = existingIds.length - prunedIds.length;
                   if (droppedCount > 0) {
                     console.log(

@@ -399,8 +399,28 @@ router.post('/api/storage/test-cases/bulk', async (req: Request, res: Response) 
 
     const storage = getStorageModule();
 
-    const hasSourceFile = testCases.some(tc => typeof tc?.sourceFile === 'string' && tc.sourceFile.length > 0);
-    if (hasSourceFile) {
+    // Provenance gate. Reject mixed batches — in `bulkUpsert` an item without
+    // `sourceFile` matches an existing record by `name` ALONE
+    // (`e.name === tc.name && (tc.sourceFile ? e.sourceFile === tc.sourceFile : true)`),
+    // which can silently overwrite an unrelated SDK TestCase that happens to
+    // share a name and clear its `sourceHash` (the update payload sets
+    // `sourceHash: tc.sourceHash`, which is `undefined` for JSON items). The
+    // CLI never sends mixed batches — it imports either an SDK file (all
+    // items carry `sourceFile`) or a JSON file (no items carry it) — so the
+    // 400 is a hard contract, not a UX paper-cut. Callers wanting both must
+    // split into two requests.
+    const withSource = testCases.filter(tc => typeof tc?.sourceFile === 'string' && tc.sourceFile.length > 0);
+    const withoutSource = testCases.length - withSource.length;
+    if (withSource.length > 0 && withoutSource > 0) {
+      return res.status(400).json({
+        error:
+          'Mixed batch rejected: every test case must either set `sourceFile` ' +
+          '(SDK / code-import upsert path) or omit it (JSON strict-create path); ' +
+          `received ${withSource.length} with sourceFile and ${withoutSource} without.`,
+      });
+    }
+
+    if (withSource.length > 0) {
       const result = await storage.testCases.bulkUpsert(testCases);
       debug(
         'StorageAPI',

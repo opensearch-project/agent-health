@@ -1,0 +1,71 @@
+{
+  "//": [
+    "Per-file tsc compilation for the published `lib/` SDK surface.",
+    "Unlike `cli/` and `server/` (which we bundle with esbuild because they are",
+    "executed as a single entry), the public SDK is compiled file-by-file so",
+    "consumers can read the installed package directly inside `node_modules/`",
+    "while debugging. This preserves source structure, JSDoc comments, and",
+    "emits per-file `.d.ts` + sourcemaps. The companion `tsc-alias` step",
+    "rewrites `@/foo` paths in the emitted .js / .d.ts.",
+    "",
+    "Output layout (mirrors source tree under `lib/dist/`):",
+    "  lib/dist/lib/index.js         <- package entrypoint",
+    "  lib/dist/lib/config/...",
+    "  lib/dist/lib/matchers/...",
+    "  lib/dist/lib/testCases/...",
+    "  lib/dist/services/connectors/...",
+    "  lib/dist/services/traces/...",
+    "  lib/dist/services/agent/...",
+    "  lib/dist/types/index.js"
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+
+    "rootDir": ".",
+    "outDir": "./lib/dist",
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "removeComments": false,
+    "noEmit": false,
+    "emitDeclarationOnly": false,
+
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "moduleDetection": "force",
+    "allowJs": false,
+    "allowImportingTsExtensions": false,
+
+    "paths": {
+      "@/*": ["./*"]
+    },
+
+    "jsx": "preserve"
+  },
+  "include": [
+    "lib/**/*.ts",
+    "services/agent/**/*.ts",
+    "services/connectors/**/*.ts",
+    "services/traces/**/*.ts",
+    "types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "lib/dist",
+    "services/adapters",
+    "services/connectors/server.ts"
+  ]
+}
