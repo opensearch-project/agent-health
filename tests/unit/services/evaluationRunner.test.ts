@@ -93,10 +93,30 @@ function makeRun(overrides: Partial<EvaluationRun> = {}): EvaluationRun {
 }
 
 function makeStorageModule() {
+  // Track placeholder docs by id so the post-completion update path returns
+  // a merged doc shape — mirrors the real storage adapter's behaviour. The
+  // pre-persist placeholder fix in services/evaluationRunner.ts depends on
+  // `runs.update(placeholderId, reportFields)` returning the saved report
+  // so the runner can read `savedReport.metricsStatus` etc. (Without this
+  // the unit tests' default `update.mockResolvedValue(undefined)` makes
+  // the runner crash on `savedReport.metricsStatus` access.)
+  const docs = new Map<string, any>();
+  const create = jest.fn().mockImplementation((report) => {
+    const id = report.id || `report-${report.testCaseId || 'x'}`;
+    const doc = { ...report, id };
+    docs.set(id, doc);
+    return Promise.resolve(doc);
+  });
+  const update = jest.fn().mockImplementation((id, updates) => {
+    const existing = docs.get(id) || { id };
+    const merged = { ...existing, ...updates, id };
+    docs.set(id, merged);
+    return Promise.resolve(merged);
+  });
   return {
     runs: {
-      create: jest.fn().mockImplementation((report) => Promise.resolve({ ...report, id: `report-${Date.now()}` })),
-      update: jest.fn().mockResolvedValue(undefined),
+      create,
+      update,
       get: jest.fn(),
       list: jest.fn(),
       delete: jest.fn(),
@@ -507,21 +527,48 @@ describe('evaluationRunner', () => {
       expect(mockRunEvaluation).not.toHaveBeenCalled();
     });
 
-    it('should save report via storage module', async () => {
+    it('should pre-persist a running placeholder then update with the completed report', async () => {
+      // Cross-surface parity (commit fd984c9e): the runner now pre-persists a
+      // `status: running` placeholder via `runs.create` BEFORE invoking the
+      // agent, then UPDATES the same doc via `runs.update` once the agent +
+      // judge complete — mirrors what /api/evaluate does for the UI "Run Test"
+      // path. This guarantees the runs list shows an in-progress row.
       const testCases = [makeTestCase('tc-1')];
-      const run = makeRun();
+      const run = makeRun({ evaluatorId: 'system-tool-usage' });
       const storage = makeStorageModule();
 
       mockRunEvaluation.mockResolvedValue({ id: 'eval-report', trajectory: [], testCaseId: 'tc-1' } as any);
-      storage.runs.create.mockResolvedValue({ id: 'saved-report-1', testCaseId: 'tc-1' });
 
       await executeEvaluationRun(run, testCases, {
         storageModule: storage,
         onProgress: jest.fn(),
       });
 
-      expect(storage.runs.create).toHaveBeenCalledWith(expect.objectContaining({ id: 'eval-report' }));
-      expect(run.results['tc-1'].reportId).toBe('saved-report-1');
+      // 1. Placeholder is created first with status='running' and the
+      //    run-level evaluatorId.
+      expect(storage.runs.create).toHaveBeenCalledTimes(1);
+      expect(storage.runs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'running',
+          metricsStatus: 'pending',
+          testCaseId: 'tc-1',
+          evaluatorId: 'system-tool-usage',
+          experimentRunId: run.id,
+        }),
+      );
+
+      // 2. Same doc is then updated with the completed report.
+      expect(storage.runs.update).toHaveBeenCalledTimes(1);
+      const [placeholderId, updatePayload] = storage.runs.update.mock.calls[0];
+      expect(typeof placeholderId).toBe('string');
+      expect(placeholderId.length).toBeGreaterThan(0);
+      // The runner stamps evaluatorId onto the report itself as defence in
+      // depth (the connector return path predates this work).
+      expect(updatePayload).toEqual(expect.objectContaining({ evaluatorId: 'system-tool-usage' }));
+
+      // 3. run.results carries the placeholder id (NOT the inline
+      //    eval-report id) so listing endpoints find the persisted doc.
+      expect(run.results['tc-1'].reportId).toBe(placeholderId);
     });
 
     it('should set completedAt timestamp on completion', async () => {

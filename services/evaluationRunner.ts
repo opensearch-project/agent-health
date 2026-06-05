@@ -218,7 +218,77 @@ export async function executeEvaluationRun(
           await new Promise(r => setTimeout(r, throttleUntil - now));
         }
 
-        // Report progress — this test case is starting
+        // Cross-surface parity: pre-persist a `status: running` placeholder
+        // for this test case BEFORE we emit the `progress: status: running`
+        // SSE event. /api/evaluate (UI "Run Test" path) already does this so
+        // the runs list shows an in-progress row immediately and the UI can
+        // resolve evaluatorId for hover/tooltips while the agent is still
+        // working. Without this, the runs list stays empty until the agent
+        // finishes — the exact UX gap the customer reported on
+        // tc-1780591691582-ezc0vkdpj.
+        //
+        // The order matters: SSE consumers (CLI, web client, SDK tests)
+        // listen for `progress: status: running` as the signal to query the
+        // runs list. If the placeholder doesn't yet exist when that event
+        // fires, the consumer will see an empty list and assume "no row"
+        // — even though one is about to appear. Persist FIRST so the
+        // contract is `after `running` event ⇒ row exists`.
+        //
+        // Best-effort: a storage failure here must not abort the run, so
+        // we swallow the error and fall back to the post-completion
+        // `runs.create()` below (which is what the runner did historically).
+        let placeholderRunId: string | undefined;
+        try {
+          const placeholder = await storageModule.runs.create({
+            // status / metricsStatus mirror what /api/evaluate persists so
+            // the runs list filter `status=running` finds this row.
+            status: 'running',
+            metricsStatus: 'pending',
+            // Identity / linkage — enough for the UI's runs list to render
+            // the row, and for run-details to load the test case + parent
+            // evaluation run.
+            testCaseId,
+            testCaseVersion: (testCase as any).currentVersion ?? (testCase as any).version ?? 1,
+            agentKey: agentConfig.key,
+            agentName: agentConfig.name,
+            agentId: agentConfig.key,
+            agentEndpoint: agentConfig.endpoint,
+            modelId: run.modelId,
+            modelName: modelConfig?.display_name || run.modelId,
+            connectorProtocol: (agentConfig as any).connectorType,
+            // The whole point of this fix: persist evaluatorId on the
+            // per-test-case run so the run-details page resolves the
+            // right evaluator and the score tooltip shows evaluator-
+            // specified rubric metrics. Inherits from the run-level
+            // evaluatorId the customer set on the EvaluationRun.
+            evaluatorId: run.evaluatorId,
+            // Group the run under its parent EvaluationRun so the
+            // experimentContext lookup in RunDetailsPage works.
+            experimentRunId: run.id,
+            experimentId: run.benchmarkId,
+            // Empty fixtures — will be populated when the agent + judge
+            // complete and we update this same doc.
+            trajectory: [],
+            metrics: {},
+            llmJudgeReasoning: '',
+            timestamp: new Date().toISOString(),
+          } as any);
+          placeholderRunId = placeholder.id;
+          debug('EvaluationRunner', `[${testCaseId}] Pre-persisted placeholder run: ${placeholderRunId}`);
+        } catch (placeholderErr: any) {
+          // Storage may not be configured / may be transiently unavailable.
+          // Log and proceed — we'll fall through to the legacy create path
+          // after the run completes, which preserves backwards compatibility.
+          console.warn(
+            `[EvaluationRunner] Failed to pre-persist placeholder for ${testCaseId} ` +
+              `— in-progress runs list will not show a row for this test case. ` +
+              `Reason: ${placeholderErr.message}`
+          );
+        }
+
+        // Report progress — this test case is starting. The placeholder
+        // (when persisted above) is already on disk, so SSE consumers that
+        // poll the runs list right after seeing `running` will find it.
         startedCount++;
         onProgress({
           runId: run.id,
@@ -231,8 +301,12 @@ export async function executeEvaluationRun(
 
         debug('EvaluationRunner', `[${testCaseId}] Starting evaluation (${completedCount}/${totalTestCases} completed)`);
 
-        // Set status to running
-        run.results[testCaseId] = { reportId: '', status: 'running' };
+        // Set status to running on the in-memory results map (mirrors the
+        // placeholder we just persisted).
+        run.results[testCaseId] = {
+          reportId: placeholderRunId || '',
+          status: 'running',
+        };
 
         try {
           // Check if this test case has a deterministic evaluate function
@@ -366,8 +440,34 @@ export async function executeEvaluationRun(
             (report as any).skipJudge = true;
           }
 
-          // Save the report via storage module
-          const savedReport = await storageModule.runs.create(report as any);
+          // Save the report via storage module. When we successfully
+          // pre-persisted a placeholder above, UPDATE the same doc so the
+          // running-row -> completed-row transition is observable in place
+          // (mirrors /api/evaluate). When the placeholder couldn't be
+          // created (storage transient failure), fall back to the legacy
+          // create path so the run is still saved.
+          //
+          // Crucial: persist `evaluatorId` on the report regardless of
+          // path. The runner has it on `run.evaluatorId`; the report
+          // returned by `runEvaluationWithConnector` doesn't carry it
+          // (the connector path predates the cross-surface parity work),
+          // so we stamp it onto the doc here.
+          (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
+          (report as any).experimentRunId = (report as any).experimentRunId ?? run.id;
+          (report as any).experimentId = (report as any).experimentId ?? run.benchmarkId;
+          let savedReport: EvaluationReport;
+          if (placeholderRunId) {
+            // Mirror saveReportWithModule's update shape: pass the report
+            // fields plus the placeholder id so storage merges in place.
+            // We exclude `id` from the spread so the placeholder's id wins.
+            const { id: _ignored, ...reportFields } = report as any;
+            savedReport = (await storageModule.runs.update(
+              placeholderRunId,
+              reportFields as any,
+            )) as any;
+          } else {
+            savedReport = await storageModule.runs.create(report as any);
+          }
 
           // If trace mode (metricsStatus: 'pending'), poll for traces and run judge inline.
           // Skipped for deterministic runs (matcher session decided the verdict already).
@@ -413,7 +513,22 @@ export async function executeEvaluationRun(
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
           debug('EvaluationRunner', `[${testCaseId}] Failed: ${errorMsg}`);
-          run.results[testCaseId] = { reportId: '', status: 'failed', error: errorMsg };
+          // If we pre-persisted a placeholder, mark it failed so the runs
+          // list doesn't show a permanently-running row after a crash.
+          if (placeholderRunId) {
+            try {
+              await storageModule.runs.update(placeholderRunId, {
+                status: 'failed',
+                metricsStatus: 'error',
+                llmJudgeReasoning: `Evaluation error: ${errorMsg}`,
+              } as any);
+            } catch { /* best-effort */ }
+          }
+          run.results[testCaseId] = {
+            reportId: placeholderRunId || '',
+            status: 'failed',
+            error: errorMsg,
+          };
 
           completedCount++;
 

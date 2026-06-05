@@ -104,13 +104,28 @@ const mockRunEval = runEvaluationWithConnector as jest.Mock;
 const mockFetchTraces = fetchTracesByRunIds as jest.MockedFunction<typeof fetchTracesByRunIds>;
 
 function createMockStorage(): IStorageModule {
-  const passthroughCreate = jest.fn().mockImplementation((report: any) =>
-    Promise.resolve({ ...report, id: report.id ?? 'report-1' })
-  );
+  // Cross-surface parity (commit fd984c9e): the runner now pre-persists a
+  // placeholder via `runs.create` and updates it via `runs.update`. Both
+  // need to return the persisted doc so downstream `savedReport.X` reads
+  // don't blow up. We track docs by id so the update path returns the
+  // merged shape — mirrors the real adapter.
+  const docs = new Map<string, any>();
+  const passthroughCreate = jest.fn().mockImplementation((report: any) => {
+    const id = report.id ?? `report-${docs.size + 1}`;
+    const doc = { ...report, id };
+    docs.set(id, doc);
+    return Promise.resolve(doc);
+  });
+  const passthroughUpdate = jest.fn().mockImplementation((id: string, updates: any) => {
+    const existing = docs.get(id) || { id };
+    const merged = { ...existing, ...updates, id };
+    docs.set(id, merged);
+    return Promise.resolve(merged);
+  });
   return {
     testCases: { getById: jest.fn(), getAll: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn(), bulkCreate: jest.fn(), bulkUpsert: jest.fn(), search: jest.fn() },
     benchmarks: { getById: jest.fn(), getAll: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn(), bulkCreate: jest.fn(), addRun: jest.fn(), updateRun: jest.fn(), deleteRun: jest.fn() },
-    runs: { getById: jest.fn(), getAll: jest.fn(), create: passthroughCreate, update: jest.fn(), delete: jest.fn(), bulkCreate: jest.fn(), search: jest.fn(), getByTestCase: jest.fn(), getByExperiment: jest.fn(), getByExperimentRun: jest.fn(), getIterations: jest.fn(), countsByTestCase: jest.fn(), addAnnotation: jest.fn(), updateAnnotation: jest.fn(), deleteAnnotation: jest.fn() },
+    runs: { getById: jest.fn(), getAll: jest.fn(), create: passthroughCreate, update: passthroughUpdate, delete: jest.fn(), bulkCreate: jest.fn(), search: jest.fn(), getByTestCase: jest.fn(), getByExperiment: jest.fn(), getByExperimentRun: jest.fn(), getIterations: jest.fn(), countsByTestCase: jest.fn(), addAnnotation: jest.fn(), updateAnnotation: jest.fn(), deleteAnnotation: jest.fn() },
     evaluationRuns: { create: jest.fn(), getById: jest.fn(), update: jest.fn(), delete: jest.fn(), list: jest.fn(), updateResult: jest.fn() },
     analytics: { query: jest.fn(), aggregations: jest.fn(), writeRecord: jest.fn(), backfill: jest.fn() },
     evaluators: { getAll: jest.fn(), getById: jest.fn(), getVersions: jest.fn(), getVersion: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
@@ -140,7 +155,17 @@ const TC: TestCase = {
 } as unknown as TestCase;
 
 function captureLastReport(storage: IStorageModule): any {
-  return (storage.runs.create as jest.Mock).mock.calls[0]?.[0];
+  // Cross-surface parity (commit fd984c9e): the FIRST `runs.create` call is
+  // the running-placeholder; the FINAL report shape lands on `runs.update`.
+  // Prefer the update-call payload when present, fall back to the create-
+  // call payload for tests that exercise the no-prompt / pre-completion path.
+  const updateCalls = (storage.runs.update as jest.Mock).mock.calls;
+  if (updateCalls.length > 0) {
+    // update is invoked as (placeholderId, reportFields) — return reportFields.
+    return updateCalls[updateCalls.length - 1][1];
+  }
+  const createCalls = (storage.runs.create as jest.Mock).mock.calls;
+  return createCalls[createCalls.length - 1]?.[0];
 }
 
 describe('executeEvaluationRun — issue #230 traces fixture pre-loading', () => {
