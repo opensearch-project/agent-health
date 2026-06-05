@@ -73,6 +73,9 @@ jest.mock('@/lib/theme', () => ({
 
 jest.mock('react-router-dom', () => ({
   useLocation: () => ({ pathname: '/settings', hash: '', search: '', state: null }),
+  // useClusterContext also calls useSearchParams; without it the hook throws
+  // "useSearchParams is not a function or its return value is not iterable".
+  useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

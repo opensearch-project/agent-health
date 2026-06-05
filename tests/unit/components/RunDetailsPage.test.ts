@@ -81,6 +81,11 @@ jest.mock('@/lib/utils', () => ({
   getDifficultyColor: jest.fn().mockReturnValue(''),
   getModelName: jest.fn((id: string) => id),
   cn: jest.fn((...args: any[]) => args.filter(Boolean).join(' ')),
+  // RunScore reads these from @/lib/utils; added to the component after this
+  // partial mock was written, so omitting them threw "getRunOverallScore is
+  // not a function".
+  getRunOverallScore: jest.fn().mockReturnValue(null),
+  formatMetricsBreakdown: jest.fn().mockReturnValue([]),
 }));
 
 // Mock child components to avoid their own async side effects

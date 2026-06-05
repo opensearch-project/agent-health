@@ -38,6 +38,10 @@ jest.mock('@/services/agent', () => ({
 
 jest.mock('@/services/traces', () => ({
   fetchTracesByRunIds: jest.fn().mockResolvedValue({ spans: [], total: 0 }),
+  // Strategy C correlation entrypoint used by RunDetailsContent's trace
+  // fetch; added with the trace-correlation work after this mock was first
+  // written. Return the same { spans, total } shape the component reads.
+  fetchTracesForRun: jest.fn().mockResolvedValue({ spans: [], total: 0 }),
   processSpansIntoTree: jest.fn().mockReturnValue([]),
   calculateTimeRange: jest.fn().mockReturnValue({ startTime: 0, endTime: 0, duration: 0 }),
   groupSpansByTrace: jest.fn().mockReturnValue([]),
@@ -81,6 +85,12 @@ jest.mock('@/lib/utils', () => ({
   getLabelColor: jest.fn().mockReturnValue(''),
   getDifficultyColor: jest.fn().mockReturnValue(''),
   cn: jest.fn((...args: any[]) => args.filter(Boolean).join(' ')),
+  // RunScore (rendered by RunDetailsContent) reads these from @/lib/utils.
+  // They were added to the component after this partial mock was written, so
+  // omitting them left them undefined → "getRunOverallScore is not a
+  // function". Provide faithful stubs: a numeric score and an empty breakdown.
+  getRunOverallScore: jest.fn().mockReturnValue(null),
+  formatMetricsBreakdown: jest.fn().mockReturnValue([]),
 }));
 
 jest.mock('react-markdown', () => {
@@ -100,6 +110,10 @@ jest.mock('@/components/ui/tooltip', () => ({
 
 jest.mock('react-router-dom', () => ({
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
+  // useClusterContext (transitively imported) calls useLocation; without it
+  // the hook throws "useLocation is not a function". Return a minimal
+  // location with an empty state object so `location.state?.fromCluster` works.
+  useLocation: () => ({ pathname: '/', search: '', hash: '', state: null, key: 'test' }),
 }));
 
 jest.mock('@/components/TrajectoryView', () => ({
@@ -129,11 +143,14 @@ jest.mock('@/components/traces/TraceFullScreenView', () => ({
 
 // ── Imports for mock control ──────────────────────────────────────────────────
 
-import { fetchTracesByRunIds, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
+import { fetchTracesByRunIds, fetchTracesForRun, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { fetchRunMetrics } from '@/services/metrics';
 
 const mockFetchTraces = fetchTracesByRunIds as jest.MockedFunction<typeof fetchTracesByRunIds>;
+// RunDetailsContent's trace fetch goes through fetchTracesForRun (Strategy C),
+// not fetchTracesByRunIds — tests that load spans must drive this one.
+const mockFetchTracesForRun = fetchTracesForRun as jest.MockedFunction<typeof fetchTracesForRun>;
 const mockProcessSpans = processSpansIntoTree as jest.MockedFunction<typeof processSpansIntoTree>;
 const mockCalcTimeRange = calculateTimeRange as jest.MockedFunction<typeof calculateTimeRange>;
 const mockGetReportById = asyncRunStorage.getReportById as jest.MockedFunction<typeof asyncRunStorage.getReportById>;
@@ -223,8 +240,10 @@ describe('RunDetailsContent', () => {
       const report = createReport({ metricsStatus: 'pending' });
       mockGetReportById.mockResolvedValue(report);
 
-      // When user clicks Traces tab, traces are found
+      // When user clicks Traces tab, traces are found. The component fetches
+      // via fetchTracesForRun (Strategy C), so drive that one too.
       mockFetchTraces.mockResolvedValue({ spans: mockSpans as any, total: 1 });
+      mockFetchTracesForRun.mockResolvedValue({ spans: mockSpans as any, total: 1 } as any);
       mockProcessSpans.mockReturnValue(mockSpanTree as any);
 
       await renderAndWait(report);
@@ -272,6 +291,7 @@ describe('RunDetailsContent', () => {
       mockGetReportById.mockResolvedValue(report);
 
       mockFetchTraces.mockResolvedValue({ spans: mockSpans as any, total: 1 });
+      mockFetchTracesForRun.mockResolvedValue({ spans: mockSpans as any, total: 1 } as any);
       mockProcessSpans.mockReturnValue(mockSpanTree as any);
 
       await renderAndWait(report);

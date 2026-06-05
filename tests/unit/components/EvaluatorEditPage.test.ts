@@ -36,10 +36,25 @@ import type { Evaluator } from '@/types';
 
 const mockNavigate = jest.fn();
 const mockUseParams = jest.fn(() => ({ evaluatorId: undefined as string | undefined }));
+// EvaluatorEditPage derives isViewRoute from location.pathname:
+//   isViewRoute = isEditMode && !/\/edit\/?$/.test(pathname)
+// so the pathname controls whether an existing evaluator renders in "Edit"
+// vs "View" mode. Tests set this per describe-block (default: an /edit path
+// so the custom-evaluator edit flow shows the editable form + "Edit" title).
+let mockPathname = '/evaluators/x/edit';
+// The History pane (EvaluatorVersionHistory) only mounts when the active tab
+// is "history", which the component seeds from location.hash === '#history'.
+// Tests that assert on the version-history panel set this to '#history'.
+let mockHash = '';
 
 jest.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
   useParams: () => mockUseParams(),
+  // EvaluatorEditPage transitively renders useClusterContext, which calls
+  // useSearchParams + useLocation; without them the hook throws "… is not a
+  // function".
+  useSearchParams: () => [new URLSearchParams(), jest.fn()],
+  useLocation: () => ({ pathname: mockPathname, search: '', hash: mockHash, state: null, key: 'test' }),
 }));
 
 // ── Version history (avoids fetching versions in unit tests) ─────────────────
@@ -77,6 +92,10 @@ beforeAll(async () => {
 beforeEach(() => {
   mockNavigate.mockReset();
   mockUseParams.mockReturnValue({ evaluatorId: undefined });
+  // Default to an /edit path so an existing evaluator renders the editable
+  // form (isViewRoute=false). View/system blocks override this below.
+  mockPathname = '/evaluators/x/edit';
+  mockHash = '';
   global.alert = jest.fn();
   global.fetch = jest.fn();
 });
@@ -222,8 +241,10 @@ describe('EvaluatorEditPage — new evaluator (create mode)', () => {
     expect(body.scoringConfig.metrics).toHaveLength(1);
     expect(body.scoringConfig.passThreshold).toBe(70);
 
-    // After create, page navigates back to the list
-    expect(mockNavigate).toHaveBeenCalledWith('/evaluators');
+    // After create, the page navigates to the new evaluator's view page
+    // (not the list) so the user lands on what they just made — the
+    // view-after-save UX. The created id comes from the POST response.
+    expect(mockNavigate).toHaveBeenCalledWith('/evaluators/eval-new-1');
   });
 });
 
@@ -257,7 +278,11 @@ describe('EvaluatorEditPage — edit existing custom evaluator', () => {
     mockUseParams.mockReturnValue({ evaluatorId: customEvaluator.id });
   });
 
-  it('loads existing evaluator data and stays on page after PUT', async () => {
+  it('loads existing evaluator data in edit mode and PUTs to its own page (not the list)', async () => {
+    // Edit mode (/edit path) pins the Tabs value to "latest" regardless of
+    // hash — version history is a view-route-only surface, so the History
+    // pane is intentionally not reachable here. This test covers the editable
+    // form + update flow; view-mode history is covered separately.
     (global.fetch as jest.Mock)
       // initial GET
       .mockResolvedValueOnce(mockFetchOk(customEvaluator))
@@ -268,20 +293,18 @@ describe('EvaluatorEditPage — edit existing custom evaluator', () => {
       render(React.createElement(EvaluatorEditPage));
     });
 
-    // Title flips to Edit Evaluator
+    // Title reads "Edit Evaluator" for an editable custom evaluator.
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /edit evaluator/i })).toBeTruthy();
     });
 
-    // Existing values populated
+    // Existing values populated into the form.
     expect((screen.getByDisplayValue('RCA Correctness') as HTMLInputElement).value).toBe(
       'RCA Correctness',
     );
 
-    // Mock version history is rendered with the right id
-    const history = screen.getByTestId('mock-version-history');
-    expect(history.getAttribute('data-evaluator-id')).toBe(customEvaluator.id);
-    const refreshBefore = Number(history.getAttribute('data-refresh-key'));
+    // History pane is NOT mounted in edit mode (view-route-only surface).
+    expect(screen.queryByTestId('mock-version-history')).toBeNull();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /save/i }));
@@ -295,13 +318,31 @@ describe('EvaluatorEditPage — edit existing custom evaluator', () => {
     expect(putCall[0]).toMatch(new RegExp(`/api/storage/evaluators/${customEvaluator.id}$`));
     expect(putCall[1].method).toBe('PUT');
 
-    // Edit mode does NOT navigate away — it bumps the history refreshKey
-    expect(mockNavigate).not.toHaveBeenCalledWith('/evaluators');
+    // After a successful edit-PUT the user lands on the evaluator's own view
+    // page (so they can verify the change) — never back on the list.
     await waitFor(() => {
-      const refreshAfter = Number(
-        screen.getByTestId('mock-version-history').getAttribute('data-refresh-key'),
-      );
-      expect(refreshAfter).toBeGreaterThan(refreshBefore);
+      expect(mockNavigate).toHaveBeenCalledWith(`/evaluators/${customEvaluator.id}`, { replace: true });
+    });
+    expect(mockNavigate).not.toHaveBeenCalledWith('/evaluators');
+  });
+
+  it('renders the version-history panel on the view route', async () => {
+    // View route (no /edit suffix) + a custom evaluator with ≥2 versions:
+    // the History tab is enabled and, when active, mounts
+    // EvaluatorVersionHistory wired to this evaluator's id.
+    mockPathname = `/evaluators/${customEvaluator.id}`;
+    mockHash = '#history';
+    (global.fetch as jest.Mock).mockResolvedValueOnce(
+      mockFetchOk({ ...customEvaluator, currentVersion: 2 }),
+    );
+
+    await act(async () => {
+      render(React.createElement(EvaluatorEditPage));
+    });
+
+    await waitFor(() => {
+      const history = screen.getByTestId('mock-version-history');
+      expect(history.getAttribute('data-evaluator-id')).toBe(customEvaluator.id);
     });
   });
 });
