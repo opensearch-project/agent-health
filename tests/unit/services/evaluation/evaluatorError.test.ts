@@ -41,6 +41,7 @@ describe('buildEvaluatorErrorPatch (issue #242)', () => {
       ['trace_incomplete', /^Trace did not converge: /],
       ['trace_callback_failed', /^Post-trace callback failed: /],
       ['trace_fetch_failed', /^Trace fetch failed: /],
+      ['boot_recovery', /^Could not resume after restart: /],
       ['unknown', /^Evaluator error: /],
     ];
     for (const [kind, re] of cases) {

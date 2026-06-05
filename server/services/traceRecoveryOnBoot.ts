@@ -28,6 +28,7 @@
 import type { IStorageModule } from '../adapters/types.js';
 import type { EvaluationReport, TestCase } from '../../types/index.js';
 import { startTracePollingForReportWithModule } from '../../services/benchmarkRunner.js';
+import { buildEvaluatorErrorPatch } from '../../services/evaluation/evaluatorError.js';
 
 /** Maximum age (ms since report.timestamp) for which we will re-attempt polling. */
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -116,10 +117,16 @@ export async function resumePendingTracePolls(storage: IStorageModule): Promise<
           ? 'No runId on pending report; cannot resume polling after server restart'
           : `Report older than ${Math.round(maxAgeMs / 60000)}m; trace ingestion window has elapsed`;
         try {
-          await storage.runs.update(report.id, {
-            metricsStatus: 'error',
-            traceError: `${reason} \u2014 marked error during boot recovery`,
-          } as Partial<EvaluationReport>);
+          // #242: use the canonical evaluator-error patch so the run is
+          // bucketed as `errored` (not `failed`), the misleading "waiting for
+          // traces" placeholder is replaced with the real reason, and
+          // passFailStatus is cleared. Boot recovery is an evaluator-side
+          // failure: the agent may have finished, but we can no longer run
+          // the trace pipeline to produce a verdict after the restart.
+          await storage.runs.update(
+            report.id,
+            buildEvaluatorErrorPatch('boot_recovery', `${reason} \u2014 marked error during boot recovery`) as Partial<EvaluationReport>,
+          );
           stat.failedOut++;
           console.log(`[traceRecovery] Marked report ${report.id} as error (${reason})`);
         } catch (err: any) {
@@ -145,10 +152,11 @@ export async function resumePendingTracePolls(storage: IStorageModule): Promise<
       if (!testCase) {
         // No test case to judge against \u2014 cannot recover
         try {
-          await storage.runs.update(report.id, {
-            metricsStatus: 'error',
-            traceError: `Test case ${report.testCaseId} no longer exists \u2014 cannot resume polling after restart`,
-          } as Partial<EvaluationReport>);
+          // #242: canonical evaluator-error patch (see Branch 1 above).
+          await storage.runs.update(
+            report.id,
+            buildEvaluatorErrorPatch('boot_recovery', `Test case ${report.testCaseId} no longer exists \u2014 cannot resume polling after restart`) as Partial<EvaluationReport>,
+          );
           stat.failedOut++;
         } catch (err: any) {
           stat.errors++;

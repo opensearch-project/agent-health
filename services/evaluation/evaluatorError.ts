@@ -33,6 +33,7 @@ export type EvaluatorErrorKind =
   | 'trace_incomplete'     // Spans arrived but never converged (no root span)
   | 'trace_callback_failed'// onTracesFound callback exploded
   | 'trace_fetch_failed'   // Underlying fetch to OpenSearch failed
+  | 'boot_recovery'        // Pending run could not be resumed after a server restart
   | 'unknown';
 
 export interface EvaluatorErrorPatch {
@@ -53,6 +54,7 @@ const KIND_LABEL: Record<EvaluatorErrorKind, string> = {
   trace_incomplete: 'Trace did not converge',
   trace_callback_failed: 'Post-trace callback failed',
   trace_fetch_failed: 'Trace fetch failed',
+  boot_recovery: 'Could not resume after restart',
   unknown: 'Evaluator error',
 };
 

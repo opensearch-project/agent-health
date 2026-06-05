@@ -163,6 +163,12 @@ describe('resumePendingTracePolls', () => {
     expect(updateCalls[0].id).toBe('r1');
     expect(updateCalls[0].updates.metricsStatus).toBe('error');
     expect(updateCalls[0].updates.traceError).toMatch(/No runId/);
+    // #242: boot-recovery failures now use buildEvaluatorErrorPatch, so the
+    // run is a true "evaluator could not run" — passFailStatus is cleared and
+    // the misleading "waiting for traces" placeholder is replaced.
+    expect(updateCalls[0].updates.passFailStatus).toBeUndefined();
+    expect(updateCalls[0].updates.llmJudgeReasoning).toMatch(/Evaluator could not run/i);
+    expect(updateCalls[0].updates.llmJudgeReasoning).not.toMatch(/waiting for traces/i);
   });
 
   it('marks pending reports older than max age as error', async () => {
@@ -176,6 +182,8 @@ describe('resumePendingTracePolls', () => {
     expect(stat.resumed).toBe(0);
     expect(updateCalls[0].updates.metricsStatus).toBe('error');
     expect(updateCalls[0].updates.traceError).toMatch(/older than/);
+    expect(updateCalls[0].updates.passFailStatus).toBeUndefined();
+    expect(updateCalls[0].updates.llmJudgeReasoning).toMatch(/Evaluator could not run/i);
     expect(startPollingMock).not.toHaveBeenCalled();
   });
 
