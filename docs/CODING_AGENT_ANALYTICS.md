@@ -277,7 +277,7 @@ Coding Agent Analytics can be disabled entirely without affecting the core evalu
 
 ```bash
 # Via environment variable
-AGENT_HEALTH_DISABLE_CODING_ANALYTICS=true npx @opensearch-project/agent-health
+AH_DISABLE_CODING_ANALYTICS=true npx @opensearch-project/agent-health
 ```
 
 Or in `agent-health.config.json`:

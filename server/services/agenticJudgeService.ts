@@ -180,17 +180,18 @@ async function evaluateWithCustomEndpoint(
 // ============================================================================
 
 /**
- * Spawn Claude Code in full agentic mode (without --print).
- * This gives the judge access to tools for verification.
+ * Spawn Claude Code in print mode for evaluation.
+ * Uses --print (read-only, no tool access) to prevent prompt injection risks.
+ * The agentic judge evaluates based on the trajectory content without executing tools.
  */
 function spawnClaudeAgentic(prompt: string, systemPrompt: string): Promise<string> {
   return new Promise((resolvePromise, reject) => {
-    // Use --print but WITHOUT --dangerously-skip-permissions in a sandboxed way
-    // The agentic judge gets read-only tool access via the default permission model
+    // Use --print mode only (no --dangerously-skip-permissions)
+    // This ensures the judge cannot modify files or access tools,
+    // preventing prompt injection from trajectory/log content.
     const args = [
       '--print',
       '--output-format', 'json',
-      '--dangerously-skip-permissions',
       '--append-system-prompt', systemPrompt,
     ];
 

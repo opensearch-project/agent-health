@@ -28,10 +28,12 @@
   "bin": {
     "agent-health": "./bin/cli.js"
   },
-  "main": "./lib/dist/index.js",
+  "main": "./lib/dist/lib/index.js",
+  "types": "./lib/dist/lib/index.d.ts",
   "exports": {
     ".": {
-      "import": "./lib/dist/index.js"
+      "types": "./lib/dist/lib/index.d.ts",
+      "import": "./lib/dist/lib/index.js"
     }
   },
   "files": [
@@ -40,7 +42,10 @@
     "server/dist/",
     "lib/dist/",
     "dist/",
-    "deployment/cloudformation/"
+    "deployment/cloudformation/",
+    "docs/",
+    "examples/",
+    "tsconfig.lib.json"
   ],
   "scripts": {
     "dev": "vite",
@@ -64,7 +69,8 @@
     "test:e2e:report": "playwright show-report",
     "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
     "build:cli": "esbuild cli/index.ts --bundle --platform=node --format=esm --outdir=cli/dist --packages=external --external:inquirer",
-    "build:lib": "esbuild lib/index.ts lib/config/index.ts --bundle --platform=node --format=esm --outdir=lib/dist --packages=external",
+    "build:lib": "rm -rf lib/dist && tsc -p tsconfig.lib.json && tsc-alias -p tsconfig.lib.json --resolve-full-paths",
+    "build:lib:legacy": "esbuild lib/index.ts lib/config/index.ts --bundle --platform=node --format=esm --outdir=lib/dist --packages=external",
     "build:all": "npm run build && npm run build:server && npm run build:cli && npm run build:lib",
     "start:observio": "cd observio-sample-agent && npm install --legacy-peer-deps --silent && npm run start:ag-ui",
     "dev:all": "npm run dev:server",
@@ -123,16 +129,18 @@
     "react-is": "^19.2.4",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^3.0.6",
-    "react-router-dom": "^7.12.0",
+    "react-router-dom": "^7.17.0",
     "recharts": "^3.4.1",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.4.0",
     "tailwindcss-animate": "^1.0.7",
+    "typebox": "^1.1.38",
     "uuid": "^14.0.0",
     "yaml": "^2.8.2",
     "zod": "^3.24.0"
   },
   "optionalDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.78.1",
     "puppeteer": "^24.37.4"
   },
   "devDependencies": {
@@ -185,7 +193,7 @@
     "@anthropic-ai/claude-agent-sdk": {
       "zod": "$zod"
     },
-    "hono": ">=4.12.18",
+    "hono": ">=4.12.21",
     "fast-uri": ">=3.1.2",
     "ip-address": ">=10.1.1",
     "ws": ">=8.20.1",

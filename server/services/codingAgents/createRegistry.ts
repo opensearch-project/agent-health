@@ -14,15 +14,16 @@
 import { CodingAgentRegistry } from './registry';
 import { RemoteAggregator } from './remoteAggregator';
 import { getRemoteServers } from './remoteConfig';
+import { readEnv } from '@/lib/envCompat';
 
 /**
  * Check whether Coding Agent Analytics is enabled.
  * Disabled when:
- *   - env AGENT_HEALTH_DISABLE_CODING_ANALYTICS=true
+ *   - env AH_DISABLE_CODING_ANALYTICS=true (legacy: AGENT_HEALTH_DISABLE_CODING_ANALYTICS)
  *   - config codingAgentAnalytics === false
  */
 function isCodingAnalyticsEnabled(): boolean {
-  if (process.env.AGENT_HEALTH_DISABLE_CODING_ANALYTICS === 'true') return false;
+  if (readEnv('AH_DISABLE_CODING_ANALYTICS', 'AGENT_HEALTH_DISABLE_CODING_ANALYTICS') === 'true') return false;
 
   // Check JSON config file (same file remoteConfig reads)
   try {

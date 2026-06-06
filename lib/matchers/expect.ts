@@ -163,6 +163,28 @@ function ensurePluginsInstalled(): void {
       duration
     );
   });
+
+  /**
+   * `.toPass()` — assert a judge {@link Verdict} passed. Gives `judge()`'s
+   * non-throwing verdict an ergonomic gate:
+   *   expect(await judge(result, claim)).toPass();
+   * Reads `verdict.pass`; surfaces `verdict.reasoning` / `errorMessage` on
+   * failure so the recorded matcher is actionable.
+   */
+  Assertion.addMethod('toPass', function (this: any) {
+    const verdict = utils.flag(this, 'object') as {
+      pass?: boolean; reasoning?: string; errorMessage?: string; accuracy?: number;
+    };
+    const passed = !!verdict?.pass;
+    const detail = verdict?.errorMessage || verdict?.reasoning || '';
+    this.assert(
+      passed,
+      `expected judge verdict to pass${detail ? ` — ${detail}` : ''}`,
+      `expected judge verdict to NOT pass`,
+      true,
+      passed
+    );
+  });
 }
 
 ensurePluginsInstalled();

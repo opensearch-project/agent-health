@@ -14,6 +14,7 @@ import { spawn } from 'child_process';
 import { resolve } from 'path';
 import { buildEvaluationPrompt, JudgeRequest, JudgeResponse } from '@/server/services/bedrockService';
 import { JUDGE_SYSTEM_PROMPT } from '@/server/prompts/judgePrompt';
+import { resolvePiCommand } from '@/server/services/piBinary';
 import { debug } from '@/lib/debug';
 
 // ============================================================================
@@ -25,6 +26,54 @@ const PI_PACKAGE_PATH = resolve(process.cwd(), 'observio-sample-agent/pi-package
 
 /** Timeout for the pi CLI process (5 minutes) */
 const PI_TIMEOUT_MS = 300_000;
+
+/** Options for spawning the pi judge CLI. @internal */
+export interface SpawnPiOptions {
+  /** Extra `--extension <path>` files to load (e.g. the trace-tool pack). */
+  extraExtensions?: string[];
+  /** Extra env vars to inject into the spawned process. */
+  extraEnv?: Record<string, string>;
+  /**
+   * Skip the observio sample-agent base pack (`PI_PACKAGE_PATH` skills +
+   * `agent-health.ts` extension). The agentic trace judge provides its own
+   * self-contained tool pack via `extraExtensions` and must NOT load the
+   * sample-agent extension (it pulls in `@earendil-works/pi-ai` and other
+   * agent-only tools the judge neither needs nor can resolve). @internal
+   */
+  omitBasePack?: boolean;
+}
+
+/**
+ * Parse the verdict JSON out of a raw pi judge response string. Handles
+ * markdown ```json fences and bare `{...}`. @internal
+ */
+export function parsePiJudgeJson(result: string): JudgeResponse {
+  let jsonText = result.trim();
+  const jsonMatch = jsonText.match(/```json\s*([\s\S]*?)\s*```/);
+  if (jsonMatch) {
+    jsonText = jsonMatch[1];
+  } else {
+    const startIdx = jsonText.indexOf('{');
+    const endIdx = jsonText.lastIndexOf('}');
+    if (startIdx !== -1 && endIdx !== -1) {
+      jsonText = jsonText.slice(startIdx, endIdx + 1);
+    }
+  }
+  const parsed = JSON.parse(jsonText);
+  const accuracy = parsed.accuracy ?? parsed.metrics?.accuracy ?? 0;
+  return {
+    passFailStatus: (parsed.pass_fail_status || 'failed') as 'passed' | 'failed',
+    metrics: {
+      accuracy,
+      faithfulness: parsed.metrics?.faithfulness,
+      latency_score: parsed.metrics?.latency_score,
+      trajectory_alignment_score: parsed.metrics?.trajectory_alignment_score,
+    },
+    llmJudgeReasoning: parsed.reasoning,
+    improvementStrategies: parsed.improvement_strategies || [],
+    duration: 0,
+  };
+}
 
 // ============================================================================
 // Main Evaluation Function
@@ -55,38 +104,10 @@ export async function evaluateWithPi(
   debug('PiJudge', '--- Raw Pi Response ---');
   debug('PiJudge', result.substring(0, 500) + (result.length > 500 ? '...' : ''));
 
-  // Extract JSON from response — handles markdown code blocks and bare JSON
-  let jsonText = result.trim();
-  const jsonMatch = jsonText.match(/```json\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    jsonText = jsonMatch[1];
-  } else {
-    const startIdx = jsonText.indexOf('{');
-    const endIdx = jsonText.lastIndexOf('}');
-    if (startIdx !== -1 && endIdx !== -1) {
-      jsonText = jsonText.slice(startIdx, endIdx + 1);
-    }
-  }
-
-  const parsed = JSON.parse(jsonText);
-
+  const parsed = parsePiJudgeJson(result);
   debug('PiJudge', '========== PI JUDGE RESPONSE ==========');
-  debug('PiJudge', 'Pass/Fail Status:', parsed.pass_fail_status?.toUpperCase() || 'MISSING');
-
-  const accuracy = parsed.accuracy ?? parsed.metrics?.accuracy ?? 0;
-
-  return {
-    passFailStatus: (parsed.pass_fail_status || 'failed') as 'passed' | 'failed',
-    metrics: {
-      accuracy,
-      faithfulness: parsed.metrics?.faithfulness,
-      latency_score: parsed.metrics?.latency_score,
-      trajectory_alignment_score: parsed.metrics?.trajectory_alignment_score,
-    },
-    llmJudgeReasoning: parsed.reasoning,
-    improvementStrategies: parsed.improvement_strategies || [],
-    duration,
-  };
+  debug('PiJudge', 'Pass/Fail Status:', parsed.passFailStatus?.toUpperCase() || 'MISSING');
+  return { ...parsed, duration };
 }
 
 // ============================================================================
@@ -94,29 +115,78 @@ export async function evaluateWithPi(
 // ============================================================================
 
 /**
- * Spawn the pi CLI and capture its output.
+ * Spawn the pi CLI and capture its output. @internal
+ *
+ * `extraExtensions` adds `--extension <path>` flags (e.g. the trace-tool
+ * pack for the agentic judge); `extraEnv` injects env (e.g. the runId the
+ * trace tools scope to).
  */
-function spawnPi(prompt: string, systemPrompt: string): Promise<string> {
+/**
+ * Extract the judge verdict text from pi's NDJSON (`--mode json`) output.
+ * pi streams one JSON event per line; the verdict lives either in an explicit
+ * `{ type: 'result', result }` event or in the last assistant message's text
+ * content. Returns `undefined` when no usable text is found. @internal
+ */
+export function extractFromNdjson(stdout: string): string | undefined {
+  const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  let resultText: string | undefined;
+  let lastAssistantText: string | undefined;
+  for (const line of lines) {
+    let ev: any;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (ev?.type === 'result' && ev.result) {
+      resultText = typeof ev.result === 'string' ? ev.result : JSON.stringify(ev.result);
+    }
+    const msg = ev?.message;
+    if (msg?.role === 'assistant' && Array.isArray(msg.content)) {
+      const text = msg.content
+        .filter((c: any) => c?.type === 'text' && typeof c.text === 'string')
+        .map((c: any) => c.text)
+        .join('');
+      if (text.trim()) lastAssistantText = text;
+    }
+  }
+  return resultText ?? lastAssistantText;
+}
+
+export function spawnPi(
+  prompt: string,
+  systemPrompt: string,
+  options: SpawnPiOptions = {}
+): Promise<string> {
   return new Promise((resolvePromise, reject) => {
     const args = [
       '--print',
       '--mode', 'json',
       '--system-prompt', systemPrompt,
-      '--skill', `${PI_PACKAGE_PATH}/skills/*`,
-      '--extension', `${PI_PACKAGE_PATH}/extensions/agent-health.ts`,
     ];
+    if (!options.omitBasePack) {
+      args.push(
+        '--skill', `${PI_PACKAGE_PATH}/skills/*`,
+        '--extension', `${PI_PACKAGE_PATH}/extensions/agent-health.ts`,
+      );
+    }
+    for (const ext of options.extraExtensions ?? []) {
+      args.push('--extension', ext);
+    }
 
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
+      ...(options.extraEnv ?? {}),
     };
 
     // Inherit AWS credentials
     if (process.env.AWS_PROFILE) env.AWS_PROFILE = process.env.AWS_PROFILE;
     if (process.env.AWS_REGION) env.AWS_REGION = process.env.AWS_REGION;
 
-    debug('PiJudge', 'Spawning pi CLI with args:', args.slice(0, 4).join(' '));
+    const pi = resolvePiCommand();
+    debug('PiJudge', `Spawning pi CLI (${pi.bundled ? 'bundled' : 'PATH'}) with args:`, args.slice(0, 4).join(' '));
 
-    const child = spawn('pi', args, {
+    const child = spawn(pi.command, [...pi.prefixArgs, ...args], {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: PI_TIMEOUT_MS,
@@ -135,7 +205,7 @@ function spawnPi(prompt: string, systemPrompt: string): Promise<string> {
 
     child.on('error', (error: Error) => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        reject(new Error('Pi CLI not found. Install it from https://pi.dev'));
+        reject(new Error('Pi CLI not found. It ships as the optionalDependency "@earendil-works/pi-coding-agent"; reinstall without --no-optional, or install pi from https://pi.dev'));
       } else {
         reject(error);
       }
@@ -170,8 +240,18 @@ function spawnPi(prompt: string, systemPrompt: string): Promise<string> {
           resolvePromise(stdout);
         }
       } catch (parseError) {
-        debug('PiJudge', 'Failed to parse Pi CLI output as JSON, using raw stdout:', (parseError as Error).message);
-        resolvePromise(stdout);
+        // pi `--mode json` streams NDJSON (one event per line), not a single
+        // JSON document, so JSON.parse(stdout) throws. Parse line-by-line and
+        // extract the verdict: prefer an explicit `result` event, else the
+        // last assistant message's text content (which carries the JSON the
+        // judge system prompt asked for).
+        const ndjson = extractFromNdjson(stdout);
+        if (ndjson) {
+          resolvePromise(ndjson);
+        } else {
+          debug('PiJudge', 'Failed to parse Pi CLI output as JSON, using raw stdout:', (parseError as Error).message);
+          resolvePromise(stdout);
+        }
       }
     });
 

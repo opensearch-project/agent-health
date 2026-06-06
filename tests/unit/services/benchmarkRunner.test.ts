@@ -40,10 +40,12 @@ const mockStorageModule = {
 } as any;
 
 const mockRunEvaluationWithConnector = jest.fn();
+const mockInvokeAgent = jest.fn();
 const mockCallBedrockJudge = jest.fn();
 
 jest.mock('@/services/evaluation', () => ({
   runEvaluationWithConnector: (...args: any[]) => mockRunEvaluationWithConnector(...args),
+  invokeAgent: (...args: any[]) => mockInvokeAgent(...args),
   callBedrockJudge: (...args: any[]) => mockCallBedrockJudge(...args),
 }));
 
@@ -219,6 +221,46 @@ describe('Experiment Runner', () => {
       expect(result.results['tc-1'].status).toBe('completed');
       expect(result.results['tc-2'].status).toBe('completed');
       expect(progressUpdates.length).toBeGreaterThan(0);
+    });
+
+    it('control inversion: deterministic body drives the agent via agent.run() (not the eager judge path)', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createBenchmarkRun('run-1');
+
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1]);
+      // invokeAgent is the primitive the agent fixture calls.
+      mockInvokeAgent.mockResolvedValue({
+        trajectory: [{ type: 'response', content: 'Agent output' }],
+        rawEvents: [],
+        runId: null,
+        agentDurationMs: 100,
+        connector: { type: 'mock' },
+      });
+      mockSaveReportWithClient.mockImplementation((_c: any, report: any) =>
+        Promise.resolve({ ...report, id: 'saved-report-1' }));
+
+      let captured: any;
+      const evaluateFnMap = new Map<string, (f: any) => Promise<void>>([
+        ['tc-1', async (fixtures: any) => {
+          captured = await fixtures.agent.run('Test prompt');
+        }],
+      ]);
+
+      const result = await executeRun(experiment, run, jest.fn(), {
+        client: mockClient,
+        evaluateFnMap,
+      });
+
+      // The classic eager judge path must NOT run for code tests.
+      expect(mockRunEvaluationWithConnector).not.toHaveBeenCalled();
+      expect(mockInvokeAgent).toHaveBeenCalledTimes(1);
+      expect(captured.agentOutput).toBe('Agent output');
+      expect(result.results['tc-1'].status).toBe('completed');
+      // Report records the deterministic verdict.
+      const savedReport = mockSaveReportWithClient.mock.calls[0][1];
+      expect(savedReport.evaluationType).toBe('deterministic');
+      expect(savedReport.passFailStatus).toBe('passed');
     });
 
     it('should handle cancellation', async () => {

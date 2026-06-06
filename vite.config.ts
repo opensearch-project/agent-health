@@ -52,15 +52,36 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.OPENSEARCH_FETCH_DELAY_MS': JSON.stringify(env.OPENSEARCH_FETCH_DELAY_MS),
     },
     server: {
-      port: parseInt(env.AGENT_HEALTH_DEV_PORT || '4000'),
+      port: parseInt(env.AH_DEV_PORT || env.AGENT_HEALTH_DEV_PORT || '4000'),
       host: true,
+      // Allow the dev server to be reached through tunnel hostnames
+      // (e.g. *.c.tunnels.lab.aws.dev). Vite v7 rejects unknown Host
+      // headers by default. Add the explicit env override first, then
+      // the lab tunnel wildcard so any *-ah-main.c.tunnels.lab.aws.dev
+      // alias works without further config.
+      allowedHosts: [
+        ...(env.AH_ALLOWED_HOST || env.AGENT_HEALTH_ALLOWED_HOST
+          ? [(env.AH_ALLOWED_HOST || env.AGENT_HEALTH_ALLOWED_HOST) as string]
+          : []),
+        '.tunnels.lab.aws.dev',
+        'localhost',
+      ],
+      // The tunnel proxies HTTPS, so HMR's WS handshake must use wss
+      // and the public port (443) instead of the local dev port.
+      hmr: (env.AH_ALLOWED_HOST || env.AGENT_HEALTH_ALLOWED_HOST)
+        ? {
+            host: (env.AH_ALLOWED_HOST || env.AGENT_HEALTH_ALLOWED_HOST) as string,
+            protocol: 'wss',
+            clientPort: 443,
+          }
+        : undefined,
       proxy: {
         '/api': {
-          target: `http://localhost:${env.AGENT_HEALTH_PORT || '4001'}`,
+          target: `http://localhost:${env.AH_PORT || env.AGENT_HEALTH_PORT || '4001'}`,
           changeOrigin: true
         },
         '/health': {
-          target: `http://localhost:${env.AGENT_HEALTH_PORT || '4001'}`,
+          target: `http://localhost:${env.AH_PORT || env.AGENT_HEALTH_PORT || '4001'}`,
           changeOrigin: true
         }
       }

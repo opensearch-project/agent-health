@@ -1,0 +1,35 @@
+{
+  "skill_name": "agent-health-assistant",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "How do I check if my agent-health setup is working correctly?",
+      "expected_output": "Suggests running the doctor command to verify setup, mentions checking OpenSearch and AWS credentials.",
+      "assertions": [
+        "The response mentions the doctor command or npx @opensearch-project/agent-health doctor",
+        "The response mentions checking credentials or environment configuration",
+        "The response provides actionable next steps if something is wrong"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "My benchmark shows 3 out of 10 test cases failing. What should I do?",
+      "expected_output": "Advises examining the failed test cases, reading the judge reasoning and improvement strategies, and fixing high-priority issues first.",
+      "assertions": [
+        "The response recommends looking at llmJudgeReasoning or improvement strategies",
+        "The response suggests prioritizing high-priority issues",
+        "The response recommends re-running the benchmark after making fixes"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I want to run my agent against a specific test case called 'RCA for high CPU'. How do I do that?",
+      "expected_output": "Shows the correct CLI command using the run subcommand with -t and -a flags.",
+      "assertions": [
+        "The response includes the run command with -t flag for test case",
+        "The response includes the -a flag for specifying the agent",
+        "The response uses the correct CLI tool name (agent-health or npx @opensearch-project/agent-health)"
+      ]
+    }
+  ]
+}

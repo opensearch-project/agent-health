@@ -46,6 +46,7 @@ describe('SubprocessConnector', () => {
     mockProcess.pid = 12345;
     mockProcess.kill = jest.fn();
 
+    (spawn as jest.Mock).mockClear();
     (spawn as jest.Mock).mockReturnValue(mockProcess);
 
     // Suppress console output in tests
@@ -931,6 +932,254 @@ describe('SubprocessConnector', () => {
           cwd: '/custom/path',
         })
       );
+    });
+  });
+
+  // ─── Regression coverage for streaming + per-request connectorConfig ────────
+  // These tests pin behavior added when wiring up the Kiro `subprocess` agent:
+  //   1. `request.connectorConfig` MUST override constructor defaults per-call
+  //      (otherwise users registering an agent via agent-health.config.ts get
+  //      silently ignored — args/inputMode never apply).
+  //   2. When `inputMode: 'arg'`, the prompt MUST be shell-quoted before being
+  //      handed to spawn(..., { shell: true }) — spaces/slashes in the prompt
+  //      were getting word-split by /bin/sh, causing "/my-agent investigate
+  //      <url>" to arrive at the child as 3 separate args.
+  //   3. With `outputParser: 'streaming'`, the connector should emit one
+  //      `assistant` step per clean stdout line in real time, AND a final
+  //      consolidated `response` step on close (so the judge sees the full
+  //      coherent answer). ANSI escapes and spinner glyphs must be filtered.
+  describe('regression: per-request connectorConfig override', () => {
+    it('applies args from request.connectorConfig (constructor defaults are empty)', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'm',
+        connectorConfig: {
+          args: ['chat', '--agent', 'demo-agent', '--no-interactive'],
+          inputMode: 'arg',
+        },
+      };
+
+      const promise = connector.execute('kiro-cli', request, mockAuth);
+      setImmediate(() => {
+        mockProcess.stdout.emit('data', Buffer.from('hi'));
+        mockProcess.emit('close', 0, null);
+      });
+      await promise;
+
+      const [cmd, args] = (spawn as jest.Mock).mock.calls[0];
+      expect(cmd).toBe('kiro-cli');
+      expect(args.slice(0, 4)).toEqual(['chat', '--agent', 'demo-agent', '--no-interactive']);
+    });
+
+    it('honors inputMode: "arg" from connectorConfig and appends a quoted prompt', async () => {
+      const request: ConnectorRequest = {
+        testCase: { ...mockTestCase, initialPrompt: '/my-agent investigate https://example.com', context: [] },
+        modelId: 'm',
+        connectorConfig: { args: ['chat'], inputMode: 'arg' },
+      };
+
+      const promise = connector.execute('kiro-cli', request, mockAuth);
+      setImmediate(() => {
+        mockProcess.stdout.emit('data', Buffer.from('ok'));
+        mockProcess.emit('close', 0, null);
+      });
+      await promise;
+
+      const [, args] = (spawn as jest.Mock).mock.calls[0];
+      const last = args[args.length - 1];
+      // Single shell-quoted argument carrying the entire prompt
+      expect(last.startsWith("'")).toBe(true);
+      expect(last.endsWith("'")).toBe(true);
+      expect(last).toContain('/my-agent investigate https://example.com');
+      expect(args).toHaveLength(2); // ['chat', "'<prompt>'"], NOT 4 word-split tokens
+    });
+
+    it('escapes single quotes inside the prompt safely', async () => {
+      const tricky = "it's a /test with 'quotes' and spaces";
+      const request: ConnectorRequest = {
+        testCase: { ...mockTestCase, initialPrompt: tricky, context: [] },
+        modelId: 'm',
+        connectorConfig: { args: [], inputMode: 'arg' },
+      };
+
+      const promise = connector.execute('echo', request, mockAuth);
+      setImmediate(() => {
+        mockProcess.stdout.emit('data', Buffer.from('done'));
+        mockProcess.emit('close', 0, null);
+      });
+      await promise;
+
+      const [, args] = (spawn as jest.Mock).mock.calls[0];
+      const last = args[0];
+      // Expected sh-quote pattern: '...'\''...'  (close, escaped quote, reopen)
+      expect(last).toContain(`'\\''`);
+      // The whole quoted form, when concatenated by /bin/sh, must survive as
+      // exactly the original string. Round-trip via the sh-quote inverse.
+      const unquoted = last.slice(1, -1).replace(/'\\''/g, "'");
+      expect(unquoted).toBe(tricky);
+    });
+
+    it('honors timeout override from connectorConfig', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'm',
+        connectorConfig: { args: [], inputMode: 'arg', timeout: 30 },
+      };
+
+      // Never emit 'close' — let the connector's own timeout fire.
+      const promise = connector.execute('slow-cmd', request, mockAuth);
+      await expect(promise).rejects.toThrow(/timed out after 30ms/);
+    });
+
+    it('merges connectorConfig.env with existing config.env', async () => {
+      const c = new SubprocessConnector({ env: { BASE: '1' } });
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'm',
+        connectorConfig: { env: { EXTRA: '2' } },
+      };
+
+      const promise = c.execute('cmd', request, mockAuth);
+      setImmediate(() => {
+        mockProcess.stdout.emit('data', Buffer.from('ok'));
+        mockProcess.emit('close', 0, null);
+      });
+      await promise;
+
+      const opts = (spawn as jest.Mock).mock.calls[0][2];
+      expect(opts.env.BASE).toBe('1');
+      expect(opts.env.EXTRA).toBe('2');
+    });
+  });
+
+  describe('regression: streaming output parser', () => {
+    it('emits an assistant step per clean stdout line in real time', async () => {
+      const seen: TrajectoryStep[] = [];
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'm',
+        connectorConfig: { args: [], inputMode: 'arg', outputParser: 'streaming' },
+      };
+
+      const promise = connector.execute('cmd', request, mockAuth, (step) => seen.push(step));
+      setImmediate(() => {
+        mockProcess.stdout.emit('data', Buffer.from('First line\nSecond line\n'));
+        mockProcess.stdout.emit('data', Buffer.from('Third line\n'));
+        mockProcess.emit('close', 0, null);
+      });
+      const result = await promise;
+
+      const assistantSteps = result.trajectory.filter((s) => s.type === 'assistant');
+      expect(assistantSteps.map((s) => s.content)).toEqual([
+        'First line',
+        'Second line',
+        'Third line',
+      ]);
+      // Live progress callbacks fired (at least once before close)
+      expect(seen.filter((s) => s.type === 'assistant').length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('strips ANSI escape codes from streamed output', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'm',
+        connectorConfig: { args: [], inputMode: 'arg', outputParser: 'streaming' },
+      };
+
+      const promise = connector.execute('cmd', request, mockAuth);
+      setImmediate(() => {
+        // Bold + color + cursor-move sequences around real text
+        mockProcess.stdout.emit(
+          'data',
+          Buffer.from('\x1b[1m\x1b[31mError:\x1b[0m something went wrong\n')
+        );
+        mockProcess.emit('close', 0, null);
+      });
+      const result = await promise;
+
+      const text = result.trajectory.map((s) => s.content).join('\n');
+      expect(text).toContain('Error: something went wrong');
+      expect(text).not.toMatch(/\x1b\[/);
+    });
+
+    it('drops pure spinner / control-only lines', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'm',
+        connectorConfig: { args: [], inputMode: 'arg', outputParser: 'streaming' },
+      };
+
+      const promise = connector.execute('cmd', request, mockAuth);
+      setImmediate(() => {
+        // Spinner braille frame + CR redraw + real text
+        mockProcess.stdout.emit('data', Buffer.from('⠋\r⠙\r⠹\rReal answer\n'));
+        mockProcess.emit('close', 0, null);
+      });
+      const result = await promise;
+
+      const contents = result.trajectory.map((s) => s.content);
+      // Real answer survives, spinner frames don't
+      expect(contents).toContain('Real answer');
+      expect(contents.some((c) => /^[⠁-⣿]+$/.test(c))).toBe(false);
+    });
+
+    it('emits a final consolidated response step on stream end', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'm',
+        connectorConfig: { args: [], inputMode: 'arg', outputParser: 'streaming' },
+      };
+
+      const promise = connector.execute('cmd', request, mockAuth);
+      setImmediate(() => {
+        mockProcess.stdout.emit('data', Buffer.from('Line 1\nLine 2\n'));
+        mockProcess.emit('close', 0, null);
+      });
+      const result = await promise;
+
+      const responses = result.trajectory.filter((s) => s.type === 'response');
+      expect(responses).toHaveLength(1);
+      expect(responses[0].content).toBe('Line 1\nLine 2');
+      // Final response comes AFTER all assistant steps
+      const lastStep = result.trajectory[result.trajectory.length - 1];
+      expect(lastStep.type).toBe('response');
+    });
+
+    it('does not bleed stream state between consecutive runs', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'm',
+        connectorConfig: { args: [], inputMode: 'arg', outputParser: 'streaming' },
+      };
+
+      // Run 1
+      const p1 = connector.execute('cmd', request, mockAuth);
+      setImmediate(() => {
+        mockProcess.stdout.emit('data', Buffer.from('Run1 output\n'));
+        mockProcess.emit('close', 0, null);
+      });
+      const r1 = await p1;
+      expect(r1.trajectory.find((s) => s.type === 'response')!.content).toBe('Run1 output');
+
+      // Reset mock process for run 2
+      mockProcess = new EventEmitter();
+      mockProcess.stdout = new EventEmitter();
+      mockProcess.stderr = new EventEmitter();
+      mockProcess.stdin = { write: jest.fn(), end: jest.fn() };
+      mockProcess.kill = jest.fn();
+      (spawn as jest.Mock).mockReturnValue(mockProcess);
+
+      const p2 = connector.execute('cmd', request, mockAuth);
+      setImmediate(() => {
+        mockProcess.stdout.emit('data', Buffer.from('Run2 output\n'));
+        mockProcess.emit('close', 0, null);
+      });
+      const r2 = await p2;
+
+      // Run 2's final response must contain ONLY run 2 content
+      const r2Response = r2.trajectory.find((s) => s.type === 'response')!;
+      expect(r2Response.content).toBe('Run2 output');
+      expect(r2Response.content).not.toContain('Run1');
     });
   });
 });

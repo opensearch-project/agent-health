@@ -125,6 +125,9 @@ test.describe('Code SDK - Observio E2E via API', () => {
 
   test('should execute deterministic evaluation run against Observio (live agent)', async ({ page }) => {
     test.skip(!observioRunning, 'Observio agent not available');
+    // Real eval = Observio agent + Bedrock judge + 2 fixture test cases.
+    // The default 60s Playwright test timeout is too short; allow 3 min.
+    test.setTimeout(180_000);
 
     // Execute a code-import evaluation run via the API
     const result = await page.evaluate(async (fixturePath: string) => {
@@ -205,6 +208,9 @@ test.describe('Code SDK - Observio E2E via API', () => {
 
   test('should verify deterministic evaluation results have expected fields (live agent)', async ({ page }) => {
     test.skip(!observioRunning, 'Observio agent not available');
+    // Real eval = Observio agent + Bedrock judge; needs more than the
+    // default 60s test timeout.
+    test.setTimeout(180_000);
 
     // First, create a run
     const createResult = await page.evaluate(async (fixturePath: string) => {

@@ -280,6 +280,7 @@ const TraceVisualization: React.FC<TraceVisualizationProps> = ({
               ) : (
                 <TraceTreeTable
                   spanTree={spanTree}
+                  timeRange={timeRange}
                   selectedSpan={selectedSpan}
                   onSelect={setSelectedSpan}
                   expandedSpans={expandedSpans}
@@ -342,6 +343,7 @@ const TraceVisualization: React.FC<TraceVisualizationProps> = ({
             ) : (
               <TraceTreeTable
                 spanTree={spanTree}
+                timeRange={timeRange}
                 selectedSpan={selectedSpan}
                 onSelect={setSelectedSpan}
                 expandedSpans={expandedSpans}

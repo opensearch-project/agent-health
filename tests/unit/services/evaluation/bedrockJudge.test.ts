@@ -161,10 +161,39 @@ describe('bedrockJudge', () => {
       ).rejects.toThrow('Bedrock Judge evaluation failed after 10 attempts');
     });
 
+    it('should fail fast on validation errors without retrying', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ error: 'Trajectory is required and must be a non-empty array' }),
+      });
+
+      await expect(
+        callBedrockJudge(mockTrajectory, mockExpectedBehavior)
+      ).rejects.toThrow('validation error (not retryable)');
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('should fail fast on missing required field errors without retrying', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ error: 'Missing required field: expectedOutcomes or expectedTrajectory' }),
+      });
+
+      await expect(
+        callBedrockJudge(mockTrajectory, mockExpectedBehavior)
+      ).rejects.toThrow('validation error (not retryable)');
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('should handle API errors on first attempt', async () => {
       const mockError = { error: 'Server error' };
       mockFetch.mockResolvedValueOnce({
         ok: false,
+        status: 500,
         json: () => Promise.resolve(mockError),
       });
       // Succeed on second attempt
@@ -222,9 +251,10 @@ describe('bedrockJudge', () => {
     });
 
     it('should reflect retry count in judgeAttempts after transient failure', async () => {
-      // First attempt fails
+      // First attempt fails with 500 (retryable)
       mockFetch.mockResolvedValueOnce({
         ok: false,
+        status: 500,
         json: () => Promise.resolve({ error: 'Transient error' }),
       });
       // Second attempt succeeds

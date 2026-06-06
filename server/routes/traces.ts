@@ -19,8 +19,8 @@ import {
   getAllSampleTraceSpansWithRecentTimestamps,
   isSampleTraceId,
 } from '../../cli/demo/sampleTraces.js';
-import { resolveObservabilityConfig, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceConfig.js';
-import { createOpenSearchClient } from '../services/opensearchClientFactory.js';
+import { resolveObservabilityConfig } from '../middleware/dataSourceConfig.js';
+import { getObservabilityClient } from '../services/observabilityClient.js';
 import type { Span } from '../../types/index.js';
 
 const router = Router();
@@ -30,15 +30,22 @@ const router = Router();
  */
 router.post('/api/traces', async (req: Request, res: Response) => {
   try {
-    const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor } = req.body;
+    const { traceId, runIds, sessionId, startTime, endTime, size = 100, serviceName, textSearch, cursor, agents } = req.body;
 
     if (sessionId !== undefined && typeof sessionId !== 'string') {
       return res.status(400).json({ error: 'sessionId must be a string' });
     }
+    if (agents !== undefined && (!Array.isArray(agents) || agents.some((a: any) =>
+        !a || typeof a.serviceName !== 'string' ||
+        typeof a.startedAt !== 'number' || typeof a.endedAt !== 'number'))) {
+      return res.status(400).json({
+        error: 'agents must be an array of { serviceName: string, startedAt: number, endedAt: number }'
+      });
+    }
 
     // Validate request - allow time range queries for live tailing
     const hasTimeRange = startTime || endTime;
-    const hasIdFilter = traceId || (runIds && runIds.length > 0) || sessionId;
+    const hasIdFilter = traceId || (runIds && runIds.length > 0) || sessionId || (agents && agents.length > 0);
 
     if (!hasIdFilter && !hasTimeRange) {
       return res.status(400).json({
@@ -62,18 +69,14 @@ router.post('/api/traces', async (req: Request, res: Response) => {
     let suggestion: string | undefined;
     let nextCursor: string | null = null;
     let hasMore: boolean = false;
-    const config = resolveObservabilityConfig(req);
+    const obs = getObservabilityClient(req);
 
-    if (config && (traceId || (runIds && runIds.length > 0) || sessionId || startTime || endTime)) {
-      let client;
+    if (obs && (traceId || (runIds && runIds.length > 0) || sessionId || startTime || endTime || (agents && agents.length > 0))) {
       try {
-        client = createOpenSearchClient(config);
-        const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
-
         const result = await fetchTraces(
-          { traceId, runIds, sessionId, startTime, endTime, size, serviceName, textSearch, cursor },
-          client,
-          indexPattern
+          { traceId, runIds, sessionId, startTime, endTime, size, serviceName, textSearch, cursor, agents },
+          obs.client,
+          obs.indexes.traces
         );
 
         realSpans = (result.spans || []) as Span[];
@@ -85,12 +88,8 @@ router.post('/api/traces', async (req: Request, res: Response) => {
         warning = classified.message;
         warningCategory = classified.category;
         suggestion = classified.suggestion;
-      } finally {
-        if (client) {
-          await client.close().catch(() => {});
-        }
       }
-    } else if (!config) {
+    } else if (!obs) {
       // No observability cluster configured
       if (hasTimeRange && !hasIdFilter) {
         // Time-range browse query: show demo traces as fallback
@@ -140,10 +139,8 @@ router.post('/api/traces', async (req: Request, res: Response) => {
  */
 router.get('/api/traces/health', async (req: Request, res: Response) => {
   try {
-    // Get observability configuration from headers or env vars
     const config = resolveObservabilityConfig(req);
 
-    // If observability not configured, return sample-only status
     if (!config) {
       return res.json({
         status: 'sample_only',
@@ -165,19 +162,13 @@ router.get('/api/traces/health', async (req: Request, res: Response) => {
       }
     }
 
-    let client;
-    try {
-      client = createOpenSearchClient(config);
-      const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
-
-      // Call traces service to check health
-      const result = await checkTracesHealth(client, indexPattern);
-      res.json(result);
-    } finally {
-      if (client) {
-        await client.close().catch(() => {});
-      }
+    const obs = getObservabilityClient(req);
+    if (!obs) {
+      return res.json({ status: 'error', error: 'Failed to create client' });
     }
+
+    const result = await checkTracesHealth(obs.client, obs.indexes.traces);
+    res.json(result);
   } catch (error: any) {
     res.json({ status: 'error', error: error.message });
   }

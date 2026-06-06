@@ -15,6 +15,7 @@ import { AGUIToTrajectoryConverter, consumeSSEStream, buildAgentPayload } from '
 import { AGUIEvent } from '@/types/agui';
 import { generateMockTrajectory } from './mockTrajectory';
 import { callBedrockJudge } from './bedrockJudge';
+import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/judgeAccessor';
 
 // Re-export for use by experimentRunner when calling judge after trace polling
 export { callBedrockJudge };
@@ -50,6 +51,7 @@ import type {
   ConnectorRequest,
   AgentConfigWithConnector,
   ConnectorRegistry,
+  AgentConnector,
 } from '@/services/connectors';
 
 // Toggle between mock and real agent
@@ -124,6 +126,171 @@ export interface RunEvaluationWithConnectorOptions {
  * @param onStep - Callback for trajectory steps
  * @param options - Options including the connector registry
  */
+/**
+ * Result of a single agent invocation — the pure, report-agnostic output of
+ * driving a connector once. This is the primitive behind both the legacy
+ * {@link runEvaluationWithConnector} (which then runs the judge + builds a
+ * report) and the RFC-004 `agent.run()` fixture (which hands it to the test
+ * body as a `RunResult`). It performs NO judging and builds NO report.
+ */
+export interface InvokeAgentResult {
+  /** Final trajectory after the afterResponse hook (if any). */
+  trajectory: TrajectoryStep[];
+  /** Agent-supplied run id for log/trace correlation, or null. */
+  runId: string | null;
+  /** Protocol-specific raw events for debugging. */
+  rawEvents: any[];
+  /** Wall-clock duration of the connector.execute() call in ms. */
+  agentDurationMs: number;
+  /** The connector that handled the request (for protocol metadata). */
+  connector: AgentConnector;
+}
+
+export interface InvokeAgentOptions {
+  /** Connector registry (required for CLI/server execution). */
+  registry: ConnectorRegistry;
+  /** Streaming step callback. */
+  onStep?: (step: TrajectoryStep) => void;
+  /** Raw event callback (debugging). */
+  onRawEvent?: (event: any) => void;
+  /**
+   * Per-invocation environment variables forwarded to the connector. Merged
+   * into `connectorConfig.env` so subprocess connectors inherit them on the
+   * spawned child (the lowest common denominator every subprocess connector
+   * already honours). Sourced from the SDK's `AgentRunOptions.env`.
+   */
+  env?: Record<string, string>;
+}
+
+/**
+ * Drive a single agent invocation through its connector and return the raw
+ * trajectory/runId/rawEvents — no judge, no report synthesis.
+ *
+ * Owns the connector resolution, request building, auth, the
+ * `beforeRequest`/`afterResponse` hooks, and execution timing. Extracted from
+ * {@link runEvaluationWithConnector} so the RFC-004 engine can offer an
+ * `agent.run()` fixture that captures exactly the same trajectory/trace
+ * correlation the legacy path produces (see RFC 004 §4.1, #256).
+ */
+export async function invokeAgent(
+  agent: AgentConfig,
+  modelId: string,
+  testCase: TestCase,
+  options: InvokeAgentOptions
+): Promise<InvokeAgentResult> {
+  const { registry: connectorRegistry, onStep, onRawEvent, env: runEnv } = options;
+
+  // Get connector for this agent
+  const agentWithConnector = agent as AgentConfigWithConnector;
+  const connector = connectorRegistry.getForAgent(agentWithConnector);
+
+  // Merge any per-invocation env (from the SDK's AgentRunOptions.env) into the
+  // connector config so subprocess connectors forward it to the spawned child.
+  // Static config env stays the base; per-call env wins on key collisions.
+  const baseConnectorConfig = agentWithConnector.connectorConfig as Record<string, any> | undefined;
+  const mergedConnectorConfig: Record<string, any> | undefined =
+    runEnv && Object.keys(runEnv).length > 0
+      ? {
+          ...(baseConnectorConfig || {}),
+          env: { ...((baseConnectorConfig?.env as Record<string, string>) || {}), ...runEnv },
+        }
+      : baseConnectorConfig;
+
+  // Build connector request
+  let request: ConnectorRequest = {
+    testCase,
+    modelId,
+    connectorConfig: mergedConnectorConfig,
+  };
+
+  // Build auth from agent config
+  const auth = buildConnectorAuth(agent);
+
+  // Execute beforeRequest hook if defined
+  let effectiveEndpoint = agent.endpoint;
+  if (agent.hooks?.beforeRequest) {
+    const previewPayload = connector.buildPayload(request);
+
+    const hookContext: BeforeRequestContext = {
+      endpoint: agent.endpoint,
+      payload: previewPayload,
+      headers: auth.headers || agent.headers || {},
+    };
+    const hookResult = await executeBeforeRequestHook(agent.hooks, hookContext, agent.key);
+    effectiveEndpoint = hookResult.endpoint;
+
+    // Pass the hook-modified payload through to the connector so it skips
+    // its internal buildPayload() call. This preserves ALL modifications the
+    // hook made to the payload (threadId, runId, custom fields, etc.)
+    request = {
+      ...request,
+      payload: hookResult.payload,
+    };
+
+    // Merge any hook-modified headers into auth
+    if (hookResult.headers) {
+      auth.headers = { ...auth.headers, ...hookResult.headers };
+    }
+  }
+
+  // Execute via connector (with timing)
+  const agentStartTime = Date.now();
+  let result = await connector.execute(
+    effectiveEndpoint,
+    request,
+    auth,
+    onStep,
+    onRawEvent
+  );
+  const agentDurationMs = Date.now() - agentStartTime;
+
+  // Execute afterResponse hook if defined
+  if (agent.hooks?.afterResponse) {
+    debug('Eval', `Executing afterResponse hook for agent "${agent.key}"`);
+    try {
+      const hookContext: AfterResponseContext = {
+        response: (result.rawEvents?.length ? result.rawEvents[result.rawEvents.length - 1] : null) || result.metadata || {},
+        trajectory: result.trajectory,
+        runId: result.runId || undefined,
+        rawEvents: result.rawEvents || [],
+        metadata: result.metadata,
+      };
+      const hookResult = await executeAfterResponseHook(agent.hooks, hookContext, agent.key);
+
+      // Apply hook modifications
+      result = {
+        ...result,
+        trajectory: hookResult.trajectory,
+        runId: hookResult.runId || result.runId,
+      };
+
+      debug('Eval', 'afterResponse hook applied:', {
+        trajectorySteps: hookResult.trajectory.length,
+        runId: hookResult.runId
+      });
+    } catch (hookError: any) {
+      const errorMsg = hookError instanceof Error ? hookError.message : String(hookError);
+      console.error(`[Eval] afterResponse hook failed for agent "${agent.key}":`, errorMsg);
+      debug('Eval', `afterResponse hook error details:`, {
+        agent: agent.key,
+        error: errorMsg,
+        rawEventsCount: result.rawEvents?.length ?? 0,
+        hasMetadata: !!result.metadata,
+      });
+      // Re-throw so the caller knows the hook failed — don't silently swallow
+      throw hookError instanceof Error ? hookError : new Error(errorMsg);
+    }
+  }
+
+  return {
+    trajectory: result.trajectory,
+    runId: result.runId,
+    rawEvents: result.rawEvents || [],
+    agentDurationMs,
+    connector,
+  };
+}
+
 export async function runEvaluationWithConnector(
   agent: AgentConfig,
   modelId: string,
@@ -143,99 +310,20 @@ export async function runEvaluationWithConnector(
   const evalStartTime = Date.now();
 
   try {
-    // Get connector for this agent
-    const agentWithConnector = agent as AgentConfigWithConnector;
-    const connector = connectorRegistry.getForAgent(agentWithConnector);
-
-    // Build connector request
-    let request: ConnectorRequest = {
-      testCase,
-      modelId,
-      connectorConfig: agentWithConnector.connectorConfig as Record<string, any>,
-    };
-
-    // Build auth from agent config
-    const auth = buildConnectorAuth(agent);
-
-    // Execute beforeRequest hook if defined
-    let effectiveEndpoint = agent.endpoint;
-    if (agent.hooks?.beforeRequest) {
-      const previewPayload = connector.buildPayload(request);
-
-      const hookContext: BeforeRequestContext = {
-        endpoint: agent.endpoint,
-        payload: previewPayload,
-        headers: auth.headers || agent.headers || {},
-      };
-      const hookResult = await executeBeforeRequestHook(agent.hooks, hookContext, agent.key);
-      effectiveEndpoint = hookResult.endpoint;
-
-      // Pass the hook-modified payload through to the connector so it skips
-      // its internal buildPayload() call. This preserves ALL modifications the
-      // hook made to the payload (threadId, runId, custom fields, etc.)
-      request = {
-        ...request,
-        payload: hookResult.payload,
-      };
-
-      // Merge any hook-modified headers into auth
-      if (hookResult.headers) {
-        auth.headers = { ...auth.headers, ...hookResult.headers };
-      }
-    }
-
-    // Execute via connector (with timing)
-    const agentStartTime = Date.now();
-    let result = await connector.execute(
-      effectiveEndpoint,
-      request,
-      auth,
+    // Drive the agent through its connector (connector resolution, request
+    // building, auth, before/afterResponse hooks, timing) via the shared
+    // primitive. Judge + report synthesis stay here in the legacy path.
+    const invocation = await invokeAgent(agent, modelId, testCase, {
+      registry: connectorRegistry,
       onStep,
-      onRawEvent
-    );
-    const agentDurationMs = Date.now() - agentStartTime;
+      onRawEvent,
+    });
+    const connector = invocation.connector;
+    const agentDurationMs = invocation.agentDurationMs;
 
-    // Execute afterResponse hook if defined
-    if (agent.hooks?.afterResponse) {
-      debug('Eval', `Executing afterResponse hook for agent "${agent.key}"`);
-      try {
-        const hookContext: AfterResponseContext = {
-          response: (result.rawEvents?.length ? result.rawEvents[result.rawEvents.length - 1] : null) || result.metadata || {},
-          trajectory: result.trajectory,
-          runId: result.runId || undefined,
-          rawEvents: result.rawEvents || [],
-          metadata: result.metadata,
-        };
-        const hookResult = await executeAfterResponseHook(agent.hooks, hookContext, agent.key);
-
-        // Apply hook modifications
-        result = {
-          ...result,
-          trajectory: hookResult.trajectory,
-          runId: hookResult.runId || result.runId,
-        };
-
-        debug('Eval', 'afterResponse hook applied:', {
-          trajectorySteps: hookResult.trajectory.length,
-          runId: hookResult.runId
-        });
-      } catch (hookError: any) {
-        const errorMsg = hookError instanceof Error ? hookError.message : String(hookError);
-        console.error(`[Eval] afterResponse hook failed for agent "${agent.key}":`, errorMsg);
-        debug('Eval', `afterResponse hook error details:`, {
-          agent: agent.key,
-          error: errorMsg,
-          rawEventsCount: result.rawEvents?.length ?? 0,
-          hasMetadata: !!result.metadata,
-        });
-        // Re-throw so the caller knows the hook failed — don't silently swallow
-        throw hookError instanceof Error ? hookError : new Error(errorMsg);
-      }
-    }
-
-    fullTrajectory = result.trajectory;
-    agentRunId = result.runId;
-    rawEvents = result.rawEvents || [];
+    fullTrajectory = invocation.trajectory;
+    agentRunId = invocation.runId;
+    rawEvents = invocation.rawEvents;
 
     debug('Eval', 'Trajectory captured:', fullTrajectory.length, 'steps');
     debug('Eval', 'Raw events captured:', rawEvents.length);
@@ -341,6 +429,13 @@ export async function runEvaluationWithConnector(
       trajectory: fullTrajectory,
       metrics: judgment.metrics,
       llmJudgeReasoning: judgment.llmJudgeReasoning,
+      // Unified judge surface (Option-B BC: legacy field above kept).
+      matcherResults: [
+        buildJudgeMatcherEntry(judgment, {
+          claim: formatExpectedOutcomesAsClaim(testCase.expectedOutcomes),
+          model: judgeModelId,
+        }),
+      ],
       improvementStrategies: judgment.improvementStrategies,
       llmJudgeResponse,
       runId: agentRunId || undefined,
@@ -582,6 +677,13 @@ export async function runEvaluation(
       trajectory: fullTrajectory,
       metrics: judgment.metrics,
       llmJudgeReasoning: judgment.llmJudgeReasoning,
+      // Unified judge surface (Option-B BC: legacy field above kept).
+      matcherResults: [
+        buildJudgeMatcherEntry(judgment, {
+          claim: formatExpectedOutcomesAsClaim(testCase.expectedOutcomes),
+          model: judgeModelId,
+        }),
+      ],
       improvementStrategies: judgment.improvementStrategies,
       llmJudgeResponse,
       openSearchLogs: logs,

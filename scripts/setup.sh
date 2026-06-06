@@ -34,7 +34,7 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 BEDROCK_MODEL="${BEDROCK_MODEL:-us.anthropic.claude-sonnet-4-20250514-v1:0}"
 MCP_SERVER_PORT="${MCP_SERVER_PORT:-3030}"
 MLCOMMONS_PORT=9200
-SERVER_PORT="${AGENT_HEALTH_PORT:-4001}"  # Unified server port (serves both API and UI)
+SERVER_PORT="${AH_PORT:-${AGENT_HEALTH_PORT:-4001}}"  # Unified server port (serves both API and UI)
 
 # Script directory (where this script lives)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -612,7 +612,7 @@ start_agenteval_services() {
     echo ""
 
     # Export port for the server to use
-    export AGENT_HEALTH_PORT="$SERVER_PORT"
+    export AH_PORT="$SERVER_PORT"
 
     # Start unified server (builds UI + serves everything from one port)
     # Runs in FOREGROUND so logs are visible

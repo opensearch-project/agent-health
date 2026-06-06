@@ -13,6 +13,7 @@
 import { Router, Request, Response } from 'express';
 import { debug } from '@/lib/debug';
 import { getStorageModule } from '../../adapters/index.js';
+import { refreshBenchmarkRunStatsByReportId } from '../../services/benchmarkRunStats.js';
 import {
   SAMPLE_RUNS,
   getSampleRun,
@@ -206,7 +207,7 @@ router.patch('/api/storage/runs/:id', async (req: Request, res: Response) => {
     if (isMetricsStatusUpdate && experimentId) {
       debug('StorageAPI', `[StatsUpdate] Triggering stats refresh for benchmark ${experimentId} after report ${id} completion`);
       // Fire-and-forget stats refresh
-      refreshBenchmarkRunStats(storage, experimentId, id).catch(err => {
+      refreshBenchmarkRunStatsByReportId(storage, experimentId, id).catch(err => {
         console.warn(`[StorageAPI] Failed to update benchmark stats after report update:`, err);
       }).then(() => {
         debug('StorageAPI', `[StatsUpdate] Successfully refreshed stats for benchmark ${experimentId}`);
@@ -545,54 +546,5 @@ router.post('/api/storage/runs/bulk', async (req: Request, res: Response) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-/**
- * Refresh benchmark run stats after a report status change.
- * Adapter-agnostic version of updateBenchmarkRunStatsForReport.
- */
-async function refreshBenchmarkRunStats(
-  storage: ReturnType<typeof getStorageModule>,
-  benchmarkId: string,
-  reportId: string,
-): Promise<void> {
-  const benchmark = await storage.benchmarks.getById(benchmarkId);
-  if (!benchmark) return;
-
-  const targetRun = benchmark.runs?.find((run: any) =>
-    Object.values(run.results || {}).some((result: any) => result.reportId === reportId)
-  );
-  if (!targetRun) return;
-
-  // Recompute stats from reports
-  const reportIds = Object.values(targetRun.results || {})
-    .map((r: any) => r.reportId)
-    .filter(Boolean);
-
-  let passed = 0, failed = 0, pending = 0;
-  const total = Object.keys(targetRun.results || {}).length;
-
-  for (const rid of reportIds) {
-    try {
-      const report = await storage.runs.getById(rid);
-      if (!report) { pending++; continue; }
-      if ((report as any).metricsStatus === 'pending' || (report as any).metricsStatus === 'calculating') {
-        pending++;
-      } else if (report.passFailStatus === 'passed') {
-        passed++;
-      } else {
-        failed++;
-      }
-    } catch {
-      pending++;
-    }
-  }
-
-  // Count results without reports as pending
-  pending += total - reportIds.length;
-
-  await storage.benchmarks.updateRun(benchmarkId, targetRun.id, {
-    stats: { passed, failed, pending, total },
-  } as any);
-}
 
 export default router;

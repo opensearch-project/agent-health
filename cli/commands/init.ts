@@ -98,7 +98,7 @@ OPENSEARCH_STORAGE_PASS=admin
 
 # ============ Server Configuration ============
 # Backend port (default: 4001)
-# AGENT_HEALTH_PORT=4001
+# AH_PORT=4001
 `;
 
 const SAMPLE_TEST_CASE = `# Sample Test Case

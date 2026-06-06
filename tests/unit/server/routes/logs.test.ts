@@ -13,10 +13,12 @@ jest.mock('@/server/services/logsService', () => ({
   fetchLogsLegacy: jest.fn(),
 }));
 
-// Mock the client factory
-jest.mock('@/server/services/opensearchClientFactory', () => ({
-  createOpenSearchClient: jest.fn().mockReturnValue({ close: jest.fn().mockResolvedValue(undefined) }),
+// Mock the observability client
+jest.mock('@/server/services/observabilityClient', () => ({
+  getObservabilityClient: jest.fn(),
 }));
+import { getObservabilityClient } from '@/server/services/observabilityClient';
+const mockGetObservabilityClient = getObservabilityClient as jest.MockedFunction<typeof getObservabilityClient>;
 
 const mockFetchLogs = fetchLogs as jest.MockedFunction<typeof fetchLogs>;
 const mockFetchLogsLegacy = fetchLogsLegacy as jest.MockedFunction<typeof fetchLogsLegacy>;
@@ -49,6 +51,8 @@ function getRouteHandler(router: any, method: string, path: string) {
 describe('Logs Routes', () => {
   const originalEnv = process.env;
 
+  const mockClient = { search: jest.fn(), close: jest.fn() };
+
   beforeEach(() => {
     jest.clearAllMocks();
     process.env = {
@@ -58,6 +62,10 @@ describe('Logs Routes', () => {
       OPENSEARCH_LOGS_PASSWORD: 'admin',
       OPENSEARCH_LOGS_INDEX: 'test-logs-*',
     };
+    mockGetObservabilityClient.mockReturnValue({
+      client: mockClient as any,
+      indexes: { traces: 'otel-traces-*', logs: 'test-logs-*', metrics: 'metrics-*' },
+    });
   });
 
   afterEach(() => {
@@ -141,7 +149,7 @@ describe('Logs Routes', () => {
     });
 
     it('should return 503 when observability not configured', async () => {
-      process.env.OPENSEARCH_LOGS_ENDPOINT = '';
+      mockGetObservabilityClient.mockReturnValue(null);
 
       const { req, res } = createMocks({ runId: 'test' });
       const handler = getRouteHandler(logsRoutes, 'post', '/api/logs');

@@ -18,6 +18,7 @@ import { config as loadDotenv } from 'dotenv';
 import open from 'open';
 import ora from 'ora';
 import { startServer } from './utils/startServer.js';
+import { readEnv } from '../lib/envCompat.js';
 import {
   createListCommand,
   createRunCommand,
@@ -32,6 +33,7 @@ import {
   createConfigureCommand,
   createKillCommand,
   createSetupTelemetryCommand,
+  createSkillCommand,
 } from './commands/index.js';
 
 // Get package.json for version
@@ -167,7 +169,7 @@ ${chalk.cyan.bold('Examples:')}
 
 // CLI options for default action (when no subcommand is specified)
 program
-  .option('-p, --port <number>', 'Server port (or set AGENT_HEALTH_PORT env var)', process.env.AGENT_HEALTH_PORT || '4001')
+  .option('-p, --port <number>', 'Server port (or set AH_PORT env var)', readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001')
   .option('-e, --env-file <path>', 'Load environment variables from file (e.g., .env)')
   .option('--no-browser', 'Do not open browser automatically')
   .option('--headless', 'Run API server only (no frontend, no browser)')
@@ -242,12 +244,13 @@ program.addCommand(createRemoteCommand());
 program.addCommand(createConfigureCommand());
 program.addCommand(createKillCommand());
 program.addCommand(createSetupTelemetryCommand());
+program.addCommand(createSkillCommand());
 
 // Add serve command as an alias for the default action
 program
   .command('serve')
   .description('Start the Agent Health server (same as default action)')
-  .option('-p, --port <number>', 'Server port (or set AGENT_HEALTH_PORT env var)', process.env.AGENT_HEALTH_PORT || '4001')
+  .option('-p, --port <number>', 'Server port (or set AH_PORT env var)', readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001')
   .option('--no-browser', 'Do not open browser automatically')
   .option('--headless', 'Run API server only (no frontend, no browser)')
   .option('--api-key <key>', 'Require API key for coding-agents endpoints')

@@ -11,6 +11,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { EvaluationReport, BenchmarkRun, ImprovementStrategy } from '@/types';
 import { cn } from '@/lib/utils';
+import { RunScore } from '@/components/RunScore';
 
 interface JudgeSectionProps {
   runs: BenchmarkRun[];
@@ -93,8 +94,11 @@ const RunJudgeCard: React.FC<{
           </Badge>
         </div>
         <div className="flex items-center gap-2 mt-1">
-          <span className="text-xs text-muted-foreground">
-            Accuracy: {report.metrics.accuracy}%
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            {/* Generic "Score: X%" with hover-tooltip listing each metric.
+                Replaces the hardcoded `Accuracy: X%` which was misleading
+                for runs scored by non-RCA-Default evaluators. */}
+            <RunScore metrics={report.metrics as Record<string, number | undefined>} />
           </span>
         </div>
       </CardHeader>
@@ -104,7 +108,7 @@ const RunJudgeCard: React.FC<{
           <CollapsibleTrigger className="w-full">
             <div className="flex items-center gap-2 py-1 rounded hover:bg-muted/50 transition-colors">
               {reasoningOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              <span className="text-xs font-medium">LLM Judge Reasoning</span>
+              <span className="text-xs font-medium">Judge Reasoning</span>
             </div>
           </CollapsibleTrigger>
           <CollapsibleContent>

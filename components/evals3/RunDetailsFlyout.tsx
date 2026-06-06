@@ -16,9 +16,13 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/componen
 import { EvaluationReport, TestCase } from '@/types';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
 
-type ResultStatus = 'passed' | 'failed' | 'running' | 'pending';
+type ResultStatus = 'passed' | 'failed' | 'errored' | 'running' | 'pending';
 
 function getResultStatus(report: EvaluationReport): ResultStatus {
+  // Issue #242: an evaluator-error report has `metricsStatus: 'error'` and
+  // `passFailStatus: null`. Light up the amber `ERRORED` chip on the
+  // flyout pill instead of conflating with `'failed'`.
+  if (report.metricsStatus === 'error') return 'errored';
   if (report.passFailStatus === 'passed') return 'passed';
   if (report.passFailStatus === 'failed') return 'failed';
   if (report.status === 'running') return 'running';

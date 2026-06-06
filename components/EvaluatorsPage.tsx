@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Eye, Pencil, Copy, RefreshCw, FlaskConical, Shield, Target, Brain, ListChecks } from 'lucide-react';
+import { Plus, Trash2, History as HistoryIcon, RefreshCw, FlaskConical, Shield, Target, Brain, ListChecks, Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +30,19 @@ const EVALUATOR_ICONS: Record<string, React.ComponentType<any>> = {
   'system-safety': Shield,
 };
 
+function formatRelativeTime(dateStr: string | undefined): string {
+  if (!dateStr) return '';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(dateStr).toLocaleDateString();
+}
+
 export const EvaluatorsPage: React.FC = () => {
   const navigate = useNavigate();
   const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
@@ -47,7 +60,11 @@ export const EvaluatorsPage: React.FC = () => {
         throw new Error(`Failed to load evaluators: ${response.statusText}`);
       }
       const data = await response.json();
-      const allEvaluators = data.evaluators || [];
+      const allEvaluators = (data.evaluators || []).sort((a: Evaluator, b: Evaluator) => {
+        const aTime = a.updatedAt || a.createdAt || '';
+        const bTime = b.updatedAt || b.createdAt || '';
+        return bTime.localeCompare(aTime);
+      });
       setEvaluators(allEvaluators);
       setSystemCount(allEvaluators.filter((e: any) => e.isSystem).length);
       setCustomCount(allEvaluators.filter((e: any) => !e.isSystem).length);
@@ -86,31 +103,8 @@ export const EvaluatorsPage: React.FC = () => {
     }
   };
 
-  const handleDuplicate = async (evaluator: Evaluator) => {
-    try {
-      const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: `${evaluator.name} (Copy)`,
-          description: evaluator.description,
-          systemPrompt: evaluator.systemPrompt,
-          scoringConfig: evaluator.scoringConfig,
-          inferenceConfig: evaluator.inferenceConfig,
-          tags: evaluator.tags,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to duplicate evaluator');
-      }
-
-      await loadEvaluators();
-    } catch (error) {
-      console.error('Error duplicating evaluator:', error);
-      alert('Failed to duplicate evaluator');
-    }
-  };
+  // Duplicate has moved off the list — it now lives on the view page so the
+  // list can show exactly two action buttons (History + Delete) per row.
 
   const getEvaluatorIcon = (evaluatorId: string) => {
     const Icon = EVALUATOR_ICONS[evaluatorId];
@@ -191,7 +185,19 @@ export const EvaluatorsPage: React.FC = () => {
               {evaluators.map((evaluator) => (
                 <div
                   key={evaluator.id}
-                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent/50 transition-colors"
+                  // Whole row is a single click target leading to the read-only
+                  // view page. Action buttons inside the row stop propagation
+                  // so they don't accidentally navigate alongside their action.
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/evaluators/${evaluator.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      navigate(`/evaluators/${evaluator.id}`);
+                    }
+                  }}
+                  className="flex items-center justify-between p-4 border rounded-lg cursor-pointer hover:bg-accent/50 hover:border-accent-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
                 >
                   <div className="flex items-center gap-4 flex-1">
                     <div className="flex-shrink-0">
@@ -224,40 +230,50 @@ export const EvaluatorsPage: React.FC = () => {
                             {evaluator.inferenceConfig.provider}
                           </span>
                         )}
+                        {(evaluator.updatedAt || evaluator.createdAt) && (
+                          <span className="flex items-center gap-1" title={evaluator.updatedAt || evaluator.createdAt}>
+                            <Clock className="h-3 w-3" />
+                            {evaluator.updatedAt && evaluator.updatedAt !== evaluator.createdAt
+                              ? `Updated ${formatRelativeTime(evaluator.updatedAt)}`
+                              : `Created ${formatRelativeTime(evaluator.createdAt)}`}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  {/* Action buttons — exactly two: History and Delete.
+                      • History jumps to the version-history section on the
+                        view page (the #version-history hash triggers an
+                        auto-scroll inside EvaluatorEditPage).
+                      • Delete is hidden for system evaluators (which the
+                        server also rejects). Both call stopPropagation so
+                        they don't also fire the row's navigate-to-view
+                        click. */}
+                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => navigate(`/evaluators/${evaluator.id}/edit`)}
-                      title={evaluator.isSystem ? 'View details' : 'Edit evaluator'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/evaluators/${evaluator.id}#history`);
+                      }}
+                      title="View version history"
+                      aria-label={`View history for ${evaluator.name}`}
                     >
-                      {evaluator.isSystem ? (
-                        <Eye className="h-4 w-4" />
-                      ) : (
-                        <Pencil className="h-4 w-4" />
-                      )}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDuplicate(evaluator)}
-                      title="Duplicate evaluator"
-                    >
-                      <Copy className="h-4 w-4" />
+                      <HistoryIcon className="h-4 w-4" />
                     </Button>
                     {!evaluator.isSystem && (
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setEvaluatorToDelete(evaluator);
                           setDeleteDialogOpen(true);
                         }}
                         title="Delete evaluator"
+                        aria-label={`Delete ${evaluator.name}`}
                       >
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>

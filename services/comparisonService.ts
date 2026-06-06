@@ -166,6 +166,10 @@ export function buildTestCaseComparisonRows(
         reportId: report.id,
         status: runResult.status === 'completed' ? 'completed' : 'failed',
         passFailStatus: report.passFailStatus,
+        // Issue #242: surface evaluator-error reports so the comparison
+        // surface (MetricCell) can light up the amber `Errored` chip
+        // instead of conflating with `Failed`.
+        errored: report.metricsStatus === 'error',
         accuracy: report.metrics.accuracy,
         faithfulness: report.metrics.faithfulness,
         trajectoryAlignment: report.metrics.trajectory_alignment_score,
@@ -307,7 +311,13 @@ export function calculateCombinedScore(result: TestCaseRunResult): number {
 
 /**
  * Determine if a row represents a regression, improvement, or mixed result
- * compared to the reference run (oldest run)
+ * compared to the reference run (oldest run).
+ *
+ * The primary signal is pass/fail — if the baseline passed and any other
+ * run failed, that's a regression, regardless of how close the scores are.
+ * Score-delta is a secondary tiebreaker for cases where pass/fail is the
+ * same but accuracy moved meaningfully (e.g., both passed but one is much
+ * weaker).
  */
 export function calculateRowStatus(
   row: TestCaseComparisonRow,
@@ -318,8 +328,9 @@ export function calculateRowStatus(
     return 'neutral';
   }
 
+  const SCORE_THRESHOLD = 5; // Only flag pure score moves above this delta.
   const baselineScore = calculateCombinedScore(baselineResult);
-  const THRESHOLD = 2; // 2-point difference threshold to avoid noise
+  const baselinePassed = baselineResult.passFailStatus === 'passed';
 
   let hasRegression = false;
   let hasImprovement = false;
@@ -327,15 +338,47 @@ export function calculateRowStatus(
   for (const [runId, result] of Object.entries(row.results)) {
     if (runId === baselineRunId || result.status !== 'completed') continue;
 
+    // Primary signal: pass/fail crossover.
+    if (result.passFailStatus) {
+      const otherPassed = result.passFailStatus === 'passed';
+      if (baselinePassed && !otherPassed) { hasRegression = true; continue; }
+      if (!baselinePassed && otherPassed) { hasImprovement = true; continue; }
+    }
+
+    // Secondary signal: meaningful score move when pass/fail agrees.
     const score = calculateCombinedScore(result);
-    if (score < baselineScore - THRESHOLD) hasRegression = true;
-    if (score > baselineScore + THRESHOLD) hasImprovement = true;
+    if (score < baselineScore - SCORE_THRESHOLD) hasRegression = true;
+    if (score > baselineScore + SCORE_THRESHOLD) hasImprovement = true;
   }
 
   if (hasRegression && hasImprovement) return 'mixed';
   if (hasRegression) return 'regression';
   if (hasImprovement) return 'improvement';
   return 'neutral';
+}
+
+/**
+ * Comparison mode — drives whether the page asks
+ * "why is one agent better?" (compare) or
+ * "is my agent improving?" (iterate).
+ *
+ * - 'compare':  ≥2 distinct agentKeys across the selected runs.
+ * - 'iterate':  all runs share one agentKey (a sequence of attempts).
+ */
+export type ComparisonMode = 'compare' | 'iterate';
+
+/**
+ * Detect the comparison mode from the selected runs.
+ * Empty / single-run selections fall back to 'iterate' so that downstream
+ * components have a deterministic mode to render against.
+ */
+export function detectComparisonMode(runs: ExperimentRun[]): ComparisonMode {
+  if (runs.length < 2) return 'iterate';
+  const agentKeys = new Set<string>();
+  for (const run of runs) {
+    if (run.agentKey) agentKeys.add(run.agentKey);
+  }
+  return agentKeys.size >= 2 ? 'compare' : 'iterate';
 }
 
 /**

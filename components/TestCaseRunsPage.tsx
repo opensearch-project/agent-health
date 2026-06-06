@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Play, Calendar, CheckCircle2, XCircle, Trash2, FileText, Pencil, Loader2, X } from 'lucide-react';
+import { ArrowLeft, Play, Calendar, CheckCircle2, XCircle, Trash2, FileText, Pencil, Loader2, X, AlertTriangle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,6 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { TestCase, EvaluationReport } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { RunScore } from '@/components/RunScore';
 import { formatDate, formatRelativeTime } from '@/lib/utils';
 import { QuickRunModal } from './QuickRunModal';
 import { TestCaseEditor } from './TestCaseEditor';
@@ -29,8 +30,39 @@ interface RunCardProps {
 }
 
 const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps) => {
-  const isPassed = run.passFailStatus === 'passed';
+  // Issue #242: distinguish evaluator-error runs from genuine pass/fail.
+  // `metricsStatus === 'error'` means the judge / trace pipeline could not
+  // produce a verdict; rendering it as `FAILED` (the previous behaviour)
+  // would conflate it with a real agent miss.
+  const isErrored = run.metricsStatus === 'error';
+  const isPassed = !isErrored && run.passFailStatus === 'passed';
   const modelDisplayName = DEFAULT_CONFIG.models[run.modelName]?.display_name || run.modelName;
+
+  // Visual triple: icon, ring background, label colour.
+  // Errored gets the amber AlertTriangle treatment used everywhere else
+  // for the same status (RunInspectorPage header, TestCaseInspectorPanel
+  // pill, BenchmarkRunsPage badge — all settled on amber for evaluator
+  // failures distinct from red for agent failures).
+  const statusVisual = isErrored
+    ? {
+        ring: 'bg-amber-500/20',
+        icon: <AlertTriangle size={20} className="text-amber-500" />,
+        label: 'ERRORED',
+        labelClass: 'text-amber-500',
+      }
+    : isPassed
+    ? {
+        ring: 'bg-opensearch-blue/20',
+        icon: <CheckCircle2 size={20} className="text-opensearch-blue" />,
+        label: 'PASSED',
+        labelClass: 'text-opensearch-blue',
+      }
+    : {
+        ring: 'bg-red-500/20',
+        icon: <XCircle size={20} className="text-red-400" />,
+        label: 'FAILED',
+        labelClass: 'text-red-400',
+      };
 
   return (
     <Card
@@ -41,19 +73,15 @@ const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps)
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4 flex-1">
             {/* Status Icon */}
-            <div className={`p-2 rounded-full ${isPassed ? 'bg-opensearch-blue/20' : 'bg-red-500/20'}`}>
-              {isPassed ? (
-                <CheckCircle2 size={20} className="text-opensearch-blue" />
-              ) : (
-                <XCircle size={20} className="text-red-400" />
-              )}
+            <div className={`p-2 rounded-full ${statusVisual.ring}`}>
+              {statusVisual.icon}
             </div>
 
             {/* Info */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <span className={`text-sm font-semibold ${isPassed ? 'text-opensearch-blue' : 'text-red-400'}`}>
-                  {isPassed ? 'PASSED' : 'FAILED'}
+                <span className={`text-sm font-semibold ${statusVisual.labelClass}`}>
+                  {statusVisual.label}
                 </span>
                 {isLatest && (
                   <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-400 border-blue-500/30">
@@ -74,12 +102,16 @@ const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps)
             {/* Metrics */}
             <div className="flex items-center gap-4 text-sm">
               <div className="text-center">
-                <div className="text-opensearch-blue font-semibold">{run.metrics.accuracy}%</div>
-                <div className="text-xs text-muted-foreground">Accuracy</div>
-              </div>
-              <div className="text-center">
-                <div className="text-blue-400 font-semibold">{run.metrics.faithfulness}%</div>
-                <div className="text-xs text-muted-foreground">Faithfulness</div>
+                {/* Overall score = mean of every metric this run's evaluator
+                    emitted, with a hover tooltip that lists each metric and
+                    value. Replaces the previous hardcoded `accuracy` display
+                    that read `0%` for any non-RCA-Default evaluator. */}
+                <RunScore
+                  metrics={run.metrics as Record<string, number | undefined>}
+                  showLabel={false}
+                  className="text-opensearch-blue font-semibold"
+                />
+                <div className="text-xs text-muted-foreground">Score</div>
               </div>
             </div>
           </div>

@@ -67,6 +67,10 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
 
   const [inputViewMode, setInputViewMode] = useState<'pretty' | 'raw'>('pretty');
   const [outputViewMode, setOutputViewMode] = useState<'pretty' | 'raw'>('pretty');
+  // Per-section pretty/raw for the flat 'All Attributes' table at the bottom
+  // of the panel. JSON-shaped string values (e.g. tool args dumped into
+  // attributes) reformat in pretty mode and stay verbatim in raw mode.
+  const [attrsViewMode, setAttrsViewMode] = useState<'pretty' | 'raw'>('pretty');
   const [copiedInput, setCopiedInput] = useState(false);
   const [copiedOutput, setCopiedOutput] = useState(false);
 
@@ -382,27 +386,79 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
 
           {/* ALL ATTRIBUTES */}
           <div className="space-y-2 pt-4 border-t">
-            <button
-              className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-muted-foreground hover:text-foreground w-full"
-              onClick={() => toggleSection('attributes')}
-            >
-              {expandedSections.attributes ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-              <Layers size={10} /> All Attributes ({allAttributes.length})
-            </button>
+            <div className="flex items-center justify-between gap-2">
+              <button
+                className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-muted-foreground hover:text-foreground flex-1 min-w-0"
+                onClick={() => toggleSection('attributes')}
+              >
+                {expandedSections.attributes ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                <Layers size={10} /> All Attributes ({allAttributes.length})
+              </button>
+              {expandedSections.attributes && allAttributes.length > 0 && (
+                <div className="inline-flex items-center rounded-md border bg-muted p-0.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setAttrsViewMode('pretty')}
+                    className={`h-5 px-1.5 text-[9px] font-medium rounded-sm transition-colors ${
+                      attrsViewMode === 'pretty' ? 'bg-background shadow-sm' : 'hover:bg-background/50 text-muted-foreground'
+                    }`}
+                    title="Pretty-print JSON-shaped values"
+                  >
+                    Pretty
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAttrsViewMode('raw')}
+                    className={`h-5 px-1.5 text-[9px] font-medium rounded-sm transition-colors ${
+                      attrsViewMode === 'raw' ? 'bg-background shadow-sm' : 'hover:bg-background/50 text-muted-foreground'
+                    }`}
+                    title="Show values verbatim (no JSON reformatting)"
+                  >
+                    Raw
+                  </button>
+                </div>
+              )}
+            </div>
             {expandedSections.attributes && allAttributes.length > 0 && (
               <div className="max-h-[300px] overflow-auto rounded-md border bg-muted/20">
                 <table className="w-full text-[10px]">
                   <tbody>
-                    {allAttributes.map(([key, value]) => (
-                      <tr key={key} className="border-b last:border-0 hover:bg-muted/30">
-                        <td className="p-2 text-muted-foreground font-medium bg-muted/50 dark:bg-muted/50 border-r border-border max-w-[150px] truncate align-top" title={key}>
-                          {key}
-                        </td>
-                        <td className="p-2 font-mono break-all">
-                          {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                        </td>
-                      </tr>
-                    ))}
+                    {allAttributes.map(([key, value]) => {
+                      // Reuse the per-row formatter so 'pretty' detects
+                      // JSON-shaped strings and reformats them, 'raw' shows
+                      // values verbatim. Keeps copy-paste workflows working.
+                      let display: string;
+                      if (value === null || value === undefined) {
+                        display = '';
+                      } else if (typeof value === 'string') {
+                        const trimmed = value.trim();
+                        const looksJson =
+                          (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+                          (trimmed.startsWith('[') && trimmed.endsWith(']'));
+                        if (attrsViewMode === 'pretty' && looksJson) {
+                          try { display = JSON.stringify(JSON.parse(trimmed), null, 2); }
+                          catch { display = value; }
+                        } else {
+                          display = value;
+                        }
+                      } else if (typeof value === 'object') {
+                        display = attrsViewMode === 'pretty'
+                          ? JSON.stringify(value, null, 2)
+                          : JSON.stringify(value);
+                      } else {
+                        display = String(value);
+                      }
+                      return (
+                        <tr key={key} className="border-b last:border-0 hover:bg-muted/30">
+                          <td className="p-2 text-muted-foreground font-medium bg-muted/50 dark:bg-muted/50 border-r border-border max-w-[150px] truncate align-top" title={key}>
+                            {key}
+                          </td>
+                          <td className="p-2 font-mono whitespace-pre-wrap break-words">
+                            {display}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

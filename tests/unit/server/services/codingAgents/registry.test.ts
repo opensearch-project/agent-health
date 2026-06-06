@@ -7,10 +7,18 @@ import { extractUsername } from '@/server/services/codingAgents/registry';
 
 describe('extractUsername', () => {
   const originalEnv = process.env;
+  let warnSpy: jest.SpyInstance;
 
   beforeEach(() => {
     process.env = { ...originalEnv };
+    delete process.env.AH_USERNAME;
     delete process.env.AGENT_HEALTH_USERNAME;
+    process.env.AH_QUIET_DEPRECATIONS = '1';
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
   });
 
   afterAll(() => {
@@ -37,13 +45,24 @@ describe('extractUsername', () => {
     expect(extractUsername('/Users/alice/Desktop/work/repo')).toBe('alice');
   });
 
-  it('should use AGENT_HEALTH_USERNAME env var when set', () => {
-    process.env.AGENT_HEALTH_USERNAME = 'override-user';
+  it('should use AH_USERNAME env var when set', () => {
+    process.env.AH_USERNAME = 'override-user';
     expect(extractUsername('/Users/jadhanir/Documents/anything')).toBe('override-user');
   });
 
   it('should prefer env var over path extraction', () => {
-    process.env.AGENT_HEALTH_USERNAME = 'team-bot';
+    process.env.AH_USERNAME = 'team-bot';
     expect(extractUsername('/home/deploy/app')).toBe('team-bot');
+  });
+
+  it('still accepts legacy AGENT_HEALTH_USERNAME', () => {
+    process.env.AGENT_HEALTH_USERNAME = 'legacy-user';
+    expect(extractUsername('/Users/anyone/path')).toBe('legacy-user');
+  });
+
+  it('prefers AH_USERNAME over legacy AGENT_HEALTH_USERNAME', () => {
+    process.env.AH_USERNAME = 'new-user';
+    process.env.AGENT_HEALTH_USERNAME = 'legacy-user';
+    expect(extractUsername('/Users/anyone/path')).toBe('new-user');
   });
 });

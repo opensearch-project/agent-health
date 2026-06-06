@@ -13,6 +13,10 @@
  *   4. labels-only-no-prompt        No agent invocation at all (data-only test)
  *   5. budget-aware                 Uses traces fixture for token-budget assertion
  *
+ * The test body owns invocation: call `const result = await agent.run()` to
+ * drive the agent (the test's `prompt` is the default), then assert against
+ * the returned result. Exactly one `agent.run()` per test.
+ *
  * Run with:
  *   curl -sN -X POST http://localhost:4002/api/storage/evaluation-runs \
  *     -H 'Content-Type: application/json' \
@@ -34,7 +38,9 @@ test('observio-says-hello', {
   prompt: 'Say hello to me in one short sentence.',
   description: 'Smoke test: agent produces a non-trivial response',
   labels: ['category:Smoke', 'difficulty:Easy', 'demo', 'agent:observio'],
-}, function ({ result }) {
+}, async function ({ agent }) {
+  const result = await agent.run();
+
   // Trajectory must exist
   expect(result.trajectory).to.have.length.greaterThan(0);
 
@@ -53,7 +59,9 @@ test('observio-uses-a-tool', {
   prompt: 'Find the source of the most recent error log entry.',
   description: 'Agent must call at least one tool, not just answer from memory',
   labels: ['category:Tool Use', 'difficulty:Medium', 'demo', 'agent:observio'],
-}, function ({ result }) {
+}, async function ({ agent }) {
+  const result = await agent.run();
+
   // At least one action step (tool invocation)
   expect(result.trajectory).to.haveStepsOfType('action');
 
@@ -76,7 +84,9 @@ test('observio-rca-is-coherent', {
     },
   ],
   labels: ['category:RCA', 'difficulty:Hard', 'demo', 'agent:observio', 'hybrid'],
-}, async function ({ result, judge }) {
+}, async function ({ agent, judge }) {
+  const result = await agent.run();
+
   // Cheap deterministic preflight — fail fast, never spend $ on the judge
   expect(result.trajectory).to.have.length.greaterThan(0);
   expect(result).to.haveCompletedWithin(120_000);
@@ -93,7 +103,8 @@ test('observio-rca-is-coherent', {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Useful for tests that assert against external state, fixtures, or static
-// data without needing any agent involvement.
+// data without needing any agent involvement. The body simply never calls
+// agent.run(), so `result` stays the empty placeholder.
 
 test('labels-only-no-prompt', {
   description: 'Verify a fixture file matches a baseline (no agent involvement)',
@@ -113,7 +124,7 @@ test('labels-only-no-prompt', {
 // Test 5: Budget-aware — uses the traces fixture for token / span timing checks
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// `traces` is pre-loaded by the runner when the agent emits OTel spans. When
+// `traces` reflects the agent's OTel spans once `agent.run()` resolves. When
 // no traces are available the accessor returns 0 / empty for all helpers,
 // so this test still passes (vacuously) on agents without instrumentation.
 
@@ -121,7 +132,9 @@ test('budget-aware', {
   prompt: 'Summarize the system in one paragraph.',
   description: 'Token budget + span-timing assertions via the traces fixture',
   labels: ['category:Budget', 'difficulty:Easy', 'demo', 'agent:observio'],
-}, function ({ result, traces }) {
+}, async function ({ agent, traces }) {
+  const result = await agent.run();
+
   expect(result.agentOutput.length).to.be.greaterThan(0);
   // Cheap budget cap — fails if the agent burned more than 50k tokens
   expect(traces.totalTokens).to.be.lessThan(50_000);

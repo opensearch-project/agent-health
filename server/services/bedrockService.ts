@@ -22,6 +22,18 @@ export interface JudgeRequest {
   expectedOutcomes?: string[];
   expectedTrajectory?: any[];
   logs?: any[];
+  /**
+   * Agent run id for trace/log correlation. Forwarded by the SDK `judge()`
+   * from `result.runId`. Required by the agentic trace judge so its
+   * read-only trace-query tools can be scoped to this single run (RFC 004
+   * §4.4, #244).
+   */
+  runId?: string;
+  /**
+   * Bedrock/registry model id the run is configured to judge with. Used by the
+   * agent trace judge to select the matching in-process pi model.
+   */
+  modelId?: string;
 }
 
 export interface JudgeResponse {

@@ -23,6 +23,7 @@ import {
   CancellationToken,
 } from '../../../services/benchmarkRunner.js';
 import { convertTestCasesToExportFormat, generateExportFilename } from '../../../lib/benchmarkExport.js';
+import { resolveCodeFnMapForStoredTestCases } from '../../../services/sourceResolver.js';
 
 /**
  * Normalize benchmark data for legacy documents without version fields.
@@ -138,6 +139,7 @@ async function computeStatsForRun(
   let passed = 0;
   let failed = 0;
   let pending = 0;
+  let errored = 0;
   const total = Object.keys(run.results || {}).length;
 
   // Fetch reports to get passFailStatus
@@ -195,6 +197,14 @@ async function computeStatsForRun(
             return;
           }
 
+          // Evaluator could not produce a verdict (issue #242). Excluded
+          // from passed/failed so misconfigured evaluators don't poison
+          // aggregate pass rates.
+          if (report.metricsStatus === 'error') {
+            errored++;
+            return;
+          }
+
           if (report.passFailStatus === 'passed') {
             passed++;
           } else {
@@ -228,7 +238,7 @@ async function computeStatsForRun(
     });
   }
 
-  return { passed, failed, pending, total };
+  return { passed, failed, pending, errored, total };
 }
 
 /**
@@ -268,6 +278,16 @@ async function updateTestCaseResult(
 
 // Registry of active cancellation tokens for in-progress runs
 const activeRuns = new Map<string, CancellationToken>();
+
+/**
+ * Read-only accessor for the in-memory active-run registry. Used by
+ * `server/services/benchmarkRunRecoveryOnBoot.ts` to distinguish runs that
+ * are *actually* in-flight in this process from runs whose `status: 'running'`
+ * was orphaned by a previous restart.
+ */
+export function isRunActiveInThisProcess(runId: string): boolean {
+  return activeRuns.has(runId);
+}
 
 function generateId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -977,69 +997,26 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
     // Handle client disconnect - execution continues in background
     req.on('close', () => {});
 
-    // SDK code-import: scan benchmark.testCaseIds for any that came from
-    // a code file (.eval.js / .eval.ts) and dynamically import each unique
-    // file to materialize the test bodies. The runner picks them up via
-    // ExecuteRunOptions.evaluateFnMap and runs the matcher session.
+    // SDK code-import: re-materialize the code test bodies (+ hooks/scopes)
+    // for any of this benchmark's test cases that came from a .eval.js/.ts
+    // file. Centralized in sourceResolver (#245/#246) so this route and the
+    // evaluation-runs route share one code-import resolution path.
     let evaluateFnMap: Map<string, (fixtures: any) => Promise<void> | void> | undefined;
+    let hooksByFile: Map<string, import('../../../lib/testCases/types.js').RegisteredHook[]> | undefined;
+    let testHookScopes: Map<string, { sourceFile?: string; describePath?: string }> | undefined;
     try {
-      // Re-fetch full test cases (including sourceFile) directly from storage —
-      // the testCaseMap built earlier only carries (id, name) for performance.
+      // Re-fetch full test cases (incl. sourceFile) — the testCaseMap built
+      // earlier only carries (id, name) for performance.
       const allFull = await getStorageModule().testCases.getAll({ size: 10000 });
-      console.log(`[StorageAPI] SDK fnMap: getAll returned ${allFull.items.length} items, total=${allFull.total}`);
       const requested = new Set(benchmark.testCaseIds);
       const fullTestCases = allFull.items.filter(tc => requested.has(tc.id));
-      console.log(`[StorageAPI] SDK fnMap: ${fullTestCases.length} of ${requested.size} test cases matched in storage`);
-      if (fullTestCases.length > 0) {
-        const sample = fullTestCases[0] as any;
-        console.log(`[StorageAPI] SDK fnMap: sample test case = id=${sample.id} name=${sample.name} sourceFile=${sample.sourceFile} keys=${Object.keys(sample).slice(0, 15).join(',')}`);
+      const resolved = await resolveCodeFnMapForStoredTestCases(fullTestCases);
+      if (resolved.evaluateFnMap.size > 0) {
+        evaluateFnMap = resolved.evaluateFnMap;
+        console.log(`[StorageAPI] SDK fnMap built with ${resolved.evaluateFnMap.size} entries`);
       }
-      const fullTcById = new Map(fullTestCases.map((tc: any) => [tc.id, tc]));
-
-      const codeFilesToLoad = new Set<string>();
-      for (const tcId of benchmark.testCaseIds) {
-        const tc = fullTcById.get(tcId) as any;
-        const sf = tc?.sourceFile;
-        if (sf && (sf.endsWith('.eval.js') || sf.endsWith('.eval.ts') || sf.endsWith('.eval.mjs') || sf.endsWith('.js') || sf.endsWith('.ts'))) {
-          codeFilesToLoad.add(sf);
-        }
-      }
-      console.log(`[StorageAPI] SDK fnMap resolution: ${codeFilesToLoad.size} code file(s) found among ${benchmark.testCaseIds.length} test cases`);
-      if (codeFilesToLoad.size > 0) {
-        const { loadTestCasesFromModule } = await import('../../../lib/testCases/loader.js');
-        const map = new Map<string, (fixtures: any) => Promise<void> | void>();
-        // Build a name+sourceFile lookup from the freshly-fetched docs
-        const tcByNameAndFile = new Map<string, any>();
-        for (const tc of fullTestCases) {
-          if ((tc as any).sourceFile) {
-            tcByNameAndFile.set(`${(tc as any).sourceFile}\u0000${tc.name}`, tc);
-          }
-        }
-        const pathMod = await import('path');
-        for (const filePath of codeFilesToLoad) {
-          try {
-            const loaded = await loadTestCasesFromModule(filePath);
-            const sourceFile = pathMod.relative(process.cwd(), loaded.filePath);
-            console.log(`[StorageAPI] Re-resolved ${filePath} → ${loaded.testCases.length} test cases (sourceFile=${sourceFile})`);
-            for (const tc of loaded.testCases) {
-              const stored = tcByNameAndFile.get(`${sourceFile}\u0000${tc.name}`);
-              if (stored && tc.evaluate && benchmark.testCaseIds.includes(stored.id)) {
-                map.set(stored.id, tc.evaluate as any);
-              } else if (!stored) {
-                console.log(`[StorageAPI]   miss: no stored test case for sourceFile=${sourceFile} name=${tc.name}`);
-              }
-            }
-          } catch (loadErr: any) {
-            console.warn(`[StorageAPI] Failed to re-resolve code file ${filePath} for SDK runs: ${loadErr.message}`);
-          }
-        }
-        if (map.size > 0) {
-          evaluateFnMap = map;
-          console.log(`[StorageAPI] SDK fnMap built with ${map.size} entries`);
-        } else {
-          console.log(`[StorageAPI] SDK fnMap built with 0 entries — no test cases matched`);
-        }
-      }
+      if (resolved.hooksByFile.size > 0) hooksByFile = resolved.hooksByFile;
+      if (resolved.testHookScopes.size > 0) testHookScopes = resolved.testHookScopes;
     } catch (err: any) {
       console.warn(`[StorageAPI] SDK fn-map re-resolution failed (non-fatal): ${err.message}`);
     }
@@ -1061,6 +1038,8 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
           client,
           storageModule: storage,
           evaluateFnMap,
+          hooksByFile,
+          testHookScopes,
           onTestCaseComplete: async (testCaseId, result) => {
             // Stream per-test-case result to the client
             const tc = testCaseMap.get(testCaseId);

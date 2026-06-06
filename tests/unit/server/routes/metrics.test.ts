@@ -15,6 +15,13 @@ jest.mock('@/server/services/metricsService', () => ({
   computeAggregateMetrics: jest.fn(),
 }));
 
+// Mock the observability client
+jest.mock('@/server/services/observabilityClient', () => ({
+  getObservabilityClient: jest.fn(),
+}));
+import { getObservabilityClient } from '@/server/services/observabilityClient';
+const mockGetObservabilityClient = getObservabilityClient as jest.MockedFunction<typeof getObservabilityClient>;
+
 const mockComputeMetrics = computeMetrics as jest.MockedFunction<typeof computeMetrics>;
 const mockComputeBatchMetrics = computeBatchMetrics as jest.MockedFunction<typeof computeBatchMetrics>;
 const mockComputeAggregateMetrics = computeAggregateMetrics as jest.MockedFunction<typeof computeAggregateMetrics>;
@@ -47,16 +54,15 @@ function getRouteHandler(router: any, method: string, path: string) {
 
 describe('Metrics Routes', () => {
   const originalEnv = process.env;
+  const mockClient = { search: jest.fn(), close: jest.fn() };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env = {
-      ...originalEnv,
-      OPENSEARCH_LOGS_ENDPOINT: 'http://localhost:9200',
-      OPENSEARCH_LOGS_USERNAME: 'admin',
-      OPENSEARCH_LOGS_PASSWORD: 'admin',
-      OPENSEARCH_LOGS_TRACES_INDEX: 'otel-traces-*',
-    };
+    process.env = { ...originalEnv };
+    mockGetObservabilityClient.mockReturnValue({
+      client: mockClient as any,
+      indexes: { traces: 'otel-traces-*', logs: 'logs-*', metrics: 'metrics-*' },
+    });
   });
 
   afterEach(() => {
@@ -86,16 +92,14 @@ describe('Metrics Routes', () => {
       await handler(req, res);
 
       expect(mockComputeMetrics).toHaveBeenCalledWith('test-run-123', expect.objectContaining({
-        endpoint: 'http://localhost:9200',
-        username: 'admin',
-        password: 'admin',
+        client: mockClient,
         indexPattern: 'otel-traces-*',
       }));
       expect(res.json).toHaveBeenCalledWith(mockMetrics);
     });
 
     it('should return 503 when observability not configured', async () => {
-      process.env.OPENSEARCH_LOGS_ENDPOINT = '';
+      mockGetObservabilityClient.mockReturnValue(null);
 
       const { req, res } = createMocks({ runId: 'test-run-123' });
       const handler = getRouteHandler(metricsRoutes, 'get', '/api/metrics/:runId');
@@ -177,7 +181,7 @@ describe('Metrics Routes', () => {
       expect(mockComputeBatchMetrics).toHaveBeenCalledTimes(1);
       expect(mockComputeBatchMetrics).toHaveBeenCalledWith(
         ['run-1', 'run-2'],
-        expect.objectContaining({ endpoint: 'http://localhost:9200' })
+        expect.objectContaining({ client: mockClient, indexPattern: 'otel-traces-*' })
       );
       expect(mockComputeAggregateMetrics).toHaveBeenCalledWith([mockMetrics1, mockMetrics2]);
       expect(res.json).toHaveBeenCalledWith({
@@ -199,7 +203,7 @@ describe('Metrics Routes', () => {
     });
 
     it('should return individual error results when observability not configured', async () => {
-      process.env.OPENSEARCH_LOGS_ENDPOINT = '';
+      mockGetObservabilityClient.mockReturnValue(null);
 
       mockComputeAggregateMetrics.mockReturnValue({
         totalRuns: 0,

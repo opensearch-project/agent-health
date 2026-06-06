@@ -373,6 +373,96 @@ describe('Evaluate Route Integration Tests', () => {
       },
       TEST_TIMEOUT
     );
+
+    // The runs list is unusable when every row falls back to the
+    // `Run <short-id>` placeholder name. This test exercises the full
+    // wire: client sends `runName` in the request body → server route
+    // persists it on the placeholder → GET /api/storage/runs/by-test-case
+    // returns the saved run with the user's name intact. If this test
+    // ever regresses, the Test Case detail page silently goes back to
+    // showing generic generated names for every run.
+    it(
+      'persists user-supplied runName / runDescription on the saved run',
+      async () => {
+        if (!backendAvailable || !storageAvailable) return;
+
+        const testCaseId = `tc-eval-integ-name-${Date.now()}`;
+        createdTestCaseIds.push(testCaseId);
+        const testCase = buildInlineTestCase(testCaseId);
+
+        const evalResponse = await fetch(`${BASE_URL}/api/evaluate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            testCase,
+            agentKey: 'demo',
+            modelId: 'demo-model',
+            runName: 'Baseline (integration test)',
+            runDescription: 'Smoke check for runName persistence',
+          }),
+        });
+
+        const events = await consumeSSEStream(evalResponse);
+        const completedEvent = events.find(e => e.type === 'completed');
+        expect(completedEvent).toBeDefined();
+        const reportId: string = completedEvent.reportId;
+        createdReportIds.push(reportId);
+
+        // Read the run back through the same endpoint the UI uses.
+        const runsResponse = await fetch(
+          `${BASE_URL}/api/storage/runs/by-test-case/${testCaseId}`,
+        );
+        expect(runsResponse.status).toBe(200);
+        const runsData = await runsResponse.json();
+        const savedRun = runsData.runs.find((r: any) => r.id === reportId);
+
+        expect(savedRun).toBeDefined();
+        expect(savedRun.name).toBe('Baseline (integration test)');
+        expect(savedRun.description).toBe('Smoke check for runName persistence');
+      },
+      TEST_TIMEOUT
+    );
+
+    it(
+      'auto-generates `Run <short-id>` when no runName is supplied',
+      async () => {
+        if (!backendAvailable || !storageAvailable) return;
+
+        const testCaseId = `tc-eval-integ-auto-${Date.now()}`;
+        createdTestCaseIds.push(testCaseId);
+        const testCase = buildInlineTestCase(testCaseId);
+
+        const evalResponse = await fetch(`${BASE_URL}/api/evaluate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            testCase,
+            agentKey: 'demo',
+            modelId: 'demo-model',
+            // no runName — server should generate `Run <short-id>`
+          }),
+        });
+
+        const events = await consumeSSEStream(evalResponse);
+        const completedEvent = events.find(e => e.type === 'completed');
+        expect(completedEvent).toBeDefined();
+        const reportId: string = completedEvent.reportId;
+        createdReportIds.push(reportId);
+
+        const runsResponse = await fetch(
+          `${BASE_URL}/api/storage/runs/by-test-case/${testCaseId}`,
+        );
+        const runsData = await runsResponse.json();
+        const savedRun = runsData.runs.find((r: any) => r.id === reportId);
+
+        expect(savedRun).toBeDefined();
+        // Server should have written `Run <last-6-chars-of-id>` so the UI
+        // never has to fall back to a synthesized label.
+        const expectedShortId = reportId.slice(-6);
+        expect(savedRun.name).toBe(`Run ${expectedShortId}`);
+      },
+      TEST_TIMEOUT
+    );
   });
 
   // ---------------------------------------------------------------------------

@@ -374,3 +374,74 @@ The Agent Health server runs on port 4001 and exposes the following REST APIs. A
 ### Compare runs
 "Compare the results of run A vs run B in benchmark bench-xxx"
 → The assistant fetches both runs and diffs pass/fail status, accuracy, and strategies
+
+### Diagnose eval-vs-reality gaps
+"My agent passes 8/9 in evals but fails in real life — why?"
+→ The assistant investigates: fetches the runs and test cases, examines judge reasoning and expectedOutcomes, checks whether the evaluator is appropriate for the domain, and recommends tightening outcomes or creating a custom evaluator
+
+---
+
+## Evaluator System
+
+### How Evaluation Works
+
+1. Agent runs against a test case → produces a **trajectory** (thinking, action, tool_result, response steps)
+2. The **judge** (LLM) receives the trajectory + expectedOutcomes and scores each outcome
+3. Each outcome: Fully achieved = 1.0, Partially = 0.5, Not achieved = 0.0
+4. `accuracy = (sum of scores / total outcomes) × 100`
+5. Pass/Fail determined by evaluator's `passThreshold` + critical failure checks
+
+### Built-in Evaluators
+
+| ID | Name | Threshold | Key Metrics |
+|---|---|---|---|
+| `system-rca-default` | RCA Default | 70% | accuracy |
+| `system-factuality` | Factuality | 80% | factual_accuracy, hallucination_rate, source_grounding |
+| `system-tool-usage` | Tool Usage | 80% | tool_selection_accuracy, redundant_calls, tool_ordering |
+| `system-reasoning-depth` | Reasoning Depth | 75% | reasoning_coherence, step_completeness, logical_validity |
+| `system-safety` | Safety | 90% | safety_score, bias_detection, guardrail_adherence |
+
+### Custom Evaluators
+
+Create custom evaluators via the UI or API for domain-specific scoring:
+
+```json
+{
+  "name": "My Domain Evaluator",
+  "systemPrompt": "You are evaluating an agent for [domain]. CRITICAL CRITERIA: ...",
+  "scoringConfig": {
+    "metrics": [
+      { "name": "routing_accuracy", "weight": 0.4, "scale": 100 },
+      { "name": "tool_correctness", "weight": 0.4, "scale": 100 },
+      { "name": "diagnostic_completeness", "weight": 0.2, "scale": 100 }
+    ],
+    "passThreshold": 85,
+    "scale": 100
+  }
+}
+```
+
+Assign to a benchmark run via `evaluatorId` in the run config.
+
+### When to Recommend Custom Evaluators
+
+- **Domain has hard correctness rules**: specific CLI commands, valid syntax, routing tables, API formats
+- **Default judge is too charitable**: agents pass evals but fail in real-world usage (eval-vs-reality gap)
+- **Multiple independent dimensions**: routing correctness AND tool syntax AND diagnostic completeness all matter
+- **70% threshold is too low**: critical domains (oncall, security, compliance) need 85%+
+
+### Common Eval-vs-Reality Gap Causes
+
+1. **expectedOutcomes describe results, not procedures**: Judge rewards "got the right answer" without verifying "used the right method"
+2. **70% threshold too permissive**: Missing 30% of steps may be catastrophic in practice
+3. **No tool-correctness validation**: Generic judge can't verify domain-specific tool syntax
+4. **Trajectory compaction hides details**: toolOutput truncated to 1000 chars, content to 500 chars — wrong commands may be invisible to judge
+5. **Test cases cleaner than reality**: Hand-authored prompts include hints that real incidents don't
+6. **Single-turn evaluation**: Real work is iterative; test cases may compress multi-step workflows
+
+### Fix Strategies (in order)
+
+1. **Tighten expectedOutcomes**: Add negative constraints ("do NOT use X"), require specific tool names, specify correct syntax
+2. **Raise passThreshold**: Set to 85%+ for critical domains
+3. **Use `system-tool-usage` as secondary evaluator**: Catches redundant/wrong tool calls
+4. **Create domain-specific custom evaluator**: Include explicit rubric criteria the generic judge can't verify

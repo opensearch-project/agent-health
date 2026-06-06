@@ -1229,16 +1229,22 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
     const sortField = options?.sort || 'createdAt';
     const order = options?.order || 'desc';
 
-    const must: any[] = [{ term: { docType: 'evaluation-run' } }];
+    // NOTE: docType/benchmarkId/agentKey/status/trigger are dynamically mapped
+    // as `text` (with a `.keyword` sub-field), so `term` queries MUST target
+    // `<field>.keyword` — a `term` on the analyzed `text` field never matches a
+    // hyphenated value like 'evaluation-run' (it's tokenized), which silently
+    // returned 0 results and made every evaluation run invisible in the UI
+    // lists even though getById (a direct _id GET) found them.
+    const must: any[] = [{ term: { 'docType.keyword': 'evaluation-run' } }];
 
-    if (options?.benchmarkId) must.push({ term: { benchmarkId: options.benchmarkId } });
-    if (options?.agentKey) must.push({ term: { agentKey: options.agentKey } });
-    if (options?.status) must.push({ term: { status: options.status } });
-    if (options?.trigger) must.push({ term: { trigger: options.trigger } });
+    if (options?.benchmarkId) must.push({ term: { 'benchmarkId.keyword': options.benchmarkId } });
+    if (options?.agentKey) must.push({ term: { 'agentKey.keyword': options.agentKey } });
+    if (options?.status) must.push({ term: { 'status.keyword': options.status } });
+    if (options?.trigger) must.push({ term: { 'trigger.keyword': options.trigger } });
     if (options?.testCaseId) {
       must.push({ nested: {
         path: 'testCaseSnapshots',
-        query: { term: { 'testCaseSnapshots.id': options.testCaseId } },
+        query: { term: { 'testCaseSnapshots.id.keyword': options.testCaseId } },
       }});
     }
 

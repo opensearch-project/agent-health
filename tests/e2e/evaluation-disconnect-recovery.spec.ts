@@ -23,7 +23,7 @@ import { test, expect } from '@playwright/test';
 const JUDGE_MODEL = 'claude-sonnet-4';
 const AGENT_KEY = 'observio';
 const TEST_TIMEOUT = 360000; // 6 minutes — leaves buffer over the 4-minute internal poll wait
-const BACKEND_URL = `http://127.0.0.1:${process.env.AGENT_HEALTH_PORT || '4001'}`;
+const BACKEND_URL = `http://127.0.0.1:${process.env.AH_PORT || process.env.AGENT_HEALTH_PORT || '4001'}`;
 
 let createdReportIds: string[] = [];
 

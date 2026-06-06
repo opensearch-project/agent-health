@@ -21,3 +21,4 @@ export { createRemoteCommand } from './remote.js';
 export { createConfigureCommand } from './configure.js';
 export { createKillCommand } from './kill.js';
 export { createSetupTelemetryCommand } from './setup-telemetry.js';
+export { createSkillCommand } from './skill.js';

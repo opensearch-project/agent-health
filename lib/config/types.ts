@@ -35,7 +35,7 @@ export interface UserModelConfig {
   key: string;
   model_id: string;
   display_name: string;
-  provider?: 'bedrock' | 'demo' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic';
+  provider?: 'bedrock' | 'demo' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic' | 'pi' | 'agent';
   context_window?: number;
   max_output_tokens?: number;
 }
@@ -53,7 +53,7 @@ export type ReporterConfig =
  * Judge configuration
  */
 export interface JudgeConfig {
-  provider?: 'bedrock' | 'demo' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic';
+  provider?: 'bedrock' | 'demo' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic' | 'pi' | 'agent';
   model?: string;
   region?: string;
   /** Endpoint for custom/agentic judge (e.g., REST endpoint or subprocess command) */
@@ -187,7 +187,8 @@ export interface UserConfig {
    * Enable or disable the Coding Agent Analytics feature.
    * When false, no coding agent routes are mounted, no background timers
    * run, and the "Coding Agents" nav tab is hidden.
-   * Can also be disabled via AGENT_HEALTH_DISABLE_CODING_ANALYTICS=true env var.
+   * Can also be disabled via AH_DISABLE_CODING_ANALYTICS=true env var
+   * (legacy AGENT_HEALTH_DISABLE_CODING_ANALYTICS=true is still accepted).
    * @default true
    */
   codingAgentAnalytics?: boolean;

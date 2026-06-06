@@ -24,6 +24,7 @@ import { CodingAgentsPage } from './components/codingAgents/CodingAgentsPage';
 import { EvaluatorsPage } from './components/EvaluatorsPage';
 import { EvaluatorEditPage } from './components/EvaluatorEditPage';
 import { AssistantChat } from './components/assistant-ui/AssistantChat';
+import { SkillsPage } from './components/skills/SkillsPage';
 
 // Evals 3 — Evaluations
 import { BenchmarksPage4 as Evals3Benchmarks } from './components/evals3/BenchmarksPage';
@@ -109,6 +110,7 @@ function App() {
             <Route path="/benchmarks/:benchmarkId/runs" element={<BenchmarkRunsPage />} />
             <Route path="/evaluators" element={<EvaluatorsPage />} />
             <Route path="/evaluators/new" element={<EvaluatorEditPage />} />
+            <Route path="/evaluators/:evaluatorId" element={<EvaluatorEditPage />} />
             <Route path="/evaluators/:evaluatorId/edit" element={<EvaluatorEditPage />} />
 
             {/* Unified run details page - works for both test case and benchmark runs */}
@@ -137,9 +139,13 @@ function App() {
             <Route path="/evaluations/runs" element={<Evals3EvalRuns />} />
             <Route path="/evaluations/runs/new" element={<Evals3NewRun />} />
             <Route path="/evaluations/runs/:runId" element={<Evals3EvalRunDetail />} />
+            <Route path="/evaluations/runs/:runId/inspect" element={<Evals3RunInspector />} />
             <Route path="/evaluations/benchmarks/:benchmarkId/runs" element={<Evals3BenchmarkRuns />} />
             <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId" element={<Navigate to="inspect" replace />} />
             <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId/inspect" element={<Evals3RunInspector />} />
+
+            {/* Skills Evaluator */}
+            <Route path="/skills" element={<SkillsPage />} />
 
             {/* Coding Agent Analytics */}
             <Route path="/coding-agents" element={<CodingAgentsPage />} />

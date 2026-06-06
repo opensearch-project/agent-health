@@ -118,6 +118,8 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     }
     const testCases = resolved.testCases;
     const evaluateFnMap = resolved.evaluateFnMap;
+    const hooksByFile = resolved.hooksByFile;
+    const testHookScopes = resolved.testHookScopes;
 
     // Create test case snapshots
     const snapshots: TestCaseSnapshot[] = testCases.map(tc => ({
@@ -161,6 +163,8 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
         storageModule: storage,
         cancellationToken,
         evaluateFnMap,
+        hooksByFile,
+        testHookScopes,
         onProgress: (progress: any) => {
           sendSSE(res, 'progress', progress);
         },

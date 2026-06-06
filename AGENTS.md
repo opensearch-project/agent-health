@@ -97,7 +97,7 @@ test('rca-coherent', { prompt: 'Why is X failing?' }, async ({ result, judge }) 
 
 Full guide: [docs/SDK.md](docs/SDK.md). Samples: [evals/demo.eval.js](evals/demo.eval.js).
 
-The SDK is **experimental** — the API surface may change in a minor release without a deprecation cycle. Set `AGENT_HEALTH_SUPPRESS_EXPERIMENTAL=1` to silence the runtime notice.
+The SDK is **experimental** — the API surface may change in a minor release without a deprecation cycle. Set `AH_SUPPRESS_EXPERIMENTAL=1` to silence the runtime notice.
 
 ## Environment Setup
 
@@ -250,6 +250,90 @@ with tracer.start_as_current_span(
 - **Metrics Calculation**: Token counts and costs are computed from semantic attributes
 - **Cross-Agent Comparison**: Standardized attributes enable fair comparisons
 - **Debugging**: Consistent naming helps identify issues across different agents
+
+## Trace correlation conventions
+
+When agent-health runs a test case it emits its own `test_case` eval span. To make
+the agent's spans correlate with that eval span (so the run-report Traces tab shows
+one unified trace tree), agents and connectors follow this layered convention.
+
+### Strategy A — W3C trace context (preferred, single trace tree)
+
+The `test_case` span is started **before** the connector invokes the agent and is
+made the active OTel context. Connectors then propagate the context to the agent:
+
+- **Subprocess agents** (Claude Code, Kiro, Pi, anything via `SubprocessConnector`)
+  set `traceContext.propagateEnv = true`. The base class injects a W3C
+  `TRACEPARENT=00-<traceId>-<spanId>-01` env var into the spawned process.
+- **HTTP/SSE agents** (Observio AGUI, REST, OpenAI-compatible, LangGraph)
+  set `traceContext.propagateHeader = true`. The base class injects a `traceparent`
+  HTTP header via `propagation.inject(context.active(), headers)`.
+
+Agents whose OTel SDK respects W3C trace context (which includes upstream Claude
+Code, Anthropic Bedrock SDKs, all standard `@opentelemetry/sdk-*` exporters)
+adopt the eval span as parent context automatically — their root span (e.g.
+`claude_code.interaction`) becomes a child of `test_case`, sharing the same
+`traceId`. Looking up by that `traceId` returns the whole tree.
+
+### Strategy B — `gen_ai.request.id` attribute (loose link, separate trees)
+
+For agents we instrument ourselves but that don't propagate W3C context, set the
+span attribute `gen_ai.request.id` equal to agent-health's `runId`. The eval span
+already carries this attribute (`ATTR_AGENT_HEALTH_AGENT_RUN_ID`), so an
+OpenSearch `terms` query unions both. SubprocessConnector also exports
+`AGENT_EVAL_RUN_ID=<runId>` to the child env as the conventional source for this
+attribute.
+
+### Strategy C — service-name + time-window (always-on fallback)
+
+For closed-source / 3rd-party agents that do neither A nor B, register the
+agent's OpenSearch `service.name` on the connector via
+`traceContext.serviceName`. The run-report Traces tab **always** issues this
+clause unioned with A/B — the API receives `agents: [{serviceName, startedAt,
+endedAt}]` derived from the connector's `traceServiceName` (or the protocol→
+name convention map) and the run's wall-clock window. The OpenSearch query
+builder unions all three clauses via `bool.should` so spans matching any
+strategy are returned without duplication.
+
+This strategy was originally opt-in via a UI checkbox — the noise risk it can
+surface is real (concurrent runs of the same agent on overlapping windows,
+other users on a shared OTel cluster running the same agent, long-lived agent
+sessions that cross run boundaries) — but in practice the run-report Traces
+tab landed on a near-empty trace tree by default until the user noticed the
+toggle. Empty-by-default was a worse cost than the noise risk, so Strategy C
+is now always-on. Users who need stricter isolation can override the
+connector's `serviceName` to a tenant-scoped value.
+
+Window derivation:
+  - When `report.performanceMetrics.durationMs` is set: `[timestamp −
+    durationMs − 60s, timestamp + 60s]` (tight bound).
+  - When `durationMs` is missing (older runs persisted before that field):
+    fall back to a 30-minute lookback. Wide enough for any realistic agent
+    run, narrow enough to keep cross-team noise minimal.
+
+Default per-connector `serviceName` values:
+
+| connectorType    | serviceName              |
+|------------------|--------------------------|
+| `claude-code`    | `claude-code-agent`      |
+| `kiro`           | `kiro-agent`             |
+| `pi`             | `pi-agent`               |
+| `agui-streaming` | `observio-sample-agent`  |
+
+Users can override per-agent in `agent-health.config.ts`:
+
+```ts
+{
+  key: 'my-agent',
+  connectorType: 'subprocess',
+  connectorConfig: {
+    traceContext: {
+      propagateEnv: true,
+      serviceName: 'my-custom-otel-service-name',
+    },
+  },
+}
+```
 
 ### Validation
 

@@ -43,6 +43,7 @@
     "observio-sample-agent",
     "services/adapters",
     "scripts/test-adapters.ts",
-    "scripts/test-claude-code-adapter.ts"
+    "scripts/test-claude-code-adapter.ts",
+    "examples"
   ]
 }

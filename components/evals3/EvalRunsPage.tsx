@@ -31,7 +31,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
-import { Benchmark, TestCase, BenchmarkRun } from '@/types';
+import { listEvaluationRuns } from '@/services/client';
+import { Benchmark, TestCase, BenchmarkRun, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatRelativeTime, getModelName } from '@/lib/utils';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -57,14 +58,28 @@ function getTimeThreshold(range: TimeRange): Date | null {
 
 type ViewMode = 'flat' | 'grouped';
 
-/** One benchmark run with its parent benchmark context */
+/** One run with its parent benchmark context.
+ *
+ * NOTE (run-model convergence, RFC 004 single-engine): there are currently
+ * TWO disjoint run records — legacy benchmark-embedded runs (`run-…` inside
+ * `benchmark.runs[]`) and top-level evaluation-runs (`eval-run-…`, created by
+ * the unified /api/storage/evaluation-runs path: code-import, run-prioritizer,
+ * `benchmark -f`). This page MERGES both so neither is invisible. The merge is
+ * intentionally TEMPORARY: the long-term goal is to converge on the
+ * evaluation-run model (converge the benchmark write path → eval-runs, migrate
+ * embedded runs via `agent-health migrate evaluation-runs`, then drop
+ * `benchmark.runs[]` and this merge). `kind` records which model a row came
+ * from so the inspector link can target the right route. */
 interface RunRow {
   run: BenchmarkRun;
+  kind: 'benchmark' | 'eval-run';
   benchmarkId: string;
   benchmarkName: string;
   agentName: string;
   passed: number;
   failed: number;
+  /** Issue #242: evaluator-error runs counted separately from `failed`. */
+  errored: number;
   total: number;
 }
 
@@ -87,9 +102,15 @@ function SortHeader({ label, active, dir, onClick, className }: {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function computeRunStats(run: BenchmarkRun): { passed: number; failed: number; total: number } {
+function computeRunStats(run: BenchmarkRun): { passed: number; failed: number; errored: number; total: number } {
   if (run.stats && run.stats.total > 0) {
-    return { passed: run.stats.passed, failed: run.stats.failed, total: run.stats.total };
+    return {
+      passed: run.stats.passed,
+      failed: run.stats.failed,
+      // `errored` is optional on older stored runs (issue #242).
+      errored: run.stats.errored ?? 0,
+      total: run.stats.total,
+    };
   }
   const results = Object.values(run.results || {});
   let passed = 0, failed = 0;
@@ -98,7 +119,9 @@ function computeRunStats(run: BenchmarkRun): { passed: number; failed: number; t
     else if (r.status === 'failed' || r.status === 'cancelled') failed++;
   }
   const total = results.length;
-  return { passed, failed, total };
+  // Result-status fallback can't distinguish errored without the report;
+  // 0 is the safe default and stats refresh on next load will populate it.
+  return { passed, failed, errored: 0, total };
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -107,6 +130,9 @@ export const EvalRunsPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
+  // Top-level evaluation-runs (eval-run-…), merged with benchmark-embedded runs
+  // below. See the RunRow convergence note.
+  const [evalRuns, setEvalRuns] = useState<EvaluationRun[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filters (persisted)
@@ -141,8 +167,18 @@ export const EvalRunsPage: React.FC = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const bms = await asyncBenchmarkStorage.getAll();
+      // Fetch both run models in parallel (see RunRow convergence note). The
+      // eval-runs fetch is best-effort so a failure there still shows
+      // benchmark-embedded runs.
+      const [bms, er] = await Promise.all([
+        asyncBenchmarkStorage.getAll(),
+        listEvaluationRuns({ size: 500 }).then(r => r.evaluationRuns).catch(err => {
+          console.error('Failed to load evaluation-runs:', err);
+          return [] as EvaluationRun[];
+        }),
+      ]);
       setBenchmarks(bms);
+      setEvalRuns(er);
     } catch (err) {
       console.error('Failed to load:', err);
     } finally {
@@ -191,6 +227,7 @@ export const EvalRunsPage: React.FC = () => {
         const stats = computeRunStats(run);
         rows.push({
           run,
+          kind: 'benchmark',
           benchmarkId: bm.id,
           benchmarkName: bm.name,
           agentName,
@@ -199,8 +236,47 @@ export const EvalRunsPage: React.FC = () => {
       }
     }
 
+    // Merge top-level evaluation-runs (eval-run-…). Disjoint from the
+    // benchmark-embedded runs above (see RunRow convergence note); de-duped by
+    // id defensively. Same time/agent/search filters applied for consistency.
+    const seen = new Set(rows.map(r => r.run.id));
+    const benchNameById = new Map(benchmarks.map(b => [b.id, b.name] as const));
+    for (const er of evalRuns) {
+      if (seen.has(er.id)) continue;
+      if (threshold && new Date(er.createdAt) < threshold) continue;
+      if (selectedAgent !== 'all' && er.agentKey !== selectedAgent) continue;
+
+      const agentName = DEFAULT_CONFIG.agents.find(a => a.key === er.agentKey)?.name || er.agentKey || 'Unknown';
+      const benchmarkName = er.benchmarkId
+        ? (benchNameById.get(er.benchmarkId) ?? er.benchmarkId)
+        : '(ad-hoc)';
+
+      if (search) {
+        const q = search.toLowerCase();
+        if (
+          !(er.name ?? '').toLowerCase().includes(q) &&
+          !(er.id ?? '').toLowerCase().includes(q) &&
+          !benchmarkName.toLowerCase().includes(q) &&
+          !agentName.toLowerCase().includes(q)
+        ) continue;
+      }
+
+      // EvaluationRun is shape-compatible with BenchmarkRun for the fields this
+      // page reads (id, name, agentKey, modelId, createdAt, results, stats).
+      const run = er as unknown as BenchmarkRun;
+      const stats = computeRunStats(run);
+      rows.push({
+        run,
+        kind: 'eval-run',
+        benchmarkId: er.benchmarkId ?? '',
+        benchmarkName,
+        agentName,
+        ...stats,
+      });
+    }
+
     return rows;
-  }, [benchmarks, timeRange, selectedAgent, search]);
+  }, [benchmarks, evalRuns, timeRange, selectedAgent, search]);
 
   // Available filter options (derived from data)
   const availableBenchmarks = useMemo(() => {
@@ -427,6 +503,13 @@ export const EvalRunsPage: React.FC = () => {
   }, [groupedByBenchmark]);
   const regressionCountReal = regressionData.count;
 
+  // Inspector route differs per run model (convergence note): eval-runs use
+  // the top-level route, benchmark-embedded runs the nested one.
+  const inspectPath = (rr: RunRow) =>
+    rr.kind === 'eval-run'
+      ? `/evaluations/runs/${rr.run.id}/inspect`
+      : `/evaluations/benchmarks/${rr.benchmarkId}/runs/${rr.run.id}/inspect`;
+
   // Render a run row
   const renderRunRow = (rr: RunRow, showBenchmark: boolean) => {
     const isAllPassed = rr.failed === 0 && rr.passed > 0;
@@ -435,7 +518,7 @@ export const EvalRunsPage: React.FC = () => {
       <tr
         key={`${rr.benchmarkId}-${rr.run.id}`}
         className={`border-b hover:bg-muted/50 cursor-pointer transition-colors ${isChecked ? 'bg-primary/5' : ''}`}
-        onClick={() => navigate(`/evaluations/benchmarks/${rr.benchmarkId}/runs/${rr.run.id}/inspect`)}
+        onClick={() => navigate(inspectPath(rr))}
       >
         <td className="px-2 py-1.5 align-middle text-center w-8" onClick={e => e.stopPropagation()}>
           <button
@@ -470,12 +553,16 @@ export const EvalRunsPage: React.FC = () => {
         </td>
         {showBenchmark && (
           <td className="px-2 py-1.5 align-middle">
-            <button
-              className="text-[10px] text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300 hover:underline transition-colors"
-              onClick={e => { e.stopPropagation(); navigate(`/evaluations/benchmarks/${rr.benchmarkId}/runs`); }}
-            >
-              {rr.benchmarkName}
-            </button>
+            {rr.benchmarkId ? (
+              <button
+                className="text-[10px] text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300 hover:underline transition-colors"
+                onClick={e => { e.stopPropagation(); navigate(`/evaluations/benchmarks/${rr.benchmarkId}/runs`); }}
+              >
+                {rr.benchmarkName}
+              </button>
+            ) : (
+              <span className="text-[10px] text-muted-foreground">{rr.benchmarkName}</span>
+            )}
           </td>
         )}
         <td className="px-2 py-1.5 align-middle text-[11px]">{rr.agentName}</td>
@@ -488,7 +575,7 @@ export const EvalRunsPage: React.FC = () => {
               return (
                 <button
                   className="text-[10px] text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 hover:underline"
-                  onClick={e => { e.stopPropagation(); navigate(`/evaluations/benchmarks/${rr.benchmarkId}/runs/${rr.run.id}/inspect`); }}
+                  onClick={e => { e.stopPropagation(); navigate(inspectPath(rr)); }}
                 >
                   {ann.total} in {ann.tcCount} TC{ann.tcCount !== 1 ? 's' : ''}
                 </button>
@@ -502,6 +589,15 @@ export const EvalRunsPage: React.FC = () => {
             <span className="text-green-500 font-medium">{rr.passed}</span>
             <span className="text-muted-foreground">/</span>
             <span className="text-red-500 font-medium">{rr.failed}</span>
+            {rr.errored > 0 && (
+              <span
+                className="flex items-center gap-0.5 text-amber-500 font-medium ml-0.5"
+                title="Evaluator could not run on these (e.g. judge validation error). Excluded from pass-rate aggregation."
+              >
+                <AlertTriangle size={10} />
+                {rr.errored}
+              </span>
+            )}
             <span className="text-muted-foreground">/</span>
             <span className="text-muted-foreground">{rr.total}</span>
           </div>

@@ -31,12 +31,23 @@ export const testCaseSchema = z.object({
   difficulty: difficultySchema,
   initialPrompt: z.string().min(1, 'Initial prompt is required'),
   context: z.array(contextItemSchema).optional().default([]),
-  expectedOutcomes: z
-    .array(z.string())
-    .refine(
-      (outcomes) => outcomes.some((o) => o.trim().length > 0),
-      'At least one non-empty expected outcome is required'
-    ),
+  // expectedOutcomes is optional. SDK code-only tests (`test()` blocks
+  // that drive pass/fail via deterministic body or inline `judge()`
+  // calls) have no expectedOutcomes — so requiring "at least one
+  // non-empty" here would force UI-created cross-surface-equivalent test
+  // cases to invent placeholder outcomes that the runner ignores. The
+  // server-side judge contract does still require expectedOutcomes when
+  // it actually grades a run (see services/evaluation/evaluatorError.ts
+  // — issue #242 surfaces "Missing required field" as an evaluator
+  // error), but the test case schema itself shouldn't gate authoring.
+  //
+  // `expectedTrajectory` is intentionally NOT modelled here. It exists on
+  // the persisted `TestCase` shape (set by the SDK loader from `test()`
+  // options) but the JSON-paste / form authoring path doesn't surface it,
+  // and adding it here without plumbing it through `ValidatedTestCaseInput`
+  // / `TestCaseFormState` / the editor save path would silently drop it on
+  // round-trip (PR #258 review feedback).
+  expectedOutcomes: z.array(z.string()).optional().default([]),
 });
 
 export const testCasesArraySchema = z.array(testCaseSchema).min(1, 'Array cannot be empty');

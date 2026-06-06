@@ -5,14 +5,16 @@
 
 /**
  * API Key Authentication Middleware
- * When AGENT_HEALTH_API_KEY is set, requires Bearer token on /api/coding-agents/* routes.
- * When not set, all requests pass through (backwards compatible).
+ * When AH_API_KEY (legacy: AGENT_HEALTH_API_KEY) is set, requires Bearer
+ * token on /api/coding-agents/* routes. When not set, all requests pass
+ * through (backwards compatible).
  */
 
 import { Request, Response, NextFunction } from 'express';
+import { readEnv } from '@/lib/envCompat';
 
 export function apiKeyAuth(req: Request, res: Response, next: NextFunction): void {
-  const requiredKey = process.env.AGENT_HEALTH_API_KEY;
+  const requiredKey = readEnv('AH_API_KEY', 'AGENT_HEALTH_API_KEY');
   if (!requiredKey) return next();
 
   // Only protect coding-agents API routes

@@ -257,7 +257,13 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
 
   const canProceedFromInfo = name.trim().length > 0;
   const canProceedFromUseCases = selectedUseCaseIds.size > 0;
-  const canSave = canProceedFromInfo && canProceedFromUseCases && runs.length > 0;
+  // In *edit* mode, Step 3 ("Define Runs") is optional — users may want to add
+  // or remove test cases (which still bumps currentVersion via the backend)
+  // without being forced to also configure a fresh run. They can run the new
+  // version later from the detail page. In *create* mode we still require at
+  // least one run config so a brand-new benchmark surfaces with results.
+  const isEditMode = !!benchmark;
+  const canSave = canProceedFromInfo && canProceedFromUseCases && (isEditMode || runs.length > 0);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -566,6 +572,29 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
                   <Check size={16} className="mr-1" />
                   Save Changes
                 </Button>
+              ) : benchmark && testCasesChanged ? (
+                // Edit mode with test-case changes: offer BOTH "Save Changes"
+                // (persist v{n+1} without running) AND "Next: Define Runs"
+                // (persist + configure a run). User feedback: editing should
+                // not force a run.
+                <>
+                  <Button
+                    data-testid="editor-save-without-run"
+                    variant="outline"
+                    onClick={handleSave}
+                    disabled={!canProceedFromUseCases}
+                  >
+                    <Check size={16} className="mr-1" />
+                    Save Changes (v{benchmark.currentVersion + 1})
+                  </Button>
+                  <Button
+                    onClick={() => setStep('runs')}
+                    disabled={!canProceedFromUseCases}
+                  >
+                    Next: Define Runs
+                    <ChevronRight size={16} className="ml-1" />
+                  </Button>
+                </>
               ) : (
                 <Button
                   onClick={() => setStep('runs')}
@@ -586,7 +615,9 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
                 {!benchmark
                   ? 'Create & Run Benchmark'
                   : testCasesChanged
-                    ? `Save & Run v${benchmark.currentVersion + 1}`
+                    ? (runs.length > 0
+                        ? `Save & Run v${benchmark.currentVersion + 1}`
+                        : `Save Changes (v${benchmark.currentVersion + 1})`)
                     : 'Save Changes'}
               </Button>
             )}

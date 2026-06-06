@@ -295,6 +295,67 @@ export interface DiffStats {
   comparisonLatencyMs: number;
 }
 
+/**
+ * One-line summary of where two trajectories first disagree.
+ * Returned to the comparison table so the user sees the *gist* of why a case
+ * regressed without expanding the row.
+ *
+ * `index` is the position in the aligned trajectory (not the raw step index)
+ * of the first non-`matched` step. `null` when the trajectories align fully.
+ */
+export interface DivergencePreview {
+  /** Aligned-step index where divergence begins */
+  index: number;
+  /** What kind of divergence — drives icon/styling at the call site */
+  type: 'added' | 'removed' | 'modified';
+  /** Short description of the baseline (loser) step at the divergence */
+  baselineSummary?: string;
+  /** Short description of the comparison (winner) step at the divergence */
+  comparisonSummary?: string;
+}
+
+const truncate = (text: string, max = 80): string => {
+  const trimmed = text.replace(/\s+/g, ' ').trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+};
+
+const summarizeStep = (step: TrajectoryStep | undefined): string | undefined => {
+  if (!step) return undefined;
+  if (step.toolName) {
+    const argHint = step.toolArgs ? Object.keys(step.toolArgs).slice(0, 2).join(',') : '';
+    return argHint ? `${step.toolName}(${argHint})` : `${step.toolName}()`;
+  }
+  if (step.content) {
+    return truncate(step.content);
+  }
+  return step.type;
+};
+
+/**
+ * Find the first divergence between two trajectories using the existing
+ * `alignTrajectories` LCS-style alignment so the result respects shifts
+ * (a longer winner trajectory doesn't claim divergence at every offset step).
+ *
+ * Returns `null` when the trajectories align identically.
+ */
+export function extractFirstDivergence(
+  baseline: TrajectoryStep[],
+  comparison: TrajectoryStep[]
+): DivergencePreview | null {
+  if (baseline.length === 0 && comparison.length === 0) return null;
+
+  const aligned = alignTrajectories(baseline, comparison);
+  const firstDivergent = aligned.find(s => s.type !== 'matched');
+  if (!firstDivergent) return null;
+
+  return {
+    index: firstDivergent.index,
+    type: firstDivergent.type as 'added' | 'removed' | 'modified',
+    baselineSummary: summarizeStep(firstDivergent.baselineStep),
+    comparisonSummary: summarizeStep(firstDivergent.comparisonStep),
+  };
+}
+
 export function calculateDiffStats(
   alignedSteps: AlignedStep[],
   baseline: TrajectoryStep[],

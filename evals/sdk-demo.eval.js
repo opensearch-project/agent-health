@@ -12,7 +12,7 @@
  *   3. data-only-no-prompt   (deterministic)  — no agent call at all
  *
  * Run with:
- *   AGENT_HEALTH_PORT=4002 npx @opensearch-project/agent-health benchmark \
+ *   AH_PORT=4002 npx @opensearch-project/agent-health benchmark \
  *     -f evals/sdk-demo.eval.js -a demo
  */
 
@@ -26,7 +26,8 @@ test('mock-says-hello', {
   prompt: 'Say hello in one short sentence.',
   description: 'Mock agent must produce a non-empty response within 30s',
   labels: ['category:Smoke', 'difficulty:Easy', 'method:deterministic'],
-}, function ({ result }) {
+}, async function ({ agent }) {
+  const result = await agent.run();
   expect(result.trajectory).to.have.length.greaterThan(0);
   expect(result.agentOutput.trim()).to.have.length.greaterThan(0);
   expect(result).to.haveCompletedWithin(30_000);
@@ -46,7 +47,9 @@ test('mock-rca-judged', {
     },
   ],
   labels: ['category:RCA', 'difficulty:Medium', 'method:agentic'],
-}, async function ({ result, judge }) {
+}, async function ({ agent, judge }) {
+  const result = await agent.run();
+
   // Cheap deterministic preflight — fail fast before spending $ on the judge
   expect(result.trajectory).to.have.length.greaterThan(0);
   expect(result).to.haveCompletedWithin(60_000);

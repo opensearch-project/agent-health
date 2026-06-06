@@ -9,6 +9,9 @@ describe('server/config', () => {
   beforeEach(() => {
     jest.resetModules();
     process.env = { ...originalEnv };
+    delete process.env.AH_PORT;
+    delete process.env.AGENT_HEALTH_PORT;
+    process.env.AH_QUIET_DEPRECATIONS = '1';
   });
 
   afterAll(() => {
@@ -17,12 +20,17 @@ describe('server/config', () => {
 
   describe('PORT', () => {
     it('should default to 4001', async () => {
-      delete process.env.AGENT_HEALTH_PORT;
       const config = await import('@/server/config');
       expect(config.PORT).toBe(4001);
     });
 
-    it('should use AGENT_HEALTH_PORT when set', async () => {
+    it('should use AH_PORT when set', async () => {
+      process.env.AH_PORT = '8080';
+      const config = await import('@/server/config');
+      expect(config.PORT).toBe(8080);
+    });
+
+    it('still accepts legacy AGENT_HEALTH_PORT', async () => {
       process.env.AGENT_HEALTH_PORT = '8080';
       const config = await import('@/server/config');
       expect(config.PORT).toBe(8080);

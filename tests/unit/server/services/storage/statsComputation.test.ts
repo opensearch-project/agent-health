@@ -35,7 +35,7 @@ describe('statsComputation', () => {
       const run = {};
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 0, failed: 0, pending: 0, total: 0 });
+      expect(stats).toEqual({ passed: 0, failed: 0, pending: 0, errored: 0, total: 0 });
       expect(mockClient.search).not.toHaveBeenCalled();
     });
 
@@ -43,7 +43,7 @@ describe('statsComputation', () => {
       const run = { results: undefined };
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 0, failed: 0, pending: 0, total: 0 });
+      expect(stats).toEqual({ passed: 0, failed: 0, pending: 0, errored: 0, total: 0 });
       expect(mockClient.search).not.toHaveBeenCalled();
     });
 
@@ -51,7 +51,7 @@ describe('statsComputation', () => {
       const run = { results: {} };
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 0, failed: 0, pending: 0, total: 0 });
+      expect(stats).toEqual({ passed: 0, failed: 0, pending: 0, errored: 0, total: 0 });
       expect(mockClient.search).not.toHaveBeenCalled();
     });
 
@@ -78,7 +78,7 @@ describe('statsComputation', () => {
 
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 2, failed: 1, pending: 0, total: 3 });
+      expect(stats).toEqual({ passed: 2, failed: 1, pending: 0, errored: 0, total: 3 });
       expect(mockClient.search).toHaveBeenCalledWith({
         index: 'evals_runs',
         body: {
@@ -112,7 +112,7 @@ describe('statsComputation', () => {
 
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 1, failed: 0, pending: 2, total: 3 });
+      expect(stats).toEqual({ passed: 1, failed: 0, pending: 2, errored: 0, total: 3 });
     });
 
     it('should count failed and cancelled status results as failed', async () => {
@@ -136,7 +136,7 @@ describe('statsComputation', () => {
 
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 1, failed: 2, pending: 0, total: 3 });
+      expect(stats).toEqual({ passed: 1, failed: 2, pending: 0, errored: 0, total: 3 });
     });
 
     it('should count completed results with missing reports as pending', async () => {
@@ -160,7 +160,7 @@ describe('statsComputation', () => {
 
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 1, failed: 0, pending: 1, total: 2 });
+      expect(stats).toEqual({ passed: 1, failed: 0, pending: 1, errored: 0, total: 2 });
     });
 
     it('should count completed results with no reportId as pending', async () => {
@@ -183,7 +183,7 @@ describe('statsComputation', () => {
 
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 1, failed: 0, pending: 1, total: 2 });
+      expect(stats).toEqual({ passed: 1, failed: 0, pending: 1, errored: 0, total: 2 });
     });
 
     it('should count results with metricsStatus pending as pending', async () => {
@@ -205,7 +205,7 @@ describe('statsComputation', () => {
 
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, total: 1 });
+      expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, errored: 0, total: 1 });
     });
 
     it('should count results with metricsStatus calculating as pending', async () => {
@@ -227,7 +227,7 @@ describe('statsComputation', () => {
 
       const stats = await computeStatsForRun(mockClient as any, run);
 
-      expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, total: 1 });
+      expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, errored: 0, total: 1 });
     });
 
     it('should handle mixed statuses correctly in a single run', async () => {
@@ -262,7 +262,7 @@ describe('statsComputation', () => {
       // passed: tc-1
       // failed: tc-2 (report), tc-5 (status), tc-6 (status) = 3
       // pending: tc-3 (pending status), tc-4 (running status), tc-7 (metricsStatus calculating), tc-8 (missing report) = 4
-      expect(stats).toEqual({ passed: 1, failed: 3, pending: 4, total: 8 });
+      expect(stats).toEqual({ passed: 1, failed: 3, pending: 4, errored: 0, total: 8 });
     });
 
     describe('no reportIds path (behavioral fix)', () => {
@@ -279,7 +279,7 @@ describe('statsComputation', () => {
 
         // The critical behavioral fix: failed/cancelled results should be counted
         // as failed even when there are no reportIds, not all as pending.
-        expect(stats).toEqual({ passed: 0, failed: 2, pending: 1, total: 3 });
+        expect(stats).toEqual({ passed: 0, failed: 2, pending: 1, errored: 0, total: 3 });
         expect(mockClient.search).not.toHaveBeenCalled();
       });
 
@@ -293,7 +293,7 @@ describe('statsComputation', () => {
 
         const stats = await computeStatsForRun(mockClient as any, run);
 
-        expect(stats).toEqual({ passed: 0, failed: 0, pending: 2, total: 2 });
+        expect(stats).toEqual({ passed: 0, failed: 0, pending: 2, errored: 0, total: 2 });
         expect(mockClient.search).not.toHaveBeenCalled();
       });
 
@@ -308,7 +308,7 @@ describe('statsComputation', () => {
 
         const stats = await computeStatsForRun(mockClient as any, run);
 
-        expect(stats).toEqual({ passed: 0, failed: 3, pending: 0, total: 3 });
+        expect(stats).toEqual({ passed: 0, failed: 3, pending: 0, errored: 0, total: 3 });
         expect(mockClient.search).not.toHaveBeenCalled();
       });
 
@@ -327,7 +327,7 @@ describe('statsComputation', () => {
 
         // failed: tc-1, tc-3 = 2
         // pending: tc-2, tc-4, tc-5 (completed but no reportId, falls to else) = 3
-        expect(stats).toEqual({ passed: 0, failed: 2, pending: 3, total: 5 });
+        expect(stats).toEqual({ passed: 0, failed: 2, pending: 3, errored: 0, total: 5 });
         expect(mockClient.search).not.toHaveBeenCalled();
       });
     });
@@ -348,7 +348,7 @@ describe('statsComputation', () => {
         const stats = await computeStatsForRun(mockClient as any, run);
 
         // Fallback: completed → pending, failed → failed, cancelled → failed, pending → pending
-        expect(stats).toEqual({ passed: 0, failed: 2, pending: 2, total: 4 });
+        expect(stats).toEqual({ passed: 0, failed: 2, pending: 2, errored: 0, total: 4 });
         expect(consoleWarnSpy).toHaveBeenCalledWith(
           '[StatsComputation] Failed to fetch reports for stats computation:',
           'Connection refused'
@@ -367,7 +367,7 @@ describe('statsComputation', () => {
 
         const stats = await computeStatsForRun(mockClient as any, run);
 
-        expect(stats).toEqual({ passed: 0, failed: 0, pending: 2, total: 2 });
+        expect(stats).toEqual({ passed: 0, failed: 0, pending: 2, errored: 0, total: 2 });
       });
 
       it('should count running as pending in error fallback', async () => {
@@ -381,7 +381,7 @@ describe('statsComputation', () => {
 
         const stats = await computeStatsForRun(mockClient as any, run);
 
-        expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, total: 1 });
+        expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, errored: 0, total: 1 });
       });
     });
 
@@ -404,7 +404,7 @@ describe('statsComputation', () => {
         const stats = await computeStatsForRun(mockClient as any, run);
 
         // Completed but report not found → pending
-        expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, total: 1 });
+        expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, errored: 0, total: 1 });
       });
 
       it('should handle undefined hits from OpenSearch', async () => {
@@ -423,7 +423,7 @@ describe('statsComputation', () => {
         const stats = await computeStatsForRun(mockClient as any, run);
 
         // Completed but report not found (hits undefined) → pending
-        expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, total: 1 });
+        expect(stats).toEqual({ passed: 0, failed: 0, pending: 1, errored: 0, total: 1 });
       });
 
       it('should only include truthy reportIds in the search query', async () => {
@@ -461,7 +461,7 @@ describe('statsComputation', () => {
         );
 
         // tc-1: passed, tc-2: pending (no reportId), tc-3: failed
-        expect(stats).toEqual({ passed: 1, failed: 1, pending: 1, total: 3 });
+        expect(stats).toEqual({ passed: 1, failed: 1, pending: 1, errored: 0, total: 3 });
       });
 
       it('should treat a report with non-passed passFailStatus as failed', async () => {
@@ -484,7 +484,60 @@ describe('statsComputation', () => {
         const stats = await computeStatsForRun(mockClient as any, run);
 
         // Non-'passed' passFailStatus counts as failed
-        expect(stats).toEqual({ passed: 0, failed: 1, pending: 0, total: 1 });
+        expect(stats).toEqual({ passed: 0, failed: 1, pending: 0, errored: 0, total: 1 });
+      });
+
+      // Issue #242: evaluator could not produce a verdict (e.g. judge
+      // validation error, trace timeout) is bucketed as `errored`, NOT
+      // `failed`, so misconfigured evaluators don't poison pass rates.
+      it('should count metricsStatus="error" as errored, not failed', async () => {
+        const run = {
+          results: {
+            'tc-1': { reportId: 'report-1', status: 'completed' },
+            'tc-2': { reportId: 'report-2', status: 'completed' },
+            'tc-3': { reportId: 'report-3', status: 'completed' },
+          },
+        };
+
+        mockClient.search.mockResolvedValue({
+          body: {
+            hits: {
+              hits: [
+                // A genuine pass
+                { _source: { id: 'report-1', passFailStatus: 'passed' } },
+                // A genuine fail (agent answered wrong)
+                { _source: { id: 'report-2', passFailStatus: 'failed' } },
+                // Evaluator never ran (judge validation error). passFailStatus
+                // may be 'failed', 'passed', or undefined here — metricsStatus
+                // wins and the result must bucket as errored.
+                { _source: { id: 'report-3', passFailStatus: 'failed', metricsStatus: 'error' } },
+              ],
+            },
+          },
+        });
+
+        const stats = await computeStatsForRun(mockClient as any, run);
+
+        expect(stats).toEqual({ passed: 1, failed: 1, pending: 0, errored: 1, total: 3 });
+      });
+
+      it('does not let metricsStatus="error" sneak into passed even if passFailStatus is passed', async () => {
+        // Defensive: if some upstream code forgot to clear passFailStatus when
+        // marking the run errored, metricsStatus must still take precedence.
+        const run = {
+          results: { 'tc-1': { reportId: 'report-1', status: 'completed' } },
+        };
+        mockClient.search.mockResolvedValue({
+          body: {
+            hits: {
+              hits: [
+                { _source: { id: 'report-1', passFailStatus: 'passed', metricsStatus: 'error' } },
+              ],
+            },
+          },
+        });
+        const stats = await computeStatsForRun(mockClient as any, run);
+        expect(stats).toEqual({ passed: 0, failed: 0, pending: 0, errored: 1, total: 1 });
       });
     });
   });

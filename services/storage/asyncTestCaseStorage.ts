@@ -106,6 +106,10 @@ function toTestCase(stored: StorageTestCase): TestCase {
     difficulty: (parsed.difficulty as Difficulty) || stored.difficulty || 'Medium',
     currentVersion: stored.version,
     versions: [], // Versions fetched separately if needed
+    // Source provenance — preserve so the UI can distinguish SDK / code-imported
+    // test cases from JSON ones (CollapsibleTestCaseDefinition keys off these).
+    sourceFile: stored.sourceFile,
+    sourceHash: stored.sourceHash,
     isPromoted: stored.tags?.includes('promoted') ?? false,
     createdAt: stored.createdAt,
     updatedAt: stored.updatedAt,

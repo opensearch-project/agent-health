@@ -36,6 +36,8 @@ import type {
 export class LangGraphConnector extends BaseConnector {
   readonly type = 'langgraph' as const;
   readonly name = 'LangGraph (REST)';
+
+  override traceContext = { propagateHeader: true };
   readonly supportsStreaming = false;
 
   buildPayload(request: ConnectorRequest): any {
@@ -67,6 +69,7 @@ export class LangGraphConnector extends BaseConnector {
   ): Promise<ConnectorResponse> {
     const payload = request.payload || this.buildPayload(request);
     const headers = this.buildAuthHeaders(auth);
+    this.injectTraceparentHeaders(headers);
     const config = request.connectorConfig || {};
     const graphId = config.graphId || 'agent';
 

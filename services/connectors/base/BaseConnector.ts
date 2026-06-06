@@ -5,6 +5,7 @@
 
 import type { TrajectoryStep } from '@/types';
 import { debug as centralDebug } from '@/lib/debug';
+import { trace, context as otelContext, propagation } from '@opentelemetry/api';
 import type {
   AgentConnector,
   ConnectorAuth,
@@ -13,6 +14,7 @@ import type {
   ConnectorResponse,
   ConnectorProgressCallback,
   ConnectorRawEventCallback,
+  TraceContextStrategy,
 } from '@/services/connectors/types';
 
 /**
@@ -23,6 +25,12 @@ export abstract class BaseConnector implements AgentConnector {
   abstract readonly type: ConnectorProtocol;
   abstract readonly name: string;
   abstract readonly supportsStreaming: boolean;
+
+  /**
+   * Trace-context propagation strategy. Subclasses set defaults; users can
+   * override per-agent via `connectorConfig.traceContext` (merged in execute()).
+   */
+  traceContext?: TraceContextStrategy;
 
   /**
    * Build payload for the agent request
@@ -170,5 +178,49 @@ export abstract class BaseConnector implements AgentConnector {
    */
   protected error(message: string, ...args: any[]): void {
     console.error(`[${this.type}] ${message}`, ...args);
+  }
+
+  /**
+   * Build a W3C `TRACEPARENT` env var string from the active OTel span,
+   * if any. Returns an env-fragment object (empty if no active span or
+   * propagation is disabled for this connector).
+   *
+   * Used by subprocess connectors to make the child's OTel SDK adopt the
+   * eval `test_case` span as parent context (Strategy A).
+   */
+  protected buildTraceparentEnv(): Record<string, string> {
+    if (!this.traceContext?.propagateEnv) return {};
+    const span = trace.getSpan(otelContext.active());
+    if (!span) return {};
+    const ctx = span.spanContext();
+    if (!ctx.traceId || !ctx.spanId) return {};
+    // Both trace-id and parent-id must be non-zero per W3C trace context spec
+    // (https://www.w3.org/TR/trace-context/#trace-id). Emitting an all-zero
+    // value would produce an invalid traceparent that downstream SDKs
+    // typically reject silently — the agent's root span won't adopt our
+    // context as parent and we'd get back to two unrelated trace trees.
+    if (ctx.traceId === '0'.repeat(32) || ctx.spanId === '0'.repeat(16)) return {};
+    // 00 = W3C version; flags=01 means SAMPLED so the agent's exporter forwards.
+    const flags = (ctx.traceFlags ?? 1).toString(16).padStart(2, '0');
+    const env: Record<string, string> = {
+      TRACEPARENT: `00-${ctx.traceId}-${ctx.spanId}-${flags}`,
+    };
+    if (ctx.traceState) {
+      const ts = ctx.traceState.serialize();
+      if (ts) env.TRACESTATE = ts;
+    }
+    return env;
+  }
+
+  /**
+   * Inject W3C `traceparent` (and `tracestate`) headers into an outgoing
+   * HTTP request, if a span is active and propagation is enabled.
+   *
+   * Used by REST/SSE connectors so the remote agent's OTel SDK adopts the
+   * eval `test_case` span as parent context (Strategy A).
+   */
+  protected injectTraceparentHeaders(headers: Record<string, string>): void {
+    if (!this.traceContext?.propagateHeader) return;
+    propagation.inject(otelContext.active(), headers);
   }
 }

@@ -606,6 +606,139 @@ describe('Experiments Storage Routes', () => {
 
       expect(res.status).toHaveBeenCalledWith(404);
     });
+
+    // ── Version-bump regression coverage ────────────────────────────────
+    // The PUT route must increment currentVersion AND append to versions[]
+    // when (and only when) the test-case selection changes. This is the
+    // single backend hook the UI's Edit flow depends on; without it the
+    // pencil button in BenchmarksPage / BenchmarkRunsPage would silently no-op.
+    it('bumps currentVersion when testCaseIds change', async () => {
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-versioned',
+        name: 'Versioned BM',
+        testCaseIds: ['tc-1'],
+        currentVersion: 1,
+        versions: [{ version: 1, createdAt: '2026-01-01T00:00:00.000Z', testCaseIds: ['tc-1'] }],
+        runs: [],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      });
+      mockBenchmarksUpdate.mockImplementation(async (_id: string, updates: any) => updates);
+
+      const { req, res } = createMocks(
+        { id: 'exp-versioned' },
+        { testCaseIds: ['tc-1', 'tc-2'] }, // adding a test case
+      );
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
+
+      await handler(req, res);
+
+      expect(mockBenchmarksUpdate).toHaveBeenCalledWith(
+        'exp-versioned',
+        expect.objectContaining({
+          currentVersion: 2,
+          testCaseIds: ['tc-1', 'tc-2'],
+          versions: expect.arrayContaining([
+            expect.objectContaining({ version: 1 }),
+            expect.objectContaining({ version: 2, testCaseIds: ['tc-1', 'tc-2'] }),
+          ]),
+        }),
+      );
+      const updateCall = mockBenchmarksUpdate.mock.calls[0][1];
+      expect(updateCall.versions).toHaveLength(2);
+    });
+
+    it('does NOT bump currentVersion when only metadata changes', async () => {
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-metadata',
+        name: 'Old Name',
+        description: 'Old desc',
+        testCaseIds: ['tc-1', 'tc-2'],
+        currentVersion: 3,
+        versions: [
+          { version: 1, createdAt: '2026-01-01T00:00:00.000Z', testCaseIds: ['tc-1'] },
+          { version: 2, createdAt: '2026-01-02T00:00:00.000Z', testCaseIds: ['tc-1', 'tc-2'] },
+          { version: 3, createdAt: '2026-01-03T00:00:00.000Z', testCaseIds: ['tc-1', 'tc-2'] },
+        ],
+        runs: [],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      });
+      mockBenchmarksUpdate.mockImplementation(async (_id: string, updates: any) => updates);
+
+      const { req, res } = createMocks(
+        { id: 'exp-metadata' },
+        { name: 'New Name', description: 'New desc' }, // metadata only, no testCaseIds
+      );
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
+
+      await handler(req, res);
+
+      const updateCall = mockBenchmarksUpdate.mock.calls[0][1];
+      // currentVersion must remain 3 — metadata edits never bump.
+      expect(updateCall.currentVersion).toBe(3);
+      // versions[] must NOT have grown.
+      expect(updateCall.versions).toHaveLength(3);
+      expect(updateCall.name).toBe('New Name');
+      expect(updateCall.description).toBe('New desc');
+    });
+
+    it('treats reordered testCaseIds as no change (set semantics)', async () => {
+      // The route uses set-based comparison (sort + zip), not array equality,
+      // so reordering the same IDs must NOT trigger a version bump. This
+      // protects against accidental version inflation from UI re-renders.
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-reorder',
+        name: 'BM',
+        testCaseIds: ['tc-a', 'tc-b', 'tc-c'],
+        currentVersion: 1,
+        versions: [{ version: 1, createdAt: '2026-01-01T00:00:00.000Z', testCaseIds: ['tc-a', 'tc-b', 'tc-c'] }],
+        runs: [],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      });
+      mockBenchmarksUpdate.mockImplementation(async (_id: string, updates: any) => updates);
+
+      const { req, res } = createMocks(
+        { id: 'exp-reorder' },
+        { testCaseIds: ['tc-c', 'tc-a', 'tc-b'] }, // same IDs, different order
+      );
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
+
+      await handler(req, res);
+
+      const updateCall = mockBenchmarksUpdate.mock.calls[0][1];
+      expect(updateCall.currentVersion).toBe(1);
+      expect(updateCall.versions).toHaveLength(1);
+    });
+
+    it('bumps currentVersion when removing a test case (length shrinks)', async () => {
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-shrink',
+        name: 'BM',
+        testCaseIds: ['tc-1', 'tc-2', 'tc-3'],
+        currentVersion: 5,
+        versions: Array.from({ length: 5 }, (_, i) => ({
+          version: i + 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          testCaseIds: ['tc-1'],
+        })),
+        runs: [],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      });
+      mockBenchmarksUpdate.mockImplementation(async (_id: string, updates: any) => updates);
+
+      const { req, res } = createMocks(
+        { id: 'exp-shrink' },
+        { testCaseIds: ['tc-1'] }, // dropping tc-2 and tc-3
+      );
+      const handler = getRouteHandler(benchmarksRoutes, 'put', '/api/storage/benchmarks/:id');
+
+      await handler(req, res);
+
+      const updateCall = mockBenchmarksUpdate.mock.calls[0][1];
+      expect(updateCall.currentVersion).toBe(6);
+      expect(updateCall.testCaseIds).toEqual(['tc-1']);
+      expect(updateCall.versions).toHaveLength(6);
+      expect(updateCall.versions[5]).toEqual(expect.objectContaining({ version: 6, testCaseIds: ['tc-1'] }));
+    });
   });
 
   describe('DELETE /api/storage/benchmarks/:id', () => {

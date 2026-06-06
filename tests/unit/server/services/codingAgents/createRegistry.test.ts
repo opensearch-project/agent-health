@@ -18,7 +18,9 @@ describe('createRegistry', () => {
     jest.resetModules();
     jest.clearAllMocks();
     process.env = { ...originalEnv };
+    delete process.env.AH_DISABLE_CODING_ANALYTICS;
     delete process.env.AGENT_HEALTH_DISABLE_CODING_ANALYTICS;
+    process.env.AH_QUIET_DEPRECATIONS = '1';
   });
 
   afterEach(() => {
@@ -64,7 +66,7 @@ describe('createRegistry', () => {
   });
 
   it('should return null when feature is disabled via env var', () => {
-    process.env.AGENT_HEALTH_DISABLE_CODING_ANALYTICS = 'true';
+    process.env.AH_DISABLE_CODING_ANALYTICS = 'true';
     setupMocks([]);
 
     const { CodingAgentRegistry } = require('@/server/services/codingAgents/registry');
@@ -75,6 +77,16 @@ describe('createRegistry', () => {
     expect(mod.codingAgentRegistry).toBeNull();
     expect(CodingAgentRegistry).not.toHaveBeenCalled();
     expect(RemoteAggregator).not.toHaveBeenCalled();
+  });
+
+  it('still accepts legacy AGENT_HEALTH_DISABLE_CODING_ANALYTICS', () => {
+    process.env.AGENT_HEALTH_DISABLE_CODING_ANALYTICS = 'true';
+    setupMocks([]);
+
+    const mod = require('@/server/services/codingAgents/createRegistry');
+
+    expect(mod.codingAnalyticsEnabled).toBe(false);
+    expect(mod.codingAgentRegistry).toBeNull();
   });
 
   it('should return null when feature is disabled via config file', () => {
@@ -107,7 +119,7 @@ describe('createRegistry', () => {
   });
 
   it('should log when feature is disabled', () => {
-    process.env.AGENT_HEALTH_DISABLE_CODING_ANALYTICS = 'true';
+    process.env.AH_DISABLE_CODING_ANALYTICS = 'true';
     setupMocks([]);
 
     require('@/server/services/codingAgents/createRegistry');

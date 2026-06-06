@@ -514,4 +514,56 @@ router.delete('/api/storage/config/observability', (req: Request, res: Response)
   }
 });
 
+/**
+ * POST /api/storage/admin/recover-orphan-benchmark-runs
+ *
+ * Test-only endpoint: invokes the same boot-recovery logic that runs in
+ * `server/index.ts` after `app.listen()`. Used by integration tests to
+ * exercise the recovery path against the real storage backend without
+ * needing to restart the server (or to dynamically import the OpenSearch
+ * client from inside Jest, which fails under CJS transform).
+ *
+ * Gated behind `AGENT_HEALTH_TEST_ENDPOINTS=1` so it cannot be triggered
+ * accidentally in production.
+ */
+router.post('/api/storage/admin/recover-orphan-benchmark-runs', async (req: Request, res: Response) => {
+  if (process.env.AGENT_HEALTH_TEST_ENDPOINTS !== '1') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  try {
+    const storage = getStorageModule();
+    if (!storage) {
+      return res.status(503).json({ error: 'Storage not initialized' });
+    }
+    const { recoverOrphanBenchmarkRuns } = await import('../../services/benchmarkRunRecoveryOnBoot.js');
+    const stat = await recoverOrphanBenchmarkRuns(storage);
+    res.json(stat);
+  } catch (error: any) {
+    console.error('[StorageAPI] recover-orphan-benchmark-runs failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/storage/admin/resume-pending-trace-polls
+ * Sister test-only endpoint for the trace-recovery boot hook.
+ */
+router.post('/api/storage/admin/resume-pending-trace-polls', async (req: Request, res: Response) => {
+  if (process.env.AGENT_HEALTH_TEST_ENDPOINTS !== '1') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  try {
+    const storage = getStorageModule();
+    if (!storage) {
+      return res.status(503).json({ error: 'Storage not initialized' });
+    }
+    const { resumePendingTracePolls } = await import('../../services/traceRecoveryOnBoot.js');
+    const stat = await resumePendingTracePolls(storage);
+    res.json(stat);
+  } catch (error: any) {
+    console.error('[StorageAPI] resume-pending-trace-polls failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

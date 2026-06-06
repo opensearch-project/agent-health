@@ -12,6 +12,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Benchmark, BenchmarkRun, EvaluationReport, TestCase } from '@/types';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { TrajectoryCompareView } from './TrajectoryCompareView';
+import { getRunOverallScore } from '@/lib/utils';
+import { RunScore } from '@/components/RunScore';
 
 interface UseCaseCompareViewProps {
   benchmark: Benchmark;
@@ -97,10 +99,17 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
   const generateInsight = (): string | null => {
     if (!reportA || !reportB || !selectedUseCaseA || !selectedUseCaseB) return null;
 
-    const accDiff = reportA.metrics.accuracy - reportB.metrics.accuracy;
+    // Compare overall score (mean of all metrics) rather than just `accuracy`.
+    // The two reports may have been scored under different evaluators that
+    // emit different metric names — the aggregate is the only comparable
+    // number when each side's metric set isn't guaranteed to be the same.
+    const scoreA = getRunOverallScore(reportA.metrics as Record<string, number | undefined>);
+    const scoreB = getRunOverallScore(reportB.metrics as Record<string, number | undefined>);
+    if (scoreA === null || scoreB === null) return null;
+    const accDiff = scoreA - scoreB;
 
     if (Math.abs(accDiff) < 5) {
-      return 'Both use cases show similar accuracy levels, suggesting consistent agent performance.';
+      return 'Both use cases show similar overall scores, suggesting consistent agent performance.';
     }
 
     const higherCase = accDiff > 0 ? selectedUseCaseA : selectedUseCaseB;
@@ -259,9 +268,24 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
                             </td>
                           </tr>
                           <tr className="border-b">
-                            <td className="py-2 pr-4 text-muted-foreground">Accuracy</td>
-                            <td className="text-center py-2 px-2 font-medium">{reportA.metrics.accuracy}%</td>
-                            <td className="text-center py-2 px-2 font-medium">{reportB.metrics.accuracy}%</td>
+                            {/* "Overall Score" instead of "Accuracy" — each
+                                report's underlying metrics may come from a
+                                different evaluator (RCA, Factuality, Tool Use,
+                                etc.). The tooltip on each cell shows the
+                                metric breakdown for that side. */}
+                            <td className="py-2 pr-4 text-muted-foreground">Overall Score</td>
+                            <td className="text-center py-2 px-2 font-medium">
+                              <RunScore
+                                metrics={reportA.metrics as Record<string, number | undefined>}
+                                showLabel={false}
+                              />
+                            </td>
+                            <td className="text-center py-2 px-2 font-medium">
+                              <RunScore
+                                metrics={reportB.metrics as Record<string, number | undefined>}
+                                showLabel={false}
+                              />
+                            </td>
                           </tr>
                           <tr className="border-b">
                             <td className="py-2 pr-4 text-muted-foreground">Faithfulness</td>

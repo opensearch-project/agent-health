@@ -198,17 +198,24 @@ async function runBenchmarkForAgent(
     // Use pass rate from shared calculation
     const passRate = stats.passRate;
 
+    // Issue #242: when the evaluator couldn't produce verdicts on some runs,
+    // call them out explicitly so users don't conflate "evaluator misconfigured"
+    // with "agent scored 0".
+    const erroredSuffix = stats.errored > 0
+      ? chalk.yellow(` (${stats.errored} errored — evaluator could not run)`)
+      : '';
+
     if (passRate >= 80) {
       spinner.succeed(
-        `${agent.name}: ${chalk.green(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
+        `${agent.name}: ${chalk.green(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
       );
     } else if (passRate >= 50) {
       spinner.warn(
-        `${agent.name}: ${chalk.yellow(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
+        `${agent.name}: ${chalk.yellow(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
       );
     } else {
       spinner.fail(
-        `${agent.name}: ${chalk.red(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
+        `${agent.name}: ${chalk.red(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
       );
     }
   } catch (error) {
@@ -429,6 +436,26 @@ async function exportResults(
  * Create the benchmark command
  */
 /**
+ * Map an array of `-f` file paths to evaluation-run sources, splitting code
+ * eval files (executable bodies → `code-import`) from JSON test-case data
+ * (→ `file-import`). This split is what makes `benchmark -f foo.eval.js`
+ * actually run the SDK body instead of importing it as inert data
+ * (#245/#246). Pure: existence checks are the caller's responsibility.
+ */
+export function buildFileSources(fileArray: string[]): TestCaseSource[] {
+  const out: TestCaseSource[] = [];
+  const codeFiles = fileArray.filter(f => isCodeFile(f));
+  const jsonFiles = fileArray.filter(f => !isCodeFile(f));
+  if (codeFiles.length > 0) {
+    out.push({ type: 'code-import', filenames: codeFiles, testCaseIds: [] });
+  }
+  if (jsonFiles.length > 0) {
+    out.push({ type: 'file-import', filenames: jsonFiles, testCaseIds: [] });
+  }
+  return out;
+}
+
+/**
  * Unified evaluation-run mode: uses the new /api/storage/evaluation-runs endpoint.
  * Triggered when new source flags are used (-d, -t, --label, or multiple -f).
  */
@@ -460,7 +487,12 @@ async function runUnifiedMode(
         process.exit(1);
       }
     }
-    sources.push({ type: 'file-import', filenames: fileArray, testCaseIds: [] });
+    // Code files (.eval.js/.ts/.mjs) carry executable test bodies and must
+    // go through `code-import` so the runner materializes + runs them
+    // (agent.run(), expect/judge/evaluate). JSON files are static test-case
+    // data and use `file-import`. This split is what makes
+    // `benchmark -f foo.eval.js` actually execute the SDK body (#245/#246).
+    sources.push(...buildFileSources(fileArray));
   }
 
   if (options.dir && options.dir.length > 0) {
@@ -691,12 +723,17 @@ export function createBenchmarkCommand(): Command {
 
       // Detect "unified mode" — new flags that use the evaluation-runs API
       const fileArray = Array.isArray(options.file) ? options.file : (options.file ? [options.file] : []);
+      // Code eval files (.eval.js/.ts/.mjs) must run through the unified
+      // evaluation-runs API as `code-import` so their bodies actually
+      // execute. The legacy single-file path only bulk-imports test cases
+      // and never runs the SDK body — so any code file forces unified mode.
+      const hasCodeFile = fileArray.some(f => isCodeFile(f));
       const hasNewFlags = (options.dir && options.dir.length > 0) ||
         (options.testCase && options.testCase.length > 0) ||
         (options.label && options.label.length > 0) ||
         fileArray.length > 1;
 
-      if (hasNewFlags || (fileArray.length > 0 && (options.dir?.length || options.testCase?.length || options.label?.length))) {
+      if (hasNewFlags || hasCodeFile || (fileArray.length > 0 && (options.dir?.length || options.testCase?.length || options.label?.length))) {
         // Unified evaluation-run mode — delegate to new API
         await runUnifiedMode(options, config, serverConfig, isCI, fileArray);
         return;
@@ -801,6 +838,13 @@ export function createBenchmarkCommand(): Command {
                   sourceFile,
                   sourceHash: tc.hash,
                   description: tc.options.description,
+                  // Forward expectedOutcomes / expectedTrajectory — see
+                  // services/sourceResolver.ts for rationale. Without
+                  // these, the CLI's import path stripped them out and a
+                  // server-side evaluator (`-e <evaluator>`) couldn't
+                  // grade a code-SDK test (issue #245).
+                  ...(tc.options.expectedOutcomes ? { expectedOutcomes: tc.options.expectedOutcomes } : {}),
+                  ...(tc.options.expectedTrajectory ? { expectedTrajectory: tc.options.expectedTrajectory } : {}),
                 };
               });
             } else {
@@ -813,7 +857,18 @@ export function createBenchmarkCommand(): Command {
 
             const uploadSpinner = ora('Importing test cases to server...').start();
             const bulkResult = await api.bulkCreateTestCases(upsertInputs as any);
-            uploadSpinner.succeed(`Imported ${bulkResult.created} test cases`);
+            // SDK upsert path returns `updated` / `unchanged` alongside
+            // `created`; surface the breakdown so the operator can see which
+            // records were reused vs. version-bumped vs. freshly created. JSON
+            // imports leave `updated` undefined and fall through to the legacy
+            // "Imported N test cases" line.
+            if (typeof bulkResult.updated === 'number') {
+              uploadSpinner.succeed(
+                `Imported: ${bulkResult.created} created, ${bulkResult.updated} updated, ${bulkResult.unchanged ?? 0} unchanged`
+              );
+            } else {
+              uploadSpinner.succeed(`Imported ${bulkResult.created} test cases`);
+            }
 
             // Map test case name -> stored id for quick lookups
             const idByName = new Map(bulkResult.testCases.map(tc => [tc.name, tc.id]));
@@ -846,15 +901,91 @@ export function createBenchmarkCommand(): Command {
             }
 
             const createSpinner = ora(`Creating ${benchmarkSpecs.length} benchmark(s)...`).start();
+            // Self-heal source path used below — only meaningful for SDK/code
+            // imports (`isCodeFile(filePath)` is true). For JSON imports we
+            // leave it undefined and the merge stays a plain set-union.
+            const sdkSourceFile = isCodeFile(filePath!)
+              ? path.relative(process.cwd(), path.resolve(filePath!))
+              : undefined;
             for (const spec of benchmarkSpecs) {
               const tcIds = spec.testCaseNames.map(n => idByName.get(n)).filter((x): x is string => !!x);
               if (tcIds.length === 0) continue;
               const existingBenchmark = await api.findBenchmark(spec.name);
               let bm: Benchmark;
               if (existingBenchmark) {
-                // Merge: union with existing testCaseIds so cross-file
-                // contributions to the same describe-named benchmark stack.
-                const merged = Array.from(new Set([...(existingBenchmark.testCaseIds || []), ...tcIds]));
+                // Merge with existing testCaseIds so cross-file contributions
+                // to the same describe-named benchmark stack. For SDK imports,
+                // also self-heal: drop any pre-existing IDs whose stored
+                // (name, sourceFile) matches a freshly upserted canonical ID
+                // — those are duplicates left over from the pre-fix bug where
+                // the bulk endpoint always called bulkCreate and minted fresh
+                // IDs for every run, growing benchmark.testCaseIds unbounded.
+                const existingIds = existingBenchmark.testCaseIds || [];
+                let prunedIds = existingIds;
+                if (sdkSourceFile && existingIds.length > 0) {
+                  const canonicalNames = new Set(spec.testCaseNames);
+                  const canonicalIdSet = new Set(tcIds);
+                  // Distinguish three outcomes per fetch so a transient
+                  // network blip can never silently delete a valid benchmark
+                  // reference:
+                  //   - { kind: 'found', tc }   → evaluate the prune predicate
+                  //   - { kind: 'missing' }     → confirmed 404, drop the dangling ref
+                  //   - { kind: 'error', err }  → fetch threw (network / 5xx);
+                  //                              KEEP the id, log a warning,
+                  //                              skip pruning for this item
+                  type FetchResult =
+                    | { kind: 'found'; tc: TestCase }
+                    | { kind: 'missing' }
+                    | { kind: 'error'; err: unknown };
+                  const fetched: FetchResult[] = await Promise.all(
+                    existingIds.map(async (id): Promise<FetchResult> => {
+                      try {
+                        // api.getTestCase returns null on 404 and throws on
+                        // any other non-OK / network failure — we rely on
+                        // that distinction here.
+                        const tc = await api.getTestCase(id);
+                        return tc ? { kind: 'found', tc } : { kind: 'missing' };
+                      } catch (err) {
+                        return { kind: 'error', err };
+                      }
+                    })
+                  );
+                  let transientErrors = 0;
+                  prunedIds = existingIds.filter((id, i) => {
+                    const r = fetched[i];
+                    if (r.kind === 'error') {
+                      transientErrors++;
+                      return true; // keep — don't prune on transient failures
+                    }
+                    if (r.kind === 'missing') {
+                      return false; // confirmed 404 — drop dangling ref
+                    }
+                    const tc = r.tc;
+                    const isStaleSdkBloat =
+                      tc.sourceFile === sdkSourceFile &&
+                      canonicalNames.has(tc.name) &&
+                      !canonicalIdSet.has(id);
+                    return !isStaleSdkBloat;
+                  });
+                  if (transientErrors > 0) {
+                    console.log(
+                      chalk.yellow(
+                        `  Note: ${transientErrors} TestCase fetch(es) failed during self-heal — ` +
+                          `keeping those IDs to avoid corrupting benchmark.testCaseIds on a network blip.`
+                      )
+                    );
+                  }
+                  const droppedCount = existingIds.length - prunedIds.length;
+                  if (droppedCount > 0) {
+                    console.log(
+                      chalk.gray(
+                        `  Self-healed "${spec.name}": pruned ${droppedCount} stale TestCase ID(s) ` +
+                          `from "${sdkSourceFile}" left over from pre-fix runs.`
+                      )
+                    );
+                  }
+                }
+                const merged = Array.from(new Set([...prunedIds, ...tcIds]));
                 bm = await api.updateBenchmark(existingBenchmark.id, { testCaseIds: merged });
               } else {
                 bm = await api.createBenchmark({
@@ -1040,7 +1171,7 @@ export function createBenchmarkCommand(): Command {
           const runId = result.run?.id || result.runId;
           const bm = (result as any).benchmark || benchmark;
           if (runId) {
-            console.log(chalk.gray(`  ${result.agent.name} (${bm.name}): ${serverResult.baseUrl}/evaluations/benchmarks/${bm.id}/runs/${runId}/inspect`));
+            console.log(chalk.gray(`  ${result.agent.name} (${bm.name}): ${serverResult.baseUrl}/evaluations/benchmarks/${bm.id}/runs/${runId}`));
           }
         }
         if (process.env.OPENSEARCH_DASHBOARDS_URL) {

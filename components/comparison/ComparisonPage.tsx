@@ -26,6 +26,11 @@ import { AggregateMetricsChart } from './AggregateMetricsChart';
 import { MetricsTimeSeriesChart } from './MetricsTimeSeriesChart';
 import { UseCaseComparisonTable } from './UseCaseComparisonTable';
 import { RunPairSelector } from './RunPairSelector';
+import { ModeToggle } from './ModeToggle';
+import { VerdictStrip } from './VerdictStrip';
+import { FailureClusterPanel } from './FailureClusterPanel';
+import { extractFirstDivergence } from '@/services/trajectoryDiffService';
+import type { FailureCluster, FailureCaseEvidenceInput } from '@/services/client/comparisonClusterApi';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import {
@@ -37,6 +42,9 @@ import {
   countRowsByStatus,
   calculateRowStatus,
   collectRunIdsFromReports,
+  calculateCombinedScore,
+  detectComparisonMode,
+  ComparisonMode,
   RowStatus,
 } from '@/services/comparisonService';
 import { fetchBatchMetrics } from '@/services/metrics';
@@ -168,12 +176,23 @@ export const ComparisonPage: React.FC = () => {
   // State for filters
   const [categoryFilter, setCategoryFilter] = useState<Category | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [rowStatusFilter, setRowStatusFilter] = useState<RowStatus | 'all'>('all');
+  // 'differences' means "show only the rows where the runs disagree" (regression
+  // | improvement | mixed) — hides 'neutral' rows so failures stand out. Default
+  // to it; the user came here for differences, not to scroll past green checkmarks.
+  const [rowStatusFilter, setRowStatusFilter] = useState<RowStatus | 'all' | 'differences'>('differences');
 
   // Trajectory gating state
   const [trajectoryTargetTestCase, setTrajectoryTargetTestCase] = useState<string | null>(null);
   const [showRunPairSelector, setShowRunPairSelector] = useState(false);
   const [trajectoryRunPair, setTrajectoryRunPair] = useState<[string, string] | null>(null);
+
+  // User-overridden mode (null means use detected mode)
+  const [modeOverride, setModeOverride] = useState<ComparisonMode | null>(null);
+
+  // Failure-cluster state — populated by the FailureClusterPanel after analysis.
+  // Drives row dot-coloring and the cluster-driven case filter below.
+  const [failureClusters, setFailureClusters] = useState<FailureCluster[]>([]);
+  const [clusterCaseFilter, setClusterCaseFilter] = useState<{ caseIds: string[]; clusterName: string } | null>(null);
 
   // Load all benchmarks and test cases
   useEffect(() => {
@@ -321,6 +340,9 @@ export const ComparisonPage: React.FC = () => {
 
   const selectedRuns = useMemo((): BenchmarkRun[] => allRuns.filter(r => selectedRunIds.includes(r.id)), [allRuns, selectedRunIds]);
 
+  const detectedMode = useMemo((): ComparisonMode => detectComparisonMode(selectedRuns), [selectedRuns]);
+  const mode: ComparisonMode = modeOverride ?? detectedMode;
+
   const runAggregates = useMemo((): RunAggregateMetrics[] => {
     return selectedRuns.map(run => {
       const base = calculateRunAggregates(run, reports);
@@ -332,7 +354,21 @@ export const ComparisonPage: React.FC = () => {
           if (tm) { totalTokens += tm.totalTokens || 0; totalInputTokens += tm.inputTokens || 0; totalOutputTokens += tm.outputTokens || 0; totalCostUsd += tm.costUsd || 0; totalDurationMs += tm.durationMs || 0; totalLlmCalls += tm.llmCalls || 0; totalToolCalls += tm.toolCalls || 0; mc++; }
         }
       }
-      return { ...base, totalTokens: mc > 0 ? totalTokens : undefined, totalInputTokens: mc > 0 ? totalInputTokens : undefined, totalOutputTokens: mc > 0 ? totalOutputTokens : undefined, totalCostUsd: mc > 0 ? totalCostUsd : undefined, avgDurationMs: mc > 0 ? Math.round(totalDurationMs / mc) : undefined, totalLlmCalls: mc > 0 ? totalLlmCalls : undefined, totalToolCalls: mc > 0 ? totalToolCalls : undefined };
+      // Fall back to the run-level performance metrics when no traces are
+      // available — prefer real data we already have over showing "0ms" /
+      // "$0.00" (which reads as "this agent costs nothing" in the verdict).
+      const perf = (run as BenchmarkRun & { performanceMetrics?: { avgTestCaseDurationMs?: number; durationMs?: number } }).performanceMetrics;
+      const fallbackAvgDurationMs = perf?.avgTestCaseDurationMs ?? (perf?.durationMs && base.totalTestCases ? Math.round(perf.durationMs / base.totalTestCases) : undefined);
+      return {
+        ...base,
+        totalTokens: mc > 0 ? totalTokens : undefined,
+        totalInputTokens: mc > 0 ? totalInputTokens : undefined,
+        totalOutputTokens: mc > 0 ? totalOutputTokens : undefined,
+        totalCostUsd: mc > 0 ? totalCostUsd : undefined,
+        avgDurationMs: mc > 0 ? Math.round(totalDurationMs / mc) : fallbackAvgDurationMs,
+        totalLlmCalls: mc > 0 ? totalLlmCalls : undefined,
+        totalToolCalls: mc > 0 ? totalToolCalls : undefined,
+      };
     });
   }, [selectedRuns, reports, traceMetricsMap]);
 
@@ -365,9 +401,129 @@ export const ComparisonPage: React.FC = () => {
     let rows = allComparisonRows;
     rows = filterRowsByCategory(rows, categoryFilter);
     rows = filterRowsByStatus(rows, statusFilter, selectedRunIds);
-    if (rowStatusFilter !== 'all') rows = rows.filter(row => calculateRowStatus(row, referenceRunId) === rowStatusFilter);
+    if (rowStatusFilter === 'differences') {
+      rows = rows.filter(row => calculateRowStatus(row, referenceRunId) !== 'neutral');
+    } else if (rowStatusFilter !== 'all') {
+      rows = rows.filter(row => calculateRowStatus(row, referenceRunId) === rowStatusFilter);
+    }
+    if (clusterCaseFilter) {
+      const allow = new Set(clusterCaseFilter.caseIds);
+      rows = rows.filter(row => allow.has(row.testCaseId));
+    }
     return rows;
-  }, [allComparisonRows, categoryFilter, statusFilter, selectedRunIds, rowStatusFilter, referenceRunId]);
+  }, [allComparisonRows, categoryFilter, statusFilter, selectedRunIds, rowStatusFilter, referenceRunId, clusterCaseFilter]);
+
+  // If the filter is 'differences' but there are no differences (all-pass /
+  // all-fail benchmark), automatically show everything so the user isn't
+  // staring at an empty table.
+  useEffect(() => {
+    if (rowStatusFilter !== 'differences') return;
+    const totalDifferences =
+      rowStatusCounts.regression + rowStatusCounts.improvement + rowStatusCounts.mixed;
+    if (totalDifferences === 0 && rowStatusCounts.neutral > 0) {
+      setRowStatusFilter('all');
+    }
+  }, [rowStatusFilter, rowStatusCounts]);
+
+  // Build the regressed-case evidence the cluster panel will analyze. Picks
+  // a winner/loser per row by combined score, mirroring DivergencePreviewRow
+  // so the divergence summary the LLM sees matches what the user sees.
+  const regressedEvidence = useMemo<{
+    cases: FailureCaseEvidenceInput[];
+    loserLabel: string;
+    winnerLabel: string;
+  }>(() => {
+    const cases: FailureCaseEvidenceInput[] = [];
+    let bestLoserAgent = '';
+    let bestWinnerAgent = '';
+
+    // We want every row where there's a pass/fail disagreement between
+    // the selected runs — regardless of which is the baseline. The cluster
+    // story is "the LOSER failed where the WINNER passed", so we collect
+    // any row where at least one run failed AND at least one passed.
+    const disagreementRows = allComparisonRows.filter(row => {
+      const completed = selectedRuns.filter(r => row.results[r.id]?.status === 'completed');
+      if (completed.length < 2) return false;
+      let anyPassed = false;
+      let anyFailed = false;
+      for (const r of completed) {
+        const result = row.results[r.id];
+        if (result?.passFailStatus === 'passed') anyPassed = true;
+        if (result?.passFailStatus === 'failed') anyFailed = true;
+      }
+      return anyPassed && anyFailed;
+    });
+
+    for (const row of disagreementRows) {
+      const completed = selectedRuns.filter(r => row.results[r.id]?.status === 'completed');
+      if (completed.length < 2) continue;
+
+      let winnerRun = completed[0];
+      let loserRun = completed[0];
+      let winnerScore = -Infinity;
+      let loserScore = Infinity;
+      for (const r of completed) {
+        const result = row.results[r.id];
+        if (!result) continue;
+        const score = calculateCombinedScore(result);
+        if (score > winnerScore) { winnerScore = score; winnerRun = r; }
+        if (score < loserScore) { loserScore = score; loserRun = r; }
+      }
+      if (winnerRun.id === loserRun.id) continue;
+
+      const winnerReport = reports[row.results[winnerRun.id]?.reportId ?? ''];
+      const loserReport = reports[row.results[loserRun.id]?.reportId ?? ''];
+
+      let firstDivergence: FailureCaseEvidenceInput['firstDivergence'] | undefined;
+      if (winnerReport?.trajectory && loserReport?.trajectory) {
+        const fd = extractFirstDivergence(loserReport.trajectory, winnerReport.trajectory);
+        if (fd) {
+          firstDivergence = {
+            stepIndex: fd.index,
+            type: fd.type,
+            baselineSummary: fd.baselineSummary,
+            comparisonSummary: fd.comparisonSummary,
+          };
+        }
+      }
+
+      cases.push({
+        caseId: row.testCaseId,
+        caseName: row.testCaseName,
+        judgeReasoning: loserReport?.llmJudgeReasoning,
+        improvementStrategies: loserReport?.improvementStrategies,
+        firstDivergence,
+      });
+
+      // Track agent labels — used to label the cluster prompt. Pick the most
+      // common winner/loser pair seen across regressed rows.
+      if (!bestLoserAgent) bestLoserAgent = loserRun.agentKey;
+      if (!bestWinnerAgent) bestWinnerAgent = winnerRun.agentKey;
+    }
+
+    return {
+      cases,
+      loserLabel: bestLoserAgent ? getAgentName(bestLoserAgent) : 'losing run',
+      winnerLabel: bestWinnerAgent ? getAgentName(bestWinnerAgent) : 'winning run',
+    };
+  }, [allComparisonRows, referenceRunId, selectedRuns, reports]);
+
+  // Map caseId -> cluster index for row dot-coloring in the table.
+  const clusterByCaseId = useMemo(() => {
+    const map = new Map<string, number>();
+    failureClusters.forEach((c, idx) => {
+      for (const id of c.caseIds) {
+        if (!map.has(id)) map.set(id, idx);
+      }
+    });
+    return map;
+  }, [failureClusters]);
+
+  // When the user picks a different benchmark / runs, drop the cluster filter.
+  useEffect(() => {
+    setClusterCaseFilter(null);
+    setFailureClusters([]);
+  }, [benchmarkId, selectedRunIds.join(',')]);
 
   const categories = useMemo(() => Array.from(new Set(allComparisonRows.map(r => r.category))).sort(), [allComparisonRows]);
 
@@ -434,6 +590,11 @@ export const ComparisonPage: React.FC = () => {
             </SelectContent>
           </Select>
           <RunMultiSelect runs={allRuns} selectedIds={selectedRunIds} onToggle={toggleRun} onSelectAll={(ids) => updateSelection(ids)} />
+          <ModeToggle
+            mode={mode}
+            detectedMode={detectedMode}
+            onChange={(m) => setModeOverride(m === detectedMode ? null : m)}
+          />
           <div className="ml-auto flex items-center gap-2">
             <Select value={categoryFilter} onValueChange={(v) => setCategoryFilter(v as Category | 'all')}>
               <SelectTrigger className="w-32 h-7 text-xs"><SelectValue placeholder="Category" /></SelectTrigger>
@@ -467,29 +628,57 @@ export const ComparisonPage: React.FC = () => {
               </div>
             )}
 
-            {/* Compare Summary — collapsible, collapsed by default */}
+            {/* Verdict — always visible, top of page */}
+            <VerdictStrip mode={mode} runs={runAggregates} />
+
+            {/* Diagnosis — failure pattern clustering across regressed cases.
+                Renders only when there are regressed rows to analyze. */}
+            {regressedEvidence.cases.length > 0 && (
+              <FailureClusterPanel
+                loserLabel={regressedEvidence.loserLabel}
+                winnerLabel={regressedEvidence.winnerLabel}
+                cases={regressedEvidence.cases}
+                activeCaseFilter={clusterCaseFilter?.caseIds}
+                onClustersChange={setFailureClusters}
+                onFilterByCases={(caseIds, clusterName) => {
+                  // Toggle off if the same cluster is clicked twice.
+                  setClusterCaseFilter(prev =>
+                    prev && prev.clusterName === clusterName ? null : { caseIds, clusterName }
+                  );
+                }}
+              />
+            )}
+
+            {/* Detailed metrics — power-user surface, collapsed by default */}
             <Collapsible open={summaryOpen} onOpenChange={setSummaryOpen}>
               <CollapsibleTrigger asChild>
                 <button className="flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg border border-border/50 hover:bg-muted/30 transition-colors">
                   <ChevronRight size={14} className={`text-muted-foreground transition-transform ${summaryOpen ? 'rotate-90' : ''}`} />
-                  <span className="text-xs font-medium">Compare Summary</span>
+                  <span className="text-xs font-medium">Detailed metrics</span>
                   {!summaryOpen && (
                     <span className="text-[10px] text-muted-foreground ml-1">
-                      {runAggregates.map(a => `${a.runName}: ${a.passRatePercent}%`).join(' · ')}
+                      Full table, radar, and time-series breakdown
                     </span>
                   )}
                 </button>
               </CollapsibleTrigger>
               <CollapsibleContent className="space-y-3 mt-2">
                 <RunSummaryTable runs={runAggregates} referenceRunId={referenceRunId} />
-                <div className="flex flex-col md:flex-row gap-4">
-                  <div className="w-full md:w-[400px] flex-shrink-0">
+                {mode === 'iterate' && (
+                  <div className="flex flex-col md:flex-row gap-4">
+                    <div className="w-full md:w-[400px] flex-shrink-0">
+                      <AggregateMetricsChart runs={runAggregates} height={240} referenceRunId={referenceRunId} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <MetricsTimeSeriesChart runs={runAggregates} height={240} />
+                    </div>
+                  </div>
+                )}
+                {mode === 'compare' && (
+                  <div className="w-full md:w-[400px]">
                     <AggregateMetricsChart runs={runAggregates} height={240} referenceRunId={referenceRunId} />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <MetricsTimeSeriesChart runs={runAggregates} height={240} />
-                  </div>
-                </div>
+                )}
               </CollapsibleContent>
             </Collapsible>
 
@@ -500,12 +689,26 @@ export const ComparisonPage: React.FC = () => {
                 <div className="flex items-center gap-2 mb-1">
                   <h2 className="text-sm font-semibold">Table Compare</h2>
                   <div className="flex items-center gap-1 ml-2">
+                    {(() => {
+                      const totalDiffs =
+                        rowStatusCounts.regression + rowStatusCounts.improvement + rowStatusCounts.mixed;
+                      return (
+                        <Badge
+                          variant="outline"
+                          className={`cursor-pointer text-[9px] px-2 py-0.5 transition-colors ${rowStatusFilter === 'differences' ? 'bg-primary/20 border-primary text-primary' : 'hover:bg-muted'}`}
+                          onClick={() => setRowStatusFilter('differences')}
+                          title="Show only the rows where the runs disagree"
+                        >
+                          {totalDiffs} differences
+                        </Badge>
+                      );
+                    })()}
                     <Badge
                       variant="outline"
                       className={`cursor-pointer text-[9px] px-2 py-0.5 transition-colors ${rowStatusFilter === 'all' ? 'bg-primary/20 border-primary text-primary' : 'hover:bg-muted'}`}
                       onClick={() => setRowStatusFilter('all')}
                     >
-                      All test cases
+                      Show all ({allComparisonRows.length})
                     </Badge>
                     {rowStatusCounts.regression > 0 && (
                       <Badge variant="outline" className={`cursor-pointer text-[9px] px-2 py-0.5 border-red-500/30 ${rowStatusFilter === 'regression' ? 'bg-red-500/10 text-red-400' : 'hover:bg-red-500/5'}`} onClick={() => setRowStatusFilter('regression')}>
@@ -522,12 +725,24 @@ export const ComparisonPage: React.FC = () => {
                         {rowStatusCounts.mixed} mixed
                       </Badge>
                     )}
-                    <Badge variant="outline" className={`cursor-pointer text-[9px] px-2 py-0.5 ${rowStatusFilter === 'neutral' ? 'bg-muted text-muted-foreground' : 'hover:bg-muted/50'}`} onClick={() => setRowStatusFilter('neutral')}>
-                      {rowStatusCounts.neutral} unchanged
-                    </Badge>
+                    {clusterCaseFilter && (
+                      <Badge
+                        variant="outline"
+                        className="cursor-pointer text-[9px] px-2 py-0.5 border-purple-500/30 bg-purple-500/10 text-purple-300 inline-flex items-center gap-1"
+                        onClick={() => setClusterCaseFilter(null)}
+                        title="Click to clear cluster filter"
+                      >
+                        Cluster: {clusterCaseFilter.clusterName}
+                        <X size={9} />
+                      </Badge>
+                    )}
                   </div>
                 </div>
-                <p className="text-[10px] text-muted-foreground">Click a row to expand the side-by-side diff</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {rowStatusFilter === 'differences' && rowStatusCounts.neutral > 0
+                    ? `Showing ${filteredRows.length} differing case${filteredRows.length === 1 ? '' : 's'} · ${rowStatusCounts.neutral} unchanged hidden — click "Show all" above to include them`
+                    : 'Click a row to expand the side-by-side diff'}
+                </p>
               </div>
 
               {/* Run pair selector for trajectory comparison (shown when > 2 runs) */}
@@ -546,6 +761,7 @@ export const ComparisonPage: React.FC = () => {
                 runs={selectedRuns}
                 reports={reports}
                 referenceRunId={referenceRunId}
+                clusterByCaseId={clusterByCaseId}
                 trajectoryRunPair={trajectoryRunPair}
                 trajectoryTargetTestCase={trajectoryTargetTestCase}
                 onTrajectoryRequest={(testCaseId) => {

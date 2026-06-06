@@ -243,23 +243,30 @@ describe('describe() API', () => {
 
 describe('experimental warning', () => {
   let warnSpy: jest.SpyInstance;
-  let originalEnv: string | undefined;
+  let originalNew: string | undefined;
+  let originalLegacy: string | undefined;
+  let originalQuietDeprecations: string | undefined;
 
   beforeEach(() => {
     clearRegistry();
     _resetExperimentalWarning();
-    originalEnv = process.env.AGENT_HEALTH_SUPPRESS_EXPERIMENTAL;
+    originalNew = process.env.AH_SUPPRESS_EXPERIMENTAL;
+    originalLegacy = process.env.AGENT_HEALTH_SUPPRESS_EXPERIMENTAL;
+    originalQuietDeprecations = process.env.AH_QUIET_DEPRECATIONS;
+    delete process.env.AH_SUPPRESS_EXPERIMENTAL;
     delete process.env.AGENT_HEALTH_SUPPRESS_EXPERIMENTAL;
+    process.env.AH_QUIET_DEPRECATIONS = '1';
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {
     warnSpy.mockRestore();
-    if (originalEnv === undefined) {
-      delete process.env.AGENT_HEALTH_SUPPRESS_EXPERIMENTAL;
-    } else {
-      process.env.AGENT_HEALTH_SUPPRESS_EXPERIMENTAL = originalEnv;
-    }
+    if (originalNew === undefined) delete process.env.AH_SUPPRESS_EXPERIMENTAL;
+    else process.env.AH_SUPPRESS_EXPERIMENTAL = originalNew;
+    if (originalLegacy === undefined) delete process.env.AGENT_HEALTH_SUPPRESS_EXPERIMENTAL;
+    else process.env.AGENT_HEALTH_SUPPRESS_EXPERIMENTAL = originalLegacy;
+    if (originalQuietDeprecations === undefined) delete process.env.AH_QUIET_DEPRECATIONS;
+    else process.env.AH_QUIET_DEPRECATIONS = originalQuietDeprecations;
   });
 
   it('emits the experimental warning the first time test() is called', () => {
@@ -275,7 +282,13 @@ describe('experimental warning', () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('is suppressed when AGENT_HEALTH_SUPPRESS_EXPERIMENTAL=1 is set', () => {
+  it('is suppressed when AH_SUPPRESS_EXPERIMENTAL=1 is set', () => {
+    process.env.AH_SUPPRESS_EXPERIMENTAL = '1';
+    test('First', { prompt: 'p' }, async () => {});
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('is also suppressed when legacy AGENT_HEALTH_SUPPRESS_EXPERIMENTAL=1 is set', () => {
     process.env.AGENT_HEALTH_SUPPRESS_EXPERIMENTAL = '1';
     test('First', { prompt: 'p' }, async () => {});
     expect(warnSpy).not.toHaveBeenCalled();

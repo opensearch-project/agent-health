@@ -70,6 +70,13 @@ export interface StorageTestCase {
   createdAt: string;
   updatedAt: string;
   lastRunAt?: string;
+  /** Source provenance for SDK / code-imported test cases. Used by the
+   *  CollapsibleTestCaseDefinition UI to distinguish SDK tests (path is
+   *  the source of truth) from JSON tests (the row itself is the source
+   *  of truth). Already round-trips through OpenSearch — the storage
+   *  layer was just dropping it on read. */
+  sourceFile?: string;
+  sourceHash?: string;
 }
 
 export interface StorageBenchmarkRunConfig {
@@ -85,7 +92,7 @@ export interface StorageBenchmarkRunConfig {
   results?: Record<string, { reportId: string; status: string; error?: string }>;
   status?: string;
   error?: string;
-  stats?: { passed: number; failed: number; pending: number; total: number };
+  stats?: { passed: number; failed: number; pending: number; total: number; errored?: number };
 }
 
 export interface StorageBenchmark {

@@ -78,7 +78,16 @@ describe('testCaseValidation', () => {
       expect(result.success).toBe(false);
     });
 
-    it('should require at least one non-empty expected outcome', () => {
+    it('accepts test cases with no non-empty expected outcomes (cross-surface parity)', () => {
+      // Cross-surface parity (commit fd984c9e): SDK code-only tests have no
+      // `expectedOutcomes` (deterministic body / inline `judge()` calls drive
+      // pass/fail), and the UI test case form must be able to mirror that
+      // shape. The schema therefore accepts:
+      //  - an `expectedOutcomes` array containing only empty / whitespace strings
+      //  - omission of `expectedOutcomes` entirely
+      // The server-side judge contract is still strict (issue #242 surfaces
+      // "Missing required field: expectedOutcomes or expectedTrajectory" as
+      // an evaluator error), but the authoring schema is no longer the gate.
       const testCaseWithEmptyOutcomes = {
         name: 'Test',
         category: 'RCA',
@@ -88,7 +97,16 @@ describe('testCaseValidation', () => {
       };
 
       const result = testCaseSchema.safeParse(testCaseWithEmptyOutcomes);
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
+
+      const omittedOutcomes = {
+        name: 'Test',
+        category: 'RCA',
+        difficulty: 'Easy',
+        initialPrompt: 'Test',
+      };
+      const result2 = testCaseSchema.safeParse(omittedOutcomes);
+      expect(result2.success).toBe(true);
     });
 
     it('should accept optional fields', () => {
@@ -392,7 +410,12 @@ describe('testCaseValidation', () => {
       expect(result.data?.context).toEqual([]);
     });
 
-    it('should ensure at least one empty expected outcome for form state', () => {
+    it('accepts JSON with empty expectedOutcomes (cross-surface parity)', () => {
+      // Cross-surface parity (commit fd984c9e): the form-state parser must
+      // accept the same shapes the schema accepts. Both empty arrays and
+      // omitted fields are valid; `parseJsonToFormState` then normalizes
+      // an empty / omitted array to `['']` so the form starts with one
+      // empty input slot for editing.
       const json = JSON.stringify({
         name: 'Test',
         category: 'RCA',
@@ -400,10 +423,11 @@ describe('testCaseValidation', () => {
         initialPrompt: 'Test',
         expectedOutcomes: [],
       });
-
-      // This should fail validation because empty expectedOutcomes is not valid
       const result = parseJsonToFormState(json);
-      expect(result.valid).toBe(false);
+      expect(result.valid).toBe(true);
+      // Confirm the parser's normalization to a single-empty-string slot
+      // (this is what the form renders, not what the schema validates).
+      expect(result.data?.expectedOutcomes).toEqual(['']);
     });
   });
 });

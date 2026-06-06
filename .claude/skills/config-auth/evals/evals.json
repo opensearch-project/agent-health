@@ -1,0 +1,35 @@
+{
+  "skill_name": "config-auth",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Where does Agent Health store OpenSearch credentials and what file format does it use?",
+      "expected_output": "A clear explanation that OpenSearch credentials are stored in agent-health.config.json (JSON format, not TypeScript), managed by the CLI setup-telemetry command or Settings UI, and distinct from the agent-health.config.ts file which handles agents/models/hooks.",
+      "assertions": [
+        "Response identifies agent-health.config.json as the file storing OpenSearch credentials, not agent-health.config.ts",
+        "Response explains that agent-health.config.json is managed by the CLI `setup-telemetry` command or the Settings UI, not manually edited like the TS config",
+        "Response mentions that the browser never sees the JSON credentials — only metadata like endpoint, authType, and hasPassword"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I have two AWS profiles: 'default' for my OpenSearch cluster and 'Bedrock' for the LLM judge. How do I configure Agent Health so each service uses the right profile? The server can only have one AWS_PROFILE set.",
+      "expected_output": "A concrete multi-profile setup: set AWS_PROFILE=Bedrock in the server environment (so the Bedrock judge uses its default credential chain), and set awsProfile: 'default' inside the storage block of agent-health.config.json (so OpenSearch SigV4 explicitly overrides the ambient profile). Explains why this works — OpenSearch uses fromNodeProviderChain with an explicit profile override while Bedrock uses ambient credentials.",
+      "assertions": [
+        "Response instructs setting AWS_PROFILE=Bedrock as the server environment variable so the Bedrock judge picks it up via default credential chain",
+        "Response instructs setting `awsProfile: 'default'` inside agent-health.config.json under the storage block to override the ambient AWS_PROFILE for OpenSearch SigV4 auth",
+        "Response explains that OpenSearch uses fromNodeProviderChain with an explicit profile parameter (from the JSON config) while Bedrock relies on the ambient environment — this is why the two services can use different profiles simultaneously"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "My agent config TypeScript file isn't being picked up. I have agent-health.config.mjs but Agent Health seems to be using defaults. What's the config loading priority and which file takes precedence?",
+      "expected_output": "Explanation of the four-level priority order for TS/JS config loading from lib/config/loader.ts: agent-health.config.ts (highest) → agent-health.config.js → agent-health.config.mjs → built-in defaults. Since .mjs is third priority, if a .ts or .js file exists it would shadow the .mjs file. Also notes that built-in defaults are only applied if `extends: false` is NOT set.",
+      "assertions": [
+        "Response states the exact priority order: agent-health.config.ts > agent-health.config.js > agent-health.config.mjs > built-in defaults, identifying .mjs as third priority",
+        "Response identifies lib/config/loader.ts as the file responsible for this loading priority logic",
+        "Response mentions that built-in defaults are only merged in when `extends: false` is NOT present in the config, meaning setting extends: false disables default merging"
+      ]
+    }
+  ]
+}

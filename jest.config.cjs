@@ -25,6 +25,10 @@ module.exports = {
     '^@/server/utils/version$': '<rootDir>/__mocks__/@/server/utils/version.ts',
     '^\\.\\./utils/version$': '<rootDir>/__mocks__/@/server/utils/version.ts',
     '^\\.\\./utils/version\\.js$': '<rootDir>/__mocks__/@/server/utils/version.ts',
+    // Mock piBinary to avoid import.meta.url issues in Jest
+    '^@/server/services/piBinary$': '<rootDir>/__mocks__/@/server/services/piBinary.ts',
+    '^\./piBinary$': '<rootDir>/__mocks__/@/server/services/piBinary.ts',
+    '^\./piBinary\.js$': '<rootDir>/__mocks__/@/server/services/piBinary.ts',
     // Mock data files to avoid JSON import issues in tests
     '^@/data/testCases$': '<rootDir>/__mocks__/@/data/testCases.ts',
     '^@/data/mockComparisonData$': '<rootDir>/__mocks__/@/data/mockComparisonData.ts',
@@ -39,6 +43,8 @@ module.exports = {
     // Mock chai (chai@5 is ESM-only and Jest's CJS loader can't import
     // it; route to the chai@4 alias for tests via __mocks__/chai.ts)
     '^chai$': '<rootDir>/__mocks__/chai.ts',
+    // Mock typebox (ESM-only; Jest CJS loader can't import it)
+    '^typebox$': '<rootDir>/__mocks__/typebox.ts',
     // Mock uuid (v14 is ESM-only, incompatible with Jest CJS transform)
     '^uuid$': '<rootDir>/__mocks__/uuid.ts',
     // Handle .js imports resolving to .ts files (ESM compatibility)

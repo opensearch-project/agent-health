@@ -420,3 +420,213 @@ describe('Benchmark Export Integration Tests', () => {
     expect(response.status).toBe(404);
   });
 });
+
+/**
+ * Integration tests for benchmark Edit + version-bump end-to-end.
+ *
+ * These exercise the real HTTP route against a real storage backend (the
+ * `agent-health-data/` JSON store, or OpenSearch when configured), proving:
+ *   - PUT /api/storage/benchmarks/:id with new testCaseIds bumps currentVersion
+ *     AND appends an immutable entry to versions[]
+ *   - PUT with metadata-only changes does NOT bump currentVersion
+ *   - Reordered testCaseIds (set-equal) does NOT bump
+ *   - Removing a test case bumps just like adding one
+ *
+ * The unit tests in tests/unit/server/routes/storage/benchmarks.test.ts cover
+ * the same logic against a mocked storage adapter; this file is the contract
+ * test that proves the wiring through the real handler stack actually works.
+ *
+ * Run:
+ *   npm run dev:server
+ *   npm run test:integration -- --testPathPatterns=benchmarks.integration
+ */
+describe('Benchmark Edit & Versioning Integration Tests', () => {
+  let backendAvailable = false;
+  const createdTestCaseIds: string[] = [];
+  const createdBenchmarkIds: string[] = [];
+
+  const seedTestCase = async (suffix: string): Promise<string> => {
+    const res = await fetch(`${BASE_URL}/api/storage/test-cases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `Edit-versioning seed TC ${suffix} ${Date.now()}`,
+        category: 'Integration',
+        difficulty: 'Easy',
+        initialPrompt: 'What is 2+2?',
+        context: [],
+        expectedOutcomes: ['Agent responds with 4'],
+        expectedTrajectory: [],
+      }),
+    });
+    if (!res.ok) throw new Error(`Failed to seed TC: ${res.status} ${await res.text()}`);
+    const tc = await res.json();
+    createdTestCaseIds.push(tc.id);
+    return tc.id;
+  };
+
+  const seedBenchmark = async (testCaseIds: string[]): Promise<any> => {
+    const res = await fetch(`${BASE_URL}/api/storage/benchmarks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `Edit-versioning seed BM ${Date.now()}`,
+        description: 'Integration test seed',
+        currentVersion: 1,
+        versions: [{ version: 1, createdAt: new Date().toISOString(), testCaseIds }],
+        testCaseIds,
+        runs: [],
+      }),
+    });
+    if (!res.ok) throw new Error(`Failed to seed BM: ${res.status} ${await res.text()}`);
+    const bm = await res.json();
+    createdBenchmarkIds.push(bm.id);
+    return bm;
+  };
+
+  beforeAll(async () => {
+    backendAvailable = await checkBackend();
+    if (!backendAvailable) {
+      console.warn('Backend not available - skipping edit/versioning integration tests');
+    }
+  });
+
+  afterAll(async () => {
+    for (const id of createdBenchmarkIds) {
+      await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+    }
+    for (const id of createdTestCaseIds) {
+      await fetch(`${BASE_URL}/api/storage/test-cases/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+    }
+  });
+
+  it('PUT with new testCaseIds bumps currentVersion v1 → v2 and appends versions[]', async () => {
+    if (!backendAvailable) return;
+
+    const tcA = await seedTestCase('A');
+    const tcB = await seedTestCase('B');
+    const bm = await seedBenchmark([tcA]);
+
+    expect(bm.currentVersion).toBe(1);
+    expect(bm.versions).toHaveLength(1);
+
+    // Add tcB.
+    const putRes = await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(bm.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCaseIds: [tcA, tcB] }),
+    });
+    expect(putRes.status).toBe(200);
+    const updated = await putRes.json();
+
+    expect(updated.currentVersion).toBe(2);
+    expect(updated.versions).toHaveLength(2);
+    expect(updated.versions[0]).toMatchObject({ version: 1, testCaseIds: [tcA] });
+    expect(updated.versions[1]).toMatchObject({ version: 2, testCaseIds: expect.arrayContaining([tcA, tcB]) });
+    expect(updated.testCaseIds).toEqual(expect.arrayContaining([tcA, tcB]));
+
+    // GET round-trip — bumped state must be persisted, not just echoed.
+    const getRes = await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(bm.id)}`);
+    const persisted = await getRes.json();
+    expect(persisted.currentVersion).toBe(2);
+    expect(persisted.versions).toHaveLength(2);
+  });
+
+  it('PUT with metadata-only changes does NOT bump currentVersion', async () => {
+    if (!backendAvailable) return;
+
+    const tcA = await seedTestCase('meta-A');
+    const tcB = await seedTestCase('meta-B');
+    const bm = await seedBenchmark([tcA, tcB]);
+
+    const putRes = await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(bm.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed', description: 'New description' }),
+    });
+    expect(putRes.status).toBe(200);
+    const updated = await putRes.json();
+
+    expect(updated.currentVersion).toBe(1);
+    expect(updated.versions).toHaveLength(1);
+    expect(updated.name).toBe('Renamed');
+    expect(updated.description).toBe('New description');
+  });
+
+  it('PUT with reordered testCaseIds (set-equal) does NOT bump', async () => {
+    if (!backendAvailable) return;
+
+    const tcA = await seedTestCase('reorder-A');
+    const tcB = await seedTestCase('reorder-B');
+    const tcC = await seedTestCase('reorder-C');
+    const bm = await seedBenchmark([tcA, tcB, tcC]);
+
+    const putRes = await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(bm.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCaseIds: [tcC, tcA, tcB] }), // same set, different order
+    });
+    expect(putRes.status).toBe(200);
+    const updated = await putRes.json();
+
+    expect(updated.currentVersion).toBe(1);
+    expect(updated.versions).toHaveLength(1);
+  });
+
+  it('PUT removing a test case bumps version with the new shorter list', async () => {
+    if (!backendAvailable) return;
+
+    const tcA = await seedTestCase('remove-A');
+    const tcB = await seedTestCase('remove-B');
+    const bm = await seedBenchmark([tcA, tcB]);
+
+    const putRes = await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(bm.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCaseIds: [tcA] }),
+    });
+    expect(putRes.status).toBe(200);
+    const updated = await putRes.json();
+
+    expect(updated.currentVersion).toBe(2);
+    expect(updated.versions).toHaveLength(2);
+    expect(updated.versions[1]).toMatchObject({ version: 2, testCaseIds: [tcA] });
+    expect(updated.testCaseIds).toEqual([tcA]);
+  });
+
+  it('multiple PUTs with successive test-case changes produce a strictly increasing version chain', async () => {
+    if (!backendAvailable) return;
+
+    const tcA = await seedTestCase('chain-A');
+    const tcB = await seedTestCase('chain-B');
+    const tcC = await seedTestCase('chain-C');
+    const bm = await seedBenchmark([tcA]);
+
+    // v1 → v2: add tcB
+    let res = await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(bm.id)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCaseIds: [tcA, tcB] }),
+    });
+    expect((await res.json()).currentVersion).toBe(2);
+
+    // v2 → v3: add tcC
+    res = await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(bm.id)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCaseIds: [tcA, tcB, tcC] }),
+    });
+    expect((await res.json()).currentVersion).toBe(3);
+
+    // v3 → v4: drop tcB (set actually changes)
+    res = await fetch(`${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(bm.id)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCaseIds: [tcA, tcC] }),
+    });
+    const final = await res.json();
+    expect(final.currentVersion).toBe(4);
+    expect(final.versions).toHaveLength(4);
+    // Each version must be immutable history — earlier entries unchanged.
+    expect(final.versions[0]).toMatchObject({ version: 1, testCaseIds: [tcA] });
+    expect(final.versions[3]).toMatchObject({ version: 4, testCaseIds: expect.arrayContaining([tcA, tcC]) });
+    expect(final.versions[3].testCaseIds).not.toContain(tcB);
+  });
+});

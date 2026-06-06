@@ -489,9 +489,9 @@ describe('generateHtmlReport', () => {
       expect(html).toContain('The root cause is...');
     });
 
-    it('should render LLM judge reasoning', () => {
+    it('should render judge reasoning', () => {
       const html = generateHtmlReport(createMockReportData());
-      expect(html).toContain('LLM Judge Reasoning');
+      expect(html).toContain('Judge Reasoning');
       expect(html).toContain('The agent correctly identified the root cause.');
     });
 
@@ -631,7 +631,7 @@ describe('generateHtmlReport', () => {
       (data.reports['report-1'] as any).llmJudgeReasoning = undefined;
       (data.reports['report-2'] as any).llmJudgeReasoning = undefined;
       const html = generateHtmlReport(data);
-      expect(html).not.toContain('LLM Judge Reasoning');
+      expect(html).not.toContain('Judge Reasoning');
     });
 
     it('should handle report without improvement strategies', () => {

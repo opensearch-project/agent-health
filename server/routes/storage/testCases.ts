@@ -370,7 +370,20 @@ router.delete('/api/storage/test-cases/:id', async (req: Request, res: Response)
   }
 });
 
-// POST /api/storage/test-cases/bulk - Bulk create
+// POST /api/storage/test-cases/bulk - Bulk import
+//
+// Auto-routes based on `sourceFile`:
+//  - Any incoming test case has `sourceFile` set (SDK / code-imported) →
+//    `bulkUpsert` semantics: dedup by `(name, sourceFile)`, version-bump on
+//    `sourceHash` drift, reuse existing TestCase IDs across runs of the same
+//    .eval.js file. This is what stops `benchmark.testCaseIds` from growing
+//    unbounded when a user re-runs the same SDK file via `npx agent-health
+//    benchmark -f file.eval.js`.
+//  - Otherwise (JSON imports / UI uploads) → strict `bulkCreate`. Pre-existing
+//    callers don't carry `sourceFile`, so behaviour is unchanged for them.
+//
+// The response shape is a superset of both modes: `created` is always present,
+// `updated` and `unchanged` are present only on the upsert path.
 router.post('/api/storage/test-cases/bulk', async (req: Request, res: Response) => {
   try {
     const { testCases } = req.body;
@@ -385,12 +398,49 @@ router.post('/api/storage/test-cases/bulk', async (req: Request, res: Response) 
     }
 
     const storage = getStorageModule();
-    const result = await storage.testCases.bulkCreate(testCases);
 
+    // Provenance gate. Reject mixed batches — in `bulkUpsert` an item without
+    // `sourceFile` matches an existing record by `name` ALONE
+    // (`e.name === tc.name && (tc.sourceFile ? e.sourceFile === tc.sourceFile : true)`),
+    // which can silently overwrite an unrelated SDK TestCase that happens to
+    // share a name and clear its `sourceHash` (the update payload sets
+    // `sourceHash: tc.sourceHash`, which is `undefined` for JSON items). The
+    // CLI never sends mixed batches — it imports either an SDK file (all
+    // items carry `sourceFile`) or a JSON file (no items carry it) — so the
+    // 400 is a hard contract, not a UX paper-cut. Callers wanting both must
+    // split into two requests.
+    const withSource = testCases.filter(tc => typeof tc?.sourceFile === 'string' && tc.sourceFile.length > 0);
+    const withoutSource = testCases.length - withSource.length;
+    if (withSource.length > 0 && withoutSource > 0) {
+      return res.status(400).json({
+        error:
+          'Mixed batch rejected: every test case must either set `sourceFile` ' +
+          '(SDK / code-import upsert path) or omit it (JSON strict-create path); ' +
+          `received ${withSource.length} with sourceFile and ${withoutSource} without.`,
+      });
+    }
+
+    if (withSource.length > 0) {
+      const result = await storage.testCases.bulkUpsert(testCases);
+      debug(
+        'StorageAPI',
+        `Bulk upserted: ${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged`
+      );
+      res.json({
+        created: result.created,
+        updated: result.updated,
+        unchanged: result.unchanged,
+        errors: 0,
+        testCases: result.testCases,
+      });
+      return;
+    }
+
+    const result = await storage.testCases.bulkCreate(testCases);
     debug('StorageAPI', `Bulk created ${result.created} test cases`);
     res.json({ created: result.created, errors: result.errors, testCases: result.testCases });
   } catch (error: any) {
-    console.error('[StorageAPI] Bulk create test cases failed:', error.message);
+    console.error('[StorageAPI] Bulk import test cases failed:', error.message);
     res.status(500).json({ error: error.message });
   }
 });

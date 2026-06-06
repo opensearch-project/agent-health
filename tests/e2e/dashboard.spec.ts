@@ -19,7 +19,7 @@ test.describe('Dashboard Page', () => {
 
     if (hasDashboard) {
       await expect(page.locator('[data-testid="dashboard-title"]')).toHaveText('Leaderboard Overview');
-      await expect(page.locator('text=Monitor agent performance trends and compare benchmark metrics')).toBeVisible();
+      await expect(page.locator('text=Surface failing runs and regressions to improve your agent fast')).toBeVisible();
     } else {
       expect(hasFirstRun).toBeTruthy();
       await expect(page.locator('text=Welcome to Agent Health')).toBeVisible();
@@ -29,7 +29,7 @@ test.describe('Dashboard Page', () => {
   test('should show first-run or dashboard content after loading', async ({ page }) => {
     const contentIndicator = page.locator('text=Welcome to Agent Health')
       .or(page.locator('text=Leaderboard Overview'))
-      .or(page.locator('text=Performance Trends'));
+      .or(page.locator('text=Recent Evaluation Runs'));
     await expect(contentIndicator).toBeVisible({ timeout: 15000 });
   });
 
@@ -70,7 +70,7 @@ test.describe('Dashboard Stats Summary Bar', () => {
 
     if (isVisible) {
       await benchmarksCard.click();
-      await page.waitForURL('**/benchmarks', { timeout: 5000 });
+      await page.waitForURL(/.*\/benchmarks/, { timeout: 5000 });
       expect(page.url()).toContain('/benchmarks');
     }
   });
@@ -81,40 +81,32 @@ test.describe('Dashboard Stats Summary Bar', () => {
 
     if (isVisible) {
       await testCasesCard.click();
-      await page.waitForURL('**/test-cases', { timeout: 5000 });
+      await page.waitForURL(/.*\/test-cases/, { timeout: 5000 });
       expect(page.url()).toContain('/test-cases');
     }
   });
 });
 
-test.describe('Dashboard Performance Section', () => {
+test.describe('Dashboard Recent Runs Section', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     const pageReady = page.locator('[data-testid="dashboard-page"]').or(page.locator('[data-testid="first-run-experience"]'));
     await expect(pageReady).toBeVisible({ timeout: 30000 });
   });
 
-  test('should show performance trends section when data exists', async ({ page }) => {
-    const hasTrendChart = await page.locator('text=Performance Trends').isVisible().catch(() => false);
+  test('should show Recent Evaluation Runs section when data exists', async ({ page }) => {
+    const hasRecent = await page.locator('[data-testid="recent-runs-card"]').isVisible().catch(() => false);
 
-    if (hasTrendChart) {
-      const metricSelector = page.locator('button').filter({ hasText: /Pass Rate|Cost|Tokens|Latency|Metric/ });
-      const hasMet = await metricSelector.first().isVisible({ timeout: 5000 }).catch(() => false);
-
-      const timeRangeSelector = page.locator('button').filter({ hasText: /Last 7 days|Last 30 days|All time/ });
-      const hasTime = await timeRangeSelector.first().isVisible({ timeout: 5000 }).catch(() => false);
-
-      if (!hasMet || !hasTime) {
-        console.log('Warning: Performance trends found but selectors missing');
-      }
+    if (hasRecent) {
+      await expect(page.locator('text=Recent Evaluation Runs')).toBeVisible();
     }
   });
 
-  test('should show benchmark metrics table when data exists', async ({ page }) => {
-    const hasMetricsTable = await page.locator('text=Benchmark Metrics by Agent').isVisible().catch(() => false);
+  test('should show Needs Attention section when data exists', async ({ page }) => {
+    const hasNeedsAttention = await page.locator('[data-testid="needs-attention-card"]').isVisible().catch(() => false);
 
-    if (hasMetricsTable) {
-      await expect(page.locator('text=Click benchmark or agent name to filter')).toBeVisible();
+    if (hasNeedsAttention) {
+      await expect(page.locator('text=Needs Attention')).toBeVisible();
     }
   });
 });

@@ -37,6 +37,13 @@ export {
 } from './assistantApi';
 
 export {
+  discoverSkills,
+  validateSkill,
+  streamSkillEval,
+  getSkillResults,
+} from './skillsApi';
+
+export {
   executeEvaluationRun,
   listEvaluationRuns,
   getEvaluationRun,

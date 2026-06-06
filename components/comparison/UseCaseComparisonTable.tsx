@@ -21,13 +21,119 @@ import { MetricCell, EvaluatorType } from './MetricCell';
 import { VersionIndicator } from './VersionIndicator';
 import { UseCaseExpandedRow } from './UseCaseExpandedRow';
 import { cn, getLabelColor } from '@/lib/utils';
-import { calculateRowStatus, RowStatus } from '@/services/comparisonService';
+import { calculateRowStatus, calculateCombinedScore, RowStatus } from '@/services/comparisonService';
+import { extractFirstDivergence } from '@/services/trajectoryDiffService';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { ArrowRightLeft, Plus, Minus } from 'lucide-react';
+import { getClusterDotColor } from './FailureClusterPanel';
 
 // Helper to get agent display name from key
 const getAgentName = (agentKey: string): string => {
   const agent = DEFAULT_CONFIG.agents.find(a => a.key === agentKey);
   return agent?.name || agentKey;
+};
+
+interface DivergencePreviewRowProps {
+  row: TestCaseComparisonRow;
+  runs: BenchmarkRun[];
+  reports: Record<string, EvaluationReport>;
+}
+
+/**
+ * Inline one-liner showing the first step where the loser and winner diverged
+ * for this test case. Only meaningful when at least one run got it right and
+ * one got it wrong. Renders nothing if a sensible winner/loser pair can't be
+ * established or trajectories are missing.
+ */
+const DivergencePreviewRow: React.FC<DivergencePreviewRowProps> = ({ row, runs, reports }) => {
+  const completedRuns = runs.filter(r => {
+    const result = row.results[r.id];
+    return result && result.status === 'completed';
+  });
+  if (completedRuns.length < 2) return null;
+
+  // Winner = highest combined score on this row; loser = lowest.
+  let winnerRun = completedRuns[0];
+  let loserRun = completedRuns[0];
+  let winnerScore = -Infinity;
+  let loserScore = Infinity;
+  for (const r of completedRuns) {
+    const result = row.results[r.id];
+    if (!result) continue;
+    const score = calculateCombinedScore(result);
+    if (score > winnerScore) { winnerScore = score; winnerRun = r; }
+    if (score < loserScore) { loserScore = score; loserRun = r; }
+  }
+  if (winnerRun.id === loserRun.id) return null;
+
+  const winnerReport = reports[row.results[winnerRun.id]?.reportId ?? ''];
+  const loserReport = reports[row.results[loserRun.id]?.reportId ?? ''];
+  if (!winnerReport?.trajectory || !loserReport?.trajectory) return null;
+
+  // Baseline = loser, comparison = winner — so 'added' means winner did
+  // something the loser didn't, 'removed' means loser did something the
+  // winner didn't, 'modified' means they did the same thing differently.
+  const divergence = extractFirstDivergence(loserReport.trajectory, winnerReport.trajectory);
+  if (!divergence) return null;
+
+  const Icon =
+    divergence.type === 'added' ? Plus :
+    divergence.type === 'removed' ? Minus :
+    ArrowRightLeft;
+  const iconColor =
+    divergence.type === 'added' ? 'text-opensearch-blue' :
+    divergence.type === 'removed' ? 'text-red-400' :
+    'text-amber-400';
+
+  const stepLabel = `Step ${divergence.index + 1}`;
+  const winnerName = getAgentName(winnerRun.agentKey);
+  const loserName = getAgentName(loserRun.agentKey);
+  const sameAgent = winnerRun.agentKey === loserRun.agentKey;
+  const winnerSide = sameAgent ? winnerRun.name : winnerName;
+  const loserSide = sameAgent ? loserRun.name : loserName;
+
+  let summary: React.ReactNode;
+  if (divergence.type === 'added') {
+    summary = (
+      <>
+        <span className="font-medium">{winnerSide}</span> called{' '}
+        <code className="text-foreground bg-muted/50 px-1 rounded">{divergence.comparisonSummary ?? '(unknown)'}</code>
+        {' · '}
+        <span className="font-medium">{loserSide}</span> skipped this step
+      </>
+    );
+  } else if (divergence.type === 'removed') {
+    summary = (
+      <>
+        <span className="font-medium">{loserSide}</span> called{' '}
+        <code className="text-foreground bg-muted/50 px-1 rounded">{divergence.baselineSummary ?? '(unknown)'}</code>
+        {' · '}
+        <span className="font-medium">{winnerSide}</span> skipped this step
+      </>
+    );
+  } else {
+    summary = (
+      <>
+        <span className="font-medium">{loserSide}</span>:{' '}
+        <code className="text-foreground bg-muted/50 px-1 rounded">{divergence.baselineSummary ?? '(unknown)'}</code>
+        {' · '}
+        <span className="font-medium">{winnerSide}</span>:{' '}
+        <code className="text-foreground bg-muted/50 px-1 rounded">{divergence.comparisonSummary ?? '(unknown)'}</code>
+      </>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-start gap-1.5 mt-1 text-[10px] text-muted-foreground"
+      title="First step where the trajectories diverge"
+    >
+      <Icon size={11} className={cn('shrink-0 mt-0.5', iconColor)} />
+      <span className="leading-snug">
+        <span className="font-medium text-foreground">{stepLabel}:</span> {summary}
+      </span>
+    </div>
+  );
 };
 
 interface UseCaseComparisonTableProps {
@@ -36,6 +142,8 @@ interface UseCaseComparisonTableProps {
   reports: Record<string, EvaluationReport>;
   referenceRunId?: string;
   visibleEvaluators?: Set<EvaluatorType>;
+  /** Map of testCaseId → cluster index, used to draw a colored dot per row */
+  clusterByCaseId?: Map<string, number>;
   trajectoryRunPair?: [string, string] | null;
   trajectoryTargetTestCase?: string | null;
   onTrajectoryRequest?: (testCaseId: string) => void;
@@ -54,6 +162,7 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
   reports,
   referenceRunId: propReferenceRunId,
   visibleEvaluators,
+  clusterByCaseId,
   onTrajectoryRequest,
 }) => {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -94,9 +203,9 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
               </TableHead>
               {runs.map((run) => (
                 <TableHead key={run.id} className="text-center min-w-32">
-                  <div className="truncate">{run.name}</div>
-                  <div className="text-xs text-muted-foreground font-normal truncate">
-                    {getAgentName(run.agentKey)}
+                  <div className="truncate">{getAgentName(run.agentKey)}</div>
+                  <div className="text-[10px] text-muted-foreground font-normal truncate">
+                    {run.name}
                   </div>
                 </TableHead>
               ))}
@@ -132,6 +241,14 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
                         </div>
                         <div className="space-y-1 min-w-0">
                           <div className="flex items-center gap-2">
+                            {clusterByCaseId?.has(row.testCaseId) && (
+                              <span
+                                className="inline-block h-2 w-2 rounded-full shrink-0"
+                                style={{ backgroundColor: getClusterDotColor(clusterByCaseId.get(row.testCaseId) ?? 0) }}
+                                title="Part of a failure pattern cluster"
+                                aria-hidden
+                              />
+                            )}
                             <Link
                               to={`/evals3/test-cases/${row.testCaseId}`}
                               className="font-medium truncate max-w-48 hover:underline text-foreground"
@@ -162,6 +279,9 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
                               </span>
                             )}
                           </div>
+                          {(rowStatus === 'regression' || rowStatus === 'mixed') && (
+                            <DivergencePreviewRow row={row} runs={runs} reports={reports} />
+                          )}
                         </div>
                       </div>
                     </TableCell>

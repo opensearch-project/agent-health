@@ -423,7 +423,7 @@ export async function updateBenchmarkRunStatsForReport(
 async function computeStatsForRunWithClient(
   client: Client,
   run: any
-): Promise<{ passed: number; failed: number; pending: number; total: number }> {
+): Promise<{ passed: number; failed: number; pending: number; errored: number; total: number }> {
   // Collect report IDs from run results
   const reportIds = Object.values(run.results || {})
     .map((r: any) => r.reportId)
@@ -432,6 +432,7 @@ async function computeStatsForRunWithClient(
   let passed = 0;
   let failed = 0;
   let pending = 0;
+  let errored = 0;
   const total = Object.keys(run.results || {}).length;
 
   // Fetch reports to get passFailStatus
@@ -479,6 +480,12 @@ async function computeStatsForRunWithClient(
             return;
           }
 
+          // Evaluator could not produce a verdict (issue #242).
+          if (report.metricsStatus === 'error') {
+            errored++;
+            return;
+          }
+
           if (report.passFailStatus === 'passed') {
             passed++;
           } else {
@@ -507,5 +514,5 @@ async function computeStatsForRunWithClient(
     pending = total;
   }
 
-  return { passed, failed, pending, total };
+  return { passed, failed, pending, errored, total };
 }

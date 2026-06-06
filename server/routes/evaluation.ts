@@ -110,7 +110,7 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
     return res.status(400).json({ error: validationError });
   }
 
-  const { testCaseId, agentKey, modelId, agentEndpoint, evaluatorId } = req.body;
+  const { testCaseId, agentKey, modelId, agentEndpoint, evaluatorId, runName, runDescription } = req.body;
   const inlineTestCase = req.body.testCase as TestCase | undefined;
   debug('EvalAPI', 'testCaseId:', testCaseId, 'agentKey:', agentKey, 'modelId:', modelId, 'inline:', !!inlineTestCase);
 
@@ -190,9 +190,22 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
   // We use the same field shape as `saveReportWithModule` (storage-layer names like
   // agentId/traceId) so the placeholder is forward-compatible with the final update.
   // This is also the shape that the listing pages and pollReportStatus expect.
+  //
+  // We resolve the run's display name here so it's persisted on the placeholder
+  // and survives both SSE disconnects and the eventual final update. Falling
+  // back to `Run <short-id>` ensures every run has a recognizable label in
+  // the runs list — historically only BenchmarkRun had a `name` field, but
+  // single test case runs deserve one too (otherwise the UI is forced to
+  // show a meaningless id slice).
+  const trimmedRunName = typeof runName === 'string' ? runName.trim() : '';
   let preCreatedReportId: string | null = null;
+  let resolvedRunName: string = trimmedRunName;
   try {
     const placeholder = await storage.runs.create({
+      // `name` is set after we know the generated id (so the auto-generated
+      // fallback can include the short id). We patch it back below.
+      name: trimmedRunName || undefined,
+      description: typeof runDescription === 'string' && runDescription.trim() ? runDescription.trim() : undefined,
       testCaseId: testCase.id,
       testCaseVersion: testCase.currentVersion,
       // Both names so app-side and storage-side queries can find the record
@@ -210,7 +223,20 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     } as Partial<TestCaseRun>);
     preCreatedReportId = placeholder.id;
-    debug('EvalAPI', 'Pre-created placeholder run:', preCreatedReportId);
+    if (!resolvedRunName) {
+      // Auto-generate using the trailing 6 chars of the id, mirroring
+      // `getRunDisplayName` on the client. Patch the placeholder so list
+      // pages reflect the generated name immediately (rather than only
+      // after the run completes).
+      const shortId = placeholder.id.length > 6 ? placeholder.id.slice(-6) : placeholder.id;
+      resolvedRunName = `Run ${shortId}`;
+      try {
+        await storage.runs.update(placeholder.id, { name: resolvedRunName } as Partial<TestCaseRun>);
+      } catch (patchErr: any) {
+        console.warn('[EvaluationAPI] Failed to patch placeholder name:', patchErr.message);
+      }
+    }
+    debug('EvalAPI', 'Pre-created placeholder run:', preCreatedReportId, 'name:', resolvedRunName);
   } catch (e: any) {
     // Storage may not be configured — disconnect recovery will be unavailable
     // but the evaluation can still proceed. Surface this clearly.

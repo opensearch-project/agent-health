@@ -53,11 +53,10 @@ import {
   fetchRecentTraces,
   groupSpansByTrace,
   calculateTimeRange,
-  categorizeSpanTree,
-  countByCategory,
-  flattenSpans,
+  computeTraceSummary,
 } from '@/services/traces';
 import { formatDuration, formatCompact } from '@/services/traces/utils';
+import TraceSummaryStrip from './TraceSummaryStrip';
 import { processSpansIntoTree } from '@/services/traces';
 import { startMeasure, endMeasure } from '@/lib/performance';
 import { cn, formatRelativeTime } from '@/lib/utils';
@@ -283,43 +282,12 @@ const ExpandedTraceRow: React.FC<ExpandedTraceRowProps> = ({ trace, onClose }) =
    * breakdown, error count, total token usage, and the model(s) used.
    * Trace ID, span count, and duration are intentionally omitted because
    * they're already visible in the row directly above.
+   *
+   * Computation lives in `services/traces/traceSummary.ts` so the
+   * fullscreen header can render exactly the same numbers from the same
+   * source-of-truth.
    */
-  const headerSummary = useMemo(() => {
-    const categorized = categorizeSpanTree(spanTree);
-    const counts = countByCategory(categorized);
-    // flattenSpans operates on the categorized tree (its declared input
-    // type) so we walk the same nodes once for token aggregation.
-    const flat = flattenSpans(categorized);
-
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let totalTokens = 0;
-    const modelSet = new Set<string>();
-    for (const s of flat) {
-      const a = s.attributes || {};
-      const it =
-        Number(a['gen_ai.usage.input_tokens'] ?? a['gen_ai.usage.prompt_tokens'] ?? a['input_tokens'] ?? 0) || 0;
-      const ot =
-        Number(a['gen_ai.usage.output_tokens'] ?? a['gen_ai.usage.completion_tokens'] ?? a['output_tokens'] ?? 0) || 0;
-      inputTokens += it;
-      outputTokens += ot;
-      totalTokens += it + ot;
-      const m = a['gen_ai.request.model'] || a['gen_ai.response.model'] || a['model'];
-      if (typeof m === 'string' && m.trim()) modelSet.add(m.trim());
-    }
-
-    return {
-      llm: counts.LLM,
-      tool: counts.TOOL,
-      agent: counts.AGENT,
-      evalCount: counts.EVAL,
-      errors: counts.ERROR,
-      inputTokens,
-      outputTokens,
-      totalTokens,
-      models: Array.from(modelSet),
-    };
-  }, [spanTree]);
+  const headerSummary = useMemo(() => computeTraceSummary(spanTree), [spanTree]);
 
   // Auto-expand root spans on initial mount and when the trace changes.
   // Keyed on `trace.traceId` (not `spanTree`) so user-driven expand/collapse
@@ -355,90 +323,10 @@ const ExpandedTraceRow: React.FC<ExpandedTraceRowProps> = ({ trace, onClose }) =
               parent trace row above (which already has root-span name,
               trace ID, span count, and duration). Instead we surface the
               category breakdown, error count, total token usage, and the
-              model(s) the trace ran against. */}
+              model(s) the trace ran against. The same TraceSummaryStrip
+              is reused in the fullscreen header for visual consistency. */}
           <div className="flex items-center justify-between px-3 py-1.5 border-b bg-card">
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground min-w-0 flex-wrap">
-              {/* Span category breakdown — only show non-zero buckets. */}
-              {headerSummary.llm > 0 && (
-                <span>
-                  <span className="text-foreground font-medium">{headerSummary.llm}</span> LLM
-                </span>
-              )}
-              {headerSummary.tool > 0 && (
-                <>
-                  {headerSummary.llm > 0 && <span>·</span>}
-                  <span>
-                    <span className="text-foreground font-medium">{headerSummary.tool}</span> tool
-                  </span>
-                </>
-              )}
-              {headerSummary.agent > 0 && (
-                <>
-                  {(headerSummary.llm > 0 || headerSummary.tool > 0) && <span>·</span>}
-                  <span>
-                    <span className="text-foreground font-medium">{headerSummary.agent}</span> agent
-                  </span>
-                </>
-              )}
-              {headerSummary.evalCount > 0 && (
-                <>
-                  <span>·</span>
-                  <span>
-                    <span className="text-foreground font-medium">{headerSummary.evalCount}</span> eval
-                  </span>
-                </>
-              )}
-              {/* Error indicator — prominent if any. */}
-              {headerSummary.errors > 0 && (
-                <>
-                  <span>·</span>
-                  <span
-                    className="text-red-500 font-medium"
-                    title={`${headerSummary.errors} span${headerSummary.errors === 1 ? '' : 's'} ended in ERROR`}
-                  >
-                    ● {headerSummary.errors} error{headerSummary.errors === 1 ? '' : 's'}
-                  </span>
-                </>
-              )}
-              {/* Token usage — only if we found any LLM tokens. */}
-              {headerSummary.totalTokens > 0 && (
-                <>
-                  <span>·</span>
-                  <span
-                    title={`Input: ${headerSummary.inputTokens.toLocaleString()} tokens — Output: ${headerSummary.outputTokens.toLocaleString()} tokens`}
-                  >
-                    <span className="text-foreground font-medium">
-                      {formatCompact(headerSummary.totalTokens)}
-                    </span>{' '}
-                    tok
-                  </span>
-                </>
-              )}
-              {/* Model name(s) — join multiple with comma; truncate if long. */}
-              {headerSummary.models.length > 0 && (
-                <>
-                  <span>·</span>
-                  <span
-                    className="text-foreground font-mono truncate max-w-[260px]"
-                    title={headerSummary.models.join(', ')}
-                  >
-                    {headerSummary.models.join(', ')}
-                  </span>
-                </>
-              )}
-              {/* Fallback when none of the above produced anything (rare:
-                  trace has no LLM / tool / errors / tokens / models). Keeps
-                  the strip from collapsing to a confusing empty bar. */}
-              {headerSummary.llm === 0 &&
-                headerSummary.tool === 0 &&
-                headerSummary.agent === 0 &&
-                headerSummary.evalCount === 0 &&
-                headerSummary.errors === 0 &&
-                headerSummary.totalTokens === 0 &&
-                headerSummary.models.length === 0 && (
-                  <span className="italic">no summary attributes available</span>
-                )}
-            </div>
+            <TraceSummaryStrip summary={headerSummary} />
             <div className="flex items-center gap-1">
               <Button
                 variant="ghost"
@@ -494,6 +382,12 @@ const ExpandedTraceRow: React.FC<ExpandedTraceRowProps> = ({ trace, onClose }) =
         <Sheet
           open={selectedSpan !== null && !fullscreenOpen}
           onOpenChange={(o) => { if (!o) setSelectedSpan(null); }}
+          // Non-modal so the trace tree behind the drawer stays
+          // interactive — users need to keep clicking spans to swap
+          // the drawer's content. Modal Radix dialogs trap focus,
+          // lock body scroll, and aria-hide siblings, which made the
+          // page feel unresponsive while the drawer was open.
+          modal={false}
         >
           <SheetContent
             side="bottom"

@@ -6,8 +6,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { useNavigate } from 'react-router-dom';
-import { X, Play, Save, Star, CheckCircle2, XCircle, Loader2, ExternalLink, Clock, RefreshCw, Info, ChevronRight } from 'lucide-react';
+import { X, Play, Save, Star, CheckCircle2, XCircle, Loader2, ExternalLink, Clock, RefreshCw, Info, ChevronRight, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { getJudgeReasoningText } from '@/lib/matchers/judgeAccessor';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -22,6 +23,7 @@ import { parseLabels } from '@/lib/labels';
 import { runServerEvaluation, ServerEvaluationReport } from '@/services/client/evaluationApi';
 import { asyncTestCaseStorage } from '@/services/storage';
 import { TrajectoryView } from './TrajectoryView';
+import { RunScore } from '@/components/RunScore';
 
 interface QuickRunModalProps {
   testCase: TestCase | null; // null = ad-hoc run mode
@@ -547,6 +549,17 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                           <Clock size={14} className="mr-1" />
                           PENDING
                         </Badge>
+                      ) : report.metricsStatus === 'error' ? (
+                        // Issue #242: distinct ERRORED bucket so an evaluator
+                        // that couldn't produce a verdict isn't conflated with
+                        // a real agent failure (which would be FAILED in red).
+                        <Badge
+                          className="bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/20 dark:text-amber-400 dark:border-amber-500/30 text-sm px-3 py-1"
+                          title="Evaluator could not run (e.g. judge validation error). Excluded from pass-rate aggregation."
+                        >
+                          <AlertTriangle size={14} className="mr-1" />
+                          ERRORED
+                        </Badge>
                       ) : report.passFailStatus === 'passed' ? (
                         <Badge className="bg-green-100 text-green-700 border-green-300 dark:bg-green-500/20 dark:text-green-400 dark:border-green-500/30 text-sm px-3 py-1">
                           <CheckCircle2 size={14} className="mr-1" />
@@ -558,8 +571,13 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                           FAILED
                         </Badge>
                       )}
-                      <span className="text-sm text-muted-foreground">
-                        Accuracy: {report.metrics.accuracy}%
+                      <span className="text-sm text-muted-foreground inline-flex items-center gap-1">
+                        {/* Generic "Score: X%" rather than "Accuracy:" — the
+                            number is the run's overall score under whichever
+                            evaluator scored it (RCA Default emits `accuracy`,
+                            other evaluators emit different metrics). The
+                            tooltip on hover lists each contributing metric. */}
+                        <RunScore metrics={report.metrics as Record<string, number | undefined>} />
                       </span>
                     </div>
                   )}
@@ -573,17 +591,23 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                     />
                   </div>
 
-                  {/* LLM Judge Reasoning */}
-                  {report?.llmJudgeReasoning && (
-                    <div>
-                      <h4 className="text-sm font-semibold text-muted-foreground uppercase mb-2">LLM Judge Reasoning</h4>
-                      <Card className="bg-muted/30">
-                        <CardContent className="p-3 text-sm">
-                          {report.llmJudgeReasoning}
-                        </CardContent>
-                      </Card>
-                    </div>
-                  )}
+                  {/* Judge Reasoning — sourced from the unified judge
+                      accessor (lib/matchers/judgeAccessor.ts) which returns
+                      either the modern matcherResults entries or the legacy
+                      llmJudgeReasoning string for old reports. */}
+                  {(() => {
+                    const reasoning = report ? getJudgeReasoningText(report) : '';
+                    return reasoning ? (
+                      <div>
+                        <h4 className="text-sm font-semibold text-muted-foreground uppercase mb-2">Judge Reasoning</h4>
+                        <Card className="bg-muted/30">
+                          <CardContent className="p-3 text-sm">
+                            {reasoning}
+                          </CardContent>
+                        </Card>
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
               ) : isRunning ? (
                 <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">

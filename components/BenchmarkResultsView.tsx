@@ -14,7 +14,8 @@ import { Benchmark, BenchmarkRun, EvaluationReport, TestCase } from '@/types';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { UseCaseCompareView } from './UseCaseCompareView';
 import { BenchmarkSummaryCharts } from './benchmarks/BenchmarkSummaryCharts';
-import { formatDate, getPassRateColor } from '@/lib/utils';
+import { formatDate, getPassRateColor, getRunOverallScore } from '@/lib/utils';
+import { RunScore } from '@/components/RunScore';
 import { calculateRunStats } from '@/lib/runStats';
 
 interface BenchmarkResultsViewProps {
@@ -77,22 +78,30 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
     // Use shared utility for pass/fail counting
     const stats = calculateRunStats(run, reports);
 
-    // Calculate average accuracy (UI-specific metric not in shared utility)
-    let totalAccuracy = 0;
-    let accuracyCount = 0;
+    // Compute the average overall score across this benchmark run's test
+    // cases. "Overall score" = mean of every metric the per-test-case
+    // evaluator emitted (see `getRunOverallScore` in `lib/utils`). The old
+    // code summed `report.metrics?.accuracy ?? 0` which silently treated
+    // every report from non-RCA evaluators as 0% — dragging the average
+    // toward zero for any benchmark scored under Factuality, Tool Use, etc.
+    let totalScore = 0;
+    let scoredCount = 0;
 
     Object.entries(run.results || {}).forEach(([, result]) => {
       if (result.reportId && result.status === 'completed') {
         const report = reports[result.reportId];
         if (report && report.status === 'completed') {
-          totalAccuracy += report.metrics?.accuracy ?? 0;
-          accuracyCount++;
+          const score = getRunOverallScore(report.metrics as Record<string, number | undefined>);
+          if (score !== null) {
+            totalScore += score;
+            scoredCount++;
+          }
         }
       }
     });
 
     return {
-      avgAccuracy: accuracyCount > 0 ? Math.round(totalAccuracy / accuracyCount) : 0,
+      avgScore: scoredCount > 0 ? Math.round(totalScore / scoredCount) : 0,
       passCount: stats.passed,
       failCount: stats.failed,
       totalCount: stats.total,
@@ -231,7 +240,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                     </thead>
                     <tbody>
                       <tr className="border-b">
-                        <td className="py-2 pr-4 text-muted-foreground">Avg Accuracy</td>
+                        <td className="py-2 pr-4 text-muted-foreground">Avg Score</td>
                         {sortedRuns.map((run, index) => {
                           const stats = getRunStatsWithAccuracy(run);
                           return (
@@ -241,7 +250,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                                 getVersionBoundary(index) ? 'border-l-2 border-l-muted-foreground/30' : ''
                               }`}
                             >
-                              {stats.avgAccuracy}%
+                              {stats.avgScore}%
                             </td>
                           );
                         })}
@@ -250,7 +259,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                             {(() => {
                               const s1 = getRunStatsWithAccuracy(sortedRuns[0]);
                               const s2 = getRunStatsWithAccuracy(sortedRuns[1]);
-                              const diff = s2.avgAccuracy - s1.avgAccuracy;
+                              const diff = s2.avgScore - s1.avgScore;
                               return (
                                 <span className={diff > 0 ? 'text-opensearch-blue' : diff < 0 ? 'text-red-400' : ''}>
                                   {diff > 0 ? '+' : ''}{diff}%
@@ -406,7 +415,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                             })}
                           </tr>
                           <tr className="border-b">
-                            <td className="py-2 pr-4 text-muted-foreground">Accuracy</td>
+                            <td className="py-2 pr-4 text-muted-foreground">Score</td>
                             {sortedRuns.map((run, index) => {
                               const result = run.results?.[useCaseId];
                               const report = result?.reportId ? reports[result.reportId] : null;
@@ -417,7 +426,13 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                                     getVersionBoundary(index) ? 'border-l-2 border-l-muted-foreground/30' : ''
                                   }`}
                                 >
-                                  {report ? `${report.metrics?.accuracy ?? 0}%` : '-'}
+                                  {report
+                                    ? <RunScore
+                                        metrics={report.metrics as Record<string, number | undefined>}
+                                        showLabel={false}
+                                        silentWhenMissing
+                                      />
+                                    : '-'}
                                 </td>
                               );
                             })}

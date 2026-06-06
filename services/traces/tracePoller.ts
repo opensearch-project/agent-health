@@ -15,10 +15,26 @@ import { debug } from '@/lib/debug';
 import { fetchTracesByRunIds } from './index';
 import { asyncRunStorage } from '../storage/asyncRunStorage';
 import { executeBuildTrajectoryHook } from '@/lib/hooks';
+import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 
-// Polling configuration
-const DEFAULT_POLL_INTERVAL_MS = 10000; // 10 seconds
-const DEFAULT_MAX_ATTEMPTS = 30; // 5 minutes total
+// Polling configuration. Defaults are overridable via env vars so that
+// CI / E2E runs without a real OpenSearch trace backend can fail fast
+// instead of waiting the full ~10 min before the poller gives up.
+//
+// NOTE: this module is imported by browser code (RunDetailsContent.tsx) for
+// recovery polling, where `process` is not defined. Guard the access so we
+// silently fall back to defaults in the browser instead of throwing
+// `ReferenceError: process is not defined` at module load time.
+const envInt = (name: string, fallback: number): number => {
+  const raw =
+    typeof process !== 'undefined' && process?.env ? process.env[name] : undefined;
+  if (!raw) return fallback;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+const DEFAULT_POLL_INTERVAL_MS = envInt('TRACE_POLL_INTERVAL_MS', 10000); // 10 seconds
+const DEFAULT_MAX_ATTEMPTS = envInt('TRACE_POLL_MAX_ATTEMPTS', 60); // 10 minutes total at default interval
+const MAX_POLL_CEILING = 60; // Hard ceiling: never exceed 60 attempts regardless of agent config or env override
 
 export interface PollState {
   reportId: string;
@@ -72,7 +88,7 @@ class TracePollingManager {
       reportId,
       runId,
       attempts: 0,
-      maxAttempts: options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+      maxAttempts: Math.min(Number.isFinite(options?.maxAttempts) ? options!.maxAttempts : DEFAULT_MAX_ATTEMPTS, MAX_POLL_CEILING),
       intervalMs: options?.intervalMs ?? DEFAULT_POLL_INTERVAL_MS,
       lastAttempt: null,
       running: true,
@@ -236,10 +252,10 @@ class TracePollingManager {
             state.running = false;
             callbacks?.onError(new Error(`Trace incomplete after ${state.maxAttempts} attempts`));
             
-            await asyncRunStorage.updateReport(reportId, {
-              metricsStatus: 'error',
-              traceError: `Incomplete trace: found ${result.spans.length} spans but no root span after ${state.maxAttempts} attempts`,
-            }).catch(err => console.error(`[TracePoller] Failed to update report error status:`, err));
+            await asyncRunStorage.updateReport(reportId, buildEvaluatorErrorPatch(
+              'trace_incomplete',
+              `found ${result.spans.length} spans but no root span after ${state.maxAttempts} attempts`,
+            ) as any).catch(err => console.error(`[TracePoller] Failed to update report error status:`, err));
             
             this.callbacks.delete(reportId);
             this.polls.delete(reportId);
@@ -265,10 +281,10 @@ class TracePollingManager {
           // Write error status so the report doesn't stay stuck in 'pending'.
           console.error(`[TracePoller] onTracesFound callback failed for report ${reportId}:`, callbackErr);
           try {
-            await asyncRunStorage.updateReport(reportId, {
-              metricsStatus: 'error',
-              traceError: `Callback failed after traces found: ${callbackErr instanceof Error ? callbackErr.message : 'Unknown error'}`,
-            });
+            await asyncRunStorage.updateReport(reportId, buildEvaluatorErrorPatch(
+              'trace_callback_failed',
+              callbackErr,
+            ) as any);
           } catch (updateErr) {
             console.error(`[TracePoller] CRITICAL: Failed to update report ${reportId} error status after callback failure.`, updateErr);
           }
@@ -286,10 +302,10 @@ class TracePollingManager {
 
           // Update report with error status - critical as report will remain stuck otherwise
           try {
-            await asyncRunStorage.updateReport(reportId, {
-              metricsStatus: 'error',
-              traceError: `Traces not available after ${state.maxAttempts} attempts (${state.maxAttempts * state.intervalMs / 60000} minutes)`,
-            });
+            await asyncRunStorage.updateReport(reportId, buildEvaluatorErrorPatch(
+              'trace_timeout',
+              `traces not available after ${state.maxAttempts} attempts (${state.maxAttempts * state.intervalMs / 60000} minutes)`,
+            ) as any);
           } catch (updateErr) {
             console.error(`[TracePoller] CRITICAL: Failed to update report ${reportId} error status. Report may be stuck in pending state.`, updateErr);
           }
@@ -310,10 +326,10 @@ class TracePollingManager {
 
         // Update report with error status - critical as report will remain stuck otherwise
         try {
-          await asyncRunStorage.updateReport(reportId, {
-            metricsStatus: 'error',
-            traceError: (error as Error).message,
-          });
+          await asyncRunStorage.updateReport(reportId, buildEvaluatorErrorPatch(
+            'trace_fetch_failed',
+            error,
+          ) as any);
         } catch (updateErr) {
           console.error(`[TracePoller] CRITICAL: Failed to update report ${reportId} error status. Report may be stuck in pending state.`, updateErr);
         }

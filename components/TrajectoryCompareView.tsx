@@ -6,6 +6,7 @@
 import React from 'react';
 import { X, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { getJudgeReasoningText } from '@/lib/matchers/judgeAccessor';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -180,20 +181,20 @@ export const TrajectoryCompareView: React.FC<TrajectoryCompareViewProps> = ({
                 );
               })}
 
-              {/* LLM Judge Reasoning Comparison */}
+              {/* Judge Reasoning Comparison */}
               <div className="border-t pt-4 mt-6">
                 <h4 className="text-sm font-semibold text-muted-foreground uppercase mb-4">
-                  LLM Judge Reasoning
+                  Judge Reasoning
                 </h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-3 bg-muted/30 rounded">
                     <p className="text-sm whitespace-pre-wrap">
-                      {leftReport.llmJudgeReasoning || 'No reasoning available'}
+                      {getJudgeReasoningText(leftReport) || 'No reasoning available'}
                     </p>
                   </div>
                   <div className="p-3 bg-muted/30 rounded">
                     <p className="text-sm whitespace-pre-wrap">
-                      {rightReport.llmJudgeReasoning || 'No reasoning available'}
+                      {getJudgeReasoningText(rightReport) || 'No reasoning available'}
                     </p>
                   </div>
                 </div>

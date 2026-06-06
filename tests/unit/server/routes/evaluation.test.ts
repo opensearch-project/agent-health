@@ -410,3 +410,150 @@ describe('POST /api/evaluate — disconnect recovery contract', () => {
     expect(afterAdvance).toBe(beforeAdvance);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Run-name persistence
+//
+// Single test case runs historically had no `name` field — the runs list
+// was forced to render `id.slice(0, 10)` (e.g. `report-178…`) which is
+// meaningless to users. The route now:
+//   - persists `runName` from the request body onto the pre-created placeholder
+//   - auto-generates `Run <short-id>` and patches the placeholder when
+//     `runName` is omitted, so every run — not just user-named ones — has
+//     a recognizable label in the runs list.
+// ---------------------------------------------------------------------------
+describe('POST /api/evaluate — run name persistence', () => {
+  let warnSpy: jest.SpyInstance;
+  let errorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    setupConfigMocks();
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+    jest.useRealTimers();
+  });
+
+  it('persists the user-supplied runName onto the placeholder run', async () => {
+    const placeholderId = 'report-1780000000000-name001';
+    let captured: any = null;
+    const mockStorage = {
+      runs: {
+        create: jest.fn().mockImplementation(async (doc) => {
+          captured = doc;
+          return { ...doc, id: placeholderId };
+        }),
+        // No auto-generation patch is expected when runName is supplied,
+        // but the route may still call update() in other paths — keep
+        // the spy around so we can assert it was NOT invoked for naming.
+        update: jest.fn().mockResolvedValue({ id: placeholderId }),
+        getById: jest.fn().mockResolvedValue({
+          id: placeholderId, status: 'completed', passFailStatus: 'passed',
+          metrics: { accuracy: 90 }, trajectory: [], llmJudgeReasoning: 'ok',
+        }),
+      },
+    };
+    mockGetStorageModule.mockReturnValue(mockStorage as any);
+    mockRunSingleUseCase.mockResolvedValue(placeholderId);
+
+    const req = createMockReq({
+      testCase: FIXTURE_TEST_CASE,
+      agentKey: 'claude-code',
+      modelId: 'claude-sonnet-4.5',
+      runName: 'Baseline',
+      runDescription: 'Smoke test of the v2 prompt',
+    });
+    const res = createMockRes();
+
+    await getEvaluateHandler()(req, res);
+
+    expect(captured.name).toBe('Baseline');
+    expect(captured.description).toBe('Smoke test of the v2 prompt');
+    // Auto-generation patch must NOT fire when the user supplied a name.
+    const namingPatch = mockStorage.runs.update.mock.calls.find(
+      ([, updates]: any[]) => updates && Object.prototype.hasOwnProperty.call(updates, 'name'),
+    );
+    expect(namingPatch).toBeUndefined();
+  });
+
+  it('trims whitespace-only runName so it falls back to auto-generated', async () => {
+    const placeholderId = 'report-1780000000000-trim01';
+    let captured: any = null;
+    const mockStorage = {
+      runs: {
+        create: jest.fn().mockImplementation(async (doc) => {
+          captured = doc;
+          return { ...doc, id: placeholderId };
+        }),
+        update: jest.fn().mockResolvedValue({ id: placeholderId }),
+        getById: jest.fn().mockResolvedValue({
+          id: placeholderId, status: 'completed', passFailStatus: 'passed',
+          metrics: { accuracy: 90 }, trajectory: [], llmJudgeReasoning: 'ok',
+        }),
+      },
+    };
+    mockGetStorageModule.mockReturnValue(mockStorage as any);
+    mockRunSingleUseCase.mockResolvedValue(placeholderId);
+
+    await getEvaluateHandler()(
+      createMockReq({
+        testCase: FIXTURE_TEST_CASE,
+        agentKey: 'claude-code',
+        modelId: 'claude-sonnet-4.5',
+        runName: '   ',
+      }),
+      createMockRes(),
+    );
+
+    // create() is called with name: undefined (whitespace trimmed away)...
+    expect(captured.name).toBeUndefined();
+    // ...and the auto-generation patch fires using the trailing 6 chars
+    // of the freshly-allocated id, mirroring `getRunDisplayName` on the client.
+    const expectedShortId = placeholderId.slice(-6);
+    expect(mockStorage.runs.update).toHaveBeenCalledWith(
+      placeholderId,
+      expect.objectContaining({ name: `Run ${expectedShortId}` }),
+    );
+  });
+
+  it('auto-generates `Run <short-id>` when runName is omitted', async () => {
+    const placeholderId = 'report-1780000000000-auto42';
+    let captured: any = null;
+    const mockStorage = {
+      runs: {
+        create: jest.fn().mockImplementation(async (doc) => {
+          captured = doc;
+          return { ...doc, id: placeholderId };
+        }),
+        update: jest.fn().mockResolvedValue({ id: placeholderId }),
+        getById: jest.fn().mockResolvedValue({
+          id: placeholderId, status: 'completed', passFailStatus: 'passed',
+          metrics: { accuracy: 75 }, trajectory: [], llmJudgeReasoning: 'ok',
+        }),
+      },
+    };
+    mockGetStorageModule.mockReturnValue(mockStorage as any);
+    mockRunSingleUseCase.mockResolvedValue(placeholderId);
+
+    await getEvaluateHandler()(
+      createMockReq({
+        testCase: FIXTURE_TEST_CASE,
+        agentKey: 'claude-code',
+        modelId: 'claude-sonnet-4.5',
+        // no runName — we expect the server to fill one in
+      }),
+      createMockRes(),
+    );
+
+    expect(captured.name).toBeUndefined();
+    expect(mockStorage.runs.update).toHaveBeenCalledWith(
+      placeholderId,
+      { name: `Run ${placeholderId.slice(-6)}` },
+    );
+  });
+});

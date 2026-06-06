@@ -5,8 +5,8 @@
 
 import { defineConfig, devices } from '@playwright/test';
 
-const backendPort = process.env.AGENT_HEALTH_PORT || '4001';
-const devPort = process.env.AGENT_HEALTH_DEV_PORT || '4000';
+const backendPort = process.env.AH_PORT || process.env.AGENT_HEALTH_PORT || '4001';
+const devPort = process.env.AH_DEV_PORT || process.env.AGENT_HEALTH_DEV_PORT || '4000';
 
 /**
  * Playwright configuration for E2E testing of AgentEval UI
@@ -56,12 +56,22 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   /* In CI, use single production server; in local dev, use separate dev servers */
-  webServer: process.env.CI
+  /* Set PLAYWRIGHT_SKIP_WEBSERVER=1 to run tests against an already-running server */
+  webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER
+    ? undefined
+    : process.env.CI
     ? {
         command: 'npm run server',
         url: `http://127.0.0.1:${backendPort}`,
         reuseExistingServer: false,
         timeout: 120000,
+        env: {
+          // E2E runs don't have a real OpenSearch trace backend, so the
+          // default 5-minute trace poll per test case (30 attempts × 10s)
+          // is wasted wall time. Fail fast instead.
+          TRACE_POLL_MAX_ATTEMPTS: process.env.TRACE_POLL_MAX_ATTEMPTS ?? '2',
+          TRACE_POLL_INTERVAL_MS: process.env.TRACE_POLL_INTERVAL_MS ?? '1000',
+        },
       }
     : [
         {
@@ -69,6 +79,10 @@ export default defineConfig({
           url: `http://127.0.0.1:${backendPort}/health`,
           reuseExistingServer: true,
           timeout: 120000,
+          env: {
+            TRACE_POLL_MAX_ATTEMPTS: process.env.TRACE_POLL_MAX_ATTEMPTS ?? '2',
+            TRACE_POLL_INTERVAL_MS: process.env.TRACE_POLL_INTERVAL_MS ?? '1000',
+          },
         },
         {
           command: 'npm run dev',

@@ -30,9 +30,20 @@ export interface RunStats {
   failed: number;
   /** Number of test cases still pending (running, or report not yet available) */
   pending: number;
+  /**
+   * Number of test cases where the *evaluator* could not produce a verdict
+   * (judge validation error, trace timeout, etc.). Excluded from passed and
+   * failed counts so a misconfigured evaluator doesn't poison aggregate
+   * pass rates. Issue #242.
+   */
+  errored: number;
   /** Total number of test cases in the run */
   total: number;
-  /** Pass rate as a percentage (0-100) */
+  /**
+   * Pass rate as a percentage (0-100). Computed over `total - errored`
+   * (the *evaluable* set), not over `total`, so a non-retryable judge
+   * failure can't masquerade as the agent scoring 0%.
+   */
   passRate: number;
 }
 
@@ -55,6 +66,7 @@ export function calculateRunStats(
   let passed = 0;
   let failed = 0;
   let pending = 0;
+  let errored = 0;
   let total = 0;
 
   Object.entries(run.results || {}).forEach(([testCaseId, result]) => {
@@ -87,6 +99,14 @@ export function calculateRunStats(
         return;
       }
 
+      // Issue #242: evaluator could not produce a verdict (judge validation
+      // error, trace timeout, etc.). Excluded from passed/failed so
+      // misconfigured evaluators don't masquerade as agent failures.
+      if (report.metricsStatus === 'error') {
+        errored++;
+        return;
+      }
+
       // Count based on passFailStatus from LLM judge
       if (report.passFailStatus === 'passed') {
         passed++;
@@ -100,13 +120,16 @@ export function calculateRunStats(
     }
   });
 
-  // Calculate pass rate (percentage of total test cases that passed)
-  const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
+  // Pass rate is computed over the evaluable set (total minus errored).
+  // If every run errored, expose 0% rather than dividing by zero.
+  const evaluable = Math.max(0, total - errored);
+  const passRate = evaluable > 0 ? Math.round((passed / evaluable) * 100) : 0;
 
   return {
     passed,
     failed,
     pending,
+    errored,
     total,
     passRate,
   };
@@ -153,6 +176,7 @@ export function computeRunStatsFromReports(
     passed: fullStats.passed,
     failed: fullStats.failed,
     pending: fullStats.pending,
+    errored: fullStats.errored,
     total: fullStats.total,
   };
 }

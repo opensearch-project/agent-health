@@ -5,6 +5,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
+import { useClusterContext } from '@/hooks/useClusterContext';
+import { ClusterContextBanner } from '@/components/comparison/ClusterContextBanner';
 import { AlertTriangle, Trash2, Database, CheckCircle2, XCircle, Upload, Download, Loader2, Server, Plus, Edit2, X, Save, ExternalLink, Eye, EyeOff, ChevronDown, ChevronRight, RefreshCw, Palette, Circle } from 'lucide-react';
 import { getTheme, setTheme, type Theme } from '@/lib/theme';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -85,15 +87,38 @@ export const SettingsPage: React.FC = () => {
   const [migrationStatus, setMigrationStatus] = useState<string>('');
   const [migrationResult, setMigrationResult] = useState<MigrationStats | null>(null);
 
+  // Cluster context — when present, render a banner and auto-scroll to the
+  // Custom Endpoints panel + open the Add form so the user lands on the
+  // exact action the comparison page suggested.
+  const { context: clusterContext } = useClusterContext();
+  const customEndpointsRef = useRef<HTMLDivElement>(null);
+
   // Agent endpoints state
   const [customEndpoints, setCustomEndpoints] = useState<AgentEndpoint[]>([]);
   const [isAddingEndpoint, setIsAddingEndpoint] = useState(false);
+  const hasOpenedFromCluster = useRef(false);
   const [editingEndpointId, setEditingEndpointId] = useState<string | null>(null);
   const [newEndpointName, setNewEndpointName] = useState('');
   const [newEndpointUrl, setNewEndpointUrl] = useState('');
   const [newConnectorType, setNewConnectorType] = useState<ConnectorProtocol>('agui-streaming');
   const [newUseTraces, setNewUseTraces] = useState(false);
   const [endpointUrlError, setEndpointUrlError] = useState<string | null>(null);
+
+  // When the user arrives from a tool_gap cluster, scroll to the Custom
+  // Endpoints panel and open the Add form so they land on the exact action.
+  useEffect(() => {
+    if (!clusterContext) return;
+    if (hasOpenedFromCluster.current) return;
+    if (clusterContext.clusterType !== 'tool_gap' && clusterContext.clusterType !== 'other') return;
+    hasOpenedFromCluster.current = true;
+    // Pre-fill the name with the cluster name so the user has context.
+    setNewEndpointName(clusterContext.name);
+    setIsAddingEndpoint(true);
+    // Scroll the panel into view next tick so the form is mounted.
+    setTimeout(() => {
+      customEndpointsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  }, [clusterContext]);
 
   // Data source configuration state (form inputs - not stored values)
   const [storageConfig, setStorageConfigState] = useState({
@@ -860,6 +885,12 @@ export const SettingsPage: React.FC = () => {
     <div className="p-6 max-w-4xl mx-auto" data-testid="settings-page">
       <h2 className="text-2xl font-bold mb-6" data-testid="settings-title">Settings</h2>
 
+      {clusterContext && (
+        <div className="mb-4">
+          <ClusterContextBanner context={clusterContext} />
+        </div>
+      )}
+
       {/* Preferences */}
       <Card className="mb-6">
         <CardHeader>
@@ -1002,7 +1033,7 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           {/* Custom Endpoints Section */}
-          <div className="border-t pt-4 mt-4">
+          <div ref={customEndpointsRef} className="border-t pt-4 mt-4">
             <div className="flex items-center justify-between mb-3">
               <Label className="text-xs text-muted-foreground uppercase tracking-wide">Custom Endpoints</Label>
               {!isAddingEndpoint && (

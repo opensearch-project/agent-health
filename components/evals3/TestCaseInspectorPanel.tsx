@@ -11,11 +11,13 @@
  */
 
 import React from 'react';
-import { CheckCircle2, XCircle, Loader2, Clock } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Clock, AlertTriangle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { EvaluationReport, TestCase } from '@/types';
 import { RunDetailsContent } from '../RunDetailsContent';
 import { type ResultStatus } from './ResultStatus';
+import { getRunDisplayName } from '@/lib/utils';
+import { CollapsibleTestCaseDefinition } from './CollapsibleTestCaseDefinition';
 
 interface TestCaseInspectorPanelProps {
   report: EvaluationReport;
@@ -28,13 +30,19 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
   testCase,
   status,
 }) => {
-  const isPassed = status === 'passed' || report.passFailStatus === 'passed';
-  const isFailed = status === 'failed' || report.passFailStatus === 'failed';
-  const displayStatus = isFailed ? 'failed' : isPassed ? 'passed' : status;
+  // Issue #242: an evaluator-error report has metricsStatus='error' and a
+  // cleared (null) passFailStatus. The runner derives status='errored'
+  // for these via getResultStatus(); the badge below must light up the
+  // amber ERRORED chip rather than falling through to PENDING.
+  const isErrored = status === 'errored' || report.metricsStatus === 'error';
+  const isPassed = !isErrored && (status === 'passed' || report.passFailStatus === 'passed');
+  const isFailed = !isErrored && (status === 'failed' || report.passFailStatus === 'failed');
+  const displayStatus = isErrored ? 'errored' : isFailed ? 'failed' : isPassed ? 'passed' : status;
 
   const badgeConfig: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
     passed: { icon: <CheckCircle2 size={16} className="text-green-500 shrink-0" />, label: 'PASSED', cls: 'bg-green-100 text-green-700 border-green-300 dark:bg-green-500/15 dark:text-green-400 dark:border-green-500/30' },
     failed: { icon: <XCircle size={16} className="text-red-500 shrink-0" />, label: 'FAILED', cls: 'bg-red-100 text-red-700 border-red-300 dark:bg-red-500/15 dark:text-red-400 dark:border-red-500/30' },
+    errored: { icon: <AlertTriangle size={16} className="text-amber-500 shrink-0" />, label: 'ERRORED', cls: 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/15 dark:text-amber-400 dark:border-amber-500/30' },
     pending_traces: { icon: <Loader2 size={16} className="text-amber-500 animate-spin shrink-0" />, label: 'AWAITING TRACES', cls: 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/15 dark:text-amber-400 dark:border-amber-500/30' },
     pending_judgment: { icon: <Loader2 size={16} className="text-purple-500 animate-spin shrink-0" />, label: 'JUDGING', cls: 'bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-500/15 dark:text-purple-400 dark:border-purple-500/30' },
     pending: { icon: <Clock size={16} className="text-muted-foreground shrink-0" />, label: 'PENDING', cls: 'bg-muted text-muted-foreground border-border' },
@@ -44,16 +52,37 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Compact header — just name + status */}
+      {/* Compact header — run name (so the user sees which run they're
+          inspecting) + status badge. The test case name is already shown in
+          the page header above, so repeating it here would be redundant. */}
       <div className="px-4 py-2.5 border-b bg-card shrink-0">
         <div className="flex items-center gap-2">
           {badge.icon}
-          <span className="text-sm font-semibold truncate flex-1">{testCase?.name || report.testCaseId}</span>
+          <span
+            className="text-sm font-semibold truncate flex-1"
+            title={getRunDisplayName(report)}
+          >
+            {getRunDisplayName(report)}
+          </span>
           <Badge className={`text-[9px] px-1.5 py-0 shrink-0 ${badge.cls}`}>
             {badge.label}
           </Badge>
         </div>
+        {/* Secondary line: agent · model — mirrors the runs list so the
+            user has the same execution context visible whether they're
+            scanning the list or focused on a single run. */}
+        <div className="text-[10px] text-muted-foreground mt-1 truncate">
+          {report.agentName || '—'} · {report.modelName || '—'}
+        </div>
       </div>
+
+      {/* Reusable definition collapsible — same widget on both
+          TestCaseDetailPage and RunInspectorPage so users get the
+          identical right-pane experience whether they came from a
+          test-case run or a benchmark run. Defaults closed; clicking
+          the header opens it to show file path (SDK) or full JSON
+          (no truncation). */}
+      <CollapsibleTestCaseDefinition testCase={testCase} />
 
       {/* Tabs — directly into content, no extra chrome */}
       <div className="flex-1 overflow-hidden">

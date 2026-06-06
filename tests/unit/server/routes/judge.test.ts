@@ -10,6 +10,7 @@ import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/serv
 import { evaluateWithLiteLLM, parseLiteLLMError } from '@/server/services/litellmJudgeService';
 import { evaluateWithClaudeCode, parseClaudeCodeError } from '@/server/services/claudeCodeJudgeService';
 import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
+import { evaluateWithPiAgenticTrace } from '@/server/services/piAgenticJudgeService';
 
 // Mock the AWS Bedrock client
 const mockSend = jest.fn();
@@ -48,6 +49,18 @@ jest.mock('@/server/services/agenticJudgeService', () => ({
   parseAgenticJudgeError: jest.fn(),
 }));
 
+// Mock the pi agentic *trace* judge service (provider: 'agent')
+jest.mock('@/server/services/piAgenticJudgeService', () => ({
+  evaluateWithPiAgenticTrace: jest.fn(),
+}));
+
+// Mock the storage adapter so a custom evaluatorId can resolve to an
+// evaluator whose inferenceConfig selects the 'agent' (trace) provider.
+const mockGetEvaluatorById = jest.fn();
+jest.mock('@/server/adapters', () => ({
+  getStorageModule: () => ({ evaluators: { getById: mockGetEvaluatorById } }),
+}));
+
 const mockEvaluateTrajectory = evaluateTrajectory as jest.MockedFunction<typeof evaluateTrajectory>;
 const mockParseBedrockError = parseBedrockError as jest.MockedFunction<typeof parseBedrockError>;
 const mockEvaluateWithOpenAICompatible = evaluateWithOpenAICompatible as jest.MockedFunction<typeof evaluateWithOpenAICompatible>;
@@ -58,6 +71,7 @@ const mockEvaluateWithClaudeCode = evaluateWithClaudeCode as jest.MockedFunction
 const mockParseClaudeCodeError = parseClaudeCodeError as jest.MockedFunction<typeof parseClaudeCodeError>;
 const mockEvaluateWithAgenticJudge = evaluateWithAgenticJudge as jest.MockedFunction<typeof evaluateWithAgenticJudge>;
 const mockParseAgenticJudgeError = parseAgenticJudgeError as jest.MockedFunction<typeof parseAgenticJudgeError>;
+const mockEvaluateWithPiAgenticTrace = evaluateWithPiAgenticTrace as jest.MockedFunction<typeof evaluateWithPiAgenticTrace>;
 
 // Helper to create mock request/response
 function createMocks(body: any = {}) {
@@ -625,6 +639,104 @@ describe('Judge Routes', () => {
         expect.objectContaining({
           error: expect.stringContaining('Judge evaluation failed'),
         })
+      );
+    });
+  });
+
+  describe('POST /api/judge - agent (trace) provider runId guard', () => {
+    // An evaluator whose inferenceConfig selects the trace-judge provider.
+    const agentEvaluator = {
+      id: 'custom-trace-eval',
+      name: 'Trace Judge',
+      inferenceConfig: { provider: 'agent' },
+    };
+
+    it('returns 400 when runId is missing (trace tools have nothing to scope to)', async () => {
+      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'search' }],
+        expectedOutcomes: ['Identify issue'],
+        evaluatorId: 'custom-trace-eval',
+        // no runId
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('runId is required') })
+      );
+      expect(mockEvaluateWithPiAgenticTrace).not.toHaveBeenCalled();
+    });
+
+    it('routes to evaluateWithPiAgenticTrace when runId is present', async () => {
+      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
+      mockEvaluateWithPiAgenticTrace.mockResolvedValue({
+        passFailStatus: 'passed',
+        metrics: { accuracy: 90 },
+        llmJudgeReasoning: 'Trace-backed evaluation',
+        improvementStrategies: [],
+      } as any);
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'search' }],
+        expectedOutcomes: ['Identify issue'],
+        evaluatorId: 'custom-trace-eval',
+        runId: 'run-abc-123',
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(res.status).not.toHaveBeenCalledWith(400);
+      expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-abc-123' })
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ passFailStatus: 'passed' })
+      );
+    });
+
+    it('returns 403 when runId does not match the runId carried by the submitted trajectory (#3 cross-run guard)', async () => {
+      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
+
+      const { req, res } = createMocks({
+        // Trajectory came from run 'run-OWN', but the caller asks the judge to
+        // inspect a different run's traces.
+        trajectory: [{ type: 'action', toolName: 'search', runId: 'run-OWN' }],
+        expectedOutcomes: ['Identify issue'],
+        evaluatorId: 'custom-trace-eval',
+        runId: 'run-SOMEONE-ELSE',
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(mockEvaluateWithPiAgenticTrace).not.toHaveBeenCalled();
+    });
+
+    it('allows when the requested runId matches a runId in the trajectory', async () => {
+      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
+      mockEvaluateWithPiAgenticTrace.mockResolvedValue({
+        passFailStatus: 'passed', metrics: { accuracy: 91 }, llmJudgeReasoning: 'ok', improvementStrategies: [],
+      } as any);
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'search', runId: 'run-OWN' }],
+        expectedOutcomes: ['Identify issue'],
+        evaluatorId: 'custom-trace-eval',
+        runId: 'run-OWN',
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(res.status).not.toHaveBeenCalledWith(403);
+      expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-OWN' })
       );
     });
   });

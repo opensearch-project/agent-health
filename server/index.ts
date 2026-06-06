@@ -15,6 +15,9 @@ import { createApp } from './app.js';
 import { getStorageConfigFromFile, getObservabilityConfigFromFile } from './services/configService.js';
 import { findObservioRoot, spawnObservioAgent, OBSERVIO_DEFAULT_PORT, resetObservioPort, isPortFree, setObservioPort, waitForObservioReady, killObservioAgent } from './services/observioAgent.js';
 import { validateAwsCredentials } from './services/tracesService.js';
+import { resumePendingTracePollsSafely } from './services/traceRecoveryOnBoot.js';
+import { recoverOrphanBenchmarkRunsSafely } from './services/benchmarkRunRecoveryOnBoot.js';
+import { getStorageModule } from './adapters/index.js';
 
 // Register server-side connectors (subprocess, claude-code)
 // This import has side effects that register connectors with the registry
@@ -146,6 +149,23 @@ async function startServer() {
           }).catch(() => { /* non-fatal */ });
         }
         console.log('');
+
+        // Resume orphan trace-mode polling that was lost during a restart.
+        // Fire-and-forget — must never block server startup or crash on failure.
+        // Runs after listen() so the poller's HTTP self-calls (asyncRunStorage)
+        // can reach the local API.
+        try {
+          const storage = getStorageModule();
+          if (storage) {
+            resumePendingTracePollsSafely(storage);
+            // Also fail out orphan BenchmarkRuns (status: 'running' for too long
+            // with the runner long dead). Different bug class — see
+            // server/services/benchmarkRunRecoveryOnBoot.ts.
+            recoverOrphanBenchmarkRunsSafely(storage);
+          }
+        } catch (err: any) {
+          console.warn(`[bootRecovery] Could not start: ${err?.message || err}`);
+        }
 
         // Graceful shutdown — stop background timers, kill child processes, drain connections
         const shutdown = (signal: string) => {

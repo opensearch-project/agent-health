@@ -14,7 +14,9 @@ import * as readline from 'readline';
 import * as dotenv from 'dotenv';
 import { format, parse, isValid } from 'date-fns';
 
+// Try observio-sample-agent/.env first, then parent project .env (won't override).
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
+dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
 
 interface LogEntry {
   timestamp: string;

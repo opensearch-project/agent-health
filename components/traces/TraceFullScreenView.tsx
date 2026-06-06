@@ -10,7 +10,7 @@
  * Supports single trace mode (timeline/flow) and comparison mode (side-by-side/merged).
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Activity, Network, List, GitBranch, Info, MessageSquare, X as XIcon } from 'lucide-react';
 import {
   FullScreenDialog,
@@ -22,9 +22,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Span, TimeRange, CategorizedSpan } from '@/types';
+import { computeTraceSummary } from '@/services/traces';
 import TraceVisualization from './TraceVisualization';
 import { ViewMode } from './ViewToggle';
 import SimpleSpanAttributesTable from './SimpleSpanAttributesTable';
+import TraceSummaryStrip from './TraceSummaryStrip';
 
 interface TraceFullScreenViewProps {
   /** Whether the fullscreen dialog is open */
@@ -149,14 +151,21 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
 
   const displaySpanCount = spanCount ?? spanTree.length;
 
+  // Same headline summary as the inline expansion shows above the
+  // tree (category breakdown / errors / tokens / models). Reusing
+  // the TraceSummaryStrip component keeps inline and fullscreen
+  // header content visually identical — if the user opens fullscreen
+  // they don't lose the at-a-glance signal they were looking at.
+  const headerSummary = useMemo(() => computeTraceSummary(spanTree), [spanTree]);
+
   return (
     <FullScreenDialog open={open} onOpenChange={onOpenChange}>
       <FullScreenDialogContent>
         {/* Header */}
         <FullScreenDialogHeader>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <Activity size={20} className="text-opensearch-blue" />
-            <div>
+            <div className="min-w-0">
               <FullScreenDialogTitle className="flex items-center gap-2">
                 {title}
                 {displaySpanCount > 0 && (
@@ -165,8 +174,13 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
                   </Badge>
                 )}
               </FullScreenDialogTitle>
+              {/* Summary strip — same content the inline expansion shows. */}
+              <TraceSummaryStrip
+                summary={headerSummary}
+                className="text-xs mt-1"
+              />
               {subtitle && (
-                <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">{subtitle}</p>
               )}
             </div>
           </div>
@@ -230,8 +244,14 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
           </div>
         </FullScreenDialogHeader>
 
-        {/* Main content area */}
-        <div className="flex-1 flex flex-col overflow-hidden relative">
+        {/* Main content area.
+            `min-h-0` is required so this flex child can shrink below its
+            content height — without it, a tall trace tree silently
+            overflows past the dialog viewport and the user can't scroll
+            up to the top of the tree (the inner overflow-auto on the
+            chart wrapper never receives a constrained parent height,
+            so its scrollbar never engages). */}
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
           {spanTree.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
               <Activity size={48} className="mb-4 opacity-20" />
@@ -259,23 +279,18 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
               bottom of the fullscreen overlay rather than the page body.
               This means it never overlaps the trace list behind the
               fullscreen and the user gets the same flat-attribute UX in
-              both inline and fullscreen modes. */}
+              both inline and fullscreen modes.
+
+              The fullscreen dialog already owns the only close (X) in
+              this overlay — putting another X on the drawer was redundant
+              and confusing. To dismiss the drawer the user clicks the
+              span row again (deselect) or hits Esc. */}
           {selectedSpan && (
             <div
               className="absolute inset-x-0 bottom-0 h-[55vh] bg-background border-t shadow-2xl flex flex-col z-20 animate-in slide-in-from-bottom-4 duration-200"
               role="dialog"
               aria-label="Span details"
             >
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 right-2 h-7 w-7 z-10"
-                onClick={() => onSelectSpan?.(null)}
-                aria-label="Close span details"
-                title="Close (Esc)"
-              >
-                <XIcon size={14} />
-              </Button>
               <SimpleSpanAttributesTable span={selectedSpan} />
             </div>
           )}

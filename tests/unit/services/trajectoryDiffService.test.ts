@@ -8,6 +8,7 @@ import {
   alignTrajectories,
   compareJsonObjects,
   calculateDiffStats,
+  extractFirstDivergence,
   AlignedStep,
 } from '@/services/trajectoryDiffService';
 import { TrajectoryStep } from '@/types';
@@ -456,6 +457,65 @@ describe('TrajectoryDiffService', () => {
 
       // Should have at least some matches (first thinking step)
       expect(stats.matchedCount + stats.modifiedCount).toBeGreaterThan(0);
+    });
+  });
+
+  describe('extractFirstDivergence', () => {
+    it('returns null for two empty trajectories', () => {
+      expect(extractFirstDivergence([], [])).toBeNull();
+    });
+
+    it('returns null when trajectories are identical', () => {
+      const steps = [
+        createStep('action', { toolName: 'search', toolArgs: { q: 'a' }, content: 'do search' }),
+        createStep('tool_result', { content: 'ok' }),
+        createStep('response', { content: 'done' }),
+      ];
+      // Use identical references so similarity is 1.0
+      expect(extractFirstDivergence(steps, steps)).toBeNull();
+    });
+
+    it('flags an added step when comparison has an extra tool call up front', () => {
+      const baseline = [
+        createStep('action', { toolName: 'answer', toolArgs: { msg: 'x' }, content: 'answer' }),
+      ];
+      const comparison = [
+        createStep('action', { toolName: 'lookup', toolArgs: { id: '1' }, content: 'lookup' }),
+        createStep('action', { toolName: 'answer', toolArgs: { msg: 'x' }, content: 'answer' }),
+      ];
+      const result = extractFirstDivergence(baseline, comparison);
+      expect(result).not.toBeNull();
+      expect(result!.type).toBe('added');
+      expect(result!.comparisonSummary).toContain('lookup');
+    });
+
+    it('flags a removed step when baseline has an extra tool call', () => {
+      const baseline = [
+        createStep('action', { toolName: 'redundant', toolArgs: { x: 1 }, content: 'extra' }),
+        createStep('action', { toolName: 'final', toolArgs: { y: 2 }, content: 'final' }),
+      ];
+      const comparison = [
+        createStep('action', { toolName: 'final', toolArgs: { y: 2 }, content: 'final' }),
+      ];
+      const result = extractFirstDivergence(baseline, comparison);
+      expect(result).not.toBeNull();
+      expect(result!.type).toBe('removed');
+      expect(result!.baselineSummary).toContain('redundant');
+    });
+
+    it('returns the index from the aligned trajectory, not raw step index', () => {
+      const baseline = [
+        createStep('action', { toolName: 'wrongTool', toolArgs: { a: 1 }, content: 'oops' }),
+        createStep('response', { content: 'final' }),
+      ];
+      const comparison = [
+        createStep('action', { toolName: 'rightTool', toolArgs: { a: 1 }, content: 'good' }),
+        createStep('response', { content: 'final' }),
+      ];
+      const result = extractFirstDivergence(baseline, comparison);
+      expect(result).not.toBeNull();
+      // First step disagrees, so divergence index should be 0.
+      expect(result!.index).toBe(0);
     });
   });
 });

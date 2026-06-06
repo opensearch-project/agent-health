@@ -18,7 +18,7 @@ jest.mock('@/lib/runStats.js', () => ({ calculateRunStats: jest.fn(), getReportI
 jest.mock('@/cli/utils/formatOutput.js', () => ({ formatJson: jest.fn(), formatMarkdownTable: jest.fn(), parseOutputFormat: jest.fn(), OUTPUT_FORMAT_DESCRIPTION: '' }));
 jest.mock('@/lib/testCases/loader.js', () => ({ isCodeFile: jest.requireActual('@/lib/testCases/loader').isCodeFile }));
 
-import { isFilePath } from '@/cli/commands/benchmark';
+import { isFilePath, buildFileSources } from '@/cli/commands/benchmark';
 
 describe('isFilePath - code file detection', () => {
   it('returns true for .json files', () => {
@@ -52,5 +52,31 @@ describe('isFilePath - code file detection', () => {
     expect(isFilePath('evals.TS')).toBe(true);
     expect(isFilePath('test.JS')).toBe(true);
     expect(isFilePath('mod.MJS')).toBe(true);
+  });
+});
+
+describe('buildFileSources — code vs JSON routing (#245/#246)', () => {
+  it('routes .eval.js/.ts/.mjs to code-import (executes bodies)', () => {
+    const sources = buildFileSources(['a.eval.js', 'b.eval.ts', 'c.eval.mjs']);
+    expect(sources).toEqual([
+      { type: 'code-import', filenames: ['a.eval.js', 'b.eval.ts', 'c.eval.mjs'], testCaseIds: [] },
+    ]);
+  });
+
+  it('routes .json to file-import (static data)', () => {
+    const sources = buildFileSources(['cases.json']);
+    expect(sources).toEqual([
+      { type: 'file-import', filenames: ['cases.json'], testCaseIds: [] },
+    ]);
+  });
+
+  it('splits a mixed batch into both source types', () => {
+    const sources = buildFileSources(['x.eval.js', 'data.json']);
+    expect(sources).toContainEqual({ type: 'code-import', filenames: ['x.eval.js'], testCaseIds: [] });
+    expect(sources).toContainEqual({ type: 'file-import', filenames: ['data.json'], testCaseIds: [] });
+  });
+
+  it('returns no sources for an empty file list', () => {
+    expect(buildFileSources([])).toEqual([]);
   });
 });

@@ -9,6 +9,7 @@
  * Ported from NovaLanggraphApplication/scripts/experiment/metrics.ts
  */
 
+import { Client } from '@opensearch-project/opensearch';
 import { MetricsResult, AggregateMetrics, OpenSearchConfig, Span } from '@/types';
 import { getSampleSpansForRunIds } from '../../cli/demo/sampleTraces.js';
 
@@ -283,8 +284,29 @@ export function computeMetricsFromSpans(
  */
 export async function computeMetrics(
   runId: string,
-  osConfig: OpenSearchConfig
+  osConfig: OpenSearchConfig | { client: Client; indexPattern?: string }
 ): Promise<MetricsResult> {
+  if ('client' in osConfig) {
+    const indexPattern = osConfig.indexPattern || 'otel-v1-apm-span-*';
+    const response = await osConfig.client.search({
+      index: indexPattern,
+      body: {
+        size: 500,
+        sort: [{ startTime: { order: 'asc' } }],
+        query: {
+          bool: {
+            must: [
+              { term: { 'span.attributes.gen_ai@request@id': runId } }
+            ]
+          }
+        }
+      }
+    });
+    const spans = response.body.hits?.hits?.map((h: any) => h._source) || [];
+    return computeMetricsFromSpans(runId, spans);
+  }
+
+  // Legacy: raw fetch with Basic auth
   const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
 
   const query = {
@@ -325,19 +347,74 @@ export async function computeMetrics(
  */
 export async function computeBatchMetrics(
   runIds: string[],
-  osConfig: OpenSearchConfig
+  osConfig: OpenSearchConfig | { client: Client; indexPattern?: string }
 ): Promise<MetricsResult[]> {
   if (runIds.length === 0) return [];
 
-  const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
   const CHUNK_SIZE = 50;
   const allResults: MetricsResult[] = [];
 
-  // Process in chunks to stay under OpenSearch max_result_window (10,000 hits)
   const chunks: string[][] = [];
   for (let i = 0; i < runIds.length; i += CHUNK_SIZE) {
     chunks.push(runIds.slice(i, i + CHUNK_SIZE));
   }
+
+  if ('client' in osConfig) {
+    const indexPattern = osConfig.indexPattern || 'otel-v1-apm-span-*';
+    const chunkResults = await Promise.all(chunks.map(async (chunk) => {
+      try {
+        const response = await osConfig.client.search({
+          index: indexPattern,
+          body: {
+            size: 10000,
+            sort: [{ startTime: { order: 'asc' } }],
+            _source: METRICS_SOURCE_FIELDS,
+            query: {
+              bool: {
+                must: [
+                  { terms: { 'span.attributes.gen_ai@request@id': chunk } }
+                ]
+              }
+            }
+          }
+        });
+
+        const allSpans = response.body.hits?.hits?.map((h: any) => h._source) || [];
+        const total = response.body.hits?.total;
+        const totalHits = (typeof total === 'object' ? total?.value : total) ?? allSpans.length;
+        if (totalHits > 10000) {
+          console.warn(
+            `OpenSearch batch metrics query returned ${allSpans.length} of ${totalHits} spans ` +
+            `for chunk of ${chunk.length} run IDs. Metrics may be incomplete.`
+          );
+        }
+
+        const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
+        for (const rid of chunk) spansByRunId.set(rid, []);
+        for (const span of allSpans) {
+          const rid = span['span.attributes.gen_ai@request@id'] as unknown as string;
+          if (rid && spansByRunId.has(rid)) {
+            spansByRunId.get(rid)!.push(span);
+          }
+        }
+
+        return chunk.map(runId => computeMetricsFromSpans(runId, spansByRunId.get(runId) || []));
+      } catch (e: any) {
+        console.warn(
+          `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ${e.message}`
+        );
+        return chunk.map(runId => computeMetricsFromSpans(runId, []));
+      }
+    }));
+
+    for (const results of chunkResults) {
+      allResults.push(...results);
+    }
+    return allResults;
+  }
+
+  // Legacy: raw fetch with Basic auth
+  const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
 
   const chunkResults = await Promise.all(chunks.map(async (chunk) => {
     const query = {
@@ -368,14 +445,12 @@ export async function computeBatchMetrics(
         `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ` +
         `${response.status} ${response.statusText}. Response body: ${responseBody}`
       );
-      // On failure, return pending results for all IDs in this chunk
       return chunk.map(runId => computeMetricsFromSpans(runId, []));
     }
 
     const data: OpenSearchResponse = await response.json();
     const allSpans = data.hits?.hits?.map(h => h._source) || [];
 
-    // Warn if results were truncated (more spans exist than size limit)
     const totalHits = (data.hits as any)?.total?.value ?? allSpans.length;
     if (totalHits > 10000) {
       console.warn(
@@ -384,7 +459,6 @@ export async function computeBatchMetrics(
       );
     }
 
-    // Group spans by run ID
     const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
     for (const rid of chunk) spansByRunId.set(rid, []);
     for (const span of allSpans) {

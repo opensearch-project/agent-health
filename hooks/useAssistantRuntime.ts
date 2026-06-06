@@ -22,15 +22,37 @@ export function useAssistantRuntime() {
     `session-${Date.now()}-${Math.random().toString(36).slice(2)}`
   );
 
-  // Derive assistant context from the current URL path
+  // Derive assistant context from the current URL path + query string.
+  //
+  // Routes we recognize:
+  //   /benchmarks/:benchmarkId       → benchmarkId
+  //   /runs/:runId                   → runId
+  //   /traces/:traceId               → traceId
+  //   /test-cases/:testCaseId        → testCaseId
+  //   /compare/:benchmarkId?runs=a,b → benchmarkId + comparisonRunIds
   const context = useMemo((): AssistantContext => {
     const path = location.pathname;
     const parts = path.split('/');
+    const search = new URLSearchParams(location.search);
+
+    // /compare/:benchmarkId carries the benchmark id in the URL too — the
+    // original parser only looked for the literal "benchmarks" segment, which
+    // meant the assistant got an empty context on the comparison page.
+    const benchmarkFromCompare =
+      parts.includes('compare') && parts.indexOf('compare') + 1 < parts.length
+        ? parts[parts.indexOf('compare') + 1]
+        : undefined;
+
+    const runsParam = search.get('runs');
+    const comparisonRunIds = runsParam
+      ? runsParam.split(',').map((s) => s.trim()).filter(Boolean)
+      : undefined;
+
     return {
-      currentUrl: path,
+      currentUrl: path + (location.search || ''),
       benchmarkId: parts.includes('benchmarks')
         ? parts[parts.indexOf('benchmarks') + 1]
-        : undefined,
+        : benchmarkFromCompare,
       runId: parts.includes('runs')
         ? parts[parts.indexOf('runs') + 1]
         : undefined,
@@ -40,8 +62,11 @@ export function useAssistantRuntime() {
       testCaseId: parts.includes('test-cases')
         ? parts[parts.indexOf('test-cases') + 1]
         : undefined,
+      comparisonRunIds: comparisonRunIds && comparisonRunIds.length > 0
+        ? comparisonRunIds
+        : undefined,
     };
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   const adapter: ChatModelAdapter = useMemo(
     () => ({

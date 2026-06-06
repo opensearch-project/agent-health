@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { cn, getLabelColor, getDifficultyColor, formatDate, formatRelativeTime, getModelName, truncate } from '@/lib/utils';
+import { cn, getLabelColor, getDifficultyColor, formatDate, formatRelativeTime, getModelName, truncate, getRunShortId, getRunDisplayName, getRunOverallScore } from '@/lib/utils';
 
 describe('lib/utils', () => {
   describe('cn', () => {
@@ -223,6 +223,111 @@ describe('lib/utils', () => {
       const result = truncate('Hello    World', 8);
       // Should trim trailing spaces before ellipsis
       expect(result).toBe('Hello...');
+    });
+  });
+
+  // ============================================================================
+  // Run display helpers
+  //
+  // These two helpers back the new runs-list rendering on the Test Case detail
+  // page, where every persisted run is expected to show a stable, human-readable
+  // label — either the user-supplied name or an auto-generated `Run <short-id>`
+  // fallback for legacy data created before `TestCaseRun.name` existed.
+  // Regression-locking them prevents the UI from sliding back into the old
+  // `report-178…` id-slice rendering.
+  // ============================================================================
+  describe('getRunShortId', () => {
+    it('returns the trailing 6 characters for typical report ids', () => {
+      // Storage adapter shape: `report-<timestamp>-<random>` — the random
+      // suffix is the visually distinguishing part, so trimming to the
+      // tail keeps short-ids unique within a session.
+      expect(getRunShortId('report-1780000000000-j0tutlwx1')).toBe('utlwx1');
+    });
+
+    it('returns the full id when shorter than 6 characters (legacy/short ids)', () => {
+      expect(getRunShortId('abc')).toBe('abc');
+      expect(getRunShortId('123456')).toBe('123456');
+    });
+
+    it('returns an empty string for an empty id rather than throwing', () => {
+      expect(getRunShortId('')).toBe('');
+    });
+  });
+
+  describe('getRunDisplayName', () => {
+    it('prefers the persisted run name when set', () => {
+      expect(getRunDisplayName({ id: 'report-1780000000000-j0tutlwx1', name: 'Baseline' })).toBe('Baseline');
+    });
+
+    it('trims the persisted name to avoid leading/trailing whitespace bleed', () => {
+      expect(getRunDisplayName({ id: 'report-x', name: '  Claude_02  ' })).toBe('Claude_02');
+    });
+
+    it('falls back to `Run <short-id>` when name is missing (legacy data)', () => {
+      expect(getRunDisplayName({ id: 'report-1780000000000-j0tutlwx1' })).toBe('Run utlwx1');
+    });
+
+    it('falls back when name is an empty / whitespace-only string', () => {
+      expect(getRunDisplayName({ id: 'report-1780000000000-j0tutlwx1', name: '' })).toBe('Run utlwx1');
+      expect(getRunDisplayName({ id: 'report-1780000000000-j0tutlwx1', name: '   ' })).toBe('Run utlwx1');
+    });
+  });
+
+  // Regression-locks the bug that made every run in the runs list show `0%`:
+  // the UI used to read `run.metrics?.accuracy ?? 0`, but only the RCA Default
+  // evaluator emits an `accuracy` metric — every other evaluator emits its
+  // own metric names (`tool_selection_accuracy`, `reasoning_coherence`, etc.).
+  // `getRunOverallScore` averages whatever numeric metrics exist so the runs
+  // list shows a meaningful number for any evaluator.
+  describe('getRunOverallScore', () => {
+    it('returns the rounded mean of populated numeric metrics', () => {
+      // Mixed evaluator: tool-use + safety metrics in one run
+      expect(getRunOverallScore({
+        tool_selection_accuracy: 80,
+        redundant_calls: 90,
+        tool_ordering: 70,
+      })).toBe(80);
+    });
+
+    it('rounds to the nearest integer', () => {
+      // (33 + 34) / 2 = 33.5 → 34
+      expect(getRunOverallScore({ a: 33, b: 34 })).toBe(34);
+      // (10 + 20 + 30) / 3 = 20
+      expect(getRunOverallScore({ a: 10, b: 20, c: 30 })).toBe(20);
+    });
+
+    it('ignores undefined / non-numeric metric values without skewing the mean', () => {
+      // Used to be: `|| 0` defaults turned undefined into 0 and dragged the
+      // mean down. Now those entries are simply skipped.
+      expect(getRunOverallScore({
+        accuracy: 100,
+        faithfulness: undefined,
+        latency_score: undefined,
+        trajectory_alignment_score: undefined,
+      })).toBe(100);
+    });
+
+    it('ignores NaN and Infinity (defensive against bad data)', () => {
+      expect(getRunOverallScore({
+        a: 50,
+        b: NaN as any,
+        c: Infinity as any,
+      })).toBe(50);
+    });
+
+    it('returns null when no numeric metrics are present', () => {
+      // Critical: this is what makes the UI render `—` instead of `0%` for
+      // runs that haven't been judged yet, or whose evaluator emitted nothing.
+      expect(getRunOverallScore({})).toBeNull();
+      expect(getRunOverallScore(undefined)).toBeNull();
+      expect(getRunOverallScore(null)).toBeNull();
+      expect(getRunOverallScore({ a: undefined, b: undefined })).toBeNull();
+    });
+
+    it('preserves a legitimate zero score (does not collapse to null)', () => {
+      // 0% is a real outcome — the helper must not treat it as missing.
+      expect(getRunOverallScore({ accuracy: 0 })).toBe(0);
+      expect(getRunOverallScore({ a: 0, b: 0 })).toBe(0);
     });
   });
 });

@@ -205,7 +205,10 @@ describe('Test Case Import Integration', () => {
       expect(result.errors[0].message).toContain('Bulk Import');
     });
 
-    it('should require at least one non-empty expected outcome', () => {
+    it('accepts test cases with no non-empty expected outcomes (cross-surface parity)', () => {
+      // Cross-surface parity (commit fd984c9e): SDK code-only tests have no
+      // `expectedOutcomes` and UI-form mirrors of those tests must be allowed
+      // to persist with the same shape. See lib/testCaseValidation.ts.
       const testCaseWithEmptyOutcomes = {
         name: 'Test',
         category: 'RCA',
@@ -214,7 +217,16 @@ describe('Test Case Import Integration', () => {
         expectedOutcomes: ['', '   '],
       };
       const result = validateTestCaseJson(testCaseWithEmptyOutcomes);
-      expect(result.valid).toBe(false);
+      expect(result.valid).toBe(true);
+
+      const omittedOutcomes = {
+        name: 'Test',
+        category: 'RCA',
+        difficulty: 'Easy' as const,
+        initialPrompt: 'Test',
+      };
+      const result2 = validateTestCaseJson(omittedOutcomes);
+      expect(result2.valid).toBe(true);
     });
   });
 

@@ -14,7 +14,7 @@ import { pathToFileURL } from 'url';
 import type { AgentConfig, ModelConfig } from '@/types';
 import type { AgentConnector } from '@/services/connectors/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { DEFAULT_BACKEND_PORT } from '@/lib/portConfig';
+import { DEFAULT_BACKEND_PORT, resolveBackendPort } from '@/lib/portConfig';
 import type {
   UserConfig,
   UserAgentConfig,
@@ -32,7 +32,7 @@ import type {
  * Follows Playwright's webServer pattern
  */
 export const DEFAULT_SERVER_CONFIG: ResolvedServerConfig = {
-  port: DEFAULT_BACKEND_PORT,
+  port: resolveBackendPort(),
   reuseExistingServer: !process.env.CI,
   startTimeout: 30000,
 };
@@ -45,6 +45,26 @@ const CONFIG_FILE_NAMES = [
   'agent-health.config.js',
   'agent-health.config.mjs',
 ];
+
+/**
+ * Server-side JSON config file. Loaded by the *server services*
+ * (configService, customAgentStore, dataSourceConfig, etc.), not by this
+ * loader — the schemas are different. We only probe for it here so the
+ * startup log can accurately tell the user whether *any* on-disk config
+ * was picked up, instead of saying "No config file found" when the JSON
+ * file is in fact driving OpenSearch / Bedrock / agents.
+ */
+const SERVER_JSON_CONFIG_FILENAME = 'agent-health.config.json';
+
+/**
+ * Check whether the server-side JSON config exists in the given directory.
+ * This file is *not* loaded by this loader — it's a separate config plane
+ * for runtime (storage, observability, custom agents) read directly by
+ * server services. We only surface its presence in the startup log.
+ */
+export function hasServerJsonConfig(cwd: string = process.cwd()): boolean {
+  return existsSync(resolve(cwd, SERVER_JSON_CONFIG_FILENAME));
+}
 
 /**
  * Find config file in the given directory
@@ -223,8 +243,17 @@ export async function loadConfig(
   if (configFile) {
     console.log(`[Config] Loading ${configFile.path}`);
     userConfig = await loadUserConfig(configFile.path);
+  } else if (hasServerJsonConfig(cwd)) {
+    // Code config absent, but server-side JSON config present — it's loaded
+    // by separate server services (storage / observability / custom agents).
+    // Be explicit so the user doesn't think *no* config is in effect.
+    console.log(
+      `[Config] No code config (agent-health.config.{ts,js,mjs}); ` +
+      `server JSON config (${SERVER_JSON_CONFIG_FILENAME}) detected and ` +
+      `loaded by server services. Using built-in defaults for agents/models.`,
+    );
   } else {
-    // No config file is fine - env vars and defaults are used
+    // Truly no config file — env vars and built-in defaults only.
     console.log('[Config] No config file found, using defaults + environment variables');
   }
 

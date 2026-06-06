@@ -37,6 +37,15 @@ export interface ServerEvaluationRequest {
   agentEndpoint?: string;
   /** Optional evaluator ID for custom evaluation criteria */
   evaluatorId?: string;
+  /**
+   * Optional human-readable name for the persisted run. If omitted the server
+   * generates `Run <short-id>` so every run has a recognizable label in the
+   * runs list. Mirrors `BenchmarkRun.name` for symmetry between single and
+   * batch runs.
+   */
+  runName?: string;
+  /** Optional human-readable description of what this run was testing. */
+  runDescription?: string;
 }
 
 /**

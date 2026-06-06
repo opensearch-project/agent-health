@@ -135,4 +135,11 @@ describe('custom matchers', () => {
     ahExpect({ durationMs: 1000 } as any).to.haveCompletedWithin(2000);
     expect(() => ahExpect({ durationMs: 5000 } as any).to.haveCompletedWithin(2000)).toThrow();
   });
+
+  it('toPass — asserts a judge Verdict passed', () => {
+    ahExpect({ pass: true } as any).to.toPass();
+    expect(() =>
+      ahExpect({ pass: false, reasoning: 'missed the root cause' } as any).to.toPass()
+    ).toThrow(/missed the root cause/);
+  });
 });

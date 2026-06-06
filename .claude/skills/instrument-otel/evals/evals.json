@@ -1,0 +1,35 @@
+{
+  "skill_name": "instrument-otel",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I'm building a Python agent that calls Claude. How do I add OpenTelemetry tracing so it shows up in Agent Health?",
+      "expected_output": "A response that includes the correct span hierarchy with invoke_agent as root, the required gen_ai attributes for each span type, and the proper environment variable configuration including http/protobuf protocol.",
+      "assertions": [
+        "The response specifies gen_ai.operation.name with value 'invoke_agent' for the root/agent span, 'chat' for LLM spans, and 'execute_tool' for tool spans",
+        "The response includes OTEL_EXPORTER_OTLP_PROTOCOL set to 'http/protobuf' (not grpc or other protocols)",
+        "The response mentions that token counts (gen_ai.usage.input_tokens, gen_ai.usage.output_tokens) must be integers, not strings"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I have my agent instrumented with OpenTelemetry and traces are going to OpenSearch. Now I need to configure Agent Health to read those traces. What's the config format and how do I set it up?",
+      "expected_output": "A response that shows the agent-health.config.json structure with the observability block including endpoint, authType, awsRegion, awsService, and tracesIndex fields, plus mentions the CLI setup option.",
+      "assertions": [
+        "The response includes a JSON config with an 'observability' key containing 'tracesIndex' set to 'otel-v1-apm-span-*'",
+        "The response mentions the CLI command 'npx @opensearch-project/agent-health setup-telemetry' as an alternative setup method",
+        "The response mentions verifying with 'npx @opensearch-project/agent-health doctor'"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "My agent traces are showing up in Agent Health but all my spans are categorized as 'OTHER' and the model usage metrics aren't appearing. I'm using model id 'claude-sonnet' and setting token counts as strings like '150'. What's wrong?",
+      "expected_output": "A response that identifies both problems: missing or incorrect gen_ai.operation.name attribute on spans causing OTHER categorization, token counts must be integers not strings, and model ID must be the full identifier not a short name.",
+      "assertions": [
+        "The response identifies that every span needs gen_ai.operation.name set to one of the recognized values ('invoke_agent', 'chat', 'execute_tool') or it falls into the 'OTHER' category",
+        "The response explains that token counts must be integers not strings (e.g., 150 not '150')",
+        "The response states that full model IDs must be used (e.g., 'anthropic.claude-sonnet-4-20250514-v1:0') rather than short names like 'claude-sonnet'"
+      ]
+    }
+  ]
+}

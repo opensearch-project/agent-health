@@ -17,6 +17,7 @@ import {
   calculateRowStatus,
   countRowsByStatus,
   getRealTestCaseMeta,
+  detectComparisonMode,
 } from '@/services/comparisonService';
 import {
   BenchmarkRun,
@@ -232,8 +233,38 @@ describe('comparisonService', () => {
       expect(rows[0].testCaseId).toBe('tc-1');
       expect(rows[0].results['run-1'].status).toBe('completed');
       expect(rows[0].results['run-1'].passFailStatus).toBe('passed');
+      expect(rows[0].results['run-1'].errored).toBeFalsy();
       expect(rows[0].results['run-2'].status).toBe('completed');
       expect(rows[0].results['run-2'].passFailStatus).toBe('failed');
+      expect(rows[0].results['run-2'].errored).toBeFalsy();
+    });
+
+    // Issue #242: when a report carries metricsStatus='error' (evaluator
+    // failed to produce a verdict), the comparison row must surface a
+    // truthy `errored` flag so the MetricCell can render the amber
+    // `Errored` chip distinct from `Failed`. Without this, the row
+    // falls through to passFailStatus-based styling and a misconfigured
+    // judge masquerades as an agent failure.
+    it('flags reports with metricsStatus="error" as errored on the row', () => {
+      const erroredReports: Record<string, EvaluationReport> = {
+        ...mockReports,
+        'report-2': {
+          id: 'report-2',
+          testCaseId: 'tc-1',
+          // The actual run-time shape: metricsStatus='error' and
+          // passFailStatus is null (cleared by buildEvaluatorErrorPatch).
+          metricsStatus: 'error',
+          passFailStatus: null as any,
+          metrics: { accuracy: 0, faithfulness: 0, trajectory_alignment_score: 0, latency_score: 0 },
+        } as unknown as EvaluationReport,
+      };
+
+      const rows = buildTestCaseComparisonRows(mockRuns, erroredReports, mockGetMeta, mockGetVersion);
+      expect(rows[0].results['run-1'].errored).toBeFalsy(); // unchanged
+      expect(rows[0].results['run-2'].errored).toBe(true);
+      // metricsStatus wins, so passFailStatus is whatever the report carries
+      // (null on errored docs), but the comparison cell will read .errored
+      // first and render the amber chip.
     });
 
     it('should detect version differences', () => {
@@ -634,6 +665,82 @@ describe('comparisonService', () => {
 
       expect(calculateRowStatus(row, referenceRunId)).toBe('mixed');
     });
+
+    it('treats baseline-passed + other-failed as regression even when scores are close', () => {
+      // The headline case: Kiro passed CP-test-04, Claude failed it. Even
+      // if the accuracy numbers are within a few points, this is the row
+      // the user actually came here for.
+      const row: TestCaseComparisonRow = {
+        testCaseId: '1',
+        testCaseName: 'TC1',
+        category: 'RCA',
+        difficulty: 'Easy',
+        labels: [],
+        results: {
+          'oldest-run': {
+            status: 'completed',
+            passFailStatus: 'passed',
+            accuracy: 75, faithfulness: 75, trajectoryAlignment: 75, latencyScore: 75,
+          },
+          'run-2': {
+            status: 'completed',
+            passFailStatus: 'failed',
+            accuracy: 73, faithfulness: 73, trajectoryAlignment: 73, latencyScore: 73,
+          },
+        },
+        hasVersionDifference: false,
+        versions: [],
+      };
+      expect(calculateRowStatus(row, referenceRunId)).toBe('regression');
+    });
+
+    it('treats baseline-failed + other-passed as improvement even when scores are close', () => {
+      const row: TestCaseComparisonRow = {
+        testCaseId: '1',
+        testCaseName: 'TC1',
+        category: 'RCA',
+        difficulty: 'Easy',
+        labels: [],
+        results: {
+          'oldest-run': {
+            status: 'completed',
+            passFailStatus: 'failed',
+            accuracy: 65, faithfulness: 65, trajectoryAlignment: 65, latencyScore: 65,
+          },
+          'run-2': {
+            status: 'completed',
+            passFailStatus: 'passed',
+            accuracy: 67, faithfulness: 67, trajectoryAlignment: 67, latencyScore: 67,
+          },
+        },
+        hasVersionDifference: false,
+        versions: [],
+      };
+      expect(calculateRowStatus(row, referenceRunId)).toBe('improvement');
+    });
+
+    it('returns neutral when both runs pass with similar scores', () => {
+      const row: TestCaseComparisonRow = {
+        testCaseId: '1',
+        testCaseName: 'TC1',
+        category: 'RCA',
+        difficulty: 'Easy',
+        labels: [],
+        results: {
+          'oldest-run': {
+            status: 'completed', passFailStatus: 'passed',
+            accuracy: 88, faithfulness: 88, trajectoryAlignment: 88, latencyScore: 88,
+          },
+          'run-2': {
+            status: 'completed', passFailStatus: 'passed',
+            accuracy: 86, faithfulness: 86, trajectoryAlignment: 86, latencyScore: 86,
+          },
+        },
+        hasVersionDifference: false,
+        versions: [],
+      };
+      expect(calculateRowStatus(row, referenceRunId)).toBe('neutral');
+    });
   });
 
   describe('countRowsByStatus', () => {
@@ -688,6 +795,57 @@ describe('comparisonService', () => {
       expect(counts.regression).toBe(1);
       expect(counts.neutral).toBe(1);
       expect(counts.mixed).toBe(0);
+    });
+  });
+
+  describe('detectComparisonMode', () => {
+    const buildRun = (id: string, agentKey: string): BenchmarkRun => ({
+      id,
+      name: id,
+      createdAt: '2024-01-01T00:00:00Z',
+      agentKey,
+      modelId: 'model-1',
+      status: 'completed',
+      results: {},
+    });
+
+    it('returns iterate when no runs are selected', () => {
+      expect(detectComparisonMode([])).toBe('iterate');
+    });
+
+    it('returns iterate for a single run', () => {
+      expect(detectComparisonMode([buildRun('r1', 'claude')])).toBe('iterate');
+    });
+
+    it('returns iterate when all runs share the same agentKey', () => {
+      const runs = [
+        buildRun('r1', 'claude'),
+        buildRun('r2', 'claude'),
+        buildRun('r3', 'claude'),
+      ];
+      expect(detectComparisonMode(runs)).toBe('iterate');
+    });
+
+    it('returns compare when runs span multiple agentKeys', () => {
+      const runs = [buildRun('r1', 'claude'), buildRun('r2', 'kiro')];
+      expect(detectComparisonMode(runs)).toBe('compare');
+    });
+
+    it('returns compare when at least two of three runs have distinct agentKeys', () => {
+      const runs = [
+        buildRun('r1', 'claude'),
+        buildRun('r2', 'claude'),
+        buildRun('r3', 'kiro'),
+      ];
+      expect(detectComparisonMode(runs)).toBe('compare');
+    });
+
+    it('treats missing agentKey as iterate', () => {
+      const runs = [
+        { ...buildRun('r1', ''), agentKey: '' },
+        { ...buildRun('r2', ''), agentKey: '' },
+      ];
+      expect(detectComparisonMode(runs)).toBe('iterate');
     });
   });
 });

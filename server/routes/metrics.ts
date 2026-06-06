@@ -10,7 +10,7 @@
 import { Request, Response, Router } from 'express';
 import { debug } from '@/lib/debug';
 import { computeMetrics, computeBatchMetrics, computeMetricsFromSampleSpans, computeAggregateMetrics } from '../services/metricsService';
-import { resolveObservabilityConfig, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceConfig.js';
+import { getObservabilityClient } from '../services/observabilityClient.js';
 import { MetricsResult } from '@/types';
 
 const router = Router();
@@ -22,7 +22,6 @@ router.get('/api/metrics/:runId', async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
 
-    // Check for sample/demo data first (no OpenSearch needed)
     if (runId.startsWith('demo-')) {
       const sampleMetrics = computeMetricsFromSampleSpans(runId);
       if (sampleMetrics) {
@@ -31,25 +30,14 @@ router.get('/api/metrics/:runId', async (req: Request, res: Response) => {
       }
     }
 
-    // Get observability configuration from headers or env vars
-    const config = resolveObservabilityConfig(req);
-
-    if (!config) {
-      return res.status(503).json({
-        error: 'Observability data source not configured'
-      });
+    const obs = getObservabilityClient(req);
+    if (!obs) {
+      return res.status(503).json({ error: 'Observability data source not configured' });
     }
-
-    const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
 
     debug('MetricsAPI', 'Computing metrics for runId:', runId);
 
-    const metrics = await computeMetrics(runId, {
-      endpoint: config.endpoint,
-      username: config.username,
-      password: config.password,
-      indexPattern
-    });
+    const metrics = await computeMetrics(runId, { client: obs.client, indexPattern: obs.indexes.traces });
 
     debug('MetricsAPI', 'Metrics computed:', {
       runId: metrics.runId,
@@ -81,40 +69,29 @@ router.post('/api/metrics/batch', async (req: Request, res: Response) => {
 
     debug('MetricsAPI', 'Computing batch metrics for', runIds.length, 'runs');
 
-    // Separate demo vs real run IDs
     const demoRunIds = runIds.filter((id: string) => id.startsWith('demo-'));
     const realRunIds = runIds.filter((id: string) => !id.startsWith('demo-'));
 
-    // Compute demo metrics from sample spans (no OpenSearch needed)
     const demoResults: (MetricsResult | { runId: string; error: string; status: string })[] =
       demoRunIds.map((runId: string) => {
         const metrics = computeMetricsFromSampleSpans(runId);
         return metrics || { runId, error: 'No sample data found', status: 'error' };
       });
 
-    // Compute real metrics from OpenSearch (if any real run IDs)
     let realResults: (MetricsResult | { runId: string; error: string; status: string })[] = [];
 
     if (realRunIds.length > 0) {
-      const config = resolveObservabilityConfig(req);
+      const obs = getObservabilityClient(req);
 
-      if (!config) {
+      if (!obs) {
         realResults = realRunIds.map((runId: string) => ({
           runId,
           error: 'Observability data source not configured',
           status: 'error'
         }));
       } else {
-        const indexPattern = config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces;
-        const osConfig = {
-          endpoint: config.endpoint,
-          username: config.username,
-          password: config.password,
-          indexPattern
-        };
-
         try {
-          realResults = await computeBatchMetrics(realRunIds, osConfig);
+          realResults = await computeBatchMetrics(realRunIds, { client: obs.client, indexPattern: obs.indexes.traces });
         } catch (e: any) {
           realResults = realRunIds.map((runId: string) => ({
             runId,
@@ -125,12 +102,10 @@ router.post('/api/metrics/batch', async (req: Request, res: Response) => {
       }
     }
 
-    // Combine results preserving original order
     const resultsMap = new Map<string, any>();
     [...demoResults, ...realResults].forEach(r => resultsMap.set(r.runId, r));
     const results = runIds.map((id: string) => resultsMap.get(id));
 
-    // Also compute aggregate metrics (filter out errors with type guard)
     const successfulMetrics = results.filter((r): r is MetricsResult => !('error' in r));
     const aggregate = computeAggregateMetrics(successfulMetrics);
 
@@ -140,10 +115,7 @@ router.post('/api/metrics/batch', async (req: Request, res: Response) => {
       totalCost: aggregate.totalCostUsd?.toFixed(4)
     });
 
-    res.json({
-      metrics: results,
-      aggregate
-    });
+    res.json({ metrics: results, aggregate });
   } catch (error: any) {
     console.error('[MetricsAPI] Batch error:', error);
     res.status(500).json({ error: error.message });

@@ -43,14 +43,15 @@ import { ClaudeCodeReader } from './readers/claudeCode';
 import { KiroReader } from './readers/kiro';
 import { CodexReader } from './readers/codex';
 import { SessionCacheManager } from './cache';
+import { readEnv } from '@/lib/envCompat';
 
 /**
  * Extract unix username from a project path.
  * Handles macOS (/Users/X/...) and Linux (/home/X/...).
- * Returns AGENT_HEALTH_USERNAME env var if set, overriding detection.
+ * Returns AH_USERNAME env var if set (legacy: AGENT_HEALTH_USERNAME), overriding detection.
  */
 export function extractUsername(projectPath: string): string {
-  const override = process.env.AGENT_HEALTH_USERNAME;
+  const override = readEnv('AH_USERNAME', 'AGENT_HEALTH_USERNAME');
   if (override) return override;
 
   const parts = projectPath.split('/');

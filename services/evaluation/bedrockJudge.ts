@@ -10,6 +10,7 @@
 
 import { TrajectoryStep, EvaluationMetrics, ImprovementStrategy, OpenSearchLog, PassFailStatus } from '@/types';
 import { ENV_CONFIG } from '@/lib/config';
+import { readEnv } from '@/lib/envCompat';
 
 interface JudgeResult {
   passFailStatus: PassFailStatus;
@@ -52,7 +53,7 @@ export async function callBedrockJudge(
 ): Promise<JudgeResult> {
   const maxRetries = 10;
   const baseDelay = 1000; // 1 second
-  const judgeApiUrl = ENV_CONFIG.judgeApiUrl || `http://localhost:${process.env?.AGENT_HEALTH_PORT || '4001'}/api/judge`;
+  const judgeApiUrl = ENV_CONFIG.judgeApiUrl || `http://localhost:${readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001'}/api/judge`;
 
   console.log('[BedrockJudge] Sending request to backend proxy...');
   console.log('[BedrockJudge] Trajectory steps:', trajectory.length);
@@ -86,7 +87,12 @@ export async function callBedrockJudge(
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || `API request failed with status ${response.status}`);
+        const errorMessage = errorData.error || `API request failed with status ${response.status}`;
+        // 4xx client errors are validation failures — retrying won't help
+        if (response.status >= 400 && response.status < 500) {
+          throw Object.assign(new Error(`Bedrock Judge validation error (not retryable): ${errorMessage}`), { nonRetryable: true });
+        }
+        throw new Error(errorMessage);
       }
 
       const result = await response.json();
@@ -124,6 +130,11 @@ export async function callBedrockJudge(
       }
 
       console.error(`[BedrockJudge] Attempt ${attempt} failed:`, errorMessage);
+
+      // Fail fast on non-retryable errors (4xx validation failures)
+      if ((error as any)?.nonRetryable) {
+        throw error;
+      }
 
       // If this is the last attempt, throw the error
       if (isLastAttempt) {

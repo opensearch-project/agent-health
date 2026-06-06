@@ -194,4 +194,136 @@ describe('Run Storage Integration Tests', () => {
       expect(retrieved).toBeNull();
     });
   });
+
+  // ===========================================================================
+  // Run name + dynamic metrics round-trip
+  //
+  // Locks down the storage-layer fixes from PR #206:
+  //   - `name`, `description`, `evaluatorId` round-trip through the read mapper
+  //     (`toTestCaseRun`) so the runs list shows the user-supplied name instead
+  //     of falling back to `Run <short-id>`.
+  //   - Dynamic metric names (e.g. `tool_selection_accuracy`,
+  //     `reasoning_coherence`, `bias_detection`) are preserved on read,
+  //     not stripped by the previous 4-key whitelist.
+  //   - Missing metrics stay missing (read mapper used to fabricate `0` for
+  //     undefined values, which made every non-RCA-Default run render as `0%`).
+  //
+  // Each test exercises the full HTTP round-trip via asyncRunStorage → backend
+  // → storage adapter → backend → asyncRunStorage so it catches type-mapper bugs
+  // that unit tests with mocks would miss.
+  // ===========================================================================
+  describe('run name, description, evaluatorId round-trip (PR #206)', () => {
+    it('preserves user-supplied name and description through save → fetch', async () => {
+      if (!backendAvailable) return;
+
+      const report = buildReport({
+        name: 'Baseline (integration test)',
+        description: 'Smoke check for runName persistence',
+      } as Partial<EvaluationReport>);
+      const saved = await asyncRunStorage.saveReport(report);
+      createdReportIds.push(saved.id);
+
+      const fetched = await asyncRunStorage.getReportById(saved.id);
+      expect(fetched).toBeDefined();
+      expect(fetched!.name).toBe('Baseline (integration test)');
+      expect(fetched!.description).toBe('Smoke check for runName persistence');
+    });
+
+    it('preserves evaluatorId so the runs list can label the evaluator', async () => {
+      if (!backendAvailable) return;
+
+      const report = buildReport({
+        evaluatorId: 'system-rca',
+      } as Partial<EvaluationReport>);
+      const saved = await asyncRunStorage.saveReport(report);
+      createdReportIds.push(saved.id);
+
+      const fetched = await asyncRunStorage.getReportById(saved.id);
+      expect(fetched).toBeDefined();
+      expect(fetched!.evaluatorId).toBe('system-rca');
+    });
+
+    it('leaves name / description undefined for runs that omit them (no fabrication)', async () => {
+      if (!backendAvailable) return;
+
+      // No name/description in the report — the read mapper must not invent
+      // values; `getRunDisplayName` on the UI side handles missing names
+      // by synthesising `Run <short-id>` at render time.
+      const report = buildReport();
+      const saved = await asyncRunStorage.saveReport(report);
+      createdReportIds.push(saved.id);
+
+      const fetched = await asyncRunStorage.getReportById(saved.id);
+      expect(fetched).toBeDefined();
+      expect(fetched!.name).toBeUndefined();
+      expect(fetched!.description).toBeUndefined();
+    });
+  });
+
+  describe('dynamic metrics preservation (PR #206)', () => {
+    it('round-trips arbitrary metric names emitted by non-RCA evaluators', async () => {
+      if (!backendAvailable) return;
+
+      // Tool-Use evaluator emits these three metrics; previously only the
+      // four legacy keys (accuracy/faithfulness/latency_score/
+      // trajectory_alignment_score) were preserved on read, so these would
+      // disappear and the UI would show `0%` for the run.
+      const report = buildReport({
+        metrics: {
+          tool_selection_accuracy: 80,
+          redundant_calls: 95,
+          tool_ordering: 70,
+        },
+      } as Partial<EvaluationReport>);
+      const saved = await asyncRunStorage.saveReport(report);
+      createdReportIds.push(saved.id);
+
+      const fetched = await asyncRunStorage.getReportById(saved.id);
+      expect(fetched).toBeDefined();
+      expect(fetched!.metrics.tool_selection_accuracy).toBe(80);
+      expect(fetched!.metrics.redundant_calls).toBe(95);
+      expect(fetched!.metrics.tool_ordering).toBe(70);
+    });
+
+    it('does not fabricate `0` for missing legacy metric keys', async () => {
+      if (!backendAvailable) return;
+
+      // Critical regression check. Old `toTestCaseRun` defaulted every
+      // missing metric to `0` via `|| 0`. After the fix, missing keys are
+      // simply absent so `getRunOverallScore` can return `null` (rendered
+      // as `—`) instead of fabricating a misleading `0%`.
+      const report = buildReport({
+        metrics: { tool_selection_accuracy: 80 },
+      } as Partial<EvaluationReport>);
+      const saved = await asyncRunStorage.saveReport(report);
+      createdReportIds.push(saved.id);
+
+      const fetched = await asyncRunStorage.getReportById(saved.id);
+      expect(fetched).toBeDefined();
+      expect(fetched!.metrics.tool_selection_accuracy).toBe(80);
+      // The four legacy keys must NOT have been auto-populated to 0.
+      expect(fetched!.metrics.accuracy).toBeUndefined();
+      expect(fetched!.metrics.faithfulness).toBeUndefined();
+      expect(fetched!.metrics.latency_score).toBeUndefined();
+      expect(fetched!.metrics.trajectory_alignment_score).toBeUndefined();
+    });
+
+    it('preserves a legitimate zero metric value (does not collapse it to undefined)', async () => {
+      if (!backendAvailable) return;
+
+      // 0% is a real outcome (e.g. `safety_score: 0` for a run that scored
+      // zero on safety). The mapper must distinguish missing-vs-zero so
+      // the tooltip in the UI can show the real score.
+      const report = buildReport({
+        metrics: { safety_score: 0, bias_detection: 100 },
+      } as Partial<EvaluationReport>);
+      const saved = await asyncRunStorage.saveReport(report);
+      createdReportIds.push(saved.id);
+
+      const fetched = await asyncRunStorage.getReportById(saved.id);
+      expect(fetched).toBeDefined();
+      expect(fetched!.metrics.safety_score).toBe(0);
+      expect(fetched!.metrics.bias_detection).toBe(100);
+    });
+  });
 });

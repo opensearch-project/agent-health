@@ -124,6 +124,68 @@ export const getModelName = (modelId: string): string => {
   return model?.display_name || modelId;
 };
 
+// ==================== Run Utilities ====================
+
+/**
+ * Returns a short, stable suffix for a TestCaseRun id, suitable for embedding
+ * in an auto-generated run name. Run ids are shaped
+ * `report-<timestamp>-<random>` (file adapter) or arbitrary keys (OpenSearch),
+ * so we take the trailing 6 characters which gives a recognizable yet compact
+ * label without exposing the full id. Falls back to the full id for very short
+ * ids (e.g. legacy data).
+ */
+export const getRunShortId = (runId: string): string => {
+  if (!runId) return '';
+  return runId.length > 6 ? runId.slice(-6) : runId;
+};
+
+/**
+ * Resolves the display name for a TestCaseRun.
+ *
+ * Prefers the persisted `name` field (set from the run config dialog or
+ * auto-generated server-side). Falls back to `Run <short-id>` for older
+ * runs that pre-date the field, so every row in the runs list has a
+ * recognizable label instead of a raw id slice.
+ */
+export const getRunDisplayName = (run: { id: string; name?: string }): string => {
+  if (run.name && run.name.trim()) return run.name.trim();
+  return `Run ${getRunShortId(run.id)}`;
+};
+
+/**
+ * Computes a single "overall score" percentage to display next to a run in
+ * a list, from whatever metrics that run happens to carry.
+ *
+ * Why this is non-trivial:
+ *   - Only the *RCA Default* system evaluator emits a metric named `accuracy`.
+ *     Other system evaluators (Factuality, Tool Use, Reasoning, Safety) and
+ *     any custom evaluator emit completely different metric names like
+ *     `tool_selection_accuracy`, `reasoning_coherence`, `bias_detection`, etc.
+ *   - The runs list used to hardcode `run.metrics?.accuracy ?? 0`, which made
+ *     every non-RCA run display `0%` even when the judge had passed it.
+ *
+ * The fix is to take the **arithmetic mean of all populated numeric metrics**
+ * on the run. This works for any evaluator without having to look up its
+ * `scoringConfig`, gives a reasonable summary number, and degrades to `null`
+ * (rendered as `—`) when no metrics are present — the only honest answer
+ * for runs whose judge call hasn't completed or which were never scored.
+ *
+ * Returns `null` when there are no numeric metrics; otherwise an integer
+ * percentage rounded to the nearest whole number.
+ */
+export const getRunOverallScore = (
+  metrics: Record<string, number | undefined> | undefined | null,
+): number | null => {
+  if (!metrics) return null;
+  const values: number[] = [];
+  for (const v of Object.values(metrics)) {
+    if (typeof v === 'number' && Number.isFinite(v)) values.push(v);
+  }
+  if (values.length === 0) return null;
+  const sum = values.reduce((a, b) => a + b, 0);
+  return Math.round(sum / values.length);
+};
+
 // ==================== Status Colors ====================
 
 /**

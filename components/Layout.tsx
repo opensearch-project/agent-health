@@ -14,6 +14,7 @@ import {
   TestTube,
   BarChart3,
   MessageSquare,
+  Wand2,
 } from "lucide-react";
 import OpenSearchLogoDark from "@/assets/opensearch-logo.svg";
 import OpenSearchLogoLight from "@/assets/opensearch-logo-light.svg";
@@ -70,6 +71,7 @@ const navItems = [
 ];
 
 const navItemsAfterEvaluation = [
+  { to: "/skills", icon: Wand2, label: "Skills", tooltip: "Evaluate and improve AgentSkills", testId: "nav-skills" },
   { to: "/coding-agents", icon: BarChart3, label: "AI Dev Tools", tooltip: "Claude Code, Kiro & Codex analytics", testId: "nav-coding-agents" },
   { to: "/assistant", icon: MessageSquare, label: "Assistant", tooltip: "AI assistant for help and analysis", testId: "nav-assistant" },
 ];

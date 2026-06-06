@@ -50,6 +50,14 @@ class TestConnector extends BaseConnector {
     return this.buildAuthEnv(auth);
   }
 
+  public testBuildTraceparentEnv(): Record<string, string> {
+    return this.buildTraceparentEnv();
+  }
+
+  public testInjectTraceparentHeaders(headers: Record<string, string>): void {
+    this.injectTraceparentHeaders(headers);
+  }
+
   public testGenerateId(): string {
     return this.generateId();
   }
@@ -276,6 +284,88 @@ describe('BaseConnector', () => {
       expect(global.fetch).toHaveBeenCalledWith('http://localhost:8080', {
         method: 'HEAD',
         headers: { 'Authorization': 'Bearer test-token' },
+      });
+    });
+  });
+
+  describe('trace context propagation', () => {
+    // The OTel API needs a ContextManager registered for `context.with()` to
+    // actually propagate context across async boundaries. We register a real
+    // AsyncLocalStorageContextManager + W3CTraceContextPropagator once for
+    // this describe block so the helpers under test see real behavior.
+    const { trace, context: otelContext, propagation, TraceFlags } = require('@opentelemetry/api');
+    const { AsyncLocalStorageContextManager } = require('@opentelemetry/context-async-hooks');
+    const { W3CTraceContextPropagator } = require('@opentelemetry/core');
+
+    let cm: any;
+    beforeAll(() => {
+      cm = new AsyncLocalStorageContextManager();
+      cm.enable();
+      otelContext.setGlobalContextManager(cm);
+      // Default global propagator is a no-op; install W3C so propagation.inject
+      // actually writes the `traceparent` header into the carrier.
+      propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+    });
+    afterAll(() => {
+      otelContext.disable();
+      propagation.disable();
+      cm.disable();
+    });
+
+    const FAKE_TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
+    const FAKE_SPAN_ID  = '00f067aa0ba902b7';
+
+    function withFakeActiveSpan<T>(fn: () => T): T {
+      const ctx = trace.setSpanContext(otelContext.active(), {
+        traceId: FAKE_TRACE_ID,
+        spanId: FAKE_SPAN_ID,
+        traceFlags: TraceFlags.SAMPLED,
+        isRemote: false,
+      });
+      return otelContext.with(ctx, fn);
+    }
+
+    it('returns empty env when traceContext.propagateEnv is not set', () => {
+      const c = new TestConnector();
+      // No traceContext on the bare TestConnector
+      withFakeActiveSpan(() => {
+        expect(c.testBuildTraceparentEnv()).toEqual({});
+      });
+    });
+
+    it('builds a TRACEPARENT env entry when an active span exists', () => {
+      const c = new TestConnector();
+      c.traceContext = { propagateEnv: true };
+      withFakeActiveSpan(() => {
+        const env = c.testBuildTraceparentEnv();
+        expect(env.TRACEPARENT).toBe(`00-${FAKE_TRACE_ID}-${FAKE_SPAN_ID}-01`);
+      });
+    });
+
+    it('returns empty env when no span is active', () => {
+      const c = new TestConnector();
+      c.traceContext = { propagateEnv: true };
+      // No surrounding context.with(); active context has no span
+      expect(c.testBuildTraceparentEnv()).toEqual({});
+    });
+
+    it('injects traceparent header when propagateHeader is enabled and a span is active', () => {
+      const c = new TestConnector();
+      c.traceContext = { propagateHeader: true };
+      withFakeActiveSpan(() => {
+        const headers: Record<string, string> = {};
+        c.testInjectTraceparentHeaders(headers);
+        expect(headers.traceparent).toBe(`00-${FAKE_TRACE_ID}-${FAKE_SPAN_ID}-01`);
+      });
+    });
+
+    it('does not inject when propagateHeader is disabled', () => {
+      const c = new TestConnector();
+      c.traceContext = {};
+      withFakeActiveSpan(() => {
+        const headers: Record<string, string> = {};
+        c.testInjectTraceparentHeaders(headers);
+        expect(headers.traceparent).toBeUndefined();
       });
     });
   });

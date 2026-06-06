@@ -11,6 +11,8 @@
  * See: vite.config.ts and https://vitejs.dev/guide/env-and-mode.html
  */
 
+import { readEnv } from './envCompat';
+
 // =============================================================================
 // Backend URL Configuration (single source of truth)
 // =============================================================================
@@ -20,7 +22,7 @@ const isServerSide = typeof window === 'undefined';
 
 // Empty string = relative URLs (works in browser)
 // Full URL needed for server-side (Node.js) since fetch() has no base URL context
-const SERVER_PORT = isServerSide ? (process.env?.AGENT_HEALTH_PORT || '4001') : '4001';
+const SERVER_PORT = isServerSide ? (readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001') : '4001';
 const BACKEND_URL = isServerSide ? `http://localhost:${SERVER_PORT}` : '';
 
 export interface EnvConfig {

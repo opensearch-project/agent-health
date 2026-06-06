@@ -85,4 +85,24 @@ describe('computeTestCaseHash', () => {
     const withLabels = { ...baseTc, options: { ...baseTc.options, labels: ['security'] } };
     expect(computeTestCaseHash(baseTc)).not.toBe(computeTestCaseHash(withLabels));
   });
+
+  // Regression for issue #245: editing expectedOutcomes / expectedTrajectory
+  // on an existing eval file must invalidate the hash so the upsert path
+  // picks up the change and re-persists. Without this, users would set
+  // these fields and the test case would silently keep its old version.
+  it('changes when expectedOutcomes is added', () => {
+    const modified = { ...baseTc, options: { ...baseTc.options, expectedOutcomes: ['outcome A'] } };
+    expect(computeTestCaseHash(baseTc)).not.toBe(computeTestCaseHash(modified));
+  });
+
+  it('changes when expectedTrajectory is added', () => {
+    const modified = {
+      ...baseTc,
+      options: {
+        ...baseTc.options,
+        expectedTrajectory: [{ step: 1, description: 'search', requiredTools: ['search_logs'] }],
+      },
+    };
+    expect(computeTestCaseHash(baseTc)).not.toBe(computeTestCaseHash(modified));
+  });
 });

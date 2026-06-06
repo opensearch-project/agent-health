@@ -9,52 +9,32 @@
 
 import { Request, Response, Router } from 'express';
 import { fetchLogs, fetchLogsLegacy } from '../services/logsService';
-import { resolveObservabilityConfig, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceConfig.js';
-import { createOpenSearchClient } from '../services/opensearchClientFactory.js';
+import { getObservabilityClient } from '../services/observabilityClient.js';
 
 const router = Router();
 
 /**
  * POST /api/logs - Fetch agent execution logs from OpenSearch
- * Uses headers for config, falls back to env vars
  */
 router.post('/api/logs', async (req: Request, res: Response) => {
   try {
     const { runId, query, startTime, endTime, size = 100 } = req.body;
 
-    // Get OpenSearch configuration from headers or env vars
-    const config = resolveObservabilityConfig(req);
-
-    if (!config) {
-      return res.status(503).json({
-        error: 'Observability data source not configured'
-      });
+    const obs = getObservabilityClient(req);
+    if (!obs) {
+      return res.status(503).json({ error: 'Observability data source not configured' });
     }
 
-    let client;
-    try {
-      client = createOpenSearchClient(config);
-      const indexPattern = config.indexes?.logs || DEFAULT_OTEL_INDEXES.logs;
+    const result = await fetchLogs(
+      { runId, query, startTime, endTime, size },
+      obs.client,
+      obs.indexes.logs
+    );
 
-      // Call logs service to fetch logs
-      const result = await fetchLogs(
-        { runId, query, startTime, endTime, size },
-        client,
-        indexPattern
-      );
-
-      res.json(result);
-    } finally {
-      if (client) {
-        await client.close().catch(() => {});
-      }
-    }
-
+    res.json(result);
   } catch (error: any) {
     console.error('[LogsAPI] Error:', error);
-    res.status(500).json({
-      error: `Logs fetch failed: ${error.message}`
-    });
+    res.status(500).json({ error: `Logs fetch failed: ${error.message}` });
   }
 });
 

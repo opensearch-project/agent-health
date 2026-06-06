@@ -1337,4 +1337,26 @@ describe('OpenSearchStorageModule', () => {
       expect(mockClient.index).not.toHaveBeenCalled();
     });
   });
+
+  describe('evaluationRuns.list — docType.keyword regression', () => {
+    it('queries docType.keyword (not the analyzed text field) so runs are not silently dropped', async () => {
+      mockClient.search.mockResolvedValue(makeSearchResponse([], 0));
+      await mod.evaluationRuns.list();
+      const must = mockClient.search.mock.calls[0][0].body.query.bool.must;
+      expect(must).toContainEqual({ term: { 'docType.keyword': 'evaluation-run' } });
+      // The analyzed `text` field must NOT be used — a term on it never matches
+      // the hyphenated value and returns 0 (the bug this guards).
+      expect(JSON.stringify(must)).not.toContain('"docType":');
+    });
+
+    it('applies benchmarkId/agentKey/status/trigger filters via their .keyword sub-fields', async () => {
+      mockClient.search.mockResolvedValue(makeSearchResponse([], 0));
+      await mod.evaluationRuns.list({ benchmarkId: 'b1', agentKey: 'a1', status: 'completed', trigger: 'manual' });
+      const must = mockClient.search.mock.calls[0][0].body.query.bool.must;
+      expect(must).toContainEqual({ term: { 'benchmarkId.keyword': 'b1' } });
+      expect(must).toContainEqual({ term: { 'agentKey.keyword': 'a1' } });
+      expect(must).toContainEqual({ term: { 'status.keyword': 'completed' } });
+      expect(must).toContainEqual({ term: { 'trigger.keyword': 'manual' } });
+    });
+  });
 });

@@ -31,7 +31,7 @@ export interface AgentSession {
   estimated_cost: number;
   uses_mcp: boolean;
   model?: string;
-  /** Unix username extracted from project_path or overridden via AGENT_HEALTH_USERNAME env var. */
+  /** Unix username extracted from project_path or overridden via AH_USERNAME env var (legacy: AGENT_HEALTH_USERNAME). */
   username?: string;
   /** Server name for multi-server aggregation ("local" or remote server name). */
   server_name?: string;

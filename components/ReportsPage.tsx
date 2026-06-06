@@ -23,6 +23,7 @@ import { CATEGORIES } from '@/data/testCases';
 import { EvaluationReport, TestCase, TraceMetrics } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate } from '@/lib/utils';
+import { RunScore } from '@/components/RunScore';
 import { fetchBatchMetrics, formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import { RunDetailsPanel } from './RunDetailsPanel';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -415,9 +416,11 @@ export const ReportsPage: React.FC = () => {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-center">
-                        <span className="text-sm font-semibold text-opensearch-blue">
-                          {report.metrics.accuracy}%
-                        </span>
+                        <RunScore
+                          metrics={report.metrics as Record<string, number | undefined>}
+                          showLabel={false}
+                          className="text-sm font-semibold text-opensearch-blue"
+                        />
                       </TableCell>
                       <TableCell className="text-center">
                         <span className="text-sm font-semibold text-blue-400">

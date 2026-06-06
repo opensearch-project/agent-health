@@ -15,6 +15,7 @@ import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/serv
 import { evaluateWithLiteLLM, parseLiteLLMError } from '@/server/services/litellmJudgeService';
 import { evaluateWithClaudeCode, parseClaudeCodeError } from '@/server/services/claudeCodeJudgeService';
 import { evaluateWithPi, parsePiError } from '@/server/services/piJudgeService';
+import { evaluateWithPiAgenticTrace } from '@/server/services/piAgenticJudgeService';
 import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
 import { loadConfigSync } from '@/lib/config/index';
 import serverConfig from '@/server/config';
@@ -173,7 +174,7 @@ router.get('/api/judge/bedrock-models', async (_req: Request, res: Response) => 
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
   try {
-    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId } = req.body;
+    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId, runId } = req.body;
 
     // Validate required fields
     if (!trajectory || !Array.isArray(trajectory) || trajectory.length === 0) {
@@ -253,12 +254,53 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       return res.json(result);
     }
 
+    if (provider === 'agent') {
+      // Agent trace judge: an LLM judge with read-only, run-scoped trace tools
+      // (query_spans/query_logs) so it can verify claims against the run's real
+      // OTel spans/logs instead of trusting the trajectory text. runId is the
+      // scoping invariant for those tools — without it they have nothing to
+      // read, so fail loudly rather than spawn a judge that can only report
+      // "no run id" (see piAgenticJudgeService).
+      if (!runId) {
+        return res.status(400).json({
+          error: 'runId is required for the agent (trace) judge provider — its trace tools scope to it'
+        });
+      }
+      // Defense in depth against cross-run/cross-tenant exfiltration: the trace
+      // tools will happily read spans/logs for whatever runId they're given, so
+      // a direct caller could pass a benign trajectory but a *different* run's
+      // runId and leak that run's data through the judge's reasoning text. Bind
+      // the runId to the trajectory the request also carries: when the
+      // trajectory steps carry runId(s) (the SDK path always derives runId from
+      // the judged result, so they match), the requested runId MUST be one of
+      // them. When the trajectory carries no runId we cannot corroborate it —
+      // this provider then trusts the caller and is single-tenant-only (see
+      // AGENTS.md "Trace correlation"; gate it behind auth in shared clusters).
+      const trajectoryRunIds = new Set(
+        (trajectory as any[])
+          .map((s) => s?.runId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      );
+      if (trajectoryRunIds.size > 0 && !trajectoryRunIds.has(runId)) {
+        return res.status(403).json({
+          error:
+            'runId does not match the submitted trajectory — the agent (trace) judge ' +
+            'may only inspect the run that produced its trajectory',
+        });
+      }
+      debug('JudgeAPI', 'Agent trace judge - evaluating with run-scoped trace tools (runId=' + runId + ')');
+      const result = await evaluateWithPiAgenticTrace(
+        { trajectory, expectedOutcomes, expectedTrajectory, logs, runId, modelId: resolvedModelId }
+      );
+      return res.json(result);
+    }
+
     if (provider === 'agentic') {
       debug('JudgeAPI', 'Agentic judge provider - running agent-based evaluation');
       const judgeConfig = config.judge || {};
       const backend = resolvedModelId === 'agentic-custom' ? 'custom' : 'claude-code';
       const result = await evaluateWithAgenticJudge(
-        { trajectory, expectedOutcomes, expectedTrajectory, logs },
+        { trajectory, expectedOutcomes, expectedTrajectory, logs, runId },
         {
           backend,
           endpoint: judgeConfig.endpoint,
@@ -314,7 +356,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
 
     const errorMessage = provider === 'agentic'
       ? parseAgenticJudgeError(error)
-      : provider === 'pi'
+      : provider === 'pi' || provider === 'agent'
         ? parsePiError(error)
         : provider === 'claude-code'
           ? parseClaudeCodeError(error)

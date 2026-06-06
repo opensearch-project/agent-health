@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { TrendingUp, TrendingDown, Minus, MessageSquare } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, MessageSquare, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { TestCaseRunResult } from '@/types';
 
@@ -57,6 +57,31 @@ export const MetricCell: React.FC<MetricCellProps> = ({
       <div className="text-center py-2 text-muted-foreground">
         <Minus size={16} className="mx-auto mb-1 opacity-50" />
         <span className="text-xs">Not run</span>
+      </div>
+    );
+  }
+
+  // Issue #242: evaluator-error result — distinct visual from Failed.
+  // The result.errored flag is set by comparisonService when the report's
+  // `metricsStatus === 'error'` (judge couldn't produce a verdict). Render
+  // it as the amber `Errored` chip so misconfigured evaluators don't
+  // visually masquerade as agent failures in side-by-side comparisons.
+  if (result.errored) {
+    return (
+      <div
+        className="py-2 px-2.5 group relative"
+        title="Evaluator could not run (e.g. judge validation error). Excluded from pass-rate aggregation."
+      >
+        <div className="flex items-center justify-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 bg-amber-500" />
+          <span className="text-xs font-medium text-amber-600 dark:text-amber-500">
+            <AlertTriangle size={10} className="inline-block mr-0.5 -mt-0.5" />
+            Errored
+          </span>
+        </div>
+        {/* Metrics intentionally omitted: an errored run has zeroed metrics
+            that the comparison cell would otherwise render as a real 0%
+            score, defeating the whole point of the distinct bucket. */}
       </div>
     );
   }

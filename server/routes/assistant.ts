@@ -85,6 +85,20 @@ router.post('/api/assistant/chat', (req: Request, res: Response) => {
 
   let ended = false;
 
+  // Keepalive comment every 15s so proxies/dev tunnels don't drop the connection
+  // during long claude CLI turns. SSE comments (lines starting with ':') are ignored by clients.
+  const keepalive = setInterval(() => {
+    if (!ended) res.write(': ping\n\n');
+  }, 15_000);
+  if (keepalive.unref) keepalive.unref();
+
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    clearInterval(keepalive);
+    res.end();
+  };
+
   const handle = streamAssistantResponse(
     sessionId,
     message,
@@ -97,22 +111,25 @@ router.post('/api/assistant/chat', (req: Request, res: Response) => {
     (fullResponse: string) => {
       if (!ended) {
         res.write(`data: ${JSON.stringify({ type: 'done', fullResponse })}\n\n`);
-        res.end();
+        finish();
       }
     },
     // onError
     (error: string) => {
       if (!ended) {
         res.write(`data: ${JSON.stringify({ type: 'error', error })}\n\n`);
-        res.end();
+        finish();
       }
     }
   );
 
   // Kill the subprocess if the client disconnects
   req.on('close', () => {
-    ended = true;
-    handle.abort();
+    if (!ended) {
+      ended = true;
+      clearInterval(keepalive);
+      handle.abort();
+    }
   });
 });
 

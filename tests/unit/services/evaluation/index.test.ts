@@ -754,4 +754,62 @@ describe('Evaluation Service Index', () => {
       expect(result.llmJudgeReasoning).toContain('Hook exploded');
     });
   });
+
+  describe('invokeAgent env forwarding (RFC 004 AgentRunOptions.env)', () => {
+    let invokeAgent: any;
+
+    beforeEach(async () => {
+      jest.resetModules();
+      const module = await import('@/services/evaluation');
+      invokeAgent = module.invokeAgent;
+    });
+
+    const makeRegistry = () => {
+      let capturedRequest: any;
+      const connector = {
+        type: 'mock',
+        execute: jest.fn().mockImplementation(async (_endpoint, request) => {
+          capturedRequest = request;
+          return {
+            trajectory: [{ type: 'response', content: 'ok', timestamp: new Date().toISOString() }],
+            runId: 'run-env',
+            rawEvents: [],
+          };
+        }),
+      };
+      const registry = { getForAgent: jest.fn().mockReturnValue(connector) };
+      return { registry, connector, getRequest: () => capturedRequest };
+    };
+
+    it('merges per-call env into connectorConfig.env so subprocess connectors forward it', async () => {
+      const { registry, getRequest } = makeRegistry();
+      const agentWithConfig = {
+        ...mockAgent,
+        connectorConfig: { command: 'my-agent', env: { BASE: 'base', SHARED: 'config' } },
+      } as any;
+
+      await invokeAgent(agentWithConfig, 'claude-3-sonnet', mockTestCase, {
+        registry,
+        env: { RUNTIME: 'value', SHARED: 'runtime-wins' },
+      });
+
+      expect(getRequest().connectorConfig.env).toEqual({
+        BASE: 'base',
+        RUNTIME: 'value',
+        SHARED: 'runtime-wins', // per-call env wins over static config env
+      });
+      // Other connectorConfig fields are preserved.
+      expect(getRequest().connectorConfig.command).toBe('my-agent');
+    });
+
+    it('leaves connectorConfig untouched when no per-call env is supplied', async () => {
+      const { registry, getRequest } = makeRegistry();
+      const baseConfig = { command: 'my-agent', env: { BASE: 'base' } };
+      const agentWithConfig = { ...mockAgent, connectorConfig: baseConfig } as any;
+
+      await invokeAgent(agentWithConfig, 'claude-3-sonnet', mockTestCase, { registry });
+
+      expect(getRequest().connectorConfig).toBe(baseConfig); // same reference, no clone
+    });
+  });
 });

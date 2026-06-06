@@ -14,10 +14,12 @@
  * Route: /evaluations/new-run
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { PREFS_KEYS } from '@/lib/preferences';
 import { useNavigate } from 'react-router-dom';
+import { useClusterContext } from '@/hooks/useClusterContext';
+import { ClusterContextBanner } from '@/components/comparison/ClusterContextBanner';
 import {
   Loader2, Plus, X, FileText, FolderOpen, Tag, Database, ArrowRight, ArrowLeft,
 } from 'lucide-react';
@@ -72,7 +74,31 @@ export const NewRunPage: React.FC = () => {
   const [executing, setExecuting] = useState(false);
   const [executeError, setExecuteError] = useState<string | null>(null);
 
+  // Cluster context — when present, auto-add the cluster's failing test
+  // cases as a source so the user lands on Step 2 with the right scope.
+  const { context: clusterContext } = useClusterContext();
+  const hasSeededFromCluster = useRef(false);
+
   const enabledAgents = DEFAULT_CONFIG.agents.filter(a => a.enabled !== false);
+
+  // Seed sources from cluster context exactly once after the page loads
+  // its data. Auto-advances to Step 2 because the source is already chosen.
+  useEffect(() => {
+    if (!clusterContext) return;
+    if (hasSeededFromCluster.current) return;
+    if (loadingData) return;
+    if (clusterContext.caseIds.length === 0) return;
+    hasSeededFromCluster.current = true;
+    const seededSource: SourceEntry = {
+      id: `cluster-${clusterContext.id}`,
+      source: { type: 'test-case-ids', ids: [...clusterContext.caseIds] },
+      label: `${clusterContext.caseIds.length} case${clusterContext.caseIds.length === 1 ? '' : 's'} from "${clusterContext.name}"`,
+      count: clusterContext.caseIds.length,
+    };
+    setSources([seededSource]);
+    setRunName(`Re-run: ${clusterContext.name}`);
+    setStep(2);
+  }, [clusterContext, loadingData]);
 
   // Load benchmarks and test cases
   useEffect(() => {
@@ -189,6 +215,10 @@ export const NewRunPage: React.FC = () => {
         ]} />
 
         <h1 className="text-xl font-semibold">Create Evaluation Run</h1>
+
+        {clusterContext && (
+          <ClusterContextBanner context={clusterContext} />
+        )}
 
         {step === 1 && (
           <div className="space-y-6">

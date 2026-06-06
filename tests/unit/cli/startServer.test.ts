@@ -35,9 +35,9 @@ describe('startServer module', () => {
   });
 
   describe('environment variable setup', () => {
-    it('should set AGENT_HEALTH_PORT from options', () => {
+    it('should set AH_PORT from options', () => {
       // When startServer is called, it sets:
-      // process.env.AGENT_HEALTH_PORT = String(options.port)
+      // process.env.AH_PORT = String(options.port)
       const port = 5000;
       const expectedEnvValue = String(port);
       expect(expectedEnvValue).toBe('5000');

@@ -108,13 +108,25 @@ function createEvaluationRun(overrides: Partial<EvaluationRun> = {}): Evaluation
 }
 
 function createMockStorageModule(): IStorageModule {
+  // Cross-surface parity (commit fd984c9e): the runner pre-persists a
+  // placeholder via `runs.create` then UPDATES it via `runs.update`. Both
+  // need to return the persisted doc shape. We track docs by id so the
+  // update path returns the merged doc — mirrors the real adapter.
+  const docs = new Map<string, any>();
   return {
     runs: {
-      create: jest.fn().mockImplementation((report: any) => Promise.resolve({
-        ...report,
-        id: report.id || `report-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      })),
-      update: jest.fn().mockResolvedValue(undefined),
+      create: jest.fn().mockImplementation((report: any) => {
+        const id = report.id || `report-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const doc = { ...report, id };
+        docs.set(id, doc);
+        return Promise.resolve(doc);
+      }),
+      update: jest.fn().mockImplementation((id: string, updates: any) => {
+        const existing = docs.get(id) || { id };
+        const merged = { ...existing, ...updates, id };
+        docs.set(id, merged);
+        return Promise.resolve(merged);
+      }),
       get: jest.fn().mockResolvedValue(null),
       list: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue(undefined),

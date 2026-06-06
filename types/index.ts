@@ -12,7 +12,7 @@ export type Difficulty = 'Easy' | 'Medium' | 'Hard';
 export type DateFormatVariant = 'date' | 'datetime' | 'detailed';
 
 // Judge provider determines which backend service handles evaluation
-export type JudgeProvider = 'demo' | 'bedrock' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic' | 'pi';
+export type JudgeProvider = 'demo' | 'bedrock' | 'openai-compatible' | 'litellm' | 'claude-code' | 'agentic' | 'pi' | 'agent';
 
 // ============ AI Assistant Types ============
 
@@ -28,6 +28,13 @@ export interface AssistantContext {
   runId?: string;
   traceId?: string;
   testCaseId?: string;
+  /**
+   * On comparison pages (`/compare/:benchmarkId?runs=a,b,…`), the list of run
+   * IDs the user is currently comparing. The assistant pre-loads these into
+   * the grounded snapshot so it can answer cross-run questions even before
+   * reaching for tools.
+   */
+  comparisonRunIds?: string[];
 }
 
 // Connector protocol for agent communication
@@ -145,9 +152,33 @@ export interface AgentConfig {
   headers?: Record<string, string>; // Custom headers for agent endpoint (e.g., AWS credentials)
   auth?: ConnectorAuthConfig; // Explicit auth config (preferred over headers inference)
   useTraces?: boolean; // When true, fetch traces instead of logs for evaluation
-  tracePolling?: { // Configurable trace polling settings (used when useTraces: true)
-    intervalMs?: number;   // Polling interval in ms (default: 10000)
-    maxAttempts?: number;  // Max polling attempts (default: 30, ~5 min total)
+  /**
+   * Configurable trace polling settings (used when `useTraces: true`).
+   *
+   * Two distinct polling paths honour these values, with different defaults
+   * because they have different ergonomic constraints:
+   *
+   *   - **Judge poller** (`services/traces/tracePoller.ts`, runs in the
+   *     background after the agent finishes, before the LLM judge fires)
+   *     defaults to `intervalMs: 10000` and `maxAttempts: 60` — a 10-minute
+   *     total budget that's fine because the user already sees a "pending"
+   *     badge while it polls.
+   *   - **SDK pre-load** (`services/traces/fetchSpansForRun.ts`, runs
+   *     synchronously inside a deterministic test body before the body's
+   *     first assertion) defaults to `intervalMs: 1000` and `maxAttempts:
+   *     10` — a ~10-second total budget so the test isn't blocked.
+   *
+   * Both paths additionally honour `TRACE_POLL_INTERVAL_MS` and
+   * `TRACE_POLL_MAX_ATTEMPTS` env vars (the env vars override the
+   * code defaults), and both enforce a hard ceiling of 60 attempts so
+   * a misconfigured agent can't lock a test for an unbounded time.
+   *
+   * Setting either field on this object overrides the path's own default
+   * for that specific agent on both paths.
+   */
+  tracePolling?: {
+    intervalMs?: number;
+    maxAttempts?: number;
   };
   /**
    * OTel `service.name` resource attribute that this agent reports under.
@@ -349,6 +380,16 @@ export type MetricsStatus = 'pending' | 'calculating' | 'ready' | 'error';
 export interface TestCaseRun {
   id: string;
   timestamp: string;
+  /**
+   * Human-readable name for this run (e.g. "Baseline", "Claude_02").
+   * Set from the user-supplied value in the run config dialog, or auto-generated
+   * server-side as `Run <short-id>` if not provided. Optional for backwards
+   * compatibility with runs created before the field existed — UI consumers
+   * should fall back to a generated label (see `getRunDisplayName`).
+   */
+  name?: string;
+  /** Optional human-readable description of what this run was testing. */
+  description?: string;
   testCaseId: string;
   testCaseVersion?: number;          // Which version was run (optional for backwards compatibility)
   experimentId?: string;             // ID of the benchmark (field name preserved for storage compatibility)
@@ -367,6 +408,15 @@ export interface TestCaseRun {
   passFailStatus?: PassFailStatus; // LLM judge determination of pass/fail
   trajectory: TrajectoryStep[];
   metrics: EvaluationMetrics;
+  /**
+   * @deprecated Use `getJudgeReasoningText(report)` /
+   * `getJudgeMatcherResults(report)` from `lib/matchers/judgeAccessor`.
+   * The canonical judge surface is now `matcherResults[]` with
+   * `method: 'llm-judge'`. This flat-string field is kept as an
+   * Option-B backward-compat shim — it carries the most recent judge
+   * reasoning so old direct readers keep working, but new code MUST
+   * use the accessor.
+   */
   llmJudgeReasoning: string;
   improvementStrategies?: ImprovementStrategy[];
   llmJudgeResponse?: LLMJudgeResponse; // Storage: Raw Bedrock judge response
@@ -568,6 +618,15 @@ export interface TraceQueryParams {
   serviceName?: string;
   textSearch?: string;
   cursor?: string; // For pagination
+  /**
+   * Strategy C (opt-in): include any spans where `serviceName` matches AND
+   * `startTime` falls within `[startedAt, endedAt]`. Used by the run-report
+   * Traces tab as a fallback for agents that don't propagate W3C trace context
+   * (TRACEPARENT) and don't tag spans with `gen_ai.request.id` matching our
+   * runId. May surface unrelated spans (concurrent runs, cross-team noise).
+   * See AGENTS.md → Trace correlation conventions.
+   */
+  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number }>;
 }
 
 export interface ConversationMessage {
@@ -806,6 +865,16 @@ export interface RunStats {
   failed: number;
   /** Number of test cases still pending (running, or report not yet available) */
   pending: number;
+  /**
+   * Number of test cases where the *evaluator* could not produce a verdict
+   * (e.g. judge validation error, trace polling timeout, post-trace callback
+   * failed). Excluded from `passed` and `failed` so a misconfigured evaluator
+   * doesn't silently poison aggregate pass rates.
+   *
+   * Optional for backward-compat: older stored runs predate this field and
+   * read as 0.
+   */
+  errored?: number;
   /** Total number of test cases in the run */
   total: number;
 }
@@ -1021,6 +1090,15 @@ export interface TestCaseRunResult {
   reportId?: string;
   status: 'completed' | 'failed' | 'missing';
   passFailStatus?: PassFailStatus;
+  /**
+   * Issue #242: when the evaluator could not produce a verdict
+   * (`metricsStatus: 'error'` on the report), the comparison row carries
+   * this flag so MetricCell can render an amber `Errored` chip distinct
+   * from `Failed`. The legacy `passFailStatus` field on these reports is
+   * cleared (`null`), so without this flag the cell would silently fall
+   * through to `Failed` styling.
+   */
+  errored?: boolean;
   accuracy?: number;
   faithfulness?: number;
   trajectoryAlignment?: number;
@@ -1228,3 +1306,6 @@ export interface DataSourceConfig {
  * 'memory' is for testing/demo
  */
 export type DataSourceAdapterType = 'file' | 'opensearch' | 'memory';
+
+// Skill evaluator types
+export * from './skills';

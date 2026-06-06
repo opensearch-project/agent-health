@@ -342,5 +342,81 @@ export function createMigrateCommand(): Command {
       }
     });
 
+  // Subcommand: migrate sdk-v2 (codemod eval files to control-inversion)
+  command
+    .command('sdk-v2 [files...]')
+    .description('Codemod code-SDK eval files to the v2 agent.run() shape (RFC 004)')
+    .option('--dry-run', 'Show the diff without writing changes')
+    .option('-v, --verbose', 'Show per-test migration notes')
+    .action(async (...args: any[]) => {
+      // Commander always passes the Command instance as the LAST action arg
+      // and the variadic positional as the first. Read options off the
+      // command so flag binding is robust across commander arg shapes.
+      const cmd = args[args.length - 1];
+      const files: string[] = Array.isArray(args[0]) ? args[0] : [];
+      // The parent `migrate` command also declares --dry-run, and commander
+      // attributes the flag to the parent. Merge parent opts so --dry-run /
+      // --verbose work whether commander binds them to this subcommand or up.
+      const ownOpts = cmd && typeof cmd.opts === 'function' ? cmd.opts() : {};
+      const parentOpts = cmd && cmd.parent && typeof cmd.parent.opts === 'function' ? cmd.parent.opts() : {};
+      const opts: { dryRun?: boolean; verbose?: boolean } = { ...parentOpts, ...ownOpts };
+      if (parentOpts.dryRun) opts.dryRun = true;
+      if (parentOpts.verbose) opts.verbose = true;
+      const { migrateEvalSource } = await import('@/lib/testCases/codemod.js');
+      const fs = await import('fs');
+      const fg = await import('fast-glob').then(m => m.default).catch(() => null);
+
+      console.log(chalk.cyan.bold('\n  Code-SDK v2 migration (codemod)\n'));
+      console.log(chalk.gray('  Rewrites `({ result }) => ...` bodies with a prompt to `({ agent }) => { const result = await agent.run(); ... }`\n'));
+
+      // Resolve inputs: explicit files/globs, or default to **/*.eval.{js,ts}.
+      const patterns = files && files.length > 0 ? files : ['**/*.eval.js', '**/*.eval.ts', '**/*.eval.mjs'];
+      let targets: string[] = [];
+      if (fg) {
+        targets = await fg(patterns, { ignore: ['**/node_modules/**', '**/dist/**', '**/lib/dist/**'], absolute: false });
+      } else {
+        // Fallback: treat args as literal file paths.
+        targets = patterns.filter(p => fs.existsSync(p));
+      }
+      if (targets.length === 0) {
+        console.log(chalk.yellow('  No matching .eval files found.\n'));
+        return;
+      }
+
+      let changedFiles = 0;
+      let migratedTests = 0;
+      for (const file of targets) {
+        let src: string;
+        try {
+          src = fs.readFileSync(file, 'utf-8');
+        } catch {
+          continue;
+        }
+        const { code, changed, notes } = migrateEvalSource(src, file);
+        const migrated = notes.filter(n => n.startsWith('migrate')).length;
+        migratedTests += migrated;
+        if (changed) {
+          changedFiles++;
+          if (!opts.dryRun) fs.writeFileSync(file, code, 'utf-8');
+          console.log((opts.dryRun ? chalk.blue('  would update ') : chalk.green('  updated ')) + chalk.bold(file) + chalk.gray(` (${migrated} test${migrated === 1 ? '' : 's'})`));
+        } else if (opts.verbose) {
+          console.log(chalk.gray(`  unchanged ${file}`));
+        }
+        if (opts.verbose) {
+          for (const n of notes) console.log(chalk.gray(`      ${n}`));
+        }
+      }
+
+      console.log(chalk.bold('\n  Summary\n'));
+      console.log(chalk.gray(`    Files scanned:   ${targets.length}`));
+      console.log(chalk.green(`    Files ${opts.dryRun ? 'to change' : 'changed'}:   ${changedFiles}`));
+      console.log(chalk.green(`    Tests migrated:  ${migratedTests}`));
+      if (opts.dryRun) {
+        console.log(chalk.blue('\n  Dry run — no files written. Re-run without --dry-run to apply.\n'));
+      } else {
+        console.log(chalk.green('\n  Done. Review the diff and run your evals to verify.\n'));
+      }
+    });
+
   return command;
 }

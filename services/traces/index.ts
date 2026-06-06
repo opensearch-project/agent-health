@@ -9,6 +9,7 @@
 
 import { Span, TimeRange, TraceQueryParams, TraceSearchResult } from '@/types';
 import { getSpanCategory } from './spanCategorization';
+import { readEnv } from '@/lib/envCompat';
 
 // Re-export trace grouping utilities
 export { groupSpansByTrace, getSpansForTrace } from './traceGrouping';
@@ -18,13 +19,13 @@ export { extractMessagesFromSpans } from './messageExtraction';
 
 /**
  * Get API base URL dynamically
- * Server-side (Node.js): Use localhost with AGENT_HEALTH_PORT env var
+ * Server-side (Node.js): Use localhost with AH_PORT env var (legacy: AGENT_HEALTH_PORT)
  * Client-side (browser): Use relative URLs
  */
 function getApiBaseUrl(): string {
   const isServerSide = typeof window === 'undefined';
   if (isServerSide) {
-    const port = process.env?.AGENT_HEALTH_PORT || '4001';
+    const port = readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001';
     return `http://localhost:${port}`;
   }
   return ''; // Relative URLs in browser
@@ -63,6 +64,34 @@ export async function fetchTraceById(traceId: string): Promise<TraceSearchResult
  */
 export async function fetchTracesByRunIds(runIds: string[]): Promise<TraceSearchResult> {
   return fetchTraces({ runIds });
+}
+
+/**
+ * Fetch traces correlated with a single test-case run, using all available
+ * correlation strategies (see AGENTS.md → Trace correlation conventions):
+ *
+ *   A. traceId  — W3C-propagated agents share traceId with the eval span
+ *   B. runId    — agents tag spans with `gen_ai.request.id == runId`
+ *   C. agents   — service.name + time-window fallback (opt-in / `includeWindowFallback`)
+ *
+ * Strategies A and B are always safe (no false positives). Strategy C is
+ * opt-in because it can surface concurrent runs of the same agent and
+ * cross-team noise on a shared cluster.
+ */
+export async function fetchTracesForRun(params: {
+  runId: string;
+  evalTraceId?: string;
+  includeWindowFallback?: boolean;
+  windowAgents?: Array<{ serviceName: string; startedAt: number; endedAt: number }>;
+  size?: number;
+}): Promise<TraceSearchResult> {
+  const { runId, evalTraceId, includeWindowFallback, windowAgents, size = 1000 } = params;
+  const query: TraceQueryParams = { runIds: [runId], size };
+  if (evalTraceId) query.traceId = evalTraceId;
+  if (includeWindowFallback && windowAgents && windowAgents.length > 0) {
+    query.agents = windowAgents;
+  }
+  return fetchTraces(query);
 }
 
 /**
@@ -285,3 +314,11 @@ export {
   type CategoryStats,
   type ToolInfo,
 } from './traceStats';
+
+// Trace-level summary (category counts + tokens + models) reused by both
+// the inline expansion header and the fullscreen header.
+export {
+  computeTraceSummary,
+  isEmptyTraceSummary,
+  type TraceSummary,
+} from './traceSummary';

@@ -19,7 +19,7 @@ import { usePersistedSet } from '@/hooks/usePersistedSet';
 import { PREFS_KEYS } from '@/lib/preferences';
 import { useNavigate } from 'react-router-dom';
 import {
-  ChevronRight, ChevronDown, CheckCircle2, XCircle,
+  ChevronRight, ChevronDown, CheckCircle2, XCircle, AlertTriangle,
   Loader2, Clock, Search, RefreshCw, Activity, BarChart3,
   SlidersHorizontal, Layers, List, ChevronsDownUp, ChevronsUpDown, Upload, Plus,
   Pencil, Play, Calendar,
@@ -33,6 +33,8 @@ import { asyncTestCaseStorage, asyncRunStorage, asyncBenchmarkStorage } from '@/
 import { TestCase, TestCaseRun, Benchmark } from '@/types';
 import { formatRelativeTime } from '@/lib/utils';
 import { TestCaseEditor } from '@/components/TestCaseEditor';
+import { useClusterContext } from '@/hooks/useClusterContext';
+import { ClusterContextBanner } from '@/components/comparison/ClusterContextBanner';
 import { QuickRunModal } from '@/components/QuickRunModal';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
@@ -57,19 +59,31 @@ function truncate(s: string | undefined, max: number): string {
   if (!s) return '—';
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
-function getPassFail(run: TestCaseRun): 'pass' | 'fail' | 'running' | 'unknown' {
+function getPassFail(run: TestCaseRun): 'pass' | 'fail' | 'errored' | 'running' | 'unknown' {
   if (run.status === 'running') return 'running';
+  // Issue #242: a run whose evaluator could not produce a verdict
+  // (`metricsStatus: 'error'`) is bucketed as `errored`, NOT `fail`. The
+  // agent may have completed normally; the judge / trace pipeline
+  // failed before scoring. Surfacing it as 'fail' here would defeat the
+  // distinct bucket the rest of the run-stats pipeline preserves.
+  if (run.metricsStatus === 'error') return 'errored';
   if (run.passFailStatus === 'passed') return 'pass';
   if (run.passFailStatus === 'failed') return 'fail';
-  if (run.status === 'completed') return run.metrics?.accuracy >= 50 ? 'pass' : 'fail';
+  // No verdict from the judge — don't fabricate one from a single metric
+  // value. The previous fallback of `accuracy >= 50` only worked under the
+  // RCA Default evaluator (the only one that emits a metric named
+  // `accuracy`), so for runs scored by any other evaluator it always
+  // returned 'fail' regardless of how the judge actually scored the run.
+  // 'unknown' is the honest answer.
   return 'unknown';
 }
 
 
-function PassFailBadge({ result }: { result: 'pass' | 'fail' | 'running' | 'unknown' }) {
+function PassFailBadge({ result }: { result: 'pass' | 'fail' | 'errored' | 'running' | 'unknown' }) {
   const c = {
     pass: { icon: <CheckCircle2 size={12} />, label: 'Pass', cls: 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-500/10 border-green-300 dark:border-green-500/20' },
     fail: { icon: <XCircle size={12} />, label: 'Fail', cls: 'text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-500/10 border-red-300 dark:border-red-500/20' },
+    errored: { icon: <AlertTriangle size={12} />, label: 'Errored', cls: 'text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-500/10 border-amber-300 dark:border-amber-500/20' },
     running: { icon: <Loader2 size={12} className="animate-spin" />, label: 'Running', cls: 'text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-500/10 border-blue-300 dark:border-blue-500/20' },
     unknown: { icon: <Clock size={12} />, label: '—', cls: 'text-muted-foreground bg-muted/50 border-border' },
   }[result];
@@ -114,6 +128,19 @@ export const TestCasesPage4: React.FC = () => {
   const [editingTestCase, setEditingTestCase] = useState<TestCase | null>(null);
   const [runningTestCase, setRunningTestCase] = useState<TestCase | null>(null);
   const [showSampleData, setShowSampleData] = useState<boolean | undefined>(undefined);
+
+  // Cluster context — when present, render a banner + auto-open the New
+  // Test Case modal so the user lands in the authoring flow they came
+  // here for (e.g. expanding test coverage for a cluster of failures).
+  const { context: clusterContext } = useClusterContext();
+  const hasOpenedFromCluster = useRef(false);
+  useEffect(() => {
+    if (!clusterContext) return;
+    if (hasOpenedFromCluster.current) return;
+    hasOpenedFromCluster.current = true;
+    setEditingTestCase(null);
+    setShowEditor(true);
+  }, [clusterContext]);
 
   // Sort
   const [sort, setSort] = usePersistedState<{ field: SortField; dir: SortDir }>('test-cases:sort', { field: 'created', dir: 'desc' });
@@ -341,6 +368,11 @@ export const TestCasesPage4: React.FC = () => {
 
   return (
     <div className="p-4 h-full flex flex-col" data-testid="test-cases-page">
+      {clusterContext && (
+        <div className="mb-3">
+          <ClusterContextBanner context={clusterContext} />
+        </div>
+      )}
       <Breadcrumbs
         items={[
           { label: 'Evaluations', href: '/evaluations/benchmarks' },

@@ -27,4 +27,7 @@ jobs:
           # that includes a scanner artifact for bundled protobuf definitions.
           # bowser uses "MIT AND MITNFA" (compound), json-schema-typed uses "BSD-2-Clause AND JSON" —
           # both are transitive deps of observio-sample-agent and use permissive licenses.
-          allow-dependencies-licenses: 'pkg:npm/protobufjs, pkg:npm/bowser, pkg:npm/json-schema-typed'
+          # strtok3@10.3.5 is MIT (see node_modules/strtok3/LICENSE.txt + package.json "license":"MIT"),
+          # but GitHub's license-metadata DB reports a stale compound "MIT AND Ruby" for this version.
+          # It arrives transitively via @mariozechner/pi-coding-agent -> file-type -> strtok3 (agent judge).
+          allow-dependencies-licenses: 'pkg:npm/protobufjs, pkg:npm/bowser, pkg:npm/json-schema-typed, pkg:npm/strtok3'

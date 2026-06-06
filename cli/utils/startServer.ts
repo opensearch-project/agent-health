@@ -41,10 +41,11 @@ const MAX_PORT_ATTEMPTS = 10;
  * Start the Express server, auto-incrementing port if already in use
  */
 export async function startServer(options: StartOptions): Promise<number> {
-  // Set environment variables for the server
-  process.env.AGENT_HEALTH_PORT = String(options.port);
-  if (options.headless) process.env.AGENT_HEALTH_HEADLESS = '1';
-  if (options.apiKey) process.env.AGENT_HEALTH_API_KEY = options.apiKey;
+  // Set environment variables for the server (use new AH_* names; legacy
+  // AGENT_HEALTH_* names are still read by the readEnv compatibility shim).
+  process.env.AH_PORT = String(options.port);
+  if (options.headless) process.env.AH_HEADLESS = '1';
+  if (options.apiKey) process.env.AH_API_KEY = options.apiKey;
 
   const packageRoot = findPackageRoot();
   const serverPath = join(packageRoot, 'server', 'dist', 'app.js');

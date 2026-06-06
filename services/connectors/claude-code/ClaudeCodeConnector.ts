@@ -78,6 +78,8 @@ export class ClaudeCodeConnector extends SubprocessConnector {
   readonly type = 'claude-code' as const;
   override readonly name = 'Claude Code CLI';
 
+  override traceContext = { propagateEnv: true, serviceName: 'claude-code-agent' };
+
   private outputBuffer = '';
   private thinkingBuffer = '';
   private textBuffer = '';
@@ -168,6 +170,27 @@ export class ClaudeCodeConnector extends SubprocessConnector {
           }));
         }
       }
+    } else if (event.type === 'user' && event.message?.content) {
+      // Claude Code emits tool results as user-role messages with tool_result
+      // content blocks (referenced back to the assistant's tool_use_id).
+      // Without this branch, tool outputs are silently dropped — the trajectory
+      // shows the tool calls but not their results.
+      for (const block of event.message.content) {
+        if (block.type === 'tool_result') {
+          const content =
+            typeof block.content === 'string'
+              ? block.content
+              : JSON.stringify(block.content);
+          steps.push(
+            this.createStep('tool_result', content, {
+              status: block.is_error ? ToolCallStatus.FAILURE : ToolCallStatus.SUCCESS,
+            })
+          );
+        } else if (block.type === 'text' && block.text) {
+          // Rare: plain text in a user message (e.g., tool-orchestrator follow-ups)
+          steps.push(this.createStep('assistant', block.text));
+        }
+      }
     } else if (event.type === 'content_block_delta') {
       // Streaming delta updates — accumulate into buffers
       if (event.delta?.type === 'thinking_delta' && event.delta.thinking) {
@@ -191,11 +214,6 @@ export class ClaudeCodeConnector extends SubprocessConnector {
       // Final result message
       steps.push(this.createStep('response',
         typeof event.result === 'string' ? event.result : JSON.stringify(event.result)
-      ));
-    } else if (event.type === 'tool_result') {
-      steps.push(this.createStep('tool_result',
-        typeof event.content === 'string' ? event.content : JSON.stringify(event.content),
-        { status: event.is_error ? ToolCallStatus.FAILURE : ToolCallStatus.SUCCESS }
       ));
     }
 

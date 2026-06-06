@@ -301,8 +301,14 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
   };
 
   // Validation for each mode
-  const hasValidOutcome = expectedOutcomes.some(o => o.trim());
-  const canSaveForm = name.trim() && initialPrompt.trim() && hasValidOutcome && !isSaving;
+  // expectedOutcomes are no longer required — SDK code-only tests have
+  // none, and the cross-surface parity work (issue #245 follow-up,
+  // tc-1780591691582-ezc0vkdpj feedback) extends that allowance to the
+  // UI form so a user can create a test case mirror of an SDK test
+  // without having to invent placeholder outcomes the runner ignores.
+  // We still REQUIRE name + initialPrompt because without those the
+  // test case has no agent invocation contract at all.
+  const canSaveForm = name.trim() && initialPrompt.trim() && !isSaving;
   const canSaveJson = jsonContent.trim() && jsonErrors.length === 0 && !isSaving;
   const canSave = editorMode === 'form' ? canSaveForm : canSaveJson;
 
