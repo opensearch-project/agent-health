@@ -400,9 +400,14 @@ export function getConfigStatus(): ConfigStatus {
       ? codeObs?.awsService
       : (process.env.OPENSEARCH_LOGS_AWS_SERVICE as 'es' | 'aoss') || undefined;
 
-  // Compute runtime storage state
+  // Compute runtime storage state.
+  // NOTE: drift detection compares the runtime storage backend against the
+  // file/env-derived config key only (the sources the storage adapter
+  // initializes from). Code config (defineConfig) is intentionally excluded
+  // here to avoid false drift signals; it still participates in resolution
+  // and in the `configured`/`source` reporting above.
   const storageState = getStorageState();
-  const resolvedStorageConfig = getStorageConfigFromFile() ?? codeStorage ??
+  const resolvedStorageConfig = getStorageConfigFromFile() ??
     (process.env.OPENSEARCH_STORAGE_ENDPOINT ? { endpoint: process.env.OPENSEARCH_STORAGE_ENDPOINT } as StorageClusterConfig : null);
   const fileConfigKey = resolvedStorageConfig ? configToCacheKey(resolvedStorageConfig) : null;
   const drifted = fileConfigKey !== storageState.configKey &&
