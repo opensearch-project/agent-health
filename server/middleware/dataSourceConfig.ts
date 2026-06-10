@@ -45,13 +45,13 @@ export const STORAGE_INDEXES = {
  * Resolve storage cluster configuration
  *
  * Priority:
- * 1. File config (agent-health.config.json) - UI-written, runtime
+ * 1. File config (agent-health.config.json)
  * 2. Code config (agent-health.config.ts defineConfig storage)
  * 3. Environment variables (OPENSEARCH_STORAGE_*)
  * 4. null (not configured)
  */
 export function resolveStorageConfig(req: Request): StorageClusterConfig | null {
-  // 1. Check file config first (admin UI writes here at runtime, must win)
+  // 1. Check file config first
   const fileConfig = getStorageConfigFromFile();
   if (fileConfig) {
     return fileConfig;
@@ -87,7 +87,7 @@ export function resolveStorageConfig(req: Request): StorageClusterConfig | null 
  * Resolve observability cluster configuration
  *
  * Priority:
- * 1. File config (agent-health.config.json) - UI-written, runtime
+ * 1. File config (agent-health.config.json)
  * 2. Code config (agent-health.config.ts defineConfig observability)
  * 3. Environment variables (OPENSEARCH_LOGS_*)
  * 4. null (not configured)
@@ -95,7 +95,7 @@ export function resolveStorageConfig(req: Request): StorageClusterConfig | null 
  * Index patterns use defaults if not specified in file or env vars.
  */
 export function resolveObservabilityConfig(req: Request): ObservabilityClusterConfig | null {
-  // 1. Check file config first (admin UI writes here at runtime, must win)
+  // 1. Check file config first
   const fileConfig = getObservabilityConfigFromFile();
 
   if (fileConfig) {

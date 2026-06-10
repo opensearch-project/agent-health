@@ -169,31 +169,14 @@ export interface UserConfig {
   testCases?: string | string[];
 
   /**
-   * OpenSearch storage cluster configuration (evaluation data: test cases,
-   * benchmarks, runs, analytics).
-   *
-   * Lets a single committed `agent-health.config.ts` be the source of truth
-   * instead of also maintaining `agent-health.config.json`. Read
-   * environment-specific values and secrets from `process.env` so the
-   * committed file carries none, e.g.:
-   *
-   *   storage: {
-   *     endpoint: process.env.OPENSEARCH_STORAGE_ENDPOINT!,
-   *     authType: 'sigv4',
-   *     awsRegion: 'us-east-1',
-   *     awsService: 'es',
-   *   }
-   *
-   * Resolution precedence: agent-health.config.json (UI-written, runtime) →
-   * this `storage` (defineConfig) → OPENSEARCH_STORAGE_* env → file-based
-   * fallback. The JSON stays highest so the admin UI's runtime edits win.
+   * OpenSearch storage cluster config (evaluation data)
+   * Resolved below agent-health.config.json, above OPENSEARCH_STORAGE_* env
    */
   storage?: StorageClusterConfig;
 
   /**
-   * OpenSearch observability cluster configuration (agent traces, logs,
-   * metrics). Same precedence and `process.env` guidance as `storage`;
-   * the env layer is OPENSEARCH_LOGS_*.
+   * OpenSearch observability cluster config (agent traces, logs, metrics)
+   * Resolved below agent-health.config.json, above OPENSEARCH_LOGS_* env
    */
   observability?: ObservabilityClusterConfig;
 
@@ -260,9 +243,7 @@ export interface ResolvedConfig {
   reporters: ReporterConfig[];
   judge: JudgeConfig;
   telemetry: TelemetryConfig;
-  /** Storage cluster config authored in defineConfig() (optional). */
   storage?: StorageClusterConfig;
-  /** Observability cluster config authored in defineConfig() (optional). */
   observability?: ObservabilityClusterConfig;
 }
 

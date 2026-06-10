@@ -319,86 +319,51 @@ export function getConfigStatus(): ConfigStatus {
   const codeStorage = getStorageConfigFromCode();
   const codeObs = getObservabilityConfigFromCode();
 
-  // Determine storage config source
-  // Precedence: file (UI-written) → code (defineConfig) → environment → none.
-  let storageSource: 'file' | 'code' | 'environment' | 'none' = 'none';
-  let storageEndpoint: string | undefined;
+  // Resolve each cluster to a single config object + source, following the
+  // precedence: file (UI-written) → code (defineConfig) → environment → none.
+  const envStorage: StorageClusterConfig | null = process.env.OPENSEARCH_STORAGE_ENDPOINT
+    ? {
+      endpoint: process.env.OPENSEARCH_STORAGE_ENDPOINT,
+      authType: (process.env.OPENSEARCH_STORAGE_AUTH_TYPE as ClusterAuthType) || undefined,
+      username: process.env.OPENSEARCH_STORAGE_USERNAME,
+      password: process.env.OPENSEARCH_STORAGE_PASSWORD,
+      awsProfile: process.env.OPENSEARCH_STORAGE_AWS_PROFILE,
+      awsRegion: process.env.OPENSEARCH_STORAGE_AWS_REGION,
+      awsService: (process.env.OPENSEARCH_STORAGE_AWS_SERVICE as 'es' | 'aoss') || undefined,
+    }
+    : null;
 
-  if (config?.storage?.endpoint) {
-    storageSource = 'file';
-    storageEndpoint = config.storage.endpoint;
-  } else if (codeStorage?.endpoint) {
-    storageSource = 'code';
-    storageEndpoint = codeStorage.endpoint;
-  } else if (process.env.OPENSEARCH_STORAGE_ENDPOINT) {
-    storageSource = 'environment';
-    storageEndpoint = process.env.OPENSEARCH_STORAGE_ENDPOINT;
-  }
+  const envObs: ObservabilityClusterConfig | null = process.env.OPENSEARCH_LOGS_ENDPOINT
+    ? {
+      endpoint: process.env.OPENSEARCH_LOGS_ENDPOINT,
+      authType: (process.env.OPENSEARCH_LOGS_AUTH_TYPE as ClusterAuthType) || undefined,
+      username: process.env.OPENSEARCH_LOGS_USERNAME,
+      password: process.env.OPENSEARCH_LOGS_PASSWORD,
+      awsProfile: process.env.OPENSEARCH_LOGS_AWS_PROFILE,
+      awsRegion: process.env.OPENSEARCH_LOGS_AWS_REGION,
+      awsService: (process.env.OPENSEARCH_LOGS_AWS_SERVICE as 'es' | 'aoss') || undefined,
+      indexes: {
+        traces: process.env.OPENSEARCH_LOGS_TRACES_INDEX,
+        logs: process.env.OPENSEARCH_LOGS_INDEX,
+      },
+    }
+    : null;
 
-  // Determine observability config source
-  let obsSource: 'file' | 'code' | 'environment' | 'none' = 'none';
-  let obsEndpoint: string | undefined;
-  let obsIndexes: ConfigStatus['observability']['indexes'];
+  const storageSource: ConfigStatus['storage']['source'] =
+    config?.storage?.endpoint ? 'file' : codeStorage?.endpoint ? 'code' : envStorage ? 'environment' : 'none';
+  const storage: StorageClusterConfig | null =
+    storageSource === 'file' ? config!.storage!
+      : storageSource === 'code' ? codeStorage
+        : storageSource === 'environment' ? envStorage
+          : null;
 
-  if (config?.observability?.endpoint) {
-    obsSource = 'file';
-    obsEndpoint = config.observability.endpoint;
-    obsIndexes = config.observability.indexes;
-  } else if (codeObs?.endpoint) {
-    obsSource = 'code';
-    obsEndpoint = codeObs.endpoint;
-    obsIndexes = codeObs.indexes;
-  } else if (process.env.OPENSEARCH_LOGS_ENDPOINT) {
-    obsSource = 'environment';
-    obsEndpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;
-    obsIndexes = {
-      traces: process.env.OPENSEARCH_LOGS_TRACES_INDEX,
-      logs: process.env.OPENSEARCH_LOGS_INDEX,
-    };
-  }
-
-  // Resolve SigV4 fields per source
-  const storageAuthType: ClusterAuthType | undefined = storageSource === 'file'
-    ? config?.storage?.authType
-    : storageSource === 'code'
-      ? codeStorage?.authType
-      : (process.env.OPENSEARCH_STORAGE_AUTH_TYPE as ClusterAuthType) || undefined;
-  const storageAwsProfile = storageSource === 'file'
-    ? config?.storage?.awsProfile
-    : storageSource === 'code'
-      ? codeStorage?.awsProfile
-      : process.env.OPENSEARCH_STORAGE_AWS_PROFILE;
-  const storageAwsRegion = storageSource === 'file'
-    ? config?.storage?.awsRegion
-    : storageSource === 'code'
-      ? codeStorage?.awsRegion
-      : process.env.OPENSEARCH_STORAGE_AWS_REGION;
-  const storageAwsService = storageSource === 'file'
-    ? config?.storage?.awsService
-    : storageSource === 'code'
-      ? codeStorage?.awsService
-      : (process.env.OPENSEARCH_STORAGE_AWS_SERVICE as 'es' | 'aoss') || undefined;
-
-  const obsAuthType: ClusterAuthType | undefined = obsSource === 'file'
-    ? config?.observability?.authType
-    : obsSource === 'code'
-      ? codeObs?.authType
-      : (process.env.OPENSEARCH_LOGS_AUTH_TYPE as ClusterAuthType) || undefined;
-  const obsAwsProfile = obsSource === 'file'
-    ? config?.observability?.awsProfile
-    : obsSource === 'code'
-      ? codeObs?.awsProfile
-      : process.env.OPENSEARCH_LOGS_AWS_PROFILE;
-  const obsAwsRegion = obsSource === 'file'
-    ? config?.observability?.awsRegion
-    : obsSource === 'code'
-      ? codeObs?.awsRegion
-      : process.env.OPENSEARCH_LOGS_AWS_REGION;
-  const obsAwsService = obsSource === 'file'
-    ? config?.observability?.awsService
-    : obsSource === 'code'
-      ? codeObs?.awsService
-      : (process.env.OPENSEARCH_LOGS_AWS_SERVICE as 'es' | 'aoss') || undefined;
+  const obsSource: ConfigStatus['observability']['source'] =
+    config?.observability?.endpoint ? 'file' : codeObs?.endpoint ? 'code' : envObs ? 'environment' : 'none';
+  const observability: ObservabilityClusterConfig | null =
+    obsSource === 'file' ? config!.observability!
+      : obsSource === 'code' ? codeObs
+        : obsSource === 'environment' ? envObs
+          : null;
 
   // Compute runtime storage state.
   // NOTE: drift detection compares the runtime storage backend against the
@@ -407,8 +372,7 @@ export function getConfigStatus(): ConfigStatus {
   // here to avoid false drift signals; it still participates in resolution
   // and in the `configured`/`source` reporting above.
   const storageState = getStorageState();
-  const resolvedStorageConfig = getStorageConfigFromFile() ??
-    (process.env.OPENSEARCH_STORAGE_ENDPOINT ? { endpoint: process.env.OPENSEARCH_STORAGE_ENDPOINT } as StorageClusterConfig : null);
+  const resolvedStorageConfig = getStorageConfigFromFile() ?? envStorage;
   const fileConfigKey = resolvedStorageConfig ? configToCacheKey(resolvedStorageConfig) : null;
   const drifted = fileConfigKey !== storageState.configKey &&
     storageState.configKey !== '__file_override__';
@@ -417,41 +381,25 @@ export function getConfigStatus(): ConfigStatus {
     storage: {
       configured: storageSource !== 'none',
       source: storageSource,
-      endpoint: storageEndpoint,
-      authType: storageAuthType,
-      username: storageSource === 'file'
-        ? config?.storage?.username
-        : storageSource === 'code'
-          ? codeStorage?.username
-          : process.env.OPENSEARCH_STORAGE_USERNAME,
-      hasPassword: storageSource === 'file'
-        ? Boolean(config?.storage?.password)
-        : storageSource === 'code'
-          ? Boolean(codeStorage?.password)
-          : Boolean(process.env.OPENSEARCH_STORAGE_PASSWORD),
-      awsProfile: storageAwsProfile,
-      awsRegion: storageAwsRegion,
-      awsService: storageAwsService,
+      endpoint: storage?.endpoint,
+      authType: storage?.authType,
+      username: storage?.username,
+      hasPassword: Boolean(storage?.password),
+      awsProfile: storage?.awsProfile,
+      awsRegion: storage?.awsRegion,
+      awsService: storage?.awsService,
     },
     observability: {
       configured: obsSource !== 'none',
       source: obsSource,
-      endpoint: obsEndpoint,
-      authType: obsAuthType,
-      username: obsSource === 'file'
-        ? config?.observability?.username
-        : obsSource === 'code'
-          ? codeObs?.username
-          : process.env.OPENSEARCH_LOGS_USERNAME,
-      hasPassword: obsSource === 'file'
-        ? Boolean(config?.observability?.password)
-        : obsSource === 'code'
-          ? Boolean(codeObs?.password)
-          : Boolean(process.env.OPENSEARCH_LOGS_PASSWORD),
-      awsProfile: obsAwsProfile,
-      awsRegion: obsAwsRegion,
-      awsService: obsAwsService,
-      indexes: obsIndexes,
+      endpoint: observability?.endpoint,
+      authType: observability?.authType,
+      username: observability?.username,
+      hasPassword: Boolean(observability?.password),
+      awsProfile: observability?.awsProfile,
+      awsRegion: observability?.awsRegion,
+      awsService: observability?.awsService,
+      indexes: observability?.indexes,
     },
     runtime: {
       storage: {

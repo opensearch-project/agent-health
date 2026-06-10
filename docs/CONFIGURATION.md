@@ -214,13 +214,13 @@ export default defineConfig({
 });
 ```
 
-> **Storage/observability precedence.** These are resolved in the order
+> **Storage/observability precedence.** A cluster is resolved in the order
 > `agent-health.config.json` (written by the Settings UI at runtime) →
 > `agent-health.config.ts` (`defineConfig`, shown above) →
-> `OPENSEARCH_STORAGE_*` / `OPENSEARCH_LOGS_*` env vars → file-based fallback.
-> The JSON stays highest so the admin UI's runtime edits keep winning; the TS
-> config is the committed default for projects that don't mutate storage via the
-> UI. Keep secrets/endpoints in `process.env` so the committed `.ts` carries none.
+> `OPENSEARCH_STORAGE_*` / `OPENSEARCH_LOGS_*` env vars. The JSON stays highest
+> so the admin UI's runtime edits keep winning; the TS config is the committed
+> default for projects that don't mutate storage via the UI. Keep
+> secrets/endpoints in `process.env` so the committed `.ts` carries none.
 
 ### Config File Options
 
