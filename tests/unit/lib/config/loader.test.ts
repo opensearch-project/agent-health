@@ -122,6 +122,78 @@ describe('defineConfig', () => {
     const result = defineConfig(testConfig);
     expect(result.agents[0].hooks.beforeRequest).toBe(hookFn);
   });
+
+  it('should preserve storage and observability cluster config', () => {
+    const { defineConfig } = require('@/lib/config/defineConfig');
+
+    const testConfig = {
+      agents: [{ key: 'a', name: 'A', endpoint: 'http://localhost:3000' }],
+      storage: {
+        endpoint: 'https://store.example.com',
+        authType: 'sigv4' as const,
+        awsRegion: 'us-east-1',
+        awsService: 'es' as const,
+      },
+      observability: {
+        endpoint: 'https://obs.example.com',
+        authType: 'sigv4' as const,
+        awsRegion: 'us-east-1',
+        awsService: 'es' as const,
+        indexes: { traces: 'otel-v1-apm-span-*' },
+      },
+    };
+
+    const result = defineConfig(testConfig);
+    expect(result.storage?.endpoint).toBe('https://store.example.com');
+    expect(result.storage?.authType).toBe('sigv4');
+    expect(result.observability?.endpoint).toBe('https://obs.example.com');
+    expect(result.observability?.indexes?.traces).toBe('otel-v1-apm-span-*');
+  });
+});
+
+describe('code cluster config accessors', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.resetModules();
+    jest.spyOn(console, 'log').mockImplementation();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('return null when no config file defines storage/observability', async () => {
+    const mockFs = require('fs');
+    mockFs.existsSync.mockReturnValue(false);
+
+    const {
+      loadConfig,
+      clearConfigCache,
+      getStorageConfigFromCode,
+      getObservabilityConfigFromCode,
+    } = require('@/lib/config/loader');
+    clearConfigCache();
+    await loadConfig('/nonexistent', true);
+
+    expect(getStorageConfigFromCode()).toBeNull();
+    expect(getObservabilityConfigFromCode()).toBeNull();
+  });
+
+  it('clearConfigCache resets the published code cluster config', async () => {
+    const mockFs = require('fs');
+    mockFs.existsSync.mockReturnValue(false);
+
+    const {
+      loadConfig,
+      clearConfigCache,
+      getStorageConfigFromCode,
+    } = require('@/lib/config/loader');
+    clearConfigCache();
+    await loadConfig('/nonexistent', true);
+    clearConfigCache();
+
+    expect(getStorageConfigFromCode()).toBeNull();
+  });
 });
 
 describe('findConfigFile', () => {

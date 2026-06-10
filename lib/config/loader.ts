@@ -26,6 +26,7 @@ import type {
   JudgeConfig,
   TelemetryConfig,
 } from './types';
+import type { StorageClusterConfig, ObservabilityClusterConfig } from '@/types/index.js';
 
 /**
  * Default server configuration
@@ -193,6 +194,10 @@ function mergeConfigs(
     reporters,
     judge,
     telemetry,
+    // Cluster config authored in defineConfig() (optional). Consumed by the
+    // server's data-source resolution chain below the UI-written JSON.
+    ...(userConfig.storage ? { storage: userConfig.storage } : {}),
+    ...(userConfig.observability ? { observability: userConfig.observability } : {}),
   };
 }
 
@@ -220,6 +225,27 @@ async function loadUserConfig(configPath: string): Promise<UserConfig> {
  */
 let cachedConfig: ResolvedConfig | null = null;
 let cachedConfigPath: string | null = null;
+
+/**
+ * In-process cluster config authored in `defineConfig()` (TS config).
+ *
+ * The server's data-source resolver (`server/middleware/dataSourceConfig.ts`)
+ * has no access to the loaded TS config object, so the loader publishes the
+ * TS-authored storage/observability here for the resolver to consult between
+ * the UI-written JSON (highest) and the OPENSEARCH_*_ env layer (lowest).
+ */
+let tsStorageConfig: StorageClusterConfig | null = null;
+let tsObservabilityConfig: ObservabilityClusterConfig | null = null;
+
+/** TS-authored storage cluster config, or null if none was defined. */
+export function getStorageConfigFromCode(): StorageClusterConfig | null {
+  return tsStorageConfig;
+}
+
+/** TS-authored observability cluster config, or null if none was defined. */
+export function getObservabilityConfigFromCode(): ObservabilityClusterConfig | null {
+  return tsObservabilityConfig;
+}
 
 /**
  * Load and resolve configuration
@@ -264,6 +290,10 @@ export async function loadConfig(
   cachedConfig = resolved;
   cachedConfigPath = configFile?.path ?? null;
 
+  // Publish TS-authored cluster config for the server's data-source resolver.
+  tsStorageConfig = resolved.storage ?? null;
+  tsObservabilityConfig = resolved.observability ?? null;
+
   console.log(`[Config] Loaded ${resolved.agents.length} agents, ${Object.keys(resolved.models).length} models`);
 
   return resolved;
@@ -298,6 +328,8 @@ export function loadConfigSync(cwd: string = process.cwd()): ResolvedConfig {
 export function clearConfigCache(): void {
   cachedConfig = null;
   cachedConfigPath = null;
+  tsStorageConfig = null;
+  tsObservabilityConfig = null;
 }
 
 /**

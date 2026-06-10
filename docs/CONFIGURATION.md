@@ -191,17 +191,36 @@ export default defineConfig({
     },
   ],
 
-  // Override storage (can also use env vars)
+  // Storage cluster (evaluation data). Read environment-specific values and
+  // secrets from process.env so the committed file carries none.
   storage: {
     endpoint: process.env.OPENSEARCH_STORAGE_ENDPOINT,
-    username: 'admin',
-    password: process.env.OPENSEARCH_STORAGE_PASSWORD,
+    authType: 'sigv4',          // 'none' | 'basic' | 'sigv4'
+    awsRegion: 'us-east-1',
+    awsService: 'es',           // 'es' (managed) | 'aoss' (Serverless)
+  },
+
+  // Observability cluster (agent traces/logs/metrics).
+  observability: {
+    endpoint: process.env.OPENSEARCH_LOGS_ENDPOINT,
+    authType: 'sigv4',
+    awsRegion: 'us-east-1',
+    awsService: 'es',
+    indexes: { traces: 'otel-v1-apm-span-*' },
   },
 
   // Custom test cases location
   testCases: './my-tests/*.yaml',
 });
 ```
+
+> **Storage/observability precedence.** These are resolved in the order
+> `agent-health.config.json` (written by the Settings UI at runtime) →
+> `agent-health.config.ts` (`defineConfig`, shown above) →
+> `OPENSEARCH_STORAGE_*` / `OPENSEARCH_LOGS_*` env vars → file-based fallback.
+> The JSON stays highest so the admin UI's runtime edits keep winning; the TS
+> config is the committed default for projects that don't mutate storage via the
+> UI. Keep secrets/endpoints in `process.env` so the committed `.ts` carries none.
 
 ### Config File Options
 

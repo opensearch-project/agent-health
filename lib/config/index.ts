@@ -32,5 +32,7 @@ export {
   findConfigFile,
   getConfigFileInfo,
   clearConfigCache,
+  getStorageConfigFromCode,
+  getObservabilityConfigFromCode,
   DEFAULT_SERVER_CONFIG,
 } from './loader';

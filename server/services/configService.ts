@@ -19,6 +19,10 @@ import path from 'path';
 import { debug } from '../../lib/debug.js';
 import { getStorageState, type StorageBackend } from '../adapters/index.js';
 import { configToCacheKey } from './opensearchClientFactory.js';
+import {
+  getStorageConfigFromCode,
+  getObservabilityConfigFromCode,
+} from '../../lib/config/index.js';
 import type { StorageClusterConfig, ObservabilityClusterConfig, ClusterAuthType } from '../../types/index.js';
 
 // Same filename used by customAgentStore.ts
@@ -58,7 +62,7 @@ interface ConfigFileDataSources {
 export interface ConfigStatus {
   storage: {
     configured: boolean;
-    source: 'file' | 'environment' | 'none';
+    source: 'file' | 'code' | 'environment' | 'none';
     endpoint?: string;
     authType?: ClusterAuthType;
     username?: string;    // Safe to return; lets the form pre-fill the username
@@ -69,7 +73,7 @@ export interface ConfigStatus {
   };
   observability: {
     configured: boolean;
-    source: 'file' | 'environment' | 'none';
+    source: 'file' | 'code' | 'environment' | 'none';
     endpoint?: string;
     authType?: ClusterAuthType;
     username?: string;
@@ -312,21 +316,27 @@ export function clearObservabilityConfig(): void {
  */
 export function getConfigStatus(): ConfigStatus {
   const config = readConfigFromDisk() as ConfigFileDataSources | null;
+  const codeStorage = getStorageConfigFromCode();
+  const codeObs = getObservabilityConfigFromCode();
 
   // Determine storage config source
-  let storageSource: 'file' | 'environment' | 'none' = 'none';
+  // Precedence: file (UI-written) → code (defineConfig) → environment → none.
+  let storageSource: 'file' | 'code' | 'environment' | 'none' = 'none';
   let storageEndpoint: string | undefined;
 
   if (config?.storage?.endpoint) {
     storageSource = 'file';
     storageEndpoint = config.storage.endpoint;
+  } else if (codeStorage?.endpoint) {
+    storageSource = 'code';
+    storageEndpoint = codeStorage.endpoint;
   } else if (process.env.OPENSEARCH_STORAGE_ENDPOINT) {
     storageSource = 'environment';
     storageEndpoint = process.env.OPENSEARCH_STORAGE_ENDPOINT;
   }
 
   // Determine observability config source
-  let obsSource: 'file' | 'environment' | 'none' = 'none';
+  let obsSource: 'file' | 'code' | 'environment' | 'none' = 'none';
   let obsEndpoint: string | undefined;
   let obsIndexes: ConfigStatus['observability']['indexes'];
 
@@ -334,6 +344,10 @@ export function getConfigStatus(): ConfigStatus {
     obsSource = 'file';
     obsEndpoint = config.observability.endpoint;
     obsIndexes = config.observability.indexes;
+  } else if (codeObs?.endpoint) {
+    obsSource = 'code';
+    obsEndpoint = codeObs.endpoint;
+    obsIndexes = codeObs.indexes;
   } else if (process.env.OPENSEARCH_LOGS_ENDPOINT) {
     obsSource = 'environment';
     obsEndpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;
@@ -343,36 +357,52 @@ export function getConfigStatus(): ConfigStatus {
     };
   }
 
-  // Resolve SigV4 fields
+  // Resolve SigV4 fields per source
   const storageAuthType: ClusterAuthType | undefined = storageSource === 'file'
     ? config?.storage?.authType
-    : (process.env.OPENSEARCH_STORAGE_AUTH_TYPE as ClusterAuthType) || undefined;
+    : storageSource === 'code'
+      ? codeStorage?.authType
+      : (process.env.OPENSEARCH_STORAGE_AUTH_TYPE as ClusterAuthType) || undefined;
   const storageAwsProfile = storageSource === 'file'
     ? config?.storage?.awsProfile
-    : process.env.OPENSEARCH_STORAGE_AWS_PROFILE;
+    : storageSource === 'code'
+      ? codeStorage?.awsProfile
+      : process.env.OPENSEARCH_STORAGE_AWS_PROFILE;
   const storageAwsRegion = storageSource === 'file'
     ? config?.storage?.awsRegion
-    : process.env.OPENSEARCH_STORAGE_AWS_REGION;
+    : storageSource === 'code'
+      ? codeStorage?.awsRegion
+      : process.env.OPENSEARCH_STORAGE_AWS_REGION;
   const storageAwsService = storageSource === 'file'
     ? config?.storage?.awsService
-    : (process.env.OPENSEARCH_STORAGE_AWS_SERVICE as 'es' | 'aoss') || undefined;
+    : storageSource === 'code'
+      ? codeStorage?.awsService
+      : (process.env.OPENSEARCH_STORAGE_AWS_SERVICE as 'es' | 'aoss') || undefined;
 
   const obsAuthType: ClusterAuthType | undefined = obsSource === 'file'
     ? config?.observability?.authType
-    : (process.env.OPENSEARCH_LOGS_AUTH_TYPE as ClusterAuthType) || undefined;
+    : obsSource === 'code'
+      ? codeObs?.authType
+      : (process.env.OPENSEARCH_LOGS_AUTH_TYPE as ClusterAuthType) || undefined;
   const obsAwsProfile = obsSource === 'file'
     ? config?.observability?.awsProfile
-    : process.env.OPENSEARCH_LOGS_AWS_PROFILE;
+    : obsSource === 'code'
+      ? codeObs?.awsProfile
+      : process.env.OPENSEARCH_LOGS_AWS_PROFILE;
   const obsAwsRegion = obsSource === 'file'
     ? config?.observability?.awsRegion
-    : process.env.OPENSEARCH_LOGS_AWS_REGION;
+    : obsSource === 'code'
+      ? codeObs?.awsRegion
+      : process.env.OPENSEARCH_LOGS_AWS_REGION;
   const obsAwsService = obsSource === 'file'
     ? config?.observability?.awsService
-    : (process.env.OPENSEARCH_LOGS_AWS_SERVICE as 'es' | 'aoss') || undefined;
+    : obsSource === 'code'
+      ? codeObs?.awsService
+      : (process.env.OPENSEARCH_LOGS_AWS_SERVICE as 'es' | 'aoss') || undefined;
 
   // Compute runtime storage state
   const storageState = getStorageState();
-  const resolvedStorageConfig = getStorageConfigFromFile() ??
+  const resolvedStorageConfig = getStorageConfigFromFile() ?? codeStorage ??
     (process.env.OPENSEARCH_STORAGE_ENDPOINT ? { endpoint: process.env.OPENSEARCH_STORAGE_ENDPOINT } as StorageClusterConfig : null);
   const fileConfigKey = resolvedStorageConfig ? configToCacheKey(resolvedStorageConfig) : null;
   const drifted = fileConfigKey !== storageState.configKey &&
@@ -386,10 +416,14 @@ export function getConfigStatus(): ConfigStatus {
       authType: storageAuthType,
       username: storageSource === 'file'
         ? config?.storage?.username
-        : process.env.OPENSEARCH_STORAGE_USERNAME,
+        : storageSource === 'code'
+          ? codeStorage?.username
+          : process.env.OPENSEARCH_STORAGE_USERNAME,
       hasPassword: storageSource === 'file'
         ? Boolean(config?.storage?.password)
-        : Boolean(process.env.OPENSEARCH_STORAGE_PASSWORD),
+        : storageSource === 'code'
+          ? Boolean(codeStorage?.password)
+          : Boolean(process.env.OPENSEARCH_STORAGE_PASSWORD),
       awsProfile: storageAwsProfile,
       awsRegion: storageAwsRegion,
       awsService: storageAwsService,
@@ -401,10 +435,14 @@ export function getConfigStatus(): ConfigStatus {
       authType: obsAuthType,
       username: obsSource === 'file'
         ? config?.observability?.username
-        : process.env.OPENSEARCH_LOGS_USERNAME,
+        : obsSource === 'code'
+          ? codeObs?.username
+          : process.env.OPENSEARCH_LOGS_USERNAME,
       hasPassword: obsSource === 'file'
         ? Boolean(config?.observability?.password)
-        : Boolean(process.env.OPENSEARCH_LOGS_PASSWORD),
+        : obsSource === 'code'
+          ? Boolean(codeObs?.password)
+          : Boolean(process.env.OPENSEARCH_LOGS_PASSWORD),
       awsProfile: obsAwsProfile,
       awsRegion: obsAwsRegion,
       awsService: obsAwsService,

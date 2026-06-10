@@ -19,6 +19,10 @@ import {
   getStorageConfigFromFile,
   getObservabilityConfigFromFile,
 } from '../services/configService.js';
+import {
+  getStorageConfigFromCode,
+  getObservabilityConfigFromCode,
+} from '../../lib/config/index.js';
 
 // Default OTEL index patterns
 export const DEFAULT_OTEL_INDEXES = {
@@ -41,18 +45,25 @@ export const STORAGE_INDEXES = {
  * Resolve storage cluster configuration
  *
  * Priority:
- * 1. File config (agent-health.config.json)
- * 2. Environment variables (OPENSEARCH_STORAGE_*)
- * 3. null (not configured)
+ * 1. File config (agent-health.config.json) - UI-written, runtime
+ * 2. Code config (agent-health.config.ts defineConfig storage)
+ * 3. Environment variables (OPENSEARCH_STORAGE_*)
+ * 4. null (not configured)
  */
 export function resolveStorageConfig(req: Request): StorageClusterConfig | null {
-  // 1. Check file config first
+  // 1. Check file config first (admin UI writes here at runtime, must win)
   const fileConfig = getStorageConfigFromFile();
   if (fileConfig) {
     return fileConfig;
   }
 
-  // 2. Fall back to environment variables
+  // 2. Code config (defineConfig in agent-health.config.ts)
+  const codeConfig = getStorageConfigFromCode();
+  if (codeConfig) {
+    return codeConfig;
+  }
+
+  // 3. Fall back to environment variables
   const envEndpoint = process.env.OPENSEARCH_STORAGE_ENDPOINT;
 
   if (envEndpoint) {
@@ -76,16 +87,17 @@ export function resolveStorageConfig(req: Request): StorageClusterConfig | null 
  * Resolve observability cluster configuration
  *
  * Priority:
- * 1. File config (agent-health.config.json)
- * 2. Environment variables (OPENSEARCH_LOGS_*)
- * 3. null (not configured)
+ * 1. File config (agent-health.config.json) - UI-written, runtime
+ * 2. Code config (agent-health.config.ts defineConfig observability)
+ * 3. Environment variables (OPENSEARCH_LOGS_*)
+ * 4. null (not configured)
  *
  * Index patterns use defaults if not specified in file or env vars.
  */
 export function resolveObservabilityConfig(req: Request): ObservabilityClusterConfig | null {
-  // 1. Check file config first
+  // 1. Check file config first (admin UI writes here at runtime, must win)
   const fileConfig = getObservabilityConfigFromFile();
-  
+
   if (fileConfig) {
     return {
       endpoint: fileConfig.endpoint,
@@ -104,7 +116,20 @@ export function resolveObservabilityConfig(req: Request): ObservabilityClusterCo
     };
   }
 
-  // 2. Fall back to environment variables
+  // 2. Code config (defineConfig in agent-health.config.ts), with index defaults
+  const codeConfig = getObservabilityConfigFromCode();
+  if (codeConfig) {
+    return {
+      ...codeConfig,
+      indexes: {
+        traces: codeConfig.indexes?.traces || DEFAULT_OTEL_INDEXES.traces,
+        logs: codeConfig.indexes?.logs || DEFAULT_OTEL_INDEXES.logs,
+        metrics: codeConfig.indexes?.metrics || DEFAULT_OTEL_INDEXES.metrics,
+      },
+    };
+  }
+
+  // 3. Fall back to environment variables
   const envEndpoint = process.env.OPENSEARCH_LOGS_ENDPOINT;
 
   if (envEndpoint) {
