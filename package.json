@@ -159,10 +159,10 @@
     "@types/react-dom": "^19.2.0",
     "@types/supertest": "^6.0.3",
     "@types/uuid": "^11.0.0",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^6.0.2",
     "autoprefixer": "^10.4.16",
     "chai4": "npm:chai@^4.5.0",
-    "esbuild": "^0.27.2",
+    "esbuild": "^0.28.1",
     "fast-check": "^4.7.0",
     "husky": "^9.1.7",
     "jest": "^30.2.0",
@@ -177,7 +177,7 @@
     "tsc-alias": "^1.8.16",
     "tsx": "^4.19.0",
     "typescript": "^5.3.3",
-    "vite": "^7.3.1",
+    "vite": "^8.0.16",
     "vite-plugin-istanbul": "^8.0.0"
   },
   "overrides": {
