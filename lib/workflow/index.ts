@@ -10,6 +10,13 @@ export { workflow } from './workflow.js';
 export { FeedbackLedger } from './ledger.js';
 export { consolidate } from './consolidate.js';
 export { mapPool } from './pool.js';
+export {
+  profileSpans,
+  buildAgentEditsPrompt,
+  parseAgentEdits,
+  deriveAgentEdits,
+  defaultReason,
+} from './stepB.js';
 
 export type {
   WorkItem,
@@ -25,6 +32,7 @@ export type {
 } from './types.js';
 export type { LedgerEntry } from './ledger.js';
 export type { PoolStats } from './pool.js';
+export type { SessionProfile, AgentEdit, ReasonFn } from './stepB.js';
 export type {
   Workflow,
   WorkflowContext,

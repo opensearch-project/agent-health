@@ -114,6 +114,12 @@ export type { TracesAccessor, MatcherResult, MatcherMethod } from './matchers/in
 //
 // @experimental Same stability caveat as the test-case SDK above.
 export { source, workflow, FeedbackLedger, consolidate, mapPool } from './workflow/index.js';
+export {
+  profileSpans,
+  buildAgentEditsPrompt,
+  parseAgentEdits,
+  deriveAgentEdits,
+} from './workflow/index.js';
 export type {
   WorkItem,
   SourceFetchFn,
@@ -132,4 +138,7 @@ export type {
   WorkflowRunOptions,
   WorkflowResult,
   ForEachOptions,
+  SessionProfile,
+  AgentEdit,
+  ReasonFn,
 } from './workflow/index.js';

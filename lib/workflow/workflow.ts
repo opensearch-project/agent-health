@@ -40,6 +40,14 @@ import type {
 import { FeedbackLedger } from './ledger.js';
 import { mapPool, type PoolStats } from './pool.js';
 import { consolidate as consolidateFn } from './consolidate.js';
+import {
+  profileSpans,
+  deriveAgentEdits as deriveAgentEditsFn,
+  type SessionProfile,
+  type AgentEdit,
+  type ReasonFn,
+} from './stepB.js';
+import type { Span } from '@/types/index.js';
 
 /** Seams the runner/CLI/tests can inject (agent invocation, PR raising, steering). */
 export interface WorkflowRunOptions {
@@ -57,6 +65,14 @@ export interface WorkflowRunOptions {
   onPR?: (pr: PRRequest, artifact: unknown) => Promise<void>;
   /** Per-item human steering — return text to append to the ledger. */
   steer?: (run: AgentRunResult) => Promise<string | void> | string | void;
+
+  // ── Step B seams (improve-the-agent) ──
+  /** Resolve guided sessions to profile. Default: warns + []. */
+  fetchGuidedSessions?: (opts: { since?: string }) => Promise<Array<{ sessionId: string; spans: Span[]; serviceName?: string; evaluator?: { id: string; systemPrompt?: string } }>>;
+  /** Fetch a session's spans by id (when profile() is called with just a sessionId). */
+  fetchSpans?: (sessionId: string) => Promise<Span[]>;
+  /** Reasoner for deriveAgentEdits. Default: `claude -p`. */
+  reason?: ReasonFn;
 }
 
 export interface ForEachOptions {
@@ -85,13 +101,16 @@ export interface WorkflowContext {
   /** Raise (or, in dry-run, log) a PR. */
   raisePR(artifact: unknown, pr: PRRequest): Promise<void>;
 
-  // ── Step B (improve-the-agent) — depends on PR #267 profile primitives ──
-  guidedSessions(opts?: { since?: string }): Promise<unknown[]>;
-  profile(session: unknown, opts?: { feedback?: FeedbackLedger }): Promise<unknown>;
+  // ── Step B (improve-the-agent) ──
+  guidedSessions(opts?: { since?: string }): Promise<SessionProfile[]>;
+  profile(
+    session: { sessionId: string; spans?: Span[]; serviceName?: string; evaluator?: { id: string; systemPrompt?: string } },
+    opts?: { feedback?: FeedbackLedger }
+  ): Promise<SessionProfile>;
   deriveAgentEdits(
-    profiles: unknown[],
+    profiles: SessionProfile[],
     opts?: { repo?: string; ledger?: FeedbackLedger }
-  ): Promise<unknown>;
+  ): Promise<AgentEdit[]>;
 }
 
 export interface WorkflowResult {
@@ -267,25 +286,42 @@ export function workflow(name: string, config: WorkflowConfig): Workflow {
           );
         },
 
-        // ── Step B stubs — wired once PR #267 profile primitives land ──
-        async guidedSessions() {
-          console.warn(
-            `[workflow:${name}] guidedSessions() is not wired yet ` +
-              '(depends on PR #267 profile primitives). Returning [].'
+        // ── Step B — wired onto the #267 profile primitives ──
+        async guidedSessions(opts = {}) {
+          if (!runOpts.fetchGuidedSessions) {
+            console.warn(
+              `[workflow:${name}] guidedSessions(): no fetchGuidedSessions seam provided — ` +
+                'returning []. Wire run({ fetchGuidedSessions }) or pass profiles directly.'
+            );
+            return [];
+          }
+          const sessions = await runOpts.fetchGuidedSessions({ since: opts.since ?? runOpts.since });
+          return sessions.map((s) =>
+            profileSpans(s.sessionId, s.spans, { serviceName: s.serviceName, evaluator: s.evaluator })
           );
-          return [];
         },
-        async profile() {
-          throw new Error(
-            'wf.profile() not implemented yet — depends on PR #267 ' +
-              '(spansToTrajectory + the profile command exported to the SDK).'
-          );
+        async profile(session, _opts = {}) {
+          let spans = session.spans;
+          if (!spans) {
+            if (!runOpts.fetchSpans) {
+              throw new Error(
+                'wf.profile(): session has no spans and no fetchSpans seam was provided. ' +
+                  'Pass { spans } or run({ fetchSpans }).'
+              );
+            }
+            spans = await runOpts.fetchSpans(session.sessionId);
+          }
+          return profileSpans(session.sessionId, spans, {
+            serviceName: session.serviceName,
+            evaluator: session.evaluator,
+          });
         },
-        async deriveAgentEdits() {
-          throw new Error(
-            'wf.deriveAgentEdits() not implemented yet — this is the headless ' +
-              'reasoner node (turns profiles + ledger into repo edits).'
-          );
+        async deriveAgentEdits(profiles, opts = {}) {
+          return deriveAgentEditsFn(profiles, {
+            repo: opts.repo ?? config.repo,
+            ledger: opts.ledger ?? ledger,
+            reason: runOpts.reason,
+          });
         },
       };
 
