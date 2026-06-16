@@ -30,6 +30,7 @@ import {
 import { judge } from './judge.js';
 import { defineEvaluator, evaluate } from './evaluators.js';
 import { expect } from '../matchers/expect.js';
+import { source, workflow } from '../workflow/index.js';
 
 /**
  * Build the authoring-surface object handed to code-imported eval files.
@@ -53,6 +54,9 @@ export function getAuthoringSurface(): Record<string, unknown> {
     evaluate,
     // Matcher API.
     expect,
+    // Workflow SDK (for .workflow.{js,ts,mjs} files).
+    source,
+    workflow,
   };
 }
 

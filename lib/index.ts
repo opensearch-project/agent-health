@@ -107,3 +107,29 @@ export type { EvaluatorContext, EvaluatorResult, EvaluatorFn, EvaluateFn } from 
 // shown in the UI as a per-matcher breakdown.
 export { expect } from './matchers/index.js';
 export type { TracesAccessor, MatcherResult, MatcherMethod } from './matchers/index.js';
+
+// Workflow SDK (for writing .workflow.ts files: deterministic steps over a
+// work source, with bounded-concurrency agent fan-out, a cumulative feedback
+// ledger, staging, and consolidation into one PR per fix-class).
+//
+// @experimental Same stability caveat as the test-case SDK above.
+export { source, workflow, FeedbackLedger, consolidate, mapPool } from './workflow/index.js';
+export type {
+  WorkItem,
+  SourceFetchFn,
+  SourceHandle,
+  AgentRunResult,
+  StagedItem,
+  Cluster,
+  WritesMode,
+  RunAgentOptions,
+  WorkflowConfig,
+  PRRequest,
+  LedgerEntry,
+  PoolStats,
+  Workflow,
+  WorkflowContext,
+  WorkflowRunOptions,
+  WorkflowResult,
+  ForEachOptions,
+} from './workflow/index.js';

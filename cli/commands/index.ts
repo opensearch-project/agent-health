@@ -24,3 +24,4 @@ export { createSetupTelemetryCommand } from './setup-telemetry.js';
 export { createSkillCommand } from './skill.js';
 export { createProfileCommand } from './profile.js';
 export { createSetupCommand } from './setup.js';
+export { createWorkflowCommand } from './workflow.js';

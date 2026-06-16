@@ -36,6 +36,7 @@ import {
   createSkillCommand,
   createProfileCommand,
   createSetupCommand,
+  createWorkflowCommand,
 } from './commands/index.js';
 
 // Get package.json for version
@@ -253,6 +254,7 @@ program.addCommand(createSetupTelemetryCommand());
 program.addCommand(createSkillCommand());
 program.addCommand(createSetupCommand());
 program.addCommand(createProfileCommand());
+program.addCommand(createWorkflowCommand());
 
 // Add serve command as an alias for the default action
 program
