@@ -1378,7 +1378,7 @@ export interface DataSourceConfig {
 
 /**
  * Adapter type for data sources
- * 'file' is the default (JSON files in agent-health-data/)
+ * 'file' is the default (JSON files in .agent-health/data/)
  * 'opensearch' when storage cluster is configured
  * 'memory' is for testing/demo
  */

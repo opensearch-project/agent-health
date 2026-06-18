@@ -50,9 +50,9 @@ tokens.json
 # Development artifacts
 *.local.json
 
-# File-based storage backend (runtime data, not source)
+# App-managed (runtime, not source): config-v2 state + generated data,
+# combined under .agent-health/ (state.json + data/).
 .agent-health/
-agent-health-data/
 
 # AI-agent generated specification files (keep steering shared)
 .kiro/*

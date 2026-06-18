@@ -6,10 +6,10 @@
 /**
  * File-backed trace store.
  *
- * Persists spans as JSON under `agent-health-data/traces/{traceId}.json` (one
+ * Persists spans as JSON under `.agent-health/data/traces/{traceId}.json` (one
  * file per trace, an array of that trace's spans). This is the data plane for
  * the file observability backend — runtime data, gitignored, parallel to
- * `agent-health-data/runs/` etc. (see docs/CONFIGURATION.md → "Where things live").
+ * `.agent-health/data/runs/` etc. (see docs/CONFIGURATION.md → "Where things live").
  *
  * Retention: **keep forever**. Nothing is auto-evicted; customers delete files
  * themselves (and graduate to an OpenSearch observability cluster when local
@@ -20,11 +20,12 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import type { Span } from '../../../types/index.js';
+import { projectDataDir } from '../../../lib/config/statePaths.js';
 
 /** Resolve the traces data directory (overridable for tests via AGENT_HEALTH_DATA_DIR). */
 export function resolveTracesDir(baseDir?: string): string {
   if (baseDir) return baseDir;
-  const dataDir = process.env.AGENT_HEALTH_DATA_DIR || path.join(process.cwd(), 'agent-health-data');
+  const dataDir = process.env.AGENT_HEALTH_DATA_DIR || projectDataDir();
   return path.join(dataDir, 'traces');
 }
 

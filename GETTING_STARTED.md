@@ -129,7 +129,7 @@ Settings are saved to `agent-health.config.json` in your working directory. This
 
 On first startup, a default config file is created automatically. If you have an existing `agent-health.yaml`, it will be auto-migrated to `agent-health.config.json`.
 
-By default, Agent Health uses **file-based storage** (no external services required). Data is stored locally in a `.agent-health-data/` directory.
+By default, Agent Health uses **file-based storage** (no external services required). Data is stored locally in a `.agent-health/data/` directory.
 
 ### Environment File
 

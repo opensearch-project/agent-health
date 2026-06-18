@@ -271,7 +271,7 @@ export const SkillsPage: React.FC = () => {
       // success and load that iteration's evidence into the UI.
       if (validation?.skill) {
         try {
-          const workspace = `agent-health-data/skill-evals/${validation.skill.metadata.name}`;
+          const workspace = `.agent-health/data/skill-evals/${validation.skill.metadata.name}`;
           const { iterations: iters, proposals } = await getSkillResults(workspace);
           const recovered = iters.find(it => Date.parse(it.created_at) >= runStartedAt);
           if (recovered) {
@@ -305,7 +305,7 @@ export const SkillsPage: React.FC = () => {
 
   const loadHistory = useCallback(async () => {
     if (!validation?.skill) return;
-    const workspace = `agent-health-data/skill-evals/${validation.skill.metadata.name}`;
+    const workspace = `.agent-health/data/skill-evals/${validation.skill.metadata.name}`;
     try {
       const { iterations: iters, proposals } = await getSkillResults(workspace);
       setIterations(iters);

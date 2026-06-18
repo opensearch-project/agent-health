@@ -30,6 +30,14 @@ import { resolve, join } from 'path';
 export const STATE_DIRNAME = '.agent-health';
 export const STATE_FILENAME = 'state.json';
 
+/**
+ * Generated data lives UNDER the app-managed state dir: `.agent-health/data/`
+ * (runs, benchmarks, test-cases, analytics, profiles, skill-evals,
+ * uploaded-skills). Combined with state.json so there is ONE app-managed,
+ * gitignored directory — not a second top-level `agent-health-data/`.
+ */
+export const DATA_DIRNAME = 'data';
+
 /** Authored config filenames, in priority order (shared with lib/config/loader). */
 export const AUTHORED_CONFIG_NAMES = [
   'agent-health.config.ts',
@@ -55,6 +63,10 @@ export function projectStatePath(cwd: string = process.cwd()): string {
 }
 export function userStatePath(): string {
   return join(userStateDir(), STATE_FILENAME);
+}
+/** Generated-data dir, nested under the project state dir: `<cwd>/.agent-health/data`. */
+export function projectDataDir(cwd: string = process.cwd()): string {
+  return join(projectStateDir(cwd), DATA_DIRNAME);
 }
 export function statePathForScope(scope: StateScope, cwd: string = process.cwd()): string {
   return scope === 'user' ? userStatePath() : projectStatePath(cwd);

@@ -7,7 +7,7 @@
  * File-backed observability module.
  *
  * Realizes `IObservabilityModule` over the on-disk `TraceStore`
- * (`agent-health-data/traces/`). This is the zero-config default when **no**
+ * (`.agent-health/data/traces/`). This is the zero-config default when **no**
  * OpenSearch observability cluster is configured — so local evaluations get a
  * working Traces view out of the box, with no external infra.
  *

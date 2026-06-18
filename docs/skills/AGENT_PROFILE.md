@@ -95,7 +95,7 @@ any reasoner.)
 }
 ```
 
-It is also written to `agent-health-data/profiles/<sessionId>/profile.json`.
+It is also written to `.agent-health/data/profiles/<sessionId>/profile.json`.
 
 ### Signals scanned (deterministic, pre-LLM)
 

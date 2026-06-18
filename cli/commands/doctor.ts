@@ -275,7 +275,7 @@ async function checkTracesConnectivity(): Promise<CheckResult> {
         name: 'Traces Connectivity',
         status: 'ok',
         message: data.backend === 'file'
-          ? 'Local filesystem trace storage (agent-health-data/traces)'
+          ? 'Local filesystem trace storage (.agent-health/data/traces)'
           : 'OpenSearch traces index is accessible',
       };
     }

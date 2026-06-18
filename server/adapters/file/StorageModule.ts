@@ -8,16 +8,17 @@
  *
  * Implements IStorageModule using JSON files on disk.
  * Each entity is stored as a single JSON file in a subdirectory:
- *   agent-health-data/test-cases/{id}-v{version}.json
- *   agent-health-data/benchmarks/{id}.json
- *   agent-health-data/runs/{id}.json
- *   agent-health-data/analytics/{id}.json
+ *   .agent-health/data/test-cases/{id}-v{version}.json
+ *   .agent-health/data/benchmarks/{id}.json
+ *   .agent-health/data/runs/{id}.json
+ *   .agent-health/data/analytics/{id}.json
  *
  * Same document shape as OpenSearch — portable between backends.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { projectDataDir } from '../../../lib/config/statePaths.js';
 import type {
   TestCase,
   Benchmark,
@@ -780,7 +781,7 @@ export class FileSessionMetadataOperations implements ISessionMetadataOperations
   private baseDir: string;
 
   constructor(baseDir?: string) {
-    this.baseDir = baseDir || path.join(process.cwd(), 'agent-health-data');
+    this.baseDir = baseDir || projectDataDir();
   }
 
   private get dir() { return path.join(this.baseDir, 'session-metadata'); }
@@ -921,8 +922,6 @@ class FileEvaluationRunOperations implements IEvaluationRunOperations {
 // File Storage Module
 // ============================================================================
 
-const DEFAULT_DATA_DIR = 'agent-health-data';
-
 export class FileStorageModule implements IStorageModule {
   readonly testCases: ITestCaseOperations;
   readonly benchmarks: IBenchmarkOperations;
@@ -935,7 +934,7 @@ export class FileStorageModule implements IStorageModule {
   private readonly baseDir: string;
 
   constructor(baseDir?: string) {
-    this.baseDir = baseDir || path.join(process.cwd(), DEFAULT_DATA_DIR);
+    this.baseDir = baseDir || projectDataDir();
     ensureDir(this.baseDir);
 
     this.testCases = new FileTestCaseOperations(this.baseDir);

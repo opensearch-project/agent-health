@@ -42,7 +42,7 @@ describe('Session Metadata API Integration Tests', () => {
   }, TEST_TIMEOUT);
 
   afterAll(async () => {
-    // Clean up: there's no DELETE endpoint, but the file will be in agent-health-data/session-metadata/
+    // Clean up: there's no DELETE endpoint, but the file will be in .agent-health/data/session-metadata/
     // which is ephemeral test data
   });
 

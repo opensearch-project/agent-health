@@ -425,7 +425,7 @@ describe('Benchmark Export Integration Tests', () => {
  * Integration tests for benchmark Edit + version-bump end-to-end.
  *
  * These exercise the real HTTP route against a real storage backend (the
- * `agent-health-data/` JSON store, or OpenSearch when configured), proving:
+ * `.agent-health/data/` JSON store, or OpenSearch when configured), proving:
  *   - PUT /api/storage/benchmarks/:id with new testCaseIds bumps currentVersion
  *     AND appends an immutable entry to versions[]
  *   - PUT with metadata-only changes does NOT bump currentVersion

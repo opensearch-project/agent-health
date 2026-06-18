@@ -146,7 +146,7 @@ router.get('/api/traces/health', async (req: Request, res: Response) => {
       return res.json({
         ...health,
         backend: 'file',
-        message: 'Using local filesystem trace storage (agent-health-data/traces). Connect an OpenSearch observability cluster to scale.',
+        message: 'Using local filesystem trace storage (.agent-health/data/traces). Connect an OpenSearch observability cluster to scale.',
         sampleTraceCount: getAllSampleTraceSpans().length,
       });
     }

@@ -69,7 +69,7 @@ What happens under the hood:
 ### Storage (file-based by default; OpenSearch optional)
 
 Agent Health uses **file-based storage by default** — results are written to a
-local `.agent-health-data/` directory and `run` / `benchmark` work with **no
+local `.agent-health/data/` directory and `run` / `benchmark` work with **no
 OpenSearch cluster required**. Point at OpenSearch only when you want shared,
 production-grade persistence (multiple machines / a team dashboard).
 

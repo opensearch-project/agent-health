@@ -30,6 +30,7 @@ import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSy
 import { join } from 'path';
 import { homedir } from 'os';
 import { loadConfig } from '@/lib/config/index.js';
+import { projectDataDir } from '@/lib/config/statePaths.js';
 import { ensureServer, createServerCleanup } from '@/cli/utils/serverLifecycle.js';
 import { ApiClient } from '@/cli/utils/apiClient.js';
 import { spansToTrajectory, scanSessionSignals } from '@/services/traces/spansToTrajectory.js';
@@ -203,7 +204,7 @@ export function createProfileCommand(): Command {
         };
 
         // 5. Persist + emit.
-        const outDir = join('agent-health-data', 'profiles', sessionId);
+        const outDir = join(projectDataDir(), 'profiles', sessionId);
         mkdirSync(outDir, { recursive: true });
         const outFile = join(outDir, 'profile.json');
         writeFileSync(outFile, JSON.stringify(profile, null, 2));

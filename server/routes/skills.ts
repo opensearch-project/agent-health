@@ -14,6 +14,7 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import { homedir, platform } from 'os';
 import { debug } from '@/lib/debug';
+import { projectDataDir } from '@/lib/config/statePaths.js';
 import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { parseSkill } from '@/services/skills/parser';
@@ -37,7 +38,7 @@ function resolveSkillPath(inputPath: string): string {
 }
 
 /** Managed workspace root for skill evaluation results */
-const SKILL_EVALS_ROOT = resolve(process.cwd(), 'agent-health-data', 'skill-evals');
+const SKILL_EVALS_ROOT = join(projectDataDir(), 'skill-evals');
 
 /**
  * GET /api/skills/discover
@@ -127,7 +128,7 @@ router.post('/api/skills/upload', async (req: Request, res: Response) => {
   const skillName = nameMatch ? nameMatch[1].trim() : (fileName || 'uploaded-skill').replace(/\.md$/i, '');
   const safeDir = skillName.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
 
-  const uploadDir = resolve(process.cwd(), 'agent-health-data', 'uploaded-skills', safeDir);
+  const uploadDir = join(projectDataDir(), 'uploaded-skills', safeDir);
   mkdirSync(uploadDir, { recursive: true });
   writeFileSync(join(uploadDir, 'SKILL.md'), content, 'utf-8');
 
@@ -273,7 +274,7 @@ router.post('/api/skills/eval', async (req: Request, res: Response) => {
   }
 
   // Determine workspace and iteration
-  const workspacePath = resolve('agent-health-data', 'skill-evals', validation.skill.metadata.name);
+  const workspacePath = join(projectDataDir(), 'skill-evals', validation.skill.metadata.name);
   const iteration = getNextIteration(workspacePath);
 
   // Set up SSE
@@ -432,12 +433,13 @@ router.get('/api/skills/results', async (req: Request, res: Response) => {
 
   // Resolve workspace path. Accept any of:
   //   - bare skill name              "add-connector"
-  //   - prefixed path                  "agent-health-data/skill-evals/add-connector"
+  //   - prefixed path                  ".agent-health/data/skill-evals/add-connector"
   //   - absolute path                  "/abs/path/to/workspace"
   // The frontend has historically built the prefixed form, while CLI / API
   // callers tend to pass the bare name. Normalise here so both work.
-  const normalised = workspace.startsWith('agent-health-data/skill-evals/')
-    ? workspace.slice('agent-health-data/skill-evals/'.length)
+  const NEW_PREFIX = '.agent-health/data/skill-evals/';
+  const normalised = workspace.startsWith(NEW_PREFIX)
+    ? workspace.slice(NEW_PREFIX.length)
     : workspace;
   const absolutePath = resolve(SKILL_EVALS_ROOT, normalised);
   if (!existsSync(absolutePath)) {

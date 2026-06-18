@@ -20,8 +20,10 @@ import * as fs from 'fs';
 import {
   STATE_DIRNAME,
   STATE_FILENAME,
+  DATA_DIRNAME,
   projectStatePath,
   userStatePath,
+  projectDataDir,
   isCodeFirstMode,
   hasAuthoredConfig,
   readLayeredState,
@@ -128,5 +130,11 @@ describe('writeStateScope', () => {
     mockedFs.readFileSync.mockReturnValue('NOT JSON {{{');
     expect(() => writeStateScope({ debug: true }, 'project', CWD)).toThrow(/unreadable or corrupt/);
     expect(mockedFs.writeFileSync).not.toHaveBeenCalled();
+  });
+});
+
+describe('combined data dir (.agent-health/data)', () => {
+  it('projectDataDir nests generated data under the app-managed state dir', () => {
+    expect(projectDataDir('/proj')).toBe(`/proj/${STATE_DIRNAME}/${DATA_DIRNAME}`);
   });
 });

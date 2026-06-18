@@ -227,7 +227,7 @@ export function getStorageState(): StorageState {
 // ============================================================================
 
 /**
- * Default storage module: JSON files in agent-health-data/.
+ * Default storage module: JSON files in .agent-health/data/.
  * Always available, no configuration needed.
  */
 let storageModule: IStorageModule = new FileStorageModule();

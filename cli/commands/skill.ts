@@ -228,5 +228,5 @@ function displayBenchmark(benchmark: SkillBenchmarkResult, format: OutputFormat)
 
   console.log('');
   console.log(table.toString());
-  console.log(chalk.gray(`\n  Results: agent-health-data/skill-evals/${benchmark.skill_path}/iteration-${benchmark.iteration}/`));
+  console.log(chalk.gray(`\n  Results: .agent-health/data/skill-evals/${benchmark.skill_path}/iteration-${benchmark.iteration}/`));
 }
