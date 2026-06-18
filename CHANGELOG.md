@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+- **Package: SDK resolvable from a `.ts` config/eval/workflow loaded as CJS** ([package.json](package.json)): added `require` + `default` conditions to `exports["."]` (it had only `import` + `types`). A `.ts` `agent-health.config.ts` / `*.eval.ts` / `*.workflow.ts` run via `tsx` compiles to CJS, so its `import … from '@opensearch-project/agent-health'` resolves through the `require` condition — without it Node threw `No "exports" main defined …` and the SDK could not be loaded from a TypeScript config/eval/workflow at all. Both `require` and `default` point at the existing ESM entry (Node ≥ 22 supports `require(esm)`); ESM consumers are unaffected.
+
 ## [0.5.1] - 2026-06-17
 
 Release-pipeline retry of `0.5.0`. The `0.5.0` git tag was cut on [`be9f7cb5`](https://github.com/opensearch-project/agent-health/commit/be9f7cb5) but the [Release Workflow](https://github.com/opensearch-project/agent-health/actions/runs/27382887163) failed at `npm test` (stale `jest.mock('@/lib/utils', ...)` factory in `RunDetailsContent.test.ts` — `getRunOverallScore` was added to the mocked module by [#247](https://github.com/opensearch-project/agent-health/pull/247) but the partial mock factory was never updated, so every test in that file threw `TypeError: getRunOverallScore is not a function` once `<RunScore>` rendered transitively). Both `npm publish` and `Release on Github` were skipped, so `0.5.0` never reached the npm registry — the latest published artifact remained `0.4.0`. This `0.5.1` ships everything `0.5.0` was meant to ship, plus the test-mock repair and a handful of additional commits that landed on `main` while diagnosing the release miss.
