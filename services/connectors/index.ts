@@ -60,4 +60,4 @@ connectorRegistry.register(restConnector);
 connectorRegistry.register(openaiCompatibleConnector);
 connectorRegistry.register(langgraphConnector);
 
-console.log('[Connectors] Browser-safe connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));
+console.error('[Connectors] Browser-safe connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));

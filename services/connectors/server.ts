@@ -39,4 +39,4 @@ connectorRegistry.register(kiroConnector);
 connectorRegistry.register(piConnector);
 connectorRegistry.register(strandsConnector);
 
-console.log('[Connectors] Server connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));
+console.error('[Connectors] Server connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));

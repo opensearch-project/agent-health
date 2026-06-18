@@ -64,7 +64,7 @@ function loadEnvFile(envPath: string): void {
     process.exit(1);
   }
 
-  const result = loadDotenv({ path: absolutePath });
+  const result = loadDotenv({ path: absolutePath, quiet: true });
 
   if (result.error) {
     console.error(chalk.red(`\n  Error loading environment file: ${result.error.message}\n`));
@@ -77,7 +77,7 @@ function loadEnvFile(envPath: string): void {
 // Auto-load .env file BEFORE parsing commands (so all subcommands get env vars)
 const defaultEnvPath = resolve(process.cwd(), '.env');
 if (existsSync(defaultEnvPath)) {
-  loadDotenv({ path: defaultEnvPath });
+  loadDotenv({ path: defaultEnvPath, quiet: true });
 }
 
 // Create the CLI program
