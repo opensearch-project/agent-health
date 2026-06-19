@@ -128,7 +128,7 @@ export function parseAgentEdits(raw: string): AgentEdit[] {
         file: e.file,
         change: e.change,
         why: e.why ?? '',
-        priority: ['high', 'medium', 'low'].includes(e.priority) ? e.priority : 'medium',
+        priority: ((p) => (p === 'high' || p === 'low' ? p : 'medium'))(String(e.priority ?? '').toLowerCase()),
         evidence: Array.isArray(e.evidence) ? e.evidence : undefined,
       }));
   } catch {

@@ -83,6 +83,18 @@ export function createWorkflowCommand(): Command {
 
       const concurrency = options.concurrency ? parseInt(options.concurrency, 10) : undefined;
       const limit = options.limit ? parseInt(options.limit, 10) : undefined;
+      // Fail fast on bad numeric flags (NaN / 0 / negative) instead of stalling
+      // the pool or silently processing 0 items.
+      for (const [flag, raw, val] of [
+        ['--concurrency', options.concurrency, concurrency],
+        ['--limit', options.limit, limit],
+      ] as const) {
+        if (val !== undefined && (!Number.isFinite(val) || val < 1)) {
+          console.error(chalk.red(`  ${flag} must be a positive integer (got "${raw}")`));
+          process.exitCode = 1;
+          return;
+        }
+      }
       const dryRun = options.dryRun !== false; // --no-dry-run flips it
 
       if (!asJson) {

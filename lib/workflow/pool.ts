@@ -22,7 +22,9 @@ export async function mapPool<T, R>(
   fn: (item: T, index: number) => Promise<R>,
   stats?: PoolStats
 ): Promise<R[]> {
-  const max = Math.max(1, Math.floor(limit));
+  // Guard non-finite / non-positive limits (e.g. NaN from a bad CLI parse) so the
+  // scheduler can never deadlock by never starting any task.
+  const max = Number.isFinite(limit) && limit >= 1 ? Math.floor(limit) : 1;
   const results: R[] = new Array(items.length);
   let next = 0;
   let active = 0;

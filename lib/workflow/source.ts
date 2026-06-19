@@ -33,7 +33,7 @@ export function source(name: string, fetch: SourceFetchFn): SourceHandle {
   return handle;
 }
 
-/** Look up a registered source by name (used by the CLI `--source` flag). */
+/** Look up a registered source by name (used by the workflow runtime / loaders). */
 export function getSource(name: string): SourceHandle | undefined {
   return registry.get(name);
 }

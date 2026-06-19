@@ -40,6 +40,11 @@ export interface AgentRunResult {
   runId: string | null;
   /** Clustering key for consolidation (derived from cti / diagnosis). */
   signature: string;
+  /**
+   * Run-correlation ids (currently the agent `runId` == OTel `gen_ai.request.id`),
+   * used to look up this run's spans in the Traces UI / as PR evidence — these are
+   * correlation handles, not raw OTel trace ids.
+   */
   traceIds: string[];
 }
 
@@ -65,7 +70,11 @@ export type WritesMode = 'shadow' | 'live';
 export interface RunAgentOptions {
   /** Cumulative feedback injected into the agent's context this run. */
   feedback?: FeedbackLedger;
-  /** 'shadow' (default): [READ] real, [WRITE] proposed-only. Never auto-mutates. */
+  /**
+   * 'shadow' (default): [READ] real, [WRITE] proposed-only. Instructs the agent not
+   * to mutate; actual enforcement is connector- and human-gated (PRs are merged by a
+   * human) — not guaranteed by this option alone.
+   */
   writes?: WritesMode;
 }
 

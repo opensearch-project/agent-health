@@ -104,8 +104,7 @@ export interface WorkflowContext {
   // ── Step B (improve-the-agent) ──
   guidedSessions(opts?: { since?: string }): Promise<SessionProfile[]>;
   profile(
-    session: { sessionId: string; spans?: Span[]; serviceName?: string; evaluator?: { id: string; systemPrompt?: string } },
-    opts?: { feedback?: FeedbackLedger }
+    session: { sessionId: string; spans?: Span[]; serviceName?: string; evaluator?: { id: string; systemPrompt?: string } }
   ): Promise<SessionProfile>;
   deriveAgentEdits(
     profiles: SessionProfile[],
@@ -243,8 +242,12 @@ export function workflow(name: string, config: WorkflowConfig): Workflow {
             return true;
           });
           const limit = opts.limit ?? runOpts.limit;
+          // Only slice for a finite, non-negative limit; ignore NaN / negative
+          // (a bad --limit) rather than silently processing 0 or odd slices.
           const items =
-            typeof limit === 'number' ? deduped.slice(0, limit) : deduped;
+            typeof limit === 'number' && Number.isFinite(limit) && limit >= 0
+              ? deduped.slice(0, limit)
+              : deduped;
           const concurrency =
             opts.concurrency ?? runOpts.concurrency ?? config.concurrency ?? 1;
           await mapPool(items, concurrency, (item) => handler(item), stats);
@@ -300,7 +303,7 @@ export function workflow(name: string, config: WorkflowConfig): Workflow {
             profileSpans(s.sessionId, s.spans, { serviceName: s.serviceName, evaluator: s.evaluator })
           );
         },
-        async profile(session, _opts = {}) {
+        async profile(session) {
           let spans = session.spans;
           if (!spans) {
             if (!runOpts.fetchSpans) {
