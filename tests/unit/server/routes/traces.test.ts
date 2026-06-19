@@ -24,12 +24,29 @@ jest.mock('@/server/services/tracesService', () => {
   };
 });
 
-// Mock the observability client
+// Mock the observability client factory; the route resolves an IObservabilityModule.
 jest.mock('@/server/services/observabilityClient', () => ({
   getObservabilityClient: jest.fn(),
+  getObservabilityModule: jest.fn(),
 }));
-import { getObservabilityClient } from '@/server/services/observabilityClient';
-const mockGetObservabilityClient = getObservabilityClient as jest.MockedFunction<typeof getObservabilityClient>;
+import { getObservabilityModule } from '@/server/services/observabilityClient';
+import { OpenSearchObservabilityModule } from '@/server/adapters/observability/OpenSearchObservabilityModule';
+const mockGetObservabilityModule = getObservabilityModule as jest.MockedFunction<typeof getObservabilityModule>;
+
+// Fake file-backed module (empty store) for "no cluster configured" (file-mode) cases.
+function fileModuleEmpty(): any {
+  return {
+    traces: {
+      query: jest.fn().mockResolvedValue({ spans: [], total: 0, nextCursor: null, hasMore: false }),
+      getByTraceId: jest.fn().mockResolvedValue([]),
+      getByRunIds: jest.fn().mockResolvedValue([]),
+    },
+    logs: { query: jest.fn().mockResolvedValue({ logs: [], total: 0 }) },
+    metrics: {},
+    health: jest.fn().mockResolvedValue({ status: 'ok' }),
+    isConfigured: () => true,
+  };
+}
 
 // Mock the data source config middleware
 jest.mock('@/server/middleware/dataSourceConfig', () => ({
@@ -95,10 +112,9 @@ describe('Traces Routes', () => {
       OPENSEARCH_LOGS_PASSWORD: 'admin',
       OPENSEARCH_LOGS_TRACES_INDEX: 'otel-traces-*',
     };
-    mockGetObservabilityClient.mockReturnValue({
-      client: mockClient as any,
-      indexes: { traces: 'otel-traces-*', logs: 'logs-*', metrics: 'metrics-*' },
-    });
+    mockGetObservabilityModule.mockReturnValue(
+      new OpenSearchObservabilityModule(mockClient as any, { traces: 'otel-traces-*', logs: 'logs-*', metrics: 'metrics-*' })
+    );
     mockResolveObservabilityConfig.mockReturnValue({
       endpoint: 'http://localhost:9200',
       authType: 'basic',
@@ -142,7 +158,7 @@ describe('Traces Routes', () => {
         expect.any(Object),
         expect.any(String)
       );
-      expect(res.json).toHaveBeenCalledWith({ spans: [], total: 0, nextCursor: null, hasMore: false, warning: undefined });
+      expect(res.json).toHaveBeenCalledWith({ spans: [], total: 0, nextCursor: null, hasMore: false, backend: 'opensearch', warning: undefined });
     });
 
     it('should accept runIds filter', async () => {
@@ -203,6 +219,7 @@ describe('Traces Routes', () => {
         total: 1,
         nextCursor: null,
         hasMore: false,
+        backend: 'opensearch',
         warning: undefined,
       });
     });
@@ -224,6 +241,7 @@ describe('Traces Routes', () => {
         total: 2,
         nextCursor: null,
         hasMore: false,
+        backend: 'opensearch',
         warning: undefined,
       });
     });
@@ -243,8 +261,9 @@ describe('Traces Routes', () => {
       );
     });
 
-    it('should return only sample data with warning when logs not configured', async () => {
-      mockGetObservabilityClient.mockReturnValue(null);
+    it('serves runId sample data in file mode (no cluster configured)', async () => {
+      mockResolveObservabilityConfig.mockReturnValue(null as any);
+      mockGetObservabilityModule.mockReturnValue(fileModuleEmpty());
       const sampleSpans = [{ traceId: 'sample', spanId: 'ss1', name: 'sample' }];
       mockGetSampleSpansForRunIds.mockReturnValue(sampleSpans as any);
 
@@ -253,15 +272,17 @@ describe('Traces Routes', () => {
 
       await handler(req, res);
 
+      // File backend is the source — never the OpenSearch fetchTraces path.
       expect(mockFetchTraces).not.toHaveBeenCalled();
       expect(res.json).toHaveBeenCalledWith({
         spans: sampleSpans,
         total: 1,
         nextCursor: null,
         hasMore: false,
-        warning: 'Observability data source not configured',
-        warningCategory: 'not_configured',
-        suggestion: 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.',
+        backend: 'file',
+        warning: undefined,
+        warningCategory: undefined,
+        suggestion: undefined,
       });
     });
 
@@ -280,6 +301,7 @@ describe('Traces Routes', () => {
         total: 1,
         nextCursor: null,
         hasMore: false,
+        backend: 'opensearch',
         warning: 'Connection failed',
         warningCategory: 'unknown',
         suggestion: 'Check the server logs for more details.',
@@ -312,6 +334,7 @@ describe('Traces Routes', () => {
         total: 1,
         nextCursor: null,
         hasMore: false,
+        backend: 'opensearch',
         warning: undefined,
         warningCategory: undefined,
         suggestion: undefined,
@@ -331,14 +354,16 @@ describe('Traces Routes', () => {
         total: 0,
         nextCursor: null,
         hasMore: false,
+        backend: 'opensearch',
         warning: 'index_not_found_exception',
         warningCategory: 'unknown',
         suggestion: 'Check the server logs for more details.',
       });
     });
 
-    it('should return demo spans with warning when observability config is missing for time-range query', async () => {
-      mockGetObservabilityClient.mockReturnValue(null);
+    it('falls back to demo spans on an empty file-backend browse (no cluster)', async () => {
+      mockResolveObservabilityConfig.mockReturnValue(null as any);
+      mockGetObservabilityModule.mockReturnValue(fileModuleEmpty());
       const demoSpans = [
         { traceId: 'demo-trace-001', spanId: 'ds1', name: 'demo-span', startTime: '2024-01-01', endTime: '2024-01-01', duration: 100, status: 'OK' as const, attributes: { 'service.name': 'demo' } },
         { traceId: 'demo-trace-002', spanId: 'ds2', name: 'demo-span-2', startTime: '2024-01-01', endTime: '2024-01-01', duration: 200, status: 'OK' as const, attributes: { 'service.name': 'other-service' } },
@@ -360,14 +385,16 @@ describe('Traces Routes', () => {
         total: 2,
         nextCursor: null,
         hasMore: false,
-        warning: 'Observability data source not configured',
-        warningCategory: 'not_configured',
-        suggestion: 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.',
+        backend: 'file',
+        warning: undefined,
+        warningCategory: undefined,
+        suggestion: undefined,
       });
     });
 
-    it('should filter demo spans by serviceName when no config', async () => {
-      mockGetObservabilityClient.mockReturnValue(null);
+    it('filters demo spans by serviceName in file mode (no cluster)', async () => {
+      mockResolveObservabilityConfig.mockReturnValue(null as any);
+      mockGetObservabilityModule.mockReturnValue(fileModuleEmpty());
       const demoSpans = [
         { traceId: 'demo-trace-001', spanId: 'ds1', name: 'span-a', startTime: '2024-01-01', endTime: '2024-01-01', duration: 100, status: 'OK' as const, attributes: { 'service.name': 'demo' } },
         { traceId: 'demo-trace-002', spanId: 'ds2', name: 'span-b', startTime: '2024-01-01', endTime: '2024-01-01', duration: 200, status: 'OK' as const, attributes: { 'service.name': 'other-service' } },
@@ -388,14 +415,16 @@ describe('Traces Routes', () => {
         total: 1,
         nextCursor: null,
         hasMore: false,
-        warning: 'Observability data source not configured',
-        warningCategory: 'not_configured',
-        suggestion: 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.',
+        backend: 'file',
+        warning: undefined,
+        warningCategory: undefined,
+        suggestion: undefined,
       });
     });
 
-    it('should filter demo spans by textSearch when no config', async () => {
-      mockGetObservabilityClient.mockReturnValue(null);
+    it('filters demo spans by textSearch in file mode (no cluster)', async () => {
+      mockResolveObservabilityConfig.mockReturnValue(null as any);
+      mockGetObservabilityModule.mockReturnValue(fileModuleEmpty());
       const demoSpans = [
         { traceId: 'demo-trace-001', spanId: 'ds1', name: 'invoke_agent Weather Agent', startTime: '2024-01-01', endTime: '2024-01-01', duration: 100, status: 'OK' as const, attributes: { 'service.name': 'demo' } },
         { traceId: 'demo-trace-002', spanId: 'ds2', name: 'chat claude-sonnet-4', startTime: '2024-01-01', endTime: '2024-01-01', duration: 200, status: 'OK' as const, attributes: { 'service.name': 'demo' } },
@@ -416,9 +445,10 @@ describe('Traces Routes', () => {
         total: 1,
         nextCursor: null,
         hasMore: false,
-        warning: 'Observability data source not configured',
-        warningCategory: 'not_configured',
-        suggestion: 'Configure OPENSEARCH_LOGS_ENDPOINT or observabilityStorage in agent-health.config.ts to connect to your traces cluster.',
+        backend: 'file',
+        warning: undefined,
+        warningCategory: undefined,
+        suggestion: undefined,
       });
     });
 
@@ -441,6 +471,7 @@ describe('Traces Routes', () => {
         total: 0,
         nextCursor: null,
         hasMore: false,
+        backend: 'opensearch',
         warning: undefined,
       });
     });
@@ -464,9 +495,9 @@ describe('Traces Routes', () => {
   });
 
   describe('GET /api/traces/health', () => {
-    it('should return sample_only when logs not configured', async () => {
+    it('reports the file backend when no cluster is configured', async () => {
       mockResolveObservabilityConfig.mockReturnValue(null as any);
-      mockGetObservabilityClient.mockReturnValue(null);
+      mockGetObservabilityModule.mockReturnValue(fileModuleEmpty());
       mockGetAllSampleTraceSpans.mockReturnValue([{ id: '1' }, { id: '2' }] as any);
 
       const { req, res } = createMocks();
@@ -474,11 +505,12 @@ describe('Traces Routes', () => {
 
       await handler(req, res);
 
-      expect(res.json).toHaveBeenCalledWith({
-        status: 'sample_only',
-        message: expect.stringContaining('not configured'),
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'ok',
+        backend: 'file',
+        message: expect.stringContaining('local filesystem'),
         sampleTraceCount: 2,
-      });
+      }));
     });
 
     it('should call checkTracesHealth when configured', async () => {
@@ -497,7 +529,7 @@ describe('Traces Routes', () => {
         expect.any(Object),
         expect.any(String)
       );
-      expect(res.json).toHaveBeenCalledWith(healthResult);
+      expect(res.json).toHaveBeenCalledWith({ ...healthResult, backend: 'opensearch' });
     });
 
     it('should return error status on health check failure', async () => {

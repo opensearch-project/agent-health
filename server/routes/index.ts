@@ -14,6 +14,7 @@ import serverInfoRoutes from './serverInfo';
 import judgeRoutes from './judge';
 import agentRoutes from './agent';
 import tracesRoutes from './traces';
+import otlpReceiverRoutes from './otlpReceiver';
 import metricsRoutes from './metrics';
 import logsRoutes from './logs';
 import storageRoutes from './storage';
@@ -43,6 +44,7 @@ router.use(serverInfoRoutes);    // /api/server-info
 router.use(judgeRoutes);         // /api/judge
 router.use(agentRoutes);         // /api/agent
 router.use(tracesRoutes);        // /api/traces, /api/traces/health
+router.use(otlpReceiverRoutes);  // /v1/traces (embedded OTLP/JSON receiver, file mode)
 router.use(metricsRoutes);       // /api/metrics/*
 router.use(logsRoutes);          // /api/logs, /api/opensearch/logs
 router.use(storageRoutes);       // /api/storage/*

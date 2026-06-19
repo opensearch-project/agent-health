@@ -15,6 +15,9 @@ import { Request } from 'express';
 import { Client } from '@opensearch-project/opensearch';
 import { resolveObservabilityConfig, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceConfig.js';
 import { createOpenSearchClient, configToCacheKey } from './opensearchClientFactory.js';
+import { OpenSearchObservabilityModule } from '../adapters/observability/OpenSearchObservabilityModule.js';
+import { FileObservabilityModule } from '../adapters/observability/FileObservabilityModule.js';
+import type { IObservabilityModule } from '../adapters/types.js';
 import type { ClusterConfig } from '../../types/index.js';
 
 interface CachedClient {
@@ -80,4 +83,27 @@ export function getObservabilityClient(req: Request): ObservabilityClientResult 
       metrics: config.indexes?.metrics || DEFAULT_OTEL_INDEXES.metrics,
     },
   };
+}
+
+/**
+ * Resolve the active observability data-source adapter for this request.
+ *
+ * **Precedence invariant:** a configured OpenSearch observability cluster is
+ * always the source of truth — it's returned even when unreachable (queries
+ * then surface the real error rather than silently using another backend).
+ * When **no** cluster is configured, the file-backed module is the zero-config
+ * default, so local runs get a working Traces view out of the box.
+ */
+export function getObservabilityModule(req: Request): IObservabilityModule {
+  const config = resolveObservabilityConfig(req);
+  if (!config) {
+    return new FileObservabilityModule();
+  }
+
+  const client = getOrCreateClient(config);
+  return new OpenSearchObservabilityModule(client, {
+    traces: config.indexes?.traces || DEFAULT_OTEL_INDEXES.traces,
+    logs: config.indexes?.logs || DEFAULT_OTEL_INDEXES.logs,
+    metrics: config.indexes?.metrics || DEFAULT_OTEL_INDEXES.metrics,
+  });
 }

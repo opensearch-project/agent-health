@@ -75,11 +75,15 @@ export interface LogsQueryOptions {
 export interface TracesQueryOptions {
   traceId?: string;
   runIds?: string[];
+  sessionId?: string;
   startTime?: number;
   endTime?: number;
   size?: number;
   serviceName?: string;
   textSearch?: string;
+  cursor?: string;
+  /** Strategy C (opt-in): service.name + time-window correlation. See AGENTS.md. */
+  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number }>;
 }
 
 // ============================================================================
@@ -211,7 +215,7 @@ export interface ILogsOperations {
  * Traces query operations
  */
 export interface ITracesOperations {
-  query(options: TracesQueryOptions): Promise<{ spans: Span[]; total: number }>;
+  query(options: TracesQueryOptions): Promise<{ spans: Span[]; total: number; nextCursor?: string | null; hasMore?: boolean }>;
   getByTraceId(traceId: string): Promise<Span[]>;
   getByRunIds(runIds: string[]): Promise<Span[]>;
 }

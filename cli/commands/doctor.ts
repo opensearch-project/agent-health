@@ -268,13 +268,15 @@ async function checkTracesConnectivity(): Promise<CheckResult> {
     const response = await fetch(`http://localhost:${port}/api/traces/health`, {
       signal: AbortSignal.timeout(5000),
     });
-    const data = await response.json() as { status: string; error?: string; errorCategory?: string; suggestion?: string };
+    const data = await response.json() as { status: string; backend?: string; error?: string; errorCategory?: string; suggestion?: string };
 
     if (data.status === 'ok') {
       return {
         name: 'Traces Connectivity',
         status: 'ok',
-        message: 'OpenSearch traces index is accessible',
+        message: data.backend === 'file'
+          ? 'Local filesystem trace storage (agent-health-data/traces)'
+          : 'OpenSearch traces index is accessible',
       };
     }
 

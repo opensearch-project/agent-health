@@ -93,16 +93,47 @@ once to `.agent-health/state.json` on first startup (handled by
 an `agent-health.config.ts`, the migrated storage/observability are ignored
 (code-first) — a startup warning tells you to move them into the `.ts`.
 
+## Where things live: settings vs data vs your test files
+
+Three locations are easy to confuse — they hold different things and have
+different lifecycles:
+
+| Location | Plane | Holds | Lifecycle |
+|----------|-------|-------|-----------|
+| `.agent-health/` | **Settings** (control plane) | `state.json` — which storage/observability cluster, custom agents, debug flag (UI-first mode only; the renamed `agent-health.config.json`) | app-managed, gitignored, tiny |
+| `agent-health-data/` | **Data** (file storage backend) | `test-cases/`, `benchmarks/`, `runs/`, `analytics/`, `evaluators/` — the records Agent Health produces when no OpenSearch cluster is configured | app-managed, gitignored, grows with use |
+| `evals/` *(or wherever you keep them)* | **Your source code** | the `.eval.js` / `.eval.ts` test files **you author** with the code SDK | you own it, version-controlled |
+
+Rules of thumb:
+
+- **`.agent-health/`** answers *"how is Agent Health configured?"* — think
+  `.vscode/settings.json`. It is **ignored entirely** in code-first mode (when an
+  `agent-health.config.ts` is present).
+- **`agent-health-data/`** answers *"what has Agent Health stored?"* — think a
+  local `./data` database directory. Used only when the storage backend is
+  **file**; set `OPENSEARCH_STORAGE_*` (or `storage` in your config) to store in
+  a cluster instead.
+- **`evals/`** is **your test source** — `.eval.js` / `.eval.ts` files you write
+  with the [code SDK](./SDK.md) and run with
+  `agent-health benchmark -f ./evals/demo.eval.js`. They are **not** stored in
+  `agent-health-data/`; *running* them produces run records that land there (or
+  in OpenSearch).
+
+Both `.agent-health/` and `agent-health-data/` are **gitignored** — runtime
+state, not source. Your `evals/` and any committed `agent-health.config.ts` are
+the parts you version-control.
+
 ## File-Based Storage (Default)
 
-By default, Agent Health uses **file-based storage** that requires no external services. Data is stored as JSON files in a `.agent-health-data/` directory:
+By default, Agent Health uses **file-based storage** that requires no external services. Data is stored as JSON files in an `agent-health-data/` directory:
 
 ```
-.agent-health-data/
+agent-health-data/
 ├── test-cases/       # Test case definitions
 ├── benchmarks/       # Benchmark configurations
 ├── runs/             # Evaluation run results
-└── analytics/        # Analytics data
+├── analytics/        # Analytics data
+└── evaluators/       # Evaluator (judge) definitions
 ```
 
 This means you can start using Agent Health immediately without setting up OpenSearch. To switch to OpenSearch storage, configure the `OPENSEARCH_STORAGE_*` environment variables (see below).
