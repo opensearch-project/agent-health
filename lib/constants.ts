@@ -186,6 +186,11 @@ export const DEFAULT_CONFIG: AppConfig = {
       description: "Claude Code CLI agent (requires claude command installed)",
       connectorType: "claude-code",
       headers: {},
+      // OTel `service.name` for claude-code is OTEL_SERVICE_NAME (default
+      // 'claude-code-agent'), which differs from the agent key — so the Agent
+      // Traces filter must translate key 'claude-code' to this service name,
+      // otherwise filtering by Claude Code matches no spans.
+      traceServiceName: ENV_CONFIG.otelServiceName,
       useTraces: ENV_CONFIG.claudeCodeTelemetryEnabled && !!ENV_CONFIG.otelExporterEndpoint,
       connectorConfig: { env: getClaudeCodeConnectorEnv() },
     },

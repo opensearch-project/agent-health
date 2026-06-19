@@ -17,7 +17,6 @@ import { RunDetailsPage } from './components/RunDetailsPage';
 import { TestCasesPage } from './components/TestCasesPage';
 import { TestCaseRunsPage } from './components/TestCaseRunsPage';
 import { ComparisonPage } from './components/comparison/ComparisonPage';
-import { TracesPage } from './components/traces/TracesPage';
 import { AgentTracesPage } from './components/traces/AgentTracesPage';
 import { PerformanceOverlay } from './components/PerformanceOverlay';
 import { CodingAgentsPage } from './components/codingAgents/CodingAgentsPage';
@@ -125,9 +124,6 @@ function App() {
             {/* Comparison */}
             <Route path="/compare" element={<ComparisonPage />} />
             <Route path="/compare/:benchmarkId" element={<ComparisonPage />} />
-
-            {/* Live Traces */}
-            <Route path="/traces" element={<TracesPage />} />
 
             {/* Agent Traces - Table View */}
             <Route path="/agent-traces" element={<AgentTracesPage />} />

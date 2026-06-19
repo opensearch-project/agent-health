@@ -7,7 +7,7 @@
  * TraceVisualization - Shared component for trace visualization
  *
  * Provides unified view switching between Timeline and Flow views.
- * Used by both TracesPage and RunDetailsContent.
+ * Used by AgentTracesPage and RunDetailsContent.
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
