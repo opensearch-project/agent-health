@@ -237,20 +237,20 @@ export async function loadConfig(
   let userConfig: UserConfig = {};
 
   if (configFile) {
-    console.log(`[Config] Loading ${configFile.path}`);
+    console.warn(`[Config] Loading ${configFile.path}`);
     userConfig = await loadUserConfig(configFile.path);
   } else if (hasServerJsonConfig(cwd)) {
     // Code config absent, but server-side JSON config present — it's loaded
     // by separate server services (storage / observability / custom agents).
     // Be explicit so the user doesn't think *no* config is in effect.
-    console.log(
+    console.warn(
       `[Config] No code config (agent-health.config.{ts,js,mjs}); ` +
       `runtime state (.agent-health/state.json) detected and loaded by server ` +
       `services (ui-first mode). Using built-in defaults for agents/models.`,
     );
   } else {
     // Truly no config file — env vars and built-in defaults only.
-    console.log('[Config] No config file found, using defaults + environment variables');
+    console.warn('[Config] No config file found, using defaults + environment variables');
   }
 
   // Merge with defaults
@@ -260,7 +260,7 @@ export async function loadConfig(
   cachedConfig = resolved;
   cachedConfigPath = configFile?.path ?? null;
 
-  console.log(`[Config] Loaded ${resolved.agents.length} agents, ${Object.keys(resolved.models).length} models`);
+  console.warn(`[Config] Loaded ${resolved.agents.length} agents, ${Object.keys(resolved.models).length} models`);
 
   return resolved;
 }

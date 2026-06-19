@@ -284,7 +284,7 @@ describe('loadConfig', () => {
     const mockFs = require('fs');
     mockFs.existsSync.mockImplementation((p: string) => p.endsWith('state.json'));
 
-    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    const logSpy = jest.spyOn(console, 'warn').mockImplementation();
     const { loadConfig, clearConfigCache } = require('@/lib/config/loader');
     clearConfigCache();
     await loadConfig('/test', true);
@@ -299,7 +299,7 @@ describe('loadConfig', () => {
     const mockFs = require('fs');
     mockFs.existsSync.mockReturnValue(false);
 
-    const logSpy = jest.spyOn(console, 'log').mockImplementation();
+    const logSpy = jest.spyOn(console, 'warn').mockImplementation();
     const { loadConfig, clearConfigCache } = require('@/lib/config/loader');
     clearConfigCache();
     await loadConfig('/test', true);
