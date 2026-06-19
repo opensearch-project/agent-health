@@ -4,31 +4,27 @@
  */
 
 /**
- * End-to-end CLI integration test for the stdout/stderr contract of
- * `list <resource> --output json`.
+ * End-to-end CLI integration test for the stdout machine-readable contract of
+ * `list <resource>`.
  *
  * Why this test exists
  * ────────────────────
  * `--output json` must emit ONLY parseable JSON on stdout so that
  * `agent-health list connectors --output json | jq` /
- * `... | python -m json.tool` work. Diagnostics (`[Connectors] …`,
- * `[Config] …`) must go to stderr.
+ * `... | python -m json.tool` work. The informational startup lines
+ * (`[Connectors] …`, `[Config] …`) must NOT corrupt that output.
  *
- * The original fix (PR #315) routed the `[Connectors]` registration
- * logs to stderr but MISSED the `[Config]` loader logs, which still
- * printed to stdout and broke `JSON.parse(stdout)`. This test pins the
- * full contract so neither source regresses:
+ * The fix gates those diagnostics (see lib/diagnostics.ts): they print to
+ * stdout only for interactive use; they are suppressed when `--output json` /
+ * `--quiet` is requested or stdout is piped/redirected (non-TTY). spawnSync
+ * pipes stdout (non-TTY), which mirrors the `| jq` scenario.
  *
- *   1. `JSON.parse(stdout)` succeeds and yields an array.
- *   2. stdout contains NO `[Connectors]` / `[Config]` diagnostic lines.
- *   3. stderr DOES carry those startup diagnostics.
+ * The original fix (PR #315) first routed only the `[Connectors]` logs to
+ * stderr and MISSED the `[Config]` loader logs, which still broke
+ * `JSON.parse(stdout)`. This test pins BOTH sources across both code paths.
  *
- * `list connectors` is fully offline — it reads the in-process
- * connector registry, so no backend or credentials are required.
- *
- * Prerequisites
- * ─────────────
- *   • CLI bundle built (npm run build:cli). The test builds it if missing.
+ * `list connectors` is fully offline — it reads the in-process connector
+ * registry, so no backend or credentials are required.
  */
 
 import { spawnSync } from 'child_process';
@@ -50,36 +46,43 @@ function ensureCliBundle(): void {
   if (!existsSync(CLI_BUNDLE)) throw new Error(`CLI bundle still missing at ${CLI_BUNDLE} after build`);
 }
 
-describe('CLI --output json — stdout carries only JSON, diagnostics on stderr', () => {
+function runCli(args: string[]) {
+  return spawnSync(process.execPath, [CLI_BUNDLE, ...args], { cwd: REPO_ROOT, encoding: 'utf8' });
+}
+
+describe('CLI stdout machine-readable contract — diagnostics never corrupt stdout', () => {
   beforeAll(() => {
     ensureCliBundle();
   }, TEST_TIMEOUT);
 
   it(
-    'list connectors --output json: stdout is parseable JSON, [Connectors]/[Config] go to stderr',
+    'list connectors --output json: stdout is parseable JSON with no [Connectors]/[Config] noise',
     () => {
-      const result = spawnSync(
-        process.execPath,
-        [CLI_BUNDLE, 'list', 'connectors', '--output', 'json'],
-        { cwd: REPO_ROOT, encoding: 'utf8' },
-      );
-
+      const result = runCli(['list', 'connectors', '--output', 'json']);
       expect(result.status).toBe(0);
 
-      // 1. stdout must be valid JSON (the whole point of --output json).
+      // stdout must be valid JSON (the whole point of --output json).
       let parsed: unknown;
       expect(() => {
         parsed = JSON.parse(result.stdout);
       }).not.toThrow();
       expect(Array.isArray(parsed)).toBe(true);
 
-      // 2. stdout must NOT contain any diagnostic noise.
+      // No diagnostic noise on stdout.
       expect(result.stdout).not.toMatch(/\[Connectors\]/);
       expect(result.stdout).not.toMatch(/\[Config\]/);
+    },
+    TEST_TIMEOUT,
+  );
 
-      // 3. stderr carries the startup diagnostics.
-      expect(result.stderr).toMatch(/\[Connectors\]/);
-      expect(result.stderr).toMatch(/\[Config\]/);
+  it(
+    'list connectors (default table, piped/non-TTY): diagnostics are suppressed from stdout',
+    () => {
+      // spawnSync pipes stdout → non-TTY → same path as `| jq`.
+      const result = runCli(['list', 'connectors']);
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toMatch(/\[Connectors\]/);
+      expect(result.stdout).not.toMatch(/\[Config\]/);
     },
     TEST_TIMEOUT,
   );

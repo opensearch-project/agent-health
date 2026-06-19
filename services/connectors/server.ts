@@ -26,6 +26,7 @@ export { StrandsConnector, strandsConnector } from './strands/StrandsConnector';
 
 // Register server-only connectors
 import { connectorRegistry } from './registry';
+import { logStartupDiagnostic } from '@/lib/diagnostics';
 import { subprocessConnector } from './subprocess/SubprocessConnector';
 import { claudeCodeConnector } from './claude-code/ClaudeCodeConnector';
 import { kiroConnector } from './kiro/KiroConnector';
@@ -39,4 +40,4 @@ connectorRegistry.register(kiroConnector);
 connectorRegistry.register(piConnector);
 connectorRegistry.register(strandsConnector);
 
-console.warn('[Connectors] Server connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));
+logStartupDiagnostic('[Connectors] Server connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));

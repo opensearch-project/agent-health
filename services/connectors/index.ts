@@ -46,6 +46,7 @@ export { LangGraphConnector, langgraphConnector } from './langgraph/LangGraphCon
 
 // ============ Auto-register Browser-safe Connectors ============
 import { connectorRegistry } from './registry';
+import { logStartupDiagnostic } from '@/lib/diagnostics';
 import { aguiStreamingConnector } from './agui/AGUIStreamingConnector';
 import { mockConnector } from './mock/MockConnector';
 import { restConnector } from './rest/RESTConnector';
@@ -60,4 +61,4 @@ connectorRegistry.register(restConnector);
 connectorRegistry.register(openaiCompatibleConnector);
 connectorRegistry.register(langgraphConnector);
 
-console.warn('[Connectors] Browser-safe connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));
+logStartupDiagnostic('[Connectors] Browser-safe connectors registered:', connectorRegistry.getRegisteredTypes().join(', '));
