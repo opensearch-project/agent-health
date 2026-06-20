@@ -144,7 +144,7 @@
     "zod": "^3.24.0"
   },
   "optionalDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.78.1",
+    "@earendil-works/pi-coding-agent": "^0.79.8",
     "puppeteer": "^24.37.4"
   },
   "devDependencies": {
