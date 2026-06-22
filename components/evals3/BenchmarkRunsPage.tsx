@@ -40,8 +40,9 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/componen
 import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
 import { executeBenchmarkRun } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
-import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats } from '@/types';
+import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, Evaluator } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { ENV_CONFIG } from '@/lib/config';
 import { getLabelColor, formatDate, getModelName } from '@/lib/utils';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import {
@@ -99,6 +100,26 @@ export const BenchmarkRunsPage2: React.FC = () => {
   const [runConfigValues, setRunConfigValues] = useState<RunConfigForExecution>({
     name: '', description: '', agentKey: '', modelId: '',
   });
+
+  // Evaluators for the run config dialog. Loaded once on mount so the
+  // "Evaluator" dropdown can show human-readable names. Mirrors
+  // TestCaseDetailPage so both "Configure Run" entry points expose the
+  // same evaluator selection.
+  const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!cancelled) setEvaluators(data.evaluators || []);
+      } catch (error) {
+        console.error('Failed to load evaluators:', error);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // Running state
   const [isRunning, setIsRunning] = useState(false);
@@ -307,6 +328,14 @@ export const BenchmarkRunsPage2: React.FC = () => {
       name: `Run ${runNumber}`, description: '',
       agentKey: latestRun?.agentKey || defaultAgent,
       modelId: latestRun?.modelId || defaultModel,
+      // Carry over the customer-supplied judge model + evaluator from the
+      // latest run so iterative runs default to the same evaluation setup
+      // (matches TestCaseDetailPage's seeding). Both are optional — the
+      // server resolves judgeModelId via
+      // evaluator.inferenceConfig.modelId → BEDROCK_MODEL_ID when undefined,
+      // and undefined evaluatorId means "RCA Default".
+      judgeModelId: latestRun?.judgeModelId,
+      evaluatorId: latestRun?.evaluatorId,
       headers: latestRun?.headers,
     });
     setIsRunConfigOpen(true);
@@ -1002,8 +1031,11 @@ export const BenchmarkRunsPage2: React.FC = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Agent</Label>
-                  <Select value={runConfigValues.agentKey} onValueChange={val => setRunConfigValues(prev => ({ ...prev, agentKey: val }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                  <Select
+                    value={runConfigValues.agentKey}
+                    onValueChange={val => setRunConfigValues(prev => ({ ...prev, agentKey: val }))}
+                  >
+                    <SelectTrigger data-testid="run-config-agent-trigger"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {DEFAULT_CONFIG.agents.map(agent => (
                         <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
@@ -1012,10 +1044,58 @@ export const BenchmarkRunsPage2: React.FC = () => {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Judge Model</Label>
+                  {/* Agent Model — the LLM the AGENT uses (filtered to
+                      bedrock/openai-compatible/litellm so judge-only
+                      pseudo-models can't be picked accidentally). */}
+                  <Label>Agent Model</Label>
                   <JudgeModelSelect
                     value={runConfigValues.modelId}
                     onValueChange={val => setRunConfigValues(prev => ({ ...prev, modelId: val }))}
+                    filterToAgentLLMs={true}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  {/* Evaluator — picks the scoring config + (default)
+                      judge prompt and judge model. "RCA Default" maps to
+                      undefined; the server resolves the built-in default. */}
+                  <Label>Evaluator</Label>
+                  <Select
+                    value={runConfigValues.evaluatorId || '__default__'}
+                    onValueChange={val => setRunConfigValues(prev => ({
+                      ...prev,
+                      evaluatorId: val === '__default__' ? undefined : val,
+                    }))}
+                  >
+                    <SelectTrigger data-testid="run-config-evaluator-trigger">
+                      <SelectValue placeholder="RCA Default" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">RCA Default</SelectItem>
+                      {evaluators.map(evaluator => (
+                        <SelectItem key={evaluator.id} value={evaluator.id}>
+                          {evaluator.name} {evaluator.isSystem ? '(System)' : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  {/* Judge Model — customer-supplied LLM for the judge,
+                      distinct from the agent's model. "Use evaluator
+                      default" maps to undefined; the server resolves
+                      from evaluator.inferenceConfig.modelId then
+                      BEDROCK_MODEL_ID. Includes ALL providers since
+                      this dropdown controls the judge LLM only. */}
+                  <Label>Judge Model</Label>
+                  <JudgeModelSelect
+                    value={runConfigValues.judgeModelId ?? ''}
+                    onValueChange={val => setRunConfigValues(prev => ({
+                      ...prev,
+                      judgeModelId: val || undefined,
+                    }))}
+                    allowDefault={true}
                   />
                 </div>
               </div>

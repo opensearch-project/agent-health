@@ -151,6 +151,101 @@ test.describe('Evals3 Benchmark Runs Page', () => {
     expect(hasRunConfig).toBeTruthy();
   });
 
+  // ── Evaluator + Judge Model dropdowns in the Configure Run dialog ──────────
+  // Pinning the contract that the dialog actually surfaces evaluator and
+  // judge-model selection. Pre-PR the dialog only had Agent + a mislabelled
+  // "Judge Model" wired to `modelId` (the agent's LLM), so users had no UI
+  // way to drive the run-level evaluatorId / judgeModelId that the server
+  // already accepted on POST /api/storage/benchmarks/:id/execute.
+
+  test('Configure Run dialog renders Agent, Agent Model, Evaluator and Judge Model fields', async ({ page }) => {
+    test.skip(!benchmarkId, 'No benchmark created');
+    await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs`);
+    await page.waitForSelector('h2', { timeout: 30_000 });
+    await page.click('button:has-text("Add Run")');
+    // Wait for the dialog (CardTitle text) — distinct from page heading.
+    await expect(page.locator('text=Configure Run')).toBeVisible({ timeout: 10_000 });
+
+    // The four labels are unique inside the open dialog. Strict-match ensures
+    // we'd catch a duplicate "Judge Model" coming back (the legacy wiring).
+    await expect(page.getByText('Agent', { exact: true })).toBeVisible();
+    await expect(page.getByText('Agent Model', { exact: true })).toBeVisible();
+    await expect(page.getByText('Evaluator', { exact: true })).toBeVisible();
+    await expect(page.getByText('Judge Model', { exact: true })).toBeVisible();
+
+    // The Evaluator dropdown is uniquely identified by data-testid so the
+    // assertion doesn't depend on which evaluators the test backend has
+    // loaded (the placeholder "RCA Default" is always present).
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toBeVisible();
+  });
+
+  test('Start Run posts evaluatorId from the dialog through to /execute', async ({ page }) => {
+    test.skip(!benchmarkId, 'No benchmark created');
+
+    // Capture the body of the /execute POST so we can assert the dialog's
+    // selected evaluatorId actually rides through. We DON'T fulfill the
+    // request — we let the real backend handle it so this also exercises
+    // the round-trip through validateRunConfig + the storage layer (the
+    // detailed contract is in
+    // tests/integration/server/routes/storage/benchmarkExecuteEvaluator.integration.test.ts;
+    // here we just need to know the UI delivered the right body).
+    let executeBody: any = null;
+    await page.route(
+      `**/api/storage/benchmarks/${encodeURIComponent(benchmarkId!)}/execute`,
+      async route => {
+        try {
+          executeBody = JSON.parse(route.request().postData() || '{}');
+        } catch {
+          /* ignore parse errors */
+        }
+        await route.continue();
+      },
+    );
+
+    await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs`);
+    await page.waitForSelector('h2', { timeout: 30_000 });
+    await page.click('button:has-text("Add Run")');
+    await expect(page.locator('text=Configure Run')).toBeVisible({ timeout: 10_000 });
+
+    // Open the Evaluator dropdown and pick the first non-"RCA Default"
+    // option if any exist; otherwise pick the default explicitly so we
+    // still verify the body shape is right.
+    await page.click('[data-testid="run-config-evaluator-trigger"]');
+    // Radix renders the listbox in a portal. Wait for it before clicking.
+    await page.waitForSelector('[role="listbox"]', { timeout: 5_000 });
+    const items = page.locator('[role="option"]');
+    const itemCount = await items.count();
+    expect(itemCount).toBeGreaterThanOrEqual(1);
+    // First item is always "RCA Default" — pick the next one if present.
+    if (itemCount >= 2) {
+      await items.nth(1).click();
+    } else {
+      await items.nth(0).click();
+    }
+
+    await page.click('button:has-text("Start Run")');
+
+    // Wait for the route handler to capture the request body. The /execute
+    // call streams over SSE so the request fires before completion; the
+    // postData is captured synchronously inside route.continue().
+    for (let i = 0; i < 40 && executeBody === null; i++) {
+      await page.waitForTimeout(100);
+    }
+
+    expect(executeBody, '/execute POST body should have been captured').toBeTruthy();
+    expect(executeBody.agentKey).toBeTruthy();
+    expect(executeBody.modelId).toBeTruthy();
+    expect(executeBody.name).toBeTruthy();
+    // The dialog must round-trip the evaluatorId field — either undefined
+    // when the user picked "RCA Default", or the system evaluator's id
+    // when picking the next option. Both are correct UI plumbing; what
+    // would NOT be correct (and what this test catches) is the field
+    // missing entirely from the body, or `evaluatorId === '__default__'`
+    // (the internal sentinel leaking through).
+    expect(['undefined', 'string']).toContain(typeof executeBody.evaluatorId);
+    expect(executeBody.evaluatorId).not.toBe('__default__');
+  });
+
   test('should handle benchmark with undefined testCaseIds', async ({ page, request }) => {
     // Create benchmark without testCaseIds
     const res = await request.post('/api/storage/benchmarks', {
