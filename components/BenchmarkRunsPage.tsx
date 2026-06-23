@@ -1047,7 +1047,7 @@ export const BenchmarkRunsPage: React.FC = () => {
       {/* Run Configuration Dialog */}
       {isRunConfigOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-md">
+          <Card className="w-full max-w-md" data-testid="run-config-dialog">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-lg">Configure Run</CardTitle>
               <Button

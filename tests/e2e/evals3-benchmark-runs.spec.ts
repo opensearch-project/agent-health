@@ -166,17 +166,25 @@ test.describe('Evals3 Benchmark Runs Page', () => {
     // Wait for the dialog (CardTitle text) — distinct from page heading.
     await expect(page.locator('text=Configure Run')).toBeVisible({ timeout: 10_000 });
 
+    // Scope every label assertion to the dialog container. The page behind
+    // the modal can also contain "Agent"/"Judge Model" text (run cards,
+    // column headers), so an unscoped getByText could pass even if the
+    // dialog regressed. The dialog is tagged data-testid="run-config-dialog"
+    // in both BenchmarkRunsPage variants for exactly this reason.
+    const dialog = page.getByTestId('run-config-dialog');
+    await expect(dialog).toBeVisible();
+
     // The four labels are unique inside the open dialog. Strict-match ensures
     // we'd catch a duplicate "Judge Model" coming back (the legacy wiring).
-    await expect(page.getByText('Agent', { exact: true })).toBeVisible();
-    await expect(page.getByText('Agent Model', { exact: true })).toBeVisible();
-    await expect(page.getByText('Evaluator', { exact: true })).toBeVisible();
-    await expect(page.getByText('Judge Model', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Agent', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Agent Model', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Evaluator', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Judge Model', { exact: true })).toBeVisible();
 
     // The Evaluator dropdown is uniquely identified by data-testid so the
     // assertion doesn't depend on which evaluators the test backend has
     // loaded (the placeholder "RCA Default" is always present).
-    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toBeVisible();
+    await expect(dialog.locator('[data-testid="run-config-evaluator-trigger"]')).toBeVisible();
   });
 
   test('Start Run posts evaluatorId from the dialog through to /execute', async ({ page }) => {
@@ -236,12 +244,15 @@ test.describe('Evals3 Benchmark Runs Page', () => {
     expect(executeBody.agentKey).toBeTruthy();
     expect(executeBody.modelId).toBeTruthy();
     expect(executeBody.name).toBeTruthy();
-    // The dialog must round-trip the evaluatorId field — either undefined
-    // when the user picked "RCA Default", or the system evaluator's id
-    // when picking the next option. Both are correct UI plumbing; what
-    // would NOT be correct (and what this test catches) is the field
-    // missing entirely from the body, or `evaluatorId === '__default__'`
-    // (the internal sentinel leaking through).
+    // What this assertion actually proves: the dialog never leaks the
+    // internal '__default__' sentinel into the request body. After
+    // JSON.parse(), an omitted field and an explicit `undefined` are
+    // indistinguishable (both read back as `undefined`), so we deliberately
+    // do NOT claim to catch "field omitted" here — only that whatever is
+    // sent is a real evaluator id (string) or absent (undefined), and never
+    // the client-only sentinel. The persisted-field contract (evaluatorId
+    // actually round-trips onto the BenchmarkRun) is pinned server-side in
+    // tests/integration/server/routes/storage/benchmarkExecuteEvaluator.integration.test.ts.
     expect(['undefined', 'string']).toContain(typeof executeBody.evaluatorId);
     expect(executeBody.evaluatorId).not.toBe('__default__');
   });

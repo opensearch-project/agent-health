@@ -25,7 +25,15 @@
  *     RENDERS the Evaluator + Judge Model dropdowns and submits them.
  *
  * Uses the built-in `demo` agent + `demo-model` so no real agent endpoint or
- * AWS Bedrock creds are required. Only OpenSearch (or file storage) is needed.
+ * AWS Bedrock creds are required. A reachable OpenSearch cluster IS required,
+ * though: POST /api/storage/benchmarks/:id/execute uses requireStorageClient()
+ * and reads/writes the benchmark via the OpenSearch client, so file storage
+ * alone cannot satisfy this route (it returns 400 "OpenSearch not configured").
+ * The suite therefore self-skips when the backend is in file-storage mode
+ * (see checkBackend below) instead of failing. Run it locally against an
+ * OpenSearch-backed server (`OPENSEARCH_STORAGE_ENDPOINT=...`); in CI it only
+ * runs once the integration job is given an OpenSearch backend (tracked
+ * separately as CI-honesty work).
  *
  * Run:
  *   npm run test:integration -- --testPathPattern=benchmarkExecuteEvaluator.integration
@@ -41,6 +49,15 @@ const checkBackend = async (): Promise<boolean> => {
     const r = await fetch(`${BASE_URL}/api/storage/health`);
     if (!r.ok) return false;
     const data = await r.json();
+    // /execute hard-requires an OpenSearch client (isStorageAvailable →
+    // requireStorageClient). A healthy server in FILE-storage mode reports
+    // `{ status: 'ok', backend: 'file' }` but /execute still returns 400
+    // there — so gating only on `status === 'ok'` would make these tests RUN
+    // and FAIL in a file-storage-only environment (e.g. a CI server started
+    // without OPENSEARCH_STORAGE_* env). Gate on a real OpenSearch backend
+    // instead: skip cleanly when file storage is active, run for real when
+    // OpenSearch is present.
+    if (data.backend === 'file') return false;
     return data.status === 'connected' || data.status === 'ok';
   } catch {
     return false;
@@ -118,6 +135,29 @@ describe('Benchmark execute — evaluatorId / judgeModelId round-trip', () => {
   });
 
   afterAll(async () => {
+    // The /execute path creates a per-test-case report document per run
+    // (run.results[*].reportId) in the runs index. Delete those first so
+    // integration runs stay hermetic — otherwise they accumulate (in
+    // file-storage mode as stray .agent-health/data/runs/*.json, in
+    // OpenSearch mode as orphaned run docs). Collect the ids from each
+    // benchmark's runs before the benchmark doc itself is removed.
+    for (const benchmarkId of createdBenchmarkIds) {
+      try {
+        const bm = await (await fetch(
+          `${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(benchmarkId)}`,
+        )).json();
+        for (const run of (bm.runs || []) as any[]) {
+          for (const result of Object.values(run.results || {}) as any[]) {
+            if (result?.reportId) {
+              await fetch(
+                `${BASE_URL}/api/storage/runs/${encodeURIComponent(result.reportId)}`,
+                { method: 'DELETE' },
+              ).catch(() => { /* ignore */ });
+            }
+          }
+        }
+      } catch { /* ignore — best-effort cleanup */ }
+    }
     for (const id of createdBenchmarkIds) {
       await fetch(
         `${BASE_URL}/api/storage/benchmarks/${encodeURIComponent(id)}`,
