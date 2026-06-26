@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+- **`claude-opus-4.8` judge model registration was using a non-existent Bedrock inference profile id** ([lib/constants.ts](lib/constants.ts)): the default models catalog mapped `claude-opus-4.8` → `us.anthropic.claude-opus-4-8-v1`, but the real Bedrock inference profile is `us.anthropic.claude-opus-4-8` (verified via `aws bedrock list-inference-profiles --region us-west-2` — the `-v1` suffix does not exist for 4.7+; 4.6 keeps it). Picking Opus 4.8 as the Judge Model produced `Judge HTTP 500: "The provided model identifier is invalid"` on every evaluation, with the run's `metrics` left at zero and `llmJudgeReasoning` set to "Evaluator could not run." Agent-side execution was unaffected because subprocess agents (Claude Code, pi) resolve their model through their own CLI catalog — only the agent-health server’s judge call goes through this map.
+
 ### Changed
 - **Removed the user-facing "agent model" concept entirely.** An agent's LLM is owned by the agent's own `agent-health.config.ts` connectorConfig (`connectorConfig.model`, `connectorConfig.env.ANTHROPIC_MODEL`, or a `--model` flag in `connectorConfig.args`) — there is no longer a run-level / UI / CLI way to pick a model separately from the agent (it was a leaky abstraction: subprocess agents like Claude Code / pi ignored it). New shared resolver [`lib/resolveAgentModel.ts`](lib/resolveAgentModel.ts); the runner ([services/evaluationRunner.ts](services/evaluationRunner.ts)) now resolves the agent's model from its config (falling back to the legacy `run.modelId` only for old runs).
   - Removed the **Agent Model** selector from all run-start dialogs: [NewRunPage](components/evals3/NewRunPage.tsx), [evals3 BenchmarkRunsPage](components/evals3/BenchmarkRunsPage.tsx), [legacy BenchmarkRunsPage](components/BenchmarkRunsPage.tsx), [TestCaseDetailPage](components/evals3/TestCaseDetailPage.tsx).

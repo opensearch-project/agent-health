@@ -144,7 +144,7 @@ describe('lib/constants', () => {
       it('should have claude-opus-4.8 model', () => {
         const model = DEFAULT_CONFIG.models['claude-opus-4.8'];
         expect(model).toBeDefined();
-        expect(model.model_id).toBe('us.anthropic.claude-opus-4-8-v1');
+        expect(model.model_id).toBe('us.anthropic.claude-opus-4-8');
         expect(model.display_name).toBe('Claude Opus 4.8');
         expect(model.max_output_tokens).toBe(128000);
       });

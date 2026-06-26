@@ -241,7 +241,12 @@ export const DEFAULT_CONFIG: AppConfig = {
       max_output_tokens: 4096
     },
     "claude-opus-4.8": {
-      model_id: "us.anthropic.claude-opus-4-8-v1",
+      // Real Bedrock inference profile id is `us.anthropic.claude-opus-4-8`. The
+      // `-v1` suffix does not exist for 4.7+ (verified via
+      // `aws bedrock list-inference-profiles --region us-west-2`); Bedrock
+      // returns `ValidationException: The provided model identifier is invalid`
+      // for `us.anthropic.claude-opus-4-8-v1`. 4.6 keeps the `-v1` suffix.
+      model_id: "us.anthropic.claude-opus-4-8",
       display_name: "Claude Opus 4.8",
       provider: "bedrock",
       context_window: 200000,
