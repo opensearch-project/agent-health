@@ -14,7 +14,6 @@ import {
 } from '../../../services/evaluationRunner.js';
 import { promoteRunToBenchmark } from '../../../services/benchmarkPromotion.js';
 import { loadConfigSync } from '../../../lib/config/index.js';
-import { DEFAULT_CONFIG } from '../../../lib/constants.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
 
@@ -142,10 +141,10 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     // (legacy) then empty. The runner re-resolves the same way at execution.
     let resolvedModelId: string = modelId || '';
     try {
-      const cfg = (() => { try { return loadConfigSync(); } catch { return DEFAULT_CONFIG; } })();
+      const cfg = loadConfigSync();
       const allAgents = [...cfg.agents, ...getCustomAgents()];
       resolvedModelId = resolveAgentModel(allAgents.find(a => a.key === agentKey), modelId);
-    } catch { /* keep fallback */ }
+    } catch { /* loadConfigSync or anything else — keep fallback */ }
 
     const run: any = {
       id: runId,

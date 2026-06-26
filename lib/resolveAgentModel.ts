@@ -23,7 +23,7 @@ import type { AgentConfig } from '@/types';
  * user-selected `modelId`). New code should not rely on it.
  */
 export function resolveAgentModel(
-  agent: Pick<AgentConfig, 'connectorConfig'> | undefined | null,
+  agent: AgentConfig | undefined | null,
   fallback?: string,
 ): string {
   const cc = (agent?.connectorConfig || {}) as Record<string, any>;
