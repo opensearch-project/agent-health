@@ -177,7 +177,9 @@ test.describe('Evals3 Benchmark Runs Page', () => {
     // The four labels are unique inside the open dialog. Strict-match ensures
     // we'd catch a duplicate "Judge Model" coming back (the legacy wiring).
     await expect(dialog.getByText('Agent', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('Agent Model', { exact: true })).toBeVisible();
+    // The agent-model concept was removed — the agent owns its model via
+    // agent-health.config.ts, so there is NO 'Agent Model' picker anymore.
+    await expect(dialog.getByText('Agent Model', { exact: true })).toHaveCount(0);
     await expect(dialog.getByText('Evaluator', { exact: true })).toBeVisible();
     await expect(dialog.getByText('Judge Model', { exact: true })).toBeVisible();
 

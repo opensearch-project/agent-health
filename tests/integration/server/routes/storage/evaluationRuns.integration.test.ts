@@ -231,15 +231,22 @@ describe('Evaluation Runs API Integration', () => {
       const err2 = await res2.json();
       expect(err2.error).toContain('agentKey');
 
-      // Missing modelId
+      // modelId is NO LONGER required — the agent's model comes from its own
+      // agent-health.config.ts connectorConfig, resolved server-side by the
+      // runner. A run with no modelId must NOT be rejected with a 400
+      // 'modelId is required'; it proceeds past validation (SSE opens).
       const res3 = await fetch(`${BASE_URL}/api/storage/evaluation-runs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sources: [{ type: 'test-case-ids', ids: ['x'] }], agentKey: 'demo' }),
       });
-      expect(res3.status).toBe(400);
-      const err3 = await res3.json();
-      expect(err3.error).toContain('modelId');
+      expect(res3.status).not.toBe(400);
+      if (res3.status === 400) {
+        const err3 = await res3.json();
+        expect(err3.error).not.toContain('modelId');
+      }
+      // Drain the SSE body so the connection doesn't dangle.
+      try { await res3.body?.cancel(); } catch { /* ignore */ }
     });
 
     it('should start an SSE stream and emit started event', async () => {

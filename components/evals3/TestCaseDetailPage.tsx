@@ -792,32 +792,19 @@ export const TestCaseDetailPage: React.FC = () => {
                   rows={2}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Agent</Label>
-                  <Select value={runConfig.agentKey} onValueChange={val => setRunConfig(prev => ({ ...prev, agentKey: val }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {DEFAULT_CONFIG.agents.map(agent => (
-                        <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  {/* Agent Model — the LLM the AGENT uses. Filtered to
-                      providers the agent connector can actually invoke
-                      (bedrock / openai-compatible / litellm). Hides
-                      judge-only pseudo-models (pi-judge, agent-trace-judge,
-                      claude-code-judge, agentic-*) so they can't be
-                      accidentally picked as the agent's model. */}
-                  <Label>Agent Model</Label>
-                  <JudgeModelSelect
-                    value={runConfig.modelId}
-                    onValueChange={val => setRunConfig(prev => ({ ...prev, modelId: val }))}
-                    filterToAgentLLMs={true}
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label>Agent</Label>
+                {/* The agent's LLM is owned by the agent's own config
+                    (agent-health.config.ts) — there is no agent-model picker;
+                    the agent controls which model it runs on. */}
+                <Select value={runConfig.agentKey} onValueChange={val => setRunConfig(prev => ({ ...prev, agentKey: val }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {DEFAULT_CONFIG.agents.map(agent => (
+                      <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">

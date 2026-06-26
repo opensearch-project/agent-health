@@ -90,9 +90,9 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     if (!agentKey) {
       return res.status(400).json({ error: 'agentKey is required' });
     }
-    if (!modelId) {
-      return res.status(400).json({ error: 'modelId is required' });
-    }
+    // NOTE: no `modelId` validation — the agent's LLM is owned by the agent's
+    // own config (connectorConfig), resolved server-side by the runner. Any
+    // client-supplied modelId is only kept as a legacy backward-compat fallback.
 
     // Set SSE headers
     res.setHeader('Content-Type', 'text/event-stream');

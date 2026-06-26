@@ -17,6 +17,7 @@ import {
 } from '@/types';
 import type { IStorageModule } from '@/server/adapters/types';
 import { runEvaluationWithConnector, callBedrockJudge, invokeAgent, computeSdkMatcherSessionMetrics } from '@/services/evaluation';
+import { resolveAgentModel } from '@/lib/resolveAgentModel';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
@@ -163,9 +164,12 @@ export async function executeEvaluationRun(
     },
   };
 
-  // Resolve model ID
-  const modelConfig = config.models[run.modelId];
-  const bedrockModelId = modelConfig?.model_id || run.modelId;
+  // Resolve the agent's LLM from the AGENT's own config (connectorConfig),
+  // never a user-selected run.modelId. `run.modelId` is only a backward-compat
+  // fallback for runs created before the agent-model concept was removed.
+  const effectiveModelId = resolveAgentModel(baseAgent, run.modelId);
+  const modelConfig = config.models[effectiveModelId];
+  const bedrockModelId = modelConfig?.model_id || effectiveModelId;
 
   // Build the hook orchestrator once per run. The factory hands the
   // orchestrator a fresh `TestFixtures` skeleton on demand; it stamps
@@ -261,8 +265,8 @@ export async function executeEvaluationRun(
             agentName: agentConfig.name,
             agentId: agentConfig.key,
             agentEndpoint: agentConfig.endpoint,
-            modelId: run.modelId,
-            modelName: modelConfig?.display_name || run.modelId,
+            modelId: effectiveModelId,
+            modelName: modelConfig?.display_name || effectiveModelId,
             // Inherit run-level judgeModelId onto the per-test-case run.
             // Same pattern as `evaluatorId` below — the run-detail UI
             // and the audit trail need to know which judge model graded

@@ -892,7 +892,7 @@ describe('Experiments Storage Routes', () => {
       );
     });
 
-    it('should validate run configuration - missing modelId', async () => {
+    it('should NOT require modelId — the agent owns its model', async () => {
       const { req, res } = createMocks(
         { id: 'exp-123' },
         { name: 'Run', agentKey: 'agent' }
@@ -901,12 +901,15 @@ describe('Experiments Storage Routes', () => {
 
       await handler(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('modelId is required'),
-        })
-      );
+      // modelId is no longer required: the agent's LLM comes from its own
+      // agent-health.config.ts connectorConfig. validateRunConfig must not
+      // reject a missing modelId (the handler may 400 for other reasons,
+      // never 'modelId is required').
+      for (const [arg] of (res.json as jest.Mock).mock.calls) {
+        if (arg && typeof (arg as any).error === 'string') {
+          expect((arg as any).error).not.toContain('modelId is required');
+        }
+      }
     });
 
     it('should validate run configuration - concurrency below 1', async () => {
@@ -1443,7 +1446,7 @@ describe('Experiments Storage Routes - Validation', () => {
     });
   });
 
-  it('should reject execute with missing modelId', async () => {
+  it('should NOT reject execute with missing modelId (agent owns its model)', async () => {
     const { req, res } = createMocks(
       { id: 'exp-123' },
       { name: 'Run', agentKey: 'agent' }
@@ -1452,10 +1455,12 @@ describe('Experiments Storage Routes - Validation', () => {
 
     await handler(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      error: 'modelId is required and must be a string',
-    });
+    // modelId is optional now — must never be rejected as required.
+    for (const [arg] of (res.json as jest.Mock).mock.calls) {
+      if (arg && typeof (arg as any).error === 'string') {
+        expect((arg as any).error).not.toContain('modelId is required');
+      }
+    }
   });
 });
 

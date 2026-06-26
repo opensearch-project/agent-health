@@ -417,11 +417,10 @@ export class ClaudeCodeConnector extends SubprocessConnector {
       this.debug('Bedrock mode: cleared ANTHROPIC_API_KEY to bypass credit check');
     }
 
-    // Pass --model flag so Claude Code uses the requested model
-    if (request.modelId) {
-      this.config.args = [...this.config.args || [], '--model', request.modelId];
-      this.debug('Model flag added:', request.modelId);
-    }
+    // The agent's model is owned by its agent-health.config.ts connector
+    // config (env.ANTHROPIC_MODEL, or a `--model` flag in connectorConfig.args)
+    // — there is no run-level / user-selected agent model. We intentionally do
+    // NOT inject a model from the run here.
 
     // Append config-driven args
     if (ccConfig) {

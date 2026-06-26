@@ -17,6 +17,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import Table from 'cli-table3';
 import { loadConfig, type ResolvedConfig } from '@/lib/config/index.js';
+import { resolveAgentModel } from '@/lib/resolveAgentModel.js';
 import { ensureServer, createServerCleanup } from '@/cli/utils/serverLifecycle.js';
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, type EvaluationResult, type EvaluationProgressEvent } from '@/cli/utils/apiClient.js';
@@ -210,7 +211,6 @@ export function createRunCommand(): Command {
     .description('Run a test case against agents')
     .requiredOption('-t, --test-case <id>', 'Test case ID or name')
     .option('-a, --agent <key>', 'Agent key (can be specified multiple times)', (val, arr: string[]) => [...arr, val], [])
-    .option('-m, --model <id>', "Agent's LLM model id (uses agent default if not specified)")
     .option('-e, --evaluator <id>', 'Evaluator ID (uses RCA default if not specified)')
     .option('--judge-model <id>', "Judge LLM model id, distinct from --model. Falls back to evaluator's inferenceConfig.modelId, then BEDROCK_MODEL_ID env. Ignored by agentic-provider judges (pi/agent/agentic/claude-code) which pick their own model.")
     .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
@@ -274,7 +274,10 @@ export function createRunCommand(): Command {
         const results: Array<{ agent: AgentConfig; report: EvaluationResult | null }> = [];
 
         for (const agent of agents) {
-          const modelId = options.model || getDefaultModel(config);
+          // The agent's model is owned by its agent-health.config.ts
+          // connectorConfig; there is no --model flag. getDefaultModel is a
+          // last-resort fallback for agents that don't configure one.
+          const modelId = resolveAgentModel(agent, getDefaultModel(config));
 
           // Validate agent requirements before running
           const validationError = await validateAgentRequirements(agent);

@@ -65,7 +65,13 @@ export const NewRunPage: React.FC = () => {
   // Configuration (Step 2) - persisted across sessions, shared with QuickRunModal
   // and other run-config dropdowns via the `prefs:*` namespace.
   const [agentKey, setAgentKey] = usePersistedState(PREFS_KEYS.agentKey, DEFAULT_CONFIG.agents.find(a => a.enabled !== false)?.key || '');
-  const [modelId, setModelId] = usePersistedState(PREFS_KEYS.modelId, Object.keys(DEFAULT_CONFIG.models)[0] || '');
+  // The agent's LLM comes from the AGENT's own config (connectorConfig.model /
+  // env.ANTHROPIC_MODEL), NOT a user-picked selector — picking a model
+  // separately is misleading (subprocess agents ignore it and use their own).
+  const agentModel = (key: string): string => {
+    const a = DEFAULT_CONFIG.agents.find(x => x.key === key);
+    return (a?.connectorConfig?.model as string) || (a?.connectorConfig?.env?.ANTHROPIC_MODEL as string) || '';
+  };
   // Judge's LLM — distinct from the agent's `modelId`. `undefined` means
   // "use the evaluator's inferenceConfig.modelId, falling back to
   // BEDROCK_MODEL_ID env" (the right setting for agentic-provider judges,
@@ -190,7 +196,7 @@ export const NewRunPage: React.FC = () => {
           name: runName || `Run ${new Date().toLocaleDateString()}`,
           sources: sourcesPayload,
           agentKey,
-          modelId,
+          modelId: agentModel(agentKey),
           // Customer-supplied judge model (separate dropdown).
           judgeModelId,
           concurrency,
@@ -384,29 +390,6 @@ export const NewRunPage: React.FC = () => {
                     {enabledAgents.map(a => (
                       <SelectItem key={a.key} value={a.key}>{a.name}</SelectItem>
                     ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div>
-                <label className="text-xs text-muted-foreground">Agent Model</label>
-                <Select value={modelId} onValueChange={setModelId}>
-                  <SelectTrigger className="mt-1">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(DEFAULT_CONFIG.models)
-                      // Agent can only be invoked via these LLM providers —
-                      // judge-only providers (pi/agent/agentic/claude-code)
-                      // are hidden so the user can't accidentally pick a
-                      // judge pseudo-model and break the agent's Bedrock call.
-                      .filter(([, m]) => {
-                        const p = (m as any).provider || 'bedrock';
-                        return p === 'bedrock' || p === 'openai-compatible' || p === 'litellm';
-                      })
-                      .map(([key, m]) => (
-                        <SelectItem key={key} value={key}>{(m as any).display_name || key}</SelectItem>
-                      ))}
                   </SelectContent>
                 </Select>
               </div>

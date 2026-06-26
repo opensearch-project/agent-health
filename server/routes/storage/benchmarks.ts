@@ -314,8 +314,10 @@ function validateRunConfig(config: any): string | null {
   if (!config.agentKey || typeof config.agentKey !== 'string') {
     return 'agentKey is required and must be a string';
   }
-  if (!config.modelId || typeof config.modelId !== 'string') {
-    return 'modelId is required and must be a string';
+  // No `modelId` requirement: the agent's LLM comes from the agent's own
+  // connectorConfig (agent-health.config.ts), resolved by the runner.
+  if (config.modelId !== undefined && typeof config.modelId !== 'string') {
+    return 'modelId must be a string when provided';
   }
   if (config.concurrency !== undefined) {
     const c = Number(config.concurrency);

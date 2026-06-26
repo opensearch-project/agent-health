@@ -18,6 +18,7 @@ import Table from 'cli-table3';
 import { readFileSync, writeFileSync } from 'fs';
 import * as path from 'path';
 import { loadConfig, DEFAULT_SERVER_CONFIG, type ResolvedConfig } from '@/lib/config/index.js';
+import { resolveAgentModel } from '@/lib/resolveAgentModel.js';
 import { ensureServer, createServerCleanup, isServerRunning, type EnsureServerResult } from '@/cli/utils/serverLifecycle.js';
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, ServerError, type BenchmarkExecutionEvent } from '@/cli/utils/apiClient.js';
@@ -561,7 +562,9 @@ async function runUnifiedMode(
     console.log(chalk.gray(`  Agent: ${agentKey}`));
   }
 
-  const modelId = options.model || getDefaultModel(config);
+  // The agent's model comes from its agent-health.config.ts connectorConfig;
+  // there is no --model flag. getDefaultModel is a last-resort fallback.
+  const modelId = resolveAgentModel(config.agents.find(a => a.key === agentKey), getDefaultModel(config));
   const concurrency = Math.max(1, Math.min(20, parseInt(options.concurrency, 10) || 1));
 
   // Determine benchmark association
@@ -715,7 +718,6 @@ export function createBenchmarkCommand(): Command {
       (val: string, arr: string[]) => [...arr, val],
       []
     )
-    .option('-m, --model <id>', "Agent's LLM model id (uses agent default if not specified)")
     .option('-e, --evaluator <id>', 'Evaluator ID (uses RCA default if not specified)')
     .option('--judge-model <id>', "Judge LLM model id, distinct from --model. Falls back to evaluator's inferenceConfig.modelId, then BEDROCK_MODEL_ID env. Ignored by agentic-provider judges (pi/agent/agentic/claude-code) which pick their own model.")
     .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
@@ -1132,7 +1134,7 @@ export function createBenchmarkCommand(): Command {
           }
           totalTestCasesAcrossBenchmarks += benchmark.testCaseIds.length;
           for (const agent of agents) {
-            const modelId = options.model || getDefaultModel(config);
+            const modelId = resolveAgentModel(agent, getDefaultModel(config));
             const results = await runBenchmarkForAgent(
               api,
               agent,
