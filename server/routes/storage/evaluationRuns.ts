@@ -13,6 +13,10 @@ import {
   CancellationToken,
 } from '../../../services/evaluationRunner.js';
 import { promoteRunToBenchmark } from '../../../services/benchmarkPromotion.js';
+import { loadConfigSync } from '../../../lib/config/index.js';
+import { DEFAULT_CONFIG } from '../../../lib/constants.js';
+import { getCustomAgents } from '../../services/customAgentStore.js';
+import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
 
 const router = Router();
 
@@ -132,12 +136,23 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     const runId = `eval-run-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     const now = new Date().toISOString();
 
+    // Resolve the agent's model from its own config (connectorConfig) so the
+    // run document records which model the agent ran on — there is no
+    // user-selected agent model. Falls back to any client-supplied modelId
+    // (legacy) then empty. The runner re-resolves the same way at execution.
+    let resolvedModelId: string = modelId || '';
+    try {
+      const cfg = (() => { try { return loadConfigSync(); } catch { return DEFAULT_CONFIG; } })();
+      const allAgents = [...cfg.agents, ...getCustomAgents()];
+      resolvedModelId = resolveAgentModel(allAgents.find(a => a.key === agentKey), modelId);
+    } catch { /* keep fallback */ }
+
     const run: any = {
       id: runId,
       name: name || `Evaluation Run ${new Date().toLocaleDateString()}`,
       sources,
       agentKey,
-      modelId,
+      modelId: resolvedModelId,
       // Customer-supplied judge model id (separate from agent's `modelId`).
       // Forwarded onto the run document so the runner reads it and the UI
       // can show which judge model graded each test case in this run.
