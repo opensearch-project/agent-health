@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+- **Re-run (restart any run).** Every non-running evaluation run now has a **Re-run** button ([components/evals3/EvalRunDetailPage.tsx](components/evals3/EvalRunDetailPage.tsx)) that opens the New-Run composer pre-filled from the run's stored config — same test-case sources, agent, evaluator, judge model, and benchmark association ([components/evals3/NewRunPage.tsx](components/evals3/NewRunPage.tsx) seeds from router `state.restartFrom` and forwards `evaluatorId`). The agent's model is resolved from its config. e2e: [tests/e2e/restart-run.spec.ts](tests/e2e/restart-run.spec.ts).
+
 ### Fixed
 - **`claude-opus-4.8` judge model registration was using a non-existent Bedrock inference profile id** ([lib/constants.ts](lib/constants.ts)): the default models catalog mapped `claude-opus-4.8` → `us.anthropic.claude-opus-4-8-v1`, but the real Bedrock inference profile is `us.anthropic.claude-opus-4-8` (verified via `aws bedrock list-inference-profiles --region us-west-2` — the `-v1` suffix does not exist for 4.7+; 4.6 keeps it). Picking Opus 4.8 as the Judge Model produced `Judge HTTP 500: "The provided model identifier is invalid"` on every evaluation, with the run's `metrics` left at zero and `llmJudgeReasoning` set to "Evaluator could not run." Agent-side execution was unaffected because subprocess agents (Claude Code, pi) resolve their model through their own CLI catalog — only the agent-health server’s judge call goes through this map.
 

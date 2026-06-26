@@ -16,7 +16,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Loader2, CheckCircle2, XCircle, Clock, AlertTriangle,
-  ChevronDown, ChevronRight, ArrowLeft, Bookmark,
+  ChevronDown, ChevronRight, ArrowLeft, Bookmark, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -204,6 +204,31 @@ export const EvalRunDetailPage: React.FC = () => {
 
             {/* Actions */}
             <div className="flex items-center gap-2">
+              {/* Re-run: restart this run with its stored config (same agent,
+                  test-case sources, evaluator, judge model) via the New-Run
+                  flow, pre-filled. Available for any run that isn't currently
+                  running. The agent's model is resolved from its config. */}
+              {run.status !== 'running' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="rerun-run-btn"
+                  onClick={() => navigate('/evaluations/runs/new', {
+                    state: {
+                      restartFrom: {
+                        name: run.name,
+                        sources: run.sources,
+                        agentKey: run.agentKey,
+                        evaluatorId: run.evaluatorId,
+                        judgeModelId: run.judgeModelId,
+                        benchmarkId: run.benchmarkId,
+                      },
+                    },
+                  })}
+                >
+                  <RotateCcw size={14} className="mr-1" /> Re-run
+                </Button>
+              )}
               {run.status === 'running' && (
                 <Button variant="destructive" size="sm" onClick={handleCancel} disabled={cancelling}>
                   {cancelling ? <Loader2 size={14} className="mr-1 animate-spin" /> : null}
