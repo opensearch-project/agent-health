@@ -38,7 +38,7 @@ test.describe('Re-run (restart any run)', () => {
 
     // Lands on the New-Run composer, pre-filled: run name starts "Re-run:".
     await expect(page).toHaveURL(/\/evaluations\/runs\/new$/);
-    await expect(page.getByDisplayValue(/^Re-run:/)).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('input[placeholder="My evaluation run"]')).toHaveValue(/^Re-run:/, { timeout: 10000 });
 
     // There is NO agent-model picker in the composer (agent owns its model).
     await expect(page.getByText('Agent Model', { exact: true })).toHaveCount(0);
