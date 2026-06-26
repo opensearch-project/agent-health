@@ -750,25 +750,33 @@ export const EvalRunsPage: React.FC = () => {
           </Button>
           {(() => {
             const selectedRows = allRunRows.filter(rr => selectedRuns.has(rr.run.id));
-            const benchmarkIds = new Set(selectedRows.map(rr => rr.benchmarkId));
-            const multiBenchmark = benchmarkIds.size > 1;
+            const benchmarkIds = new Set(selectedRows.map(rr => rr.benchmarkId).filter(Boolean));
+            // Comparison is a test-case-level primitive — it does NOT require a
+            // shared benchmark. If every selected run came from the SAME
+            // benchmark we keep the scoped URL (nicer context); otherwise (mixed
+            // benchmarks, or ad-hoc runs with no benchmarkId) we fall back to the
+            // benchmark-free `/compare?runs=…` view.
+            const singleBenchmark = benchmarkIds.size === 1;
             return (
               <Button
                 variant="outline"
                 size="sm"
                 className={`h-7 gap-1.5 text-xs ${selectedRuns.size > 0 ? 'border-primary/50' : ''}`}
-                disabled={multiBenchmark || selectedRuns.size < 1}
+                disabled={selectedRuns.size < 1}
                 onClick={() => {
-                  if (multiBenchmark || selectedRuns.size < 1) return;
-                  const bmId = [...benchmarkIds][0];
+                  if (selectedRuns.size < 1) return;
                   const ids = selectedRows.map(rr => rr.run.id).join(',');
-                  navigate(`/compare/${bmId}?runs=${ids}`);
+                  if (singleBenchmark) {
+                    const bmId = [...benchmarkIds][0];
+                    navigate(`/compare/${bmId}?runs=${ids}`);
+                  } else {
+                    navigate(`/compare?runs=${ids}`);
+                  }
                 }}
-                title={multiBenchmark ? 'Select runs from a single benchmark to compare' : selectedRuns.size < 1 ? 'Select at least one run to compare' : 'Compare runs'}
+                title={selectedRuns.size < 1 ? 'Select at least one run to compare' : 'Compare runs'}
               >
                 <GitCompare size={12} />
                 Compare
-                {multiBenchmark && <span className="text-amber-500 text-[9px]">⚠</span>}
               </Button>
             );
           })()}
@@ -818,13 +826,18 @@ export const EvalRunsPage: React.FC = () => {
         </TooltipProvider>
       </div>
 
-      {/* ── Multi-benchmark warning banner ──────────────────────────── */}
+      {/* ── Cross-benchmark info banner ─────────────────────────────
+          Comparison is now a test-case-level primitive, so selecting runs from
+          different benchmarks is valid — Compare routes to the benchmark-free
+          `/compare?runs=…` view and surfaces a per-test overlap summary. This
+          banner is informational (not a blocker) so users know the cross-
+          benchmark comparison is intentional. */}
       {isMultiBenchmark && (
-        <div className="flex items-center gap-2 px-3 py-2 mb-3 rounded-lg border border-amber-300 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 text-xs">
-          <AlertTriangle size={14} className="shrink-0" />
-          <span>Compare requires runs from the same benchmark. Deselect runs from other benchmarks or use "Group by Benchmark" to select within one.</span>
+        <div className="flex items-center gap-2 px-3 py-2 mb-3 rounded-lg border border-blue-300 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 text-blue-800 dark:text-blue-300 text-xs">
+          <GitCompare size={14} className="shrink-0" />
+          <span>Comparing runs across different benchmarks. Comparison happens at the test-case level — the summary shows which test cases overlap and which were only run by some runs.</span>
           <button
-            className="ml-auto text-[10px] underline text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 shrink-0"
+            className="ml-auto text-[10px] underline text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 shrink-0"
             onClick={() => setSelectedRuns(new Set())}
           >
             Clear selection

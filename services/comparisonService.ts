@@ -48,6 +48,7 @@ export function calculateRunAggregates(
   let passedCount = 0;
   let failedCount = 0;
   let completedCount = 0;
+  let erroredCount = 0;
 
   // Fast path: use denormalized stats if available
   const hasStats = run.stats && typeof run.stats.passed === 'number';
@@ -62,6 +63,26 @@ export function calculateRunAggregates(
     if (result.status === 'completed' || result.status === 'failed') {
       const report = reports[result.reportId];
       if (report) {
+        // Issue #242: an evaluator-error report carries placeholder zero
+        // metrics and is NOT a real pass or fail. Exclude it from both the
+        // accuracy average and the pass-rate denominator — exactly as the
+        // canonical lib/runStats.calculateRunStats does (passRate over
+        // `total - errored`). Counting it would deflate both metrics and can
+        // flip the comparison VerdictStrip's declared winner between two runs
+        // that merely have different numbers of errored cases.
+        if (report.metricsStatus === 'error') {
+          erroredCount++;
+          continue;
+        }
+        // The judge hasn't produced a verdict yet (trace mode still polling).
+        // Bucket as pending exactly like lib/runStats.calculateRunStats:
+        // exclude from the accuracy average AND from the pass/fail fallback so
+        // a not-yet-evaluated run is never counted as a failure or graphed
+        // with placeholder zeros. It stays in the pass-rate denominator
+        // (`total - errored`), matching the canonical pass rate.
+        if (report.metricsStatus === 'pending' || report.metricsStatus === 'calculating') {
+          continue;
+        }
         completedCount++;
         totalAccuracy += report.metrics?.accuracy ?? 0;
 
@@ -77,7 +98,13 @@ export function calculateRunAggregates(
     }
   }
 
-  const count = completedCount || 1; // Avoid division by zero
+  const count = completedCount || 1; // Avoid division by zero (accuracy: over evaluable)
+  // Pass rate is computed over the *evaluable* set (total minus errored), to
+  // match run.stats.passRate / the run report / the benchmark overview. When
+  // denormalized stats are present they already exclude errored from
+  // passed/failed, so prefer their authoritative errored count.
+  const erroredForRate = hasStats ? (run.stats!.errored ?? 0) : erroredCount;
+  const evaluable = Math.max(0, testCaseIds.length - erroredForRate);
 
   return {
     runId: run.id,
@@ -89,7 +116,7 @@ export function calculateRunAggregates(
     passedCount,
     failedCount,
     avgAccuracy: Math.round(totalAccuracy / count),
-    passRatePercent: testCaseIds.length > 0 ? Math.round((passedCount / testCaseIds.length) * 100) : 0,
+    passRatePercent: evaluable > 0 ? Math.round((passedCount / evaluable) * 100) : 0,
     // Trace metrics will be populated separately via fetchBatchMetrics
     totalTokens: undefined,
     totalInputTokens: undefined,
@@ -362,7 +389,9 @@ export function calculateRowStatus(
  * "why is one agent better?" (compare) or
  * "is my agent improving?" (iterate).
  *
- * - 'compare':  ≥2 distinct agentKeys across the selected runs.
+ * - 'compare':  ≥2 distinct agentKeys OR ≥2 distinct modelIds (different
+ *               agents, or the same agent on different models — e.g. Sonnet
+ *               vs Opus).
  * - 'iterate':  all runs share one agentKey (a sequence of attempts).
  */
 export type ComparisonMode = 'compare' | 'iterate';
@@ -374,11 +403,17 @@ export type ComparisonMode = 'compare' | 'iterate';
  */
 export function detectComparisonMode(runs: ExperimentRun[]): ComparisonMode {
   if (runs.length < 2) return 'iterate';
+  // 'compare' the moment the runs differ by agent OR by model: comparing
+  // Sonnet vs Opus on the SAME agent (claude-code) is still a comparison, not
+  // an iteration of one config. Only truly-identical setups (same agent AND
+  // same model — e.g. re-runs of one config) default to 'iterate'.
   const agentKeys = new Set<string>();
+  const modelIds = new Set<string>();
   for (const run of runs) {
     if (run.agentKey) agentKeys.add(run.agentKey);
+    if (run.modelId) modelIds.add(run.modelId);
   }
-  return agentKeys.size >= 2 ? 'compare' : 'iterate';
+  return (agentKeys.size >= 2 || modelIds.size >= 2) ? 'compare' : 'iterate';
 }
 
 /**
@@ -401,4 +436,62 @@ export function countRowsByStatus(
   }
 
   return counts;
+}
+
+/**
+ * Test-level overlap between the selected runs.
+ *
+ * Comparison is a test-case-level primitive — it does NOT require the runs to
+ * belong to the same benchmark. Two ad-hoc runs (no benchmarkId) can be
+ * compared as long as we are honest about WHICH test cases they have in
+ * common. This computes that honesty surface:
+ *
+ *  - `totalTestCases`  — union of every test case any selected run executed.
+ *  - `sharedTestCases` — intersection: cases run by ALL selected runs (the
+ *                        only cases where an apples-to-apples verdict holds).
+ *  - `partialTestCases`— cases run by some-but-not-all runs (surfaced as
+ *                        "Not run" cells per run).
+ *  - `perRun`          — per-run executed count + how many were unique to it.
+ *  - `fullyOverlapping` — true when every run ran the exact same set.
+ */
+export interface TestCaseOverlap {
+  runCount: number;
+  totalTestCases: number;
+  sharedTestCases: number;
+  partialTestCases: number;
+  perRun: Array<{ runId: string; runName: string; count: number; uniqueCount: number }>;
+  fullyOverlapping: boolean;
+}
+
+export function computeTestCaseOverlap(runs: ExperimentRun[]): TestCaseOverlap {
+  const idsPerRun = runs.map(r => new Set(Object.keys(r.results || {})));
+  const union = new Set<string>();
+  idsPerRun.forEach(s => s.forEach(id => union.add(id)));
+
+  let shared = 0;
+  let partial = 0;
+  for (const id of union) {
+    const inCount = idsPerRun.reduce((n, s) => n + (s.has(id) ? 1 : 0), 0);
+    if (runs.length > 0 && inCount === runs.length) shared++;
+    else partial++;
+  }
+
+  const perRun = runs.map((run, i) => {
+    const s = idsPerRun[i];
+    let uniqueCount = 0;
+    for (const id of s) {
+      const inCount = idsPerRun.reduce((n, ss) => n + (ss.has(id) ? 1 : 0), 0);
+      if (inCount === 1) uniqueCount++;
+    }
+    return { runId: run.id, runName: run.name, count: s.size, uniqueCount };
+  });
+
+  return {
+    runCount: runs.length,
+    totalTestCases: union.size,
+    sharedTestCases: shared,
+    partialTestCases: partial,
+    perRun,
+    fullyOverlapping: union.size > 0 && shared === union.size,
+  };
 }

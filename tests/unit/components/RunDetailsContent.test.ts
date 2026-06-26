@@ -356,18 +356,20 @@ describe('RunDetailsContent', () => {
 
     it('should show error banner in header when metricsStatus is error', async () => {
       // When polling exhausted all attempts, metricsStatus is set to 'error'
-      // and the header shows a red error banner with the traceError message
+      // and the header shows a red error banner. Post-#335 the title is derived
+      // from the error-kind label (NOT a blanket "Failed to fetch traces"), with
+      // the raw traceError shown beneath.
       const report = createReport({
         metricsStatus: 'error',
-        traceError: 'Traces not available after 30 attempts',
+        traceError: 'Traces never arrived (kind=trace_timeout): polling exhausted after 30 attempts',
       });
       mockGetReportById.mockResolvedValue(report);
 
       await renderAndWait(report);
 
       await waitFor(() => {
-        expect(screen.getByText(/Failed to fetch traces/i)).toBeTruthy();
-        expect(screen.getByText(/Traces not available after 30 attempts/)).toBeTruthy();
+        expect(screen.getByText('Traces never arrived')).toBeTruthy();
+        expect(screen.getByText(/polling exhausted after 30 attempts/)).toBeTruthy();
       });
     });
 
@@ -417,7 +419,9 @@ describe('RunDetailsContent', () => {
       await renderAndWait(report);
 
       await waitFor(() => {
-        expect(screen.getByText(/Failed to fetch traces/i)).toBeTruthy();
+        // No `(kind=...)` prefix in traceError → banner title falls back to the
+        // generic "Evaluation error", with the raw message beneath.
+        expect(screen.getByText('Evaluation error')).toBeTruthy();
         expect(screen.getByText(/Traces not available after 30 attempts/)).toBeTruthy();
       });
     });

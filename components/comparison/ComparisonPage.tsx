@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { GitCompare, ArrowLeft, ChevronDown, ChevronRight, X, Check, Loader2 } from 'lucide-react';
+import { GitCompare, ChevronDown, ChevronRight, X, Check, Loader2 } from 'lucide-react';
 import {
   Collapsible,
   CollapsibleContent,
@@ -30,10 +30,12 @@ import { ModeToggle } from './ModeToggle';
 import { VerdictStrip } from './VerdictStrip';
 import { ComparisonDeepDive, DeepDiveRunMeta } from './ComparisonDeepDive';
 import { FailureClusterPanel } from './FailureClusterPanel';
+import { ComparisonOverlapBanner } from './ComparisonOverlapBanner';
 import { extractFirstDivergence } from '@/services/trajectoryDiffService';
 import type { FailureCluster, FailureCaseEvidenceInput } from '@/services/client/comparisonClusterApi';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
+import { listEvaluationRuns, getEvaluationRun } from '@/services/client';
 import {
   calculateRunAggregates,
   buildTestCaseComparisonRows,
@@ -45,6 +47,7 @@ import {
   collectRunIdsFromReports,
   calculateCombinedScore,
   detectComparisonMode,
+  computeTestCaseOverlap,
   ComparisonMode,
   RowStatus,
 } from '@/services/comparisonService';
@@ -58,6 +61,14 @@ type StatusFilter = 'all' | 'passed' | 'failed' | 'mixed';
 const getAgentName = (key: string) =>
   DEFAULT_CONFIG.agents.find(a => a.key === key)?.name || key;
 
+/** A selectable run plus the benchmark it came from (label only). */
+interface RunPoolEntry {
+  run: BenchmarkRun;
+  benchmarkId?: string;
+  benchmarkName?: string;
+  kind: 'benchmark' | 'eval-run';
+}
+
 
 // ─── Run Multi-Select Dropdown ───────────────────────────────────────────────
 
@@ -66,39 +77,72 @@ function RunMultiSelect({
   selectedIds,
   onToggle,
   onSelectAll,
+  getRunBenchmarkLabel,
 }: {
   runs: BenchmarkRun[];
   selectedIds: string[];
   onToggle: (id: string) => void;
   onSelectAll: (ids: string[]) => void;
+  getRunBenchmarkLabel?: (runId: string) => string | undefined;
 }) {
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState('');
   const selectedCount = selectedIds.length;
-  const allSelected = selectedCount === runs.length;
+  const allSelected = selectedCount === runs.length && runs.length > 0;
+
+  const visibleRuns = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return runs;
+    return runs.filter(run => {
+      const label = getRunBenchmarkLabel?.(run.id) ?? '';
+      return (
+        (run.name ?? '').toLowerCase().includes(q) ||
+        (run.id ?? '').toLowerCase().includes(q) ||
+        getAgentName(run.agentKey).toLowerCase().includes(q) ||
+        getModelName(run.modelId).toLowerCase().includes(q) ||
+        label.toLowerCase().includes(q)
+      );
+    });
+  }, [runs, filter, getRunBenchmarkLabel]);
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <Button variant="outline" size="sm" className="h-7 gap-2 text-xs font-normal w-[220px] justify-between">
+          <Button variant="outline" size="sm" className="h-7 gap-2 text-xs font-normal w-[220px] justify-between" data-testid="run-multiselect-trigger">
             <span>{selectedCount} of {runs.length} runs selected</span>
             <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-[340px] p-0" align="start">
+        <PopoverContent className="w-[360px] p-0" align="start">
           <div className="p-2 border-b flex items-center justify-between">
             <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Select runs to compare</span>
             <button
-              onClick={() => onSelectAll(allSelected ? [] : runs.map(r => r.id))}
+              onClick={() => onSelectAll(allSelected ? [] : visibleRuns.map(r => r.id))}
               className="text-[10px] text-primary hover:underline"
             >
               {allSelected ? 'Deselect all' : 'Select all'}
             </button>
           </div>
-          <div className="max-h-[240px] overflow-y-auto p-1">
-            {runs.map(run => {
+          {runs.length > 6 && (
+            <div className="p-2 border-b">
+              <input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter runs by name, agent, benchmark…"
+                className="w-full h-7 px-2 text-xs rounded border border-border bg-background outline-none focus:border-primary"
+                data-testid="run-multiselect-filter"
+              />
+            </div>
+          )}
+          <div className="max-h-[260px] overflow-y-auto p-1">
+            {visibleRuns.length === 0 && (
+              <div className="px-2 py-3 text-[11px] text-muted-foreground text-center">No runs match “{filter}”</div>
+            )}
+            {visibleRuns.map(run => {
               const isSelected = selectedIds.includes(run.id);
               const canDeselect = selectedIds.length > 1;
+              const benchmarkLabel = getRunBenchmarkLabel?.(run.id);
               return (
                 <button
                   key={run.id}
@@ -118,8 +162,9 @@ function RunMultiSelect({
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="font-medium truncate">{run.name}</div>
-                    <div className="text-[10px] text-muted-foreground">
+                    <div className="text-[10px] text-muted-foreground truncate">
                       {getAgentName(run.agentKey)} · {getModelName(run.modelId)} · {formatRelativeTime(run.createdAt)}
+                      {benchmarkLabel ? ` · ${benchmarkLabel}` : ''}
                     </div>
                   </div>
                 </button>
@@ -166,10 +211,23 @@ export const ComparisonPage: React.FC = () => {
 
   // State for benchmark and data
   const [benchmark, setBenchmark] = useState<Benchmark | null>(null);
-  const [allRuns, setAllRuns] = useState<BenchmarkRun[]>([]);
+  // The selectable pool of runs. In benchmark-scoped mode this is that
+  // benchmark's runs; in unscoped mode (`/compare?runs=a,b`) it's the union of
+  // every benchmark-embedded run and every top-level evaluation-run. Each entry
+  // carries the benchmark it came from (if any) purely for labeling — comparison
+  // itself is a test-case-level primitive and does not require a benchmark.
+  const [runPool, setRunPool] = useState<RunPoolEntry[]>([]);
   const [reports, setReports] = useState<Record<string, EvaluationReport>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [traceMetricsMap, setTraceMetricsMap] = useState<Map<string, TraceMetrics>>(new Map());
+
+  // Derived: the flat run list (pool minus benchmark labels) used everywhere
+  // the page previously read `allRuns`.
+  const allRuns = useMemo((): BenchmarkRun[] => runPool.map(p => p.run), [runPool]);
+  const getRunBenchmarkLabel = useCallback(
+    (runId: string) => runPool.find(p => p.run.id === runId)?.benchmarkName,
+    [runPool]
+  );
 
   // State for selected runs (initialized from URL)
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
@@ -202,18 +260,15 @@ export const ComparisonPage: React.FC = () => {
   const [failureClusters, setFailureClusters] = useState<FailureCluster[]>([]);
   const [clusterCaseFilter, setClusterCaseFilter] = useState<{ caseIds: string[]; clusterName: string } | null>(null);
 
-  // Load all benchmarks and test cases
+  // Load all test cases (name lookup). Benchmarks list is loaded by the pool
+  // loader below and stored in allBenchmarks for the selector.
   useEffect(() => {
     (async () => {
       try {
-        const [bms, tcs] = await Promise.all([
-          asyncBenchmarkStorage.getAll(),
-          asyncTestCaseStorage.getAll(),
-        ]);
-        setAllBenchmarks(bms);
+        const tcs = await asyncTestCaseStorage.getAll();
         setAllTestCases(tcs);
       } catch (err) {
-        console.error('Failed to load benchmarks/test cases:', err);
+        console.error('Failed to load test cases:', err);
       }
     })();
   }, []);
@@ -224,59 +279,109 @@ export const ComparisonPage: React.FC = () => {
     return sorted.slice(0, Math.min(2, sorted.length)).map(r => r.id);
   };
 
-  // Load benchmark data
+  // Load the run pool.
+  //
+  // Two modes, but a single primitive underneath — a set of runs keyed by id:
+  //   - scoped   (`/compare/:benchmarkId`): pool = that benchmark's runs.
+  //   - unscoped (`/compare?runs=a,b`):     pool = union of every benchmark's
+  //                                         runs ∪ every top-level eval-run.
+  // In both modes comparison happens at the test-case level (see
+  // buildTestCaseComparisonRows / computeTestCaseOverlap); the benchmark is only
+  // context for selecting + labeling runs, never a requirement.
   useEffect(() => {
-    const loadBenchmark = async () => {
-      if (!benchmarkId) {
-        setIsLoading(false);
-        return;
-      }
-
+    const loadPool = async () => {
       setIsLoading(true);
+      try {
+        const [bms, evalRuns] = await Promise.all([
+          asyncBenchmarkStorage.getAll(),
+          listEvaluationRuns({ size: 500 }).then(r => r.evaluationRuns).catch(() => []),
+        ]);
+        setAllBenchmarks(bms);
+        const benchNameById = new Map(bms.map(b => [b.id, b.name] as const));
 
-      const bench = await asyncBenchmarkStorage.getById(benchmarkId);
-      if (!bench) {
-        navigate('/benchmarks');
-        return;
+        const pool: RunPoolEntry[] = [];
+        const seen = new Set<string>();
+
+        if (benchmarkId) {
+          // Scoped: resolve this benchmark; its runs are the pool.
+          const bench = bms.find(b => b.id === benchmarkId) ?? await asyncBenchmarkStorage.getById(benchmarkId);
+          if (!bench) {
+            navigate('/benchmarks');
+            return;
+          }
+          setBenchmark(bench);
+          for (const run of bench.runs || []) {
+            if (seen.has(run.id)) continue;
+            seen.add(run.id);
+            pool.push({ run, benchmarkId: bench.id, benchmarkName: bench.name, kind: 'benchmark' });
+          }
+        } else {
+          // Unscoped: union of every benchmark-embedded run + every eval-run.
+          setBenchmark(null);
+          for (const bm of bms) {
+            for (const run of bm.runs || []) {
+              if (seen.has(run.id)) continue;
+              seen.add(run.id);
+              pool.push({ run, benchmarkId: bm.id, benchmarkName: bm.name, kind: 'benchmark' });
+            }
+          }
+          for (const er of evalRuns) {
+            if (seen.has(er.id)) continue;
+            seen.add(er.id);
+            pool.push({
+              run: er as unknown as BenchmarkRun,
+              benchmarkId: er.benchmarkId,
+              benchmarkName: er.benchmarkId ? (benchNameById.get(er.benchmarkId) ?? er.benchmarkId) : undefined,
+              kind: 'eval-run',
+            });
+          }
+        }
+
+        // Resolve any URL-referenced runs that aren't in the pool yet (e.g.
+        // ad-hoc eval-runs older than the list page size). This is what makes
+        // `/compare?runs=<adhoc-a>,<adhoc-b>` work even with benchmarkId: None.
+        const urlRunIds = searchParams.get('runs')?.split(',').filter(Boolean) || [];
+        const missing = urlRunIds.filter(id => !seen.has(id));
+        if (missing.length > 0) {
+          const fetched = await Promise.all(missing.map(id => getEvaluationRun(id).catch(() => null)));
+          for (const er of fetched) {
+            if (er && !seen.has(er.id)) {
+              seen.add(er.id);
+              pool.push({
+                run: er as unknown as BenchmarkRun,
+                benchmarkId: er.benchmarkId,
+                benchmarkName: er.benchmarkId ? (benchNameById.get(er.benchmarkId) ?? er.benchmarkId) : undefined,
+                kind: 'eval-run',
+              });
+            }
+          }
+        }
+
+        setRunPool(pool);
+
+        // Initialize selection from URL; fall back to latest-2 only in scoped
+        // mode (unscoped with no `runs` shows the picker prompt instead).
+        const poolIds = new Set(pool.map(p => p.run.id));
+        const validUrl = urlRunIds.filter(id => poolIds.has(id));
+        if (validUrl.length >= 1) {
+          setSelectedRunIds(validUrl);
+        } else if (benchmarkId) {
+          setSelectedRunIds(pickLatestRuns(pool.map(p => p.run)));
+        } else {
+          setSelectedRunIds([]);
+        }
+      } catch (err) {
+        console.error('[ComparisonPage] Failed to load run pool:', err);
+      } finally {
+        setIsLoading(false);
       }
-
-      const runs = bench.runs || [];
-
-      const reportIds = new Set<string>();
-      runs.forEach(run => {
-        Object.values(run.results || {}).forEach(result => {
-          if (result.reportId) reportIds.add(result.reportId);
-        });
-      });
-
-      const reportsMap: Record<string, EvaluationReport> = {};
-      await Promise.all(
-        Array.from(reportIds).map(async (reportId) => {
-          const report = await asyncRunStorage.getReportById(reportId);
-          if (report) reportsMap[reportId] = report;
-        })
-      );
-
-      setBenchmark(bench);
-      setAllRuns(runs);
-      setReports(reportsMap);
-
-      // Initialize selected runs from URL or default to last 2
-      const urlRunIds = searchParams.get('runs')?.split(',').filter(Boolean) || [];
-      if (urlRunIds.length > 0) {
-        const validRunIds = urlRunIds.filter(id => runs.some(r => r.id === id));
-        setSelectedRunIds(validRunIds.length >= 2 ? validRunIds : pickLatestRuns(runs));
-      } else {
-        setSelectedRunIds(pickLatestRuns(runs));
-      }
-
-      setIsLoading(false);
     };
 
-    loadBenchmark();
+    loadPool();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [benchmarkId, navigate]);
 
-  // Sync selectedRunIds when URL changes externally
+  // Sync selectedRunIds when URL changes externally (e.g. assistant nav).
   useEffect(() => {
     const urlRunIds = searchParams.get('runs')?.split(',').filter(Boolean) || [];
     if (urlRunIds.length > 0 && allRuns.length > 0) {
@@ -290,10 +395,39 @@ export const ComparisonPage: React.FC = () => {
     }
   }, [searchParams, allRuns]);
 
-  // Fetch trace metrics
+  // Fetch reports for the currently-selected runs (lazily; the unscoped pool can
+  // be large so we never prefetch reports for the whole pool).
+  useEffect(() => {
+    const loadReports = async () => {
+      const selected = runPool.filter(p => selectedRunIds.includes(p.run.id));
+      const reportIds = new Set<string>();
+      selected.forEach(({ run }) => {
+        Object.values(run.results || {}).forEach(result => {
+          if (result.reportId) reportIds.add(result.reportId);
+        });
+      });
+      const missing = Array.from(reportIds).filter(id => !reports[id]);
+      if (missing.length === 0) return;
+      const fetched: Record<string, EvaluationReport> = {};
+      await Promise.all(
+        missing.map(async (reportId) => {
+          const report = await asyncRunStorage.getReportById(reportId);
+          if (report) fetched[reportId] = report;
+        })
+      );
+      if (Object.keys(fetched).length > 0) {
+        setReports(prev => ({ ...prev, ...fetched }));
+      }
+    };
+    loadReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runPool, selectedRunIds]);
+
+  // Fetch trace metrics for the selected runs.
   useEffect(() => {
     const loadTraceMetrics = async () => {
-      const runIds = collectRunIdsFromReports(allRuns, reports);
+      const selectedRunsForMetrics = runPool.filter(p => selectedRunIds.includes(p.run.id)).map(p => p.run);
+      const runIds = collectRunIdsFromReports(selectedRunsForMetrics, reports);
       if (runIds.length === 0) { setTraceMetricsMap(new Map()); return; }
       try {
         const { metrics } = await fetchBatchMetrics(runIds);
@@ -304,16 +438,28 @@ export const ComparisonPage: React.FC = () => {
         console.warn('[ComparisonPage] Failed to fetch trace metrics:', error);
       }
     };
-    if (allRuns.length > 0 && Object.keys(reports).length > 0) loadTraceMetrics();
-  }, [allRuns, reports]);
+    if (selectedRunIds.length > 0 && Object.keys(reports).length > 0) loadTraceMetrics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runPool, selectedRunIds, reports]);
 
-  // Update URL when selection changes
+  // Update URL when selection changes.
+  //   - scoped:   drop the `runs` param when the whole benchmark is selected
+  //               (keeps the URL clean / matches prior behavior).
+  //   - unscoped: runs ARE the source of truth, so always serialize them.
   const updateSelection = (runIds: string[]) => {
     setSelectedRunIds(runIds);
-    if (runIds.length > 0 && runIds.length < allRuns.length) {
-      setSearchParams({ runs: runIds.join(',') }, { replace: true });
-    } else if (runIds.length === allRuns.length) {
-      setSearchParams({}, { replace: true });
+    if (benchmarkId) {
+      if (runIds.length > 0 && runIds.length < allRuns.length) {
+        setSearchParams({ runs: runIds.join(',') }, { replace: true });
+      } else if (runIds.length === allRuns.length) {
+        setSearchParams({}, { replace: true });
+      }
+    } else {
+      if (runIds.length > 0) {
+        setSearchParams({ runs: runIds.join(',') }, { replace: true });
+      } else {
+        setSearchParams({}, { replace: true });
+      }
     }
   };
 
@@ -326,8 +472,16 @@ export const ComparisonPage: React.FC = () => {
     updateSelection(newSelection);
   };
 
-  // Handle benchmark change — navigate to new URL
+  // Handle benchmark change — navigate to new URL. `__all__` switches to the
+  // unscoped, runs-first view (`/compare`).
   const handleBenchmarkChange = (newBmId: string) => {
+    if (newBmId === '__all__') {
+      if (benchmarkId) {
+        setSelectedRunIds([]);
+        navigate('/compare', { replace: true });
+      }
+      return;
+    }
     if (newBmId !== benchmarkId) {
       setSelectedRunIds([]);
       navigate(`/compare/${newBmId}`, { replace: true });
@@ -347,6 +501,10 @@ export const ComparisonPage: React.FC = () => {
   };
 
   const selectedRuns = useMemo((): BenchmarkRun[] => allRuns.filter(r => selectedRunIds.includes(r.id)), [allRuns, selectedRunIds]);
+
+  // Test-level overlap across the selected runs — the honesty surface for
+  // benchmark-free comparison (which cases overlap, which don't).
+  const overlap = useMemo(() => computeTestCaseOverlap(selectedRuns), [selectedRuns]);
 
   const detectedMode = useMemo((): ComparisonMode => detectComparisonMode(selectedRuns), [selectedRuns]);
   const mode: ComparisonMode = modeOverride ?? detectedMode;
@@ -557,39 +715,6 @@ export const ComparisonPage: React.FC = () => {
     return <div className="p-6 flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin text-muted-foreground" /></div>;
   }
 
-  if (!benchmark) {
-    return (
-      <div className="h-full flex flex-col" data-testid="comparison-page">
-        <div className="sticky top-0 z-20 bg-background border-b border-border px-4 py-2">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="h-7 w-7">
-              <ArrowLeft size={14} />
-            </Button>
-            <GitCompare className="h-4 w-4 text-primary" />
-            <h1 className="text-sm font-semibold">Compare Runs</h1>
-            <div className="ml-4">
-              <Select value="" onValueChange={handleBenchmarkChange}>
-                <SelectTrigger className="w-[220px] h-7 text-xs"><SelectValue placeholder="Select a benchmark..." /></SelectTrigger>
-                <SelectContent>
-                  {allBenchmarks.map(bm => (
-                    <SelectItem key={bm.id} value={bm.id}>
-                      <span>{bm.name}</span>
-                      <span className="text-[10px] text-muted-foreground ml-1">({bm.runs?.length || 0})</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </div>
-        <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
-          <GitCompare className="h-10 w-10 mb-3 opacity-50" />
-          <p className="text-sm">Select a benchmark to start comparing runs</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="h-full flex flex-col" data-testid="comparison-page">
       {/* ── Compact Sticky Toolbar ─────────────────────────────── */}
@@ -600,10 +725,15 @@ export const ComparisonPage: React.FC = () => {
             { label: 'Compare Runs' },
           ]}
         />
+        <h1 className="sr-only" data-testid="comparison-title">Compare Runs</h1>
         <div className="flex items-center gap-3 flex-wrap">
-          <Select value={benchmarkId || ''} onValueChange={handleBenchmarkChange}>
-            <SelectTrigger className="w-[180px] h-7 text-xs"><SelectValue placeholder="Select benchmark" /></SelectTrigger>
+          <Select value={benchmarkId || '__all__'} onValueChange={handleBenchmarkChange}>
+            <SelectTrigger className="w-[200px] h-7 text-xs" data-testid="comparison-benchmark-select"><SelectValue placeholder="Select benchmark" /></SelectTrigger>
             <SelectContent>
+              <SelectItem value="__all__">
+                <span>All runs</span>
+                <span className="text-[10px] text-muted-foreground ml-1">(no benchmark)</span>
+              </SelectItem>
               {allBenchmarks.map(bm => (
                 <SelectItem key={bm.id} value={bm.id}>
                   <span>{bm.name}</span>
@@ -612,7 +742,13 @@ export const ComparisonPage: React.FC = () => {
               ))}
             </SelectContent>
           </Select>
-          <RunMultiSelect runs={allRuns} selectedIds={selectedRunIds} onToggle={toggleRun} onSelectAll={(ids) => updateSelection(ids)} />
+          <RunMultiSelect
+            runs={allRuns}
+            selectedIds={selectedRunIds}
+            onToggle={toggleRun}
+            onSelectAll={(ids) => updateSelection(ids)}
+            getRunBenchmarkLabel={benchmark ? undefined : getRunBenchmarkLabel}
+          />
           <ModeToggle
             mode={mode}
             detectedMode={detectedMode}
@@ -648,6 +784,25 @@ export const ComparisonPage: React.FC = () => {
               <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-300 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 text-blue-800 dark:text-blue-300 text-xs">
                 <GitCompare size={14} className="shrink-0" />
                 <span>Showing results for a single run. Add at least one more run to compare differences.</span>
+              </div>
+            )}
+
+            {/* Test-level overlap — honest coverage across the selected runs
+                (benchmark or not). Shown for 2+ runs. */}
+            {selectedRuns.length >= 2 && <ComparisonOverlapBanner overlap={overlap} />}
+
+            {/* A/B legend — make the comparison's A vs B mapping explicit (URL
+                order: A = first run, B = second). Shown for 2-run compares so
+                the deep-dive, span citations and trace panes are unambiguous. */}
+            {mode === 'compare' && selectedRuns.length === 2 && (
+              <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="comparison-ab-legend">
+                {(['A', 'B'] as const).map((ab, i) => (
+                  <span key={ab} className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${i === 0 ? 'bg-opensearch-blue/10 border-opensearch-blue/40' : 'bg-purple-500/10 border-purple-400/40'}`}>
+                    <span className={`inline-flex items-center justify-center h-4 min-w-[1rem] px-1 rounded font-bold ${i === 0 ? 'text-opensearch-blue' : 'text-purple-300'}`}>{ab}</span>
+                    <span className="font-medium text-foreground">{getAgentName(selectedRuns[i].agentKey)}</span>
+                    <span className="text-muted-foreground">· {getModelName(selectedRuns[i].modelId)}</span>
+                  </span>
+                ))}
               </div>
             )}
 

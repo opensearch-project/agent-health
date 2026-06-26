@@ -29,7 +29,6 @@ import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/
 import { getEvaluationRun } from '@/services/client';
 import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, EvaluationReport } from '@/types';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
-import { useSidebarCollapse } from '@/components/Layout';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
@@ -57,7 +56,6 @@ export const RunInspectorPage: React.FC = () => {
   // clicked. Resolve to a testCaseId once results are loaded.
   const [searchParams] = useSearchParams();
   const targetReportId = searchParams.get('reportId');
-  const { isCollapsed, setIsCollapsed } = useSidebarCollapse();
 
   // `mode` is derived from the route. Benchmark mode reads from
   // asyncBenchmarkStorage and finds the run inside benchmark.runs[];
@@ -158,16 +156,9 @@ export const RunInspectorPage: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Auto-collapse the global app sidebar while inspecting a benchmark run.
-  // Run pages are dense, multi-pane views; the global nav competes with the
-  // page's own left list (test cases). Restore on unmount so navigating back
-  // to /evaluations/benchmarks etc. shows the full nav.
-  useEffect(() => {
-    const prev = isCollapsed;
-    setIsCollapsed(true);
-    return () => setIsCollapsed(prev);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Sidebar collapse for run URLs is owned globally by Layout (it collapses on
+  // landing on a /runs/<id> URL and persists the preset), so this page no
+  // longer manages it locally.
 
   // Load report when selection changes
   useEffect(() => {
@@ -253,20 +244,23 @@ export const RunInspectorPage: React.FC = () => {
             <span className={`font-semibold ${passRate >= 80 ? 'text-green-500' : passRate >= 50 ? 'text-amber-500' : 'text-red-500'}`}>
               {passRate}%
             </span>
-            {/* Compare requires a benchmarkId; the comparison surface itself
-                is benchmark-scoped (it diffs runs inside one benchmark).
-                Hide it for SDK eval runs that aren't tied to one. */}
-            {mode === 'benchmark' && benchmarkId && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 text-xs ml-2"
-                onClick={() => navigate(`/compare/${benchmarkId}?runs=${runId}`)}
-              >
-                <GitCompare size={12} />
-                Compare
-              </Button>
-            )}
+            {/* Compare is a test-case-level primitive and no longer requires a
+                benchmark — benchmark runs deep-link with their benchmark for
+                context; ad-hoc SDK/eval runs use the benchmark-free
+                `/compare?runs=…` view. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-xs ml-2"
+              onClick={() => navigate(
+                mode === 'benchmark' && benchmarkId
+                  ? `/compare/${benchmarkId}?runs=${runId}`
+                  : `/compare?runs=${runId}`
+              )}
+            >
+              <GitCompare size={12} />
+              Compare
+            </Button>
           </div>
         </div>
       </div>

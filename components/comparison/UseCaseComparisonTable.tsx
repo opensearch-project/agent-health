@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Table,
@@ -197,6 +197,23 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
   // Use prop if provided, otherwise fall back to first run
   const referenceRunId = propReferenceRunId || runs[0]?.id;
 
+  // Per-row coverage: how many of the selected runs actually ran a given case
+  // (status !== 'missing'). Used to render a coverage chip so a partial-overlap
+  // comparison (e.g. cross-benchmark / ad-hoc runs) is never misread as "both
+  // runs ran all these tests" — the chip + the per-cell "Not run" make the
+  // "N in common" banner self-evident in the table.
+  const ranCountFor = (row: TestCaseComparisonRow) =>
+    runs.reduce((n, r) => n + ((row.results[r.id]?.status ?? 'missing') !== 'missing' ? 1 : 0), 0);
+
+  // Only surface coverage chips when the selection actually has mixed coverage
+  // (some row isn't run by every selected run). Same-set comparisons (the common
+  // iterate case) stay chip-free to avoid noise.
+  const hasMixedCoverage = useMemo(
+    () => runs.length >= 2 && rows.some(row => { const c = ranCountFor(row); return c > 0 && c < runs.length; }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, runs]
+  );
+
   const toggleRow = (useCaseId: string) => {
     setExpandedRows((prev) => {
       const next = new Set(prev);
@@ -244,6 +261,8 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
               const referenceAccuracy = referenceResult?.accuracy;
               const isExpanded = expandedRows.has(row.testCaseId);
               const rowStatus = calculateRowStatus(row, referenceRunId);
+              const ranRuns = runs.filter(r => (row.results[r.id]?.status ?? 'missing') !== 'missing');
+              const isPartialRow = hasMixedCoverage && ranRuns.length > 0 && ranRuns.length < runs.length;
 
               return (
                 <React.Fragment key={row.testCaseId}>
@@ -251,6 +270,7 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
                     className={cn(
                       'cursor-pointer hover:bg-muted/50 transition-colors',
                       isExpanded && 'bg-muted/30',
+                      isPartialRow && 'bg-amber-500/[0.04]',
                       rowStatusStyles[rowStatus]
                     )}
                     onClick={() => {
@@ -285,6 +305,25 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
                             </Link>
                             {row.hasVersionDifference && (
                               <VersionIndicator versions={row.versions} />
+                            )}
+                            {hasMixedCoverage && (
+                              ranRuns.length === runs.length ? (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] px-1.5 py-0 border-green-500/40 text-green-600 dark:text-green-400 shrink-0"
+                                  title="Ran by every selected run — directly comparable"
+                                >
+                                  {runs.length === 2 ? 'In both' : `In all ${runs.length}`}
+                                </Badge>
+                              ) : (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] px-1.5 py-0 border-amber-500/40 text-amber-600 dark:text-amber-400 shrink-0"
+                                  title={`Only run by: ${ranRuns.map(r => r.name).join(', ')} — the other run(s) show “Not run”`}
+                                >
+                                  {ranRuns.length === 1 ? `Only ${ranRuns[0].name}` : `${ranRuns.length}/${runs.length} runs`}
+                                </Badge>
+                              )
                             )}
                           </div>
                           <div className="text-[10px] text-muted-foreground font-mono truncate max-w-48">

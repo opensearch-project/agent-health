@@ -71,7 +71,10 @@ export async function fetchTracesByRunIds(runIds: string[]): Promise<TraceSearch
  * correlation strategies (see AGENTS.md → Trace correlation conventions):
  *
  *   A. traceId  — W3C-propagated agents share traceId with the eval span
- *   B. runId    — agents tag spans with `gen_ai.request.id == runId`
+ *   B. runId    — agents tag spans with `agent_health.run.id == runId` (or the
+ *                 OTEL-standard `gen_ai.conversation.id`); the server query
+ *                 unions both. NOT `gen_ai.request.id` — that is not a
+ *                 registered Gen AI semconv attribute. See AGENTS.md → Strategy B.
  *   C. agents   — service.name + time-window fallback (opt-in / `includeWindowFallback`)
  *
  * Strategies A and B are always safe (no false positives). Strategy C is
@@ -86,11 +89,24 @@ export async function fetchTracesForRun(params: {
    */
   runId?: string;
   evalTraceId?: string;
+  /**
+   * Strategy A (direct): the report's own `traceId`. Agents that emit their
+   * own OTel trace (e.g. pi) carry it on every span but NOT our connector
+   * `runId`, so a direct `traceId` lookup returns the run's spans immediately
+   * — independent of the deep-dive's window hints.
+   */
+  traceId?: string;
+  /**
+   * Strategy D (direct): the report's `session.id`. Claude Code stamps it on
+   * every span; a direct `sessionId` lookup correlates without needing a
+   * window. (Server matches both the analyzed field and its `.keyword`.)
+   */
+  sessionId?: string;
   includeWindowFallback?: boolean;
   windowAgents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>;
   size?: number;
 }): Promise<TraceSearchResult> {
-  const { runId, evalTraceId, includeWindowFallback, windowAgents, size = 1000 } = params;
+  const { runId, evalTraceId, traceId, sessionId, includeWindowFallback, windowAgents, size = 1000 } = params;
   // Only include the runIds clause when runId is a non-empty string. A
   // `[undefined]` array makes the server build a `terms: [null]` query that
   // OpenSearch rejects wholesale (taking the Strategy C window fallback down
@@ -100,7 +116,9 @@ export async function fetchTracesForRun(params: {
   if (typeof runId === 'string' && runId.length > 0) {
     query.runIds = [runId];
   }
-  if (evalTraceId) query.traceId = evalTraceId;
+  // traceId: explicit param wins, else the eval-span traceId (both → query.traceId).
+  if (traceId || evalTraceId) query.traceId = traceId || evalTraceId;
+  if (typeof sessionId === 'string' && sessionId.length > 0) query.sessionId = sessionId;
   if (includeWindowFallback && windowAgents && windowAgents.length > 0) {
     query.agents = windowAgents;
   }

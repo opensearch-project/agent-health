@@ -172,6 +172,15 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   const nameA = getAgentName(runs[0].agentKey);
   const nameB = getAgentName(runs[1].agentKey);
 
+  // A = runs[0], B = runs[1] (the URL order). Surface the A/B mapping
+  // everywhere — header + span-citation pills — so a `span:subprocess-…`
+  // citation is unambiguous about which run it belongs to.
+  const abByRunId = new Map<string, 'A' | 'B'>();
+  (meta?.runs || []).forEach((r, i) => { if (r.runId) abByRunId.set(r.runId, i === 0 ? 'A' : 'B'); });
+  const AbBadge = ({ ab, className = '' }: { ab: 'A' | 'B'; className?: string }) => (
+    <span className={`inline-flex items-center justify-center h-4 min-w-[1rem] px-1 rounded text-[0.7rem] font-bold border ${ab === 'A' ? 'bg-opensearch-blue/15 text-opensearch-blue border-opensearch-blue/40' : 'bg-purple-500/20 text-purple-300 border-purple-400/40'} ${className}`}>{ab}</span>
+  );
+
   // Custom anchor: `span:<runId>:<spanId>` → deep-link pill; others → normal link.
   const SpanAnchor = ({ href, children }: { href?: string; children?: React.ReactNode }) => {
     const m = /^span:([^:]+):(.+)$/.exec(href || '');
@@ -187,6 +196,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
           title={`Open this span in the Traces tab${who ? ` (${who})` : ''}`}
           className="inline-flex items-center gap-0.5 align-baseline rounded bg-opensearch-blue/10 px-1.5 py-0.5 text-[0.85em] font-medium text-opensearch-blue hover:bg-opensearch-blue/20 transition-colors"
         >
+          {abByRunId.get(runId) && <span className="font-bold opacity-80">{abByRunId.get(runId)}·</span>}
           {children}
           <ArrowUpRight size={11} className="flex-shrink-0" />
         </button>
@@ -213,8 +223,8 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
           <Sparkles size={16} className="text-opensearch-blue flex-shrink-0" />
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-foreground">What's actually different</h3>
-            <p className="text-xs text-muted-foreground truncate">
-              {nameA} <span className="opacity-60">vs</span> {nameB} · grounded in both runs' traces
+            <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+              <AbBadge ab="A" /> {nameA} <span className="opacity-60">vs</span> <AbBadge ab="B" /> {nameB} <span className="opacity-60">· grounded in both runs' traces</span>
             </p>
           </div>
         </div>

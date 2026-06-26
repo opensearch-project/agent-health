@@ -263,6 +263,7 @@ export async function fetchTraces(
     [
       !!traceId,
       !!(runIds && runIds.length > 0),
+      !!sessionId,
     ].filter(Boolean).length + (agents?.length ?? 0) > 1;
 
   const must: any[] = [];
@@ -330,10 +331,15 @@ export async function fetchTraces(
         // Strategy D: the agent's emitted session.id is a precise per-run
         // correlator (Claude Code stamps session.id on every span). Prefer it,
         // unioned with Strategy C as a fallback for spans it doesn't cover.
+        // Match BOTH `attributes.session.id` and its `.keyword` sub-field: a
+        // UUID like `faee44ca-...` is text-analyzed (split on `-`), so a plain
+        // `term` on the analyzed field never matches — the `.keyword` exact field
+        // is what actually correlates.
         sink.push({
           bool: {
             should: [
               { term: { 'attributes.session.id': a.sessionId } },
+              { term: { 'attributes.session.id.keyword': a.sessionId } },
               strategyC,
             ],
             minimum_should_match: 1,
@@ -346,7 +352,22 @@ export async function fetchTraces(
   }
 
   if (sessionId) {
-    must.push({ term: { 'attributes.session.id': sessionId } });
+    // Match both the analyzed field and its `.keyword` exact sub-field — a
+    // hyphenated UUID session.id is text-analyzed, so a plain `term` on
+    // `attributes.session.id` matches nothing; `.keyword` is the exact field.
+    // Push to `sink` (the UNION when other clauses exist) — NOT `must` — so a
+    // session.id that doesn't match the spans (e.g. Claude Code's span
+    // session.id differs from the session_id we captured on the report)
+    // can't zero out spans that traceId/runId already matched.
+    sink.push({
+      bool: {
+        should: [
+          { term: { 'attributes.session.id': sessionId } },
+          { term: { 'attributes.session.id.keyword': sessionId } },
+        ],
+        minimum_should_match: 1,
+      },
+    });
   }
 
   if (startTime || endTime) {

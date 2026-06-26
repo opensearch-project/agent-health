@@ -142,6 +142,11 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
       author: ann.author,
     })),
     runId: stored.traceId || (stored as any).runId,
+    // Preserve the OTel traceId as its OWN field (distinct from runId). The
+    // comparison Traces tab correlates spans by report.traceId (Strategy A);
+    // without this it was always undefined here — mapped into runId only — so
+    // agents that emit their own trace (pi) / Claude Code never showed traces.
+    traceId: (stored as any).traceId,
     sessionId: (stored as any).sessionId,
     rawEvents: stored.rawEvents as any[] | undefined,
     logs: (stored.logs || []) as OpenSearchLog[],

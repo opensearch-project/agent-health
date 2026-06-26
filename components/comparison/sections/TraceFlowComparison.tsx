@@ -478,6 +478,10 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
   const [selectedSpan, setSelectedSpan] = useState<CategorizedSpan | null>(null);
   const detailPanelRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // When the most recent fetch completed (null = never fetched). Lets the empty
+  // state say "checked at HH:MM:SS" so the user can tell "no traces present"
+  // (terminal) apart from "still loading" (the spinner).
+  const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Get run IDs from reports
@@ -489,6 +493,10 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
         experimentRunId: run.id,
         runName: run.name,
         agentRunId: report?.runId || null,
+        // Direct correlators (deep-dive-independent): an agent's own traceId
+        // (Strategy A, e.g. pi) / session.id (Strategy D, e.g. Claude Code).
+        traceId: report?.traceId || null,
+        sessionId: report?.sessionId || null,
       };
     }).filter(info => info.agentRunId);
   }, [runs, reports, useCaseId]);
@@ -525,9 +533,13 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
           const wa = windowAgentsByRunId?.get(info.agentRunId);
           const result = await fetchTracesForRun({
             runId: info.agentRunId,
+            // Strategy A / D: the run's own traceId / session.id correlate
+            // immediately, without waiting for the deep-dive's window hints.
+            traceId: info.traceId || undefined,
+            sessionId: info.sessionId || undefined,
             includeWindowFallback: true,
             windowAgents: wa?.serviceName
-              ? [{ serviceName: wa.serviceName, startedAt: wa.startedAt, endedAt: wa.endedAt }]
+              ? [{ serviceName: wa.serviceName, startedAt: wa.startedAt, endedAt: wa.endedAt, sessionId: info.sessionId || undefined }]
               : undefined,
           });
           const spanTree = processSpansIntoTree(result.spans);
@@ -566,6 +578,7 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
     );
 
     setIsLoading(false);
+    setLastFetchedAt(Date.now());
   }, [runInfos, windowAgentsByRunId]);
 
   // Fetch traces on mount
@@ -644,9 +657,9 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
   if (isLoading || !leftTrace || !rightTrace || leftTrace.loading || rightTrace.loading) {
     return (
       <Card className="bg-card/50">
-        <CardContent className="py-8 text-center">
+        <CardContent className="py-8 text-center" data-testid="trace-flow-loading">
           <RefreshCw size={24} className="mx-auto mb-2 animate-spin text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">Loading traces...</p>
+          <p className="text-sm text-muted-foreground">Loading traces… <span className="opacity-70">querying spans for both runs</span></p>
         </CardContent>
       </Card>
     );
@@ -682,20 +695,30 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
     );
   }
 
-  // Show empty state
+  // Show empty state — TERMINAL: the fetch completed and matched no spans. This
+  // is deliberately distinct from the loading spinner above so "not present"
+  // can't be mistaken for "still loading". We stamp when we last checked, and
+  // name the per-run span counts (an errored run that produced 0 spans reads as
+  // "0 spans", not a perpetual "propagating…").
   if (!comparisonResult || comparisonResult.alignedTree.length === 0) {
+    const leftN = leftTrace?.spans?.length ?? 0;
+    const rightN = rightTrace?.spans?.length ?? 0;
+    const checked = lastFetchedAt ? new Date(lastFetchedAt).toLocaleTimeString() : null;
     return (
       <Card className="bg-card/50">
-        <CardContent className="py-8 text-center">
+        <CardContent className="py-8 text-center" data-testid="trace-flow-empty">
           <Activity size={32} className="mx-auto mb-2 text-muted-foreground opacity-50" />
-          <p className="text-sm text-muted-foreground">
-            No trace data available for comparison
-          </p>
+          <p className="text-sm text-foreground">No traces found for these runs</p>
           <p className="text-xs text-muted-foreground mt-1">
-            Traces may take a few minutes to propagate after agent execution
+            {checked ? `Checked ${checked} — ` : ''}
+            <span data-testid="trace-flow-empty-counts">{leftTrace?.runName ?? 'A'}: {leftN} spans · {rightTrace?.runName ?? 'B'}: {rightN} spans</span>.
+            This is final — not still loading.
+          </p>
+          <p className="text-[0.7rem] text-muted-foreground/70 mt-1">
+            A run that errored emits no trace. If a run just finished, spans can lag a few seconds while indexing — Refresh to re-check.
           </p>
           <div className="mt-4">
-            <Button variant="outline" size="sm" onClick={fetchAllTraces}>
+            <Button variant="outline" size="sm" onClick={fetchAllTraces} data-testid="trace-flow-refresh">
               <RefreshCw size={14} className="mr-1.5" />
               Refresh
             </Button>

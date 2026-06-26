@@ -13,6 +13,7 @@ export { UseCaseExpandedRow } from './UseCaseExpandedRow';
 export { ModeToggle } from './ModeToggle';
 export { VerdictStrip } from './VerdictStrip';
 export { FailureClusterPanel, getClusterDotColor, CLUSTER_DOT_COLORS } from './FailureClusterPanel';
+export { ComparisonOverlapBanner } from './ComparisonOverlapBanner';
 
 // Sections
 export { TrajectorySection } from './sections/TrajectorySection';

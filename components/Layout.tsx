@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, createContext, useContext } from "react";
+import React, { useState, useEffect, useRef, useMemo, createContext, useContext } from "react";
 import {
   LayoutDashboard,
   Settings,
@@ -20,6 +20,7 @@ import OpenSearchLogoDark from "@/assets/opensearch-logo.svg";
 import OpenSearchLogoLight from "@/assets/opensearch-logo-light.svg";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useServerStatus } from "@/hooks/useServerStatus";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import {
   Sidebar,
   SidebarContent,
@@ -89,7 +90,26 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   // Keep testing dropdown always open
   const [testingOpen, setTestingOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = usePersistedState<boolean>('sidebar:collapsed', false);
+
+  // Collapse the nav when landing on a *specific run* URL (single-run inspect /
+  // detail views are dense — no need to waste space on the global nav). Matches
+  // /runs/<id>[/inspect] and /evaluations/runs/<id> but NOT the bare run LISTS
+  // (…/runs) or /evaluations/runs/new. Fires on direct landing too (first mount
+  // with the ref still false). The collapsed/expanded state itself is persisted
+  // (usePersistedState above), so it's remembered across navigations/reloads and
+  // the user can re-expand — that choice sticks until the next run URL.
+  const isRunDetailRoute = useMemo(
+    () => /\/runs\/(?!new(?:\/|$))[^/]+/.test(location.pathname),
+    [location.pathname]
+  );
+  const wasRunDetailRoute = useRef(false);
+  useEffect(() => {
+    if (isRunDetailRoute && !wasRunDetailRoute.current) {
+      setIsCollapsed(true);
+    }
+    wasRunDetailRoute.current = isRunDetailRoute;
+  }, [isRunDetailRoute, setIsCollapsed]);
   
   // Detect theme for logo switching
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -271,11 +291,13 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   </Collapsible>
                 )}
 
-                {/* Evaluations icon only when collapsed */}
+                {/* Evaluations icon only when collapsed — the closed-navbar
+                    Evaluations button jumps straight to Evaluation Runs (the
+                    most-used evals3 surface), not the Benchmarks list. */}
                 {isCollapsed && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild isActive={location.pathname.startsWith("/evaluations")} tooltip="Evaluations" data-testid="nav-evals3" className="h-9">
-                      <Link to="/evaluations/benchmarks" className="justify-center">
+                      <Link to="/evaluations/runs" className="justify-center">
                         <Gauge className="h-4 w-4" />
                       </Link>
                     </SidebarMenuButton>

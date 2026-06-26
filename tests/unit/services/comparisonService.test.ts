@@ -18,6 +18,7 @@ import {
   countRowsByStatus,
   getRealTestCaseMeta,
   detectComparisonMode,
+  computeTestCaseOverlap,
 } from '@/services/comparisonService';
 import {
   BenchmarkRun,
@@ -116,6 +117,116 @@ describe('comparisonService', () => {
 
       expect(aggregates.passedCount).toBe(0);
       expect(aggregates.failedCount).toBe(0);
+    });
+
+    // Issue #242 regression: an evaluator-error report must NOT count as a
+    // fail in the comparison aggregate. Pass rate is computed over the
+    // evaluable set (total - errored), matching lib/runStats.calculateRunStats,
+    // the run report and the benchmark overview. Before the fix this divided
+    // by total, so 1 pass + 1 errored read 50% (and could flip VerdictStrip's
+    // declared winner) instead of the correct 100%.
+    it('excludes errored runs from pass rate and accuracy (no denormalized stats)', () => {
+      const run: BenchmarkRun = {
+        ...mockRun,
+        stats: undefined,
+        results: {
+          'tc-1': { reportId: 'report-1', status: 'completed' },
+          'tc-2': { reportId: 'report-err', status: 'completed' },
+        },
+      };
+      const reports: Record<string, EvaluationReport> = {
+        'report-1': {
+          id: 'report-1',
+          testCaseId: 'tc-1',
+          passFailStatus: 'passed',
+          metrics: { accuracy: 90, faithfulness: 85, trajectory_alignment_score: 80, latency_score: 75 },
+        } as EvaluationReport,
+        'report-err': {
+          id: 'report-err',
+          testCaseId: 'tc-2',
+          passFailStatus: null,
+          metricsStatus: 'error',
+          metrics: { accuracy: 0, faithfulness: 0, trajectory_alignment_score: 0, latency_score: 0 },
+        } as unknown as EvaluationReport,
+      };
+
+      const aggregates = calculateRunAggregates(run, reports);
+
+      expect(aggregates.passedCount).toBe(1);
+      expect(aggregates.failedCount).toBe(0);
+      // 1 passed / (2 total - 1 errored) = 100%, NOT 50%.
+      expect(aggregates.passRatePercent).toBe(100);
+      // Accuracy averaged over the evaluable case only (the 0 is excluded).
+      expect(aggregates.avgAccuracy).toBe(90);
+    });
+
+    // Same invariant via the denormalized fast path: when run.stats carries an
+    // `errored` count, the pass-rate denominator must use it.
+    it('excludes errored runs from pass rate using denormalized run.stats.errored', () => {
+      const run: BenchmarkRun = {
+        ...mockRun,
+        stats: { passed: 2, failed: 0, pending: 0, errored: 2, total: 4 },
+        results: {
+          'tc-1': { reportId: 'report-1', status: 'completed' },
+          'tc-2': { reportId: 'report-2', status: 'completed' },
+          'tc-3': { reportId: 'report-e1', status: 'completed' },
+          'tc-4': { reportId: 'report-e2', status: 'completed' },
+        },
+      };
+      const reports: Record<string, EvaluationReport> = {
+        'report-1': { id: 'report-1', testCaseId: 'tc-1', passFailStatus: 'passed', metrics: { accuracy: 80, faithfulness: 0, trajectory_alignment_score: 0, latency_score: 0 } } as EvaluationReport,
+        'report-2': { id: 'report-2', testCaseId: 'tc-2', passFailStatus: 'passed', metrics: { accuracy: 60, faithfulness: 0, trajectory_alignment_score: 0, latency_score: 0 } } as EvaluationReport,
+        'report-e1': { id: 'report-e1', testCaseId: 'tc-3', passFailStatus: null, metricsStatus: 'error', metrics: { accuracy: 0, faithfulness: 0, trajectory_alignment_score: 0, latency_score: 0 } } as unknown as EvaluationReport,
+        'report-e2': { id: 'report-e2', testCaseId: 'tc-4', passFailStatus: null, metricsStatus: 'error', metrics: { accuracy: 0, faithfulness: 0, trajectory_alignment_score: 0, latency_score: 0 } } as unknown as EvaluationReport,
+      };
+
+      const aggregates = calculateRunAggregates(run, reports);
+
+      // 2 passed / (4 total - 2 errored) = 100%.
+      expect(aggregates.passRatePercent).toBe(100);
+      // Accuracy over the two evaluable reports only: (80 + 60) / 2 = 70.
+      expect(aggregates.avgAccuracy).toBe(70);
+    });
+
+    // Copilot review (#345): pending/calculating reports must be bucketed as
+    // pending (like lib/runStats), NOT counted as failures or averaged in with
+    // placeholder zeros. Before the fix the no-stats `else` branch counted a
+    // pending report as failed and its 0-accuracy dragged the average down.
+    it('buckets pending/calculating runs as pending, not failed (no denormalized stats)', () => {
+      const run: BenchmarkRun = {
+        ...mockRun,
+        stats: undefined,
+        results: {
+          'tc-1': { reportId: 'report-1', status: 'completed' },
+          'tc-2': { reportId: 'report-pending', status: 'completed' },
+        },
+      };
+      const reports: Record<string, EvaluationReport> = {
+        'report-1': {
+          id: 'report-1',
+          testCaseId: 'tc-1',
+          passFailStatus: 'passed',
+          metrics: { accuracy: 90, faithfulness: 0, trajectory_alignment_score: 0, latency_score: 0 },
+        } as EvaluationReport,
+        'report-pending': {
+          id: 'report-pending',
+          testCaseId: 'tc-2',
+          passFailStatus: undefined,
+          metricsStatus: 'pending',
+          metrics: { accuracy: 0, faithfulness: 0, trajectory_alignment_score: 0, latency_score: 0 },
+        } as unknown as EvaluationReport,
+      };
+
+      const aggregates = calculateRunAggregates(run, reports);
+
+      // The pending case is NOT a failure.
+      expect(aggregates.passedCount).toBe(1);
+      expect(aggregates.failedCount).toBe(0);
+      // Accuracy averaged over the evaluable (non-pending) case only.
+      expect(aggregates.avgAccuracy).toBe(90);
+      // Pending stays in the denominator (total - errored = 2), matching
+      // lib/runStats: 1 passed / 2 = 50%.
+      expect(aggregates.passRatePercent).toBe(50);
     });
   });
 
@@ -799,12 +910,12 @@ describe('comparisonService', () => {
   });
 
   describe('detectComparisonMode', () => {
-    const buildRun = (id: string, agentKey: string): BenchmarkRun => ({
+    const buildRun = (id: string, agentKey: string, modelId = 'model-1'): BenchmarkRun => ({
       id,
       name: id,
       createdAt: '2024-01-01T00:00:00Z',
       agentKey,
-      modelId: 'model-1',
+      modelId,
       status: 'completed',
       results: {},
     });
@@ -831,6 +942,22 @@ describe('comparisonService', () => {
       expect(detectComparisonMode(runs)).toBe('compare');
     });
 
+    it('returns compare when the same agent runs differ by model (Sonnet vs Opus)', () => {
+      const runs = [
+        buildRun('r1', 'claude-code', 'claude-sonnet-4.6'),
+        buildRun('r2', 'claude-code', 'claude-opus-4.8'),
+      ];
+      expect(detectComparisonMode(runs)).toBe('compare');
+    });
+
+    it('returns iterate when agent AND model are identical (re-runs of one config)', () => {
+      const runs = [
+        buildRun('r1', 'claude-code', 'claude-opus-4.8'),
+        buildRun('r2', 'claude-code', 'claude-opus-4.8'),
+      ];
+      expect(detectComparisonMode(runs)).toBe('iterate');
+    });
+
     it('returns compare when at least two of three runs have distinct agentKeys', () => {
       const runs = [
         buildRun('r1', 'claude'),
@@ -846,6 +973,92 @@ describe('comparisonService', () => {
         { ...buildRun('r2', ''), agentKey: '' },
       ];
       expect(detectComparisonMode(runs)).toBe('iterate');
+    });
+  });
+
+  describe('computeTestCaseOverlap', () => {
+    const mkRun = (id: string, tcIds: string[]): BenchmarkRun => ({
+      id,
+      name: `Run ${id}`,
+      createdAt: '2024-01-01T00:00:00Z',
+      agentKey: 'agent-1',
+      modelId: 'model-1',
+      status: 'completed',
+      results: Object.fromEntries(
+        tcIds.map(tc => [tc, { reportId: `${id}-${tc}`, status: 'completed' as const }])
+      ),
+    });
+
+    it('reports full overlap when all runs share the same test cases', () => {
+      const overlap = computeTestCaseOverlap([
+        mkRun('a', ['tc-1', 'tc-2', 'tc-3']),
+        mkRun('b', ['tc-1', 'tc-2', 'tc-3']),
+      ]);
+      expect(overlap.runCount).toBe(2);
+      expect(overlap.totalTestCases).toBe(3);
+      expect(overlap.sharedTestCases).toBe(3);
+      expect(overlap.partialTestCases).toBe(0);
+      expect(overlap.fullyOverlapping).toBe(true);
+      expect(overlap.perRun).toEqual([
+        { runId: 'a', runName: 'Run a', count: 3, uniqueCount: 0 },
+        { runId: 'b', runName: 'Run b', count: 3, uniqueCount: 0 },
+      ]);
+    });
+
+    it('computes intersection / union for partially-overlapping ad-hoc runs', () => {
+      // Two ad-hoc runs with no shared benchmark: A ran {1,2,3}, B ran {2,3,4}.
+      const overlap = computeTestCaseOverlap([
+        mkRun('a', ['tc-1', 'tc-2', 'tc-3']),
+        mkRun('b', ['tc-2', 'tc-3', 'tc-4']),
+      ]);
+      expect(overlap.totalTestCases).toBe(4);   // union {1,2,3,4}
+      expect(overlap.sharedTestCases).toBe(2);  // intersection {2,3}
+      expect(overlap.partialTestCases).toBe(2); // {1} only in A, {4} only in B
+      expect(overlap.fullyOverlapping).toBe(false);
+      expect(overlap.perRun).toEqual([
+        { runId: 'a', runName: 'Run a', count: 3, uniqueCount: 1 },
+        { runId: 'b', runName: 'Run b', count: 3, uniqueCount: 1 },
+      ]);
+    });
+
+    it('handles fully-disjoint runs (no overlap at all)', () => {
+      const overlap = computeTestCaseOverlap([
+        mkRun('a', ['tc-1', 'tc-2']),
+        mkRun('b', ['tc-3', 'tc-4']),
+      ]);
+      expect(overlap.totalTestCases).toBe(4);
+      expect(overlap.sharedTestCases).toBe(0);
+      expect(overlap.partialTestCases).toBe(4);
+      expect(overlap.fullyOverlapping).toBe(false);
+      expect(overlap.perRun.every(r => r.uniqueCount === r.count)).toBe(true);
+    });
+
+    it('counts a case shared across 3 runs only when ALL three ran it', () => {
+      const overlap = computeTestCaseOverlap([
+        mkRun('a', ['tc-1', 'tc-2']),
+        mkRun('b', ['tc-1', 'tc-2']),
+        mkRun('c', ['tc-1']), // tc-2 missing here
+      ]);
+      expect(overlap.runCount).toBe(3);
+      expect(overlap.totalTestCases).toBe(2);
+      expect(overlap.sharedTestCases).toBe(1);  // only tc-1 is in all three
+      expect(overlap.partialTestCases).toBe(1); // tc-2 in a,b but not c
+      expect(overlap.fullyOverlapping).toBe(false);
+    });
+
+    it('is empty/degenerate-safe', () => {
+      expect(computeTestCaseOverlap([])).toEqual({
+        runCount: 0,
+        totalTestCases: 0,
+        sharedTestCases: 0,
+        partialTestCases: 0,
+        perRun: [],
+        fullyOverlapping: false,
+      });
+      const single = computeTestCaseOverlap([mkRun('a', ['tc-1'])]);
+      expect(single.totalTestCases).toBe(1);
+      expect(single.sharedTestCases).toBe(1); // single run “shares” with itself
+      expect(single.fullyOverlapping).toBe(true);
     });
   });
 });
