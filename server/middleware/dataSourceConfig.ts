@@ -191,6 +191,7 @@ export function getStorageConfigFromEnv(): StorageClusterConfig | null {
     awsProfile: process.env.OPENSEARCH_STORAGE_AWS_PROFILE,
     awsRegion: process.env.OPENSEARCH_STORAGE_AWS_REGION,
     awsService: (process.env.OPENSEARCH_STORAGE_AWS_SERVICE as 'es' | 'aoss') || undefined,
+    tlsSkipVerify: process.env.OPENSEARCH_STORAGE_TLS_SKIP_VERIFY === 'true',
   };
 }
 
@@ -213,6 +214,7 @@ export function getObservabilityConfigFromEnv(): ObservabilityClusterConfig | nu
     awsProfile: process.env.OPENSEARCH_LOGS_AWS_PROFILE,
     awsRegion: process.env.OPENSEARCH_LOGS_AWS_REGION,
     awsService: (process.env.OPENSEARCH_LOGS_AWS_SERVICE as 'es' | 'aoss') || undefined,
+    tlsSkipVerify: process.env.OPENSEARCH_LOGS_TLS_SKIP_VERIFY === 'true',
     indexes: {
       traces: process.env.OPENSEARCH_LOGS_TRACES_INDEX || DEFAULT_OTEL_INDEXES.traces,
       logs: process.env.OPENSEARCH_LOGS_INDEX || DEFAULT_OTEL_INDEXES.logs,
