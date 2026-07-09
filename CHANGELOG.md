@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+- **Loud mock judge: the `demo` provider no longer silently reports a "100% pass"** ([server/routes/judge.ts](server/routes/judge.ts), [types/index.ts](types/index.ts)): the built-in `demo`/mock judge returns a semi-random pass **without calling an LLM**, but the only hint was a footnote at the *bottom* of the reasoning — so a real benchmark whose judge model resolved to `demo-model` looked like it passed when nothing was actually judged (WebIR user feedback). Now the mock verdict (1) sets a structured `warning` field on the `JudgeResponse` (a real provider never sets it), (2) leads the reasoning with a `⚠️ MOCK JUDGE — NOT A REAL EVALUATION` banner at the **top**, and (3) emits an always-on `console.warn` server-side naming the resolved model and how to pin a real judge. Integration: [tests/integration/server/routes/judge.integration.test.ts](tests/integration/server/routes/judge.integration.test.ts) (asserts the `warning` field + banner-at-top).
+
 ### Added
 - **Claude Code: log user prompts to OTel by default** ([services/connectors/claude-code/ClaudeCodeConnector.ts](services/connectors/claude-code/ClaudeCodeConnector.ts)): when telemetry is enabled, `createBedrockClaudeCodeConnector` now sets `OTEL_LOG_USER_PROMPTS=1` in the child env so the user's prompt is captured on the `claude_code` OTel log records and is visible in the Traces view. Opt out with `OTEL_LOG_USER_PROMPTS=0` in the host env. Unit: [tests/unit/services/connectors/claude-code/ClaudeCodeConnector.test.ts](tests/unit/services/connectors/claude-code/ClaudeCodeConnector.test.ts).
 

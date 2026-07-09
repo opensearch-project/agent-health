@@ -1253,6 +1253,13 @@ export interface JudgeResponse {
   llmJudgeReasoning: string;
   improvementStrategies: ImprovementStrategy[];
   duration: number;
+  /**
+   * Set only by the demo/mock judge to flag that this verdict was NOT produced
+   * by a real LLM (semi-random pass). A real provider never sets this. The
+   * CLI/UI surface it so a "100% pass" from the mock can't be mistaken for a
+   * real score.
+   */
+  warning?: string;
 }
 
 export interface AgentProxyRequest {
