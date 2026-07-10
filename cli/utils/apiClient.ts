@@ -400,6 +400,46 @@ export class ApiClient {
   }
 
   /**
+   * Get a code-import / SDK evaluation run by id.
+   * GET /api/storage/evaluation-runs/:id — returns the run directly (not nested
+   * under a benchmark). Returns null on 404.
+   */
+  async getEvaluationRun(runId: string): Promise<EvaluationRun | null> {
+    const res = await fetch(
+      `${this.baseUrl}/api/storage/evaluation-runs/${encodeURIComponent(runId)}`
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      throw new Error(`Failed to get evaluation run: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  /**
+   * Poll an evaluation run until it reaches a terminal state
+   * (completed / failed / cancelled).
+   *
+   * This is the fallback for long runs where the SSE progress stream drops
+   * (idle-timeout at a proxy, ~4 min) while the server keeps executing and
+   * persisting results. The CLI must read the true final state from storage
+   * rather than trusting the point at which the stream happened to end.
+   *
+   * Default timeout is deliberately generous (60 min): subprocess agents
+   * (Kiro / Claude Code / custom ops agents) can run many minutes per case.
+   */
+  async pollEvaluationRunStatus(
+    runId: string,
+    onProgress?: (run: EvaluationRun) => void,
+    timeoutMs = 3_600_000
+  ): Promise<EvaluationRun | null> {
+    return this.pollUntilTerminal(
+      () => this.getEvaluationRun(runId),
+      (run) => !!run.status && ['completed', 'failed', 'cancelled'].includes(run.status),
+      { timeoutMs, onPoll: onProgress }
+    );
+  }
+
+  /**
    * Get a single report (TestCaseRun) by ID.
    *
    * This is the preferred method for fetching reports - use report IDs

@@ -1679,4 +1679,58 @@ describe('ApiClient', () => {
       expect(progressEvents.some(e => e.type === 'reconnecting' && e.reportId === 'report-noend-2')).toBe(true);
     });
   });
+
+  describe('getEvaluationRun', () => {
+    it('returns the run on 200', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({ id: 'run-1', status: 'completed', results: {} }),
+      });
+      const run = await client.getEvaluationRun('run-1');
+      expect(mockFetch).toHaveBeenCalledWith(`${baseUrl}/api/storage/evaluation-runs/run-1`);
+      expect(run?.status).toBe('completed');
+    });
+
+    it('returns null on 404', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 404 });
+      expect(await client.getEvaluationRun('missing')).toBeNull();
+    });
+  });
+
+  describe('pollEvaluationRunStatus', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('keeps polling storage until the run is terminal (SSE-dropped-mid-run fallback)', async () => {
+      jest.useFakeTimers();
+      // First read: still running (as it would be right after the SSE dropped
+      // on a long run). Second read: the server finished and persisted.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true, status: 200,
+          json: jest.fn().mockResolvedValue({ id: 'run-1', status: 'running', results: { a: { status: 'running' } } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true, status: 200,
+          json: jest.fn().mockResolvedValue({ id: 'run-1', status: 'completed', results: { a: { status: 'completed' } } }),
+        });
+
+      const promise = client.pollEvaluationRunStatus('run-1');
+      await jest.advanceTimersByTimeAsync(5000); // skip the inter-poll wait
+      const run = await promise;
+
+      expect(run?.status).toBe('completed');
+      expect(mockFetch).toHaveBeenCalledTimes(2); // polled again after 'running'
+    });
+
+    it('returns immediately when the first read is already terminal', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true, status: 200,
+        json: jest.fn().mockResolvedValue({ id: 'run-1', status: 'failed', results: {} }),
+      });
+      const run = await client.pollEvaluationRunStatus('run-1');
+      expect(run?.status).toBe('failed');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
 });

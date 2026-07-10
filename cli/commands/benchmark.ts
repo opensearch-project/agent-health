@@ -25,7 +25,7 @@ import { ApiClient, ServerError, type BenchmarkExecutionEvent } from '@/cli/util
 import { validateTestCasesArrayJson, type ValidatedTestCaseInput } from '@/lib/testCaseValidation.js';
 import { calculateRunStats, getReportIdsFromRun } from '@/lib/runStats.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
-import type { AgentConfig, Benchmark, BenchmarkRun, TestCase, TestCaseRun, EvaluationReport, TestCaseSource } from '@/types/index.js';
+import type { AgentConfig, Benchmark, BenchmarkRun, TestCase, TestCaseRun, EvaluationReport, TestCaseSource, EvaluationRun } from '@/types/index.js';
 import { existsSync, statSync } from 'fs';
 import { isCodeFile } from '@/lib/testCases/loader.js';
 
@@ -639,53 +639,80 @@ async function runUnifiedMode(
     let totalTestCases = 0;
     let completedCount = 0;
     let runId = '';
+    let sseSawTerminal = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          const eventType = line.slice(7);
-          continue;
-        }
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            const eventType = line.slice(7);
+            continue;
+          }
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
 
-            if (data.runId && data.testCases) {
-              // Started event
-              runId = data.runId;
-              totalTestCases = data.testCases.length;
-              spinner.text = `Running evaluation (0/${totalTestCases})`;
-            } else if (data.completedCount !== undefined) {
-              // Progress event
-              completedCount = data.completedCount;
-              spinner.text = `Running evaluation (${completedCount}/${totalTestCases})`;
-            } else if (data.status === 'completed' || data.status === 'cancelled') {
-              // Completed event
-              break;
-            } else if (data.error) {
-              spinner.fail(`Run failed: ${data.error}`);
-              process.exit(1);
+              if (data.runId && data.testCases) {
+                // Started event
+                runId = data.runId;
+                totalTestCases = data.testCases.length;
+                spinner.text = `Running evaluation (0/${totalTestCases})`;
+              } else if (data.completedCount !== undefined) {
+                // Progress event
+                completedCount = data.completedCount;
+                spinner.text = `Running evaluation (${completedCount}/${totalTestCases})`;
+              } else if (data.status === 'completed' || data.status === 'cancelled') {
+                // Completed event
+                sseSawTerminal = true;
+                break;
+              } else if (data.error) {
+                spinner.fail(`Run failed: ${data.error}`);
+                process.exit(1);
+              }
+            } catch {
+              // Skip malformed SSE data
             }
-          } catch {
-            // Skip malformed SSE data
           }
         }
       }
+    } catch (streamErr) {
+      // The progress stream dropped (proxy idle-timeout ~4 min, network blip)
+      // BEFORE the run finished. This is expected on long runs. The server
+      // keeps executing and persisting results, so as long as we captured the
+      // runId we recover the true result by polling storage below rather than
+      // aborting the whole command (the old behavior surfaced "0/0 / fetch
+      // failed" even though the run finished server-side).
+      if (!runId) {
+        spinner.fail(`Lost connection before the run started: ${streamErr instanceof Error ? streamErr.message : String(streamErr)}`);
+        process.exit(1);
+      }
+    }
+
+    // Read the TRUE final state from storage. If the SSE stream ended before
+    // the run reached a terminal state (long run + dropped stream), poll until
+    // it does — the server finishes independently of the client connection.
+    const api = new ApiClient(serverResult.baseUrl);
+    let run: EvaluationRun | null = null;
+    if (runId && !sseSawTerminal) {
+      spinner.text = 'Stream ended; waiting for the run to finish server-side…';
+      run = await api.pollEvaluationRunStatus(runId, (r) => {
+        const done = Object.values(r.results || {}).filter((x: any) => x.status !== 'pending' && x.status !== 'running').length;
+        spinner.text = `Waiting for run to finish server-side (${done}/${totalTestCases || Object.keys(r.results || {}).length})…`;
+      });
+    } else if (runId) {
+      run = await api.getEvaluationRun(runId);
     }
 
     spinner.succeed(`Evaluation run completed (${completedCount}/${totalTestCases} test cases)`);
 
-    // Fetch final run state
-    const finalRun = await fetch(`${serverResult.baseUrl}/api/storage/evaluation-runs/${runId}`);
-    if (finalRun.ok) {
-      const run = await finalRun.json();
+    if (run) {
       const passed = Object.values(run.results || {}).filter((r: any) => r.status === 'completed').length;
       const failed = Object.values(run.results || {}).filter((r: any) => r.status === 'failed').length;
 

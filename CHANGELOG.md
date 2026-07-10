@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+- **CLI `benchmark -f`: long runs no longer report `0/0` when the progress stream drops** ([cli/commands/benchmark.ts](cli/commands/benchmark.ts), [cli/utils/apiClient.ts](cli/utils/apiClient.ts)): the unified evaluation-run path read the final run **once**, the moment the SSE progress stream ended. On a long run (e.g. a subprocess agent that takes ~10 min) a proxy idle-timeout drops the stream after a few minutes, so the CLI reported partial/`0/0` results — or `fetch failed` — even though the server kept executing and persisting server-side (WebIR user feedback). Now the SSE read loop tolerates a mid-stream disconnect (as long as the runId was captured) and the CLI **polls `/api/storage/evaluation-runs/:id` until the run reaches a terminal state** (`ApiClient.pollEvaluationRunStatus`, mirroring the existing `pollRunStatus` fallback) before reporting — reading the true result from storage. Default poll budget 60 min (subprocess agents can be slow). Unit: [tests/unit/cli/utils/apiClient.test.ts](tests/unit/cli/utils/apiClient.test.ts) (polls until terminal after a `running` read; returns immediately when already terminal).
+
 ### Added
 - **Claude Code: log user prompts to OTel by default** ([services/connectors/claude-code/ClaudeCodeConnector.ts](services/connectors/claude-code/ClaudeCodeConnector.ts)): when telemetry is enabled, `createBedrockClaudeCodeConnector` now sets `OTEL_LOG_USER_PROMPTS=1` in the child env so the user's prompt is captured on the `claude_code` OTel log records and is visible in the Traces view. Opt out with `OTEL_LOG_USER_PROMPTS=0` in the host env. Unit: [tests/unit/services/connectors/claude-code/ClaudeCodeConnector.test.ts](tests/unit/services/connectors/claude-code/ClaudeCodeConnector.test.ts).
 
