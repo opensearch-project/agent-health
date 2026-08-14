@@ -277,11 +277,19 @@ describe('Benchmark execute — evaluatorId / judgeModelId round-trip', () => {
       if (!backendAvailable) return;
       const { benchmarkId } = await seedBenchmark(`with-judge-${Date.now()}`);
 
+      // NOTE: judgeModelId must be a demo-provider model here. This route now
+      // actually forwards the run-level judge model to the judge (it used to
+      // be silently dropped — the very bug the fix pinned by
+      // benchmarkExecuteJudgeModel.integration.test.ts). A real Bedrock id
+      // would make the judge call Bedrock, which hangs in CI (no AWS creds).
+      // The agent-side modelId is a Bedrock key instead — the demo agent's
+      // mock connector ignores it — so the two fields still differ and the
+      // separate-persistence assertion keeps its teeth.
       const runId = await executeAndGetRunId(benchmarkId, {
         name: 'With judge model',
         agentKey: 'demo',
-        modelId: 'demo-model',
-        judgeModelId: 'us.anthropic.claude-haiku-3-5',
+        modelId: 'claude-sonnet-4',
+        judgeModelId: 'demo-model',
       });
       expect(runId).toBeDefined();
 
@@ -291,8 +299,8 @@ describe('Benchmark execute — evaluatorId / judgeModelId round-trip', () => {
       const run = bm.runs?.find((r: any) => r.id === runId);
 
       expect(run).toBeDefined();
-      expect(run.judgeModelId).toBe('us.anthropic.claude-haiku-3-5');
-      expect(run.modelId).toBe('demo-model');
+      expect(run.judgeModelId).toBe('demo-model');
+      expect(run.modelId).toBe('claude-sonnet-4');
       expect(run.judgeModelId).not.toBe(run.modelId);
     },
     TEST_TIMEOUT,
