@@ -219,6 +219,12 @@ export async function saveReportWithClient(
     rawEvents: report.rawEvents || [], // Ensure empty array if null/undefined
     logs: report.logs || report.openSearchLogs,
     improvementStrategies: report.improvementStrategies,
+    // Judge audit trail: which model/evaluator judged this report. Set by the
+    // runner from the run-level cx input; without persisting them the
+    // run-detail UI can't show "agent: <m1> judge: <m2>" and the trace-mode
+    // polled judge loses its inputs (same fields saveReportWithModule keeps).
+    judgeModelId: report.judgeModelId,
+    evaluatorId: report.evaluatorId,
     // SDK matcher verdicts: persist alongside the report so the inspect
     // page can render the per-matcher breakdown.
     ...(report.matcherResults !== undefined ? { matcherResults: report.matcherResults } : {}),

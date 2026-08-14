@@ -224,6 +224,38 @@ describe('Experiment Runner', () => {
       expect(progressUpdates.length).toBeGreaterThan(0);
     });
 
+    it('forwards run-level judgeModelId to the judge and stamps it on the saved report (classic path)', async () => {
+      // Regression: the classic path passed { evaluatorId, skipJudge } but
+      // dropped judgeModelId, so --judge-model / the run-config judge model
+      // never reached the judge via POST /benchmarks/:id/execute — the judge
+      // silently fell back to BEDROCK_MODEL_ID or the agent's own model.
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = { ...createBenchmarkRun('run-1'), judgeModelId: 'judge-model-xyz', evaluatorId: 'eval-abc' };
+
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1]);
+      mockRunEvaluationWithConnector.mockResolvedValue({
+        id: 'report-1',
+        trajectory: [],
+        metrics: { accuracy: 0.9 },
+      });
+      mockSaveReportWithClient.mockImplementation((_c: any, report: any) =>
+        Promise.resolve({ ...report, id: 'saved-report-1', metricsStatus: 'ready' }));
+
+      await executeRun(experiment, run, jest.fn(), { client: mockClient });
+
+      // 1) The judge options carry the run-level judgeModelId.
+      const options = mockRunEvaluationWithConnector.mock.calls[0][4];
+      expect(options.judgeModelId).toBe('judge-model-xyz');
+      expect(options.evaluatorId).toBe('eval-abc');
+
+      // 2) The report saved to storage is stamped with both (audit trail +
+      //    trace-mode polled judge inputs).
+      const savedReportArg = mockSaveReportWithClient.mock.calls[0][1];
+      expect(savedReportArg.judgeModelId).toBe('judge-model-xyz');
+      expect(savedReportArg.evaluatorId).toBe('eval-abc');
+    });
+
     it('control inversion: deterministic body drives the agent via agent.run() (not the eager judge path)', async () => {
       const testCase1 = createTestCase('tc-1');
       const experiment = createExperiment(['tc-1']);

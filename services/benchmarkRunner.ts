@@ -584,12 +584,31 @@ export async function executeRun(
               bedrockModelId,
               testCase,
               () => {},
-              { registry: connectorRegistry, evaluatorId: run.evaluatorId, skipJudge: false }
+              {
+                registry: connectorRegistry,
+                evaluatorId: run.evaluatorId,
+                skipJudge: false,
+                // Forward the run-level judge model so the judge call uses what
+                // the customer picked in the run config dialog / CLI / API — not
+                // the agent's own model. Without this the benchmark-execute path
+                // silently fell back to BEDROCK_MODEL_ID / the agent's modelId
+                // (→ mock judge for demo-modeled agents) while runSingleUseCase
+                // forwarded it correctly.
+                judgeModelId: run.judgeModelId,
+              }
             );
             report = caseSpanContext
               ? await context.with(caseSpanContext, runEval)
               : await runEval();
           }
+
+          // Stamp run-level judge inputs onto the report BEFORE saving — the
+          // connector return path doesn't carry them, and both the persisted
+          // audit trail (report.judgeModelId) and the trace-mode polled judge
+          // (which reads report.judgeModelId / report.evaluatorId) depend on
+          // them. Mirrors the same stamp in runSingleUseCase.
+          (report as any).judgeModelId = (report as any).judgeModelId ?? run.judgeModelId;
+          (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
 
           // Save the report to OpenSearch and get the actual stored ID
           const savedReport = await saveReportWithClient(client, report, {
