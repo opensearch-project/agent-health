@@ -3,9 +3,29 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MODEL_PRICING, DEFAULT_CONFIG, MOCK_TOOLS } from '@/lib/constants';
+import { MODEL_PRICING, DEFAULT_CONFIG, MOCK_TOOLS, isBuiltInAgent } from '@/lib/constants';
 
 describe('lib/constants', () => {
+  describe('isBuiltInAgent', () => {
+    it('trusts the server-computed builtIn flag when present', () => {
+      expect(isBuiltInAgent({ key: 'demo', builtIn: true })).toBe(true);
+      // Config-file agent with a non-built-in key — the original Settings bug
+      expect(isBuiltInAgent({ key: 'kiro', builtIn: false })).toBe(false);
+      expect(isBuiltInAgent({ key: 'aos-oncall-cc', builtIn: false })).toBe(false);
+    });
+
+    it('falls back to BUILT_IN_AGENT_KEYS before refreshConfig() populates builtIn', () => {
+      expect(isBuiltInAgent({ key: 'demo' })).toBe(true);
+      expect(isBuiltInAgent({ key: 'observio' })).toBe(true);
+      expect(isBuiltInAgent({ key: 'my-config-agent' })).toBe(false);
+    });
+
+    it('never treats UI-added custom agents as built-in', () => {
+      expect(isBuiltInAgent({ key: 'demo', builtIn: true, isCustom: true })).toBe(false);
+      expect(isBuiltInAgent({ key: 'custom-1', isCustom: true })).toBe(false);
+    });
+  });
+
   describe('MODEL_PRICING', () => {
     it('should have Claude Opus 4.6 pricing', () => {
       expect(MODEL_PRICING['us.anthropic.claude-opus-4-6-v1']).toEqual({

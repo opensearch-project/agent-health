@@ -64,6 +64,7 @@ jest.mock('@/lib/constants', () => ({
     models: {},
   },
   refreshConfig: jest.fn().mockResolvedValue(undefined),
+  isBuiltInAgent: (a: { key: string; isCustom?: boolean }) => a.key === 'demo' && !a.isCustom,
 }));
 
 jest.mock('@/lib/theme', () => ({
