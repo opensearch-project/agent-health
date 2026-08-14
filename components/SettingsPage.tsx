@@ -970,6 +970,9 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  const builtInAgents = DEFAULT_CONFIG.agents.filter(isBuiltInAgent);
+  const configAgents = DEFAULT_CONFIG.agents.filter(a => !isBuiltInAgent(a) && !a.isCustom);
+
   return (
     <>
     <div className="p-6 max-w-4xl mx-auto" data-testid="settings-page">
@@ -1093,16 +1096,16 @@ export const SettingsPage: React.FC = () => {
               className="flex items-center gap-1 text-xs text-muted-foreground uppercase tracking-wide hover:text-foreground"
             >
               {showBuiltInAgents ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              Built-in Agents ({DEFAULT_CONFIG.agents.filter(isBuiltInAgent).length})
+              Built-in Agents ({builtInAgents.length})
             </button>
 
-            {showBuiltInAgents && DEFAULT_CONFIG.agents.filter(isBuiltInAgent).map((agent) => (
+            {showBuiltInAgents && builtInAgents.map((agent) => (
               <AgentInfoCard key={agent.key} agent={agent} badge="built-in" />
             ))}
           </div>
 
           {/* Config File Agents (authored in agent-health.config.ts — not built-in, not UI-added) */}
-          {DEFAULT_CONFIG.agents.some(a => !isBuiltInAgent(a) && !a.isCustom) && (
+          {configAgents.length > 0 && (
             <div className="space-y-2">
               <button
                 type="button"
@@ -1111,10 +1114,10 @@ export const SettingsPage: React.FC = () => {
                 className="flex items-center gap-1 text-xs text-muted-foreground uppercase tracking-wide hover:text-foreground"
               >
                 {showConfigAgents ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                Config File Agents ({DEFAULT_CONFIG.agents.filter(a => !isBuiltInAgent(a) && !a.isCustom).length})
+                Config File Agents ({configAgents.length})
               </button>
 
-              {showConfigAgents && DEFAULT_CONFIG.agents.filter(a => !isBuiltInAgent(a) && !a.isCustom).map((agent) => (
+              {showConfigAgents && configAgents.map((agent) => (
                 <AgentInfoCard key={agent.key} agent={agent} badge="config" />
               ))}
             </div>
