@@ -539,7 +539,7 @@ test.describe('Agent Endpoints grouping (built-in vs config-file)', () => {
   // Regression: agents authored in agent-health.config.ts used to render under
   // "Built-in Agents" with a false "built-in" badge, because the UI grouped by
   // !isCustom instead of the server-computed builtIn flag.
-  test('config-file agents render under Config File Agents, not Built-in', async ({ page }) => {
+  test('config-file agents render under Custom Agents (agent-health.config.ts), not Built-in', async ({ page }) => {
     await page.route('**/api/agents', async (route) => {
       await route.fulfill({
         status: 200,
@@ -564,7 +564,7 @@ test.describe('Agent Endpoints grouping (built-in vs config-file)', () => {
 
     // Counts in the section headers reflect the correct grouping
     await expect(builtInToggle).toContainText('Built-in Agents (1)');
-    await expect(configToggle).toContainText('Config File Agents (1)');
+    await expect(configToggle).toContainText('Custom Agents — agent-health.config.ts (1)');
 
     // Expand built-in: only demo, with a built-in badge; kiro must NOT be there
     await builtInToggle.click();
@@ -579,7 +579,7 @@ test.describe('Agent Endpoints grouping (built-in vs config-file)', () => {
     await expect(kiroCard).not.toContainText('built-in');
   });
 
-  test('Config File Agents section is hidden when config defines no extra agents', async ({ page }) => {
+  test('Custom Agents section is hidden when config defines no extra agents', async ({ page }) => {
     await page.route('**/api/agents', async (route) => {
       await route.fulfill({
         status: 200,

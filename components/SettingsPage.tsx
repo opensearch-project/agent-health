@@ -1104,7 +1104,7 @@ export const SettingsPage: React.FC = () => {
             ))}
           </div>
 
-          {/* Config File Agents (authored in agent-health.config.ts — not built-in, not UI-added) */}
+          {/* Custom agents authored in agent-health.config.ts — not built-in, not UI-added */}
           {configAgents.length > 0 && (
             <div className="space-y-2">
               <button
@@ -1114,7 +1114,7 @@ export const SettingsPage: React.FC = () => {
                 className="flex items-center gap-1 text-xs text-muted-foreground uppercase tracking-wide hover:text-foreground"
               >
                 {showConfigAgents ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                Config File Agents ({configAgents.length})
+                Custom Agents — agent-health.config.ts ({configAgents.length})
               </button>
 
               {showConfigAgents && configAgents.map((agent) => (
