@@ -184,7 +184,14 @@ describe('findConfigFile', () => {
 });
 
 describe('loadConfig', () => {
+  // The default-port assertion below must not be affected by an ambient
+  // AH_PORT / AGENT_HEALTH_PORT in the developer's shell (e.g. when running
+  // integration tests against a non-default port in the same session).
+  const savedPortEnv = { AH_PORT: process.env.AH_PORT, AGENT_HEALTH_PORT: process.env.AGENT_HEALTH_PORT };
+
   beforeEach(() => {
+    delete process.env.AH_PORT;
+    delete process.env.AGENT_HEALTH_PORT;
     jest.clearAllMocks();
     jest.resetModules();
     jest.spyOn(console, 'log').mockImplementation();
@@ -192,6 +199,9 @@ describe('loadConfig', () => {
   });
 
   afterEach(() => {
+    for (const [k, v] of Object.entries(savedPortEnv)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
     jest.restoreAllMocks();
   });
 
