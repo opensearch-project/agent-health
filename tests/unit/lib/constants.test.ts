@@ -24,6 +24,16 @@ describe('lib/constants', () => {
       expect(isBuiltInAgent({ key: 'demo', builtIn: true, isCustom: true })).toBe(false);
       expect(isBuiltInAgent({ key: 'custom-1', isCustom: true })).toBe(false);
     });
+
+    it('every shipped DEFAULT_CONFIG agent is registered as built-in (drift guard)', () => {
+      // A default agent missing from BUILT_IN_AGENT_KEYS gets builtIn: false
+      // from /api/agents and would render under "Config File Agents"
+      // (this happened to `pi`).
+      for (const agent of DEFAULT_CONFIG.agents) {
+        expect({ key: agent.key, builtIn: isBuiltInAgent(agent) })
+          .toEqual({ key: agent.key, builtIn: true });
+      }
+    });
   });
 
   describe('MODEL_PRICING', () => {
