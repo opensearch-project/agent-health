@@ -479,7 +479,7 @@ export const EvalRunsPage: React.FC = () => {
       const sorted = sortRows(group.rows);
       const shown = isCollapsed ? [] : sorted.slice(0, Math.max(0, budget));
       if (!isCollapsed) budget -= shown.length;
-      return { group, isCollapsed, shown, truncated: !isCollapsed && shown.length < sorted.length };
+      return { group, isCollapsed, shown };
     });
   }, [groupedByBenchmark, collapsedGroups, sortRows, visibleRunCount]);
 
@@ -963,7 +963,6 @@ export const EvalRunsPage: React.FC = () => {
               flatSortedRows.slice(0, visibleRunCount).map(rr => renderRunRow(rr, true))
             ) : (
               groupedRenderPlan.map(({ group, isCollapsed, shown }) => {
-                const sorted = shown;
                 const groupPassed = group.rows.filter(r => r.failed === 0 && r.passed > 0).length;
                 const groupRunIds = group.rows.map(r => r.run.id);
                 const allGroupSelected = groupRunIds.length > 0 && groupRunIds.every(id => selectedRuns.has(id));
@@ -1011,7 +1010,7 @@ export const EvalRunsPage: React.FC = () => {
                         </div>
                       </td>
                     </tr>
-                    {!isCollapsed && sorted.map(rr => renderRunRow(rr, false))}
+                    {!isCollapsed && shown.map(rr => renderRunRow(rr, false))}
                   </React.Fragment>
                 );
               })
