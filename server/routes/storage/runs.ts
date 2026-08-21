@@ -58,9 +58,23 @@ router.get('/api/storage/runs', async (req: Request, res: Response) => {
       // shipping it makes a 16-report fetch tens of MB. ponytail: strip in the
       // route (server→browser win); add OS _source excludes if the server-side
       // OS→server fetch ever matters.
+      // Optional `fields` projection on the batch path: `?ids=…&fields=a,b`
+      // returns only the requested top-level fields (id always included).
+      // Lets status/badge consumers (run inspector, runs-list annotation
+      // counts) fetch 80+ reports in one request measured in KBs, not MBs.
+      const pick = typeof fields === 'string' && fields.trim()
+        ? fields.split(',').map((f) => f.trim()).filter(Boolean)
+        : null;
       const runs = fetched
         .filter((r): r is TestCaseRun => r !== null)
-        .map((r) => { const { rawEvents, ...rest } = r as any; return rest as TestCaseRun; });
+        .map((r) => {
+          if (pick) {
+            const out: Record<string, unknown> = { id: (r as any).id };
+            for (const f of pick) if (f in (r as any)) out[f] = (r as any)[f];
+            return out as unknown as TestCaseRun;
+          }
+          const { rawEvents, ...rest } = r as any; return rest as TestCaseRun;
+        });
       return res.json({ runs, total: runs.length });
     }
 

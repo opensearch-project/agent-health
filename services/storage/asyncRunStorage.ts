@@ -295,6 +295,30 @@ class AsyncRunStorage {
   }
 
   /**
+   * Lightweight batch fetch: status/verdict fields only (KBs for ~100
+   * reports vs MBs for the full documents). Enough for status badges
+   * (getResultStatus), pass/fail tallies, annotation counts, and
+   * trace-polling recovery (runId/metricsStatus/judgeModelId/modelId).
+   * Full reports stay on-demand via getReportById for the selected row.
+   */
+  async getReportSummariesByIds(reportIds: string[]): Promise<Record<string, EvaluationReport>> {
+    if (reportIds.length === 0) return {};
+    // Stored-doc field names (the projection runs server-side on the stored
+    // shape): `traceId` maps to app-level `runId` in toTestCaseRun.
+    const fields = [
+      'status', 'passFailStatus', 'metricsStatus', 'traceId', 'sessionId',
+      'judgeModelId', 'modelId', 'agentId', 'testCaseId', 'createdAt', 'annotations',
+    ];
+    const out: Record<string, EvaluationReport> = {};
+    // Chunk to keep the URL well under practical limits for large benchmarks.
+    for (let i = 0; i < reportIds.length; i += 100) {
+      const stored = await opensearchRuns.getByIds(reportIds.slice(i, i + 100), { fields });
+      for (const s of stored) out[s.id] = toTestCaseRun(s);
+    }
+    return out;
+  }
+
+  /**
    * Delete a report and its annotations
    */
   async deleteReport(reportId: string): Promise<boolean> {

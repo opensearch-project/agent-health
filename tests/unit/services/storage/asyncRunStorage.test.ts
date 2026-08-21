@@ -15,6 +15,7 @@ jest.mock('@/services/storage/opensearchClient', () => ({
     getByTestCase: jest.fn(),
     getAll: jest.fn(),
     getById: jest.fn(),
+    getByIds: jest.fn(),
     delete: jest.fn(),
     partialUpdate: jest.fn(),
     count: jest.fn(),
@@ -249,6 +250,42 @@ describe('AsyncRunStorage', () => {
       const result = await asyncRunStorage.getReportById('non-existent');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('getReportSummariesByIds', () => {
+    it('returns an empty map for no ids without hitting the API', async () => {
+      const result = await asyncRunStorage.getReportSummariesByIds([]);
+      expect(result).toEqual({});
+      expect(mockOsRuns.getByIds).not.toHaveBeenCalled();
+    });
+
+    it('requests only lightweight status fields and maps traceId → runId', async () => {
+      mockOsRuns.getByIds.mockResolvedValue([
+        { id: 'r-1', status: 'completed', passFailStatus: 'passed', metricsStatus: 'ready', traceId: 'otel-1', createdAt: '2024-01-01T00:00:00Z' },
+      ]);
+
+      const result = await asyncRunStorage.getReportSummariesByIds(['r-1']);
+
+      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(1);
+      const [ids, options] = mockOsRuns.getByIds.mock.calls[0];
+      expect(ids).toEqual(['r-1']);
+      expect(options.fields).toEqual(expect.arrayContaining(['status', 'passFailStatus', 'metricsStatus', 'traceId', 'annotations']));
+      expect(result['r-1'].passFailStatus).toBe('passed');
+      expect(result['r-1'].metricsStatus).toBe('ready');
+      expect(result['r-1'].runId).toBe('otel-1');
+    });
+
+    it('chunks large id lists into batches of 100', async () => {
+      const ids = Array.from({ length: 250 }, (_, i) => `r-${i}`);
+      mockOsRuns.getByIds.mockResolvedValue([]);
+
+      await asyncRunStorage.getReportSummariesByIds(ids);
+
+      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(3);
+      expect(mockOsRuns.getByIds.mock.calls[0][0]).toHaveLength(100);
+      expect(mockOsRuns.getByIds.mock.calls[1][0]).toHaveLength(100);
+      expect(mockOsRuns.getByIds.mock.calls[2][0]).toHaveLength(50);
     });
   });
 

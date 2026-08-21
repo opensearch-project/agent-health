@@ -447,9 +447,10 @@ export const runStorage = {
    * Batch-get runs by ID in one request (server fans out in parallel).
    * Used by the comparison page to load every cell's report at once.
    */
-  async getByIds(ids: string[]): Promise<StorageRun[]> {
+  async getByIds(ids: string[], options?: { fields?: string[] }): Promise<StorageRun[]> {
     if (ids.length === 0) return [];
-    const result = await request<{ runs: StorageRun[]; total: number }>('GET', `/runs?ids=${ids.map(encodeURIComponent).join(',')}`);
+    const fieldsParam = options?.fields?.length ? `&fields=${options.fields.map(encodeURIComponent).join(',')}` : '';
+    const result = await request<{ runs: StorageRun[]; total: number }>('GET', `/runs?ids=${ids.map(encodeURIComponent).join(',')}${fieldsParam}`);
     return result.runs;
   },
 
