@@ -234,6 +234,69 @@ describe('Runs Storage Routes', () => {
         })
       );
     });
+
+    it('batch ids path returns full docs minus rawEvents when no fields given', async () => {
+      mockRunsGetById.mockImplementation(async (id: string) => ({
+        id,
+        testCaseId: 'tc-1',
+        status: 'completed',
+        passFailStatus: 'passed',
+        trajectory: [{ type: 'assistant', content: 's' }],
+        rawEvents: [{ type: 'RAW' }],
+      }));
+
+      const { req, res } = createMocks({}, {}, { ids: 'run-a,run-b' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+
+      await handler(req, res);
+
+      expect(mockRunsGetById).toHaveBeenCalledTimes(2);
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.total).toBe(2);
+      expect(body.runs[0].trajectory).toBeDefined();
+      expect(body.runs[0].rawEvents).toBeUndefined();
+    });
+
+    it('batch ids path with fields= projects only requested fields plus id', async () => {
+      mockRunsGetById.mockResolvedValue({
+        id: 'run-a',
+        testCaseId: 'tc-1',
+        status: 'completed',
+        passFailStatus: 'passed',
+        metricsStatus: 'ready',
+        trajectory: [{ type: 'assistant', content: 's' }],
+        rawEvents: [{ type: 'RAW' }],
+        llmJudgeReasoning: 'reasoning',
+      });
+
+      const { req, res } = createMocks({}, {}, { ids: 'run-a', fields: 'status,passFailStatus, metricsStatus,missingField' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+
+      await handler(req, res);
+
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.runs[0]).toEqual({
+        id: 'run-a',
+        status: 'completed',
+        passFailStatus: 'passed',
+        metricsStatus: 'ready',
+      });
+    });
+
+    it('batch ids path drops ids that fail to fetch', async () => {
+      mockRunsGetById
+        .mockResolvedValueOnce({ id: 'run-a', status: 'completed' })
+        .mockRejectedValueOnce(new Error('boom'));
+
+      const { req, res } = createMocks({}, {}, { ids: 'run-a,run-gone', fields: 'status' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+
+      await handler(req, res);
+
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.total).toBe(1);
+      expect(body.runs[0].id).toBe('run-a');
+    });
   });
 
   describe('GET /api/storage/runs/:id', () => {
