@@ -252,6 +252,48 @@ describe('RunInspectorPage — lazy report loading', () => {
     expect(screen.queryByTestId('run-inspector-error')).toBeNull();
   });
 
+  it('shows error + Retry even when the failure happens AFTER the run loaded', async () => {
+    // benchmark + run resolve fine, but the test-cases fetch throws — the
+    // error UI must still be reachable (previously only pre-`run` failures
+    // reached it; post-`run` failures rendered a broken page with no retry).
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockRejectedValueOnce(new Error('tc fetch down'));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('run-inspector-error')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Retry'));
+
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
+  });
+
+  it('resets selection and window when navigating to a different run', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(120));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(120));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(120));
+
+    const { rerender } = renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(100));
+
+    // Grow the window, then navigate to run-2 (same component instance).
+    act(() => ioInstances[ioInstances.length - 1].callback([{ isIntersecting: true }]));
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(120));
+
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-2' };
+    const bm2 = makeBenchmark(120);
+    bm2.runs[0].id = 'run-2';
+    mockBenchmarkGetById.mockResolvedValue(bm2);
+    rerender(React.createElement(RunInspectorPage));
+
+    // Window resets to the first page for the new run.
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(100));
+    // And the first row of the new run is auto-selected (selection reset).
+    await waitFor(() => expect(mockGetReportById).toHaveBeenCalledWith('rep-0'));
+  });
+
   it('fans out trace-polling recovery for pending rows using the summary report', async () => {
     mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
     mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));

@@ -182,6 +182,18 @@ export const RunInspectorPage: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Reset per-run UI state when navigating between runs. React Router reuses
+  // the component instance across param changes, so without this the previous
+  // run's selection/window/deep-link handling would leak into the next run.
+  const lastRunIdRef = React.useRef(runId);
+  useEffect(() => {
+    if (lastRunIdRef.current === runId) return;
+    lastRunIdRef.current = runId;
+    initialSelectionDone.current = false;
+    setSelectedTcId(null);
+    setVisibleCount(ROWS_PER_PAGE);
+  }, [runId]);
+
   // Infinite scroll: reveal the next page of rows when the sentinel at the
   // bottom of the left list becomes visible.
   useEffect(() => {
@@ -226,20 +238,25 @@ export const RunInspectorPage: React.FC = () => {
   const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
   const selectedResult = results.find(r => r.testCaseId === selectedTcId) || null;
 
+  // Error state takes priority over both the skeleton and any partially
+  // populated data: a failure AFTER `run` was set (e.g. the test-cases fetch
+  // threw) previously rendered a broken page with empty rows and no way to
+  // retry — only pre-`run` failures reached the error UI.
+  if (!loading && loadError) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center space-y-3" data-testid="run-inspector-error">
+          <AlertTriangle size={32} className="mx-auto text-amber-500" />
+          <p className="text-sm text-muted-foreground">Failed to load this run — the server may be restarting.</p>
+          <Button variant="outline" size="sm" onClick={() => loadData()}>Retry</Button>
+        </div>
+      </div>
+    );
+  }
+
   // Loading: in benchmark mode we need both `benchmark` and `run`; in
   // eval-run mode we only need `run` (no benchmark to fetch).
   if (loading || !run || (mode === 'benchmark' && !benchmark)) {
-    if (!loading && loadError) {
-      return (
-        <div className="flex items-center justify-center h-full">
-          <div className="text-center space-y-3" data-testid="run-inspector-error">
-            <AlertTriangle size={32} className="mx-auto text-amber-500" />
-            <p className="text-sm text-muted-foreground">Failed to load this run — the server may be restarting.</p>
-            <Button variant="outline" size="sm" onClick={() => loadData()}>Retry</Button>
-          </div>
-        </div>
-      );
-    }
     return (
       <div className="p-6 space-y-4">
         <Skeleton className="h-10 w-60" />

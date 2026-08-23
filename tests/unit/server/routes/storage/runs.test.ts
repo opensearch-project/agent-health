@@ -297,6 +297,41 @@ describe('Runs Storage Routes', () => {
       expect(body.total).toBe(1);
       expect(body.runs[0].id).toBe('run-a');
     });
+
+    it('batch ids path resolves demo-* ids from sample data (never storage)', async () => {
+      mockRunsGetById.mockResolvedValue({ id: 'run-a', status: 'completed', passFailStatus: 'failed' });
+
+      const { req, res } = createMocks({}, {}, { ids: 'demo-run-1,run-a', fields: 'status,passFailStatus' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+
+      await handler(req, res);
+
+      // storage was only asked for the non-sample id
+      expect(mockRunsGetById).toHaveBeenCalledTimes(1);
+      expect(mockRunsGetById).toHaveBeenCalledWith('run-a');
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.total).toBe(2);
+      const byId = Object.fromEntries(body.runs.map((r: any) => [r.id, r]));
+      expect(byId['demo-run-1']).toBeDefined();
+      expect(byId['run-a'].passFailStatus).toBe('failed');
+    });
+
+    it('batch ids path never projects rawEvents even when requested', async () => {
+      mockRunsGetById.mockResolvedValue({
+        id: 'run-a',
+        status: 'completed',
+        rawEvents: [{ type: 'RAW' }],
+      });
+
+      const { req, res } = createMocks({}, {}, { ids: 'run-a', fields: 'status,rawEvents' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+
+      await handler(req, res);
+
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.runs[0].status).toBe('completed');
+      expect(body.runs[0].rawEvents).toBeUndefined();
+    });
   });
 
   describe('GET /api/storage/runs/:id', () => {

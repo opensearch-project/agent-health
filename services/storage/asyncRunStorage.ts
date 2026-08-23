@@ -115,6 +115,10 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     agentKey: stored.agentId,
     modelName: stored.modelId,
     modelId: stored.modelId,
+    // Judge model used for this run (PR #390 persists it). Without this
+    // mapping, browser-side trace-recovery judging silently fell back to the
+    // agent's modelId even when a distinct judge model was configured.
+    judgeModelId: (stored as any).judgeModelId,
     status: stored.status,
     passFailStatus: stored.passFailStatus as 'passed' | 'failed' | undefined,
     evaluatorId: (stored as any).evaluatorId,

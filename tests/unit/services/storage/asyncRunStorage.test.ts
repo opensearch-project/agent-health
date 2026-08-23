@@ -244,6 +244,15 @@ describe('AsyncRunStorage', () => {
       expect(result?.sessionId).toBe('sess-read');
     });
 
+    it('maps judgeModelId from storage so recovery judges with the configured model', async () => {
+      const mockRun = { ...createMockStorageRun('run-1'), judgeModelId: 'claude-sonnet-4-6' } as any;
+      mockOsRuns.getById.mockResolvedValue(mockRun);
+
+      const result = await asyncRunStorage.getReportById('run-1');
+
+      expect(result?.judgeModelId).toBe('claude-sonnet-4-6');
+    });
+
     it('returns null when not found', async () => {
       mockOsRuns.getById.mockResolvedValue(null);
 
