@@ -159,6 +159,17 @@ describe('Data Source Adapter Factory', () => {
       expect(result.message).toBe('Connection failed');
     });
 
+    it('appends the HTTP status code so a 403 (e.g. expired/rotated SigV4 credentials) reads differently than a 5xx', async () => {
+      const authError: any = new Error('Response Error');
+      authError.meta = { statusCode: 403, body: {} };
+      mockClusterHealth.mockRejectedValue(authError);
+
+      const result = await testStorageConnection(validConfig);
+
+      expect(result.status).toBe('error');
+      expect(result.message).toBe('Response Error (HTTP 403)');
+    });
+
     it('should close the client on success', async () => {
       mockClusterHealth.mockResolvedValue({
         body: { cluster_name: 'test-cluster', status: 'green' },
@@ -293,6 +304,17 @@ describe('Data Source Adapter Factory', () => {
       expect(result.status).toBe('error');
       expect(result.message).toBe('ECONNREFUSED');
       expect(result.latencyMs).toBeDefined();
+    });
+
+    it('appends the HTTP status code so a 403 (e.g. expired/rotated SigV4 credentials) reads differently than a 5xx', async () => {
+      const authError: any = new Error('Response Error');
+      authError.meta = { statusCode: 403, body: {} };
+      mockClusterHealth.mockRejectedValue(authError);
+
+      const result = await testObservabilityConnection(validConfig);
+
+      expect(result.status).toBe('error');
+      expect(result.message).toBe('Response Error (HTTP 403)');
     });
 
     it('should extract error reason from meta body when available', async () => {

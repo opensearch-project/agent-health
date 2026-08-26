@@ -78,6 +78,38 @@ describe('FileStorageModule', () => {
     });
   });
 
+  describe('benchmarks', () => {
+    // Regression: benchmarks and evaluation-runs share the same on-disk `benchmarks/`
+    // dir, discriminated by `docType`. Without the docType filter, an eval-run
+    // detail route renders it as an empty benchmark instead of 404ing.
+    it('getById returns null for an evaluation-run id (eval-run rendered as empty benchmark)', async () => {
+      await mod.evaluationRuns.create({
+        id: 'eval-run-leak-2',
+        name: 'CLI eval-run',
+        status: 'completed',
+        agentKey: 'demo',
+        modelId: 'claude-sonnet',
+        sources: [],
+        trigger: 'api',
+        testCaseSnapshots: [],
+        results: {},
+      } as any);
+
+      const result = await mod.benchmarks.getById('eval-run-leak-2');
+
+      expect(result).toBeNull();
+    });
+
+    it('getById still returns a real benchmark', async () => {
+      const bm = await mod.benchmarks.create({ name: 'Real Benchmark 2', testCaseIds: [] });
+
+      const result = await mod.benchmarks.getById(bm.id);
+
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe(bm.id);
+    });
+  });
+
   describe('sessionMetadata', () => {
     it('should return null for nonexistent session', async () => {
       const result = await mod.sessionMetadata.get('claude-code', 'nonexistent');

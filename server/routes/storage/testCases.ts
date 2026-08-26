@@ -103,12 +103,15 @@ router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
     if (storageConfigured) {
       try {
         if (filterIds) {
-          // Filter by specific IDs - get latest version of each
+          // Filter by specific IDs - get latest version of each. Fan out in
+          // PARALLEL — this used to await each id sequentially, which at
+          // ~80ms/OpenSearch round-trip made an 84-case benchmark inspect
+          // page block ~7s on this request alone.
           const nonSampleIds = filterIds.filter(id => !isSampleId(id));
-          for (const id of nonSampleIds) {
-            const tc = await storage.testCases.getById(id);
-            if (tc) realData.push(tc);
-          }
+          const fetched = await Promise.all(
+            nonSampleIds.map(id => storage.testCases.getById(id).catch(() => null)),
+          );
+          realData = fetched.filter((tc): tc is TestCase => tc !== null);
         } else {
           // Get all test cases (adapter returns latest versions)
           const result = await storage.testCases.getAll();

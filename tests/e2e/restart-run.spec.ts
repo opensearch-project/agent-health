@@ -42,5 +42,26 @@ test.describe('Re-run (restart any run)', () => {
 
     // There is NO agent-model picker in the composer (agent owns its model).
     await expect(page.getByText('Agent Model', { exact: true })).toHaveCount(0);
+
+    // Customer path: clicking "Launch Run" goes through the real UI client
+    // (executeEvaluationRun -> POST /api/storage/evaluation-runs). Intercept it
+    // to assert the request the client actually builds, without executing a
+    // (heavy) agent run.
+    let body: any = null;
+    await page.route('**/api/storage/evaluation-runs', async (route) => {
+      if (route.request().method() === 'POST') {
+        try { body = JSON.parse(route.request().postData() || '{}'); } catch { body = {}; }
+        await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: {"type":"complete"}\n\n' });
+      } else {
+        await route.continue();
+      }
+    });
+    await page.getByRole('button', { name: /Launch Run/i }).click();
+    await expect.poll(() => body, { timeout: 10000 }).not.toBeNull();
+
+    // The client sends the seeded scope + agent, but no user-selected agent
+    // model field beyond what the agent's own config resolves to.
+    expect(body.agentKey, 'agentKey forwarded').toBeTruthy();
+    expect(Array.isArray(body.sources) && body.sources.length > 0, 'sources seeded').toBeTruthy();
   });
 });

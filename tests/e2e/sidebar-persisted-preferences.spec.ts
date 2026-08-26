@@ -60,7 +60,11 @@ test.describe('Sidebar pages — persisted preferences round-trip', () => {
       await setPref(page, 'dashboard:filters', { agentKey: 'observio' });
 
       await page.goto('/');
-      await page.waitForSelector('[data-testid="dashboard-page"]', { timeout: 30000 });
+      // The dashboard renders either the data view (dashboard-page) or the
+      // first-run experience depending on whether any runs exist; this test
+      // only checks the localStorage prefs round-trip, so accept either as the
+      // "page loaded" signal (a fresh e2e backend has no data -> first-run).
+      await page.waitForSelector('[data-testid="dashboard-page"], [data-testid="first-run-experience"]', { timeout: 30000 });
 
       expect(await getPref(page, 'dashboard:timeRange')).toBe(JSON.stringify('30d'));
       expect(await getPref(page, 'dashboard:selectedMetric')).toBe(JSON.stringify('avgRunTime'));

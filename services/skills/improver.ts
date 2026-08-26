@@ -13,6 +13,7 @@ import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-r
 import type { Skill, SkillGradingResult, SkillBenchmarkResult } from '@/types';
 import { debug } from '@/lib/debug';
 import { DEFAULT_SKILL_MODEL_ID } from './constants';
+import { buildInferenceConfig, resolveRegionAwareModelId } from '@/lib/bedrockCompat';
 
 export interface ImprovementProposal {
   originalInstructions: string;
@@ -51,7 +52,7 @@ export async function proposeImprovement(options: ImproveOptions): Promise<Impro
   );
 
   const prompt = buildImprovementPrompt(skill, failures, baselineSuccesses, benchmark);
-  const effectiveModelId = modelId || DEFAULT_SKILL_MODEL_ID;
+  const effectiveModelId = resolveRegionAwareModelId(modelId || DEFAULT_SKILL_MODEL_ID);
 
   debug('SkillImprover', `Requesting improvement. Failures: ${failures.length}`);
 
@@ -65,7 +66,7 @@ export async function proposeImprovement(options: ImproveOptions): Promise<Impro
       { role: 'user', content: [{ text: prompt }] },
     ],
     system: [{ text: 'You are a skill optimization expert. Analyze evaluation failures and produce improved skill instructions that are lean, generalizable, and reasoning-based. Always output between the specified markers.' }],
-    inferenceConfig: { maxTokens: 8192, temperature: 0.3 },
+    inferenceConfig: buildInferenceConfig(effectiveModelId, { maxTokens: 8192, temperature: 0.3 }),
   });
 
   const response = await client.send(command);

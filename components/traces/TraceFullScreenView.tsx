@@ -22,7 +22,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Span, TimeRange, CategorizedSpan } from '@/types';
-import { computeTraceSummary } from '@/services/traces';
+import { computeTraceSummary, getInitialExpandedSpans } from '@/services/traces';
 import TraceVisualization from './TraceVisualization';
 import { ViewMode } from './ViewToggle';
 import SimpleSpanAttributesTable from './SimpleSpanAttributesTable';
@@ -122,11 +122,11 @@ export const TraceFullScreenView: React.FC<TraceFullScreenViewProps> = ({
     onViewModeChange?.(mode);
   }, [onViewModeChange]);
 
-  // Auto-expand root spans when opening (only for uncontrolled mode)
+  // Auto-expand roots + ancestors of any ERROR span when opening (only for
+  // uncontrolled mode) so a failing span isn't hidden behind collapsed parents.
   useEffect(() => {
     if (open && spanTree.length > 0 && controlledExpandedSpans === undefined) {
-      const rootIds = new Set(spanTree.map(s => s.spanId));
-      setInternalExpandedSpans(rootIds);
+      setInternalExpandedSpans(getInitialExpandedSpans(spanTree));
     }
   }, [open, spanTree, controlledExpandedSpans]);
 

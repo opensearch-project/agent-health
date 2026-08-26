@@ -89,10 +89,15 @@ describe('Evaluation SSE Heartbeat & Polling Fallback', () => {
       return;
     }
 
-    // Prefer observio for real testing, fall back to demo
-    if (await checkAgent('observio')) {
+    // Prefer a real agent for true SSE/heartbeat timing ONLY when one is opted
+    // in (local dev). CI has no observio backend (:3001) and no Bedrock, so
+    // default to the always-available mock 'demo' agent: the started-event /
+    // pre-created assertions hold for any agent, and the heartbeat-timing test
+    // skips for demo (too fast). ('claude-sonnet-4' was also a stale model key
+    // — the valid key is 'claude-sonnet-4.6'.)
+    if (process.env.AH_INTEGRATION_REAL_AGENT && await checkAgent('observio')) {
       agentKey = 'observio';
-      modelId = 'claude-sonnet-4';
+      modelId = 'claude-sonnet-4.6';
     }
   });
 

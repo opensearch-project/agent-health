@@ -383,3 +383,72 @@ describe('bindJudge() — run-level defaults (UI-equivalent)', () => {
     expect(body.modelId).toBe('claude-opus-4');
   });
 });
+
+describe('judge() — server URL resolution (port-isolation)', () => {
+  const realEnv = { ...process.env };
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(async () => {
+    startSession();
+    clearJudgeCache();
+    // Reset the warn-once latch so each test can observe the warning fire.
+    const { __resetJudgePortWarning } = await import('@/lib/testCases/judge');
+    __resetJudgePortWarning();
+    delete process.env.AH_PORT;
+    delete process.env.AGENT_HEALTH_PORT;
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    endSession();
+    process.env = { ...realEnv };
+    jest.restoreAllMocks();
+  });
+
+  /** Pull the URL the judge POSTed to from the fetch mock. */
+  function lastUrl(fetchMock: jest.Mock): string {
+    const calls = fetchMock.mock.calls;
+    return String(calls[calls.length - 1][0]);
+  }
+
+  it('warns once and defaults to :4001 when AH_PORT and serverUrl are both unset', async () => {
+    const { fetchMock } = mockJudgeFetch();
+    const result = { trajectory: [{ type: 'response', content: 'ok' }] } as any;
+
+    await judge(result, 'claim A');
+    await judge(result, 'claim B'); // second call must NOT warn again
+
+    expect(lastUrl(fetchMock)).toContain('http://localhost:4001/api/judge');
+    // Exactly one warning across both calls (warn-once per process).
+    const portWarnings = warnSpy.mock.calls.filter(c =>
+      String(c[0]).includes('AH_PORT is not set')
+    );
+    expect(portWarnings).toHaveLength(1);
+  });
+
+  it('does NOT warn when AH_PORT is set, and targets that port', async () => {
+    process.env.AH_PORT = '4087';
+    const { fetchMock } = mockJudgeFetch();
+
+    await judge({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim');
+
+    expect(lastUrl(fetchMock)).toContain('http://localhost:4087/api/judge');
+    const portWarnings = warnSpy.mock.calls.filter(c =>
+      String(c[0]).includes('AH_PORT is not set')
+    );
+    expect(portWarnings).toHaveLength(0);
+  });
+
+  it('does NOT warn when an explicit serverUrl is provided, and targets it', async () => {
+    const { fetchMock } = mockJudgeFetch();
+
+    await judge({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim', {
+      serverUrl: 'http://127.0.0.1:9100',
+    });
+
+    expect(lastUrl(fetchMock)).toContain('http://127.0.0.1:9100/api/judge');
+    const portWarnings = warnSpy.mock.calls.filter(c =>
+      String(c[0]).includes('AH_PORT is not set')
+    );
+    expect(portWarnings).toHaveLength(0);
+  });
+});

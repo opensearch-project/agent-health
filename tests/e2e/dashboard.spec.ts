@@ -22,22 +22,25 @@ test.describe('Dashboard Page', () => {
       await expect(page.locator('text=Surface failing runs and regressions to improve your agent fast')).toBeVisible();
     } else {
       expect(hasFirstRun).toBeTruthy();
-      await expect(page.locator('text=Welcome to Agent Health')).toBeVisible();
+      await expect(page.locator('[data-testid="first-run-experience"]')).toBeVisible();
+      await expect(page.locator('text=Know if your agent is actually working')).toBeVisible();
     }
   });
 
   test('should show first-run or dashboard content after loading', async ({ page }) => {
-    const contentIndicator = page.locator('text=Welcome to Agent Health')
+    const contentIndicator = page.locator('text=Know if your agent is actually working')
+      .or(page.locator('[data-testid="first-run-experience"]'))
       .or(page.locator('text=Leaderboard Overview'))
       .or(page.locator('text=Recent Evaluation Runs'));
-    await expect(contentIndicator).toBeVisible({ timeout: 15000 });
+    await expect(contentIndicator.first()).toBeVisible({ timeout: 15000 });
   });
 
   test('should display getting started steps when no data', async ({ page }) => {
     const hasFirstRun = await page.locator('[data-testid="first-run-experience"]').isVisible().catch(() => false);
 
     if (hasFirstRun) {
-      await expect(page.locator('text=Welcome to Agent Health')).toBeVisible();
+      await expect(page.locator('[data-testid="first-run-experience"]')).toBeVisible();
+      await expect(page.locator('text=Know if your agent is actually working')).toBeVisible();
     }
   });
 });

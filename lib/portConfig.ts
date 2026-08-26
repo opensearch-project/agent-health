@@ -43,6 +43,24 @@ export function resolveDevPort(): number {
 }
 
 /**
+ * Whether the backend port was *explicitly* configured (AH_PORT /
+ * AGENT_HEALTH_PORT set) vs. silently defaulted to {@link DEFAULT_BACKEND_PORT}.
+ *
+ * Callers that dial the backend over HTTP (e.g. the SDK `judge()` matcher
+ * run outside the server lifecycle) use this to warn before defaulting to
+ * 4001 — where a foreign instance (a live demo, another checkout) may be
+ * listening. See AGENTS.md → server lifecycle.
+ *
+ * Only a value that parses to a valid integer counts as explicit — a
+ * garbage `AH_PORT=abc` silently falls back to the default in
+ * {@link resolveBackendPort}, so the warn-once must still fire for it.
+ */
+export function isBackendPortExplicit(): boolean {
+  const port = readEnv('AH_PORT', 'AGENT_HEALTH_PORT');
+  return !!port && !isNaN(parseInt(port, 10));
+}
+
+/**
  * Get the full backend URL (http://localhost:<port>).
  */
 export function getBackendUrl(): string {

@@ -1,0 +1,15 @@
+{
+  "name": "Ops RCA (weighted)",
+  "description": "Weighted scoring for a ticket-triage / RCA ops agent. Root-cause accuracy dominates; latency is a small tie-breaker. Attach to a run via evaluatorId.",
+  "systemPrompt": "You are evaluating an ops agent that triages a support ticket. The agent must (1) classify the ticket type (latency vs fault), (2) identify the root cause from a fixed category set, (3) recommend an appropriate SOP/runbook, and (4) check the relevant metrics. Score each metric from 0 to 100.\n\nCRITICAL CRITERIA:\n- root_cause_accuracy is the PRIMARY metric. A wrong root cause is a failed triage regardless of everything else.\n- sop_selection: did the agent recommend a runbook appropriate for the identified root cause?\n- relevant_metrics: did the agent inspect the metrics/logs that actually matter for this failure mode?\n- latency: score higher when the agent reaches a correct answer in fewer steps / less wall-clock time.\n\nReturn pass_fail_status, reasoning, a metrics object with the four numeric scores, and improvement_strategies.",
+  "scoringConfig": {
+    "metrics": [
+      { "name": "root_cause_accuracy", "weight": 0.6, "scale": 100 },
+      { "name": "sop_selection", "weight": 0.2, "scale": 100 },
+      { "name": "relevant_metrics", "weight": 0.1, "scale": 100 },
+      { "name": "latency", "weight": 0.1, "scale": 100 }
+    ],
+    "passThreshold": 80,
+    "scale": 100
+  }
+}

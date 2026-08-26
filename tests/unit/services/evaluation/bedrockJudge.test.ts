@@ -64,6 +64,39 @@ describe('bedrockJudge', () => {
       expect(result.llmJudgeReasoning).toBe('The agent performed well.');
     });
 
+    it('should forward the mock-judge `warning` field when the route sets it', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          passFailStatus: 'passed',
+          metrics: { accuracy: 80 },
+          llmJudgeReasoning: '⚠️ **MOCK JUDGE — NOT A REAL EVALUATION** ⚠️',
+          improvementStrategies: [],
+          warning: 'MOCK_JUDGE: this score was produced by the demo/mock judge, not an LLM.',
+        }),
+      });
+
+      const result = await callBedrockJudge(mockTrajectory, mockExpectedBehavior);
+
+      expect(result.warning).toMatch(/MOCK_JUDGE/);
+    });
+
+    it('should leave `warning` undefined when the route response omits it (real judge)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          passFailStatus: 'passed',
+          metrics: { accuracy: 92 },
+          llmJudgeReasoning: 'The agent performed well.',
+          improvementStrategies: [],
+        }),
+      });
+
+      const result = await callBedrockJudge(mockTrajectory, mockExpectedBehavior);
+
+      expect(result.warning).toBeUndefined();
+    });
+
     it('should call onProgress callback with reasoning', async () => {
       const mockResponse = {
         passFailStatus: 'passed',

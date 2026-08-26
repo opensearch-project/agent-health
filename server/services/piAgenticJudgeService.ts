@@ -25,6 +25,7 @@ import type { PiSdk } from '@/server/services/piSdkTypes';
 import { Evaluator } from '@/types';
 import { readEnv } from '@/lib/envCompat';
 import { debug } from '@/lib/debug';
+import { regionInferencePrefix } from '@/lib/bedrockCompat';
 
 /**
  * Default base prompt used when no saved evaluator's `systemPrompt` is provided.
@@ -112,14 +113,6 @@ export function buildAgentTraceJudgeSystemPrompt(evaluator?: { systemPrompt?: st
       ? evaluator.systemPrompt
       : DEFAULT_AGENT_TRACE_JUDGE_BASE_PROMPT;
   return baseSystemPrompt + AGENT_TRACE_TOOL_ADDENDUM;
-}
-
-/** Inference-profile prefix appropriate for the current AWS region. */
-function regionInferencePrefix(): string {
-  const r = (process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1').toLowerCase();
-  if (r.startsWith('eu-')) return 'eu.';
-  if (r.startsWith('ap-')) return 'apac.';
-  return 'us.';
 }
 
 /**

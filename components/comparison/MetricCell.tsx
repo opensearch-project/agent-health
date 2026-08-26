@@ -20,14 +20,18 @@ interface MetricCellProps {
   visibleEvaluators?: Set<EvaluatorType>;
 }
 
+// Metric values arrive as raw JS floats — a 95.5 vs 95.8 subtraction renders
+// "-0.29999999999999716" without this. One decimal is all a comparison needs.
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
 function DeltaValue({ value, baseline, label }: { value?: number; baseline?: number; label: string }) {
   if (value === undefined) return null;
-  const delta = baseline !== undefined ? value - baseline : undefined;
+  const delta = baseline !== undefined ? round1(value - baseline) : undefined;
   return (
     <div className="flex items-center justify-between text-[10px]">
       <span className="text-muted-foreground">{label}</span>
       <span>
-        <span className="font-medium">{value}%</span>
+        <span className="font-medium">{round1(value)}%</span>
         {delta !== undefined && delta !== 0 && (
           <span className={cn('ml-0.5', delta > 0 ? 'text-opensearch-blue' : 'text-red-400')}>
             ({delta > 0 ? '+' : ''}{delta})
@@ -54,9 +58,9 @@ export const MetricCell: React.FC<MetricCellProps> = ({
 
   if (result.status === 'missing') {
     return (
-      <div className="text-center py-2 text-muted-foreground">
-        <Minus size={16} className="mx-auto mb-1 opacity-50" />
-        <span className="text-xs">Not run</span>
+      <div className="flex items-center justify-center gap-1 py-1 text-muted-foreground">
+        <Minus size={12} className="opacity-50" />
+        <span className="text-[11px]">Not run</span>
       </div>
     );
   }
@@ -88,29 +92,26 @@ export const MetricCell: React.FC<MetricCellProps> = ({
 
   const isPassed = result.passFailStatus === 'passed';
   const accuracy = result.accuracy ?? 0;
-  const accDelta = !isReference && baselineAccuracy !== undefined ? accuracy - baselineAccuracy : undefined;
+  const accDelta = !isReference && baselineAccuracy !== undefined
+    ? round1(accuracy - baselineAccuracy)
+    : undefined;
 
   return (
-    <div className="py-2 px-2.5 group relative">
-      {/* Pass/Fail status dot + label */}
-      <div className="flex items-center justify-center gap-1.5">
-        <span className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', isPassed ? 'bg-green-500' : 'bg-red-400')} />
-        <span className={cn('text-xs font-medium', isPassed ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400')}>
+    <div className="py-1 px-2.5 group relative">
+      {/* Dense primary row: status + accuracy + delta on ONE line — a status
+          label and a label-value "Accuracy" pair on separate lines tripled the
+          row height for no information gain. */}
+      <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
+        <span className={cn('w-2 h-2 rounded-full flex-shrink-0', isPassed ? 'bg-green-500' : 'bg-red-400')} />
+        <span className={cn('text-[11px] font-medium', isPassed ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400')}>
           {isPassed ? 'Passed' : 'Failed'}
         </span>
-      </div>
-
-      {/* Metrics grid */}
-      <div className="mt-1 space-y-0.5">
-        {/* Accuracy — always shown */}
         {show('accuracy') && (
-        <div className="flex items-center justify-between text-[10px]">
-          <span className="text-muted-foreground" title="Accuracy">Accuracy</span>
-          <div className="flex items-center gap-1">
-            <span className="font-medium">{accuracy}%</span>
+          <>
+            <span className="text-[11px] font-medium tabular-nums ml-1" title="Accuracy">{round1(accuracy)}%</span>
             {accDelta !== undefined && accDelta !== 0 && (
               <span className={cn(
-                'inline-flex items-center gap-0.5 px-1.5 py-0 rounded-full text-[9px] font-medium',
+                'inline-flex items-center gap-0.5 px-1 py-0 rounded-full text-[9px] font-medium tabular-nums',
                 accDelta > 0
                   ? 'bg-blue-500/10 text-blue-500'
                   : 'bg-red-500/10 text-red-400'
@@ -119,10 +120,12 @@ export const MetricCell: React.FC<MetricCellProps> = ({
                 {accDelta > 0 ? '+' : ''}{accDelta}
               </span>
             )}
-          </div>
-        </div>
+          </>
         )}
+      </div>
 
+      {/* Secondary metrics — only when explicitly toggled visible */}
+      <div className="space-y-0.5">
         {/* Faithfulness — show if available and visible */}
         {show('faithfulness') && (
         <DeltaValue
@@ -136,7 +139,7 @@ export const MetricCell: React.FC<MetricCellProps> = ({
         {show('trajectory') && result.trajectoryAlignment !== undefined && (
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-muted-foreground" title="Trajectory alignment">Trajectory</span>
-            <span className="font-medium">{result.trajectoryAlignment}%</span>
+            <span className="font-medium">{round1(result.trajectoryAlignment)}%</span>
           </div>
         )}
 
@@ -144,7 +147,7 @@ export const MetricCell: React.FC<MetricCellProps> = ({
         {show('latency') && result.latencyScore !== undefined && (
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-muted-foreground" title="Latency score">Latency</span>
-            <span className="font-medium">{result.latencyScore}%</span>
+            <span className="font-medium">{round1(result.latencyScore)}%</span>
           </div>
         )}
       </div>

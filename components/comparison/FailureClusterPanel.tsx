@@ -258,23 +258,21 @@ export const FailureClusterPanel: React.FC<FailureClusterPanelProps> = ({
   }
 
   if (phase === 'idle') {
+    // Single slim line — this sits inside the Table Compare block now, so it
+    // must read as a toolbar affordance, not a full-width banner.
     return (
-      <div className="rounded-lg border border-dashed border-border bg-muted/10 px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Sparkles size={14} className="text-purple-300" />
-          <div>
-            <div className="text-xs font-medium">Analyze failure patterns</div>
-            <div className="text-[10px] text-muted-foreground">
-              Group {cases.length} regressed case{cases.length === 1 ? '' : 's'} by root cause so you can see what to fix.
-            </div>
-          </div>
-        </div>
+      <div className="rounded-md border border-dashed border-border bg-muted/10 px-3 py-1 flex items-center gap-2">
+        <Sparkles size={12} className="text-purple-300 shrink-0" />
+        <span className="text-[11px] font-medium">Analyze failure patterns</span>
+        <span className="text-[10px] text-muted-foreground truncate">
+          group {cases.length} regressed case{cases.length === 1 ? '' : 's'} by root cause
+        </span>
         <Button
           size="sm"
           onClick={() => run(false)}
-          className="h-7 gap-1.5 text-xs"
+          className="h-5 gap-1 text-[10px] px-2 ml-auto"
         >
-          <Sparkles size={12} />
+          <Sparkles size={10} />
           Analyze
         </Button>
       </div>

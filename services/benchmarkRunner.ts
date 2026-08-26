@@ -48,6 +48,7 @@ import type { TrajectoryStep } from '@/types';
 import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
 import { v4 as uuidv4 } from 'uuid';
 import { loadConfigSync } from '@/lib/config/index';
+import { getBackendUrl } from '@/lib/portConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { tracePollingManager } from './traces/tracePoller';
 import { fetchSpansForRun, type TraceWindowAgent } from './traces/fetchSpansForRun';
@@ -483,8 +484,10 @@ export async function executeRun(
                 // See the matching comment in services/evaluationRunner.ts.
                 // Customer-supplied `run.judgeModelId` becomes the bound
                 // judge model; the agent's `bedrockModelId` no longer
-                // leaks into the judge call.
-                judge: bindJudge({ evaluatorId: run.evaluatorId, model: run.judgeModelId }),
+                // leaks into the judge call. serverUrl is pinned to this
+                // server's actual bound URL so the SDK judge never defaults
+                // to 4001 / a foreign instance.
+                judge: bindJudge({ evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() }),
                 evaluate: evaluateFixture,
               };
               try {
@@ -581,12 +584,34 @@ export async function executeRun(
               bedrockModelId,
               testCase,
               () => {},
-              { registry: connectorRegistry, evaluatorId: run.evaluatorId, skipJudge: false }
+              {
+                registry: connectorRegistry,
+                evaluatorId: run.evaluatorId,
+                skipJudge: false,
+                // Forward the run-level judge model so the judge call uses what
+                // the customer picked in the run config dialog / CLI / API — not
+                // the agent's own model. Without this the benchmark-execute path
+                // silently fell back to BEDROCK_MODEL_ID / the agent's modelId
+                // (→ mock judge for demo-modeled agents) while runSingleUseCase
+                // forwarded it correctly.
+                judgeModelId: run.judgeModelId,
+              }
             );
             report = caseSpanContext
               ? await context.with(caseSpanContext, runEval)
               : await runEval();
           }
+
+          // Stamp run-level judge inputs onto the report BEFORE saving — the
+          // connector return path doesn't carry them, and both the persisted
+          // audit trail (report.judgeModelId) and the trace-mode polled judge
+          // (which reads report.judgeModelId / report.evaluatorId) depend on
+          // them. Mirrors the same stamp in runSingleUseCase.
+          (report as any).judgeModelId = (report as any).judgeModelId ?? run.judgeModelId;
+          (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
+          // Eval test_case span traceId — Strategy A correlator for the trace
+          // poller (see evaluationRunner for details).
+          (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
 
           // Save the report to OpenSearch and get the actual stored ID
           const savedReport = await saveReportWithClient(client, report, {
@@ -601,7 +626,10 @@ export async function executeRun(
           // Start trace polling for trace-mode runs (metricsStatus: 'pending').
           // Deterministic SDK runs already populated the report with their own
           // verdict in the matcher session above, so skip this path.
-          if (!hasDeterministicEval && savedReport.metricsStatus === 'pending' && savedReport.runId) {
+          // No runId requirement: the poller correlates via the report's
+          // sessionId / eval traceId / service-window hints when Strategy B
+          // is unavailable (REST-connector reports never carry a runId).
+          if (!hasDeterministicEval && savedReport.metricsStatus === 'pending') {
             const pollPromise = startTracePollingForReport(savedReport, testCase, client, benchmark, run);
             // Attach .catch to prevent unhandled rejection if cancelled/errored before allSettled
             pendingTracePolls.push(pollPromise.catch(() => {}));
@@ -893,6 +921,8 @@ export async function runSingleUseCase(
   // running the AES Oncall test case with `useTraces: true` + the
   // agent (trace) judge.
   (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
+  // Eval test_case span traceId — Strategy A correlator for the trace poller.
+  (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
 
   // If a placeholder run was pre-created, update it instead of creating a new one.
   // We use the storage-layer field names (traceId, etc.) to match `saveReportWithModule`
@@ -963,8 +993,9 @@ export async function runSingleUseCase(
     })
     .catch(err => console.warn(`[BenchmarkRunner] Failed to update lastRunAt for ${testCase.id}:`, err.message));
 
-  // Start trace polling for trace-mode runs
-  if (savedReport.metricsStatus === 'pending' && savedReport.runId) {
+  // Start trace polling for trace-mode runs. No runId requirement — see
+  // startTracePollingForReportWithModule.
+  if (savedReport.metricsStatus === 'pending') {
     if (options?.awaitTraces !== false) {
       // CLI/batch mode: block until traces arrive and judge evaluates
       try {
@@ -1006,9 +1037,11 @@ export async function runSingleUseCase(
  * can re-attach polling for reports that were orphaned by a server restart.
  */
 export function startTracePollingForReportWithModule(report: EvaluationReport, testCase: TestCase, storage: IStorageModule): Promise<void> {
+  // No runId (e.g. REST-connector agents) is fine now: the poller derives
+  // sessionId / service-window correlation hints from the report itself
+  // (Strategies C/D), so polling can proceed without Strategy B.
   if (!report.runId) {
-    console.warn(`[BenchmarkRunner] No runId for report ${report.id}, cannot start trace polling`);
-    return Promise.resolve();
+    debug('BenchmarkRunner', `No runId for report ${report.id} — polling via sessionId/service-window hints`);
   }
 
   // Pass agent config to trace poller for hooks
@@ -1022,7 +1055,11 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
     {
       onTracesFound: async (spans, updatedReport) => {
         try {
-          const finalTrajectory = agentConfig?.hooks?.buildTrajectory ? updatedReport.trajectory : report.trajectory;
+          // updatedReport.trajectory is the span-built trajectory (from the
+          // agent's buildTrajectory hook, or the default span→trajectory
+          // conversion — issue #320); the poller leaves the original SSE
+          // trajectory in place when no steps could be built from spans.
+          const finalTrajectory = updatedReport.trajectory;
           // Trace-mode polled judge — same priority chain as the standard
           // path: report.judgeModelId (persisted at run-create time) >
           // BEDROCK_MODEL_ID env > agent's modelId (last-resort BC
@@ -1136,9 +1173,10 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
  * Start trace polling for the batch benchmark execution path (uses raw OpenSearch client).
  */
 function startTracePollingForReport(report: EvaluationReport, testCase: TestCase, client: Client, benchmark?: Benchmark, run?: BenchmarkRun): Promise<void> {
+  // See startTracePollingForReportWithModule: no runId → the poller falls
+  // back to sessionId/service-window correlation hints from the report.
   if (!report.runId) {
-    console.warn(`[BenchmarkRunner] No runId for report ${report.id}, cannot start trace polling`);
-    return Promise.resolve();
+    debug('BenchmarkRunner', `No runId for report ${report.id} — polling via sessionId/service-window hints`);
   }
 
   // Pass agent config to trace poller for hooks
@@ -1152,7 +1190,8 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
     {
       onTracesFound: async (spans, updatedReport) => {
         try {
-          const finalTrajectory = agentConfig?.hooks?.buildTrajectory ? updatedReport.trajectory : report.trajectory;
+          // Span-built trajectory (hook or default conversion — issue #320).
+          const finalTrajectory = updatedReport.trajectory;
           // Trace-mode timeout judge (no spans found) — same priority as above.
           const judgeModelId =
             report.judgeModelId ||

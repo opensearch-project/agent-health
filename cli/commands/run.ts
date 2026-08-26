@@ -120,16 +120,28 @@ async function runForAgent(
           spinner.text = `${agent.name}: Step ${event.stepIndex + 1} (${event.step.type})`;
         } else if (event.type === 'started') {
           spinner.text = `${agent.name}: Started evaluation...`;
+        } else if (event.type === 'awaiting-judge' || event.type === 'polling') {
+          // Trace-mode agents: judge runs in the background after traces land
+          spinner.text = `${agent.name}: Waiting for traces / judge verdict...`;
         }
       },
       evaluatorId,
       judgeModelId
     );
 
-    if (report.status === 'completed' && report.passFailStatus === 'passed') {
+    // Trace-mode reports can time out still awaiting the judge — that state
+    // is neither PASSED nor FAILED (issue #333): show it as pending.
+    const judgePending = report.metricsStatus === 'pending' || report.metricsStatus === 'calculating';
+    if (report.status === 'completed' && judgePending) {
+      spinner.warn(`${agent.name}: ${chalk.yellow('PENDING')} (judge has not run yet — check the report later)`);
+    } else if (report.status === 'completed' && report.passFailStatus === 'passed') {
       spinner.succeed(`${agent.name}: ${chalk.green('PASSED')}`);
+    } else if (report.status === 'completed' && report.passFailStatus === 'failed') {
+      spinner.fail(`${agent.name}: ${chalk.red('FAILED')}`);
     } else if (report.status === 'completed') {
-      spinner.succeed(`${agent.name}: ${chalk.red('FAILED')}`);
+      // Completed but no verdict recorded (e.g. judge errored) — don't
+      // misreport as FAILED.
+      spinner.warn(`${agent.name}: ${chalk.yellow('NO VERDICT')}`);
     } else {
       spinner.fail(`${agent.name}: ${chalk.yellow(report.status)}`);
     }
@@ -149,7 +161,9 @@ function buildResultRows(results: Array<{ agent: AgentConfig; report: Evaluation
     if (!r.report) {
       return [r.agent.name, 'ERROR', '-', '-', '-'];
     }
-    const status = r.report.passFailStatus === 'passed' ? 'PASSED'
+    const judgePending = r.report.metricsStatus === 'pending' || r.report.metricsStatus === 'calculating';
+    const status = judgePending ? 'PENDING'
+      : r.report.passFailStatus === 'passed' ? 'PASSED'
       : r.report.passFailStatus === 'failed' ? 'FAILED'
       : r.report.status;
     return [
@@ -185,11 +199,14 @@ function displayResults(results: Array<{ agent: AgentConfig; report: EvaluationR
       table.push([r.agent.name, chalk.red('ERROR'), '-', '-', '-']);
       continue;
     }
-    const statusStr = r.report.passFailStatus === 'passed'
-      ? chalk.green('PASSED')
-      : r.report.passFailStatus === 'failed'
-        ? chalk.red('FAILED')
-        : chalk.yellow(r.report.status);
+    const judgePending = r.report.metricsStatus === 'pending' || r.report.metricsStatus === 'calculating';
+    const statusStr = judgePending
+      ? chalk.yellow('PENDING')
+      : r.report.passFailStatus === 'passed'
+        ? chalk.green('PASSED')
+        : r.report.passFailStatus === 'failed'
+          ? chalk.red('FAILED')
+          : chalk.yellow(r.report.status);
     table.push([
       r.agent.name,
       statusStr,
@@ -212,7 +229,7 @@ export function createRunCommand(): Command {
     .requiredOption('-t, --test-case <id>', 'Test case ID or name')
     .option('-a, --agent <key>', 'Agent key (can be specified multiple times)', (val, arr: string[]) => [...arr, val], [])
     .option('-e, --evaluator <id>', 'Evaluator ID (uses RCA default if not specified)')
-    .option('--judge-model <id>', "Judge LLM model id, distinct from --model. Falls back to evaluator's inferenceConfig.modelId, then BEDROCK_MODEL_ID env. Ignored by agentic-provider judges (pi/agent/agentic/claude-code) which pick their own model.")
+    .option('--judge-model <id>', "Judge LLM model id (the agent's own model is owned by its config, not a flag). Falls back to evaluator's inferenceConfig.modelId, then BEDROCK_MODEL_ID env. Ignored by agentic-provider judges (pi/agent/agentic/claude-code) which pick their own model.")
     .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
     .option('-v, --verbose', 'Show detailed trajectory output')
     .option('--agent-path <path>', 'Path to the agent repository to use as judge grounding context (or set AH_AGENT_PATH)')

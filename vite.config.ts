@@ -21,7 +21,11 @@ export default defineConfig(({ mode }) => {
         include: ['components/*', 'hooks/*', 'lib/*', 'App.tsx', 'index.tsx'],
         exclude: ['node_modules', 'tests/', 'dist/', 'server/', 'cli/', '**/*.test.ts'],
         extension: ['.ts', '.tsx', '.js', '.jsx'],
-        requireEnv: true,
+        // requireEnv omitted — defaults to false. The outer
+        // `if (process.env.E2E_COVERAGE === 'true')` already gates whether the
+        // plugin runs at all; forceBuildInstrument makes it instrument the
+        // production e2e build. A second VITE_COVERAGE gate here just silently
+        // defeated both (empty .nyc_output → no e2e coverage flag).
         forceBuildInstrument: true,
       })
     );

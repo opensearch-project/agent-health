@@ -3,14 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Mock opensearchClientFactory
+// Mock opensearchClientFactory (keep describeOpenSearchError/etc. real; only
+// stub the two functions that talk to a real OpenSearch client)
 const mockConfigToCacheKey = jest.fn().mockReturnValue('basic|https://localhost:9200|abc123');
 const mockCreateClient = jest.fn();
 
-jest.mock('@/server/services/opensearchClientFactory', () => ({
-  createOpenSearchClient: mockCreateClient,
-  configToCacheKey: mockConfigToCacheKey,
-}));
+jest.mock('@/server/services/opensearchClientFactory', () => {
+  const actual = jest.requireActual('@/server/services/opensearchClientFactory');
+  return {
+    ...actual,
+    createOpenSearchClient: mockCreateClient,
+    configToCacheKey: mockConfigToCacheKey,
+  };
+});
 
 // Mock adapters
 const mockSetStorageModule = jest.fn();
@@ -104,6 +109,23 @@ describe('initializeStorageFromConfig', () => {
     // Should NOT have called setStorageModule with opensearch or file
     expect(mockSetStorageModule).not.toHaveBeenCalled();
     expect(mockClient.close).toHaveBeenCalled();
+  });
+
+  it('appends the HTTP status code so a 403 (stale/rotated SigV4 credentials) is distinguishable from a 5xx (cluster failure) in the wedge-diagnosis log line', async () => {
+    const authError: any = new Error('Response Error');
+    authError.meta = { statusCode: 403, body: {} };
+    mockClient.cluster.health.mockRejectedValue(authError);
+    const config = { endpoint: 'https://sigv4-host:9200', authType: 'sigv4', awsRegion: 'us-east-1' } as any;
+
+    const state = await initializeStorageFromConfig(config);
+
+    expect(state.backend).toBe('error');
+    expect(state.error).toBe('Response Error (HTTP 403)');
+    expect(mockSetStorageError).toHaveBeenCalledWith(
+      'Response Error (HTTP 403)',
+      expect.any(String),
+      'https://sigv4-host:9200'
+    );
   });
 
   it('should run index validation when option is set', async () => {

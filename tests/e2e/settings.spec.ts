@@ -441,8 +441,8 @@ test.describe('Evaluation Storage Section', () => {
     // Wait for "Loading storage stats..." to disappear (stats API response)
     await expect(page.locator('text=Loading storage stats')).not.toBeVisible({ timeout: 30000 }).catch(() => {});
 
-    // Should show either Connected or Not connected
-    const statusText = page.locator('text=Connected to OpenSearch').or(page.locator('text=Not connected')).first();
+    // Should show either Connected (OpenSearch reachable) or the file-storage fallback
+    const statusText = page.locator('text=Connected to OpenSearch').or(page.locator('text=Using file storage')).first();
     await expect(statusText).toBeVisible({ timeout: 15000 });
   });
 
@@ -532,5 +532,72 @@ test.describe('Data Migration Section', () => {
     if (await exportButton.isVisible().catch(() => false)) {
       await expect(exportButton).toBeVisible();
     }
+  });
+});
+
+test.describe('Agent Endpoints grouping (built-in vs config-file)', () => {
+  // Regression: agents authored in agent-health.config.ts used to render under
+  // "Built-in Agents" with a false "built-in" badge, because the UI grouped by
+  // !isCustom instead of the server-computed builtIn flag.
+  test('config-file agents render under Custom Agents (agent-health.config.ts), not Built-in', async ({ page }) => {
+    await page.route('**/api/agents', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          agents: [
+            { key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo', connectorType: 'mock', builtIn: true },
+            { key: 'kiro', name: 'Kiro', endpoint: '/usr/local/bin/kiro', connectorType: 'kiro', builtIn: false },
+            { key: 'custom-1', name: 'My Custom', endpoint: 'http://x.example.com', connectorType: 'agui-streaming', isCustom: true, builtIn: false },
+          ],
+          total: 3,
+          meta: { source: 'config', hasCustomAgents: true, customCount: 2, builtInCount: 1 },
+        }),
+      });
+    });
+
+    await page.goto('/settings');
+    await page.waitForSelector('[data-testid="settings-page"]', { timeout: 30000 });
+
+    const builtInToggle = page.getByTestId('builtin-agents-toggle');
+    const configToggle = page.getByTestId('config-agents-toggle');
+
+    // Counts in the section headers reflect the correct grouping
+    await expect(builtInToggle).toContainText('Built-in Agents (1)');
+    await expect(configToggle).toContainText('Custom Agents — agent-health.config.ts (1)');
+
+    // Expand built-in: only demo, with a built-in badge; kiro must NOT be there
+    await builtInToggle.click();
+    await expect(page.getByTestId('agent-card-demo')).toContainText('built-in');
+    await expect(page.getByTestId('agent-card-kiro')).toHaveCount(0);
+
+    // Expand config-file: kiro appears with a "config" badge, not "built-in"
+    await configToggle.click();
+    const kiroCard = page.getByTestId('agent-card-kiro');
+    await expect(kiroCard).toBeVisible();
+    await expect(kiroCard).toContainText('config');
+    await expect(kiroCard).not.toContainText('built-in');
+  });
+
+  test('Custom Agents section is hidden when config defines no extra agents', async ({ page }) => {
+    await page.route('**/api/agents', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          agents: [
+            { key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo', connectorType: 'mock', builtIn: true },
+          ],
+          total: 1,
+          meta: { source: 'config', hasCustomAgents: false, customCount: 0, builtInCount: 1 },
+        }),
+      });
+    });
+
+    await page.goto('/settings');
+    await page.waitForSelector('[data-testid="settings-page"]', { timeout: 30000 });
+
+    await expect(page.getByTestId('builtin-agents-toggle')).toBeVisible();
+    await expect(page.getByTestId('config-agents-toggle')).toHaveCount(0);
   });
 });

@@ -71,14 +71,23 @@ test.describe('Navigation', () => {
     const sidebar = page.locator('[data-testid="sidebar"]');
     const menuItems = sidebar.locator('[data-testid^="nav-"]');
 
-    // Expected order: Overview, Agent Traces, Evaluations, AI Dev Tools, Assistant, Settings
+    // Expected order: Overview, Agent Traces, Evaluations (group header +
+    // benchmarks/test-cases/runs/evaluators), Skills, AI Dev Tools, Assistant,
+    // Settings.
+    // nav-skills was added with the skill evaluator feature (#206).
+    // nav-evals3 is the "Evaluations" collapsible group header link (rendered
+    // in the expanded sidebar) — it carries the same testid as the collapsed
+    // rail's icon-only button so a hover-flyout mid-click can retarget to the
+    // same destination (see components/Layout.tsx).
     const expectedOrder = [
       'nav-overview',
       'nav-agent-traces',
+      'nav-evals3',
       'nav-evals3-benchmarks',
       'nav-evals3-test-cases',
       'nav-evals3-runs',
       'nav-evaluators',
+      'nav-skills',
       'nav-coding-agents',
       'nav-assistant',
       'nav-settings',

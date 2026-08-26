@@ -42,6 +42,104 @@ import type { ClusterConfig } from '../../types/index.js';
  *   (the footgun: authType:'aws' → opaque 401/403 'Response Error').
  * - Defaults to 'basic' (backwards compatible) when nothing is specified.
  */
+/**
+ * Safety window used to force a SigV4 credential re-resolve even when the
+ * resolved AWS credentials carry no `expiration` of their own.
+ *
+ * opensearch-js's AwsSigv4Signer transport only calls `getCredentials()`
+ * again once it decides the CURRENTLY CACHED credentials object is expired
+ * (see its internal `credentialsState.credentials` + expiry check). That
+ * check is driven entirely by fields on the credentials object itself
+ * (`needsRefresh()`, `.expired`, `.expireTime`, or `.expiration`). Long-lived
+ * session credentials resolved from a profile in `~/.aws/credentials` (e.g.
+ * as written by `ada credentials update`) commonly have NONE of those
+ * fields set, even though the underlying STS session token rotates roughly
+ * hourly. Without an `expiration`, the transport's expiry check never fires
+ * again after the first successful request, so it keeps signing requests
+ * with the FIRST credentials it ever resolved - forever. When `ada` rotates
+ * the profile afterwards, every OpenSearch request starts failing with a
+ * bodiless 403 ("Response Error") and only a process restart (which
+ * re-resolves credentials at client construction) recovers.
+ *
+ * The fix: always attach a synthetic `expiration` (now + this window) to
+ * credentials that don't already carry one, so opensearch-js's own expiry
+ * check periodically forces a re-call to `getCredentials()`, which - since
+ * we build a fresh provider chain on every call below - re-reads whatever
+ * is on disk/in the environment right now.
+ */
+// 5 minutes: bounds the worst-case "still signing with a rotated-out key"
+// window to something short (opensearch-js re-checks ~30s before this
+// elapses, per its own `expiryBufferMs`) without forcing excessive re-reads
+// for credential sources that DO update in place cheaply (a profile file
+// re-read, or an already-cached IMDS/SSO provider call).
+export const SIGV4_CREDENTIAL_REFRESH_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Resolve fresh AWS credentials for the SigV4 signer via the standard node
+ * credential provider chain, honoring an explicit `expiration` from the
+ * provider (e.g. real STS temporary credentials, which are AWS SDK v3
+ * objects and therefore only ever signal freshness via `.expiration` — the
+ * `needsRefresh()`/`.expired`/`.expireTime` fields opensearch-js also checks
+ * are AWS SDK v2-only and never present on anything `fromNodeProviderChain`
+ * returns) or falling back to a synthetic near-term expiration so
+ * opensearch-js re-resolves periodically even for long-lived/session
+ * credentials that don't self-report expiry (see
+ * SIGV4_CREDENTIAL_REFRESH_WINDOW_MS above). Returns a new object rather
+ * than mutating the one handed back by the provider, since AWS SDK
+ * credential providers may cache/memoize and hand out the same object
+ * instance across calls — mutating it in place would leak our synthetic
+ * expiration into other consumers of that provider.
+ *
+ * Exported for direct unit testing.
+ */
+export async function resolveSigv4Credentials(awsProfile?: string) {
+  const provider = fromNodeProviderChain({
+    ...(awsProfile && { profile: awsProfile }),
+  });
+  const credentials = await provider();
+  if (credentials.expiration) {
+    return credentials;
+  }
+  return {
+    ...credentials,
+    expiration: new Date(Date.now() + SIGV4_CREDENTIAL_REFRESH_WINDOW_MS),
+  };
+}
+
+/**
+ * Best-effort extraction of an HTTP status code from an OpenSearch client
+ * error (opensearch-js's `ResponseError`/`ConnectionError` etc). Used to
+ * distinguish an auth failure (403 - e.g. expired/rotated SigV4 credentials)
+ * from a cluster-side failure (5xx) in logs, without needing to touch every
+ * call site's error handling.
+ */
+export function opensearchErrorStatusCode(error: unknown): number | undefined {
+  const err = error as { statusCode?: number; meta?: { statusCode?: number; body?: { status?: number } } } | null | undefined;
+  if (!err) return undefined;
+  if (typeof err.statusCode === 'number') return err.statusCode;
+  if (typeof err.meta?.statusCode === 'number') return err.meta.statusCode;
+  if (typeof err.meta?.body?.status === 'number') return err.meta.body.status;
+  return undefined;
+}
+
+/**
+ * Format an OpenSearch client error for logs/UI with its HTTP status code
+ * appended when available, e.g. "Response Error (HTTP 403)" instead of the
+ * opaque, bodiless "Response Error" opensearch-js reports for IAM denials.
+ *
+ * Returns '' (not a stringified object) when the error carries no `.message`
+ * and no status code, so existing `describeOpenSearchError(error) || 'fallback'`
+ * call sites keep their original fallback behavior for message-less errors.
+ */
+export function describeOpenSearchError(error: unknown): string {
+  const message = (error as { message?: string } | null | undefined)?.message || '';
+  const statusCode = opensearchErrorStatusCode(error);
+  if (!message) {
+    return statusCode ? `Request failed (HTTP ${statusCode})` : '';
+  }
+  return statusCode ? `${message} (HTTP ${statusCode})` : message;
+}
+
 export function resolveAuthType(config: ClusterConfig): 'none' | 'basic' | 'sigv4' {
   let authType = config.authType as string | undefined;
   if (!authType && (config.awsProfile || config.awsRegion)) {
@@ -74,12 +172,7 @@ export function createOpenSearchClient(config: ClusterConfig): Client {
     const signer = AwsSigv4Signer({
       region: config.awsRegion,
       service: config.awsService || 'es',
-      getCredentials: () => {
-        const provider = fromNodeProviderChain({
-          ...(config.awsProfile && { profile: config.awsProfile }),
-        });
-        return provider();
-      },
+      getCredentials: () => resolveSigv4Credentials(config.awsProfile),
     });
 
     return new Client({

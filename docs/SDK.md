@@ -166,7 +166,7 @@ Key points:
 Hooks are a no-op when no test in the run uses them — the orchestrator
 is short-circuited to a noop variant and existing tests pay zero cost.
 
-See the demo at [`evals/sdk-hooks-demo.eval.js`](../evals/sdk-hooks-demo.eval.js).
+See the demo at [`examples/eval-files/sdk-hooks-demo.eval.js`](../examples/eval-files/sdk-hooks-demo.eval.js).
 
 ### 5. Matchers record structured verdicts
 
@@ -483,6 +483,44 @@ enforced regardless of configuration.
 
 ---
 
+## Weighted scoring across criteria
+
+Each `expect(...)`, `judge(...)`, and `evaluate(...)` call records **one
+per-matcher pass/fail** — they are not weighted against each other. When you
+need a **single aggregate score** that weights criteria differently (e.g. root
+cause 60%, SOP selection 20%, relevant-metrics check 10%, latency 10%), the
+weighting lives in a **custom evaluator's `scoringConfig`**, not in the test
+body. Define the weighted metrics once and attach the evaluator to the run via
+`evaluatorId`:
+
+```json
+{
+  "name": "Ops RCA (weighted)",
+  "systemPrompt": "You evaluate an ops agent that triages a ticket. Score each metric 0-100. CRITICAL: root_cause_accuracy is the primary metric.",
+  "scoringConfig": {
+    "metrics": [
+      { "name": "root_cause_accuracy",  "weight": 0.6, "scale": 100 },
+      { "name": "sop_selection",        "weight": 0.2, "scale": 100 },
+      { "name": "relevant_metrics",     "weight": 0.1, "scale": 100 },
+      { "name": "latency",              "weight": 0.1, "scale": 100 }
+    ],
+    "passThreshold": 80,
+    "scale": 100
+  }
+}
+```
+
+The run's overall score is the weighted mean of the metrics the evaluator
+emits, so you get one comparable number per run for progress tracking. Use the
+deterministic `expect(...)` matchers for the hard checks (exact classification,
+tool was called, budget cap) and the judge/evaluator + weighted `scoringConfig`
+for the aggregate score. See the ops-RCA worked example at
+[`examples/eval-files/ops-rca-classification.eval.js`](../examples/eval-files/ops-rca-classification.eval.js)
+and its companion [`examples/eval-files/ops-rca-evaluator.json`](../examples/eval-files/ops-rca-evaluator.json),
+and the evaluator reference in [docs/skills/AGENT_HEALTH.md](./skills/AGENT_HEALTH.md#custom-evaluators).
+
+---
+
 ## Running the tests
 
 ### Via the UI
@@ -492,7 +530,7 @@ enforced regardless of configuration.
 ### Via the CLI
 
 ```bash
-npx @opensearch-project/agent-health benchmark -f ./evals/demo.eval.js -a observio
+npx @opensearch-project/agent-health benchmark -f ./examples/eval-files/demo.eval.js -a observio
 ```
 
 ### Via the HTTP API
@@ -504,7 +542,7 @@ curl -sN -X POST http://localhost:4001/api/storage/evaluation-runs \
     "name": "Demo",
     "sources": [{
       "type": "code-import",
-      "filenames": ["evals/demo.eval.js"],
+      "filenames": ["examples/eval-files/demo.eval.js"],
       "testCaseIds": []
     }],
     "agentKey": "observio",

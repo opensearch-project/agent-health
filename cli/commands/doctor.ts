@@ -14,6 +14,7 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { loadConfig, getConfigFileInfo, type ResolvedConfig } from '@/lib/config/index.js';
 import { connectorRegistry } from '@/services/connectors/server.js';
+import { resolveBackendPort } from '@/lib/portConfig.js';
 
 interface CheckResult {
   name: string;
@@ -263,7 +264,10 @@ function checkOpenSearchObservability(): CheckResult {
  * Check traces connectivity via the running server's health endpoint
  */
 async function checkTracesConnectivity(): Promise<CheckResult> {
-  const port = process.env.PORT || '4001';
+  // Use the canonical backend port (AH_PORT / AGENT_HEALTH_PORT, default
+  // 4001) — not the bare PORT env, which is unrelated and left the doctor
+  // probing the wrong server. See AGENTS.md → server lifecycle.
+  const port = resolveBackendPort();
   try {
     const response = await fetch(`http://localhost:${port}/api/traces/health`, {
       signal: AbortSignal.timeout(5000),

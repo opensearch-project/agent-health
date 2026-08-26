@@ -385,6 +385,13 @@ If you run an MCP server, expose this document as a resource at `agent-health://
 
 ## Reference
 
+### New to OpenTelemetry?
+
+- [What is OpenTelemetry?](https://opentelemetry.io/docs/what-is-opentelemetry/) — start here for the concepts (traces, spans, exporters, collectors).
+- [OpenTelemetry GenAI semantic conventions (repo)](https://github.com/open-telemetry/semantic-conventions-genai) — the source-of-truth for the `gen_ai.*` attributes this guide uses.
+
+### Specs used by this guide
+
 - [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
 - [OTel GenAI Agent Spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/)
 - [Agent Health Telemetry Setup](./CLAUDE_CODE_TELEMETRY.md)

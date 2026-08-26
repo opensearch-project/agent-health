@@ -9,7 +9,7 @@
 
 import { Span, TimeRange, TraceQueryParams, TraceSearchResult } from '@/types';
 import { getSpanCategory } from './spanCategorization';
-import { readEnv } from '@/lib/envCompat';
+import { getBackendUrl } from '@/lib/portConfig';
 
 // Re-export trace grouping utilities
 export { groupSpansByTrace, getSpansForTrace } from './traceGrouping';
@@ -25,8 +25,9 @@ export { extractMessagesFromSpans } from './messageExtraction';
 function getApiBaseUrl(): string {
   const isServerSide = typeof window === 'undefined';
   if (isServerSide) {
-    const port = readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001';
-    return `http://localhost:${port}`;
+    // Server-side self-call — use the canonical backend URL (AH_PORT is kept
+    // in lockstep with the actual bound port; see server lifecycle).
+    return getBackendUrl();
   }
   return ''; // Relative URLs in browser
 }
@@ -252,6 +253,29 @@ export function getSpanColor(span: Span): string {
   };
 
   return CATEGORY_HEX[category] || CATEGORY_HEX.OTHER;
+}
+
+/**
+ * Compute the initial expanded-spans set for a trace: every root, plus
+ * every ancestor of any ERROR-status span so the failing span is visible
+ * on load instead of hidden behind collapsed parents (TraceTree and
+ * Timeline both key off this set).
+ */
+export function getInitialExpandedSpans(spanTree: Span[]): Set<string> {
+  const expanded = new Set<string>();
+  const walk = (spans: Span[], ancestors: string[]): void => {
+    for (const span of spans) {
+      if (!span.parentSpanId) expanded.add(span.spanId);
+      if (span.status === 'ERROR') {
+        for (const id of ancestors) expanded.add(id);
+      }
+      if (span.children?.length) {
+        walk(span.children, [...ancestors, span.spanId]);
+      }
+    }
+  };
+  walk(spanTree, []);
+  return expanded;
 }
 
 /**

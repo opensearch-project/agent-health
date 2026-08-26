@@ -31,6 +31,34 @@ function getEventContent(span: Span, eventName: string): string | null {
   return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
 }
 
+function getToolPartFromMessages(
+  raw: unknown,
+  partType: 'tool_call' | 'tool_call_response',
+  field: 'arguments' | 'result',
+): string | null {
+  if (!raw) return null;
+  let messages: unknown = raw;
+  if (typeof messages === 'string') {
+    try {
+      messages = JSON.parse(messages);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(messages)) return null;
+  for (const msg of messages) {
+    const parts = (msg as any)?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts) {
+      if (part?.type === partType && part[field] !== undefined && part[field] !== null) {
+        const v = part[field];
+        return typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v);
+      }
+    }
+  }
+  return null;
+}
+
 function extractSpanIO(span: Span): SpanIOData {
   const attrs = span.attributes || {};
   const name = span.name.toLowerCase();
@@ -70,9 +98,13 @@ function extractSpanIO(span: Span): SpanIOData {
              null;
   }
 
-  // Tool spans - OTel standard: gen_ai.tool.call.arguments / gen_ai.tool.call.result
+  // Tool spans — mirrors the component (issue #319): spec attributes,
+  // then event convention (gen_ai.tool.message / gen_ai.choice), then
+  // structured message attributes, then vendor-compat fallbacks.
   if (category === 'tool') {
     input = attrs['gen_ai.tool.call.arguments'] ||
+            getEventContent(span, 'gen_ai.tool.message') ||
+            getToolPartFromMessages(attrs['gen_ai.input.messages'], 'tool_call', 'arguments') ||
             getEventContent(span, 'gen_ai.tool.input') ||
             attrs['gen_ai.tool.input'] ||
             attrs['tool.input'] ||
@@ -81,6 +113,8 @@ function extractSpanIO(span: Span): SpanIOData {
             null;
 
     output = attrs['gen_ai.tool.call.result'] ||
+             getEventContent(span, 'gen_ai.choice') ||
+             getToolPartFromMessages(attrs['gen_ai.output.messages'], 'tool_call_response', 'result') ||
              getEventContent(span, 'gen_ai.tool.output') ||
              attrs['gen_ai.tool.output'] ||
              attrs['tool.output'] ||
@@ -294,6 +328,75 @@ describe('SpanInputOutput - extractSpanIO', () => {
       const result = extractSpanIO(span);
       expect(result.input).toBe('input data');
       expect(result.output).toBe('output data');
+    });
+
+    // Issue #319: the OTel GenAI event-based convention (what Strands emits)
+    // stores arguments in a gen_ai.tool.message event and the result in a
+    // gen_ai.choice event — neither is an attribute.
+    it('extracts tool I/O from gen_ai.tool.message / gen_ai.choice span events (Strands)', () => {
+      const span = createSpan({
+        name: 'execute_tool add_to_cart',
+        attributes: {
+          'gen_ai.operation.name': 'execute_tool',
+          'gen_ai.tool.name': 'add_to_cart',
+          'gen_ai.tool.call.id': 'tooluse_abc',
+        },
+        events: [
+          {
+            name: 'gen_ai.tool.message',
+            time: '2024-01-01T00:00:00.5Z',
+            attributes: { role: 'tool', id: 'tooluse_abc', content: '{"quantity":1,"product_id":"PROD-001"}' },
+          },
+          {
+            name: 'gen_ai.choice',
+            time: '2024-01-01T00:00:00.9Z',
+            attributes: { id: 'tooluse_abc', message: '[{"json":{"cart_id":"default","total":79.99}}]' },
+          },
+        ],
+      });
+
+      const result = extractSpanIO(span);
+      expect(result.category).toBe('tool');
+      expect(result.input).toBe('{"quantity":1,"product_id":"PROD-001"}');
+      expect(result.output).toBe('[{"json":{"cart_id":"default","total":79.99}}]');
+    });
+
+    it('prefers spec attributes gen_ai.tool.call.arguments/.result over events', () => {
+      const span = createSpan({
+        name: 'execute_tool search',
+        attributes: {
+          'gen_ai.tool.name': 'search',
+          'gen_ai.tool.call.arguments': '{"q":"attr wins"}',
+          'gen_ai.tool.call.result': '{"hits":1}',
+        },
+        events: [
+          { name: 'gen_ai.tool.message', time: '2024-01-01T00:00:00.5Z', attributes: { content: '{"q":"event"}' } },
+          { name: 'gen_ai.choice', time: '2024-01-01T00:00:00.9Z', attributes: { message: '{"hits":0}' } },
+        ],
+      });
+
+      const result = extractSpanIO(span);
+      expect(result.input).toBe('{"q":"attr wins"}');
+      expect(result.output).toBe('{"hits":1}');
+    });
+
+    it('extracts tool I/O from gen_ai.input/output.messages tool_call parts', () => {
+      const span = createSpan({
+        name: 'execute_tool lookup',
+        attributes: {
+          'gen_ai.tool.name': 'lookup',
+          'gen_ai.input.messages': JSON.stringify([
+            { role: 'assistant', parts: [{ type: 'tool_call', id: 'c1', name: 'lookup', arguments: { key: 'k1' } }] },
+          ]),
+          'gen_ai.output.messages': JSON.stringify([
+            { role: 'tool', parts: [{ type: 'tool_call_response', id: 'c1', result: { value: 42 } }] },
+          ]),
+        },
+      });
+
+      const result = extractSpanIO(span);
+      expect(result.input).toContain('"key": "k1"');
+      expect(result.output).toContain('"value": 42');
     });
 
     it('extracts tool.parameters and tool.result', () => {

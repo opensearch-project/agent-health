@@ -406,6 +406,27 @@ describe('Config Routes', () => {
       expect(observioAgent.builtIn).toBe(true);
     });
 
+    it('marks config-file agents (non-built-in keys) with builtIn: false', async () => {
+      mockLoadConfigSync.mockReturnValue({
+        agents: [
+          { key: 'demo', name: 'Demo Agent', endpoint: 'mock://demo' },
+          { key: 'kiro', name: 'Kiro', endpoint: '/usr/local/bin/kiro' },
+          { key: 'pi-opus48', name: 'Pi (Opus 4.8)', endpoint: '/usr/local/bin/pi' },
+        ],
+        models: {},
+      } as any);
+
+      const { req, res } = createMocks();
+      const handler = getRouteHandler(configRoutes, 'get', '/api/agents');
+      await handler(req, res);
+
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      expect(response.agents.find((a: any) => a.key === 'demo').builtIn).toBe(true);
+      expect(response.agents.find((a: any) => a.key === 'kiro').builtIn).toBe(false);
+      expect(response.agents.find((a: any) => a.key === 'pi-opus48').builtIn).toBe(false);
+      expect(response.meta.builtInCount).toBe(1);
+    });
+
     it('marks custom agents with builtIn: false', async () => {
       mockLoadConfigSync.mockReturnValue({
         agents: [

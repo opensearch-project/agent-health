@@ -74,6 +74,12 @@ export async function startServer(options: StartOptions): Promise<number> {
   };
 
   const actualPort = await tryListen(options.port);
+  // Keep AH_PORT in lockstep with the port we actually bound. Without this,
+  // an auto-incremented server (e.g. 4001 busy → bound 4002) leaves
+  // AH_PORT=4001, so every self-call (judge proxy, assistant, traces, pi
+  // agentic judge) dials the *original* port — which may be a foreign
+  // instance such as the live demo. See AGENTS.md → server lifecycle.
+  process.env.AH_PORT = String(actualPort);
   if (actualPort !== options.port) {
     process.env.VITE_BACKEND_PORT = String(actualPort);
   }

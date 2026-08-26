@@ -18,7 +18,7 @@
  *     -H 'Content-Type: application/json' \
  *     -d '{
  *       "name":"SDK Demo",
- *       "sources":[{"type":"code-import","filenames":["evals/demo.eval.js"],"testCaseIds":[]}],
+ *       "sources":[{"type":"code-import","filenames":["examples/eval-files/demo.eval.js"],"testCaseIds":[]}],
  *       "agentKey":"observio",
  *       "modelId":"claude-sonnet"
  *     }'

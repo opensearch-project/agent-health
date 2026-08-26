@@ -649,7 +649,7 @@ describe('PiConnector Integration Tests', () => {
 
       const result = await promise;
       expect(result).toBe(true);
-      expect(mockSpawn).toHaveBeenCalledWith('which', ['pi'], expect.objectContaining({ shell: true }));
+      expect(mockSpawn).toHaveBeenCalledWith('which', ['pi'], expect.objectContaining({ shell: false }));
     });
 
     it('should use endpoint if provided', async () => {
@@ -660,7 +660,7 @@ describe('PiConnector Integration Tests', () => {
       proc.emit('close', 0, null);
 
       await promise;
-      expect(mockSpawn).toHaveBeenCalledWith('which', ['/usr/local/bin/pi'], expect.objectContaining({ shell: true }));
+      expect(mockSpawn).toHaveBeenCalledWith('which', ['/usr/local/bin/pi'], expect.objectContaining({ shell: false }));
     });
 
     it('should return false when command is not found', async () => {

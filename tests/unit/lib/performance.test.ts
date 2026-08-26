@@ -22,6 +22,7 @@ describe('Performance Measurement Utilities', () => {
   let consoleGroupSpy: jest.SpyInstance;
   let consoleGroupEndSpy: jest.SpyInstance;
   let performanceNowSpy: jest.SpyInstance;
+  let originalPerformance: typeof globalThis.performance;
 
   // Will hold the freshly-required module for each test group
   let mod: typeof import('@/lib/performance');
@@ -61,15 +62,28 @@ describe('Performance Measurement Utilities', () => {
     consoleGroupSpy = jest.spyOn(console, 'group').mockImplementation(() => {});
     consoleGroupEndSpy = jest.spyOn(console, 'groupEnd').mockImplementation(() => {});
 
-    // Deterministic performance.now() starting at 1000, incrementing by 100
+    // Deterministic performance.now() starting at 1000, incrementing by 100.
+    // Node 18 makes performance.now read-only AND non-configurable, so neither
+    // jest.spyOn(performance,'now') nor Object.defineProperty(performance,'now')
+    // works there ("Cannot assign to read only property 'now'"). Swap the whole
+    // global `performance` object instead — it is configurable on all supported
+    // Node versions, and the lib reads performance.now() at call time so the
+    // override is observed.
     let tick = 1000;
-    performanceNowSpy = jest
-      .spyOn(performance, 'now')
-      .mockImplementation(() => {
-        const value = tick;
-        tick += 100;
-        return value;
-      });
+    const nowImpl = jest.fn(() => {
+      const value = tick;
+      tick += 100;
+      return value;
+    });
+    originalPerformance = globalThis.performance;
+    Object.defineProperty(globalThis, 'performance', {
+      configurable: true,
+      writable: true,
+      value: Object.create(originalPerformance, {
+        now: { value: nowImpl, configurable: true, writable: true },
+      }),
+    });
+    performanceNowSpy = nowImpl as unknown as jest.SpyInstance;
   });
 
   afterEach(() => {
@@ -77,7 +91,12 @@ describe('Performance Measurement Utilities', () => {
     consoleWarnSpy.mockRestore();
     consoleGroupSpy.mockRestore();
     consoleGroupEndSpy.mockRestore();
-    performanceNowSpy.mockRestore();
+    // Restore the real global performance object.
+    Object.defineProperty(globalThis, 'performance', {
+      configurable: true,
+      writable: true,
+      value: originalPerformance,
+    });
 
     // Restore environment
     process.env.NODE_ENV = originalNodeEnv;

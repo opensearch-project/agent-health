@@ -113,7 +113,7 @@ Rules of thumb:
   `OPENSEARCH_STORAGE_*` or `storage` in your config to use a cluster instead).
 - **`evals/`** is **your test source** — `.eval.js` / `.eval.ts` files you write
   with the [code SDK](./SDK.md) and run with
-  `agent-health benchmark -f ./evals/demo.eval.js`. They are **not** stored under
+  `agent-health benchmark -f ./examples/eval-files/demo.eval.js`. They are **not** stored under
   `.agent-health/data/`; *running* them produces run records that land there (or
   in OpenSearch).
 

@@ -839,4 +839,89 @@ describe('AssistantService', () => {
       expect(withTools).not.toMatch(/NO tool access/);
     });
   });
+
+  // Issues #298/#299 call-site wiring: the Bedrock streaming fallback must
+  // route its model id through resolveRegionAwareModelId and its
+  // inferenceConfig through buildInferenceConfig. Scenario: no claude CLI,
+  // judge model configured as a us.-prefixed new-generation Claude that
+  // deprecates temperature — the ConverseStream must carry no temperature.
+  describe('streamFromBedrock fallback — bedrockCompat wiring (#298/#299)', () => {
+    it('omits temperature for a deprecating model on the fallback path', (done) => {
+      // Claude CLI unavailable → forces the Bedrock fallback branch.
+      mockExecSync.mockImplementation(() => { throw new Error('command not found'); });
+
+      const capturedInputs: any[] = [];
+      jest.doMock('@aws-sdk/client-bedrock-runtime', () => ({
+        BedrockRuntimeClient: jest.fn(() => ({
+          send: jest.fn().mockResolvedValue({
+            stream: (async function* () {
+              yield { contentBlockDelta: { delta: { text: 'hello' } } };
+            })(),
+          }),
+        })),
+        ConverseStreamCommand: jest.fn((input: any) => { capturedInputs.push(input); return input; }),
+      }));
+
+      const { loadConfigSync } = require('@/lib/config/index');
+      (loadConfigSync as jest.Mock).mockReturnValue({
+        models: {},
+        judge: { provider: 'bedrock', model: 'us.anthropic.claude-opus-4-8' },
+      });
+
+      assistantService = require('@/server/services/assistantService');
+      assistantService.streamAssistantResponse(
+        'sess-bedrock-compat',
+        'What failed in this run?',
+        undefined,
+        () => {},
+        () => {
+          try {
+            expect(capturedInputs.length).toBe(1);
+            expect(capturedInputs[0].modelId).toBe('us.anthropic.claude-opus-4-8');
+            expect(capturedInputs[0].inferenceConfig.temperature).toBeUndefined();
+            expect(capturedInputs[0].inferenceConfig.maxTokens).toBe(4096);
+            done();
+          } catch (e) { done(e as Error); }
+        },
+        (err) => done(new Error(`unexpected error: ${err}`)),
+      );
+    });
+
+    it('keeps temperature 0.7 for a model that still accepts it', (done) => {
+      mockExecSync.mockImplementation(() => { throw new Error('command not found'); });
+
+      const capturedInputs: any[] = [];
+      jest.doMock('@aws-sdk/client-bedrock-runtime', () => ({
+        BedrockRuntimeClient: jest.fn(() => ({
+          send: jest.fn().mockResolvedValue({
+            stream: (async function* () {
+              yield { contentBlockDelta: { delta: { text: 'ok' } } };
+            })(),
+          }),
+        })),
+        ConverseStreamCommand: jest.fn((input: any) => { capturedInputs.push(input); return input; }),
+      }));
+
+      const { loadConfigSync } = require('@/lib/config/index');
+      (loadConfigSync as jest.Mock).mockReturnValue({
+        models: {},
+        judge: { provider: 'bedrock', model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0' },
+      });
+
+      assistantService = require('@/server/services/assistantService');
+      assistantService.streamAssistantResponse(
+        'sess-bedrock-compat-2',
+        'Summarize the benchmark',
+        undefined,
+        () => {},
+        () => {
+          try {
+            expect(capturedInputs[0].inferenceConfig.temperature).toBe(0.7);
+            done();
+          } catch (e) { done(e as Error); }
+        },
+        (err) => done(new Error(`unexpected error: ${err}`)),
+      );
+    });
+  });
 });

@@ -29,7 +29,7 @@
  *          the top of the runs list.
  *        - The right pane shows a `LiveRunPanel` with the *same* tab
  *          strip as the saved-run inspector — Test Case Output
- *          (active by default), Traces, LLM Judge, Annotations — but
+ *          (active by default), Traces, Judge Evaluation, Annotations — but
  *          *no Overview tab*, since the Definition section to the left
  *          already covers that information.
  *        - The left sidebar remains clickable: the page is fully
@@ -329,7 +329,7 @@ test.describe('Test Case Detail — inline live-run UX (PR #228)', () => {
 
       // ── LiveRunPanel tab strip assertions ──────────────────────────
       // The right pane mounts a Tabs component with exactly four tabs:
-      // Test Case Output (active), Traces, LLM Judge, Annotations.
+      // Test Case Output (active), Traces, Judge Evaluation, Annotations.
       // The Overview tab was deliberately removed because the Definition
       // section to the left already covers that information.
       //
@@ -348,7 +348,7 @@ test.describe('Test Case Detail — inline live-run UX (PR #228)', () => {
       // The four tabs the LiveRunPanel renders.
       await expect(page.getByRole('tab', { name: /^Test Case Output/ })).toHaveCount(1);
       await expect(page.getByRole('tab', { name: /^Traces$/ })).toHaveCount(1);
-      await expect(page.getByRole('tab', { name: /^LLM Judge$/ })).toHaveCount(1);
+      await expect(page.getByRole('tab', { name: /^Judge Evaluation$/ })).toHaveCount(1);
       await expect(page.getByRole('tab', { name: /^Annotations$/ })).toHaveCount(1);
 
       // Critical regression: the LiveRunPanel must NOT render an Overview
@@ -358,8 +358,9 @@ test.describe('Test Case Detail — inline live-run UX (PR #228)', () => {
       await expect(page.getByRole('tab', { name: /^Overview$/ })).toHaveCount(0);
 
       // Sanity: the sidebar nav is still interactive — the page is not
-      // covered by a modal backdrop.
-      await expect(page.getByRole('link', { name: /^skills$/i }).first()).toBeVisible();
+      // covered by a modal backdrop. Use the stable nav testid (the sidebar
+      // item's role/label varies with collapsed state).
+      await expect(page.locator('[data-testid="nav-skills"]').first()).toBeVisible();
     } finally {
       await releaseStream();
       await tc.cleanup();
@@ -390,10 +391,10 @@ test.describe('Test Case Detail — inline live-run UX (PR #228)', () => {
         page.getByText(/Traces will appear here when the run completes/i),
       ).toBeVisible();
 
-      // LLM Judge tab placeholder.
-      await page.getByRole('tab', { name: /^LLM Judge$/ }).click();
+      // Judge Evaluation tab placeholder.
+      await page.getByRole('tab', { name: /^Judge Evaluation$/ }).click();
       await expect(
-        page.getByText(/LLM Judge reasoning will appear here once judging completes/i),
+        page.getByText(/Judge evaluation will appear here once judging completes/i),
       ).toBeVisible();
 
       // Annotations tab placeholder.

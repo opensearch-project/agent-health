@@ -17,11 +17,11 @@
  */
 
 import { tracePollingManager, PollCallbacks } from '@/services/traces/tracePoller';
-import { fetchTracesByRunIds } from '@/services/traces';
+import { fetchTracesForRun } from '@/services/traces';
 import { asyncRunStorage } from '@/services/storage/asyncRunStorage';
 
 jest.mock('@/services/traces/index', () => ({
-  fetchTracesByRunIds: jest.fn(),
+  fetchTracesForRun: jest.fn(),
 }));
 
 jest.mock('@/services/storage/asyncRunStorage', () => ({
@@ -52,7 +52,7 @@ describe('Issue #184 Fix - Behavioral Contract', () => {
     it('does NOT resolve until traces are found', async () => {
       // Simulate: no traces on first two attempts, found on third
       let attempt = 0;
-      (fetchTracesByRunIds as jest.Mock).mockImplementation(() => {
+      (fetchTracesForRun as jest.Mock).mockImplementation(() => {
         attempt++;
         if (attempt < 3) return Promise.resolve({ spans: [] });
         return Promise.resolve({
@@ -99,7 +99,7 @@ describe('Issue #184 Fix - Behavioral Contract', () => {
     });
 
     it('does NOT resolve until onTracesFound callback completes', async () => {
-      (fetchTracesByRunIds as jest.Mock).mockResolvedValue({
+      (fetchTracesForRun as jest.Mock).mockResolvedValue({
         spans: [{ traceId: 'trace-1', spanId: 'span-1', name: 'root' }],
       });
 
@@ -138,7 +138,7 @@ describe('Issue #184 Fix - Behavioral Contract', () => {
     });
 
     it('rejects (does not hang forever) when traces never arrive', async () => {
-      (fetchTracesByRunIds as jest.Mock).mockResolvedValue({ spans: [] });
+      (fetchTracesForRun as jest.Mock).mockResolvedValue({ spans: [] });
 
       const onError = jest.fn();
       const callbacks: PollCallbacks = {
@@ -167,7 +167,7 @@ describe('Issue #184 Fix - Behavioral Contract', () => {
     });
 
     it('rejects when onTracesFound throws (judge failure)', async () => {
-      (fetchTracesByRunIds as jest.Mock).mockResolvedValue({
+      (fetchTracesForRun as jest.Mock).mockResolvedValue({
         spans: [{ traceId: 'trace-1', spanId: 'span-1', name: 'root' }],
       });
 
@@ -212,7 +212,7 @@ describe('Issue #184 Fix - Behavioral Contract', () => {
     });
 
     it('startPollingAsync returns Promise — caller CAN await it', () => {
-      (fetchTracesByRunIds as jest.Mock).mockResolvedValue({ spans: [] });
+      (fetchTracesForRun as jest.Mock).mockResolvedValue({ spans: [] });
 
       const result = tracePollingManager.startPollingAsync(
         'contrast-test-2',

@@ -14,7 +14,7 @@
  *
  * Run with:
  *   AH_PORT=4002 npx @opensearch-project/agent-health benchmark \
- *     -f evals/sdk-hooks-demo.eval.js -a demo
+ *     -f examples/eval-files/sdk-hooks-demo.eval.js -a demo
  */
 
 const fs = require('fs');

@@ -43,7 +43,7 @@ import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { request as httpRequest } from 'http';
-import { getTestBackendUrl } from '@/tests/integration/testConfig';
+import { getTestBackendUrl, checkJudgeAvailable } from '@/tests/integration/testConfig';
 
 const TEST_TIMEOUT = 90_000;
 const BASE_URL = getTestBackendUrl();
@@ -105,6 +105,7 @@ function ensureCliBuilt() {
 
 describe('CLI --judge-model flag — end-to-end', () => {
   let backendAvailable = false;
+  let judgeAvailable = false;
   const createdReportIds: string[] = [];
   const createdTestCaseIds: string[] = [];
 
@@ -112,6 +113,14 @@ describe('CLI --judge-model flag — end-to-end', () => {
     backendAvailable = await checkBackend();
     if (!backendAvailable) {
       console.log(`[judgeModelIdFlag.integ] Backend not running at ${BASE_URL}, skipping`);
+      return;
+    }
+    // The CLI run drives a real eval that only exits 0 once the (Bedrock) judge
+    // scores it. CI has no AWS creds, so skip when the judge can't run (this
+    // suite passes locally with AWS_PROFILE=Bedrock).
+    judgeAvailable = await checkJudgeAvailable(BASE_URL);
+    if (!judgeAvailable) {
+      console.log('[judgeModelIdFlag.integ] Bedrock judge unavailable (no AWS creds), skipping');
       return;
     }
     ensureCliBuilt();
@@ -130,7 +139,7 @@ describe('CLI --judge-model flag — end-to-end', () => {
   it(
     '`agent-health run --judge-model <id>` persists judgeModelId on the run document, distinct from --model',
     async () => {
-      if (!backendAvailable) return;
+      if (!backendAvailable || !judgeAvailable) return;
 
       // Create a test case the CLI can look up by id.
       const testCaseId = `tc-cli-judgemodel-${Date.now()}`;
@@ -172,7 +181,6 @@ describe('CLI --judge-model flag — end-to-end', () => {
           CLI_BUNDLE, 'run',
           '-t', testCaseId,
           '-a', 'demo',
-          '-m', 'demo-model',
           '--judge-model', 'us.anthropic.claude-opus-4-6-v1',
           '-o', 'json',
         ],
@@ -209,7 +217,7 @@ describe('CLI --judge-model flag — end-to-end', () => {
   it(
     '`agent-health run` without --judge-model leaves the field undefined on the run (no auto-derive from --model)',
     async () => {
-      if (!backendAvailable) return;
+      if (!backendAvailable || !judgeAvailable) return;
 
       const testCaseId = `tc-cli-judgemodel-unset-${Date.now()}`;
       createdTestCaseIds.push(testCaseId);
@@ -242,7 +250,6 @@ describe('CLI --judge-model flag — end-to-end', () => {
           CLI_BUNDLE, 'run',
           '-t', testCaseId,
           '-a', 'demo',
-          '-m', 'demo-model',
           // no --judge-model
           '-o', 'json',
         ],

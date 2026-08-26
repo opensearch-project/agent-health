@@ -25,7 +25,7 @@ jest.mock('@aws-sdk/credential-providers', () => ({
   fromNodeProviderChain: mockFromNodeProviderChain,
 }));
 
-import { createOpenSearchClient, configToCacheKey } from '@/server/services/opensearchClientFactory';
+import { createOpenSearchClient, configToCacheKey, resolveSigv4Credentials, describeOpenSearchError, opensearchErrorStatusCode, SIGV4_CREDENTIAL_REFRESH_WINDOW_MS } from '@/server/services/opensearchClientFactory';
 import type { ClusterConfig } from '@/types';
 
 describe('opensearchClientFactory', () => {
@@ -123,6 +123,7 @@ describe('opensearchClientFactory', () => {
       expect(signerCall.region).toBe('us-east-1');
 
       // Call getCredentials to trigger fromNodeProviderChain
+      expect(typeof signerCall.getCredentials).toBe('function');
       signerCall.getCredentials();
       expect(mockFromNodeProviderChain).toHaveBeenCalledWith({ profile: 'MyProfile' });
     });
@@ -219,6 +220,109 @@ describe('opensearchClientFactory', () => {
           auth: { username: 'admin', password: 'admin' },
         })
       );
+    });
+  });
+
+  describe('resolveSigv4Credentials (refresh behavior)', () => {
+    it('creates a fresh provider chain and calls it on every invocation (no memoized/one-shot credentials)', async () => {
+      mockFromNodeProviderChain
+        .mockReturnValueOnce(jest.fn().mockResolvedValue({ accessKeyId: 'first', secretAccessKey: 's1' }))
+        .mockReturnValueOnce(jest.fn().mockResolvedValue({ accessKeyId: 'second', secretAccessKey: 's2' }));
+
+      const first = await resolveSigv4Credentials('MyProfile');
+      const second = await resolveSigv4Credentials('MyProfile');
+
+      expect(mockFromNodeProviderChain).toHaveBeenCalledTimes(2);
+      expect(first.accessKeyId).toBe('first');
+      expect(second.accessKeyId).toBe('second');
+    });
+
+    it('attaches a synthetic near-term expiration when the resolved credentials carry none, so opensearch-js will re-invoke getCredentials instead of caching them forever', async () => {
+      mockFromNodeProviderChain.mockReturnValueOnce(
+        jest.fn().mockResolvedValue({ accessKeyId: 'a', secretAccessKey: 'b' }) // no `expiration`, like ada-written ~/.aws/credentials
+      );
+
+      const before = Date.now();
+      const credentials: any = await resolveSigv4Credentials();
+      const after = Date.now();
+
+      expect(credentials.expiration).toBeInstanceOf(Date);
+      const expiresAt = credentials.expiration.getTime();
+      expect(expiresAt).toBeGreaterThan(before);
+      expect(expiresAt).toBeLessThanOrEqual(after + SIGV4_CREDENTIAL_REFRESH_WINDOW_MS);
+    });
+
+    it('honors a real expiration already provided by the credential chain (e.g. genuine STS temporary credentials) instead of overwriting it', async () => {
+      const realExpiration = new Date(Date.now() + 60 * 60 * 1000); // 1h out, from STS
+      mockFromNodeProviderChain.mockReturnValueOnce(
+        jest.fn().mockResolvedValue({ accessKeyId: 'a', secretAccessKey: 'b', expiration: realExpiration })
+      );
+
+      const credentials: any = await resolveSigv4Credentials();
+
+      expect(credentials.expiration).toBe(realExpiration);
+    });
+
+    // Red→green regression proof for the actual production bug: simulates `ada`
+    // rotating the profile mid-process (new access key after the first
+    // request) and proves a subsequent getCredentials() call surfaces the
+    // rotated key rather than the stale first-resolved one.
+    it('simulates expired-then-refreshed credentials: after an ada-style rotation, the next getCredentials() call returns the fresh key', async () => {
+      const staleProvider = jest.fn().mockResolvedValue({
+        accessKeyId: 'STALE_KEY_BEFORE_ROTATION',
+        secretAccessKey: 'stale-secret',
+      });
+      const rotatedProvider = jest.fn().mockResolvedValue({
+        accessKeyId: 'FRESH_KEY_AFTER_ADA_ROTATION',
+        secretAccessKey: 'fresh-secret',
+      });
+      mockFromNodeProviderChain.mockReturnValueOnce(staleProvider).mockReturnValueOnce(rotatedProvider);
+
+      const beforeRotation = await resolveSigv4Credentials('default');
+      expect(beforeRotation.accessKeyId).toBe('STALE_KEY_BEFORE_ROTATION');
+
+      // `ada credentials update` rewrites ~/.aws/credentials here, in-process,
+      // with no server restart.
+      const afterRotation = await resolveSigv4Credentials('default');
+      expect(afterRotation.accessKeyId).toBe('FRESH_KEY_AFTER_ADA_ROTATION');
+    });
+  });
+
+  describe('opensearchErrorStatusCode / describeOpenSearchError', () => {
+    it('extracts statusCode directly off the error when present', () => {
+      expect(opensearchErrorStatusCode({ statusCode: 500 })).toBe(500);
+    });
+
+    it('falls back to error.meta.statusCode (opensearch-js ResponseError shape for a bodiless 403)', () => {
+      const err = { message: 'Response Error', meta: { statusCode: 403, body: {} } };
+      expect(opensearchErrorStatusCode(err)).toBe(403);
+    });
+
+    it('falls back to error.meta.body.status when present', () => {
+      const err = { message: 'oops', meta: { body: { status: 502 } } };
+      expect(opensearchErrorStatusCode(err)).toBe(502);
+    });
+
+    it('returns undefined when no status code is discoverable', () => {
+      expect(opensearchErrorStatusCode(new Error('boom'))).toBeUndefined();
+      expect(opensearchErrorStatusCode(null)).toBeUndefined();
+    });
+
+    it('appends the HTTP status code to the message so a 403 (auth) reads differently from a 5xx (cluster) in logs', () => {
+      const authError = { message: 'Response Error', meta: { statusCode: 403, body: {} } };
+      const clusterError = { message: 'Response Error', meta: { statusCode: 503, body: {} } };
+
+      expect(describeOpenSearchError(authError)).toBe('Response Error (HTTP 403)');
+      expect(describeOpenSearchError(clusterError)).toBe('Response Error (HTTP 503)');
+      expect(describeOpenSearchError(authError)).not.toBe(describeOpenSearchError(clusterError));
+    });
+
+    it('leaves the message untouched when no status code is available', () => {
+      expect(describeOpenSearchError(new Error('Connection refused'))).toBe('Connection refused');
+    });
+
+    it('returns an empty string (not "[object Object]") for a message-less, status-less error so callers\' `|| fallback` still applies', () => {
+      expect(describeOpenSearchError({})).toBe('');
     });
   });
 

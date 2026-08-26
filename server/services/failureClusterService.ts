@@ -19,6 +19,7 @@
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import config from '../config';
 import { debug } from '@/lib/debug';
+import { buildInferenceConfig, resolveRegionAwareModelId } from '@/lib/bedrockCompat';
 import type { ImprovementStrategy } from '@/types';
 
 export interface FailureCaseEvidence {
@@ -307,7 +308,7 @@ export async function clusterFailures(
     }
   }
 
-  const modelId = options.modelId || DEFAULT_MODEL_ID;
+  const modelId = resolveRegionAwareModelId(options.modelId || DEFAULT_MODEL_ID);
   const prompt = buildPrompt(input);
 
   debug(
@@ -326,7 +327,7 @@ export async function clusterFailures(
           'specified markers. No prose outside the markers.',
       },
     ],
-    inferenceConfig: { maxTokens: 4096, temperature: 0.2 },
+    inferenceConfig: buildInferenceConfig(modelId, { maxTokens: 4096, temperature: 0.2 }),
   });
 
   const response = await bedrockClient.send(command);

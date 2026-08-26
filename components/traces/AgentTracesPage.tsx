@@ -54,6 +54,7 @@ import {
   groupSpansByTrace,
   calculateTimeRange,
   computeTraceSummary,
+  getInitialExpandedSpans,
 } from '@/services/traces';
 import { formatDuration, formatCompact } from '@/services/traces/utils';
 import TraceSummaryStrip from './TraceSummaryStrip';
@@ -294,8 +295,7 @@ const ExpandedTraceRow: React.FC<ExpandedTraceRowProps> = ({ trace, onClose }) =
   // toggles aren't reset if the parent happens to re-render with the same
   // logical trace.
   useEffect(() => {
-    const rootIds = new Set(spanTree.map(s => s.spanId));
-    setExpandedSpans(rootIds);
+    setExpandedSpans(getInitialExpandedSpans(spanTree));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trace.traceId]);
 
@@ -808,15 +808,11 @@ export const AgentTracesPage: React.FC = () => {
       });
     }
 
-    // Text search as filter
-    if (debouncedSearch) {
-      const q = debouncedSearch.toLowerCase();
-      result = result.filter(t =>
-        t.traceId.toLowerCase().includes(q) ||
-        t.rootSpanName.toLowerCase().includes(q) ||
-        t.serviceName.toLowerCase().includes(q)
-      );
-    }
+    // Text search is applied server-side (fetchRecentTraces sends
+    // debouncedSearch as textSearch, which now matches attributes.session.id
+    // too). Re-filtering here on only traceId/rootSpanName/serviceName would
+    // drop server-side session.id matches, so leave the server result as-is.
+    // ponytail: no client text filter — server query is authoritative.
 
     return result;
   }, [allTraces, filters, debouncedSearch]);

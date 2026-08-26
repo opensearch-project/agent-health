@@ -19,6 +19,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import type { ResolvedServerConfig } from '@/lib/config/types.js';
+import { decideServerOwnership, foreignServerError } from './serverOwnership.js';
 
 // Get CLI version from package.json
 const __filename = fileURLToPath(import.meta.url);
@@ -54,13 +55,22 @@ export function getCliVersion(): string {
 }
 
 /**
- * Server status with version information
+ * Server status with version + instance identity information
  */
 export interface ServerStatus {
   /** Whether server is running */
   running: boolean;
   /** Server version (from /health endpoint) */
   version?: string;
+  /**
+   * Working directory the running server was launched from (from
+   * /health `instance.cwd`). Absent for older servers that predate the
+   * identity block. Used to detect a *foreign* server (a different
+   * checkout/instance) before reusing or killing it.
+   */
+  cwd?: string;
+  /** PID of the running server (from /health `instance.pid`). */
+  pid?: number;
 }
 
 /**
@@ -139,6 +149,8 @@ export async function checkServerStatus(port: number): Promise<ServerStatus> {
       return {
         running: true,
         version: data.version,
+        cwd: data.instance?.cwd,
+        pid: data.instance?.pid,
       };
     }
   } catch {
@@ -355,6 +367,48 @@ export async function ensureServer(
   const cliVersion = getCliVersion();
 
   if (serverStatus.running) {
+    // ── Ownership guard ───────────────────────────────────────────────
+    // Before any reuse/version logic, decide whether the server on this
+    // port is *ours* (same checkout) or a FOREIGN instance — e.g. a live
+    // demo / another worktree that merely happens to occupy the port.
+    // Without this, a version mismatch would `killServerOnPort()` and take
+    // down that foreign server, and a version match would silently route
+    // every benchmark/run/report into its storage. Both are data-corruption
+    // hazards. See AGENTS.md → server lifecycle.
+    const myCwd = process.cwd();
+    const allowForeign =
+      process.env.AH_REUSE_FOREIGN_SERVER === '1' ||
+      process.env.AH_REUSE_FOREIGN_SERVER === 'true';
+    const ownership = decideServerOwnership({
+      serverCwd: serverStatus.cwd,
+      myCwd,
+      allowForeign,
+    });
+
+    if (ownership.action === 'refuse') {
+      throw new Error(
+        foreignServerError({
+          port,
+          myCwd,
+          serverCwd: serverStatus.cwd,
+          serverPid: serverStatus.pid,
+        })
+      );
+    }
+    if (ownership.action === 'reuse-foreign') {
+      console.log(
+        `[ServerLifecycle] Reusing FOREIGN server on port ${port} ` +
+          `(cwd ${serverStatus.cwd}) — AH_REUSE_FOREIGN_SERVER override set.`
+      );
+      return { wasStarted: false, baseUrl };
+    }
+    if (!serverStatus.cwd) {
+      console.log(
+        `[ServerLifecycle] Server on port ${port} reports no instance identity ` +
+          `(older build) — ownership unverifiable; proceeding with legacy reuse logic.`
+      );
+    }
+
     // Check for version mismatch
     const versionMatches = serverStatus.version === cliVersion ||
                            serverStatus.version === 'unknown' ||

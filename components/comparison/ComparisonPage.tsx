@@ -14,21 +14,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { GitCompare, ChevronDown, ChevronRight, X, Check, Loader2, RotateCcw } from 'lucide-react';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
-import { MetricComparisonPanel } from './MetricComparisonPanel';
+import { GitCompare, X, Loader2, RotateCcw, AlertTriangle } from 'lucide-react';
 import { ComparisonSearch } from './ComparisonSearch';
 import { UseCaseComparisonTable } from './UseCaseComparisonTable';
 import { RunPairSelector } from './RunPairSelector';
-import { VerdictStrip } from './VerdictStrip';
+import { ComparisonScoreboard } from './ComparisonScoreboard';
+import { ComparisonInsightsBand, type CategorySelection } from './ComparisonInsightsBand';
+import { bucketRow, extractRowCategory, type AgreementBucket } from '@/lib/comparisonInsights';
 import { ComparisonDeepDive, DeepDiveRunMeta } from './ComparisonDeepDive';
 import { FailureClusterPanel } from './FailureClusterPanel';
-import { ComparisonOverlapBanner } from './ComparisonOverlapBanner';
 import { extractFirstDivergence } from '@/services/trajectoryDiffService';
 import type { FailureCluster, FailureCaseEvidenceInput } from '@/services/client/comparisonClusterApi';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
@@ -37,22 +31,18 @@ import { listEvaluationRuns, getEvaluationRun, executeEvaluationRun } from '@/se
 import {
   calculateRunAggregates,
   buildTestCaseComparisonRows,
-  filterRowsByCategory,
   filterRowsByStatus,
   getRealTestCaseMeta,
   countRowsByStatus,
   calculateRowStatus,
   collectRunIdsFromReports,
   calculateCombinedScore,
-  detectComparisonMode,
   computeTestCaseOverlap,
-  ComparisonMode,
   RowStatus,
 } from '@/services/comparisonService';
 import { fetchBatchMetrics } from '@/services/metrics';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { formatRelativeTime, getModelName } from '@/lib/utils';
-import { Category, Benchmark, BenchmarkRun, EvaluationReport, EvaluationRun, RunAggregateMetrics, TestCaseComparisonRow, TraceMetrics, TestCase } from '@/types';
+import { Benchmark, BenchmarkRun, EvaluationReport, EvaluationRun, RunAggregateMetrics, TestCaseComparisonRow, TraceMetrics, TestCase } from '@/types';
 
 type StatusFilter = 'all' | 'passed' | 'failed' | 'mixed';
 
@@ -96,6 +86,16 @@ export const ComparisonPage: React.FC = () => {
   // load). Without this the table renders every cell as 'missing' (empty) for
   // the whole fetch window — the "no runs on each test case" symptom.
   const [reportsLoading, setReportsLoading] = useState(false);
+  // Surfaces a genuine fetch failure (network error, 431, 5xx) so it renders
+  // as a visible error banner instead of silently rendering every cell as
+  // "Not run" (the pre-fix symptom when getReportsByIds' single unchunked
+  // request blew past the server's URL/header size limit).
+  const [reportsError, setReportsError] = useState<string | null>(null);
+  // Guards against a stale in-flight report fetch clobbering newer state —
+  // e.g. the user swaps the selected runs while a slow/failing request for
+  // the PREVIOUS selection is still in flight; that response (success or
+  // error) must be discarded, not applied on top of the new selection.
+  const reportsRequestIdRef = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
   const [traceMetricsMap, setTraceMetricsMap] = useState<Map<string, TraceMetrics>>(new Map());
 
@@ -113,6 +113,11 @@ export const ComparisonPage: React.FC = () => {
   // State for filters
   const [labelFilter, setLabelFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  // Insights-band filters: agreement bucket (all-pass / all-fail / split) and
+  // category (the raw-category set behind a matrix column, so the `(other)`
+  // rollup filters exactly the rows its cell counted). Both narrow the table.
+  const [agreementFilter, setAgreementFilter] = useState<AgreementBucket | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<CategorySelection | null>(null);
   const [testCaseFilter, setTestCaseFilter] = useState<string | null>(null);
   // All standalone evaluation runs (for the run-search universe).
   const [allEvalRuns, setAllEvalRuns] = useState<EvaluationRun[]>([]);
@@ -133,8 +138,6 @@ export const ComparisonPage: React.FC = () => {
   const [showRunPairSelector, setShowRunPairSelector] = useState(false);
   const [trajectoryRunPair, setTrajectoryRunPair] = useState<[string, string] | null>(null);
 
-  // User-overridden mode (null means use detected mode)
-  const [modeOverride, setModeOverride] = useState<ComparisonMode | null>(null);
 
   // Failure-cluster state — populated by the FailureClusterPanel after analysis.
   // Drives row dot-coloring and the cluster-driven case filter below.
@@ -290,16 +293,28 @@ export const ComparisonPage: React.FC = () => {
       });
       const missing = Array.from(reportIds).filter(id => !reports[id]);
       if (missing.length === 0) return;
+      const requestId = ++reportsRequestIdRef.current;
       setReportsLoading(true);
+      setReportsError(null);
       try {
-        // ONE batched request (server fans out in parallel) instead of N
-        // per-report round-trips — cells populate in a single OpenSearch hop.
+        // Batched request chunked into at most a handful of bounded-size
+        // hops (never one unbounded request) instead of N per-report
+        // round-trips — see asyncRunStorage.getReportsByIds for why.
         const fetched = await asyncRunStorage.getReportsByIds(missing);
+        if (requestId !== reportsRequestIdRef.current) return; // superseded — discard
         if (Object.keys(fetched).length > 0) {
           setReports(prev => ({ ...prev, ...fetched }));
         }
+      } catch (err) {
+        if (requestId !== reportsRequestIdRef.current) return; // superseded — discard
+        // A real failure must be visible — never let it fall through as an
+        // empty result that renders every cell as "Not run". Log the real
+        // error for diagnosis; keep the user-facing message stable (avoid
+        // leaking transport-specific text like a raw "431 ..." into the UI).
+        console.error('[ComparisonPage] Failed to load reports:', err);
+        setReportsError('Failed to load test case reports. Please retry.');
       } finally {
-        setReportsLoading(false);
+        if (requestId === reportsRequestIdRef.current) setReportsLoading(false);
       }
     };
     loadReports();
@@ -389,8 +404,6 @@ export const ComparisonPage: React.FC = () => {
   // benchmark-free comparison (which cases overlap, which don't).
   const overlap = useMemo(() => computeTestCaseOverlap(selectedRuns), [selectedRuns]);
 
-  const detectedMode = useMemo((): ComparisonMode => detectComparisonMode(selectedRuns), [selectedRuns]);
-  const mode: ComparisonMode = modeOverride ?? detectedMode;
 
   const runAggregates = useMemo((): RunAggregateMetrics[] => {
     return selectedRuns.map(run => {
@@ -489,11 +502,30 @@ export const ComparisonPage: React.FC = () => {
 
   const rowStatusCounts = useMemo(() => countRowsByStatus(allComparisonRows, referenceRunId), [allComparisonRows, referenceRunId]);
 
+  // Insights-band filters are defined relative to the CURRENT run selection
+  // (an agreement bucket over runs A,B means something else over A,B,C — and
+  // the band disappears entirely below 2 runs while its filters would keep
+  // narrowing the table invisibly). Reset them whenever the selection changes.
+  const selectionKey = selectedRunIds.join(',');
+  useEffect(() => {
+    setAgreementFilter(null);
+    setCategoryFilter(null);
+  }, [selectionKey]);
+
   const filteredRows = useMemo((): TestCaseComparisonRow[] => {
     let rows = allComparisonRows;
     if (labelFilter !== 'all') rows = rows.filter(r => (r.labels || []).includes(labelFilter));
     if (testCaseFilter) rows = rows.filter(r => r.testCaseId === testCaseFilter);
     rows = filterRowsByStatus(rows, statusFilter, selectedRunIds);
+    // Insights-band filters compose with everything else. (Activating an
+    // agreement chip explicitly flips the row-status pill to 'all' in the
+    // handler below — a visible state change, never a silent bypass.)
+    if (agreementFilter) {
+      rows = rows.filter(row => bucketRow(row, selectedRunIds) === agreementFilter);
+    }
+    if (categoryFilter) {
+      rows = rows.filter(row => categoryFilter.categories.includes(extractRowCategory(row)));
+    }
     if (rowStatusFilter === 'differences') {
       rows = rows.filter(row => calculateRowStatus(row, referenceRunId) !== 'neutral');
     } else if (rowStatusFilter !== 'all') {
@@ -504,7 +536,7 @@ export const ComparisonPage: React.FC = () => {
       rows = rows.filter(row => allow.has(row.testCaseId));
     }
     return rows;
-  }, [allComparisonRows, labelFilter, testCaseFilter, statusFilter, selectedRunIds, rowStatusFilter, referenceRunId, clusterCaseFilter]);
+  }, [allComparisonRows, labelFilter, testCaseFilter, statusFilter, selectedRunIds, rowStatusFilter, referenceRunId, clusterCaseFilter, agreementFilter, categoryFilter]);
 
   // If the filter is 'differences' but there are no differences (all-pass /
   // all-fail benchmark), automatically show everything so the user isn't
@@ -666,8 +698,6 @@ export const ComparisonPage: React.FC = () => {
     composeSelection(next);
   };
 
-  // Collapsible state
-  const [summaryOpen, setSummaryOpen] = useState(false);
 
   if (isLoading) {
     return <div className="p-6 flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin text-muted-foreground" /></div>;
@@ -739,7 +769,7 @@ export const ComparisonPage: React.FC = () => {
       {/* ── Scrollable Results Area ─────────────────────────────── */}
       <div className="flex-1 overflow-y-auto rounded-lg">
         {selectedRuns.length >= 1 ? (
-          <div className="p-4 space-y-3">
+          <div className="p-4 space-y-2.5">
             {/* Info banner when only 1 run selected */}
             {selectedRuns.length === 1 && (
               <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-300 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 text-blue-800 dark:text-blue-300 text-xs">
@@ -748,28 +778,52 @@ export const ComparisonPage: React.FC = () => {
               </div>
             )}
 
-            {/* Test-level overlap — honest coverage across the selected runs
-                (benchmark or not). Shown for 2+ runs. */}
-            {selectedRuns.length >= 2 && <ComparisonOverlapBanner overlap={overlap} />}
-
-            {/* A/B legend — make the comparison's A vs B mapping explicit (URL
-                order: A = first run, B = second). Shown for 2-run compares so
-                the deep-dive, span citations and trace panes are unambiguous. */}
-            {mode === 'compare' && selectedRuns.length === 2 && (
-              <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="comparison-ab-legend">
-                {(['A', 'B'] as const).map((ab, i) => (
-                  <span key={ab} className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${i === 0 ? 'bg-opensearch-blue/10 border-opensearch-blue/40' : 'bg-purple-500/10 border-purple-400/40'}`}>
-                    <span className={`inline-flex items-center justify-center h-4 min-w-[1rem] px-1 rounded font-bold ${i === 0 ? 'text-opensearch-blue' : 'text-purple-300'}`}>{ab}</span>
-                    <span className="font-medium text-foreground">{getAgentName(selectedRuns[i].agentKey)}</span>
-                    <span className="text-muted-foreground">· {getModelName(selectedRuns[i].modelId)}</span>
-                  </span>
-                ))}
-              </div>
+            {/* Comparison Scoreboard — replaces VerdictStrip + ComparisonOverlapBanner + MetricComparisonPanel Collapsible.
+                Renders for single-run views too (run row + "All metrics"), like
+                the old standalone Detailed-metrics panel did. */}
+            {selectedRuns.length >= 1 && (
+              <ComparisonScoreboard
+                runs={runAggregates}
+                selectedRuns={selectedRuns}
+                overlap={overlap}
+                onRemoveRun={(id) => {
+                  const next = selectedRunIds.filter(rid => rid !== id);
+                  if (next.length >= 1) updateSelection(next);
+                }}
+                onSwapRuns={() => {
+                  if (selectedRunIds.length >= 2) {
+                    updateSelection([selectedRunIds[1], selectedRunIds[0], ...selectedRunIds.slice(2)]);
+                  }
+                }}
+                getAgentName={getAgentName}
+              />
             )}
 
-            {/* What's actually different — agentic, trace-grounded deep-dive
-                for 2-run compares; classic VerdictStrip otherwise. */}
-            {mode === 'compare' && runAggregates.length === 2 ? (
+            {/* Agreement + category insights — deterministic, no LLM */}
+            {selectedRuns.length >= 2 && (
+              <ComparisonInsightsBand
+                rows={allComparisonRows}
+                runIds={selectedRunIds}
+                getRunName={(id) => {
+                  const run = selectedRuns.find(r => r.id === id);
+                  return run ? getAgentName(run.agentKey) || run.name : id;
+                }}
+                agreementFilter={agreementFilter}
+                onAgreementFilter={(bucket) => {
+                  setAgreementFilter(bucket);
+                  // The default 'differences' pill hides all-pass/all-fail rows,
+                  // which would empty the Both-pass / Both-fail buckets. Flip
+                  // the pill to 'Show all' VISIBLY instead of overriding it
+                  // silently; the user can re-narrow afterwards.
+                  if (bucket) setRowStatusFilter('all');
+                }}
+                categoryFilter={categoryFilter}
+                onCategoryFilter={setCategoryFilter}
+              />
+            )}
+
+            {/* What's actually different — agentic, trace-grounded deep-dive */}
+            {selectedRuns.length === 2 && runAggregates.length === 2 && (
               <ComparisonDeepDive
                 runs={selectedRuns}
                 rows={allComparisonRows}
@@ -779,13 +833,6 @@ export const ComparisonPage: React.FC = () => {
                   const m = new Map<string, { serviceName?: string; startedAt: number; endedAt: number }>();
                   metaRuns.forEach((r) => {
                     const win = { serviceName: r.serviceName, startedAt: r.startedAt, endedAt: r.endedAt };
-                    // Key by reportId AND the deep-dive's (agent) runId. The
-                    // Traces tab looks the window up by the report's *client*
-                    // run id, which toTestCaseRun maps to the OTel traceId — not
-                    // the agent runId the deep-dive returns — so keying only by
-                    // runId missed, the Strategy-C window was never fetched, and
-                    // some cited spans couldn't be opened. reportId is stable on
-                    // both sides; the lookup tries it first.
                     if (r.reportId) m.set(r.reportId, win);
                     if (r.runId) m.set(r.runId, win);
                   });
@@ -795,45 +842,7 @@ export const ComparisonPage: React.FC = () => {
                   setSpanDeepLink({ testCaseId, runId, spanId, nonce: Date.now() })
                 }
               />
-            ) : (
-              <VerdictStrip mode={mode} runs={runAggregates} />
             )}
-
-            {/* Diagnosis — failure pattern clustering across regressed cases.
-                Renders only when there are regressed rows to analyze. */}
-            {regressedEvidence.cases.length > 0 && (
-              <FailureClusterPanel
-                loserLabel={regressedEvidence.loserLabel}
-                winnerLabel={regressedEvidence.winnerLabel}
-                cases={regressedEvidence.cases}
-                activeCaseFilter={clusterCaseFilter?.caseIds}
-                onClustersChange={setFailureClusters}
-                onFilterByCases={(caseIds, clusterName) => {
-                  // Toggle off if the same cluster is clicked twice.
-                  setClusterCaseFilter(prev =>
-                    prev && prev.clusterName === clusterName ? null : { caseIds, clusterName }
-                  );
-                }}
-              />
-            )}
-
-            {/* Detailed metrics — power-user surface, collapsed by default */}
-            <Collapsible open={summaryOpen} onOpenChange={setSummaryOpen}>
-              <CollapsibleTrigger asChild>
-                <button className="flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg border border-border/50 hover:bg-muted/30 transition-colors">
-                  <ChevronRight size={14} className={`text-muted-foreground transition-transform ${summaryOpen ? 'rotate-90' : ''}`} />
-                  <span className="text-xs font-medium">Detailed metrics</span>
-                  {!summaryOpen && (
-                    <span className="text-[10px] text-muted-foreground ml-1">
-                      Bar chart of quality metrics + full metrics matrix
-                    </span>
-                  )}
-                </button>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="space-y-3 mt-2">
-                <MetricComparisonPanel runs={runAggregates} />
-              </CollapsibleContent>
-            </Collapsible>
 
             {/* ── Table Compare — primary content ──────────────── */}
             <section>
@@ -898,6 +907,26 @@ export const ComparisonPage: React.FC = () => {
                 </p>
               </div>
 
+              {/* Diagnosis — failure pattern clustering across regressed cases.
+                  Lives inside the Table Compare block (it acts on exactly the
+                  regressed rows below), not as a free-floating band. */}
+              {regressedEvidence.cases.length > 0 && (
+                <div className="mb-2">
+                  <FailureClusterPanel
+                    loserLabel={regressedEvidence.loserLabel}
+                    winnerLabel={regressedEvidence.winnerLabel}
+                    cases={regressedEvidence.cases}
+                    activeCaseFilter={clusterCaseFilter?.caseIds}
+                    onClustersChange={setFailureClusters}
+                    onFilterByCases={(caseIds, clusterName) => {
+                      setClusterCaseFilter(prev =>
+                        prev && prev.clusterName === clusterName ? null : { caseIds, clusterName }
+                      );
+                    }}
+                  />
+                </div>
+              )}
+
               {/* Run pair selector for trajectory comparison (shown when > 2 runs) */}
               {showRunPairSelector && trajectoryTargetTestCase && (
                 <RunPairSelector
@@ -909,6 +938,16 @@ export const ComparisonPage: React.FC = () => {
               )}
 
               {/* Comparison table */}
+              {reportsError && (
+                <div
+                  role="alert"
+                  data-testid="reports-error-banner"
+                  className="mb-2 flex items-center gap-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400"
+                >
+                  <AlertTriangle size={12} className="shrink-0" />
+                  <span>Failed to load test case reports: {reportsError}</span>
+                </div>
+              )}
               <UseCaseComparisonTable
                 reportsLoading={reportsLoading}
                 rows={filteredRows}

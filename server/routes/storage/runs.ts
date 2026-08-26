@@ -52,15 +52,37 @@ router.get('/api/storage/runs', async (req: Request, res: Response) => {
     if (typeof ids === 'string' && ids.trim()) {
       const idList = ids.split(',').map((s) => s.trim()).filter(Boolean);
       const storage = getStorageModule();
-      const fetched = await Promise.all(idList.map((id) => storage.runs.getById(id).catch(() => null)));
+      // Resolve demo-* ids from the bundled sample data (mirrors GET /runs/:id)
+      // so sample benchmarks keep their real statuses on the batch path too.
+      const fetched = await Promise.all(idList.map((id) =>
+        isSampleId(id)
+          ? Promise.resolve(getSampleRun(id) as TestCaseRun | null)
+          : storage.runs.getById(id).catch(() => null),
+      ));
       // Drop rawEvents (the raw SSE event log — KBs to MBs each) from the batch
       // payload. List/table consumers like the comparison page never read it;
       // shipping it makes a 16-report fetch tens of MB. ponytail: strip in the
       // route (server→browser win); add OS _source excludes if the server-side
       // OS→server fetch ever matters.
+      // Optional `fields` projection on the batch path: `?ids=…&fields=a,b`
+      // returns only the requested top-level fields (id always included).
+      // Lets status/badge consumers (run inspector, runs-list annotation
+      // counts) fetch 80+ reports in one request measured in KBs, not MBs.
+      // `rawEvents` is never projectable — the batch path's contract is that
+      // the raw SSE log (KBs–MBs per report) stays out of batch payloads.
+      const pick = typeof fields === 'string' && fields.trim()
+        ? fields.split(',').map((f) => f.trim()).filter((f) => f && f !== 'rawEvents')
+        : null;
       const runs = fetched
         .filter((r): r is TestCaseRun => r !== null)
-        .map((r) => { const { rawEvents, ...rest } = r as any; return rest as TestCaseRun; });
+        .map((r) => {
+          if (pick) {
+            const out: Record<string, unknown> = { id: (r as any).id };
+            for (const f of pick) if (f in (r as any)) out[f] = (r as any)[f];
+            return out as unknown as TestCaseRun;
+          }
+          const { rawEvents, ...rest } = r as any; return rest as TestCaseRun;
+        });
       return res.json({ runs, total: runs.length });
     }
 

@@ -306,7 +306,7 @@ describe('Code SDK — CLI subprocess integration (every SDK condition)', () => 
     // the (benchmarkId, runId) pairs together. Format:
     //   Demo Agent (Group Name): http://.../benchmarks/<bid>/runs/<rid>
     const stdout = (cli.stdout || '').replace(/\u001b\[[0-9;]*m/g, ''); // strip ANSI
-    const urlRe = /\/evaluations\/benchmarks\/(bench-[A-Za-z0-9-]+)\/runs\/(run-[A-Za-z0-9-]+)/g;
+    const urlRe = /\/evaluations\/benchmarks\/(bench-[A-Za-z0-9-]+)\/runs\/((?:eval-)?run-[A-Za-z0-9-]+)/g;
     const benchRunPairs: Array<{ bid: string; rid: string }> = [];
     let m: RegExpExecArray | null;
     while ((m = urlRe.exec(stdout)) !== null) {
@@ -318,16 +318,17 @@ describe('Code SDK — CLI subprocess integration (every SDK condition)', () => 
     benchmarkId = benchRunPairs[0].bid;
     runId = benchRunPairs[0].rid;
 
-    // Pull every benchmark and merge their runs / results.
+    // Pull each run directly from the evaluation-runs endpoint. The code-import
+    // (unified) path persists `eval-run-…` documents that carry their own
+    // results / testCaseSnapshots; they are associated with the benchmark but
+    // not nested under benchmark.runs.
     const allRuns: any[] = [];
-    for (const { bid, rid } of benchRunPairs) {
-      const benchRes = await httpGet<any>(`${BASE_URL}/api/storage/benchmarks/${bid}`);
-      if (benchRes.status !== 200) continue;
-      const bench = benchRes.body;
-      const run = (bench.runs || []).find((r: any) => r.id === rid);
-      if (run) allRuns.push(run);
+    for (const { rid } of benchRunPairs) {
+      const runRes = await httpGet<any>(`${BASE_URL}/api/storage/evaluation-runs/${rid}`);
+      if (runRes.status !== 200) continue;
+      allRuns.push(runRes.body);
     }
-    if (allRuns.length === 0) throw new Error(`No runs found across ${benchRunPairs.length} benchmark(s).`);
+    if (allRuns.length === 0) throw new Error(`No runs found across ${benchRunPairs.length} run id(s).`);
 
     // Snapshot test cases so we can verify forwarded fields.
     const tcAll = (await httpGet<any>(`${BASE_URL}/api/storage/test-cases?size=500`)).body;
@@ -381,7 +382,7 @@ describe('Code SDK — CLI subprocess integration (every SDK condition)', () => 
       return;
     }
     expect(benchmarkId).toMatch(/^bench-/);
-    expect(runId).toMatch(/^run-/);
+    expect(runId).toMatch(/^(?:eval-)?run-/);
     expect(reportIds.size).toBeGreaterThan(0);
   });
 

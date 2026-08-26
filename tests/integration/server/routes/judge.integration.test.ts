@@ -431,6 +431,39 @@ describe('Judge Route Integration Tests', () => {
     );
 
     it(
+      'should loudly flag the mock judge: structured warning field + banner at the TOP of reasoning',
+      async () => {
+        if (!backendAvailable) return;
+
+        const response = await fetch(`${BASE_URL}/api/judge`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            trajectory: buildSampleTrajectory(),
+            expectedOutcomes: ['Agent should identify the root cause'],
+            modelId: 'demo-model',
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+
+        // 1) A structured, machine-readable warning a real judge never sets.
+        expect(typeof data.warning).toBe('string');
+        expect(data.warning).toMatch(/MOCK_JUDGE/);
+
+        // 2) The banner is at the TOP of the reasoning (not a footnote that's
+        //    easy to miss) — this is the regression guard for the WebIR
+        //    "100% pass" confusion.
+        expect(data.llmJudgeReasoning).toMatch(/^\s*⚠\uFE0F?\s*\*\*MOCK JUDGE/);
+        expect(data.llmJudgeReasoning.indexOf('MOCK JUDGE')).toBeLessThan(
+          data.llmJudgeReasoning.indexOf('Mock Evaluation Result')
+        );
+      },
+      TEST_TIMEOUT
+    );
+
+    it(
       'should accept optional logs field without error',
       async () => {
         if (!backendAvailable) return;

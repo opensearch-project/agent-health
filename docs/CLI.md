@@ -130,7 +130,7 @@ agent-health benchmark [options]
 agent-health benchmark                                           # quick mode
 agent-health benchmark -n "Baseline" -a ml-commons               # named mode
 agent-health benchmark -f ./test-cases.json -a pulsar -v         # file mode (JSON)
-agent-health benchmark -f ./evals/demo.eval.js -a observio       # file mode (code SDK)
+agent-health benchmark -f ./examples/eval-files/demo.eval.js -a observio       # file mode (code SDK)
 agent-health benchmark -f ./test-cases.json -n "My Run" -a pulsar --export results.json
 agent-health benchmark -n "Baseline" -e system-tool-usage -c 4   # custom evaluator, 4 in parallel
 agent-health benchmark -n "Baseline" --export report.html --format html

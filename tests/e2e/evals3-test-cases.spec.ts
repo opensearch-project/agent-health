@@ -63,9 +63,11 @@ test.describe('Evals3 Test Cases Page', () => {
       // The seeded test case is visible before filtering.
       await expect(page.locator(`text=${tcName}`).first()).toBeVisible({ timeout: 10000 });
 
-      // Open the label filter and pick the unique label.
+      // Open the label filter and pick the unique label. Scope to the
+      // dropdown option (role=option) — a bare text= match also hits the tiny
+      // label badge rendered on the test-case card, which isn't clickable.
       await page.locator('[data-testid="label-filter"]').click();
-      await page.locator(`text=${uniqueLabel}`).first().click();
+      await page.getByRole('option', { name: uniqueLabel }).click();
       await page.waitForTimeout(500);
 
       // The seeded test case survives the filter; a known sample TC that lacks

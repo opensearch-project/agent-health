@@ -22,7 +22,12 @@
  * deterministic and needs no backend data, AWS, or OpenSearch.
  */
 
-import { test, expect, type Route } from '@playwright/test';
+// `test`/`expect` come from the local fixtures (not raw '@playwright/test')
+// so this spec's execution is captured by the E2E Istanbul coverage collector
+// (see tests/e2e/fixtures/test-fixtures.ts) — it renders ComparisonScoreboard
+// end-to-end and was previously invisible to coverage reporting entirely.
+import { test, expect } from './fixtures/test-fixtures';
+import type { Route } from '@playwright/test';
 
 const RUN_A = 'eval-run-a';
 const RUN_B = 'eval-run-b';
@@ -140,18 +145,47 @@ test.describe('Benchmark-free comparison (test-level primitive)', () => {
     // trigger, which replaced the benchmark-select + run-multiselect toolbar.
     await expect(page.locator('[data-testid="comparison-search"]')).toContainText('2 of');
 
-    // The honesty surface: partial overlap banner naming shared vs only-in-some.
+    // The honesty surface: the scoreboard's coverage cell carries the overlap
+    // contract (was a standalone banner). Partial overlap shows shared/total
+    // inline; the per-run "only here" breakdown lives in the tooltip.
     const banner = page.locator('[data-testid="comparison-overlap-banner"]');
     await expect(banner).toBeVisible();
     await expect(banner).toHaveAttribute('data-overlap', 'partial');
-    await expect(banner).toContainText('in common');
-    await expect(banner).toContainText('only in');
+    await expect(banner).toContainText('shared');
+    await expect(banner).toHaveAttribute('title', /only in some runs/);
 
-    // A/B legend: the comparison must make the A vs B mapping explicit
-    // (URL order — A = first run, B = second).
-    const legend = page.locator('[data-testid="comparison-ab-legend"]');
+    // A/B legend: the scoreboard IS the legend now — one row per run with the
+    // A/B badge and the full run name (URL order — A = first run, B = second).
+    const legend = page.locator('[data-testid="comparison-scoreboard"]');
     await expect(legend).toBeVisible();
-    await expect(legend).toContainText('A');
-    await expect(legend).toContainText('B');
+    await expect(legend.locator('[data-testid="scoreboard-row-A"]')).toBeVisible();
+    await expect(legend.locator('[data-testid="scoreboard-row-B"]')).toBeVisible();
+  });
+
+  test('run row expands into a detail drawer (copy id + deep link) and collapses again; A/B swap keeps both rows rendered', async ({ page }) => {
+    await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
+    await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+
+    const rowA = page.locator('[data-testid="scoreboard-row-A"]');
+    await rowA.click();
+
+    // Drawer: deep link back to the run detail page + the raw run id + a
+    // working "copy id" affordance.
+    const openRunLink = page.locator(`a[href="/evaluations/runs/${RUN_A}"]`);
+    await expect(openRunLink).toBeVisible();
+    await expect(page.locator(`code:has-text("${RUN_A}")`)).toBeVisible();
+
+    await page.locator('button[title="Copy run ID"]').click();
+    await expect(page.locator('text=Copied')).toBeVisible();
+
+    // Second click on the same row collapses the drawer again.
+    await rowA.click();
+    await expect(openRunLink).not.toBeVisible();
+
+    // Swap A/B via the delta-footer control — both rows re-render (no crash,
+    // no request outside the mocks set up in beforeEach).
+    await page.locator('button[title="Swap A/B"]').click();
+    await expect(page.locator('[data-testid="scoreboard-row-A"]')).toBeVisible();
+    await expect(page.locator('[data-testid="scoreboard-row-B"]')).toBeVisible();
   });
 });

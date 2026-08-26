@@ -221,26 +221,40 @@ function extractGenericMessages(span: Span, messages: ConversationMessage[]): vo
     }
   }
 
-  // Tool spans → tool_call + tool_result
+  // Tool spans → tool_call + tool_result.
+  // OTel GenAI conveys tool arguments/results three ways (issue #319/#320):
+  // spec attributes (gen_ai.tool.call.arguments/.result), span events
+  // (gen_ai.tool.message / gen_ai.choice — what Strands emits), and the
+  // legacy non-spec attribute names kept as vendor-compat fallbacks.
   const toolName = attrs['gen_ai.tool.name'] || attrs['tool.name'];
   if (toolName) {
-    const toolInput = attrs['gen_ai.tool.input'] || attrs['input'];
-    if (toolInput) {
-      messages.push({
-        id: `${span.spanId}-tool-call`,
-        timestamp: span.startTime,
-        role: 'tool_call',
-        content: typeof toolInput === 'object' ? JSON.stringify(toolInput, null, 2) : String(toolInput),
-        metadata: {
-          spanId: span.spanId,
-          spanName: span.name,
-          toolName: String(toolName),
-          durationMs: span.duration || (new Date(span.endTime).getTime() - new Date(span.startTime).getTime()),
-        },
-      });
-    }
+    const toolMessageEvent = events.find(e => e.name === 'gen_ai.tool.message');
+    const toolChoiceEvent = events.find(e => e.name === 'gen_ai.choice');
 
-    const toolOutput = attrs['gen_ai.tool.output'] || attrs['output'];
+    const toolInput = attrs['gen_ai.tool.call.arguments'] ||
+      toolMessageEvent?.attributes?.['content'] ||
+      attrs['gen_ai.tool.input'] || attrs['input'];
+    // Emit the tool_call even when arguments weren't captured — the tool WAS
+    // invoked, and the judge needs to see that (issue #320 root cause 2).
+    messages.push({
+      id: `${span.spanId}-tool-call`,
+      timestamp: span.startTime,
+      role: 'tool_call',
+      content: toolInput
+        ? (typeof toolInput === 'object' ? JSON.stringify(toolInput, null, 2) : String(toolInput))
+        : '',
+      metadata: {
+        spanId: span.spanId,
+        spanName: span.name,
+        toolName: String(toolName),
+        durationMs: span.duration || (new Date(span.endTime).getTime() - new Date(span.startTime).getTime()),
+      },
+    });
+
+    const toolOutput = attrs['gen_ai.tool.call.result'] ||
+      toolChoiceEvent?.attributes?.['message'] ||
+      toolChoiceEvent?.attributes?.['content'] ||
+      attrs['gen_ai.tool.output'] || attrs['output'];
     if (toolOutput) {
       messages.push({
         id: `${span.spanId}-tool-result`,

@@ -141,12 +141,18 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
       const barHeight = ROW_HEIGHT * 0.7;
       const y = start[1] - barHeight / 2;
 
+      const span = (params as any).data?.span as Span | undefined;
+      // ERROR spans are often very short (e.g. a 45ms ShellError) and would
+      // render as a sub-pixel sliver that's impossible to spot. Give them a
+      // larger minimum width so the red bar is actually visible.
+      const minWidth = span?.status === 'ERROR' ? 8 : 4;
+
       return {
         type: 'rect',
         shape: {
           x: start[0],
           y: y,
-          width: Math.max(end[0] - start[0], 4),
+          width: Math.max(end[0] - start[0], minWidth),
           height: barHeight,
           r: 2
         },
@@ -212,6 +218,11 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
               : ' ';
             const label = span.name?.split('.').pop() || 'span';
             const truncatedLabel = truncate(label, 25);
+            // Error spans get a red, marked label so they stand out in the
+            // long list of neutral span names.
+            if (span.status === 'ERROR') {
+              return `${indent}${icon} {err|⚠ ${truncatedLabel}}`;
+            }
             return `${indent}${icon} ${truncatedLabel}`;
           },
           fontSize: 12,
@@ -226,6 +237,10 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
               fontSize: 14,
               fontWeight: 'bold',
               padding: [0, 2, 0, 0]
+            },
+            err: {
+              color: '#ef4444',
+              fontWeight: 'bold'
             }
           }
         },

@@ -9,6 +9,7 @@ import {
   calculateTimeRange,
   getSpanColor,
   flattenVisibleSpans,
+  getInitialExpandedSpans,
   fetchTraces,
   fetchTraceById,
   fetchTracesByRunIds,
@@ -254,6 +255,40 @@ describe('Traces Service Index', () => {
       const result = flattenVisibleSpans(spans, new Set());
 
       expect(result[0].hasChildren).toBe(false);
+    });
+  });
+
+  describe('getInitialExpandedSpans', () => {
+    it('expands roots but not children when no errors', () => {
+      const child = createSpan({ spanId: 'child', parentSpanId: 'root' });
+      const root = createSpan({ spanId: 'root', children: [child] });
+      expect(getInitialExpandedSpans([root])).toEqual(new Set(['root']));
+    });
+
+    it('expands every ancestor of an ERROR span so it is visible on load', () => {
+      const errored = createSpan({ spanId: 'err', parentSpanId: 'mid', status: 'ERROR' });
+      const mid = createSpan({ spanId: 'mid', parentSpanId: 'root', children: [errored] });
+      const root = createSpan({ spanId: 'root', children: [mid] });
+
+      const result = getInitialExpandedSpans([root]);
+
+      // Every ancestor of the ERROR span must be expanded so the red span is
+      // visible in the tree/timeline on initial load.
+      expect(result.has('root')).toBe(true);
+      expect(result.has('mid')).toBe(true);
+    });
+
+    it('leaves unrelated branches collapsed', () => {
+      const errChild = createSpan({ spanId: 'err', parentSpanId: 'a', status: 'ERROR' });
+      const okChild = createSpan({ spanId: 'ok', parentSpanId: 'b' });
+      const a = createSpan({ spanId: 'a', parentSpanId: 'root', children: [errChild] });
+      const b = createSpan({ spanId: 'b', parentSpanId: 'root', children: [okChild] });
+      const root = createSpan({ spanId: 'root', children: [a, b] });
+
+      const result = getInitialExpandedSpans([root]);
+
+      expect(result.has('a')).toBe(true);   // path to error
+      expect(result.has('b')).toBe(false);  // unrelated branch stays collapsed
     });
   });
 

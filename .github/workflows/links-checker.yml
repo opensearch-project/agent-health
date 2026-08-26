@@ -34,6 +34,7 @@ jobs:
             --exclude '127.0.0.1'
             --exclude '.*xenproject\.org.*'
             --exclude '.*opentelemetry\.io.*'
+            --exclude '.*star-history\.com.*'
             --exclude-path 'node_modules'
             --exclude-path 'coverage'
             --exclude-path 'dist'

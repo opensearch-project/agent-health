@@ -33,14 +33,26 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
   const llmRequestEvent = span.events?.find(e => e.name === 'llm.request');
   const llmResponseEvent = span.events?.find(e => e.name === 'llm.response');
 
+  // OTel GenAI event-based message convention (issue #319): tool spans carry
+  // arguments in a gen_ai.tool.message event and the result in a
+  // gen_ai.choice event. Strands and other SDKs emit these; the older
+  // gen_ai.tool.input/.output attribute names are non-spec vendor fallbacks.
+  const toolMessageEvent = span.events?.find(e => e.name === 'gen_ai.tool.message');
+  const toolChoiceEvent = span.events?.find(e => e.name === 'gen_ai.choice');
+
   // Extract input/output data from span attributes OR events
-  const inputData = span.attributes?.['gen_ai.tool.input'] ||
+  const inputData = span.attributes?.['gen_ai.tool.call.arguments'] ||
+                    toolMessageEvent?.attributes?.['content'] ||
+                    span.attributes?.['gen_ai.tool.input'] ||
                     span.attributes?.['input'] ||
                     span.attributes?.['gen_ai.prompt'] ||
                     span.attributes?.['test.case.input'] ||
                     llmRequestEvent?.attributes?.['llm.prompt'] ||
                     llmRequestEvent?.attributes?.['llm.system_prompt'];
-  const outputData = span.attributes?.['gen_ai.tool.output'] ||
+  const outputData = span.attributes?.['gen_ai.tool.call.result'] ||
+                     toolChoiceEvent?.attributes?.['message'] ||
+                     toolChoiceEvent?.attributes?.['content'] ||
+                     span.attributes?.['gen_ai.tool.output'] ||
                      span.attributes?.['output'] ||
                      span.attributes?.['gen_ai.completion'] ||
                      span.attributes?.['test.case.output'] ||

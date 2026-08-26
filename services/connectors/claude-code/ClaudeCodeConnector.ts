@@ -486,6 +486,9 @@ export function createBedrockClaudeCodeConnector(): ClaudeCodeConnector {
     env.OTEL_TRACES_EXPORTER = 'otlp';
     env.OTEL_METRICS_EXPORTER = 'otlp';
     env.OTEL_LOGS_EXPORTER = 'otlp';
+    // Log the user prompt as a log record attribute so the run's prompt is
+    // visible in the Traces view. Opt-out via OTEL_LOG_USER_PROMPTS=0.
+    env.OTEL_LOG_USER_PROMPTS = process.env.OTEL_LOG_USER_PROMPTS ?? '1';
     if (process.env.OTEL_SERVICE_NAME) env.OTEL_SERVICE_NAME = process.env.OTEL_SERVICE_NAME;
     if (process.env.OTEL_EXPORTER_OTLP_PROTOCOL) env.OTEL_EXPORTER_OTLP_PROTOCOL = process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
     if (process.env.OTEL_EXPORTER_OTLP_HEADERS) env.OTEL_EXPORTER_OTLP_HEADERS = process.env.OTEL_EXPORTER_OTLP_HEADERS;

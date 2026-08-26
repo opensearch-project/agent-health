@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import type { ConnectorProtocol, ClusterAuthType } from '@/types';
+import type { AgentConfig, ConnectorProtocol, ClusterAuthType } from '@/types';
 import { storageAdmin } from '@/services/storage/opensearchClient';
 import {
   hasLocalStorageData,
@@ -36,7 +36,7 @@ import {
   type ConfigStatus,
   type SaveStorageConfigResult,
 } from '@/lib/dataSourceConfig';
-import { DEFAULT_CONFIG, refreshConfig, CONNECTOR_TYPE_INFO, type ConnectorTypeInfo } from '@/lib/constants';
+import { DEFAULT_CONFIG, refreshConfig, isBuiltInAgent, CONNECTOR_TYPE_INFO, type ConnectorTypeInfo } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 
 interface StorageStats {
@@ -79,11 +79,43 @@ function getCustomEndpointsFromConfig(): AgentEndpoint[] {
     }));
 }
 
+/**
+ * Read-only agent card with a source badge ("built-in" for shipped agents,
+ * "config" for agents authored in agent-health.config.ts).
+ */
+const AgentInfoCard: React.FC<{ agent: AgentConfig; badge: 'built-in' | 'config' }> = ({ agent, badge }) => (
+  <div
+    data-testid={`agent-card-${agent.key}`}
+    className="p-3 border rounded-lg bg-muted/5 flex items-start justify-between gap-3"
+  >
+    <div className="flex-1 min-w-0">
+      <div className="font-medium text-sm flex items-center gap-2">
+        {agent.name}
+        <span className={`text-xs px-2 py-1 rounded inline-block border ${
+          badge === 'built-in'
+            ? 'bg-blue-100 text-blue-900 border-blue-300 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-700/50'
+            : 'bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-700/50'
+        }`}>
+          {badge}
+        </span>
+      </div>
+      <div className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-1">
+        <ExternalLink size={10} />
+        {agent.endpoint || <span className="italic">Not configured</span>}
+      </div>
+      {agent.description && (
+        <div className="text-xs text-muted-foreground mt-1">{agent.description}</div>
+      )}
+    </div>
+  </div>
+);
+
 export const SettingsPage: React.FC = () => {
 
   const [debugMode, setDebugMode] = useState(false);
   const [currentTheme, setCurrentTheme] = useState<Theme>('dark');
   const [showBuiltInAgents, setShowBuiltInAgents] = useState(false);
+  const [showConfigAgents, setShowConfigAgents] = useState(false);
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -938,6 +970,9 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  const builtInAgents = DEFAULT_CONFIG.agents.filter(isBuiltInAgent);
+  const configAgents = DEFAULT_CONFIG.agents.filter(a => !isBuiltInAgent(a) && !a.isCustom);
+
   return (
     <>
     <div className="p-6 max-w-4xl mx-auto" data-testid="settings-page">
@@ -1056,39 +1091,37 @@ export const SettingsPage: React.FC = () => {
           <div className="space-y-2">
             <button
               type="button"
+              data-testid="builtin-agents-toggle"
               onClick={() => setShowBuiltInAgents(!showBuiltInAgents)}
               className="flex items-center gap-1 text-xs text-muted-foreground uppercase tracking-wide hover:text-foreground"
             >
               {showBuiltInAgents ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              Built-in Agents ({DEFAULT_CONFIG.agents.filter(a => !a.isCustom).length})
+              Built-in Agents ({builtInAgents.length})
             </button>
 
-            {showBuiltInAgents && DEFAULT_CONFIG.agents.filter(a => !a.isCustom).map((agent) => {
-
-              return (
-                <div
-                  key={agent.key}
-                  className="p-3 border rounded-lg bg-muted/5 flex items-start justify-between gap-3"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm flex items-center gap-2">
-                      {agent.name}
-                      <span className="text-xs px-2 py-1 rounded inline-block bg-blue-100 text-blue-900 border border-blue-300 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-700/50">
-                        built-in
-                      </span>
-                    </div>
-                    <div className="text-xs text-muted-foreground truncate flex items-center gap-1 mt-1">
-                      <ExternalLink size={10} />
-                      {agent.endpoint || <span className="italic">Not configured</span>}
-                    </div>
-                    {agent.description && (
-                      <div className="text-xs text-muted-foreground mt-1">{agent.description}</div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {showBuiltInAgents && builtInAgents.map((agent) => (
+              <AgentInfoCard key={agent.key} agent={agent} badge="built-in" />
+            ))}
           </div>
+
+          {/* Custom agents authored in agent-health.config.ts — not built-in, not UI-added */}
+          {configAgents.length > 0 && (
+            <div className="space-y-2">
+              <button
+                type="button"
+                data-testid="config-agents-toggle"
+                onClick={() => setShowConfigAgents(!showConfigAgents)}
+                className="flex items-center gap-1 text-xs text-muted-foreground uppercase tracking-wide hover:text-foreground"
+              >
+                {showConfigAgents ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                Custom Agents — agent-health.config.ts ({configAgents.length})
+              </button>
+
+              {showConfigAgents && configAgents.map((agent) => (
+                <AgentInfoCard key={agent.key} agent={agent} badge="config" />
+              ))}
+            </div>
+          )}
 
           {/* Custom Endpoints Section */}
           <div ref={customEndpointsRef} className="border-t pt-4 mt-4">

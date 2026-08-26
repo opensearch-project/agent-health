@@ -25,3 +25,4 @@ export { createSkillCommand } from './skill.js';
 export { createProfileCommand } from './profile.js';
 export { createSetupCommand } from './setup.js';
 export { createWorkflowCommand } from './workflow.js';
+export { createImportCommand } from './import.js';

@@ -15,11 +15,16 @@
  * This module is invoked once after `app.listen()` succeeds. It:
  *   1. Pages through every run.
  *   2. For each run with `metricsStatus === 'pending' | 'calculating'`:
- *        a. If it has a `runId` and is recent (within `TRACE_RECOVERY_MAX_AGE_MS`),
- *           re-start trace polling. Once traces land, the existing poller
- *           callback runs the judge and writes `ready`/`error`.
- *        b. Otherwise (no runId or too old), mark it `error` so the UI no
- *           longer shows PENDING and the parent benchmark stats are updated.
+ *        a. If it is younger than `TRACE_RECOVERY_MIN_AGE_MS`, skip it — it is
+ *           presumed in-flight (possibly on a sibling server sharing the
+ *           storage cluster).
+ *        b. If it is recent (within `TRACE_RECOVERY_MAX_AGE_MS`), re-start
+ *           trace polling — with or without a `runId`; the poller falls back
+ *           to sessionId/service-window correlation hints. Once traces land,
+ *           the existing poller callback runs the judge and writes
+ *           `ready`/`error`.
+ *        c. Otherwise (too old), mark it `error` so the UI no longer shows
+ *           PENDING and the parent benchmark stats are updated.
  *
  * The function is fire-and-forget and never throws \u2014 a recovery failure
  * must not prevent the server from serving requests.
@@ -31,6 +36,9 @@ import { startTracePollingForReportWithModule } from '../../services/benchmarkRu
 
 /** Maximum age (ms since report.timestamp) for which we will re-attempt polling. */
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/** Minimum age below which a pending report is presumed in-flight and skipped. */
+const DEFAULT_MIN_AGE_MS = 15 * 60 * 1000; // 15 minutes
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -75,6 +83,9 @@ export async function resumePendingTracePolls(storage: IStorageModule): Promise<
   }
 
   const maxAgeMs = envInt('TRACE_RECOVERY_MAX_AGE_MS', DEFAULT_MAX_AGE_MS);
+  // Reports younger than this are skipped entirely (likely in-flight; see
+  // grace-window comment below). Default 15 min ~= the poll budget + slack.
+  const minAgeMs = envInt('TRACE_RECOVERY_MIN_AGE_MS', DEFAULT_MIN_AGE_MS);
   const pageSize = envInt('TRACE_RECOVERY_PAGE_SIZE', 200);
   // Hard-cap pagination so a misconfigured store doesn't loop forever.
   const maxPages = envInt('TRACE_RECOVERY_MAX_PAGES', 50);
@@ -116,13 +127,26 @@ export async function resumePendingTracePolls(storage: IStorageModule): Promise<
       // newly-created report won't be falsely tombstoned.
       const ageMs = Number.isFinite(reportTs) && reportTs > 0 ? now - reportTs : 0;
       const tooOld = ageMs > maxAgeMs;
-      const hasRunId = !!report.runId;
 
-      // Branch 1: no runId or too old \u2014 mark error and update parent stats
-      if (!hasRunId || tooOld) {
-        const reason = !hasRunId
-          ? 'No runId on pending report; cannot resume polling after server restart'
-          : `Report older than ${Math.round(maxAgeMs / 60000)}m; trace ingestion window has elapsed`;
+      // Grace window: a *young* pending report is very likely in-flight --
+      // either on this server (created while this very scan pages through the
+      // index) or on a SIBLING agent-health server pointed at the same shared
+      // storage cluster. Tombstoning it kills a healthy run's report
+      // (2026-08-25: a boot recovery marked in-flight placeholders of a
+      // running benchmark as error mid-run). Leave young reports alone -- if
+      // genuinely orphaned they are settled on a later boot, once aged past
+      // the grace window.
+      if (ageMs < minAgeMs) {
+        continue;
+      }
+
+      // Branch 1: too old -- mark error and update parent stats. A missing
+      // runId is NO LONGER disqualifying: the trace poller now correlates via
+      // sessionId/service-window hints derived from the report itself
+      // (REST-connector reports never carry a runId), so no-runId reports
+      // flow into Branch 2 and have their polling resumed.
+      if (tooOld) {
+        const reason = `Report older than ${Math.round(maxAgeMs / 60000)}m; trace ingestion window has elapsed`;
         try {
           await storage.runs.update(report.id, {
             metricsStatus: 'error',

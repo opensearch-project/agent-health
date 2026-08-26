@@ -1,0 +1,8 @@
+# cli/** is subprocess-integration-tested (jest can't instrument subprocesses)
+ignore:
+  - "cli/**"
+
+# PR comment with per-suite (flag) coverage: unit, integration, e2e
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: false

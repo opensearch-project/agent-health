@@ -1,24 +1,12 @@
+---
 name: Backport
-
 on:
-  pull_request:
+  pull_request_target:
     types: [closed, labeled]
 
 jobs:
   backport:
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'backport')
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
-
-      - name: Create backport PRs
-        uses: korthout/backport-action@ef20d86abccbac3ee3a73cb2efbdc06344c390e5 # v2
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          label_pattern: '^backport (?<target>.+)$'
+    if: github.repository == 'opensearch-project/agent-health'
+    uses: opensearch-project/opensearch-build/.github/workflows/backport-pr.yml@main
+    secrets:
+      OPENSEARCH_CI_BOT_TOKEN: ${{ secrets.OPENSEARCH_CI_BOT_TOKEN }}

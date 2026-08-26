@@ -207,7 +207,7 @@ test.describe('Trace Fetch Size', () => {
       });
     });
 
-    await page.goto('/traces');
+    await page.goto('/agent-traces');
     await page.waitForTimeout(3000);
 
     expect(capturedBody).not.toBeNull();

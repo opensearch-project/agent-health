@@ -45,6 +45,9 @@ interface TestCaseResult {
   report?: EvaluationReport | null;
 }
 
+/** Rows revealed per infinite-scroll page in the left test-case list. */
+const ROWS_PER_PAGE = 100;
+
 
 export const RunInspectorPage: React.FC = () => {
   // Either route shape resolves into one of two modes. `benchmarkId` is
@@ -70,12 +73,19 @@ export const RunInspectorPage: React.FC = () => {
   const [selectedTcId, setSelectedTcId] = useState<string | null>(null);
   const [selectedReport, setSelectedReport] = useState<EvaluationReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  // Infinite scroll: number of rows revealed in the left list. Statuses for
+  // ALL rows arrive in one lightweight batch (so the header tallies are
+  // always complete); this only windows the DOM for very large benchmarks.
+  const [visibleCount, setVisibleCount] = useState(ROWS_PER_PAGE);
+  const sentinelRef = React.useRef<HTMLDivElement | null>(null);
   const initialSelectionDone = React.useRef(false);
 
   // Load data — fetch reports to get real pass/fail status
   const loadData = useCallback(async () => {
     if (!runId) return;
     setLoading(true);
+    setLoadError(false);
     try {
       let runData: BenchmarkRun | EvaluationRun;
 
@@ -104,18 +114,24 @@ export const RunInspectorPage: React.FC = () => {
       const testCases = await asyncTestCaseStorage.getByIds(tcIds);
       const tcMap = new Map(testCases.map(tc => [tc.id, tc]));
 
-      // Load each report to get the real pass/fail/pending status
-      const resultRows: TestCaseResult[] = await Promise.all(tcIds.map(async (tcId) => {
+      // ONE lightweight batch (status fields only, chunked at 100 ids) instead
+      // of N full-report round-trips. Full report documents (trajectory +
+      // judge output, ~0.3–2 MB each) load on-demand for the selected row
+      // only — an 84-case run went from ~68 MB / ~10 s to a few KB here.
+      const reportIds = tcIds
+        .map(tcId => runData.results[tcId]?.reportId)
+        .filter((id): id is string => Boolean(id));
+      let summaries: Record<string, EvaluationReport> = {};
+      try {
+        summaries = await asyncRunStorage.getReportSummariesByIds(reportIds);
+      } catch { /* fall back to execution status below */ }
+
+      const resultRows: TestCaseResult[] = tcIds.map((tcId) => {
         const runResult = runData.results[tcId];
-        let report: EvaluationReport | null = null;
-        if (runResult?.reportId) {
-          try {
-            report = await asyncRunStorage.getReportById(runResult.reportId) || null;
-          } catch { /* fallback to execution status */ }
-        }
+        const report = runResult?.reportId ? summaries[runResult.reportId] || null : null;
         const status = getResultStatus(runResult, report);
         return { testCaseId: tcId, testCase: tcMap.get(tcId) || null, reportId: runResult?.reportId || null, status, report };
-      }));
+      });
 
       setResults(resultRows);
       if (resultRows.length > 0 && !initialSelectionDone.current) {
@@ -126,6 +142,13 @@ export const RunInspectorPage: React.FC = () => {
           ? resultRows.find(r => r.reportId === targetReportId)
           : null;
         setSelectedTcId((targeted ?? resultRows[0]).testCaseId);
+        // Make sure a deep-linked row is actually revealed by the windowed list.
+        if (targeted) {
+          const idx = resultRows.indexOf(targeted);
+          if (idx >= ROWS_PER_PAGE) {
+            setVisibleCount(Math.ceil((idx + 1) / ROWS_PER_PAGE) * ROWS_PER_PAGE);
+          }
+        }
         initialSelectionDone.current = true;
       }
 
@@ -137,8 +160,13 @@ export const RunInspectorPage: React.FC = () => {
       // reports, so this is safe to call unconditionally.
       for (const row of resultRows) {
         if (!row.report || !row.testCase) continue;
-        if (row.report.metricsStatus !== 'pending' || !row.report.runId) continue;
+        if (row.report.metricsStatus !== 'pending') continue;
         ensureTracePollingForReport(row.report, row.testCase, {
+          // Grace period: skip reports that only just went pending — they are
+          // likely eager-path placeholders whose agent is still executing, not
+          // stuck trace-mode reports. Prevents the fan-out from racing (and
+          // historically clobbering) eager judge verdicts.
+          minPendingAgeMs: 3 * 60 * 1000,
           onUpdated: (updated) => {
             setResults(prev => prev.map(r => r.testCaseId === row.testCaseId
               ? { ...r, report: updated, status: getResultStatus({ status: 'completed' }, updated) }
@@ -149,6 +177,9 @@ export const RunInspectorPage: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to load:', error);
+      // Surface a retry UI instead of an infinite skeleton — a transient API
+      // failure (e.g. server restart) used to leave this page stuck forever.
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -156,23 +187,50 @@ export const RunInspectorPage: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Reset per-run UI state when navigating between runs. React Router reuses
+  // the component instance across param changes, so without this the previous
+  // run's selection/window/deep-link handling would leak into the next run.
+  const lastRunIdRef = React.useRef(runId);
+  useEffect(() => {
+    if (lastRunIdRef.current === runId) return;
+    lastRunIdRef.current = runId;
+    initialSelectionDone.current = false;
+    setSelectedTcId(null);
+    setVisibleCount(ROWS_PER_PAGE);
+  }, [runId]);
+
+  // Infinite scroll: reveal the next page of rows when the sentinel at the
+  // bottom of the left list becomes visible.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || visibleCount >= results.length) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) {
+        setVisibleCount(c => Math.min(c + ROWS_PER_PAGE, results.length));
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [visibleCount, results.length]);
+
   // Sidebar collapse for run URLs is owned globally by Layout (it collapses on
   // landing on a /runs/<id> URL and persists the preset), so this page no
   // longer manages it locally.
 
-  // Load report when selection changes
+  // Load report when selection changes. Keyed on the selected row's
+  // reportId (not the `results` array identity) so background updates to
+  // other rows don't re-fetch — and don't remount — the open panel.
+  const selectedReportId = results.find(r => r.testCaseId === selectedTcId)?.reportId ?? null;
   useEffect(() => {
-    if (!selectedTcId) { setSelectedReport(null); return; }
-    const result = results.find(r => r.testCaseId === selectedTcId);
-    if (!result?.reportId) { setSelectedReport(null); return; }
+    if (!selectedReportId) { setSelectedReport(null); return; }
     setReportLoading(true);
     let cancelled = false;
-    asyncRunStorage.getReportById(result.reportId)
+    asyncRunStorage.getReportById(selectedReportId)
       .then(report => { if (!cancelled) setSelectedReport(report || null); })
       .catch(() => { if (!cancelled) setSelectedReport(null); })
       .finally(() => { if (!cancelled) setReportLoading(false); });
     return () => { cancelled = true; };
-  }, [selectedTcId, results]);
+  }, [selectedReportId]);
 
   const passCount = results.filter(r => r.status === 'passed').length;
   const failCount = results.filter(r => r.status === 'failed').length;
@@ -184,6 +242,22 @@ export const RunInspectorPage: React.FC = () => {
   const judgedCount = passCount + failCount;
   const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
   const selectedResult = results.find(r => r.testCaseId === selectedTcId) || null;
+
+  // Error state takes priority over both the skeleton and any partially
+  // populated data: a failure AFTER `run` was set (e.g. the test-cases fetch
+  // threw) previously rendered a broken page with empty rows and no way to
+  // retry — only pre-`run` failures reached the error UI.
+  if (!loading && loadError) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center space-y-3" data-testid="run-inspector-error">
+          <AlertTriangle size={32} className="mx-auto text-amber-500" />
+          <p className="text-sm text-muted-foreground">Failed to load this run — the server may be restarting.</p>
+          <Button variant="outline" size="sm" onClick={() => loadData()}>Retry</Button>
+        </div>
+      </div>
+    );
+  }
 
   // Loading: in benchmark mode we need both `benchmark` and `run`; in
   // eval-run mode we only need `run` (no benchmark to fetch).
@@ -276,7 +350,7 @@ export const RunInspectorPage: React.FC = () => {
               </span>
             </div>
             <div className="p-1.5 space-y-0.5">
-              {results.map(r => {
+              {results.slice(0, visibleCount).map(r => {
                 const isSelected = r.testCaseId === selectedTcId;
                 const tc = r.testCase;
                 return (
@@ -300,6 +374,11 @@ export const RunInspectorPage: React.FC = () => {
                   </div>
                 );
               })}
+              {visibleCount < results.length && (
+                <div ref={sentinelRef} data-testid="test-case-list-sentinel" className="flex items-center justify-center py-3">
+                  <Loader2 size={14} className="animate-spin text-muted-foreground" />
+                </div>
+              )}
             </div>
           </ScrollArea>
         </ResizablePanel>

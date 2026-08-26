@@ -306,7 +306,9 @@ class FileBenchmarkOperations implements IBenchmarkOperations {
   }
 
   async getById(id: string): Promise<Benchmark | null> {
-    return readJsonFile<Benchmark>(this.docPath(id));
+    const doc = readJsonFile<Benchmark & { docType?: string }>(this.docPath(id));
+    // Shared dir with evaluation-runs — an eval-run id is NOT a benchmark.
+    return doc && doc.docType === 'evaluation-run' ? null : doc;
   }
 
   async create(benchmark: Partial<Benchmark>): Promise<Benchmark> {

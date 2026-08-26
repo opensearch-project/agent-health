@@ -22,10 +22,11 @@ import { resolveAgentModel } from '@/lib/resolveAgentModel.js';
 import { ensureServer, createServerCleanup, isServerRunning, type EnsureServerResult } from '@/cli/utils/serverLifecycle.js';
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, ServerError, type BenchmarkExecutionEvent } from '@/cli/utils/apiClient.js';
+import { resolveUnifiedRunOutcome } from '@/cli/utils/evaluationRunOutcome.js';
 import { validateTestCasesArrayJson, type ValidatedTestCaseInput } from '@/lib/testCaseValidation.js';
 import { calculateRunStats, getReportIdsFromRun } from '@/lib/runStats.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
-import type { AgentConfig, Benchmark, BenchmarkRun, TestCase, TestCaseRun, EvaluationReport, TestCaseSource } from '@/types/index.js';
+import type { AgentConfig, Benchmark, BenchmarkRun, TestCase, TestCaseRun, EvaluationReport, TestCaseSource, EvaluationRun } from '@/types/index.js';
 import { existsSync, statSync } from 'fs';
 import { isCodeFile } from '@/lib/testCases/loader.js';
 
@@ -478,7 +479,19 @@ async function runUnifiedMode(
   // Build sources from flags
   const sources: TestCaseSource[] = [];
 
-  if (options.name && !isFilePath(options.name)) {
+  // `-n/--name` is overloaded: alone it re-runs an *existing* benchmark (its
+  // test cases become a source); alongside -f/-d/-t/--label it just *names* the
+  // benchmark the resulting run is grouped under (created below if the name is
+  // new). Only require the benchmark to pre-exist (as a source) when it is the
+  // sole source — otherwise `benchmark -f foo.eval.js -n "New Name"` wrongly
+  // errored "Benchmark not found" for code-import (unified) runs.
+  const hasExplicitSources =
+    fileArray.length > 0 ||
+    (options.dir?.length ?? 0) > 0 ||
+    (options.testCase?.length ?? 0) > 0 ||
+    (options.label?.length ?? 0) > 0;
+
+  if (options.name && !isFilePath(options.name) && !hasExplicitSources) {
     // -n flag: will be resolved server-side
     const api = new ApiClient(`http://localhost:${serverConfig.port}`);
     const benchmark = await api.findBenchmark(options.name);
@@ -567,11 +580,23 @@ async function runUnifiedMode(
   const modelId = resolveAgentModel(config.agents.find(a => a.key === agentKey), getDefaultModel(config));
   const concurrency = Math.max(1, Math.min(20, parseInt(options.concurrency, 10) || 1));
 
-  // Determine benchmark association
+  // Determine benchmark association. With explicit sources (-f/-d/-t/--label),
+  // `-n` names the benchmark the run is grouped under — create it when the name
+  // is new so the run is benchmark-associated (parity with JSON `-f` legacy mode
+  // and the documented `benchmark -f foo.eval.js -n "My Benchmark"` behavior).
   let benchmarkId: string | undefined;
   if (options.name && !isFilePath(options.name)) {
-    const benchmark = await api.findBenchmark(options.name);
-    benchmarkId = benchmark?.id;
+    const existing = await api.findBenchmark(options.name);
+    if (existing) {
+      benchmarkId = existing.id;
+    } else if (hasExplicitSources) {
+      const created = await api.createBenchmark({
+        name: options.name,
+        description: `CLI benchmark run from ${fileArray.join(', ') || 'sources'}`,
+        testCaseIds: [],
+      });
+      benchmarkId = created.id;
+    }
   }
 
   console.log(chalk.gray(`  Sources: ${sources.length} source(s)`));
@@ -615,53 +640,98 @@ async function runUnifiedMode(
     let totalTestCases = 0;
     let completedCount = 0;
     let runId = '';
+    let sseSawTerminal = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          const eventType = line.slice(7);
-          continue;
-        }
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            const eventType = line.slice(7);
+            continue;
+          }
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
 
-            if (data.runId && data.testCases) {
-              // Started event
-              runId = data.runId;
-              totalTestCases = data.testCases.length;
-              spinner.text = `Running evaluation (0/${totalTestCases})`;
-            } else if (data.completedCount !== undefined) {
-              // Progress event
-              completedCount = data.completedCount;
-              spinner.text = `Running evaluation (${completedCount}/${totalTestCases})`;
-            } else if (data.status === 'completed' || data.status === 'cancelled') {
-              // Completed event
-              break;
-            } else if (data.error) {
-              spinner.fail(`Run failed: ${data.error}`);
-              process.exit(1);
+              if (data.runId && data.testCases) {
+                // Started event
+                runId = data.runId;
+                totalTestCases = data.testCases.length;
+                spinner.text = `Running evaluation (0/${totalTestCases})`;
+              } else if (data.completedCount !== undefined) {
+                // Progress event
+                completedCount = data.completedCount;
+                spinner.text = `Running evaluation (${completedCount}/${totalTestCases})`;
+              } else if (data.status === 'completed' || data.status === 'cancelled') {
+                // Completed event
+                sseSawTerminal = true;
+                break;
+              } else if (data.error) {
+                spinner.fail(`Run failed: ${data.error}`);
+                process.exit(1);
+              }
+            } catch {
+              // Skip malformed SSE data
             }
-          } catch {
-            // Skip malformed SSE data
           }
         }
       }
+    } catch (streamErr) {
+      // The progress stream dropped (proxy idle-timeout ~4 min, network blip)
+      // BEFORE the run finished. This is expected on long runs. The server
+      // keeps executing and persisting results, so as long as we captured the
+      // runId we recover the true result by polling storage below rather than
+      // aborting the whole command (the old behavior surfaced "0/0 / fetch
+      // failed" even though the run finished server-side).
+      if (!runId) {
+        spinner.fail(`Lost connection before the run started: ${streamErr instanceof Error ? streamErr.message : String(streamErr)}`);
+        process.exit(1);
+      }
     }
 
-    spinner.succeed(`Evaluation run completed (${completedCount}/${totalTestCases} test cases)`);
+    // Read the TRUE final state from storage. If the SSE stream ended before
+    // the run reached a terminal state (long run + dropped stream), poll until
+    // it does — the server finishes independently of the client connection.
+    const api = new ApiClient(serverResult.baseUrl);
+    let run: EvaluationRun | null = null;
+    if (runId && !sseSawTerminal) {
+      spinner.text = 'Stream ended; waiting for the run to finish server-side…';
+      run = await api.pollEvaluationRunStatus(runId, (r) => {
+        const done = Object.values(r.results || {}).filter((x: any) => x.status !== 'pending' && x.status !== 'running').length;
+        spinner.text = `Waiting for run to finish server-side (${done}/${totalTestCases || Object.keys(r.results || {}).length})…`;
+      });
+    } else if (runId) {
+      run = await api.getEvaluationRun(runId);
+    }
 
-    // Fetch final run state
-    const finalRun = await fetch(`${serverResult.baseUrl}/api/storage/evaluation-runs/${runId}`);
-    if (finalRun.ok) {
-      const run = await finalRun.json();
+    // The run object we now hold may not actually be terminal: a poll can give
+    // up after its (generous, but finite) timeout while the server is still
+    // working, and 'failed'/'cancelled' are legitimate distinct terminal
+    // states from 'completed'. Report each case honestly instead of always
+    // succeeding — this is the same class of bug this fix addresses, one
+    // layer up. See cli/utils/evaluationRunOutcome.ts for the (unit-tested)
+    // decision logic.
+    const outcome = resolveUnifiedRunOutcome(run, completedCount);
+    if (outcome.kind === 'failed') {
+      spinner.fail(outcome.message);
+      process.exit(1);
+    }
+    if (outcome.kind === 'timeout') {
+      spinner.warn('Timed out waiting for the run to finish server-side — it may still be in progress.');
+      console.log(chalk.gray(`  Check status: ${serverResult.baseUrl}/api/storage/evaluation-runs/${runId}`));
+      process.exit(1);
+    }
+
+    spinner.succeed(`Evaluation run completed (${outcome.doneCount}/${totalTestCases} test cases)`);
+
+    if (run) {
       const passed = Object.values(run.results || {}).filter((r: any) => r.status === 'completed').length;
       const failed = Object.values(run.results || {}).filter((r: any) => r.status === 'failed').length;
 
@@ -670,7 +740,13 @@ async function runUnifiedMode(
       console.log(`    ${chalk.green('✓ Passed:')} ${passed}`);
       console.log(`    ${chalk.red('✗ Failed:')} ${failed}`);
       console.log(`    ${chalk.gray('Total:')} ${totalTestCases}`);
-      if (!benchmarkId) {
+      if (benchmarkId) {
+        console.log('');
+        console.log(chalk.cyan('  View results:'));
+        console.log(
+          chalk.gray(`  ${serverResult.baseUrl}/evaluations/benchmarks/${benchmarkId}/runs/${runId}`)
+        );
+      } else {
         console.log('');
         console.log(chalk.gray(`  This was an ad-hoc run (ID: ${runId}).`));
         console.log(chalk.gray('  Promote to benchmark with: -n "Benchmark Name"'));
@@ -719,7 +795,7 @@ export function createBenchmarkCommand(): Command {
       []
     )
     .option('-e, --evaluator <id>', 'Evaluator ID (uses RCA default if not specified)')
-    .option('--judge-model <id>', "Judge LLM model id, distinct from --model. Falls back to evaluator's inferenceConfig.modelId, then BEDROCK_MODEL_ID env. Ignored by agentic-provider judges (pi/agent/agentic/claude-code) which pick their own model.")
+    .option('--judge-model <id>', "Judge LLM model id (the agent's own model is owned by its config, not a flag). Falls back to evaluator's inferenceConfig.modelId, then BEDROCK_MODEL_ID env. Ignored by agentic-provider judges (pi/agent/agentic/claude-code) which pick their own model.")
     .option('-o, --output <format>', OUTPUT_FORMAT_DESCRIPTION, 'table')
     .option('--export <path>', 'Export results to file')
     .option('--format <type>', 'Report format for --export: json (default), html, pdf', 'json')

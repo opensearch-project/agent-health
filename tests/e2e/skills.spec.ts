@@ -91,7 +91,7 @@ test.describe('Skills Evaluator Page', () => {
     await expect(page.locator('[data-testid="validation-result"]')).toBeVisible({ timeout: 10000 });
 
     // SKILL.md tab should be visible with content
-    await expect(page.locator('text=SKILL.md')).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'SKILL.md' })).toBeVisible();
     await expect(page.locator('text=Skill Instructions')).toBeVisible();
   });
 

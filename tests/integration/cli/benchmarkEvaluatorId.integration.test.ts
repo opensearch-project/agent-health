@@ -203,7 +203,12 @@ describe('CLI: run-level evaluatorId binding (precedence rules end-to-end)', () 
       CLI_BUNDLE, 'benchmark',
       '-f', fixturePath,
       '-a', 'demo',
-      '-m', 'demo-model',
+      // Pin the JUDGE model to the mock `demo` provider so matcher #1 (valid
+      // evaluator) passes deterministically regardless of content/credentials
+      // — this suite proves evaluatorId *binding precedence*, not judge scoring,
+      // and must run without Bedrock in CI. A real judge would score the
+      // synthetic trajectory non-deterministically (and need AWS creds).
+      '--judge-model', 'demo-model',
       '-e', 'definitely-does-not-exist',
       '-n', benchmarkName,
     ], {
@@ -219,20 +224,21 @@ describe('CLI: run-level evaluatorId binding (precedence rules end-to-end)', () 
 
     // Parse the 'View results:' URL line for (benchmarkId, runId).
     const stdout = (cli.stdout || '').replace(/\u001b\[[0-9;]*m/g, '');
-    const urlRe = /\/evaluations\/benchmarks\/(bench-[A-Za-z0-9-]+)\/runs\/(run-[A-Za-z0-9-]+)/;
+    const urlRe = /\/evaluations\/benchmarks\/(bench-[A-Za-z0-9-]+)\/runs\/((?:eval-)?run-[A-Za-z0-9-]+)/;
     const m = urlRe.exec(stdout);
     if (!m) {
       throw new Error(`Could not parse benchmark/run from CLI stdout:\n${stdout}\nSTDERR:\n${cli.stderr}`);
     }
-    const [, benchmarkId, runId] = m;
+    const [, , runId] = m;
 
-    // Pull the run + the single test case's persisted report.
-    const benchRes = await httpGet<any>(`${BASE_URL}/api/storage/benchmarks/${benchmarkId}`);
-    if (benchRes.status !== 200) {
-      throw new Error(`GET benchmark failed: ${benchRes.status}`);
+    // Pull the run + the single test case's persisted report. The code-import
+    // (unified) path persists an `eval-run-…` document; fetch it directly from
+    // the evaluation-runs endpoint rather than via benchmark.runs.
+    const runRes = await httpGet<any>(`${BASE_URL}/api/storage/evaluation-runs/${runId}`);
+    if (runRes.status !== 200) {
+      throw new Error(`GET evaluation-run failed: ${runRes.status} for ${runId}`);
     }
-    const run = (benchRes.body.runs || []).find((r: any) => r.id === runId);
-    if (!run) throw new Error(`Run ${runId} not found on benchmark ${benchmarkId}`);
+    const run = runRes.body;
 
     const reportEntries = Object.values(run.results || {}) as Array<{ reportId?: string }>;
     if (reportEntries.length !== 1 || !reportEntries[0].reportId) {
@@ -262,10 +268,16 @@ describe('CLI: run-level evaluatorId binding (precedence rules end-to-end)', () 
     expect(report).toBeDefined();
   });
 
-  it('the test as a whole was marked failed (one of two judge calls failed)', () => {
+  it('the run is marked errored (null pass/fail) — the bogus run-level evaluator could not be loaded', () => {
     if (!backendAvailable) return;
+    // matcher #2's judge() hit an unloadable evaluator ("Evaluator not found"),
+    // which is an evaluator *error*, not a clean pass/fail judgment about the
+    // agent — so the run's overall pass/fail is null (errored state), never
+    // 'passed'. (buildEvaluatorErrorPatch / #242 deliberately nulls it.)
     // eslint-disable-next-line jest/no-conditional-expect
-    expect(report.passFailStatus).toBe('failed');
+    expect(report.passFailStatus == null).toBe(true);
+    // eslint-disable-next-line jest/no-conditional-expect
+    expect(report.passFailStatus).not.toBe('passed');
   });
 
   it('records exactly two judge matcherResults — one per judge() call', () => {

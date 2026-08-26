@@ -25,7 +25,7 @@
  *   npm run test:integration -- --testPathPattern=judgeModelId.integration
  */
 
-import { getTestBackendUrl } from '@/tests/integration/testConfig';
+import { getTestBackendUrl, checkJudgeAvailable } from '@/tests/integration/testConfig';
 
 const TEST_TIMEOUT = 60000;
 const BASE_URL = getTestBackendUrl();
@@ -119,6 +119,7 @@ function buildInlineTestCase(id: string) {
 describe('judgeModelId round-trip — integration', () => {
   let backendAvailable = false;
   let storageAvailable = false;
+  let judgeAvailable = false;
   const createdReportIds: string[] = [];
   const createdTestCaseIds: string[] = [];
   const createdRunIds: string[] = [];
@@ -126,10 +127,16 @@ describe('judgeModelId round-trip — integration', () => {
   beforeAll(async () => {
     backendAvailable = await checkBackend();
     storageAvailable = backendAvailable && await checkStorage();
+    // These round-trips all wait for a `completed`/scored result, which needs a
+    // real (Bedrock) judge. The CI integration job has no AWS creds, so skip
+    // when the judge can't actually run (passes locally with AWS_PROFILE).
+    judgeAvailable = storageAvailable && await checkJudgeAvailable(BASE_URL);
     if (!backendAvailable) {
       console.log(`[judgeModelId.integ] Backend not running at ${BASE_URL}, skipping all tests`);
     } else if (!storageAvailable) {
       console.log('[judgeModelId.integ] Storage not configured, skipping happy-path tests');
+    } else if (!judgeAvailable) {
+      console.log('[judgeModelId.integ] Bedrock judge unavailable (no AWS creds), skipping judge round-trips');
     }
   });
 
@@ -155,7 +162,7 @@ describe('judgeModelId round-trip — integration', () => {
     it(
       'persists run-level judgeModelId on the saved run document',
       async () => {
-        if (!backendAvailable || !storageAvailable) return;
+        if (!backendAvailable || !storageAvailable || !judgeAvailable) return;
 
         const testCaseId = `tc-judgemodel-set-${Date.now()}`;
         createdTestCaseIds.push(testCaseId);
@@ -196,7 +203,7 @@ describe('judgeModelId round-trip — integration', () => {
     it(
       'omits judgeModelId from run document when not supplied (server does not auto-derive it from modelId)',
       async () => {
-        if (!backendAvailable || !storageAvailable) return;
+        if (!backendAvailable || !storageAvailable || !judgeAvailable) return;
 
         const testCaseId = `tc-judgemodel-unset-${Date.now()}`;
         createdTestCaseIds.push(testCaseId);
@@ -236,7 +243,7 @@ describe('judgeModelId round-trip — integration', () => {
     it(
       'rejects empty-string judgeModelId as if it were undefined (does NOT persist empty)',
       async () => {
-        if (!backendAvailable || !storageAvailable) return;
+        if (!backendAvailable || !storageAvailable || !judgeAvailable) return;
 
         const testCaseId = `tc-judgemodel-empty-${Date.now()}`;
         createdTestCaseIds.push(testCaseId);
@@ -277,7 +284,7 @@ describe('judgeModelId round-trip — integration', () => {
     it(
       'persists judgeModelId on the EvaluationRun document AND on every child report',
       async () => {
-        if (!backendAvailable || !storageAvailable) return;
+        if (!backendAvailable || !storageAvailable || !judgeAvailable) return;
 
         const testCaseId = `tc-judgemodel-erun-${Date.now()}`;
         createdTestCaseIds.push(testCaseId);
@@ -352,7 +359,7 @@ describe('judgeModelId round-trip — integration', () => {
     it(
       'propagates llmJudgeResponse (rawResponse, extraFields, judgeDebug) onto the persisted run',
       async () => {
-        if (!backendAvailable || !storageAvailable) return;
+        if (!backendAvailable || !storageAvailable || !judgeAvailable) return;
 
         // The demo provider returns a mock response that exercises the
         // typed wire fields but doesn't emit extraFields. So this test

@@ -125,12 +125,14 @@ test.describe('Comparison Traces tab — loading vs not-present + timing', () =>
 
     // 2. Then spans render (Trace Flow Comparison present, not the empty state).
     await expect(page.locator('text=Trace Flow Comparison')).toBeVisible({ timeout: 15000 });
-    // Spans rendered (not the terminal empty state): the per-pane span counts show.
-    await expect(page.getByText(/Left:\s*\d+ spans/i)).toBeVisible({ timeout: 15000 });
+    // Spans rendered (not the terminal empty state): the per-pane span counts
+    // show a POSITIVE number (0 spans would be the empty case, covered below).
+    await expect(page.getByText(/Left:\s*[1-9]\d* spans/i)).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="trace-flow-empty"]')).toHaveCount(0);
-    await expect(page.getByText('invoke_agent').first()).toBeVisible({ timeout: 15000 });
+    // (We assert the loaded span COUNT rather than a specific node label: the
+    // React Flow graph positions nodes via dagre and doesn't surface the raw
+    // span name as findable DOM text.)
     const loadMs = Date.now() - t0;
-
     // Publish the timing.
     const out = { measuredAt: new Date().toISOString(), case: 'present', mockedTraceDelayMs: TRACE_DELAY_MS, tabOpenToSpansRenderedMs: loadMs };
     const dir = path.resolve('test-results'); fs.mkdirSync(dir, { recursive: true });

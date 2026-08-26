@@ -22,7 +22,7 @@ import type {
   HealthStatus,
 } from '../../types/index.js';
 import { STORAGE_INDEXES, DEFAULT_OTEL_INDEXES } from '../middleware/dataSourceConfig.js';
-import { createOpenSearchClient } from '../services/opensearchClientFactory.js';
+import { createOpenSearchClient, describeOpenSearchError } from '../services/opensearchClientFactory.js';
 import type { IStorageModule } from './types.js';
 import { FileStorageModule } from './file/StorageModule.js';
 
@@ -65,7 +65,7 @@ export async function testStorageConnection(config: StorageClusterConfig): Promi
   } catch (error: any) {
     return {
       status: 'error',
-      message: error.message || 'Connection failed',
+      message: describeOpenSearchError(error) || 'Connection failed',
       latencyMs: Date.now() - startTime,
     };
   } finally {
@@ -126,10 +126,10 @@ export async function testObservabilityConnection(config: ObservabilityClusterCo
       ...(indexWarning && { message: indexWarning }),
     };
   } catch (error: any) {
-    console.error('[testObservabilityConnection] Connection failed:', error.message);
+    console.error('[testObservabilityConnection] Connection failed:', describeOpenSearchError(error));
     return {
       status: 'error',
-      message: error.meta?.body?.error?.reason || error.message || 'Connection failed',
+      message: error.meta?.body?.error?.reason || describeOpenSearchError(error) || 'Connection failed',
       latencyMs: Date.now() - startTime,
     };
   } finally {

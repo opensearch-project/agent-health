@@ -343,7 +343,9 @@ describe('Pi Judge Service - evaluateWithPi', () => {
       mockChild.emit('error', error);
     });
 
-    await expect(promise).rejects.toThrow('Pi CLI not found. Install it from https://pi.dev');
+    // Assert the stable part of the message; the ENOENT branch returns a richer
+    // hint (optionalDependency reinstall guidance) that we don't pin verbatim.
+    await expect(promise).rejects.toThrow('Pi CLI not found');
   });
 
   it('should reject with stderr when pi exits with non-zero code', async () => {

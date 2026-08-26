@@ -229,6 +229,19 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
   useEffect(() => { loadBenchmark(); }, [loadBenchmark]);
 
+  // Infinite scroll: auto-click "Load More Runs" when its sentinel container
+  // scrolls into view. The button stays as an explicit fallback.
+  const loadMoreRunsSentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRunsSentinelRef.current;
+    if (!el || !hasMoreRuns || isLoadingMoreRuns) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) loadMoreRuns();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMoreRuns, isLoadingMoreRuns, loadMoreRuns]);
+
   // ─── Derived Data ────────────────────────────────────────────────────────
 
   const benchmarkTestCases = useMemo(() =>
@@ -705,9 +718,10 @@ export const BenchmarkRunsPage2: React.FC = () => {
             )}
           </div>
 
-          {/* Load More */}
+          {/* Load More — auto-triggers via infinite scroll; button kept as a
+              no-JS/observer fallback */}
           {hasMoreRuns && !isLoadingMoreRuns && (
-            <div className="flex justify-center pt-4">
+            <div ref={loadMoreRunsSentinelRef} data-testid="load-more-runs-sentinel" className="flex justify-center pt-4">
               <Button variant="outline" onClick={loadMoreRuns}>Load More Runs</Button>
             </div>
           )}

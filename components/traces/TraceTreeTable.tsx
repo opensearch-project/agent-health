@@ -150,6 +150,7 @@ const TraceTreeTable: React.FC<TraceTreeTableProps> = ({
         const isHovered = hoveredSpan === span.spanId;
         const isExpanded = expandedSpans.has(span.spanId);
         const SpanIcon = getSpanIcon(span);
+        const isError = span.status === 'ERROR';
         const depth = span.depth || 0;
         const inSelectedPath = isInSelectedPath(span);
         const inHoveredPath = isInHoveredPath(span);
@@ -157,10 +158,13 @@ const TraceTreeTable: React.FC<TraceTreeTableProps> = ({
         return (
           <div
             key={span.spanId}
+            data-error-span={isError ? 'true' : undefined}
             className={cn(
               'flex items-center gap-2 py-2 rounded cursor-pointer transition-colors relative group',
               isSelected
                 ? 'bg-opensearch-blue/20 dark:bg-opensearch-blue/30'
+                : isError
+                ? 'bg-red-500/10 hover:bg-red-500/20'
                 : 'hover:bg-muted/50'
             )}
             onClick={() => onSelect(span)}
@@ -302,7 +306,7 @@ const TraceTreeTable: React.FC<TraceTreeTableProps> = ({
                   >
                     <SpanIcon size={14} style={{ color: getSpanColor(span) }} />
                   </div>
-                  <div className="flex-1 min-w-0 font-medium text-sm truncate" title={span.name}>
+                  <div className={cn('flex-1 min-w-0 font-medium text-sm truncate', isError && 'text-red-500 dark:text-red-400')} title={span.name}>
                     {span.name}
                   </div>
                 </div>
@@ -392,7 +396,7 @@ const TraceTreeTable: React.FC<TraceTreeTableProps> = ({
                 </div>
 
                 {/* Span name - allows truncation */}
-                <div className="flex-1 min-w-0 font-medium text-sm truncate">
+                <div className={cn('flex-1 min-w-0 font-medium text-sm truncate', isError && 'text-red-500 dark:text-red-400')}>
                   {span.name}
                 </div>
 

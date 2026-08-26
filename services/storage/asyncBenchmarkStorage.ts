@@ -54,12 +54,17 @@ function toBenchmark(stored: StorageBenchmark): Benchmark {
  */
 function toBenchmarkRun(stored: StorageBenchmarkRunConfig): BenchmarkRun {
   // Convert results with proper typing for status field
-  const results: Record<string, { reportId: string; status: RunResultStatus; error?: string; performanceMetrics?: any }> = {};
+  const results: Record<string, { reportId: string; status: RunResultStatus; passFailStatus?: 'passed' | 'failed'; error?: string; performanceMetrics?: any }> = {};
   if (stored.results) {
     Object.entries(stored.results).forEach(([key, value]) => {
       results[key] = {
         reportId: value.reportId,
         status: value.status as RunResultStatus,
+        // passFailStatus is the per-case verdict bucketRunResults() reads to
+        // compute pass rate (a completed result with no verdict = errored,
+        // #242). Dropping it here made every benchmark-embedded run read as
+        // all-errored in the comparison panel.
+        ...((value as any).passFailStatus && { passFailStatus: (value as any).passFailStatus }),
         ...(value.error && { error: value.error }),
         ...((value as any).performanceMetrics && { performanceMetrics: (value as any).performanceMetrics }),
       };

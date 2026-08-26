@@ -81,6 +81,46 @@ export function getIndexMappings(): IndexMappings {
           createdAt: { type: 'date' },
           llmJudgePrompt: { type: 'text' },
           testCaseIds: { type: 'keyword' },
+          // EvaluationRun (docType: 'evaluation-run') is stored as a top-level
+          // doc in this same index, discriminated by docType (see
+          // OpenSearchEvaluationRunOperations). Its `results` map is keyed by
+          // testCaseId, so without an explicit non-dynamic mapping every
+          // distinct testCaseId across every run ever created adds ~2-5 new
+          // mapped fields (`results.<id>.reportId`, `.status`, `.keyword`
+          // sub-fields, ...) to this index's *shared* field-count budget.
+          // A single few-hundred-case run can add 1000+ fields; real incident
+          // 2026-08-26 crashed mid-run at 243/400 test cases with
+          // "Limit of total fields [5000] has been exceeded".
+          //
+          // `enabled: false` treats the whole subtree as an opaque blob:
+          // still stored/returned in _source (reads/writes/painless partial
+          // updates via `ctx._source.results.put(...)` are unaffected — see
+          // OpenSearchEvaluationRunOperations.updateResult), just never
+          // parsed into the mapping. This is a real trade-off, not a free
+          // lunch: it permanently forfeits OpenSearch-side filter/sort/
+          // aggregate on any `results.*` subfield for this index — that's
+          // fine *today* because no query anywhere does that (all consumers
+          // read the whole `results` object out of `_source` in JS and
+          // filter/aggregate in application code), but a future feature
+          // that wants to e.g. search across reportIds would need a
+          // different field (or a reindex to a `flattened`/nested shape),
+          // not a query against this one.
+          //
+          // Existing installs: OpenSearch rejects `enabled` changes on a
+          // field that was already dynamically mapped with real sub-properties
+          // (`mapper_exception: the [enabled] parameter can't be updated for
+          // the object mapping [results]`), so `ensureIndexes()`'s best-effort
+          // putMapping on an already-poisoned index (e.g. the shared cluster,
+          // which already has 800+ dynamically-mapped results.* fields) fails
+          // safely (caught, surfaced as a warning) and leaves the existing
+          // mapping/data untouched — no crash, no reindex required. It fully
+          // protects fresh indexes and any existing index that hasn't been
+          // poisoned yet. Verified against a local disposable OpenSearch
+          // 2.17.0 container (not the shared cluster): fresh index + 500
+          // synthetic results stayed at 3 mapped fields; painless
+          // `results.put()` partial updates and `docType.keyword` term
+          // queries both continued to work unchanged.
+          results: { type: 'object', enabled: false },
           runs: {
             type: 'nested',
             properties: {

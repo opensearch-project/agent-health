@@ -443,6 +443,29 @@ describe('Storage Service', () => {
       expect(result.experimentRunId).toBe('exprun-1');
     });
 
+    it('persists the judge audit trail (judgeModelId + evaluatorId) on the stored doc', async () => {
+      mockClient.index.mockResolvedValue({ body: { result: 'created' } });
+
+      await saveReport({
+        testCaseId: 'tc-1',
+        agentKey: 'test-agent',
+        modelId: 'agent-model',
+        status: 'completed',
+        judgeModelId: 'judge-model-xyz',
+        evaluatorId: 'eval-abc',
+      });
+
+      expect(mockClient.index).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            modelId: 'agent-model',
+            judgeModelId: 'judge-model-xyz',
+            evaluatorId: 'eval-abc',
+          }),
+        })
+      );
+    });
+
     it('should use default values when options not provided', async () => {
       mockClient.index.mockResolvedValue({ body: { result: 'created' } });
 

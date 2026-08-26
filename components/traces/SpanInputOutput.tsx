@@ -8,7 +8,9 @@
  *
  * Extracts and displays input/output data from OTEL semantic conventions:
  * - gen_ai.prompt / gen_ai.completion for LLM spans
- * - gen_ai.tool.input / gen_ai.tool.output for tool spans
+ * - gen_ai.tool.call.arguments / .result attributes and the event-based
+ *   gen_ai.tool.message / gen_ai.choice convention for tool spans
+ * - gen_ai.input.messages / gen_ai.output.messages tool_call parts
  * - Various other OTEL conventions for agent spans
  *
  * @see https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
@@ -68,6 +70,40 @@ function getEventContent(span: Span, eventName: string): string | null {
 }
 
 /**
+ * Extract a tool call's arguments/result from the structured message
+ * attributes `gen_ai.input.messages` / `gen_ai.output.messages` (current
+ * OTel GenAI dev spec). Tool calls appear as message parts of type
+ * `tool_call` (with `arguments`) and `tool_call_response` (with `result`).
+ */
+function getToolPartFromMessages(
+  raw: unknown,
+  partType: 'tool_call' | 'tool_call_response',
+  field: 'arguments' | 'result',
+): string | null {
+  if (!raw) return null;
+  let messages: unknown = raw;
+  if (typeof messages === 'string') {
+    try {
+      messages = JSON.parse(messages);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(messages)) return null;
+  for (const msg of messages) {
+    const parts = (msg as any)?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts) {
+      if (part?.type === partType && part[field] !== undefined && part[field] !== null) {
+        const v = part[field];
+        return typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v);
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Extract input/output from span attributes based on OTEL GenAI conventions.
  *
  * Checks both span attributes and span events, supporting:
@@ -77,7 +113,7 @@ function getEventContent(span: Span, eventName: string): string | null {
  *
  * @see https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
  */
-function extractSpanIO(span: Span): SpanIOData {
+export function extractSpanIO(span: Span): SpanIOData {
   const attrs = span.attributes || {};
   const name = span.name.toLowerCase();
 
@@ -118,9 +154,20 @@ function extractSpanIO(span: Span): SpanIOData {
              null;
   }
 
-  // Tool spans - OTel standard: gen_ai.tool.call.arguments / gen_ai.tool.call.result
+  // Tool spans. OTel GenAI conveys tool arguments/results three ways
+  // (issue #319) — check all of them:
+  //  1. Span attributes gen_ai.tool.call.arguments / .result (Opt-In,
+  //     rarely emitted)
+  //  2. Span events gen_ai.tool.message (arguments) / gen_ai.choice
+  //     (result) — what Strands and other event-convention SDKs emit
+  //  3. gen_ai.input.messages / gen_ai.output.messages attributes with
+  //     tool_call / tool_call_response parts (current dev spec)
+  // The gen_ai.tool.input/.output names are NOT in any OTel convention;
+  // kept last as a vendor-compat fallback only.
   if (category === 'tool') {
     input = attrs['gen_ai.tool.call.arguments'] ||
+            getEventContent(span, 'gen_ai.tool.message') ||
+            getToolPartFromMessages(attrs['gen_ai.input.messages'], 'tool_call', 'arguments') ||
             getEventContent(span, 'gen_ai.tool.input') ||
             attrs['gen_ai.tool.input'] ||
             attrs['tool.input'] ||
@@ -129,6 +176,8 @@ function extractSpanIO(span: Span): SpanIOData {
             null;
 
     output = attrs['gen_ai.tool.call.result'] ||
+             getEventContent(span, 'gen_ai.choice') ||
+             getToolPartFromMessages(attrs['gen_ai.output.messages'], 'tool_call_response', 'result') ||
              getEventContent(span, 'gen_ai.tool.output') ||
              attrs['gen_ai.tool.output'] ||
              attrs['tool.output'] ||
@@ -385,9 +434,14 @@ export const SpanInputOutput: React.FC<SpanInputOutputProps> = ({ spans }) => {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
         <AlertCircle size={48} className="mb-4 opacity-20" />
-        <p>No input/output data found in span attributes</p>
-        <p className="text-xs mt-2">
-          Spans may not include OTEL GenAI semantic convention attributes
+        <p>No input/output content captured for these spans</p>
+        <p className="text-xs mt-2 text-center max-w-md">
+          Prompt &amp; response capture is controlled by{' '}
+          <code className="px-1 rounded bg-muted font-mono">OTEL_LOG_USER_PROMPTS</code>{' '}
+          &mdash; on by default for Claude Code. If inputs/outputs are missing it may be
+          disabled in the agent&apos;s environment (set to <code className="px-1 rounded bg-muted font-mono">0</code>);
+          re-enable with <code className="px-1 rounded bg-muted font-mono">export OTEL_LOG_USER_PROMPTS=1</code>.
+          Spans without OTEL GenAI semantic-convention attributes also show nothing here.
         </p>
       </div>
     );

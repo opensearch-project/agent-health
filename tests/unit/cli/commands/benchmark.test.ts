@@ -12,9 +12,10 @@
  */
 
 import { writeFileSync, existsSync, statSync } from 'fs';
-import type { BenchmarkRun, EvaluationReport, Benchmark, AgentConfig, TestCaseSource } from '@/types';
+import type { BenchmarkRun, EvaluationReport, Benchmark, AgentConfig, TestCaseSource, EvaluationRun } from '@/types';
 import { calculateRunStats, getReportIdsFromRun } from '@/lib/runStats';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
+import { resolveUnifiedRunOutcome } from '@/cli/utils/evaluationRunOutcome';
 
 // Mock fs
 jest.mock('fs', () => ({
@@ -731,6 +732,76 @@ describe('Benchmark Command - Source Composition (Unified Mode)', () => {
       const hasNewFlags = (options.dir.length > 0) || (options.testCase.length > 0) || (options.label.length > 0);
       const hasMultipleFiles = (options.file || []).length > 1;
       expect(hasNewFlags || hasMultipleFiles).toBe(false);
+    });
+  });
+
+  // Long-run SSE-drop fix: once runUnifiedMode has a (possibly polled) run
+  // object, it must not blindly report success. Covers the failed/cancelled/
+  // timeout branches that are otherwise only reachable through the network+
+  // SSE machinery `runUnifiedMode` itself is deliberately not unit-tested
+  // through (see the "server dependencies" note above).
+  describe('resolveUnifiedRunOutcome', () => {
+    function makeRun(overrides: Partial<EvaluationRun> = {}): EvaluationRun {
+      return {
+        id: 'run-1',
+        docType: 'evaluation-run',
+        name: 'test',
+        createdAt: new Date().toISOString(),
+        status: 'completed',
+        agentKey: 'demo',
+        modelId: 'demo-model',
+        sources: [],
+        trigger: 'cli',
+        testCaseSnapshots: [],
+        results: {},
+        ...overrides,
+      } as EvaluationRun;
+    }
+
+    it('reports success with the stale SSE completedCount when no run was ever fetched (runId never captured)', () => {
+      const outcome = resolveUnifiedRunOutcome(null, 3);
+      expect(outcome).toEqual({ kind: 'success', doneCount: 3 });
+    });
+
+    it('reports success with a FRESH doneCount derived from run.results, ignoring stale completedCount', () => {
+      const run = makeRun({
+        status: 'completed',
+        results: {
+          a: { reportId: 'r-a', status: 'completed' },
+          b: { reportId: 'r-b', status: 'failed' },
+          c: { reportId: 'r-c', status: 'pending' }, // not counted as "done"
+        } as any,
+      });
+      // completedCount is deliberately wrong/stale (e.g. frozen before a disconnect)
+      // to prove the fresh per-case count from storage wins.
+      const outcome = resolveUnifiedRunOutcome(run, 0);
+      expect(outcome).toEqual({ kind: 'success', doneCount: 2 });
+    });
+
+    it('reports FAILED (not success) when the run itself terminated in a failed state', () => {
+      const run = makeRun({ status: 'failed', error: 'agent crashed' });
+      const outcome = resolveUnifiedRunOutcome(run, 5);
+      expect(outcome.kind).toBe('failed');
+      expect((outcome as any).message).toContain('failed');
+      expect((outcome as any).message).toContain('agent crashed');
+    });
+
+    it('reports FAILED without an error suffix when the run has no error field', () => {
+      const run = makeRun({ status: 'cancelled', error: undefined });
+      const outcome = resolveUnifiedRunOutcome(run, 5);
+      expect(outcome).toEqual({ kind: 'failed', message: 'Evaluation run cancelled' });
+    });
+
+    it('reports TIMEOUT (not success) when polling gave up while the run was still running', () => {
+      const run = makeRun({ status: 'running' });
+      const outcome = resolveUnifiedRunOutcome(run, 1);
+      expect(outcome).toEqual({ kind: 'timeout' });
+    });
+
+    it('reports TIMEOUT when polling gave up while the run had not even started processing', () => {
+      const run = makeRun({ status: 'pending' });
+      const outcome = resolveUnifiedRunOutcome(run, 0);
+      expect(outcome).toEqual({ kind: 'timeout' });
     });
   });
 

@@ -10,7 +10,7 @@
 
 import { TrajectoryStep, EvaluationMetrics, ImprovementStrategy, OpenSearchLog, PassFailStatus } from '@/types';
 import { ENV_CONFIG } from '@/lib/config';
-import { readEnv } from '@/lib/envCompat';
+import { getBackendUrl } from '@/lib/portConfig';
 
 interface JudgeResult {
   passFailStatus: PassFailStatus;
@@ -19,6 +19,13 @@ interface JudgeResult {
   improvementStrategies: ImprovementStrategy[];
   judgeDurationMs?: number;
   judgeAttempts?: number;
+  /**
+   * Set only by the demo/mock judge (`/api/judge` never sets this for a real
+   * provider) to flag that the verdict was NOT produced by an LLM. Forwarded
+   * as-is so any caller of `callBedrockJudge` can detect a mock verdict
+   * without re-parsing `llmJudgeReasoning` prose.
+   */
+  warning?: string;
   /** Raw text the judge model emitted (forwarded from /api/judge). */
   rawResponse?: string;
   /** Extra JSON keys the model emitted that weren't typed wire fields. */
@@ -79,7 +86,7 @@ export async function callBedrockJudge(
 ): Promise<JudgeResult> {
   const maxRetries = 10;
   const baseDelay = 1000; // 1 second
-  const judgeApiUrl = ENV_CONFIG.judgeApiUrl || `http://localhost:${readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001'}/api/judge`;
+  const judgeApiUrl = ENV_CONFIG.judgeApiUrl || `${getBackendUrl()}/api/judge`;
 
   console.log('[BedrockJudge] Sending request to backend proxy...');
   console.log('[BedrockJudge] Trajectory steps:', trajectory.length);
@@ -150,6 +157,8 @@ export async function callBedrockJudge(
         improvementStrategies: result.improvementStrategies || [],
         judgeDurationMs: Date.now() - judgeStartTime,
         judgeAttempts: attempt,
+        // Forward the mock-judge warning (absent for every real provider).
+        warning: result.warning,
         // Forward debug breadcrumbs from the route so the runner can persist
         // them on the run document. These are absent in older /api/judge
         // responses (back-compat) and in production unless AH_JUDGE_DEBUG=1.

@@ -37,6 +37,7 @@ import {
   createProfileCommand,
   createSetupCommand,
   createWorkflowCommand,
+  createImportCommand,
 } from './commands/index.js';
 
 // Get package.json for version
@@ -159,6 +160,10 @@ ${chalk.cyan.bold('Agent Profiling:')}
   ${chalk.yellow('agent-health setup')}                   Install the agent-profiling hook + skill (Claude Code)
   ${chalk.yellow('agent-health profile')} ${chalk.gray('-e <evaluator>')}    Profile the current session, surface what to fix in the agent
 
+${chalk.cyan.bold('Importing:')}
+  ${chalk.yellow('agent-health import')} ${chalk.gray('--from holmesgpt')}     Import HolmesGPT test cases from GitHub
+  ${chalk.yellow('agent-health import')} ${chalk.gray('--from holmesgpt --source <path>')}  Import from local fixtures
+
 ${chalk.cyan.bold('Maintenance:')}
   ${chalk.yellow('agent-health migrate')}                Migrate legacy benchmark data to current format
   ${chalk.yellow('agent-health kill')} ${chalk.gray('sample-agent')}       Stop a running sample agent by name
@@ -268,6 +273,7 @@ program.addCommand(createSkillCommand());
 program.addCommand(createSetupCommand());
 program.addCommand(createProfileCommand());
 program.addCommand(createWorkflowCommand());
+program.addCommand(createImportCommand());
 
 // Add serve command as an alias for the default action
 program

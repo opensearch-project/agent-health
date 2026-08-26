@@ -101,4 +101,29 @@ describe('lib/portConfig', () => {
       expect(DEFAULT_DEV_PORT).toBe(4000);
     });
   });
+
+  describe('isBackendPortExplicit', () => {
+    it('is false when neither AH_PORT nor AGENT_HEALTH_PORT is set', async () => {
+      const { isBackendPortExplicit } = await import('@/lib/portConfig');
+      expect(isBackendPortExplicit()).toBe(false);
+    });
+
+    it('is true when AH_PORT is set', async () => {
+      process.env.AH_PORT = '4042';
+      const { isBackendPortExplicit } = await import('@/lib/portConfig');
+      expect(isBackendPortExplicit()).toBe(true);
+    });
+
+    it('is true when only the legacy AGENT_HEALTH_PORT is set', async () => {
+      process.env.AGENT_HEALTH_PORT = '4042';
+      const { isBackendPortExplicit } = await import('@/lib/portConfig');
+      expect(isBackendPortExplicit()).toBe(true);
+    });
+
+    it('is false for a non-numeric AH_PORT (getBackendUrl falls back, so warn-once must fire)', async () => {
+      process.env.AH_PORT = 'abc';
+      const { isBackendPortExplicit } = await import('@/lib/portConfig');
+      expect(isBackendPortExplicit()).toBe(false);
+    });
+  });
 });

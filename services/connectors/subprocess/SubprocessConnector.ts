@@ -128,6 +128,14 @@ export class SubprocessConnector extends BaseConnector {
       ...process.env,
       ...this.buildAuthEnv(auth),
       ...this.config.env,
+      // W3C trace context (Strategy A): TRACEPARENT/TRACESTATE from the active
+      // eval `test_case` span. Agents whose OTel SDK honors TRACEPARENT (pi —
+      // verified) emit their spans under the eval span's traceId, giving the
+      // trace poller an exact, window-free correlator. Despite the
+      // `traceContext.propagateEnv` contract, this helper was never actually
+      // wired into the spawn env before — subprocess agents silently ran
+      // without trace context.
+      ...this.buildTraceparentEnv(),
       AGENT_EVAL_RUN_ID: runId,
     };
 

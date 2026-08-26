@@ -15,6 +15,7 @@ jest.mock('@/services/storage/opensearchClient', () => ({
     getByTestCase: jest.fn(),
     getAll: jest.fn(),
     getById: jest.fn(),
+    getByIds: jest.fn(),
     delete: jest.fn(),
     partialUpdate: jest.fn(),
     count: jest.fn(),
@@ -243,12 +244,173 @@ describe('AsyncRunStorage', () => {
       expect(result?.sessionId).toBe('sess-read');
     });
 
+    it('maps judgeModelId from storage so recovery judges with the configured model', async () => {
+      const mockRun = { ...createMockStorageRun('run-1'), judgeModelId: 'claude-sonnet-4-6' } as any;
+      mockOsRuns.getById.mockResolvedValue(mockRun);
+
+      const result = await asyncRunStorage.getReportById('run-1');
+
+      expect(result?.judgeModelId).toBe('claude-sonnet-4-6');
+    });
+
     it('returns null when not found', async () => {
       mockOsRuns.getById.mockResolvedValue(null);
 
       const result = await asyncRunStorage.getReportById('non-existent');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('getReportsByIds', () => {
+    it('returns an empty map for no ids without hitting the API', async () => {
+      const result = await asyncRunStorage.getReportsByIds([]);
+      expect(result).toEqual({});
+      expect(mockOsRuns.getByIds).not.toHaveBeenCalled();
+    });
+
+    it('issues a single request and maps results by id for a small id list', async () => {
+      mockOsRuns.getByIds.mockResolvedValue([
+        createMockStorageRun('r-1'),
+        createMockStorageRun('r-2'),
+      ]);
+
+      const result = await asyncRunStorage.getReportsByIds(['r-1', 'r-2']);
+
+      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(1);
+      expect(mockOsRuns.getByIds).toHaveBeenCalledWith(['r-1', 'r-2']);
+      expect(Object.keys(result)).toEqual(['r-1', 'r-2']);
+    });
+
+    // Regression guard for the comparison-page 431 ("Request Header Fields
+    // Too Large"): a single unchunked GET /api/storage/runs?ids=<all> blew
+    // past the server's URL/header size limit once ids climbed into the
+    // thousands (4 runs x 400 reports = 1600 ids). Chunking must kick in
+    // well before that.
+    it('chunks large id lists into batches of 100 issued in parallel', async () => {
+      const ids = Array.from({ length: 250 }, (_, i) => `r-${i}`);
+      mockOsRuns.getByIds.mockImplementation(async (chunk: string[]) =>
+        chunk.map(id => createMockStorageRun(id))
+      );
+
+      const result = await asyncRunStorage.getReportsByIds(ids);
+
+      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(3);
+      expect(mockOsRuns.getByIds.mock.calls[0][0]).toHaveLength(100);
+      expect(mockOsRuns.getByIds.mock.calls[1][0]).toHaveLength(100);
+      expect(mockOsRuns.getByIds.mock.calls[2][0]).toHaveLength(50);
+      // Every id present, order-independent, nothing dropped or duplicated
+      // across chunk boundaries.
+      expect(Object.keys(result).sort()).toEqual([...ids].sort());
+      ids.forEach(id => expect(result[id]).toBeDefined());
+    });
+
+    // A very large comparison (many runs x a large benchmark) can produce far
+    // more than a handful of chunks. Fan-out must stay capped — firing all
+    // chunks at once would turn a single oversized request into an unbounded
+    // burst of parallel ones, just moving the stampede risk elsewhere.
+    it('never runs more than a modest number of chunk requests concurrently', async () => {
+      const ids = Array.from({ length: 1600 }, (_, i) => `r-${i}`); // 16 chunks of 100
+      let inFlight = 0;
+      let maxInFlight = 0;
+      mockOsRuns.getByIds.mockImplementation(async (chunk: string[]) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        inFlight--;
+        return chunk.map(id => createMockStorageRun(id));
+      });
+
+      await asyncRunStorage.getReportsByIds(ids);
+
+      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(16);
+      expect(maxInFlight).toBeGreaterThan(0);
+      expect(maxInFlight).toBeLessThanOrEqual(8);
+    });
+
+    // A URL-length regression guard: at CHUNK_SIZE=100, even a 1600-id
+    // request (the exact 4-run x 400-report shape that triggered the 431)
+    // never issues a single request whose id list could blow the header
+    // limit — each individual chunk's joined-id query string stays tiny.
+    it('keeps each individual chunk small enough to stay well under URL/header size limits', async () => {
+      const ids = Array.from({ length: 1600 }, (_, i) => `report-id-${i}`);
+      mockOsRuns.getByIds.mockResolvedValue([]);
+
+      await asyncRunStorage.getReportsByIds(ids);
+
+      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(16);
+      for (const call of mockOsRuns.getByIds.mock.calls) {
+        const [chunk] = call;
+        expect(chunk.length).toBeLessThanOrEqual(100);
+        // Rough proxy for the eventual `ids=<comma-joined>` query param length.
+        expect(chunk.join(',').length).toBeLessThan(1600);
+      }
+    });
+
+    it('merges results from every chunk, preserving all ids regardless of chunk order of resolution', async () => {
+      let resolveFirst!: (v: unknown) => void;
+      const firstPending = new Promise(resolve => { resolveFirst = resolve; });
+      mockOsRuns.getByIds.mockImplementationOnce(() => firstPending as any)
+        .mockImplementationOnce(async () => [createMockStorageRun('r-101')]);
+
+      const ids = [...Array.from({ length: 100 }, (_, i) => `r-${i}`), 'r-101'];
+      const pending = asyncRunStorage.getReportsByIds(ids);
+
+      // Resolve the second (faster) chunk's underlying promise first to
+      // prove ordering of resolution doesn't drop or misplace results.
+      await Promise.resolve();
+      resolveFirst([createMockStorageRun('r-0')]);
+
+      const result = await pending;
+      expect(result['r-0']).toBeDefined();
+      expect(result['r-101']).toBeDefined();
+    });
+
+    // A genuinely failed chunk must propagate, not be swallowed into a
+    // partial/empty result that the UI would render as "Not run" for every
+    // cell (the exact pre-fix masking symptom).
+    it('propagates a chunk failure instead of swallowing it', async () => {
+      mockOsRuns.getByIds.mockRejectedValue(new Error('431 Request Header Fields Too Large'));
+
+      await expect(asyncRunStorage.getReportsByIds(['r-1'])).rejects.toThrow(
+        '431 Request Header Fields Too Large'
+      );
+    });
+  });
+
+  describe('getReportSummariesByIds', () => {
+    it('returns an empty map for no ids without hitting the API', async () => {
+      const result = await asyncRunStorage.getReportSummariesByIds([]);
+      expect(result).toEqual({});
+      expect(mockOsRuns.getByIds).not.toHaveBeenCalled();
+    });
+
+    it('requests only lightweight status fields and maps traceId → runId', async () => {
+      mockOsRuns.getByIds.mockResolvedValue([
+        { id: 'r-1', status: 'completed', passFailStatus: 'passed', metricsStatus: 'ready', traceId: 'otel-1', createdAt: '2024-01-01T00:00:00Z' },
+      ]);
+
+      const result = await asyncRunStorage.getReportSummariesByIds(['r-1']);
+
+      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(1);
+      const [ids, options] = mockOsRuns.getByIds.mock.calls[0];
+      expect(ids).toEqual(['r-1']);
+      expect(options.fields).toEqual(expect.arrayContaining(['status', 'passFailStatus', 'metricsStatus', 'traceId', 'annotations']));
+      expect(result['r-1'].passFailStatus).toBe('passed');
+      expect(result['r-1'].metricsStatus).toBe('ready');
+      expect(result['r-1'].runId).toBe('otel-1');
+    });
+
+    it('chunks large id lists into batches of 100', async () => {
+      const ids = Array.from({ length: 250 }, (_, i) => `r-${i}`);
+      mockOsRuns.getByIds.mockResolvedValue([]);
+
+      await asyncRunStorage.getReportSummariesByIds(ids);
+
+      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(3);
+      expect(mockOsRuns.getByIds.mock.calls[0][0]).toHaveLength(100);
+      expect(mockOsRuns.getByIds.mock.calls[1][0]).toHaveLength(100);
+      expect(mockOsRuns.getByIds.mock.calls[2][0]).toHaveLength(50);
     });
   });
 

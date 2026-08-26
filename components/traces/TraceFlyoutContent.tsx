@@ -43,7 +43,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Span, TimeRange } from '@/types';
-import { processSpansIntoTree, calculateTimeRange, getCategoryColors } from '@/services/traces';
+import { processSpansIntoTree, calculateTimeRange, getCategoryColors, getInitialExpandedSpans } from '@/services/traces';
 import { formatDuration } from '@/services/traces/utils';
 import TraceVisualization from './TraceVisualization';
 import TraceTimelineChart from './TraceTimelineChart';
@@ -134,10 +134,10 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
     }
   }, [trace.traceId, spanTree]);
 
-  // Auto-expand root spans
+  // Auto-expand roots + ancestors of any ERROR span so the failing span is
+  // visible on load rather than hidden behind collapsed parents.
   useEffect(() => {
-    const rootIds = new Set(spanTree.map(s => s.spanId));
-    setExpandedSpans(rootIds);
+    setExpandedSpans(getInitialExpandedSpans(spanTree));
   }, [spanTree]);
 
   // Handle expand toggle

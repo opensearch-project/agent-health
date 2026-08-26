@@ -193,7 +193,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
     ));
   };
 
-  const handleSave = async () => {
+  const handleSave = async (runAfterSave = true) => {
     // For new benchmarks, we don't include runs - they'll be created during execution
     // For existing benchmarks, we keep the runs
     const isNewBenchmark = !benchmark;
@@ -216,7 +216,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
         runs: [],
       };
 
-      if (onSaveAndRun && runs.length > 0) {
+      if (runAfterSave && onSaveAndRun && runs.length > 0) {
         // For new benchmarks, save and immediately trigger all configured runs
         const runConfigs: RunConfigForExecution[] = runs.map(run => ({
           name: run.name,
@@ -238,8 +238,11 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
       });
 
       if (updated) {
-        // If test cases changed (new version), run the new version with configured runs
-        if (testCasesChanged && onSaveAndRun && runs.length > 0) {
+        // If test cases changed (new version), run the new version with
+        // configured runs — but only when the caller asked to run. The
+        // "Save Changes" (save-without-run) button passes runAfterSave=false
+        // so editing test cases never silently fires an evaluation /execute.
+        if (runAfterSave && testCasesChanged && onSaveAndRun && runs.length > 0) {
           const runConfigs: RunConfigForExecution[] = runs.map(run => ({
             name: run.name,
             description: run.description,
@@ -565,7 +568,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
             {step === 'useCases' && (
               benchmark && !testCasesChanged ? (
                 <Button
-                  onClick={handleSave}
+                  onClick={() => handleSave(false)}
                   disabled={!canProceedFromUseCases}
                   className="bg-opensearch-blue hover:bg-blue-600"
                 >
@@ -581,7 +584,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
                   <Button
                     data-testid="editor-save-without-run"
                     variant="outline"
-                    onClick={handleSave}
+                    onClick={() => handleSave(false)}
                     disabled={!canProceedFromUseCases}
                   >
                     <Check size={16} className="mr-1" />
@@ -607,7 +610,7 @@ export const BenchmarkEditor: React.FC<BenchmarkEditorProps> = ({
             )}
             {step === 'runs' && (
               <Button
-                onClick={handleSave}
+                onClick={() => handleSave(true)}
                 disabled={!canSave}
                 className="bg-opensearch-blue hover:bg-blue-600"
               >

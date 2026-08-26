@@ -13,7 +13,7 @@
 import type { StorageClusterConfig } from '../../types/index.js';
 import type { StorageState } from '../adapters/index.js';
 import { setStorageModule, setStorageError, FileStorageModule, FileSessionMetadataOperations, OpenSearchStorageModule } from '../adapters/index.js';
-import { createOpenSearchClient, configToCacheKey } from './opensearchClientFactory.js';
+import { createOpenSearchClient, configToCacheKey, describeOpenSearchError } from './opensearchClientFactory.js';
 import { ensureIndexesWithValidation } from './indexInitializer.js';
 
 /**
@@ -88,7 +88,10 @@ export async function initializeStorageFromConfig(
     console.log('[storageInit] OpenSearch storage module activated');
     return state;
   } catch (error: any) {
-    const errorMsg = error.message || 'Connection failed';
+    // describeOpenSearchError() appends the HTTP status code (e.g. "(HTTP 403)")
+    // when available, so an auth failure (expired/rotated SigV4 credentials) is
+    // distinguishable in logs from a cluster-side 5xx without a restart-and-guess.
+    const errorMsg = describeOpenSearchError(error) || 'Connection failed';
     console.warn(`[storageInit] OpenSearch not reachable: ${errorMsg}`);
     setStorageError(errorMsg, configKey, config.endpoint);
     if (client) await client.close().catch(() => {});

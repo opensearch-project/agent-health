@@ -119,6 +119,7 @@ describe('Benchmark Stats Refresh Integration', () => {
         passed: 2,
         failed: 1,
         pending: 0,
+        errored: 0,
         total: 3,
       });
 
@@ -131,6 +132,7 @@ describe('Benchmark Stats Refresh Integration', () => {
             passed: 2,
             failed: 1,
             pending: 0,
+            errored: 0,
             total: 3,
           },
         })
@@ -287,6 +289,7 @@ describe('Benchmark Stats Refresh Integration', () => {
         passed: 1,
         failed: 1,
         pending: 0,
+        errored: 0,
         total: 2,
       });
       expect(mockBenchmarkUpdateRun).toHaveBeenCalledTimes(1); // Only target run

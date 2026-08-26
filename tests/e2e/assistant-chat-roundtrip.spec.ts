@@ -68,8 +68,9 @@ test.describe('Assistant Chat — round trip', () => {
     await input.fill('Why did this run fail?');
     await send.click();
 
-    // The mocked reply text appears somewhere in the thread.
-    await expect(page.getByText('Hello! This is a mocked assistant response.', { exact: false }))
+    // The mocked reply text appears in the page thread (scope to the page —
+    // the global AssistantModal mirrors the same thread in the DOM).
+    await expect(page.locator('[data-testid="assistant-chat-page"]').getByText('Hello! This is a mocked assistant response.', { exact: false }))
       .toBeVisible({ timeout: 15_000 });
 
     expect(chatCalls).toBe(1);
@@ -106,13 +107,13 @@ test.describe('Assistant Chat — round trip', () => {
     await input.click();
     await input.fill('First question');
     await send.click();
-    await expect(page.getByText('First reply.', { exact: false })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="assistant-chat-page"]').getByText('First reply.', { exact: false })).toBeVisible({ timeout: 15_000 });
 
     // Turn 2 — same chat, no reload.
     await input.click();
     await input.fill('Follow-up question');
     await send.click();
-    await expect(page.getByText('Second reply.', { exact: false })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="assistant-chat-page"]').getByText('Second reply.', { exact: false })).toBeVisible({ timeout: 15_000 });
 
     expect(observedMessages).toEqual(['First question', 'Follow-up question']);
     expect(observedSessionIds).toHaveLength(2);
@@ -135,9 +136,9 @@ test.describe('Assistant Chat — round trip', () => {
     await page.goto('/assistant');
     await page.waitForSelector('[data-testid="assistant-chat-page"]', { timeout: 30_000 });
 
-    await page.getByText('Benchmark Results', { exact: true }).click();
+    await page.locator('[data-testid="assistant-chat-page"]').getByText('Benchmark Results', { exact: true }).click();
 
-    await expect(page.getByText('Benchmark insights here.', { exact: false }))
+    await expect(page.locator('[data-testid="assistant-chat-page"]').getByText('Benchmark insights here.', { exact: false }))
       .toBeVisible({ timeout: 15_000 });
     expect(lastMessage).toBe("Explain this benchmark's results");
   });
@@ -166,8 +167,9 @@ test.describe('Assistant Chat — round trip', () => {
     // by leaving the user-visible thread without an assistant bubble. The
     // signal we care about is that the user message itself rendered AND no
     // mocked content from a prior happy path appears.
-    await expect(page.getByText('Trigger an error', { exact: false })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Hello! This is a mocked assistant response.', { exact: false }))
+    const chat = page.locator('[data-testid="assistant-chat-page"]');
+    await expect(chat.getByText('Trigger an error', { exact: false })).toBeVisible({ timeout: 15_000 });
+    await expect(chat.getByText('Hello! This is a mocked assistant response.', { exact: false }))
       .not.toBeVisible();
   });
 });

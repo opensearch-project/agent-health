@@ -172,7 +172,7 @@ run a JSON file:
 
 ```bash
 # `-f` accepts BOTH JSON test-case files and code SDK (.eval.js / .eval.ts) files
-npx @opensearch-project/agent-health benchmark -f ./evals/demo.eval.js -a my-agent
+npx @opensearch-project/agent-health benchmark -f ./examples/eval-files/demo.eval.js -a my-agent
 ```
 
 They produce **per-matcher results** (`matcherResults[]`) instead of a single

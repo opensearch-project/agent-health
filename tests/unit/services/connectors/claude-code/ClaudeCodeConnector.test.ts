@@ -628,6 +628,33 @@ describe('ClaudeCodeConnector', () => {
 
       expect(bedrockConnector).toBeInstanceOf(ClaudeCodeConnector);
     });
+
+    it('sets OTEL_LOG_USER_PROMPTS=1 by default when telemetry is enabled', () => {
+      const prev = { ...process.env };
+      process.env.CLAUDE_CODE_TELEMETRY_ENABLED = 'true';
+      process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otlp.example/v1/traces';
+      delete process.env.OTEL_LOG_USER_PROMPTS;
+      try {
+        const env = (createBedrockClaudeCodeConnector() as any).config.env;
+        expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe('1');
+        expect(env.OTEL_LOG_USER_PROMPTS).toBe('1');
+      } finally {
+        process.env = prev;
+      }
+    });
+
+    it('honors an explicit OTEL_LOG_USER_PROMPTS opt-out', () => {
+      const prev = { ...process.env };
+      process.env.CLAUDE_CODE_TELEMETRY_ENABLED = 'true';
+      process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://otlp.example/v1/traces';
+      process.env.OTEL_LOG_USER_PROMPTS = '0';
+      try {
+        const env = (createBedrockClaudeCodeConnector() as any).config.env;
+        expect(env.OTEL_LOG_USER_PROMPTS).toBe('0');
+      } finally {
+        process.env = prev;
+      }
+    });
   });
 
   describe('default instance', () => {

@@ -45,6 +45,7 @@ import { expect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
 import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
 import { loadConfigSync } from '@/lib/config/index';
+import { getBackendUrl } from '@/lib/portConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { debug } from '@/lib/debug';
@@ -490,7 +491,12 @@ export async function executeEvaluationRun(
                 // configured to use the same model as the agent. The server
                 // /api/judge resolves the actual judge model from the
                 // evaluator config when this is undefined.
-                judge: bindJudge({ evaluatorId: run.evaluatorId, model: run.judgeModelId }),
+                // Pin the judge fixture to *this* server's actual bound URL.
+                // The runner is in-process so AH_PORT is correct, but passing
+                // serverUrl explicitly stops the SDK judge from re-deriving
+                // (and possibly defaulting to 4001 / a foreign instance) if
+                // env is ever mutated mid-run. See AGENTS.md → server lifecycle.
+                judge: bindJudge({ evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() }),
                 evaluate: evaluateFixture,
               };
               const arg = Object.assign(emptyResult, { ...fixtures, result: emptyResult }) as any;
@@ -523,7 +529,14 @@ export async function executeEvaluationRun(
             // `capturedResult` was never set because `agent.run()` rejected) from
             // a deliberate gate failure. The former must surface as a clearly
             // labelled `errored` run, not a silent `failed` with an empty card.
-            const agentFailed = evalError !== undefined && capturedResult === undefined;
+            // BUT a no-prompt/deterministic test whose body threw a *recorded*
+            // gate failure (e.g. a failing chai `expect()` — which both records a
+            // code-assertion matcher AND throws) is a FAILED test, not an agent
+            // failure: a real agent crash produces no matcher (`anyGateFailed`
+            // is false). Without this guard such runs were bucketed as errored
+            // (metricsStatus:'error' → passFailStatus null), regressing #245.
+            const agentFailed =
+              evalError !== undefined && capturedResult === undefined && !anyGateFailed;
             const failed = anyGateFailed || evalError !== undefined;
             (report as any).evaluationType = 'deterministic';
             (report as any).matcherResults = matcherResults;
@@ -628,6 +641,11 @@ export async function executeEvaluationRun(
           // (the connector path predates the cross-surface parity work),
           // so we stamp it onto the doc here.
           (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
+          // Stamp the eval test_case span's traceId (Strategy A correlator).
+          // Agents that adopt the propagated traceparent (REST via header,
+          // pi via TRACEPARENT env) emit their spans under this exact
+          // traceId, giving the trace poller a precise, window-free match.
+          (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
           // Same fallback for judgeModelId — the connector return path
           // doesn't carry it, but `run.judgeModelId` is the cx input so
           // we stamp it onto the report on save.
@@ -650,12 +668,18 @@ export async function executeEvaluationRun(
 
           // If trace mode (metricsStatus: 'pending'), poll for traces and run judge inline.
           // Skipped for deterministic runs (matcher session decided the verdict already).
+          // Guarded on agentConfig.useTraces: only trace-mode agents legitimately
+          // produce 'pending' — a stale placeholder 'pending' surviving a save-merge
+          // must never send an eagerly-judged report into trace polling that
+          // clobbers its verdict. No runId requirement: the poller correlates
+          // via sessionId/service-window hints when Strategy B is unavailable
+          // (REST agents never get a runId; Claude Code spans carry only session.id).
           if (
             !hasDeterministicEval &&
-            savedReport.metricsStatus === 'pending' &&
-            savedReport.runId
+            agentConfig?.useTraces &&
+            savedReport.metricsStatus === 'pending'
           ) {
-            debug('EvaluationRunner', `[${testCaseId}] Trace mode: polling for traces (runId=${savedReport.runId})`);
+            debug('EvaluationRunner', `[${testCaseId}] Trace mode: polling for traces (runId=${savedReport.runId ?? 'none — window/session correlation'})`);
             await waitForTracesAndJudge(savedReport, testCase, storageModule, agentConfig);
           }
 
@@ -841,13 +865,16 @@ async function waitForTracesAndJudge(
   return new Promise<void>((resolve) => {
     tracePollingManager.startPolling(
       report.id,
-      report.runId!,
+      report.runId,
       {
+        // The poller stops without a verdict when the report reached a
+        // terminal state through another path — resolve or this hangs the
+        // run's test-case worker forever.
+        onStopped: () => resolve(),
         onTracesFound: async (_spans, updatedReport) => {
           try {
-            const finalTrajectory = agentConfig?.hooks?.buildTrajectory
-              ? updatedReport.trajectory
-              : report.trajectory;
+            // Span-built trajectory (hook or default conversion — issue #320).
+            const finalTrajectory = updatedReport.trajectory;
 
             const config = getConfig();
             const modelConfig = config.models[report.modelId || ''];

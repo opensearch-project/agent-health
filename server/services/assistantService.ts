@@ -28,6 +28,7 @@ import { readEnv } from '@/lib/envCompat';
 import { getSkillPath } from '@/lib/packagePaths';
 import { resolveAgentPath, discoverAgentPath, renderDiscoveryMarkdown } from '@/server/services/agentPath';
 import serverConfig from '@/server/config/index';
+import { buildInferenceConfig, resolveRegionAwareModelId } from '@/lib/bedrockCompat';
 import { asyncRunStorage } from '@/services/storage/asyncRunStorage';
 import { asyncBenchmarkStorage } from '@/services/storage/asyncBenchmarkStorage';
 import { asyncTestCaseStorage } from '@/services/storage/asyncTestCaseStorage';
@@ -712,7 +713,7 @@ async function streamFromBedrock(
     const { BedrockRuntimeClient, ConverseStreamCommand } = await import('@aws-sdk/client-bedrock-runtime');
     const client = new BedrockRuntimeClient({ region: serverConfig.AWS_REGION });
     const appConfig = loadConfigSync();
-    const modelId = appConfig.judge?.model || serverConfig.BEDROCK_MODEL_ID;
+    const modelId = resolveRegionAwareModelId(appConfig.judge?.model || serverConfig.BEDROCK_MODEL_ID);
     debug('Assistant', 'Using Bedrock model:', modelId);
 
     const trimmed = messages.slice(-FALLBACK_HISTORY_CAP);
@@ -725,7 +726,7 @@ async function streamFromBedrock(
       modelId,
       messages: bedrockMessages,
       system: [{ text: systemPrompt }],
-      inferenceConfig: { maxTokens: 4096, temperature: 0.7 },
+      inferenceConfig: buildInferenceConfig(modelId, { maxTokens: 4096, temperature: 0.7 }),
     });
     const response = await client.send(command);
 

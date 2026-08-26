@@ -102,14 +102,49 @@ describe('Health Endpoint Integration Tests', () => {
         const data = await response.json();
 
         // Verify complete response structure
-        expect(data).toEqual({
-          status: 'ok',
-          version: expect.stringMatching(/^\d+\.\d+\.\d+/),
-          service: 'agent-health',
-          features: {
-            codingAgentAnalytics: true,
-          },
-        });
+        expect(data).toEqual(
+          expect.objectContaining({
+            status: 'ok',
+            version: expect.stringMatching(/^\d+\.\d+\.\d+/),
+            service: 'agent-health',
+            features: {
+              codingAgentAnalytics: true,
+            },
+          })
+        );
+      },
+      TEST_TIMEOUT
+    );
+
+    it(
+      'should expose an instance identity block (pid / cwd / port / startedAt)',
+      async () => {
+        if (!backendAvailable) return;
+
+        const response = await fetch(`${BASE_URL}/health`);
+        const data = await response.json();
+
+        // Backward-compatible: older backends predate the identity block. Only
+        // assert its shape when present (a fresh build always includes it; the
+        // authoritative end-to-end proof is portIsolation.integration.test.ts,
+        // which boots a known-fresh server).
+        if (!data.instance) {
+          console.warn(
+            'Backend at',
+            BASE_URL,
+            'reports no instance block (older build) — skipping identity assertions'
+          );
+          return;
+        }
+
+        expect(typeof data.instance.pid).toBe('number');
+        expect(typeof data.instance.cwd).toBe('string');
+        expect(data.instance.cwd.length).toBeGreaterThan(0);
+        // port may be undefined only if AH_PORT is unset; the running server
+        // always has it (CLI/serve set it), so assert it's a number here.
+        expect(typeof data.instance.port).toBe('number');
+        expect(typeof data.instance.startedAt).toBe('string');
+        expect(Number.isNaN(Date.parse(data.instance.startedAt))).toBe(false);
       },
       TEST_TIMEOUT
     );

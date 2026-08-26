@@ -16,6 +16,7 @@ import { AGENT_PATH_SYSTEM_ADDENDUM } from '@/server/prompts/judgePrompt';
 import { parseJudgeResponse } from '@/server/services/judgeResponseParser';
 import { buildJudgeDebug } from '@/server/services/judgeDebug';
 import { getAgentSourceForPrompt, isAgentPathConfigured } from '@/server/services/agentPath';
+import { buildInferenceConfig, resolveRegionAwareModelId } from '@/lib/bedrockCompat';
 
 // ============================================================================
 // Types
@@ -292,8 +293,10 @@ export async function evaluateTrajectory(
   // Use default evaluator if none provided (backward compatibility)
   const effectiveEvaluator = evaluator || getDefaultEvaluator();
 
-  // Use provided modelId or fall back to configured default
-  const effectiveModelId = modelId || config.BEDROCK_MODEL_ID;
+  // Use provided modelId or fall back to configured default. The registry
+  // pins `us.` cross-region inference profiles; re-home the prefix to the
+  // active AWS region (eu./apac.) so non-US regions resolve the profile.
+  const effectiveModelId = resolveRegionAwareModelId(modelId || config.BEDROCK_MODEL_ID);
 
   debug('JudgeAPI', '========== BEDROCK JUDGE REQUEST ==========');
   debug('JudgeAPI', 'Received evaluation request');
@@ -344,16 +347,16 @@ export async function evaluateTrajectory(
 
   debug('JudgeAPI', 'Prompt built, length:', userPrompt.length, 'characters');
 
-  // Default the judge temperature to 1. Claude extended-thinking models (Opus
-  // 4.7/4.8+) reject any value other than 1 (Bedrock `ValidationException:
-  // temperature is deprecated for this model`), and 1 is equally valid for all
-  // earlier Claude models — so 1 is a safe universal default. An evaluator may
-  // still set its own temperature via inferenceConfig (its responsibility to
-  // pick a value the chosen model accepts).
-  const temperature = effectiveEvaluator.inferenceConfig?.temperature ?? 1;
+  // Newer Claude models (Opus 4.5+, Sonnet 4.6+, the Claude 5 family) have
+  // deprecated `temperature` and reject any explicit value with
+  // `ValidationException: 'temperature' is deprecated for this model`.
+  // buildInferenceConfig() omits the field for those models; older models
+  // still get the evaluator's temperature (default 0.1 for judge determinism).
+  const temperature = effectiveEvaluator.inferenceConfig?.temperature ?? 0.1;
   const maxTokens = effectiveEvaluator.inferenceConfig?.maxTokens ?? 4096;
+  const inferenceConfig = buildInferenceConfig(effectiveModelId, { maxTokens, temperature });
 
-  debug('JudgeAPI', 'Inference config - temperature:', temperature, 'maxTokens:', maxTokens);
+  debug('JudgeAPI', 'Inference config - temperature:', inferenceConfig.temperature ?? '(omitted: deprecated for model)', 'maxTokens:', maxTokens);
 
   // Create Bedrock command using evaluator's system prompt
   const command = new ConverseCommand({
@@ -365,10 +368,7 @@ export async function evaluateTrajectory(
       },
     ],
     system: [{ text: effectiveEvaluator.systemPrompt + (agentSource ? AGENT_PATH_SYSTEM_ADDENDUM : '') }],
-    inferenceConfig: {
-      maxTokens,
-      temperature,
-    },
+    inferenceConfig,
   });
 
   // Call Bedrock

@@ -8,6 +8,7 @@ import { useLocation } from 'react-router-dom';
 import { useLocalRuntime, type ChatModelAdapter } from '@assistant-ui/react';
 import { streamAssistantChat } from '@/services/client/assistantApi';
 import type { AssistantContext } from '@/types';
+import { deriveAssistantContext } from '@/hooks/assistantContext';
 
 /**
  * Hook that provides an assistant-ui runtime backed by the Agent Health
@@ -23,50 +24,10 @@ export function useAssistantRuntime() {
   );
 
   // Derive assistant context from the current URL path + query string.
-  //
-  // Routes we recognize:
-  //   /benchmarks/:benchmarkId       → benchmarkId
-  //   /runs/:runId                   → runId
-  //   /traces/:traceId               → traceId
-  //   /test-cases/:testCaseId        → testCaseId
-  //   /compare/:benchmarkId?runs=a,b → benchmarkId + comparisonRunIds
-  const context = useMemo((): AssistantContext => {
-    const path = location.pathname;
-    const parts = path.split('/');
-    const search = new URLSearchParams(location.search);
-
-    // /compare/:benchmarkId carries the benchmark id in the URL too — the
-    // original parser only looked for the literal "benchmarks" segment, which
-    // meant the assistant got an empty context on the comparison page.
-    const benchmarkFromCompare =
-      parts.includes('compare') && parts.indexOf('compare') + 1 < parts.length
-        ? parts[parts.indexOf('compare') + 1]
-        : undefined;
-
-    const runsParam = search.get('runs');
-    const comparisonRunIds = runsParam
-      ? runsParam.split(',').map((s) => s.trim()).filter(Boolean)
-      : undefined;
-
-    return {
-      currentUrl: path + (location.search || ''),
-      benchmarkId: parts.includes('benchmarks')
-        ? parts[parts.indexOf('benchmarks') + 1]
-        : benchmarkFromCompare,
-      runId: parts.includes('runs')
-        ? parts[parts.indexOf('runs') + 1]
-        : undefined,
-      traceId: parts.includes('traces')
-        ? parts[parts.indexOf('traces') + 1]
-        : undefined,
-      testCaseId: parts.includes('test-cases')
-        ? parts[parts.indexOf('test-cases') + 1]
-        : undefined,
-      comparisonRunIds: comparisonRunIds && comparisonRunIds.length > 0
-        ? comparisonRunIds
-        : undefined,
-    };
-  }, [location.pathname, location.search]);
+  const context = useMemo(
+    (): AssistantContext => deriveAssistantContext(location.pathname, location.search),
+    [location.pathname, location.search]
+  );
 
   const adapter: ChatModelAdapter = useMemo(
     () => ({

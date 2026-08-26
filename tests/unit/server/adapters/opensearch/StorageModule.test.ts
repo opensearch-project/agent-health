@@ -149,6 +149,30 @@ describe('OpenSearchStorageModule', () => {
         error: 'Connection refused',
       });
     });
+
+    it('appends the HTTP status code (e.g. 403 for expired/rotated SigV4 credentials) so it is distinguishable from a cluster 5xx', async () => {
+      const authError: any = new Error('Response Error');
+      authError.meta = { statusCode: 403, body: {} };
+      mockClient.cluster.health.mockRejectedValue(authError);
+
+      const result = await mod.health();
+
+      expect(result).toEqual({
+        status: 'error',
+        error: 'Response Error (HTTP 403)',
+      });
+    });
+
+    it('falls back to "Unknown error" instead of an empty string when the error has neither a message nor a status code', async () => {
+      mockClient.cluster.health.mockRejectedValue({});
+
+      const result = await mod.health();
+
+      expect(result).toEqual({
+        status: 'error',
+        error: 'Unknown error',
+      });
+    });
   });
 
   // ==========================================================================
@@ -554,6 +578,15 @@ describe('OpenSearchStorageModule', () => {
         mockClient.get.mockRejectedValue(make404Error());
 
         const result = await mod.benchmarks.getById('missing');
+
+        expect(result).toBeNull();
+      });
+
+      it('should return null for an evaluation-run doc (eval-run rendered as empty benchmark)', async () => {
+        const evalRun = { id: 'eval-run-1', name: 'CLI eval-run', docType: 'evaluation-run' };
+        mockClient.get.mockResolvedValue(makeGetResponse(evalRun));
+
+        const result = await mod.benchmarks.getById('eval-run-1');
 
         expect(result).toBeNull();
       });
@@ -1357,6 +1390,20 @@ describe('OpenSearchStorageModule', () => {
       expect(must).toContainEqual({ term: { 'agentKey.keyword': 'a1' } });
       expect(must).toContainEqual({ term: { 'status.keyword': 'completed' } });
       expect(must).toContainEqual({ term: { 'trigger.keyword': 'manual' } });
+    });
+
+    // Regression: `testCaseSnapshots` on EvaluationRun docs is a plain
+    // dynamically-mapped `object` array, NOT `nested` (see indexMappings.ts).
+    // A `nested` query against it 400s with "query_shard_exception: nested
+    // object under path [testCaseSnapshots] is not of nested type" — verified
+    // against a real OpenSearch 2.17.0 instance. `list()` must use a plain
+    // `term` on the flattened `.keyword` multi-field instead.
+    it('applies the testCaseId filter as a plain term on testCaseSnapshots.id.keyword, not a nested query', async () => {
+      mockClient.search.mockResolvedValue(makeSearchResponse([], 0));
+      await mod.evaluationRuns.list({ testCaseId: 'tc-1' });
+      const must = mockClient.search.mock.calls[0][0].body.query.bool.must;
+      expect(must).toContainEqual({ term: { 'testCaseSnapshots.id.keyword': 'tc-1' } });
+      expect(JSON.stringify(must)).not.toContain('"nested"');
     });
   });
 });

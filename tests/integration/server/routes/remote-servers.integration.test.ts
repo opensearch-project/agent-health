@@ -22,11 +22,15 @@ import { jest } from '@jest/globals';
 const mockExistsSync = jest.fn();
 const mockReadFileSync = jest.fn();
 const mockWriteFileSync = jest.fn();
+const mockMkdirSync = jest.fn();
 
 jest.mock('fs', () => ({
   existsSync: (...args: any[]) => mockExistsSync(...args),
   readFileSync: (...args: any[]) => mockReadFileSync(...args),
   writeFileSync: (...args: any[]) => mockWriteFileSync(...args),
+  // config-v2 writeStateScope() does mkdirSync(dir,{recursive:true}) before
+  // writing .agent-health/state.json; without it the write path threw 500.
+  mkdirSync: (...args: any[]) => mockMkdirSync(...args),
 }));
 
 jest.mock('@/lib/config/index', () => ({
@@ -94,8 +98,14 @@ describe('Remote Servers Endpoints', () => {
     const { default: configRouter } = await import('@/server/routes/config');
     app.use(configRouter);
 
-    // Default: config file exists with empty remoteServers
-    mockExistsSync.mockReturnValue(true);
+    // Default: ui-first mode (the writable state file exists, but NO authored
+    // agent-health.config.{ts,js,mjs}). A blanket existsSync->true used to be
+    // fine, but config-v2 reads a present authored config as code-first and
+    // then rejects remote-server writes with 409. Keep authored config absent
+    // so writes stay allowed (201).
+    mockExistsSync.mockImplementation(
+      (p: any) => !/agent-health\.config\.(ts|js|mjs)$/.test(String(p))
+    );
     mockReadFileSync.mockReturnValue(JSON.stringify({ remoteServers: [] }));
     mockWriteFileSync.mockImplementation(() => {});
   });

@@ -145,6 +145,36 @@ describe('indexMappings', () => {
 
       expect(mappings[key].settings?.['index.mapping.total_fields.limit']).toBe(5000);
     });
+
+    // Regression test for the 2026-08-26 incident: a 400-test-case
+    // EvaluationRun crashed mid-run at 243/400 with "Limit of total fields
+    // [5000] has been exceeded". EvaluationRun docs are top-level docs in
+    // this index (see OpenSearchEvaluationRunOperations) with their own
+    // `results` map keyed by testCaseId, distinct from the legacy nested
+    // `runs.results` (already protected above). Without this top-level
+    // mapping, OpenSearch dynamically mapped `results.<testCaseId>.*` as new
+    // fields for every unique test case across every run ever created.
+    it('should have a disabled object mapping for the top-level EvaluationRun results field', () => {
+      const mappings = getIndexMappings();
+      const key = Object.keys(mappings).find((k) => k.includes('experiments'))!;
+      const props = mappings[key].mappings.properties;
+
+      expect(props.results).toEqual({ type: 'object', enabled: false });
+    });
+
+    it('should not disable docType/testCaseSnapshots at the top level (still queried via term queries)', () => {
+      const mappings = getIndexMappings();
+      const key = Object.keys(mappings).find((k) => k.includes('experiments'))!;
+      const props = mappings[key].mappings.properties;
+
+      // These are deliberately left to dynamic mapping: OpenSearchEvaluationRunOperations.list()
+      // filters on docType.keyword/benchmarkId.keyword/etc. and testCaseSnapshots.id.keyword (a
+      // plain term query — testCaseSnapshots is a dynamically-inferred `object` array, NOT
+      // `nested`, so they must stay real, queryable fields, not become part of an opaque
+      // enabled:false blob.
+      expect(props.docType).toBeUndefined();
+      expect(props.testCaseSnapshots).toBeUndefined();
+    });
   });
 
   describe('Runs Index Schema', () => {

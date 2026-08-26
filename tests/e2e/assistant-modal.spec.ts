@@ -55,9 +55,12 @@ test.describe('Assistant Modal', () => {
     const content = page.locator('[data-testid="assistant-modal-content"]');
     await expect(content).toBeVisible({ timeout: 5000 });
 
-    // Should show suggestion buttons
-    await expect(content.locator('text=Explain this benchmark')).toBeVisible();
-    await expect(content.locator('text=Help me write a test case')).toBeVisible();
+    // Suggestions are route-derived (useAssistantSuggestions), so assert the
+    // suggestions container renders at least one button rather than hardcoding
+    // route-specific prompt copy.
+    const suggestions = content.locator('[data-testid="assistant-modal-suggestions"]');
+    await expect(suggestions).toBeVisible();
+    await expect(suggestions.locator('button').first()).toBeVisible();
   });
 
   test('popup has input field and send button', async ({ page }) => {

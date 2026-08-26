@@ -25,7 +25,9 @@ const startPollingMock = benchmarkRunner.startTracePollingForReportWithModule as
 function makeReport(overrides: Partial<EvaluationReport>): EvaluationReport {
   return {
     id: 'report-1',
-    timestamp: new Date().toISOString(),
+    // Default: past the TRACE_RECOVERY_MIN_AGE_MS grace window (15 min), so
+    // recovery treats these as genuine orphans rather than in-flight reports.
+    timestamp: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
     testCaseId: 'tc-1',
     agentName: 'demo',
     modelName: 'claude',
@@ -103,6 +105,7 @@ describe('resumePendingTracePolls', () => {
     jest.clearAllMocks();
     delete process.env.TRACE_RECOVERY_DISABLED;
     delete process.env.TRACE_RECOVERY_MAX_AGE_MS;
+    delete process.env.TRACE_RECOVERY_MIN_AGE_MS;
     delete process.env.TRACE_RECOVERY_PAGE_SIZE;
     delete process.env.TRACE_RECOVERY_MAX_PAGES;
   });
@@ -149,20 +152,47 @@ describe('resumePendingTracePolls', () => {
     expect(startPollingMock).not.toHaveBeenCalled();
   });
 
-  it('marks pending reports without a runId as error (cannot resume)', async () => {
+  it('resumes pending reports without a runId (sessionId/window correlation)', async () => {
+    // REST-connector reports never carry a runId; the poller now correlates
+    // via sessionId/service-window hints derived from the report, so boot
+    // recovery must resume them instead of tombstoning (which previously
+    // errored healthy in-flight/orphaned REST reports).
     const r1 = makeReport({ id: 'r1', metricsStatus: 'pending', runId: undefined });
     const { storage, updateCalls } = mockStorage({ reports: [r1] });
 
     const stat = await resumePendingTracePolls(storage);
 
     expect(stat.pendingFound).toBe(1);
+    expect(stat.resumed).toBe(1);
+    expect(stat.failedOut).toBe(0);
+    expect(startPollingMock).toHaveBeenCalledTimes(1);
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it('skips reports younger than the grace window (presumed in-flight)', async () => {
+    // A just-created pending report is very likely being executed right now,
+    // possibly by a sibling server on the shared storage cluster. Recovery
+    // must leave it alone: no resume, no tombstone.
+    const r1 = makeReport({ id: 'r1', metricsStatus: 'pending', runId: 'run-1', timestamp: new Date().toISOString() });
+    const { storage, updateCalls } = mockStorage({ reports: [r1] });
+
+    const stat = await resumePendingTracePolls(storage);
+
+    expect(stat.pendingFound).toBe(1);
     expect(stat.resumed).toBe(0);
-    expect(stat.failedOut).toBe(1);
+    expect(stat.failedOut).toBe(0);
     expect(startPollingMock).not.toHaveBeenCalled();
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].id).toBe('r1');
-    expect(updateCalls[0].updates.metricsStatus).toBe('error');
-    expect(updateCalls[0].updates.traceError).toMatch(/No runId/);
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it('honours TRACE_RECOVERY_MIN_AGE_MS env override', async () => {
+    process.env.TRACE_RECOVERY_MIN_AGE_MS = '1'; // 1 ms => nothing is "young"
+    const r1 = makeReport({ id: 'r1', metricsStatus: 'pending', runId: 'run-1', timestamp: new Date(Date.now() - 1000).toISOString() });
+    const { storage } = mockStorage({ reports: [r1] });
+
+    const stat = await resumePendingTracePolls(storage);
+
+    expect(stat.resumed).toBe(1);
   });
 
   it('marks pending reports older than max age as error', async () => {
@@ -181,6 +211,7 @@ describe('resumePendingTracePolls', () => {
 
   it('honours TRACE_RECOVERY_MAX_AGE_MS env override', async () => {
     process.env.TRACE_RECOVERY_MAX_AGE_MS = '1'; // 1 ms => everything is "too old"
+    process.env.TRACE_RECOVERY_MIN_AGE_MS = '1'; // disable the in-flight grace window for this test
     // Use an explicit past timestamp so age > 1ms regardless of execution speed.
     const past = new Date(Date.now() - 1000).toISOString();
     const r1 = makeReport({ id: 'r1', metricsStatus: 'pending', runId: 'run-1', timestamp: past });
@@ -197,8 +228,9 @@ describe('resumePendingTracePolls', () => {
     // Previous code defaulted ageMs to `Infinity` when report.timestamp was
     // missing/invalid, which meant the `tooOld` branch always fired and
     // freshly-created reports without a timestamp got marked as error
-    // during boot recovery. Now we default to age 0 ("recent") so a healthy
-    // newly-created report continues polling.
+    // during boot recovery. Now we default to age 0 ("recent") — which, with
+    // the in-flight grace window, means the report is SKIPPED (left pending,
+    // never tombstoned).
     //
     // We test both shapes of "missing": an explicit empty-string and an
     // explicit invalid date string.
@@ -214,12 +246,9 @@ describe('resumePendingTracePolls', () => {
       const stat = await resumePendingTracePolls(storage);
 
       expect(stat.failedOut).toBe(0);
-      expect(stat.resumed).toBe(1);
-      // No error-tombstone update; the report stays pending and polling
-      // resumes for it.
+      // No error-tombstone update; the report stays pending untouched.
       const errorUpdates = updateCalls.filter(u => (u.updates as any).metricsStatus === 'error');
       expect(errorUpdates).toHaveLength(0);
-      expect(startPollingMock).toHaveBeenCalled();
       startPollingMock.mockClear();
     }
   });
@@ -252,7 +281,8 @@ describe('resumePendingTracePolls', () => {
   });
 
   it('counts errors when storage update fails but keeps scanning', async () => {
-    const r1 = makeReport({ id: 'r1', metricsStatus: 'pending', runId: undefined }); // -> failedOut path
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    const r1 = makeReport({ id: 'r1', metricsStatus: 'pending', runId: 'run-1', timestamp: tenDaysAgo }); // -> failedOut path (too old)
     const r2 = makeReport({ id: 'r2', metricsStatus: 'pending', runId: 'run-2' });   // -> resumed path
     const { storage } = mockStorage({ reports: [r1, r2], updateThrowsFor: new Set(['r1']) });
 

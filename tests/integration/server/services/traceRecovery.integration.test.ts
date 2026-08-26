@@ -19,7 +19,11 @@
  * Coverage:
  *   1. A pending report older than `TRACE_RECOVERY_MAX_AGE_MS` (default 24h)
  *      is marked `'error'` with an informative `traceError`.
- *   2. A pending report with no `runId` is marked `'error'` (cannot poll).
+ *   2. A YOUNG pending report (inside `TRACE_RECOVERY_MIN_AGE_MS`, default
+ *      15 min) is left untouched — it is presumed in-flight, possibly on a
+ *      sibling server sharing the storage cluster. This includes no-runId
+ *      reports: they are no longer tombstoned (the poller correlates via
+ *      sessionId/service-window hints, so a missing runId is not fatal).
  *   3. Reports that are not in pending/calculating state are left untouched.
  *
  * We deliberately do NOT cover the "resume polling and find traces" path in
@@ -205,13 +209,18 @@ describe('Trace polling recovery on boot \u2014 integration', () => {
     }
   });
 
-  it('marks pending reports with no runId as error (cannot resume)', async () => {
+  it('leaves a YOUNG pending report without a runId untouched (grace window — presumed in-flight)', async () => {
     if (!backendUp || !endpointUp) return;
 
     const tcId = await createTestCase('trace-recovery-norunid-' + Date.now());
     expect(tcId).toBeTruthy();
     createdTestCaseIds.push(tcId!);
 
+    // Freshly created (age ≈ 0 < TRACE_RECOVERY_MIN_AGE_MS): recovery must
+    // neither tombstone nor resume it — a live run (possibly on a sibling
+    // server against the same storage cluster) may still be executing it.
+    // The old behavior tombstoned these as "No runId ... cannot resume",
+    // which killed healthy in-flight placeholders mid-benchmark (2026-08-25).
     const reportId = await createReport({
       testCaseId: tcId!,
       metricsStatus: 'pending',
@@ -225,11 +234,44 @@ describe('Trace polling recovery on boot \u2014 integration', () => {
 
     const stat = await triggerRecovery();
     expect(stat.errors).toBe(0);
-    expect(stat.failedOut).toBeGreaterThanOrEqual(1);
 
     const after = await getReport(reportId!);
-    expect(after.metricsStatus).toBe('error');
-    expect(after.traceError).toMatch(/No runId|runId/i);
+    expect(after.metricsStatus).toBe('pending');
+    expect(after.traceError || '').not.toMatch(/No runId/i);
+  });
+
+  it('RESUMES (not tombstones) an aged pending report without a runId', async () => {
+    if (!backendUp || !endpointUp) return;
+
+    const tcId = await createTestCase('trace-recovery-norunid-aged-' + Date.now());
+    expect(tcId).toBeTruthy();
+    createdTestCaseIds.push(tcId!);
+
+    // Past the 15-min grace window but inside the 24h max age: recovery
+    // should re-attach polling via the report's sessionId/service-window
+    // hints instead of erroring it for lacking a runId.
+    const reportId = await createReport({
+      testCaseId: tcId!,
+      metricsStatus: 'pending',
+      runId: undefined,
+      ageMs: 20 * 60 * 1000, // 20 min
+    });
+    expect(reportId).toBeTruthy();
+    createdReportIds.push(reportId!);
+
+    await patchReport(reportId!, {
+      runId: '',
+      timestamp: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+    } as any).catch(() => {});
+
+    const stat = await triggerRecovery();
+    expect(stat.errors).toBe(0);
+
+    const after = await getReport(reportId!);
+    // Whatever the poller eventually decides (no spans will ever match this
+    // synthetic report), recovery itself must not have written the legacy
+    // "No runId ... cannot resume" tombstone.
+    expect(after.traceError || '').not.toMatch(/No runId/i);
   });
 
   it('does not touch reports that are already terminal', async () => {

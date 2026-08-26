@@ -73,7 +73,17 @@ export const BROWSER_SAFE_CONNECTORS = (Object.entries(CONNECTOR_TYPE_INFO) as [
   .map(([type]) => type);
 
 /** Keys of built-in agents shipped with the tool. */
-export const BUILT_IN_AGENT_KEYS = new Set(['demo', 'observio', 'claude-code', 'strands', 'langgraph-rest']);
+export const BUILT_IN_AGENT_KEYS = new Set(['demo', 'observio', 'claude-code', 'strands', 'pi', 'langgraph-rest']);
+
+/**
+ * True when an agent is one of the tool's shipped built-ins — as opposed to an
+ * agent authored in agent-health.config.ts or a UI-added custom endpoint.
+ * Prefers the server-computed `builtIn` flag (from /api/agents); falls back to
+ * BUILT_IN_AGENT_KEYS for the hardcoded defaults used before refreshConfig().
+ */
+export function isBuiltInAgent(a: { key: string; builtIn?: boolean; isCustom?: boolean }): boolean {
+  return (a.builtIn ?? BUILT_IN_AGENT_KEYS.has(a.key)) && !a.isCustom;
+}
 
 /**
  * Ordered list of preferred default agent keys, used when picking an initial

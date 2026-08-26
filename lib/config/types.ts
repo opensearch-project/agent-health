@@ -30,6 +30,16 @@ export interface UserAgentConfig {
   enabled?: boolean;
   headers?: Record<string, string>;
   useTraces?: boolean;
+  /**
+   * OTel `service.name` this agent's spans are emitted under — used by the
+   * trace poller / Traces tab for service-window correlation (Strategy C).
+   * Without it, correlation falls back to the connector-protocol default
+   * (e.g. `pi-agent`), which can collide with OTHER emitters sharing that
+   * service name on the same observability cluster.
+   */
+  traceServiceName?: string;
+  /** Trace-poll overrides (attempts × interval) for slow ingestion pipelines. */
+  tracePolling?: { maxAttempts?: number; intervalMs?: number };
   connectorType?: ConnectorProtocol;
   connectorConfig?: Record<string, any>;
   hooks?: AgentHooks;

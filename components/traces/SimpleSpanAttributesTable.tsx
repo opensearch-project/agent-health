@@ -74,15 +74,25 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
 
   // Flat sorted list of attribute entries. Sort alphabetically so users
   // can scan predictably; this is the "simple table" the user asked for.
+  //
+  // Span EVENTS are folded in as `<event-name>.<field>` rows (issue #319):
+  // the OTel GenAI conventions put tool arguments/results on events
+  // (gen_ai.tool.message / gen_ai.choice), not attributes, so a table that
+  // only showed span.attributes hid the most useful tool-call detail.
   const entries = useMemo(() => {
     const attrs = span.attributes || {};
     const list = Object.entries(attrs).map(([k, v]) => ({
       key: k,
       value: valueToString(v, valueMode),
     }));
+    for (const event of span.events || []) {
+      for (const [k, v] of Object.entries(event.attributes || {})) {
+        list.push({ key: `${event.name}.${k}`, value: valueToString(v, valueMode) });
+      }
+    }
     list.sort((a, b) => a.key.localeCompare(b.key));
     return list;
-  }, [span.attributes, valueMode]);
+  }, [span.attributes, span.events, valueMode]);
 
   const filtered = useMemo(() => {
     if (!filter.trim()) return entries;
@@ -213,9 +223,9 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
               </tr>
             </thead>
             <tbody>
-              {filtered.map(({ key, value }) => (
+              {filtered.map(({ key, value }, i) => (
                 <tr
-                  key={key}
+                  key={`${key}-${i}`}
                   className="border-b last:border-b-0 hover:bg-muted/30 group align-top"
                 >
                   <td className="px-3 py-1.5 font-mono text-foreground/90 break-all">{key}</td>

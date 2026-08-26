@@ -26,6 +26,11 @@ import type { EvaluationRun, TestCase, AgentConfig } from '@/types';
 import type { EvaluateFn } from '@/services/sourceResolver';
 
 jest.mock('@/services/evaluation', () => ({
+  // Spread the real module so helpers the runner calls (e.g.
+  // computeSdkMatcherSessionMetrics, added in #312) stay defined — only the
+  // agent/judge entrypoints below are stubbed. Without this the runner throws
+  // "computeSdkMatcherSessionMetrics is not a function", erroring the run.
+  ...jest.requireActual('@/services/evaluation'),
   runEvaluationWithConnector: jest.fn(),
   invokeAgent: jest.fn(),
   callBedrockJudge: jest.fn(),

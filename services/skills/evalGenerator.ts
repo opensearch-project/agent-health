@@ -15,6 +15,7 @@ import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-r
 import type { Skill, SkillEvalsFile } from '@/types';
 import { debug } from '@/lib/debug';
 import { DEFAULT_SKILL_MODEL_ID } from './constants';
+import { buildInferenceConfig, resolveRegionAwareModelId } from '@/lib/bedrockCompat';
 
 /**
  * Generate eval cases by calling Bedrock with the skill's instructions.
@@ -27,7 +28,7 @@ export async function generateEvals(
   debug('EvalGenerator', `Generating evals for skill: ${skill.metadata.name}`);
 
   const prompt = buildGenerationPrompt(skill);
-  const effectiveModelId = modelId || DEFAULT_SKILL_MODEL_ID;
+  const effectiveModelId = resolveRegionAwareModelId(modelId || DEFAULT_SKILL_MODEL_ID);
 
   const client = new BedrockRuntimeClient({
     region: process.env.AWS_REGION || 'us-west-2',
@@ -39,7 +40,7 @@ export async function generateEvals(
       { role: 'user', content: [{ text: prompt }] },
     ],
     system: [{ text: 'You are a test case generator for AI agent skills. Generate realistic, discriminating test cases that help identify whether a skill actually improves agent performance. Output valid JSON only within the specified markers.' }],
-    inferenceConfig: { maxTokens: 4096, temperature: 0.7 },
+    inferenceConfig: buildInferenceConfig(effectiveModelId, { maxTokens: 4096, temperature: 0.7 }),
   });
 
   const response = await client.send(command);

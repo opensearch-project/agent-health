@@ -354,16 +354,16 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
                       toggleRow(row.testCaseId);
                     }}
                   >
-                    <TableCell className="sticky left-0 bg-background z-10">
+                    <TableCell className="sticky left-0 bg-background z-10 py-1.5">
                       <div className="flex items-center gap-2">
                         <div className="flex-shrink-0 text-muted-foreground">
                           {isExpanded ? (
-                            <ChevronDown size={16} />
+                            <ChevronDown size={14} />
                           ) : (
-                            <ChevronRight size={16} />
+                            <ChevronRight size={14} />
                           )}
                         </div>
-                        <div className="space-y-1 min-w-0">
+                        <div className="space-y-0.5 min-w-0">
                           <div className="flex items-center gap-2">
                             {clusterByCaseId?.has(row.testCaseId) && (
                               <span
@@ -375,7 +375,7 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
                             )}
                             <Link
                               to={`/evaluations/test-cases/${row.testCaseId}`}
-                              className="font-medium truncate max-w-48 hover:underline text-foreground"
+                              className="font-medium text-[12px] truncate max-w-48 hover:underline text-foreground"
                               onClick={(e) => e.stopPropagation()}
                             >
                               {row.testCaseName}
@@ -403,11 +403,14 @@ export const UseCaseComparisonTable: React.FC<UseCaseComparisonTableProps> = ({
                               )
                             )}
                           </div>
-                          <div className="text-[10px] text-muted-foreground font-mono truncate max-w-48 inline-flex items-center gap-1">
-                            <span className="truncate">{row.testCaseId}</span>
-                            <CopyButton value={row.testCaseId} title="Copy test case id" size={10} className="shrink-0" />
-                          </div>
-                          <div className="flex items-center gap-2 flex-wrap">
+                          {/* id + labels share one line — separate rows for a
+                              10px id and two label chips made every row ~3
+                              lines tall and the table unscannable. */}
+                          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                            <span className="text-[10px] text-muted-foreground font-mono truncate max-w-36 inline-flex items-center gap-1">
+                              <span className="truncate">{row.testCaseId}</span>
+                              <CopyButton value={row.testCaseId} title="Copy test case id" size={10} className="shrink-0" />
+                            </span>
                             {(row.labels || []).slice(0, 2).map((label) => (
                               // Clicking a label filters the comparison table to
                               // test cases carrying it (in place); stopPropagation

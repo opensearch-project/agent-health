@@ -85,6 +85,11 @@ function toAgentConfig(userAgent: UserAgentConfig): AgentConfig {
     enabled: userAgent.enabled ?? true,
     headers: userAgent.headers ?? {},
     useTraces: userAgent.useTraces ?? false,
+    // Trace-correlation fields — dropping these silently broke per-agent
+    // service-window correlation (fell back to protocol defaults, colliding
+    // with other emitters) and per-agent poll budgets (fell back to 60×10s).
+    traceServiceName: userAgent.traceServiceName,
+    tracePolling: userAgent.tracePolling,
     connectorType: userAgent.connectorType,
     connectorConfig: userAgent.connectorConfig,
     hooks: userAgent.hooks,

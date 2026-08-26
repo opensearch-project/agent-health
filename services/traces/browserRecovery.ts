@@ -18,7 +18,7 @@
  * when server-side recovery is also in flight.
  */
 
-import type { EvaluationReport, TestCase } from '@/types';
+import type { EvaluationReport, Span, TestCase } from '@/types';
 import { tracePollingManager } from '@/services/traces/tracePoller';
 import { asyncRunStorage } from '@/services/storage';
 import { callBedrockJudge } from '@/services/evaluation';
@@ -41,10 +41,29 @@ export function ensureTracePollingForReport(
   options?: {
     onUpdated?: (updated: EvaluationReport) => void;
     onError?: (err: Error) => void;
+    /** Fired as soon as spans land, before the judge runs — lets the caller
+     *  update trace-visualization state (issue #320 consolidation). */
+    onSpans?: (spans: Span[]) => void;
+    /**
+     * Only start recovery when the report has been pending at least this
+     * long. Eager-path reports are *transiently* pending while their agent
+     * executes — fan-out callers (RunInspectorPage) should pass a grace
+     * period so freshly-created reports aren't dragged into trace polling
+     * that races their eager judge. 0 (default) = start immediately.
+     */
+    minPendingAgeMs?: number;
   }
 ): void {
-  // Only valid for trace-mode pending reports with a runId and a test case.
-  if (report.metricsStatus !== 'pending' || !report.runId || !testCase) return;
+  // Only valid for pending reports with a test case. A missing runId is no
+  // longer disqualifying — the poller correlates via sessionId/service-window
+  // hints derived from the report (REST agents never carry a runId).
+  if (report.metricsStatus !== 'pending' || !testCase) return;
+
+  const minAge = options?.minPendingAgeMs ?? 0;
+  if (minAge > 0) {
+    const ts = Date.parse(report.timestamp || '') || 0;
+    if (ts > 0 && Date.now() - ts < minAge) return;
+  }
 
   const existingState = tracePollingManager.getState(report.id);
   if (existingState?.running) return;
@@ -53,10 +72,31 @@ export function ensureTracePollingForReport(
     report.id,
     report.runId,
     {
-      onTracesFound: async (_spans, updatedReport) => {
+      onTracesFound: async (spans, updatedReport) => {
         try {
-          const judgeModelId = report.modelId
-            ? (DEFAULT_CONFIG.models[report.modelId]?.model_id || report.modelId)
+          options?.onSpans?.(spans);
+
+          // TRUE-FALLBACK GUARD (issue #320): the server-side poller runs the
+          // same judge in a different runtime, so the "already polling" check
+          // above cannot see it. Re-read the persisted report and bail unless
+          // it is still awaiting a judge ('pending'); 'calculating' means a
+          // judge is mid-flight elsewhere, and 'ready'/'error' mean a verdict
+          // already landed — the browser recovery must never race or
+          // overwrite the server's judge result.
+          const persisted = await asyncRunStorage.getReportById(report.id);
+          if (persisted && persisted.metricsStatus !== 'pending') {
+            if (persisted.metricsStatus !== 'calculating' && options?.onUpdated) {
+              options.onUpdated(persisted);
+            }
+            return;
+          }
+
+          // Same priority as the server-side runner: report.judgeModelId
+          // (persisted at run-create time) > agent's modelId BC fallback.
+          // (BEDROCK_MODEL_ID env is server-only — not readable here.)
+          const judgeModelKey = report.judgeModelId || report.modelId;
+          const judgeModelId = judgeModelKey
+            ? (DEFAULT_CONFIG.models[judgeModelKey]?.model_id || judgeModelKey)
             : undefined;
 
           const judgment = await callBedrockJudge(

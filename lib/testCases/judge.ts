@@ -44,9 +44,36 @@
 import type { TrajectoryStep } from '@/types';
 import { recordVerdict } from '../matchers/session.js';
 import { readEnv } from '../envCompat.js';
+import { getBackendUrl, isBackendPortExplicit, DEFAULT_BACKEND_PORT } from '../portConfig.js';
 
 /** Whether a judge signal gates the test verdict or is observational only. */
 export type JudgeRole = 'gate' | 'observe';
+
+// Warn at most once per process when judge() falls back to the default
+// backend port. Defaulting to 4001 is dangerous when a *foreign* agent-health
+// server (a live demo, another checkout) is listening there — the judge call
+// would hit it instead of the run's own server. We warn rather than throw so
+// existing zero-config local usage (server actually on 4001) keeps working.
+let warnedDefaultJudgePort = false;
+function resolveJudgeServerUrl(explicit?: string): string {
+  if (explicit) return explicit;
+  if (!isBackendPortExplicit() && !warnedDefaultJudgePort) {
+    warnedDefaultJudgePort = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[agent-health] judge(): AH_PORT is not set and no options.serverUrl was ` +
+        `provided — defaulting to http://localhost:${DEFAULT_BACKEND_PORT}. If a ` +
+        `different agent-health server is on that port, judging will hit it. Set ` +
+        `AH_PORT or pass options.serverUrl to target the right server.`
+    );
+  }
+  return getBackendUrl();
+}
+
+/** Test-only: reset the warn-once latch so unit tests can assert it fires. */
+export function __resetJudgePortWarning(): void {
+  warnedDefaultJudgePort = false;
+}
 
 /**
  * The result of a `judge()` call. Carries the verdict data plus a few
@@ -273,8 +300,7 @@ async function runJudge(
     : undefined;
   const claims = Array.isArray(claimOrClaims) ? claimOrClaims : [claimOrClaims];
 
-  const serverUrl =
-    options?.serverUrl ?? `http://localhost:${readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001'}`;
+  const serverUrl = resolveJudgeServerUrl(options?.serverUrl);
 
   const description =
     claims.length === 1 ? `judge: ${claims[0]}` : `judge: ${claims.length} claims`;

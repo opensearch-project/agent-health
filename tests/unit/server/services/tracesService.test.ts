@@ -337,6 +337,64 @@ describe('tracesService', () => {
       expect(client.search).toHaveBeenCalled();
     });
 
+    it('text search matches session.id as a case-insensitive substring (dashes/colons literal)', async () => {
+      const client = createMockClient();
+
+      // A bare UUID out of a pi-web URL; the real session.id on spans is
+      // `<ts>_<uuid>`, so this only matches as a substring wildcard.
+      await fetchTraces({ startTime: Date.now() - 86400000, endTime: Date.now(), textSearch: '019f3ae3-656d-70e7-8e0a-e6609e83d977' }, client);
+
+      const body = client.search.mock.calls[0][0].body;
+      const clauses = JSON.stringify(body.query);
+      // No query_string (its parser would choke on the dashes).
+      expect(clauses).not.toContain('query_string');
+      // Wildcards on session.id across both index schemas (Data Prepper's
+      // `span.attributes.session@id` and ss4o's `attributes.session.id.keyword`).
+      expect(clauses).toContain('span.attributes.session@id');
+      expect(body.query.bool.must).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            bool: expect.objectContaining({
+              should: expect.arrayContaining([
+                {
+                  wildcard: {
+                    'attributes.session.id.keyword': {
+                      value: '*019f3ae3-656d-70e7-8e0a-e6609e83d977*',
+                      case_insensitive: true,
+                    },
+                  },
+                },
+              ]),
+            }),
+          }),
+        ])
+      );
+    });
+
+    it('skips the expensive id/wildcard fan-out for a too-short query, but still matches by name', async () => {
+      const client = createMockClient();
+
+      await fetchTraces({ startTime: Date.now() - 86400000, endTime: Date.now(), textSearch: 'ab' }, client);
+
+      const body = client.search.mock.calls[0][0].body;
+      const clauses = JSON.stringify(body.query);
+      // No leading-wildcard clauses on the high-cardinality id/service fields
+      // for a 2-character query — that's a full terms-dictionary scan for a
+      // query too short to be selective.
+      expect(clauses).not.toContain('wildcard');
+      expect(clauses).not.toContain('span.attributes.session@id');
+      // The cheap `name` match still runs, so short input isn't a dead no-op.
+      expect(body.query.bool.must).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            bool: expect.objectContaining({
+              should: [{ match: { name: 'ab' } }],
+            }),
+          }),
+        ])
+      );
+    });
+
     it('should use custom size', async () => {
       const client = createMockClient();
 

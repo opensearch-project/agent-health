@@ -53,9 +53,8 @@ import { ENV_CONFIG } from '@/lib/config';
 import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
 import { RunScore } from '@/components/RunScore';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
-import { callBedrockJudge } from '@/services/evaluation';
-import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { tracePollingManager } from '@/services/traces/tracePoller';
+import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
 import { getResultStatus as getSharedResultStatus, StatusIcon as SharedStatusIcon, StatusLabel as SharedStatusLabel } from '@/components/evals3/ResultStatus';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -189,107 +188,40 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     };
   }, [liveReport.id, liveReport.metricsStatus]);
 
-  // Auto-recover trace polling for pending reports when page loads
-  // This handles the case where the browser was closed before polling completed
+  // Auto-recover trace polling for pending reports when page loads.
+  // Handles the case where the browser was closed before polling completed.
+  //
+  // Issue #320: this used to inline its own judge call that wrote a
+  // DIVERGENT field set (no matcherResults) and could race the server-side
+  // poller, flipping verdicts on refresh. It now delegates to the shared
+  // ensureTracePollingForReport, which writes the canonical judge surface
+  // and re-checks the persisted report before judging so it never
+  // overwrites a server-produced verdict.
   useEffect(() => {
     // Only for pending trace-mode reports with a runId
     if (liveReport.metricsStatus !== 'pending' || !liveReport.runId || !testCase) return;
 
-    // Check if polling is already running for this report
-    const existingState = tracePollingManager.getState(liveReport.id);
-    if (existingState?.running) {
-      console.info('[RunDetails] Polling already running for report:', liveReport.id);
-      return;
-    }
+    console.info('[RunDetails] Ensuring recovery polling for pending report:', liveReport.id);
 
-    console.info('[RunDetails] Starting auto-recovery polling for pending report:', liveReport.id);
-
-    // Start/resume polling with callbacks
-    tracePollingManager.startPolling(
-      liveReport.id,
-      liveReport.runId,
-      {
-        onTracesFound: async (spans, updatedReport) => {
-          console.info(`[RunDetails] Traces found for report ${liveReport.id}: ${spans.length} spans`);
-
-          // Update trace visualization state so UI reflects traces immediately
-          setTraceSpans(spans);
-          const tree = processSpansIntoTree(spans);
-          setSpanTree(tree);
-          setTimeRange(calculateTimeRange(spans));
-          const rootIds = new Set(tree.map(s => s.spanId));
-          setExpandedSpans(rootIds);
-          setTracesError(null);
-          setTracesFetched(true);
-
-          try {
-            // Trace-mode polled judge (UI fallback path). Same priority
-            // as the runner: report.judgeModelId > BEDROCK_MODEL_ID env >
-            // agent's modelId. Reading process.env from a browser bundle
-            // returns undefined, so we hop straight to the agent's modelId
-            // BC fallback when the run document didn't carry the new field.
-            const judgeModelId = liveReport.judgeModelId
-              ? (DEFAULT_CONFIG.models[liveReport.judgeModelId]?.model_id || liveReport.judgeModelId)
-              : (liveReport.modelId
-                  ? (DEFAULT_CONFIG.models[liveReport.modelId]?.model_id || liveReport.modelId)
-                  : undefined);
-            console.info(`[RunDetails] Calling Bedrock judge for report ${liveReport.id} with model: ${judgeModelId || '(default)'}`);
-
-            const judgment = await callBedrockJudge(
-              updatedReport.trajectory,
-              {
-                expectedOutcomes: testCase.expectedOutcomes,
-                expectedTrajectory: testCase.expectedTrajectory,
-              },
-              [], // No logs for trace-mode
-              (chunk) => console.debug('[RunDetails] Judge progress:', chunk.slice(0, 100)),
-              judgeModelId
-            );
-
-            console.info(`[RunDetails] Judge result: ${judgment.passFailStatus}`, judgment.metrics);
-
-            // Update report with judge results
-            await asyncRunStorage.updateReport(liveReport.id, {
-              metricsStatus: 'ready',
-              passFailStatus: judgment.passFailStatus,
-              metrics: judgment.metrics,
-              llmJudgeReasoning: judgment.llmJudgeReasoning,
-              improvementStrategies: judgment.improvementStrategies,
-            });
-
-            // Update local state
-            const freshReport = await asyncRunStorage.getReportById(liveReport.id);
-            if (freshReport) {
-              setLiveReport(freshReport);
-            }
-
-            console.info(`[RunDetails] Report ${liveReport.id} updated with judge results`);
-          } catch (error) {
-            console.error(`[RunDetails] Failed to judge report ${liveReport.id}:`, error);
-            // Issue #242: convert the failure into a kind-tagged "evaluator
-            // could not run" patch — zeroed metrics, cleared passFailStatus,
-            // bolded `**Evaluator could not run.**` heading in the judge
-            // surface, and `traceError` machine-greppable as `kind=judge_failed`.
-            await asyncRunStorage.updateReport(liveReport.id, buildEvaluatorErrorPatch(
-              'judge_failed',
-              error,
-            ) as any);
-
-            // Update local state
-            const freshReport = await asyncRunStorage.getReportById(liveReport.id);
-            if (freshReport) {
-              setLiveReport(freshReport);
-            }
-          }
-        },
-        onAttempt: (attempt, maxAttempts) => {
-          console.info(`[RunDetails] Polling attempt ${attempt}/${maxAttempts} for report ${liveReport.id}`);
-        },
-        onError: (error) => {
-          console.error(`[RunDetails] Trace polling failed for report ${liveReport.id}:`, error);
-        },
-      }
-    );
+    ensureTracePollingForReport(liveReport, testCase, {
+      onSpans: (spans) => {
+        // Update trace visualization state so UI reflects traces immediately
+        setTraceSpans(spans);
+        const tree = processSpansIntoTree(spans);
+        setSpanTree(tree);
+        setTimeRange(calculateTimeRange(spans));
+        const rootIds = new Set(tree.map(s => s.spanId));
+        setExpandedSpans(rootIds);
+        setTracesError(null);
+        setTracesFetched(true);
+      },
+      onUpdated: (fresh) => {
+        setLiveReport(fresh);
+      },
+      onError: (error) => {
+        console.error(`[RunDetails] Trace recovery failed for report ${liveReport.id}:`, error);
+      },
+    });
 
     // Cleanup: stop polling when component unmounts or report changes
     return () => {

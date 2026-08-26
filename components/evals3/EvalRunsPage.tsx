@@ -59,6 +59,9 @@ function getTimeThreshold(range: TimeRange): Date | null {
 
 type ViewMode = 'flat' | 'grouped';
 
+/** Run rows revealed per infinite-scroll page in the runs table. */
+const RUNS_PER_PAGE = 50;
+
 /** One run with its parent benchmark context.
  *
  * NOTE (run-model convergence, RFC 004 single-engine): there are currently
@@ -163,6 +166,11 @@ export const EvalRunsPage: React.FC = () => {
 
   // Annotation counts: runId → { totalAnnotations, testCasesWithAnnotations, firstTestCaseId }
   const [annotationMap, setAnnotationMap] = useState<Map<string, { total: number; tcCount: number; firstTcId: string }>>(new Map());
+
+  // Infinite scroll: number of run rows revealed in the table. Reset whenever
+  // the underlying row set changes (filters/search/sort/view toggles).
+  const [visibleRunCount, setVisibleRunCount] = useState(RUNS_PER_PAGE);
+  const loadMoreSentinelRef = useRef<HTMLTableRowElement | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -353,59 +361,11 @@ export const EvalRunsPage: React.FC = () => {
     ? Math.round(filteredRunRows.reduce((sum, r) => sum + (r.total > 0 ? (r.passed / r.total) * 100 : 0), 0) / totalRuns)
     : 0;
 
-  // Load annotation counts lazily for visible runs only (avoids N+1 on mount)
+  // Load annotation counts lazily — only for the run rows actually rendered
+  // by the infinite-scroll window, and via ONE lightweight batch request
+  // (annotations field only) instead of a full-report fetch per test case.
+  // (Effect lives below, after the rendered-row memos it depends on.)
   const loadedAnnotationRuns = useRef(new Set<string>());
-
-  useEffect(() => {
-    if (benchmarks.length === 0) return;
-
-    const toLoad: { runId: string; run: any; bmId: string }[] = [];
-    for (const rr of filteredRunRows.slice(0, 100)) {
-      if (loadedAnnotationRuns.current.has(rr.run.id)) continue;
-      toLoad.push({ runId: rr.run.id, run: rr.run, bmId: rr.benchmarkId });
-    }
-    if (toLoad.length === 0) return;
-
-    let cancelled = false;
-
-    // Load in batches of 10 to limit concurrency
-    (async () => {
-      const BATCH_SIZE = 10;
-      for (let i = 0; i < toLoad.length; i += BATCH_SIZE) {
-        if (cancelled) return;
-        const batch = toLoad.slice(i, i + BATCH_SIZE);
-        const batchResults = await Promise.all(batch.map(async ({ runId, run }) => {
-          let totalAnnotations = 0;
-          let tcWithAnnotations = 0;
-          let firstTcId = '';
-          for (const [tcId, result] of Object.entries(run.results || {} as Record<string, any>)) {
-            if (!(result as any).reportId) continue;
-            try {
-              const report = await asyncRunStorage.getReportById((result as any).reportId);
-              if (report?.annotations && report.annotations.length > 0) {
-                totalAnnotations += report.annotations.length;
-                tcWithAnnotations++;
-                if (!firstTcId) firstTcId = tcId;
-              }
-            } catch { /* skip */ }
-          }
-          return { runId, total: totalAnnotations, tcCount: tcWithAnnotations, firstTcId };
-        }));
-
-        if (cancelled) return;
-        setAnnotationMap(prev => {
-          const next = new Map(prev);
-          for (const r of batchResults) {
-            loadedAnnotationRuns.current.add(r.runId);
-            if (r.total > 0) next.set(r.runId, { total: r.total, tcCount: r.tcCount, firstTcId: r.firstTcId });
-          }
-          return next;
-        });
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [filteredRunRows, benchmarks]);
 
   // Regressions — computed after groupedByBenchmark
 
@@ -503,6 +463,97 @@ export const EvalRunsPage: React.FC = () => {
   }, [groupedByBenchmark]);
   const regressionCountReal = regressionData.count;
 
+  // ─── Infinite scroll windowing ─────────────────────────────────────
+
+  // Flat mode: sorted rows, windowed to visibleRunCount.
+  const flatSortedRows = useMemo(
+    () => sortRows(showRegressionsOnly ? filteredRunRows.filter(rr => regressionData.runIds.has(rr.run.id)) : filteredRunRows),
+    [sortRows, showRegressionsOnly, filteredRunRows, regressionData],
+  );
+
+  // Grouped mode: distribute the row budget across expanded groups in order.
+  const groupedRenderPlan = useMemo(() => {
+    let budget = visibleRunCount;
+    return groupedByBenchmark.map(group => {
+      const isCollapsed = collapsedGroups.has(group.id);
+      const sorted = sortRows(group.rows);
+      const shown = isCollapsed ? [] : sorted.slice(0, Math.max(0, budget));
+      if (!isCollapsed) budget -= shown.length;
+      return { group, isCollapsed, shown };
+    });
+  }, [groupedByBenchmark, collapsedGroups, sortRows, visibleRunCount]);
+
+  // The run rows currently rendered — drives lazy annotation loading.
+  const renderedRunRows = useMemo<RunRow[]>(
+    () => viewMode === 'flat'
+      ? flatSortedRows.slice(0, visibleRunCount)
+      : groupedRenderPlan.flatMap(p => p.shown),
+    [viewMode, flatSortedRows, visibleRunCount, groupedRenderPlan],
+  );
+
+  const totalRenderableRows = viewMode === 'flat'
+    ? flatSortedRows.length
+    : groupedRenderPlan.reduce((sum, p) => sum + (p.isCollapsed ? 0 : p.group.rows.length), 0);
+  const hasMoreRows = renderedRunRows.length < totalRenderableRows;
+
+  // Reset the window when the row universe changes (filters/search/sort).
+  useEffect(() => { setVisibleRunCount(RUNS_PER_PAGE); }, [filteredRunRows, viewMode, sort]);
+
+  // Reveal the next page when the sentinel row scrolls into view.
+  useEffect(() => {
+    const el = loadMoreSentinelRef.current;
+    if (!el || !hasMoreRows) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) {
+        setVisibleRunCount(c => c + RUNS_PER_PAGE);
+      }
+    }, { root: scrollRef.current });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMoreRows, renderedRunRows.length]);
+
+  // Load annotation counts for rendered rows only, via one lightweight
+  // summary batch (annotations field, no trajectories) per newly revealed set.
+  useEffect(() => {
+    const toLoad = renderedRunRows.filter(rr => !loadedAnnotationRuns.current.has(rr.run.id));
+    if (toLoad.length === 0) return;
+    let cancelled = false;
+
+    (async () => {
+      const perRun = toLoad.map(rr => ({
+        runId: rr.run.id,
+        entries: Object.entries(rr.run.results || {})
+          .filter(([, r]) => (r as any).reportId)
+          .map(([tcId, r]) => ({ tcId, reportId: (r as any).reportId as string })),
+      }));
+      let summaries: Record<string, { annotations?: unknown[] }> = {};
+      try {
+        summaries = await asyncRunStorage.getReportSummariesByIds(perRun.flatMap(p => p.entries.map(e => e.reportId)));
+      } catch { return; /* retry on next render pass */ }
+      if (cancelled) return;
+
+      setAnnotationMap(prev => {
+        const next = new Map(prev);
+        for (const { runId, entries } of perRun) {
+          loadedAnnotationRuns.current.add(runId);
+          let total = 0, tcCount = 0, firstTcId = '';
+          for (const { tcId, reportId } of entries) {
+            const anns = summaries[reportId]?.annotations;
+            if (anns && anns.length > 0) {
+              total += anns.length;
+              tcCount++;
+              if (!firstTcId) firstTcId = tcId;
+            }
+          }
+          if (total > 0) next.set(runId, { total, tcCount, firstTcId });
+        }
+        return next;
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [renderedRunRows]);
+
   // Inspector route differs per run model (convergence note): eval-runs use
   // the top-level route, benchmark-embedded runs the nested one.
   const inspectPath = (rr: RunRow) =>
@@ -517,6 +568,7 @@ export const EvalRunsPage: React.FC = () => {
     return (
       <tr
         key={`${rr.benchmarkId}-${rr.run.id}`}
+        data-testid="run-row"
         className={`border-b hover:bg-muted/50 cursor-pointer transition-colors ${isChecked ? 'bg-primary/5' : ''}`}
         onClick={() => navigate(inspectPath(rr))}
       >
@@ -908,11 +960,9 @@ export const EvalRunsPage: React.FC = () => {
                 </td>
               </tr>
             ) : viewMode === 'flat' ? (
-              sortRows(showRegressionsOnly ? filteredRunRows.filter(rr => regressionData.runIds.has(rr.run.id)) : filteredRunRows).map(rr => renderRunRow(rr, true))
+              flatSortedRows.slice(0, visibleRunCount).map(rr => renderRunRow(rr, true))
             ) : (
-              groupedByBenchmark.map(group => {
-                const isCollapsed = collapsedGroups.has(group.id);
-                const sorted = sortRows(group.rows);
+              groupedRenderPlan.map(({ group, isCollapsed, shown }) => {
                 const groupPassed = group.rows.filter(r => r.failed === 0 && r.passed > 0).length;
                 const groupRunIds = group.rows.map(r => r.run.id);
                 const allGroupSelected = groupRunIds.length > 0 && groupRunIds.every(id => selectedRuns.has(id));
@@ -960,10 +1010,17 @@ export const EvalRunsPage: React.FC = () => {
                         </div>
                       </td>
                     </tr>
-                    {!isCollapsed && sorted.map(rr => renderRunRow(rr, false))}
+                    {!isCollapsed && shown.map(rr => renderRunRow(rr, false))}
                   </React.Fragment>
                 );
               })
+            )}
+            {hasMoreRows && (
+              <tr ref={loadMoreSentinelRef} data-testid="runs-table-sentinel">
+                <td colSpan={viewMode === 'flat' ? 9 : 8} className="py-3 text-center">
+                  <Loader2 size={14} className="animate-spin text-muted-foreground inline-block" />
+                </td>
+              </tr>
             )}
           </tbody>
         </table>

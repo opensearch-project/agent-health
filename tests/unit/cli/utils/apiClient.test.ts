@@ -1679,4 +1679,162 @@ describe('ApiClient', () => {
       expect(progressEvents.some(e => e.type === 'reconnecting' && e.reportId === 'report-noend-2')).toBe(true);
     });
   });
+
+  describe('getEvaluationRun', () => {
+    it('returns the run on 200', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({ id: 'run-1', status: 'completed', results: {} }),
+      });
+      const run = await client.getEvaluationRun('run-1');
+      expect(mockFetch).toHaveBeenCalledWith(`${baseUrl}/api/storage/evaluation-runs/run-1`);
+      expect(run?.status).toBe('completed');
+    });
+
+    it('returns null on 404', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 404 });
+      expect(await client.getEvaluationRun('missing')).toBeNull();
+    });
+  });
+
+  describe('pollEvaluationRunStatus', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('keeps polling storage until the run is terminal (SSE-dropped-mid-run fallback)', async () => {
+      jest.useFakeTimers();
+      // First read: still running (as it would be right after the SSE dropped
+      // on a long run). Second read: the server finished and persisted.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true, status: 200,
+          json: jest.fn().mockResolvedValue({ id: 'run-1', status: 'running', results: { a: { status: 'running' } } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true, status: 200,
+          json: jest.fn().mockResolvedValue({ id: 'run-1', status: 'completed', results: { a: { status: 'completed' } } }),
+        });
+
+      const promise = client.pollEvaluationRunStatus('run-1');
+      await jest.advanceTimersByTimeAsync(5000); // skip the inter-poll wait
+      const run = await promise;
+
+      expect(run?.status).toBe('completed');
+      expect(mockFetch).toHaveBeenCalledTimes(2); // polled again after 'running'
+    });
+
+    it('returns immediately when the first read is already terminal', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true, status: 200,
+        json: jest.fn().mockResolvedValue({ id: 'run-1', status: 'failed', results: {} }),
+      });
+      const run = await client.pollEvaluationRunStatus('run-1');
+      expect(run?.status).toBe('failed');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Issue #333: for trace-mode agents the server emits `completed` with
+  // metricsStatus 'pending' BEFORE the background judge runs. The CLI must
+  // not treat that snapshot as a final verdict.
+  describe('runEvaluation - trace-mode pending judge (issue #333)', () => {
+    function createSSEStream(events: any[]) {
+      const encoder = new TextEncoder();
+      let eventIndex = 0;
+      return new ReadableStream({
+        pull(controller) {
+          if (eventIndex < events.length) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(events[eventIndex])}\n\n`));
+            eventIndex++;
+          } else {
+            controller.close();
+          }
+        },
+      });
+    }
+
+    it('polls until the judge verdict lands when completed arrives with metricsStatus pending', async () => {
+      const sseEvents = [
+        { type: 'started', testCase: 'Test', agent: 'TraceAgent', reportId: 'report-trace-1' },
+        {
+          type: 'completed',
+          reportId: 'report-trace-1',
+          report: {
+            id: 'report-trace-1',
+            status: 'completed',
+            metricsStatus: 'pending',
+            // no passFailStatus yet — judge hasn't run
+            metrics: { accuracy: 0 },
+            trajectorySteps: 1,
+            llmJudgeReasoning: 'Waiting for traces to become available...',
+          },
+        },
+      ];
+      mockFetch.mockImplementationOnce(() => Promise.resolve({
+        ok: true,
+        body: createSSEStream(sseEvents),
+      }));
+
+      // Poll 1: still pending. Poll 2: judge finished, run passed.
+      let pollCount = 0;
+      mockFetch.mockImplementation(() => {
+        pollCount++;
+        const ready = pollCount >= 2;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            id: 'report-trace-1',
+            status: 'completed',
+            metricsStatus: ready ? 'ready' : 'pending',
+            passFailStatus: ready ? 'passed' : undefined,
+            metrics: { accuracy: ready ? 95 : 0 },
+            trajectory: [{ type: 'action', content: 'tool call' }],
+            llmJudgeReasoning: ready ? 'All expected outcomes met' : 'Waiting for traces...',
+          }),
+        });
+      });
+
+      const progressEvents: any[] = [];
+      const result = await client.runEvaluation(
+        'tc-1', 'trace-agent', 'claude-sonnet-4',
+        (e) => progressEvents.push(e),
+      );
+
+      // The CLI must see the judged verdict, not the pending snapshot
+      expect(result.passFailStatus).toBe('passed');
+      expect(result.metricsStatus).toBe('ready');
+      expect(result.metrics?.accuracy).toBe(95);
+      // And it should have signaled that it was waiting on the judge
+      expect(progressEvents.some(e => e.type === 'awaiting-judge')).toBe(true);
+    }, 30000);
+
+    it('returns the final report directly when the judge ran synchronously (no metricsStatus)', async () => {
+      const sseEvents = [
+        { type: 'started', testCase: 'Test', agent: 'Agent', reportId: 'report-sync-1' },
+        {
+          type: 'completed',
+          reportId: 'report-sync-1',
+          report: {
+            id: 'report-sync-1',
+            status: 'completed',
+            passFailStatus: 'failed',
+            metrics: { accuracy: 30 },
+            trajectorySteps: 2,
+            llmJudgeReasoning: 'Missed expected outcome',
+          },
+        },
+      ];
+      mockFetch.mockResolvedValue({
+        ok: true,
+        body: createSSEStream(sseEvents),
+      });
+
+      const result = await client.runEvaluation('tc-1', 'observio', 'claude-sonnet-4');
+
+      // Non-trace agents keep the synchronous behavior: no extra polling
+      expect(result.passFailStatus).toBe('failed');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
 });

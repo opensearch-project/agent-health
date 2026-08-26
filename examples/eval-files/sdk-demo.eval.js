@@ -13,7 +13,7 @@
  *
  * Run with:
  *   AH_PORT=4002 npx @opensearch-project/agent-health benchmark \
- *     -f evals/sdk-demo.eval.js -a demo
+ *     -f examples/eval-files/sdk-demo.eval.js -a demo
  */
 
 const { test, expect } = require('@opensearch-project/agent-health');

@@ -125,6 +125,13 @@ async function startServer() {
       const server = app.listen(port, host);
 
       server.on('listening', () => {
+        // Keep AH_PORT in lockstep with the port we actually bound. The loop
+        // below auto-increments on EADDRINUSE (4001 busy → 4002 → …); without
+        // this rewrite every server self-call (judge proxy, assistant,
+        // traces, pi agentic judge) would keep dialing the originally
+        // requested port — which may be a foreign instance such as the live
+        // demo. See AGENTS.md → server lifecycle.
+        process.env.AH_PORT = String(port);
         console.log(`\n  Backend Server running on http://${host}:${port}`);
         console.log(`   Health check: http://localhost:${port}/health`);
         console.log(`   AWS Region: ${process.env.AWS_REGION || 'us-west-2'}`);

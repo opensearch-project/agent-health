@@ -48,7 +48,9 @@ const MessageHistoryView: React.FC<MessageHistoryViewProps> = ({ spans, serviceN
         <Info size={36} className="mb-3 opacity-20" />
         <p className="text-sm font-medium">No message content available</p>
         <p className="text-xs mt-2 text-center max-w-sm">
-          For Claude Code, enable content capture with:
+          Prompt &amp; response capture is controlled by OTEL_LOG_USER_PROMPTS
+          (on by default for Claude Code). If messages are missing, it may be
+          disabled in the agent&apos;s environment &mdash; re-enable with:
         </p>
         <code className="text-xs mt-1 px-2 py-1 rounded bg-muted font-mono">
           export OTEL_LOG_USER_PROMPTS=1

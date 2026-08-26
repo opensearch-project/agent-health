@@ -73,6 +73,10 @@ jest.mock('@/services/traces/tracePoller', () => ({
   },
 }));
 
+jest.mock('@/services/traces/browserRecovery', () => ({
+  ensureTracePollingForReport: jest.fn(),
+}));
+
 jest.mock('@/lib/constants', () => ({
   DEFAULT_CONFIG: {
     agents: [],
@@ -146,6 +150,8 @@ jest.mock('@/components/traces/TraceFullScreenView', () => ({
 import { fetchTracesByRunIds, fetchTracesForRun, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { fetchRunMetrics } from '@/services/metrics';
+import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
+import { tracePollingManager } from '@/services/traces/tracePoller';
 
 const mockFetchTraces = fetchTracesByRunIds as jest.MockedFunction<typeof fetchTracesByRunIds>;
 // RunDetailsContent's trace fetch goes through fetchTracesForRun (Strategy C),
@@ -156,6 +162,8 @@ const mockCalcTimeRange = calculateTimeRange as jest.MockedFunction<typeof calcu
 const mockGetReportById = asyncRunStorage.getReportById as jest.MockedFunction<typeof asyncRunStorage.getReportById>;
 const mockGetTestCaseById = asyncTestCaseStorage.getById as jest.MockedFunction<typeof asyncTestCaseStorage.getById>;
 const mockFetchRunMetrics = fetchRunMetrics as jest.MockedFunction<typeof fetchRunMetrics>;
+const mockEnsureRecovery = ensureTracePollingForReport as jest.MockedFunction<typeof ensureTracePollingForReport>;
+const mockStopPolling = tracePollingManager.stopPolling as jest.MockedFunction<typeof tracePollingManager.stopPolling>;
 
 // ── Test data ─────────────────────────────────────────────────────────────────
 
@@ -551,6 +559,104 @@ describe('RunDetailsContent', () => {
       expect(screen.getByText('49556ms')).toBeTruthy();
       // Agent time shown in parentheses next to Duration
       expect(screen.getByText(/agent 49154ms/)).toBeTruthy();
+    });
+  });
+
+  // Issue #320: the auto-recovery effect must delegate to the SHARED
+  // ensureTracePollingForReport (canonical judge surface, server-verdict-wins
+  // guard) instead of the old inline judge that raced the server poller.
+  describe('trace recovery delegation (#320)', () => {
+    const pendingTestCase = {
+      id: 'tc-1',
+      name: 'Trace TC',
+      expectedOutcomes: ['tool add_to_cart invoked'],
+    } as any;
+
+    it('starts shared recovery for a pending trace-mode report and stops it on unmount', async () => {
+      const report = createReport({ metricsStatus: 'pending', runId: 'run-123' });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue(pendingTestCase);
+
+      let unmount: () => void;
+      await act(async () => {
+        const r = render(React.createElement(RunDetailsContent, { report }));
+        unmount = r.unmount;
+      });
+      await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+      await waitFor(() => {
+        expect(mockEnsureRecovery).toHaveBeenCalled();
+      });
+      const [reportArg, tcArg, callbacks] = mockEnsureRecovery.mock.calls[0];
+      expect(reportArg.id).toBe('report-1');
+      expect(tcArg).toBe(pendingTestCase);
+      // The shared helper receives all three UI callbacks
+      expect(typeof (callbacks as any).onSpans).toBe('function');
+      expect(typeof (callbacks as any).onUpdated).toBe('function');
+      expect(typeof (callbacks as any).onError).toBe('function');
+
+      await act(async () => { unmount!(); });
+      expect(mockStopPolling).toHaveBeenCalledWith('report-1');
+    });
+
+    it('does not start recovery for non-pending reports', async () => {
+      const report = createReport({ metricsStatus: 'ready', runId: 'run-123' });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue(pendingTestCase);
+
+      await renderAndWait(report);
+
+      expect(mockEnsureRecovery).not.toHaveBeenCalled();
+    });
+
+    it('onSpans callback populates the trace visualization state (spans render after recovery)', async () => {
+      const report = createReport({ metricsStatus: 'pending', runId: 'run-123' });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue(pendingTestCase);
+      mockProcessSpans.mockReturnValue(mockSpanTree as any);
+      mockCalcTimeRange.mockReturnValue({ startTime: 1, endTime: 2, duration: 1 });
+
+      await renderAndWait(report);
+      await waitFor(() => expect(mockEnsureRecovery).toHaveBeenCalled());
+
+      // Simulate the poller finding spans: the component's onSpans must run
+      // processSpansIntoTree/calculateTimeRange to hydrate the Traces tab.
+      const callbacks = mockEnsureRecovery.mock.calls[0][2] as any;
+      await act(async () => {
+        callbacks.onSpans(mockSpans);
+      });
+
+      expect(mockProcessSpans).toHaveBeenCalledWith(mockSpans);
+      expect(mockCalcTimeRange).toHaveBeenCalledWith(mockSpans);
+      // Judge-in-progress banner appears now that spans are loaded but the
+      // verdict hasn't landed.
+      await waitFor(() => {
+        expect(screen.getByText(/Running LLM judge evaluation/i)).toBeTruthy();
+      });
+    });
+
+    it('onUpdated callback swaps in the judged report (verdict lands without refresh)', async () => {
+      const report = createReport({ metricsStatus: 'pending', runId: 'run-123', passFailStatus: undefined });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue(pendingTestCase);
+
+      await renderAndWait(report);
+      await waitFor(() => expect(mockEnsureRecovery).toHaveBeenCalled());
+
+      const callbacks = mockEnsureRecovery.mock.calls[0][2] as any;
+      const judged = createReport({
+        metricsStatus: 'ready',
+        passFailStatus: 'passed',
+        llmJudgeReasoning: 'All expected outcomes met',
+      });
+      await act(async () => {
+        callbacks.onUpdated(judged);
+      });
+
+      // The pending banner is gone once the verdict lands
+      await waitFor(() => {
+        expect(screen.queryByText(/Waiting for traces to become available/i)).toBeNull();
+      });
     });
   });
 });

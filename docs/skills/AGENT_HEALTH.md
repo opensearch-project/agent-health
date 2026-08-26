@@ -167,7 +167,7 @@ run a JSON file:
 
 ```bash
 # `-f` accepts BOTH JSON test-case files and code SDK (.eval.js / .eval.ts) files
-npx @opensearch-project/agent-health benchmark -f ./evals/demo.eval.js -a my-agent
+npx @opensearch-project/agent-health benchmark -f ./examples/eval-files/demo.eval.js -a my-agent
 ```
 
 They produce **per-matcher results** (`matcherResults[]`) instead of a single
@@ -302,6 +302,60 @@ Repeat until all high-priority issues are resolved.
 | "No agents configured" | `npx agent-health init` (creates config with sample agents) |
 | Server / config issues | `npx agent-health doctor` (checks config + connectivity) |
 | "OpenSearch storage not configured" | Fine for local use — file-based storage is the default. Set `OPENSEARCH_STORAGE_*` only for shared / production persistence. |
+
+> **Note (benchmark execution vs. reads):** file-based storage covers reads,
+> single `run`s, and sample data, but **executing a multi-case `benchmark`
+> currently requires an OpenSearch storage client** — without one the execute
+> path returns `Cannot execute in sample-only mode`. Point `OPENSEARCH_STORAGE_*`
+> at a cluster (a local security-disabled Docker OpenSearch on plain HTTP with
+> `authType=none` is enough) before running `benchmark`.
+
+---
+
+## Benchmarking a local (subprocess) agent — gotchas
+
+When you wrap a local CLI agent (Kiro, Claude Code, Pi, or your own script) as a
+**subprocess** agent and run a `benchmark`, these are the traps that bite first
+— check them before blaming the agent:
+
+1. **Pin a real judge model — don't leave it on `demo`.** The `demo` provider is
+   a mock judge that returns high pass rates without calling an LLM, so a run
+   can look like "100% pass" while nothing was actually judged. Set the run's
+   judge model to a real Bedrock model, e.g.
+   `us.anthropic.claude-sonnet-4-5-20250929-v1:0`, and confirm it's invocable in
+   your account (`aws bedrock ... ` / `doctor`). If your pass rate looks too
+   good, check the judge provider first.
+2. **Raise the subprocess timeout for slow agents.** The subprocess connector
+   defaults to a 5-minute (`300000` ms) timeout. A real ops/RCA agent can run
+   ~10 min. Set it in your agent's `connectorConfig`:
+   ```ts
+   { key: 'my-ops-agent', connectorType: 'subprocess',
+     connectorConfig: { timeout: 1200000 /* 20 min */, /* ... */ } }
+   ```
+3. **Fail loud on a wrong agent name.** If your wrapper points at an agent key
+   that doesn't exist, the underlying CLI may silently fall back to a default
+   agent — so you benchmark the wrong thing. Echo the resolved agent name in
+   your wrapper and eyeball the first trajectory.
+4. **Long runs + CLI SSE disconnects.** On runs longer than a few minutes the
+   CLI's streaming connection can drop and report `0/0` / `fetch failed` **while
+   the server keeps going**. The results are still persisted — read them back
+   from storage (`list runs` / the UI run inspector / `--export`) rather than
+   trusting the CLI summary.
+5. **Watch for a stale server on the port.** If you patch/upgrade the package
+   but a previously-started `npx` server is still bound to port 4001, your runs
+   are served by the old code. Confirm which process owns the port
+   (`lsof -i :4001` / a `/proc` sweep) and restart the one you actually patched
+   (the server loads `server/dist/app.js`, not `index.js`).
+6. **Judge `CredentialsProviderError` after a session rotates.** If your AWS
+   sandbox session rotates, `AWS_SHARED_CREDENTIALS_FILE` can point at a stale/
+   empty file and the judge fails. Re-vend credentials and restart the server
+   with the AWS env explicit (`aws sts get-caller-identity` to confirm first).
+7. **Local OpenSearch dying (exit 255) = memory pressure.** Give the container
+   enough heap and run it with `--restart=unless-stopped`.
+8. **Case schema is strict.** Test cases need `expectedOutcomes` (a
+   **string[]**, not a singular `expectedOutcome` string) and a capitalized
+   `difficulty` (`Easy` | `Medium` | `Hard`). Validate your converter output
+   against a known-good case before importing 16 of them.
 
 ---
 

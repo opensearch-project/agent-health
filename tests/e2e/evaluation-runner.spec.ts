@@ -402,7 +402,7 @@ test.describe('Evaluation Runner - Empty States', () => {
     expect(hasRuns || hasEmptyState).toBeTruthy();
   });
 
-  test('should show Create New Run CTA when no runs exist', async ({ page }) => {
+  test('shows an informative empty state when no runs exist', async ({ page }) => {
     await page.goto('/evaluations/runs');
     await page.waitForTimeout(3000);
 
@@ -410,9 +410,13 @@ test.describe('Evaluation Runner - Empty States', () => {
     const data = await response.json();
 
     if (data.total === 0) {
-      // When empty, there should be a CTA to create a new run
-      const createButton = page.locator('button:has-text("Create"), button:has-text("New Run"), a:has-text("Create"), a:has-text("New Run")');
-      await expect(createButton.first()).toBeVisible({ timeout: 10000 });
+      // The runs list has no inline "create run" CTA by design (runs are
+      // created from the Test Cases / Benchmarks pages; see the sibling test
+      // below). The empty state must at least tell the user there are no runs
+      // rather than render a blank table. (Exact copy depends on the active
+      // time range: "No evaluation runs found" for All time, else "No runs in
+      // <range>".)
+      await expect(page.getByText(/No .*runs?( found| in )/i).first()).toBeVisible({ timeout: 10000 });
     }
   });
 

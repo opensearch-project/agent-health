@@ -72,6 +72,9 @@ test.describe('PI Agent Configuration in Settings', () => {
 
 test.describe('PI Judge Provider', () => {
   test('should accept pi provider via the judge API', async ({ page }) => {
+    // Load the app first so the relative fetch below resolves against the
+    // server origin (page.evaluate on about:blank would throw -> status 0).
+    await page.goto('/');
     // Direct API test through the page context — verifies server recognizes "pi" provider
     const result = await page.evaluate(async () => {
       try {

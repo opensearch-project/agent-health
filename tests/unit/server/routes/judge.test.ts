@@ -293,8 +293,30 @@ describe('Judge Routes', () => {
             accuracy: expect.any(Number),
           }),
           llmJudgeReasoning: expect.any(String),
+          warning: expect.stringMatching(/MOCK_JUDGE/),
         })
       );
+    });
+
+    it('warns loudly on the server console when the mock judge is used (unconditional, not behind a debug flag)', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      try {
+        const { req, res } = createMocks({
+          trajectory: [{ type: 'action', toolName: 'cluster_health' }],
+          expectedOutcomes: ['Identify root cause'],
+          modelId: 'demo-model',
+        });
+        const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+        await handler(req, res);
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('MOCK JUDGE IN USE'),
+          expect.stringContaining('demo-model') // resolved id, e.g. "mock://demo-model"
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
     it('calls Bedrock service for real evaluation', async () => {

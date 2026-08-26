@@ -340,6 +340,8 @@ export async function fetchTraces(
             should: [
               { term: { 'attributes.session.id': a.sessionId } },
               { term: { 'attributes.session.id.keyword': a.sessionId } },
+              // Data Prepper `otel-v1-apm-span-*` schema stores it here (@ = dot).
+              { term: { 'span.attributes.session@id': a.sessionId } },
               strategyC,
             ],
             minimum_should_match: 1,
@@ -364,6 +366,8 @@ export async function fetchTraces(
         should: [
           { term: { 'attributes.session.id': sessionId } },
           { term: { 'attributes.session.id.keyword': sessionId } },
+          // Data Prepper `otel-v1-apm-span-*` schema stores it here (@ = dot).
+          { term: { 'span.attributes.session@id': sessionId } },
         ],
         minimum_should_match: 1,
       },
@@ -390,14 +394,49 @@ export async function fetchTraces(
     });
   }
 
-  // Text search across span name and attributes
+  // Text search: substring match across span name, ids, service, and
+  // session.id. Uses `wildcard` on keyword fields rather than `query_string`
+  // so reserved chars in the query — the dashes/colons in a UUID or an
+  // ISO-timestamped session.id (e.g. `2026-07-07T04-43-29-005Z_019f3ae3-…`) —
+  // are matched literally instead of being parsed as query operators.
+  // `case_insensitive` lets a lower-cased UUID match the uppercase `T` in a
+  // timestamped session.id. Session file basenames carry a `<ts>_` prefix, so
+  // a bare-UUID search only works as a substring — hence the leading wildcard.
   if (textSearch) {
+    const trimmed = textSearch.trim();
+    const pattern = `*${trimmed}*`;
+    const wc = (field: string) => ({ wildcard: { [field]: { value: pattern, case_insensitive: true } } });
+    // Leading-wildcard queries (`*x*`) can't use the field's index to narrow
+    // the scan — OpenSearch has to walk the WHOLE terms dictionary for that
+    // field. The search box re-fires this on every debounced keystroke, so a
+    // 1-2 character query is the worst case: on a high-cardinality keyword
+    // field (traceId, session.id) nearly every value contains any single
+    // common character, turning a cheap lookup into a full-dictionary scan
+    // for a query that wasn't selective enough to be useful anyway. Gate the
+    // id/wildcard clauses on a minimum length; `name` still gets a cheap,
+    // index-backed `match` at any length so a short search isn't a dead
+    // no-op, just narrower (matches span name only) until it's long enough
+    // to be worth the wildcard scan.
+    const MIN_WILDCARD_LENGTH = 3;
+    const idClauses = trimmed.length >= MIN_WILDCARD_LENGTH
+      ? [
+          // session.id lives under different field names per index schema:
+          //  - Data Prepper `otel-v1-apm-span-*`: `span.attributes.session@id` (@ = dot)
+          //  - ss4o / nested attributes: `attributes.session.id[.keyword]`
+          // A wildcard on a field the mapping lacks just matches nothing, so
+          // listing all three is safe and makes search schema-agnostic.
+          wc('span.attributes.session@id'),
+          wc('attributes.session.id.keyword'),
+          wc('attributes.session.id'),
+          wc('traceId'),
+          wc('serviceName'),
+        ]
+      : [];
     must.push({
-      query_string: {
-        query: `*${textSearch}*`,
-        fields: ['name', 'attributes.*'],
-        default_operator: 'AND'
-      }
+      bool: {
+        should: [...idClauses, { match: { 'name': textSearch } }],
+        minimum_should_match: 1,
+      },
     });
   }
 
