@@ -76,6 +76,12 @@ module.exports = {
     'lib/**/*.ts',
     'cli/**/*.ts',
     'types/**/*.ts',
+    // Component coverage is currently opt-in while the global baseline is
+    // expanded incrementally. Include the run-visibility surfaces so their
+    // focused DOM tests contribute to the combined project report.
+    'components/evals3/BenchmarkRunsPage.tsx',
+    'components/evals3/EvalRunsPage.tsx',
+    'components/evals3/RunningRunIndicator.tsx',
     '!**/__tests__/**',
     '!**/*.test.ts',
     '!**/dist/**',

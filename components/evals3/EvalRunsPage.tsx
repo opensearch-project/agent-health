@@ -37,6 +37,7 @@ import { DEFAULT_CONFIG } from '@/lib/constants';
 import { bucketRunResults } from '@/lib/runStats';
 import { formatRelativeTime, getModelName } from '@/lib/utils';
 import { Breadcrumbs } from './Breadcrumbs';
+import { getRunningRunProgress, RunningRunIndicator } from './RunningRunIndicator';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────
 
@@ -85,6 +86,8 @@ interface RunRow {
   /** Issue #242: evaluator-error runs counted separately from `failed`. */
   errored: number;
   total: number;
+  completedCases: number;
+  totalCases: number;
 }
 
 function SortHeader({ label, active, dir, onClick, className }: {
@@ -196,6 +199,25 @@ export const EvalRunsPage: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Keep mid-flight rows live without replacing the page with its initial
+  // loading skeleton. Once the final write lands this refresh also swaps the
+  // row from running progress to its terminal status.
+  const hasRunningEvaluationRuns = evalRuns.some(run => run.status === 'running');
+  useEffect(() => {
+    if (!hasRunningEvaluationRuns) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await listEvaluationRuns({ size: 500 });
+        if (!cancelled) setEvalRuns(response.evaluationRuns);
+      } catch (err) {
+        console.error('Failed to refresh running evaluation-runs:', err);
+      }
+    };
+    const interval = window.setInterval(refresh, 3000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [hasRunningEvaluationRuns]);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -233,6 +255,7 @@ export const EvalRunsPage: React.FC = () => {
         }
 
         const stats = computeRunStats(run);
+        const progress = getRunningRunProgress(run);
         rows.push({
           run,
           kind: 'benchmark',
@@ -240,6 +263,8 @@ export const EvalRunsPage: React.FC = () => {
           benchmarkName: bm.name,
           agentName,
           ...stats,
+          completedCases: progress.completed,
+          totalCases: progress.total,
         });
       }
     }
@@ -273,6 +298,7 @@ export const EvalRunsPage: React.FC = () => {
       // page reads (id, name, agentKey, modelId, createdAt, results, stats).
       const run = er as unknown as BenchmarkRun;
       const stats = computeRunStats(run);
+      const progress = getRunningRunProgress(er);
       rows.push({
         run,
         kind: 'eval-run',
@@ -280,6 +306,8 @@ export const EvalRunsPage: React.FC = () => {
         benchmarkName,
         agentName,
         ...stats,
+        completedCases: progress.completed,
+        totalCases: progress.total,
       });
     }
 
@@ -563,7 +591,10 @@ export const EvalRunsPage: React.FC = () => {
 
   // Render a run row
   const renderRunRow = (rr: RunRow, showBenchmark: boolean) => {
-    const isAllPassed = rr.failed === 0 && rr.passed > 0;
+    const isRunning = rr.run.status === 'running';
+    const isFailed = rr.run.status === 'failed';
+    const isCancelled = rr.run.status === 'cancelled';
+    const isAllPassed = !isRunning && !isFailed && !isCancelled && rr.failed === 0 && rr.passed > 0;
     const isChecked = selectedRuns.has(rr.run.id);
     return (
       <tr
@@ -593,15 +624,36 @@ export const EvalRunsPage: React.FC = () => {
           </button>
         </td>
         <td className="px-2 py-1.5 align-middle text-center w-8">
-          {isAllPassed
-            ? <CheckCircle2 size={12} className="text-green-500" />
-            : rr.failed > 0
-              ? <XCircle size={12} className="text-red-500" />
-              : <Clock size={12} className="text-muted-foreground" />}
+          {isRunning
+            ? <Loader2 size={12} className="text-blue-600 animate-spin" aria-label="Running" />
+            : isFailed
+              ? <XCircle size={12} className="text-red-500" aria-label="Failed" />
+              : isCancelled
+                ? <XCircle size={12} className="text-muted-foreground" aria-label="Cancelled" />
+                : isAllPassed
+                  ? <CheckCircle2 size={12} className="text-green-500" />
+                  : rr.failed > 0
+                    ? <XCircle size={12} className="text-red-500" />
+                    : <Clock size={12} className="text-muted-foreground" />}
         </td>
         <td className="px-2 py-1.5 align-middle">
           <div className="text-xs font-medium">{rr.run.name}</div>
-          <div className="text-[9px] text-muted-foreground font-mono">{rr.run.id.slice(0, 8)}</div>
+          {isRunning ? (
+            <RunningRunIndicator completed={rr.completedCases} total={rr.totalCases} />
+          ) : (
+            <>
+              <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                <span className="font-mono">{rr.run.id.slice(0, 8)}</span>
+                {isFailed && <span className="font-medium text-red-600 dark:text-red-400">Failed</span>}
+                {isCancelled && <span className="font-medium">Cancelled</span>}
+              </div>
+              {isFailed && rr.run.error && (
+                <div className="text-[9px] text-red-600 dark:text-red-400 truncate max-w-64" title={rr.run.error}>
+                  {rr.run.error}
+                </div>
+              )}
+            </>
+          )}
         </td>
         {showBenchmark && (
           <td className="px-2 py-1.5 align-middle">

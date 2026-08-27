@@ -128,3 +128,7 @@ export async function createApp(): Promise<Express> {
 }
 
 export default createApp;
+
+// Re-exported so the CLI entry (cli/utils/startServer.ts), which imports the
+// compiled app bundle, can run the same post-listen recovery as server/index.ts.
+export { runBootRecoverySafely } from './services/bootRecovery.js';

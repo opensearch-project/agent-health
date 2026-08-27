@@ -125,6 +125,13 @@ jest.mock('@/server/services/storageInitializer', () => ({
   }),
 }));
 
+// createApp re-exports the shared post-listen recovery hook for the CLI entry.
+// Keep this focused unit isolated from recovery's route/storage dependency graph.
+// (The recovery orchestrator and each recovery service have dedicated tests.)
+jest.mock('@/server/services/bootRecovery', () => ({
+  runBootRecoverySafely: jest.fn(),
+}));
+
 import { createApp } from '@/server/app';
 
 describe('createApp', () => {

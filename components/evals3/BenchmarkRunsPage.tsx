@@ -18,6 +18,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { PREFS_KEYS } from '@/lib/preferences';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
@@ -38,9 +39,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
-import { executeBenchmarkRun } from '@/services/client';
+import { executeBenchmarkRun, listEvaluationRuns } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
-import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, Evaluator } from '@/types';
+import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, Evaluator } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { getLabelColor, formatDate, getModelName } from '@/lib/utils';
@@ -54,6 +55,7 @@ import {
 } from '@/lib/benchmarkVersionUtils';
 import { RunConfigForExecution } from '@/components/BenchmarkEditor';
 import { BenchmarkEditor } from '@/components/BenchmarkEditor';
+import { getRunningRunProgress, RunningRunIndicator } from './RunningRunIndicator';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -84,9 +86,14 @@ export const BenchmarkRunsPage2: React.FC = () => {
   const { benchmarkId } = useParams<{ benchmarkId: string }>();
   const navigate = useNavigate();
   const parentPath = '/evaluations/benchmarks';
+  const isMobile = useIsMobile();
 
   const [benchmark, setBenchmark] = useState<Benchmark | null>(null);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
+  // Unified evaluation-run documents are top-level records and are only
+  // appended to benchmark.runs after completion. Keep the running records
+  // alongside the embedded history so a run never vanishes mid-flight.
+  const [inProgressRuns, setInProgressRuns] = useState<EvaluationRun[]>([]);
 
   // Run pagination
   const [totalRuns, setTotalRuns] = useState(0);
@@ -150,6 +157,10 @@ export const BenchmarkRunsPage2: React.FC = () => {
     'benchmark-runs:layoutMode',
     'split',
   );
+  // A horizontal split leaves each pane unusably narrow on phones. Preserve
+  // the user's desktop preference, but render the Runs-first tab layout at the
+  // mobile breakpoint used by the rest of the app.
+  const effectiveLayoutMode = isMobile ? 'tabs' : layoutMode;
 
   // Tab state (only used when layoutMode === 'tabs')
   const [activeTab, setActiveTab] = usePersistedState<string>('benchmark-runs:activeTab', 'runs');
@@ -201,6 +212,24 @@ export const BenchmarkRunsPage2: React.FC = () => {
     }
   }, [benchmarkId, navigate, parentPath]);
 
+  const loadInProgressRuns = useCallback(async () => {
+    if (!benchmarkId) return;
+    try {
+      const response = await listEvaluationRuns({
+        benchmarkId,
+        status: 'running',
+        size: 100,
+        sort: 'createdAt',
+        order: 'desc',
+      });
+      setInProgressRuns(response.evaluationRuns);
+    } catch (error) {
+      // The benchmark history remains usable if the top-level run endpoint is
+      // unavailable (for example during a rolling upgrade).
+      console.error('Failed to load in-progress evaluation runs:', error);
+    }
+  }, [benchmarkId]);
+
   const loadMoreRuns = useCallback(async () => {
     if (!benchmarkId || !benchmark || isLoadingMoreRuns) return;
     setIsLoadingMoreRuns(true);
@@ -227,7 +256,10 @@ export const BenchmarkRunsPage2: React.FC = () => {
     }
   }, [benchmarkId, benchmark, isLoadingMoreRuns]);
 
-  useEffect(() => { loadBenchmark(); }, [loadBenchmark]);
+  useEffect(() => {
+    loadBenchmark();
+    loadInProgressRuns();
+  }, [loadBenchmark, loadInProgressRuns]);
 
   // Infinite scroll: auto-click "Load More Runs" when its sentinel container
   // scrolls into view. The button stays as an explicit fallback.
@@ -265,6 +297,14 @@ export const BenchmarkRunsPage2: React.FC = () => {
     () => filterRunsByVersion(benchmark?.runs, runVersionFilter), [benchmark?.runs, runVersionFilter]
   );
 
+  const visibleInProgressRuns = useMemo(() => {
+    const embeddedIds = new Set((benchmark?.runs || []).map(run => run.id));
+    return inProgressRuns.filter(run =>
+      !embeddedIds.has(run.id) &&
+      (runVersionFilter === 'all' || run.benchmarkVersion === undefined || run.benchmarkVersion === runVersionFilter)
+    );
+  }, [benchmark?.runs, inProgressRuns, runVersionFilter]);
+
   const hasMultipleVersions = versionData.length > 1;
 
   // ─── Run Stats ───────────────────────────────────────────────────────────
@@ -299,20 +339,23 @@ export const BenchmarkRunsPage2: React.FC = () => {
   }, [benchmark?.runs]);
 
   const hasServerInProgressRuns = useMemo(() => {
-    if (!benchmark?.runs) return false;
-    return benchmark.runs.some(run => getEffectiveRunStatus(run) === 'running');
-  }, [benchmark?.runs]);
+    return visibleInProgressRuns.length > 0 ||
+      (benchmark?.runs || []).some(run => getEffectiveRunStatus(run) === 'running');
+  }, [benchmark?.runs, visibleInProgressRuns.length]);
 
   // Polling
   useEffect(() => {
     const shouldPoll = isRunning || hasPendingEvaluations || hasServerInProgressRuns;
     if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
     if (shouldPoll) {
-      const interval = isRunning ? POLL_INTERVAL_MS : 5000;
-      pollIntervalRef.current = setInterval(() => { loadBenchmark(); }, interval);
+      const interval = isRunning || visibleInProgressRuns.length > 0 ? POLL_INTERVAL_MS : 5000;
+      pollIntervalRef.current = setInterval(() => {
+        loadBenchmark();
+        loadInProgressRuns();
+      }, interval);
     }
     return () => { if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; } };
-  }, [isRunning, hasPendingEvaluations, hasServerInProgressRuns, loadBenchmark]);
+  }, [isRunning, hasPendingEvaluations, hasServerInProgressRuns, visibleInProgressRuns.length, loadBenchmark, loadInProgressRuns]);
 
   // ─── Actions ─────────────────────────────────────────────────────────────
 
@@ -447,6 +490,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
   }
 
   const runs = benchmark.runs || [];
+  const visibleRunCount = runs.length + visibleInProgressRuns.length;
   const hasMultipleRuns = runs.length >= 2;
 
   return (
@@ -497,9 +541,9 @@ export const BenchmarkRunsPage2: React.FC = () => {
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          {runs.length} run{runs.length !== 1 ? 's' : ''}
+          {visibleRunCount} run{visibleRunCount !== 1 ? 's' : ''}
           {hasMultipleVersions && ` · ${versionData.length} versions`}
-          {runs.length > 0 && ` · Latest: ${formatDate(filteredRuns[0]?.createdAt || runs[0]?.createdAt)}`}
+          {visibleRunCount > 0 && ` · Latest: ${formatDate(visibleInProgressRuns[0]?.createdAt || filteredRuns[0]?.createdAt || runs[0]?.createdAt)}`}
           {benchmark.description && ` · ${benchmark.description}`}
         </p>
       </div>
@@ -568,7 +612,39 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
           {/* Runs List — full width */}
           <div className="space-y-3">
-            {filteredRuns.length === 0 ? (
+            {visibleInProgressRuns.map(run => {
+              const progress = getRunningRunProgress(run);
+              return (
+                <Card
+                  key={run.id}
+                  data-testid="benchmark-in-progress-run"
+                  className="border-blue-400/60 bg-blue-50/60 dark:bg-blue-500/5 hover:border-blue-500 transition-colors cursor-pointer"
+                  onClick={() => navigate(`/evaluations/runs/${run.id}/inspect`)}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <h3 className="font-semibold truncate">{run.name}</h3>
+                          <RunningRunIndicator completed={progress.completed} total={progress.total} />
+                          {run.benchmarkVersion && (
+                            <Badge variant="outline" className="text-xs text-muted-foreground">v{run.benchmarkVersion}</Badge>
+                          )}
+                        </div>
+                        {run.description && <p className="text-sm text-muted-foreground mb-2">{run.description}</p>}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1"><Calendar size={12} />{formatDate(run.createdAt)}</span>
+                          <span>Agent: {DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey)?.name || run.agentKey}</span>
+                          <span>Model: {getModelName(run.modelId)}</span>
+                        </div>
+                      </div>
+                      <ChevronRight size={16} className="text-blue-600 shrink-0" />
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+            {filteredRuns.length === 0 && visibleInProgressRuns.length === 0 ? (
               <Card className="border-dashed">
                 <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                   <Play size={48} className="mb-4 opacity-20" />
@@ -835,7 +911,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Versions ({runs.length})</SelectItem>
+              <SelectItem value="all">All Versions ({visibleRunCount})</SelectItem>
               {versionData.map(v => (
                 <SelectItem key={v.version} value={String(v.version)}>
                   v{v.version} ({v.runCount} run{v.runCount !== 1 ? 's' : ''})
@@ -863,7 +939,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
           </Select>
         ) : null;
 
-        const layoutToggle = (
+        const layoutToggle = !isMobile ? (
           <div className="inline-flex items-center rounded border border-border overflow-hidden" data-testid="layout-toggle">
             <Button
               type="button"
@@ -892,9 +968,9 @@ export const BenchmarkRunsPage2: React.FC = () => {
               <LayoutPanelTop size={14} />
             </Button>
           </div>
-        );
+        ) : null;
 
-        if (layoutMode === 'split') {
+        if (effectiveLayoutMode === 'split') {
           return (
             <div className="flex-1 flex flex-col overflow-hidden max-md:overflow-visible" data-testid="benchmark-runs-split">
               <div className="flex items-center justify-end mb-3">
@@ -923,8 +999,8 @@ export const BenchmarkRunsPage2: React.FC = () => {
                     <div className="sticky top-0 z-10 bg-background pb-3 border-b border-border mb-3 flex items-center justify-between max-md:static">
                       <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center">
                         Runs
-                        {filteredRuns.length > 0 && (
-                          <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">{filteredRuns.length}</Badge>
+                        {(filteredRuns.length + visibleInProgressRuns.length) > 0 && (
+                          <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">{filteredRuns.length + visibleInProgressRuns.length}</Badge>
                         )}
                       </h3>
                       {runsVersionSelect}
@@ -943,7 +1019,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
             <div className="flex items-center justify-between mb-3">
               <TabsList>
                 <TabsTrigger value="runs" className="text-xs">
-                  Runs {filteredRuns.length > 0 && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">{filteredRuns.length}</Badge>}
+                  Runs {(filteredRuns.length + visibleInProgressRuns.length) > 0 && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">{filteredRuns.length + visibleInProgressRuns.length}</Badge>}
                 </TabsTrigger>
                 <TabsTrigger value="test-cases" className="text-xs">
                   Test Cases {versionTestCases.length > 0 && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">{versionTestCases.length}</Badge>}

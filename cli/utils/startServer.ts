@@ -49,7 +49,7 @@ export async function startServer(options: StartOptions): Promise<number> {
 
   const packageRoot = findPackageRoot();
   const serverPath = join(packageRoot, 'server', 'dist', 'app.js');
-  const { createApp } = await import(serverPath);
+  const { createApp, runBootRecoverySafely } = await import(serverPath);
 
   const app = await createApp();
 
@@ -83,5 +83,11 @@ export async function startServer(options: StartOptions): Promise<number> {
   if (actualPort !== options.port) {
     process.env.VITE_BACKEND_PORT = String(actualPort);
   }
+
+  // Post-listen boot recovery (orphan run finalization, trace-poll resume).
+  // Must run after AH_PORT reflects the bound port because the trace poller
+  // makes HTTP self-calls. Guarded for older compiled bundles without it.
+  runBootRecoverySafely?.();
+
   return actualPort;
 }
