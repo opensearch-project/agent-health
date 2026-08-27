@@ -1195,18 +1195,27 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
 
   async update(id: string, updates: Partial<EvaluationRun>): Promise<EvaluationRun> {
     assertNotMigrating(this.index);
-    const existing = await this.getById(id);
-    if (!existing) throw new Error(`Evaluation run ${id} not found`);
+    // Partial doc-merge via the _update API instead of read-modify-write +
+    // full reindex: a stale read here would silently clobber concurrent
+    // per-test-case `updateResult` script updates (seen under concurrency>1
+    // and with the periodic run heartbeat). Only the provided fields are
+    // touched, and OpenSearch retries CAS conflicts server-side.
+    try {
+      await this.client.update({
+        index: this.index,
+        id,
+        retry_on_conflict: 10,
+        body: { doc: updates },
+        refresh: 'wait_for',
+      });
+    } catch (error: any) {
+      if (error.meta?.statusCode === 404) throw new Error(`Evaluation run ${id} not found`);
+      throw error;
+    }
 
-    const updated = { ...existing, ...updates };
-    await this.client.index({
-      index: this.index,
-      id,
-      body: updated,
-      refresh: 'wait_for',
-    });
-
-    return updated as EvaluationRun;
+    const updated = await this.getById(id);
+    if (!updated) throw new Error(`Evaluation run ${id} not found`);
+    return updated;
   }
 
   async delete(id: string): Promise<{ deleted: boolean }> {
@@ -1293,6 +1302,10 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
       await this.client.update({
         index: this.index,
         id: runId,
+        // Concurrent test cases (run.concurrency > 1) update the same run
+        // doc — without CAS retries these script updates fail with
+        // version_conflict_engine_exception and the whole run aborts.
+        retry_on_conflict: 10,
         body: {
           script: {
             source: `ctx._source.results.put(params.testCaseId, params.result)`,

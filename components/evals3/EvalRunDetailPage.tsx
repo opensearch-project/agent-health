@@ -16,7 +16,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Loader2, CheckCircle2, XCircle, Clock, AlertTriangle,
-  ChevronDown, ChevronRight, ArrowLeft, Bookmark, RotateCcw,
+  ChevronDown, ChevronRight, ArrowLeft, Bookmark, RotateCcw, Play,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -33,6 +33,7 @@ import {
   getEvaluationRun,
   cancelEvaluationRun,
   promoteEvaluationRun,
+  resumeEvaluationRun,
 } from '@/services/client/evaluationRunsApi';
 import { Breadcrumbs } from './Breadcrumbs';
 
@@ -68,6 +69,19 @@ function SourceBadge({ source }: { source: any }) {
   );
 }
 
+/**
+ * Client-side heuristic mirroring the server's liveness check: a 'running'
+ * run whose last liveness signal (heartbeat > resumed > created) is older
+ * than 10 minutes probably lost its server. The server re-validates against
+ * the authoritative EVALUATION_RUN_STALE_AFTER_MS on resume, so a false
+ * positive here just gets a clear 409.
+ */
+function runLooksOrphaned(run: EvaluationRun): boolean {
+  const last = new Date(run.heartbeatAt || run.resumedAt || run.createdAt || 0).getTime();
+  if (!Number.isFinite(last) || last <= 0) return true;
+  return Date.now() - last > 10 * 60 * 1000;
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export const EvalRunDetailPage: React.FC = () => {
@@ -82,6 +96,7 @@ export const EvalRunDetailPage: React.FC = () => {
   const [promoteName, setPromoteName] = useState('');
   const [promoting, setPromoting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [resuming, setResuming] = useState(false);
 
   const loadRun = useCallback(async () => {
     if (!runId) return;
@@ -117,6 +132,20 @@ export const EvalRunDetailPage: React.FC = () => {
     } finally {
       setCancelling(false);
     }
+  };
+
+  // Resume: re-execute only the test cases without a persisted report.
+  // Fire-and-poll — the SSE stream runs in the background; the existing
+  // running-status poller picks up per-test-case progress.
+  const handleResume = async () => {
+    if (!runId) return;
+    setResuming(true);
+    setError(null);
+    resumeEvaluationRun(runId, () => {})
+      .catch((err: any) => setError(err.message))
+      .finally(() => loadRun());
+    // Give the server a moment to flip status to running, then refresh
+    setTimeout(() => { loadRun(); setResuming(false); }, 1000);
   };
 
   const handlePromote = async () => {
@@ -211,6 +240,23 @@ export const EvalRunDetailPage: React.FC = () => {
 
             {/* Actions */}
             <div className="flex items-center gap-2">
+              {/* Resume: continue THIS run — re-executes only test cases without
+                  a persisted report (checkpoint-resume). Shown for interrupted
+                  runs (failed / cancelled) and for 'running' runs whose
+                  liveness heartbeat went silent (orphaned by a dead server —
+                  the server re-validates staleness and 409s if it's alive). */}
+              {(run.status !== 'running' || runLooksOrphaned(run)) && (run.testCaseSnapshots || []).some(s => !run.results?.[s.id]?.reportId) && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  data-testid="resume-run-btn"
+                  onClick={handleResume}
+                  disabled={resuming}
+                >
+                  {resuming ? <Loader2 size={14} className="mr-1 animate-spin" /> : <Play size={14} className="mr-1" />}
+                  Resume ({(run.testCaseSnapshots || []).filter(s => !run.results?.[s.id]?.reportId).length} left)
+                </Button>
+              )}
               {/* Re-run: restart this run with its stored config (same agent,
                   test-case sources, evaluator, judge model) via the New-Run
                   flow, pre-filled. Available for any run that isn't currently

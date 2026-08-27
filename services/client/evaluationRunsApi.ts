@@ -67,6 +67,44 @@ export async function executeEvaluationRun(
     throw new Error(err.error || 'Failed to create evaluation run');
   }
 
+  return consumeRunSSEStream(response, onProgress, onStarted, onTestCaseComplete);
+}
+
+/**
+ * Resume an interrupted evaluation run via SSE streaming.
+ *
+ * Re-executes only the test cases without a persisted report; completed
+ * test cases keep their existing reports (checkpoint-resume semantics).
+ */
+export async function resumeEvaluationRun(
+  runId: string,
+  onProgress: (progress: EvaluationRunProgress) => void,
+  onStarted?: (event: EvaluationRunStartedEvent) => void,
+  onTestCaseComplete?: (testCaseId: string, result: any) => void
+): Promise<EvaluationRun> {
+  debug('ClientAPI', 'Resuming evaluation run:', runId);
+
+  const response = await fetch(`/api/storage/evaluation-runs/${encodeURIComponent(runId)}/resume`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || 'Failed to resume evaluation run');
+  }
+
+  return consumeRunSSEStream(response, onProgress, onStarted, onTestCaseComplete);
+}
+
+/**
+ * Consume the SSE stream shared by the create and resume endpoints.
+ */
+async function consumeRunSSEStream(
+  response: Response,
+  onProgress: (progress: EvaluationRunProgress) => void,
+  onStarted?: (event: EvaluationRunStartedEvent) => void,
+  onTestCaseComplete?: (testCaseId: string, result: any) => void
+): Promise<EvaluationRun> {
   const reader = response.body?.getReader();
   if (!reader) {
     throw new Error('No response body');

@@ -827,6 +827,21 @@ export class FileSessionMetadataOperations implements ISessionMetadataOperations
 
 class FileEvaluationRunOperations implements IEvaluationRunOperations {
   private readonly dir: string;
+  /**
+   * Per-run write serialization. update()/updateResult() are
+   * read-modify-write with an `await` between read and write — with
+   * run.concurrency > 1 two in-flight updates could interleave at that
+   * boundary and the second write clobbers the first (lost per-test-case
+   * results). Chain writes per run id so they apply in order.
+   */
+  private writeQueues = new Map<string, Promise<unknown>>();
+
+  private serialized<T>(id: string, op: () => Promise<T>): Promise<T> {
+    const prev = this.writeQueues.get(id) ?? Promise.resolve();
+    const next = prev.then(op, op);
+    this.writeQueues.set(id, next.catch(() => {}));
+    return next;
+  }
 
   constructor(baseDir: string) {
     // Stored in same directory as benchmarks (same "index" concept)
@@ -857,11 +872,13 @@ class FileEvaluationRunOperations implements IEvaluationRunOperations {
   }
 
   async update(id: string, updates: Partial<EvaluationRun>): Promise<EvaluationRun> {
-    const existing = await this.getById(id);
-    if (!existing) throw new Error(`Evaluation run ${id} not found`);
-    const updated = { ...existing, ...updates } as EvaluationRun;
-    writeJsonFile(path.join(this.dir, `${id}.json`), updated);
-    return updated;
+    return this.serialized(id, async () => {
+      const existing = await this.getById(id);
+      if (!existing) throw new Error(`Evaluation run ${id} not found`);
+      const updated = { ...existing, ...updates } as EvaluationRun;
+      writeJsonFile(path.join(this.dir, `${id}.json`), updated);
+      return updated;
+    });
   }
 
   async delete(id: string): Promise<{ deleted: boolean }> {
@@ -912,11 +929,13 @@ class FileEvaluationRunOperations implements IEvaluationRunOperations {
     status: RunResultStatus;
     error?: string;
   }): Promise<boolean> {
-    const existing = await this.getById(runId);
-    if (!existing) return false;
-    existing.results[testCaseId] = result;
-    writeJsonFile(path.join(this.dir, `${runId}.json`), existing);
-    return true;
+    return this.serialized(runId, async () => {
+      const existing = await this.getById(runId);
+      if (!existing) return false;
+      existing.results[testCaseId] = result;
+      writeJsonFile(path.join(this.dir, `${runId}.json`), existing);
+      return true;
+    });
   }
 }
 
