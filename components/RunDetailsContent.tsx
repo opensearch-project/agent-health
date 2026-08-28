@@ -995,7 +995,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                               row again to deselect, or press Esc. */}
                           {selectedSpan && (
                             <div
-                              className="absolute inset-x-0 bottom-0 h-[55%] bg-background border-t shadow-2xl flex flex-col z-20 animate-in slide-in-from-bottom-4 duration-200"
+                              className="absolute inset-x-0 bottom-0 h-[55%] bg-background border-t shadow-2xl flex flex-col z-20 animate-in slide-in-from-bottom-4 duration-200 max-lg:!max-w-[calc(100vw-1rem)] max-lg:!max-h-[calc(100dvh-1rem)] max-lg:overflow-y-auto"
                               role="dialog"
                               aria-label="Span details"
                             >
