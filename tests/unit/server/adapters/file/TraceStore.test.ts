@@ -34,7 +34,7 @@ describe('TraceStore', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it('writes spans grouped by traceId, one file per trace', async () => {
+  it('writes fallback spans as canonical NDJSON grouped by traceId', async () => {
     await store.writeSpans([
       span({ traceId: 'tA', spanId: 'a1' }),
       span({ traceId: 'tA', spanId: 'a2' }),
@@ -74,7 +74,49 @@ describe('TraceStore', () => {
     expect(await store.readTrace(weirdId)).toHaveLength(1); // round-trips via the same hash
     const files = await fs.readdir(dir);
     expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(/^[0-9a-f]{64}\.json$/); // bounded sha256 hex filename
+    expect(files[0]).toMatch(/^trace-[0-9a-f]{64}\.ndjson$/); // bounded sha256 hex filename
+  });
+
+  it('stores one flat, judge-consumable line per span and exposes its exact canonical file', async () => {
+    const stored = span({
+      traceId: 'trace-flat',
+      spanId: 'flat-1',
+      kind: 3,
+      duration: 42,
+      attributes: {
+        'session.id': 'session-flat',
+        'service.name': 'pi-agent',
+        'gen_ai.tool.name': 'read',
+        'agent_health.run.id': 'run-flat',
+        ignored: 'not-hoisted',
+      },
+    });
+    await store.writeSpans([stored]);
+
+    const files = await store.canonicalFilesForSpans([stored]);
+    expect(files).toHaveLength(1);
+    expect(path.basename(files[0])).toBe('run-run-flat.ndjson');
+    const lines = (await fs.readFile(files[0], 'utf8')).trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]);
+    expect(record).toEqual(expect.objectContaining({
+      spanId: 'flat-1', kind: 3, durationMs: 42,
+      'service.name': 'pi-agent', 'session.id': 'session-flat',
+      'gen_ai.tool.name': 'read', 'agent_health.run.id': 'run-flat',
+    }));
+    expect(record.ignored).toBeUndefined();
+    expect(record.raw.attributes.ignored).toBe('not-hoisted');
+  });
+
+  it('groups multiple traces sharing session.id in one canonical session file', async () => {
+    await store.writeSpans([
+      span({ traceId: 'tA', spanId: 'a1', attributes: { 'session.id': 'session-1' } }),
+      span({ traceId: 'tB', spanId: 'b1', attributes: { 'session.id': 'session-1' } }),
+    ]);
+    const files = await fs.readdir(dir);
+    expect(files).toEqual(['session-session-1.ndjson']);
+    expect(await store.readTrace('tA')).toHaveLength(1);
+    expect(await store.listTraceIds()).toEqual(expect.arrayContaining(['tA', 'tB']));
   });
 
   it('skips spans without a spanId (avoid silent dedupe collisions)', async () => {

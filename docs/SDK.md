@@ -316,7 +316,7 @@ compatibility with code written against the original PR.
 
 | Option        | Forwarded as | What it does |
 |---------------|--------------|--------------|
-| `model`       | `modelId`    | Override the judge model. Same provider routing (`bedrock`, `litellm`, `claude-code`, `pi`, `openai-compatible`, `agentic`, `demo`) the UI uses. |
+| `model`       | `modelId`    | Override the judge model. Same provider routing (`bedrock`, `litellm`, `claude-code`, `pi`, `agent`, `openai-compatible`, `agentic`, `demo`) the UI uses. The plain `pi` provider is deprecated (unrestricted spawned CLI); prefer `agent`, which uses an in-process restricted-bash evidence bundle. |
 | `evaluatorId` | `evaluatorId`| Pick a stored evaluator. Same shape the UI sends — built-in ids are prefixed `system-` (e.g. `system-rca-default`, `system-factuality`) and resolve via `getSystemEvaluatorById`; anything else is a storage id resolved via `storage.evaluators.getById`. |
 | `serverUrl`   | (request URL)| Point at a non-default agent-health server (defaults to `http://localhost:${AGENT_HEALTH_PORT ?? 4001}`). |
 | `skip`        | (no request) | Tri-state. `true` → skip the judge (records a non-gating `skipped` verdict, no HTTP call). `false` → force the judge to run **even if `AH_SKIP_JUDGE` is set**. Omitted → defer to `AH_SKIP_JUDGE`. |

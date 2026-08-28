@@ -13,14 +13,18 @@
  *
  * In-process (SDK) rather than spawning the pi CLI: no subprocess, no NDJSON
  * stdout parsing, no extension file, no env-var scoping, no PATH/bin lookup.
- * The tools capture `runId` via closure so the judging model cannot pivot to
- * other runs. pi ships as the optionalDependency `@earendil-works/pi-coding-agent`.
+ * File-mode traces are read via exact canonical NDJSON mounts; cluster-mode
+ * query tools capture `runId` via closure so the model cannot pivot to other
+ * runs. pi ships as the optionalDependency `@earendil-works/pi-coding-agent`.
  */
 
 import { buildEvaluationPrompt, JudgeRequest, JudgeResponse } from '@/server/services/bedrockService';
 import { parseJudgeResponse } from '@/server/services/judgeResponseParser';
 import { buildJudgeDebug } from '@/server/services/judgeDebug';
 import { createTraceJudgeExtension } from '@/server/services/traceJudgeTools';
+import { createEvidenceJudgeExtension } from '@/server/services/evidenceJudgeTools';
+import { buildJudgeEvidence, removeJudgeEvidence, type JudgeTraceMode } from '@/server/services/judgeEvidence';
+import { RESTRICTED_COMMANDS } from '@/server/services/restrictedBash';
 import type { PiSdk } from '@/server/services/piSdkTypes';
 import { Evaluator } from '@/types';
 import { readEnv } from '@/lib/envCompat';
@@ -29,10 +33,9 @@ import { regionInferencePrefix } from '@/lib/bedrockCompat';
 
 /**
  * Default base prompt used when no saved evaluator's `systemPrompt` is provided.
- * The trace-tool addendum is appended to whatever base is in effect (default
- * or saved evaluator) so the agentic-judge contract — the existence and use
- * of `query_spans` / `query_logs` — is preserved regardless of how the user
- * customizes the judge prompt.
+ * A runtime evidence/tool addendum is appended to whatever base is in effect
+ * (default or saved evaluator), so custom prompts cannot erase the actual
+ * tool and immutable-evidence contract.
  */
 const DEFAULT_AGENT_TRACE_JUDGE_BASE_PROMPT = `You are an expert evaluator for observability and Root Cause Analysis (RCA) agents.
 
@@ -45,25 +48,121 @@ When you are done investigating, respond with ONLY a JSON object (no prose, opti
   "improvement_strategies": []
 }`;
 
+/** The runtime state used to compose a truthful evidence/tool addendum. */
+export interface AgentTraceJudgePromptState {
+  registeredTools: readonly string[];
+  evidenceEntries: readonly string[];
+  traceMode: JudgeTraceMode;
+  traceDataExists: boolean;
+}
+
+type TreeNode = { directories: Map<string, TreeNode>; files: Set<string> };
+
+const ENTRY_DESCRIPTIONS: Record<string, string> = {
+  'evidence': 'immutable evidence',
+  'evidence/testcase.json': 'original prompt + expected outcomes',
+  'evidence/run.json': 'run id, agent, timings, metadata',
+  'evidence/trajectory.json': 'FULL trajectory array',
+  'evidence/trajectory.ndjson': 'one complete step per line',
+  'evidence/steps': 'one complete file per step',
+  'evidence/spans.ndjson': 'canonical trace-store mount (read-only)',
+  'evidence/logs.ndjson': 'canonical log-store mount (read-only)',
+  'evidence/workspace': 'canonical run-workspace mount (read-only)',
+  'scratch': 'writable temporary analysis files',
+};
+
+/** Render the entries that really exist/mount; no template-only filenames. */
+export function renderJudgeEvidenceTree(entries: readonly string[]): string {
+  const root: TreeNode = { directories: new Map(), files: new Set() };
+  for (const rawEntry of [...new Set(entries)]) {
+    const isDirectory = rawEntry.endsWith('/');
+    const parts = rawEntry.replace(/\/$/, '').split('/').filter(Boolean);
+    if (!parts.length) continue;
+    let node = root;
+    for (let i = 0; i < parts.length - (isDirectory ? 0 : 1); i++) {
+      const part = parts[i];
+      let child = node.directories.get(part);
+      if (!child) {
+        child = { directories: new Map(), files: new Set() };
+        node.directories.set(part, child);
+      }
+      node = child;
+    }
+    if (!isDirectory) node.files.add(parts.at(-1)!);
+  }
+
+  const lines = ['./'];
+  const render = (node: TreeNode, prefix: string, parentPath: string) => {
+    const children = [
+      ...[...node.directories.entries()].map(([name, child]) => ({ name, child, directory: true })),
+      ...[...node.files].map((name) => ({ name, child: undefined, directory: false })),
+    ].sort((a, b) => a.name.localeCompare(b.name));
+    children.forEach((entry, index) => {
+      const last = index === children.length - 1;
+      const entryPath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+      const description = ENTRY_DESCRIPTIONS[entryPath];
+      lines.push(`${prefix}${last ? '└──' : '├──'} ${entry.name}${entry.directory ? '/' : ''}${description ? `  # ${description}` : ''}`);
+      if (entry.child) render(entry.child, `${prefix}${last ? '    ' : '│   '}`, entryPath);
+    });
+  };
+  render(root, '', '');
+  return lines.join('\n');
+}
+
 /**
- * Trace-tool addendum that's ALWAYS appended to whatever base system prompt
- * is in effect (default or user-saved evaluator). Without this paragraph the
- * judge has no way to know `query_spans` / `query_logs` exist or what they
- * return — the trace-judging contract collapses into trajectory-only
- * judgement. Documenting the tools is structurally separate from "how to
- * judge an RCA agent", which is what the saved evaluator's prompt covers.
+ * Compose the immutable runtime addendum from the judgment's actual tree,
+ * registered tools, active trace backend, and reachable trace data.
  */
-const AGENT_TRACE_TOOL_ADDENDUM = `
+export function composeAgentTraceToolAddendum(state: AgentTraceJudgePromptState): string {
+  if (!state.registeredTools.includes('bash')) {
+    throw new Error('Agent evidence judge requires the registered bash tool');
+  }
+  const tools = [...new Set(state.registeredTools)];
+  const tree = renderJudgeEvidenceTree(state.evidenceEntries);
+  const traceFiles = ['evidence/spans.ndjson', 'evidence/logs.ndjson']
+    .filter((entry) => state.evidenceEntries.includes(entry));
+
+  let traceSection: string;
+  if (!state.traceDataExists) {
+    traceSection = 'no trace data exists for this run — judge from trajectory evidence';
+  } else if (state.traceMode === 'file') {
+    const files = traceFiles.map((entry) => `\`${entry}\``).join(' and ');
+    traceSection = `Trace data is mounted directly from the canonical file store as ${files}; these virtual entries are read-only and are not copies.\n\nTrace/trajectory join example:\n- \`jq -s '.[0] as $steps | .[1:] | map({spanId, name, tool: ."gen_ai.tool.name"}) as $spans | {trajectorySteps: ($steps|length), spans: $spans}' evidence/trajectory.json evidence/spans.ndjson\``;
+  } else if (state.traceMode === 'cluster') {
+    const traceTools = tools.filter((tool) => tool === 'query_spans' || tool === 'query_logs');
+    traceSection = traceTools.length
+      ? `Trace data exists in the configured OpenSearch cluster and is not mounted in the evidence tree. Query it with ${traceTools.map((tool) => `\`${tool}\``).join(' and ')}; this is the interim interface until a PPL tool lands.`
+      : 'Trace data exists in the configured OpenSearch cluster but no trace-query tool is registered for this judgment.';
+  } else {
+    traceSection = 'Trace data exists but its backend is unavailable to this judgment.';
+  }
+
+  return `
 
 ---
 
-## Available trace-query tools (READ-ONLY, scoped to the run being judged)
+## Complete judgment evidence + restricted tools
 
-In addition to the trajectory shown in the prompt you have these tools that return the REAL OpenTelemetry spans and logs for the run you are judging:
-  - query_spans({ nameFilter? }): the run's actual spans (tool calls, token usage, latency, gen_ai.* attributes)
-  - query_logs({ query? }): the run's correlated logs (evidence for/against a root cause)
+The trajectory embedded in the user prompt may be truncated. The tree below is rendered from the complete entries actually materialized or mounted for this judgment. Use the \`bash\` tool to inspect it; this is a safe in-process interpreter, NOT an operating-system shell.
 
-These tools are hard-scoped to this single run — you cannot query other runs. PREFER verifying claims against this real data over trusting the trajectory narrative. Confirm a span exists before crediting a tool call, check real token usage before crediting a budget claim, and look for log evidence before crediting a root-cause claim.`;
+Registered judgment tools: ${tools.map((tool) => `\`${tool}\``).join(', ')}.
+
+\`\`\`
+${tree}
+\`\`\`
+
+\`evidence/\` is READ-ONLY. Writes/redirections are allowed only under \`scratch/\` (100 MB / 500-file quota). The working directory is fixed at the tree root; \`cd\` is not supported. Every physical path is realpath-confined to this tree and symlinks are rejected. Explicit virtual mounts resolve only to their declared canonical read-only files or workspace tree. Output is capped near 50 KB; narrow broad queries.
+
+Available restricted bash commands: ${RESTRICTED_COMMANDS.map((command) => `\`${command}\``).join(', ')}. Sequences (\`;\`, \`&&\`, \`||\`), pipelines, quoted arguments, \`<\`, and \`>/>> scratch/...\` are supported. Variables/expansion, command substitution, backticks, globs, subshells, and background \`&\` are rejected.
+
+Two jq examples:
+- \`jq -r '.expectedOutcomes[]' evidence/testcase.json\`
+- \`jq -r '.[] | select(.type=="action") | .toolName' evidence/trajectory.json | sort | uniq -c\`
+
+${traceSection}
+
+Before returning a verdict, you MUST use restricted \`bash\` to inspect \`evidence/testcase.json\` and the complete trajectory files (at least two focused commands). PREFER real evidence over the narrative. Confirm evidence before crediting a tool call, budget claim, file-safety claim, or root-cause claim.`;
+}
 
 /**
  * Dynamically load the pi SDK (optionalDependency). Throws a clear, actionable
@@ -99,20 +198,22 @@ function bedrockBaseId(id: string): string {
  * Two-layer composition:
  *   1. Base prompt: the saved evaluator's `systemPrompt` (when non-empty),
  *      else the default. This is the surface the user iterates on.
- *   2. {@link AGENT_TRACE_TOOL_ADDENDUM} is ALWAYS appended on top so the
- *      tool-use contract (`query_spans` / `query_logs`) survives any
- *      customization of the base prompt. A regression test pins this
- *      invariant — see piAgenticJudgeService.test.
+ *   2. A runtime-composed addendum is ALWAYS appended on top. It describes
+ *      only tools registered and files materialized/mounted for this exact
+ *      judgment. A regression test pins that it survives custom base prompts.
  *
  * Exported for unit testing; production callers go through
  * {@link evaluateWithPiAgenticTrace}.
  */
-export function buildAgentTraceJudgeSystemPrompt(evaluator?: { systemPrompt?: string }): string {
+export function buildAgentTraceJudgeSystemPrompt(
+  evaluator: { systemPrompt?: string } | undefined,
+  state: AgentTraceJudgePromptState
+): string {
   const baseSystemPrompt =
     evaluator?.systemPrompt && evaluator.systemPrompt.trim().length > 0
       ? evaluator.systemPrompt
       : DEFAULT_AGENT_TRACE_JUDGE_BASE_PROMPT;
-  return baseSystemPrompt + AGENT_TRACE_TOOL_ADDENDUM;
+  return baseSystemPrompt + composeAgentTraceToolAddendum(state);
 }
 
 /**
@@ -180,17 +281,16 @@ export function extractFinalAssistantText(messages: any[]): string {
 /**
  * Evaluate a trajectory with the agent trace judge (in-process pi SDK).
  *
- * Requires `request.runId` so the trace tools can scope to the run. Without a
- * runId the tools report "no run id" and the judge degrades to a
- * trajectory-only judgement rather than failing.
+ * The complete trajectory is materialized as immutable evidence before the
+ * prompt's compact copy is built. A runId is optional: when absent, trace
+ * tools report "no run id", while the restricted evidence tool remains fully
+ * functional for trajectory-only judgment.
  *
- * @param request - The judge request, must include `runId` for trace scoping.
+ * @param request - The judge request; runId is optional trace correlation.
  * @param evaluator - Optional saved evaluator. When provided, its `systemPrompt`
- *   replaces the default base prompt; the trace-tool addendum is ALWAYS
- *   appended on top so the judge knows `query_spans`/`query_logs` exist
- *   regardless of how the user customizes the base prompt. Its
- *   `scoringConfig.metrics` drives dynamic metric extraction in the parsed
- *   response.
+ *   replaces the default base prompt; the runtime evidence/tool addendum is
+ *   ALWAYS appended on top. Its `scoringConfig.metrics` drives dynamic metric
+ *   extraction in the parsed response.
  */
 export async function evaluateWithPiAgenticTrace(
   request: JudgeRequest,
@@ -207,84 +307,105 @@ export async function evaluateWithPiAgenticTrace(
     process.env.AH_JUDGE_SERVER_URL ||
     `http://localhost:${readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001'}`;
   const startTime = Date.now();
-
-  const { createAgentSession, SessionManager, AuthStorage, ModelRegistry, DefaultResourceLoader, getAgentDir } =
-    await loadPiSdk();
-
-  const authStorage = AuthStorage.create();
-  const modelRegistry = ModelRegistry.create(authStorage);
-  const available = await modelRegistry.getAvailable();
-  // Prefer the exact model the run is configured to judge with; fall back to a
-  // recent Claude from the credentialed models.
-  const model = findRequestedModel(available, request.modelId) ?? pickJudgeModel(available);
-  if (!model) {
-    throw new Error(
-      'Agent judge: no model available. Configure a default pi model (e.g. a Bedrock or Anthropic model with valid credentials).'
-    );
+  const evidence = await buildJudgeEvidence(request, serverUrl);
+  const bashCommands: string[] = [];
+  const keepEvidence =
+    request.keepEvidence === true ||
+    ['1', 'true', 'yes'].includes(String(process.env.AH_JUDGE_KEEP_EVIDENCE ?? '').toLowerCase());
+  const useClusterTraceTools = evidence.trace.mode === 'cluster' && evidence.trace.exists && !!runId;
+  const registeredTools = useClusterTraceTools
+    ? ['bash', 'query_spans', 'query_logs']
+    : ['bash'];
+  debug('AgentJudge', 'Evidence directory:', evidence.rootDir);
+  debug('AgentJudge', 'Evidence files:', evidence.files);
+  debug('AgentJudge', 'Evidence mounts:', evidence.mounts);
+  debug('AgentJudge', 'Registered tools:', registeredTools);
+  if (keepEvidence && evidence.mounts.length) {
+    console.info(`[AgentJudge] Evidence mounts: ${JSON.stringify(evidence.mounts)}`);
   }
-  debug('AgentJudge', 'model:', `${model.provider}/${model.id}`);
 
-  // Compose the system prompt: saved evaluator's prompt (if any) replaces
-  // the default base, then the trace-tool addendum is unconditionally
-  // appended. Editing the saved prompt cannot accidentally break the
-  // trace-judging contract — a regression test in piAgenticJudgeService.test
-  // pins this invariant.
-  const systemPrompt = buildAgentTraceJudgeSystemPrompt(evaluator);
+  try {
+    const { createAgentSession, SessionManager, AuthStorage, ModelRegistry, DefaultResourceLoader, getAgentDir } =
+      await loadPiSdk();
 
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: process.cwd(),
-    agentDir: getAgentDir(),
-    systemPromptOverride: () => systemPrompt,
-    appendSystemPromptOverride: () => [],
-    extensionFactories: [createTraceJudgeExtension(runId, serverUrl, agents)],
-    // Full isolation for this HEADLESS in-process session. Without
-    // noExtensions the loader auto-loads the user's global ~/.pi/agent
-    // extensions (e.g. an interactive status-bar extension) whose render
-    // `tick` touches the TUI theme and throws "Theme not initialized",
-    // crashing the server process. Inline extensionFactories
-    // (query_spans/query_logs) still register regardless of this flag.
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-  });
-  await resourceLoader.reload();
+    const authStorage = AuthStorage.create();
+    const modelRegistry = ModelRegistry.create(authStorage);
+    const available = await modelRegistry.getAvailable();
+    // Prefer the exact model the run is configured to judge with; fall back to a
+    // recent Claude from the credentialed models.
+    const model = findRequestedModel(available, request.modelId) ?? pickJudgeModel(available);
+    if (!model) {
+      throw new Error(
+        'Agent judge: no model available. Configure a default pi model (e.g. a Bedrock or Anthropic model with valid credentials).'
+      );
+    }
+    debug('AgentJudge', 'model:', `${model.provider}/${model.id}`);
 
-  const { session } = await createAgentSession({
-    model,
-    authStorage,
-    modelRegistry,
-    resourceLoader,
-    // Restrict to ONLY the run-scoped trace tools registered by the extension
-    // factory. `tools: []` disables all built-in tools (read/bash/grep/...) so
-    // the judge cannot read the project's filesystem — it may only inspect this
-    // run's spans/logs. This is the core scoping guarantee of the trace judge.
-    tools: ['query_spans', 'query_logs'],
-    sessionManager: SessionManager.inMemory(),
-  });
+    const systemPrompt = buildAgentTraceJudgeSystemPrompt(evaluator, {
+      registeredTools,
+      evidenceEntries: evidence.files,
+      traceMode: evidence.trace.mode,
+      traceDataExists: evidence.trace.exists,
+    });
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: evidence.rootDir,
+      agentDir: getAgentDir(),
+      systemPromptOverride: () => systemPrompt,
+      appendSystemPromptOverride: () => [],
+      extensionFactories: [
+        ...(useClusterTraceTools ? [createTraceJudgeExtension(runId, serverUrl, agents)] : []),
+        createEvidenceJudgeExtension(evidence.rootDir, {
+          mounts: evidence.mounts,
+          onCommand: (command) => {
+            bashCommands.push(command);
+            debug('AgentJudge', 'restricted bash:', command);
+            if (keepEvidence) console.info(`[AgentJudge] restricted bash: ${command}`);
+          },
+        }),
+      ],
+      // Full isolation for this HEADLESS in-process session. Only the inline
+      // factories above register tools; all user extensions/built-ins stay disabled.
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    await resourceLoader.reload();
 
-  await session.prompt(userPrompt);
-  const finalText = extractFinalAssistantText(session.messages);
-  const duration = Date.now() - startTime;
+    const { session } = await createAgentSession({
+      model,
+      authStorage,
+      modelRegistry,
+      resourceLoader,
+      tools: registeredTools,
+      sessionManager: SessionManager.inMemory(),
+    });
 
-  const parsed = parseJudgeResponse(finalText, {
-    evaluator,
-    duration,
-    source: 'AgentJudge',
-  });
-  debug('AgentJudge', 'Pass/Fail:', parsed.passFailStatus, 'in', duration, 'ms');
-  const judgeDebug = buildJudgeDebug({
-    provider: 'agent',
-    modelId: `${model.provider}/${model.id}`,
-    evaluatorId: evaluator?.id,
-    systemPrompt,
-    userPrompt,
-  });
-  if (judgeDebug) parsed.judgeDebug = judgeDebug;
-  // Per RFC 004: individual judge verdicts never carry recommendations
-  // (those belong to the insights synthesis layer). Forcing an empty array
-  // also keeps the persisted matcherResults.improvementStrategies shape stable
-  // regardless of what the model emitted.
-  return { ...parsed, improvementStrategies: [] };
+    await session.prompt(userPrompt);
+    const finalText = extractFinalAssistantText(session.messages);
+    const duration = Date.now() - startTime;
+    const parsed = parseJudgeResponse(finalText, { evaluator, duration, source: 'AgentJudge' });
+    debug('AgentJudge', 'Pass/Fail:', parsed.passFailStatus, 'in', duration, 'ms');
+    const judgeDebug = buildJudgeDebug({
+      provider: 'agent',
+      modelId: `${model.provider}/${model.id}`,
+      evaluatorId: evaluator?.id,
+      systemPrompt,
+      userPrompt,
+    });
+    if (judgeDebug) {
+      parsed.judgeDebug = {
+        ...judgeDebug,
+        toolCalls: bashCommands.map((command) => ({ tool: 'bash', command })),
+      };
+    }
+    return { ...parsed, improvementStrategies: [] };
+  } finally {
+    if (keepEvidence) {
+      console.info(`[AgentJudge] Keeping evidence directory: ${evidence.rootDir}`);
+    } else {
+      await removeJudgeEvidence(evidence);
+    }
+  }
 }

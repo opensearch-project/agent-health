@@ -76,13 +76,44 @@ export interface ConnectorRequest {
 }
 
 /**
+ * Conventional metadata returned by connector execution.
+ *
+ * Connectors may add protocol-specific keys alongside these shared keys.
+ */
+export interface ConnectorResponseMetadata {
+  /**
+   * The actual working directory this run executed in, when the connector
+   * controls it per-run (for example, a temporary fixture copy).
+   */
+  workspaceDir?: string;
+  [key: string]: any;
+}
+
+/**
+ * Resolve the workspace that judge evidence should snapshot. Per-run connector
+ * truth takes precedence over the agent's static connector configuration.
+ */
+export function resolveConnectorWorkspaceDir(
+  metadata?: ConnectorResponseMetadata,
+  connectorConfig?: Record<string, any>
+): string | undefined {
+  if (typeof metadata?.workspaceDir === 'string' && metadata.workspaceDir.trim()) {
+    return metadata.workspaceDir;
+  }
+  if (typeof connectorConfig?.cwd === 'string' && connectorConfig.cwd.trim()) {
+    return connectorConfig.cwd;
+  }
+  return undefined;
+}
+
+/**
  * Response from connector execution
  */
 export interface ConnectorResponse {
   trajectory: TrajectoryStep[];
   runId: string | null;
   rawEvents?: any[]; // Protocol-specific raw events for debugging
-  metadata?: Record<string, any>; // Additional connector-specific data
+  metadata?: ConnectorResponseMetadata; // Additional connector-specific data
 }
 
 /**

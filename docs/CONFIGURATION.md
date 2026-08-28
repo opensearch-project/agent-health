@@ -231,6 +231,8 @@ Debug logging can also be toggled at runtime via the Settings page "Verbose Logg
 |----------|-------------|---------|
 | `VITE_BACKEND_PORT` | Backend server port | `4001` |
 | `BEDROCK_MODEL_ID` | Judge model ID | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| `AH_JUDGE_KEEP_EVIDENCE` | Keep `agent` provider evidence tmpdirs after verdicts (`1`/`true`); otherwise they are deleted | unset |
+| `AH_JUDGE_DEBUG` | Persist judge prompts, restricted bash calls, and retained evidence path in judge debug output | unset |
 
 ## TypeScript Config File (Optional)
 
@@ -307,7 +309,7 @@ export default defineConfig({
 | `observability` | `ObservabilityClusterConfig` | OpenSearch traces/logs cluster (endpoint + auth + index patterns) |
 | `testCases` | `string \| string[]` | Test case file patterns |
 | `reporters` | `ReporterConfig[]` | Output reporters |
-| `judge` | `JudgeConfig` | Judge model configuration |
+| `judge` | `JudgeConfig` | Judge model configuration; `keepEvidence?: boolean` retains restricted `agent`-judge evidence for debugging |
 | `telemetry` | `TelemetryConfig` | OTel evaluation span emission |
 | `extends` | `boolean` | Extend defaults (`true`) or replace (`false`) |
 

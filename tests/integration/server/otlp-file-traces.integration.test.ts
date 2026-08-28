@@ -22,7 +22,7 @@ import tracesRoutes from '@/server/routes/traces';
 
 const TRACE_ID = 'aaaa0000bbbb1111cccc2222dddd3333';
 
-function otlpPayload(opts: { traceId?: string; runId?: string; service?: string; spanId?: string } = {}) {
+function otlpPayload(opts: { traceId?: string; runId?: string; sessionId?: string; service?: string; spanId?: string } = {}) {
   return {
     resourceSpans: [
       {
@@ -38,7 +38,11 @@ function otlpPayload(opts: { traceId?: string; runId?: string; service?: string;
                 kind: 3,
                 startTimeUnixNano: '1700000000000000000',
                 endTimeUnixNano: '1700000001000000000',
-                attributes: opts.runId ? [{ key: 'agent_health.run.id', value: { stringValue: opts.runId } }] : [],
+                attributes: [
+                  ...(opts.runId ? [{ key: 'agent_health.run.id', value: { stringValue: opts.runId } }] : []),
+                  ...(opts.sessionId ? [{ key: 'session.id', value: { stringValue: opts.sessionId } }] : []),
+                  { key: 'gen_ai.request.model', value: { stringValue: 'synthetic-model' } },
+                ],
                 status: { code: 1 },
               },
             ],
@@ -86,6 +90,15 @@ describe('OTLP file-trace round-trip (integration)', () => {
     const ids = res.body.spans.map((s: any) => s.spanId);
     expect(ids).toContain('1111222233334444');
     expect(res.body.spans[0].attributes['service.name']).toBe('local-agent');
+
+    const canonical = path.join(dir, 'traces', `trace-${TRACE_ID}.ndjson`);
+    const records = (await fs.readFile(canonical, 'utf8')).trim().split('\n').map(JSON.parse);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toEqual(expect.objectContaining({
+      spanId: '1111222233334444', kind: 3, durationMs: 1000,
+      'service.name': 'local-agent', 'gen_ai.request.model': 'synthetic-model',
+    }));
+    expect(records[0].raw.attributes['service.name']).toBe('local-agent');
   });
 
   it('correlates by runId (agent_health.run.id == runId)', async () => {
@@ -97,6 +110,18 @@ describe('OTLP file-trace round-trip (integration)', () => {
     const res = await request(app).post('/api/traces').send({ runIds: ['run-xyz'] }).expect(200);
     expect(res.body.backend).toBe('file');
     expect(res.body.spans.some((s: any) => s.spanId === 'cafe000000000001')).toBe(true);
+  });
+
+  it('correlates runIds directly to session.id and stores a per-session file', async () => {
+    const runId = 'run-session-direct';
+    await request(app)
+      .post('/v1/traces')
+      .send(otlpPayload({ traceId: 'cccc0000cccc0000cccc0000cccc0000', spanId: 'cafe000000000002', sessionId: runId }))
+      .expect(200);
+
+    const res = await request(app).post('/api/traces').send({ runIds: [runId] }).expect(200);
+    expect(res.body.spans.map((s: any) => s.spanId)).toContain('cafe000000000002');
+    await expect(fs.stat(path.join(dir, 'traces', `session-${runId}.ndjson`))).resolves.toBeDefined();
   });
 
   it('reports the file backend on /api/traces/health', async () => {

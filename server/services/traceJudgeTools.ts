@@ -21,6 +21,45 @@ function textResult(obj: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }], details: obj };
 }
 
+export type TraceJudgeAgentHint = {
+  serviceName: string;
+  startedAt: number;
+  endedAt: number;
+  sessionId?: string;
+};
+
+/** Shared run-scoped fetch used by cluster tools and file-mount discovery. */
+export async function fetchTraceJudgeSpans(
+  runId: string,
+  serverUrl: string,
+  agents?: TraceJudgeAgentHint[]
+): Promise<any> {
+  const body: Record<string, unknown> = { runIds: [runId], size: 500 };
+  if (agents?.length) body.agents = agents;
+  const res = await fetch(`${serverUrl}/api/traces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`traces query failed: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Shared run-scoped log fetch used by cluster tools and evidence-state discovery. */
+export async function fetchTraceJudgeLogs(
+  runId: string,
+  serverUrl: string,
+  query?: string
+): Promise<any> {
+  const res = await fetch(`${serverUrl}/api/logs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runId, query, size: 200 }),
+  });
+  if (!res.ok) throw new Error(`logs query failed: HTTP ${res.status}`);
+  return res.json();
+}
+
 /**
  * Build an extension factory that registers the run-scoped trace tools.
  * @param runId   the single run the tools are hard-scoped to (closure, not a tool param)
@@ -36,7 +75,7 @@ function textResult(obj: unknown) {
 export function createTraceJudgeExtension(
   runId: string | undefined,
   serverUrl: string,
-  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>
+  agents?: TraceJudgeAgentHint[]
 ): PiExtensionFactory {
   return (pi: PiExtensionAPI) => {
     pi.registerTool({
@@ -71,22 +110,7 @@ export function createTraceJudgeExtension(
           // (which doesn't stamp gen_ai.request.id with agent-health's
           // runId) is invisible to the judge — leaving the judge to
           // reason from the trajectory text alone.
-          const body: Record<string, unknown> = {
-            runIds: [runId],
-            size: 500,
-          };
-          if (agents && agents.length > 0) {
-            body.agents = agents;
-          }
-          const res = await fetch(`${serverUrl}/api/traces`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          });
-          if (!res.ok) {
-            return textResult({ error: `traces query failed: HTTP ${res.status}` });
-          }
-          const data: any = await res.json();
+          const data: any = await fetchTraceJudgeSpans(runId, serverUrl, agents);
           let spans: any[] = Array.isArray(data?.spans) ? data.spans : [];
           if (params.nameFilter) {
             const f = params.nameFilter.toLowerCase();
@@ -128,15 +152,7 @@ export function createTraceJudgeExtension(
           return textResult({ error: 'No run id available — trace tools are disabled for this judge invocation.' });
         }
         try {
-          const res = await fetch(`${serverUrl}/api/logs`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ runId, query: params.query, size: 200 }),
-          });
-          if (!res.ok) {
-            return textResult({ error: `logs query failed: HTTP ${res.status}` });
-          }
-          const data: any = await res.json();
+          const data: any = await fetchTraceJudgeLogs(runId, serverUrl, params.query);
           return textResult({ runId, logs: data?.logs ?? data });
         } catch (err: any) {
           return textResult({ error: `logs query error: ${err?.message ?? String(err)}` });

@@ -84,7 +84,7 @@ agent-health run -t <test-case> [options]
 | `-a, --agent <key>` | Agent key (repeatable for comparison) |
 | `-m, --model <id>` | Agent's LLM model id (agent default if omitted) |
 | `-e, --evaluator <id>` | Evaluator ID (RCA Default if omitted) |
-| `--judge-model <id>` | Judge LLM model id, distinct from `-m`. Falls back to the evaluator's `inferenceConfig.modelId`, then `BEDROCK_MODEL_ID`. Ignored by agentic judges (`pi`/`agent`/`agentic`/`claude-code`). |
+| `--judge-model <id>` | Judge LLM model id, distinct from `-m`. Falls back to the evaluator's `inferenceConfig.modelId`, then `BEDROCK_MODEL_ID`. Ignored by agentic judges (`pi`/`agent`/`agentic`/`claude-code`). **`pi` is deprecated** because it spawns an unrestricted CLI; use provider **`agent`**, whose in-process judge can inspect complete immutable evidence only through restricted bash. |
 | `-o, --output <fmt>` | Output: `table`, `json` |
 | `-v, --verbose` | Show full trajectory |
 

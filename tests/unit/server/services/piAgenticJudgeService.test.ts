@@ -94,45 +94,104 @@ describe('extractFinalAssistantText', () => {
   });
 });
 
-describe('buildAgentTraceJudgeSystemPrompt (evaluator-prompt-plumbing contract)', () => {
-  // The trace-judging contract — the existence and use of `query_spans`/
-  // `query_logs` — must survive any user customization of the saved
-  // evaluator's `systemPrompt`. These tests pin that invariant so a future
-  // refactor breaks loudly with a clear message.
+const BASE_ENTRIES = [
+  'evidence/',
+  'evidence/run.json',
+  'evidence/steps/',
+  'evidence/steps/001-action.json',
+  'evidence/testcase.json',
+  'evidence/trajectory.json',
+  'evidence/trajectory.ndjson',
+  'scratch/',
+];
 
+const promptState = (over: Partial<Parameters<typeof buildAgentTraceJudgeSystemPrompt>[1]> = {}) => ({
+  registeredTools: ['bash'],
+  evidenceEntries: BASE_ENTRIES,
+  traceMode: 'file' as const,
+  traceDataExists: false,
+  ...over,
+});
+
+describe('buildAgentTraceJudgeSystemPrompt (runtime-composed contract)', () => {
   it('uses the default base prompt when no evaluator is supplied', () => {
-    const out = buildAgentTraceJudgeSystemPrompt(undefined);
+    const out = buildAgentTraceJudgeSystemPrompt(undefined, promptState());
     expect(out).toContain('observability and Root Cause Analysis');
-    expect(out).toContain('query_spans');
-    expect(out).toContain('query_logs');
+    expect(out).toContain('`bash`');
+    expect(out).not.toContain('query_spans');
+    expect(out).not.toContain('query_logs');
   });
 
   it('uses the default base prompt when evaluator.systemPrompt is empty/whitespace', () => {
-    expect(buildAgentTraceJudgeSystemPrompt({ systemPrompt: '' }))
+    expect(buildAgentTraceJudgeSystemPrompt({ systemPrompt: '' }, promptState()))
       .toContain('observability and Root Cause Analysis');
-    expect(buildAgentTraceJudgeSystemPrompt({ systemPrompt: '   \n  ' }))
+    expect(buildAgentTraceJudgeSystemPrompt({ systemPrompt: '   \n  ' }, promptState()))
       .toContain('observability and Root Cause Analysis');
   });
 
   it('replaces the base prompt with the saved evaluator.systemPrompt verbatim', () => {
-    const out = buildAgentTraceJudgeSystemPrompt({
-      systemPrompt: 'I am the CP-Oncall judge. Emit only JSON.',
-    });
+    const out = buildAgentTraceJudgeSystemPrompt(
+      { systemPrompt: 'I am the CP-Oncall judge. Emit only JSON.' },
+      promptState()
+    );
     expect(out).toContain('I am the CP-Oncall judge');
-    // The default base must NOT be present — the saved prompt fully
-    // replaces it. (Pre-fix the override was silently dropped.)
     expect(out).not.toContain('observability and Root Cause Analysis');
   });
 
-  it('ALWAYS appends the trace-tool addendum, even when the saved prompt does not mention tools', () => {
-    // This is the critical invariant: a user who saves a custom prompt and
-    // forgets to mention query_spans/query_logs must NOT accidentally
-    // disable trace-grounded judging.
-    const out = buildAgentTraceJudgeSystemPrompt({
-      systemPrompt: 'You are a custom judge. Do not use tools.',
-    });
-    expect(out).toContain('query_spans');
-    expect(out).toContain('query_logs');
+  it('ALWAYS appends the runtime addendum to a custom evaluator base prompt', () => {
+    const out = buildAgentTraceJudgeSystemPrompt(
+      { systemPrompt: 'You are a custom judge. Do not use tools.' },
+      promptState()
+    );
+    expect(out).toContain('Complete judgment evidence + restricted tools');
     expect(out).toContain('READ-ONLY');
+    expect(out).toContain('evidence/testcase.json');
+  });
+
+  it('renders file-mode trace mounts and the join example only when they resolve in the real tree', () => {
+    const withSpans = buildAgentTraceJudgeSystemPrompt(undefined, promptState({
+      evidenceEntries: [...BASE_ENTRIES, 'evidence/spans.ndjson'],
+      traceDataExists: true,
+    }));
+    expect(withSpans).toContain('spans.ndjson  # canonical trace-store mount');
+    expect(withSpans).toContain('Trace/trajectory join example');
+    expect(withSpans).not.toContain('logs.ndjson');
+    expect(withSpans).not.toContain('query_spans');
+
+    const withoutSpans = buildAgentTraceJudgeSystemPrompt(undefined, promptState());
+    expect(withoutSpans).not.toContain('spans.ndjson');
+    expect(withoutSpans).not.toContain('logs.ndjson');
+    expect(withoutSpans).toContain('no trace data exists for this run — judge from trajectory evidence');
+  });
+
+  it('cluster mode lists no trace files and mentions each registered trace tool iff registered', () => {
+    const onlySpans = buildAgentTraceJudgeSystemPrompt(undefined, promptState({
+      registeredTools: ['bash', 'query_spans'],
+      traceMode: 'cluster',
+      traceDataExists: true,
+    }));
+    expect(onlySpans).toContain('query_spans');
+    expect(onlySpans).not.toContain('query_logs');
+    expect(onlySpans).not.toContain('spans.ndjson');
+    expect(onlySpans).toContain('interim interface until a PPL tool lands');
+
+    const both = buildAgentTraceJudgeSystemPrompt(undefined, promptState({
+      registeredTools: ['bash', 'query_spans', 'query_logs'],
+      traceMode: 'cluster',
+      traceDataExists: true,
+    }));
+    expect(both).toContain('query_spans');
+    expect(both).toContain('query_logs');
+  });
+
+  it('tree entries are listed iff supplied by the evidence bundle', () => {
+    const out = buildAgentTraceJudgeSystemPrompt(undefined, promptState({
+      evidenceEntries: [...BASE_ENTRIES, 'evidence/workspace/', 'evidence/workspace/answer.txt'],
+    }));
+    expect(out).toContain('answer.txt');
+    expect(out).toContain('workspace/');
+    expect(out).not.toContain('workspace-error.txt');
+    expect(out).not.toContain('README');
+    expect(out).not.toContain('manifest');
   });
 });

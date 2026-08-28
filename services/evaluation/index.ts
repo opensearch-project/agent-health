@@ -18,6 +18,7 @@ import { callBedrockJudge } from './bedrockJudge';
 import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/judgeAccessor';
 import type { MatcherResult } from '@/lib/matchers/types';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
+import { resolveConnectorWorkspaceDir } from '@/services/connectors/types';
 
 // Re-export for use by experimentRunner when calling judge after trace polling
 export { callBedrockJudge };
@@ -433,6 +434,7 @@ export async function runEvaluationWithConnector(
     });
     const connector = invocation.connector;
     const agentDurationMs = invocation.agentDurationMs;
+    const connectorMetadata = invocation.metadata;
 
     fullTrajectory = invocation.trajectory;
     agentRunId = invocation.runId;
@@ -545,7 +547,14 @@ export async function runEvaluationWithConnector(
           performanceMetrics: { durationMs: Date.now() - evalStartTime, agentDurationMs },
         },
         agent.traceServiceName
-      )
+      ),
+      {
+        prompt: testCase.initialPrompt,
+        agentKey: agent.key,
+        timings: { agentDurationMs, evaluationElapsedMs: Date.now() - evalStartTime },
+        metadata: connectorMetadata,
+        workspaceDir: resolveConnectorWorkspaceDir(connectorMetadata, agent.connectorConfig),
+      }
     );
 
     debug('Eval', 'Metrics:', judgment.metrics);

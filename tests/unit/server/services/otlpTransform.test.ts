@@ -68,6 +68,7 @@ describe('otlpTransform', () => {
       expect(s.spanId).toBe('1111222233334444');
       expect(s.parentSpanId).toBe('5555666677778888');
       expect(s.name).toBe('chat');
+      expect(s.kind).toBe(3);
       expect(s.status).toBe('ERROR'); // code 2
     });
 

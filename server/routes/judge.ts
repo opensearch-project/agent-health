@@ -342,7 +342,7 @@ router.get('/api/judge/github-models', async (_req: Request, res: Response) => {
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
   try {
-    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId, runId, agents } = req.body;
+    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId, runId, agents, evidenceContext } = req.body;
 
     // Validate required fields
     if (!trajectory || !Array.isArray(trajectory) || trajectory.length === 0) {
@@ -440,17 +440,9 @@ router.post('/api/judge', async (req: Request, res: Response) => {
     }
 
     if (provider === 'agent') {
-      // Agent trace judge: an LLM judge with read-only, run-scoped trace tools
-      // (query_spans/query_logs) so it can verify claims against the run's real
-      // OTel spans/logs instead of trusting the trajectory text. runId is the
-      // scoping invariant for those tools — without it they have nothing to
-      // read, so fail loudly rather than spawn a judge that can only report
-      // "no run id" (see piAgenticJudgeService).
-      if (!runId) {
-        return res.status(400).json({
-          error: 'runId is required for the agent (trace) judge provider — its trace tools scope to it'
-        });
-      }
+      // Evidence agent judge: complete trajectory/testcase files are always
+      // available through restricted in-process bash. A runId may discover a
+      // file-mode canonical mount or enable cluster-mode query tools.
       // Defense in depth against cross-run/cross-tenant exfiltration: the trace
       // tools will happily read spans/logs for whatever runId they're given, so
       // a direct caller could pass a benign trajectory but a *different* run's
@@ -466,20 +458,57 @@ router.post('/api/judge', async (req: Request, res: Response) => {
           .map((s) => s?.runId)
           .filter((id): id is string => typeof id === 'string' && id.length > 0)
       );
-      if (trajectoryRunIds.size > 0 && !trajectoryRunIds.has(runId)) {
+      if (runId && trajectoryRunIds.size > 0 && !trajectoryRunIds.has(runId)) {
         return res.status(403).json({
           error:
             'runId does not match the submitted trajectory — the agent (trace) judge ' +
             'may only inspect the run that produced its trajectory',
         });
       }
-      debug('JudgeAPI', 'Agent trace judge - evaluating with run-scoped trace tools (runId=' + runId + ')');
+      let trustedAgentKey: string | undefined;
+      if (runId) {
+        const storage = getStorageModule();
+        const runRecord = await storage.evaluationRuns.getById(runId);
+        const reportRecord = runRecord ? null : await storage.runs.getById(runId);
+        trustedAgentKey = runRecord?.agentKey || reportRecord?.agentKey;
+        const requestedAgentKey = evidenceContext?.agentKey;
+        if (requestedAgentKey && trustedAgentKey && requestedAgentKey !== trustedAgentKey) {
+          return res.status(403).json({ error: 'agentKey does not match the stored run metadata' });
+        }
+      }
+      debug('JudgeAPI', 'Agent evidence judge - evaluating with restricted bash (runId=' + (runId || 'none') + ')');
       // Pass the resolved evaluator so a saved `systemPrompt` replaces the
-      // default base prompt (the trace-tool addendum is still appended
-      // inside the service so the judge always knows query_spans/query_logs
-      // exist).
+      // default base prompt (the runtime evidence/tool addendum is still
+      // appended inside the service and describes only actual state).
       const result = await evaluateWithPiAgenticTrace(
-        { trajectory, expectedOutcomes, expectedTrajectory, logs, runId, modelId: resolvedModelId, agents },
+        {
+          trajectory,
+          expectedOutcomes,
+          expectedTrajectory,
+          logs,
+          runId,
+          modelId: resolvedModelId,
+          agents,
+          evidenceContext: evidenceContext && typeof evidenceContext === 'object'
+            ? {
+                ...evidenceContext,
+                agentKey: trustedAgentKey,
+                // HTTP clients control evidenceContext metadata, so never
+                // accept a workspace path from it. Only the server-owned agent
+                // configuration may select files for an API-triggered judge.
+                // In-process evaluation still uses the connector's actual
+                // per-run workspace because that metadata never crosses this
+                // untrusted request boundary.
+                workspaceDir: (() => {
+                  const cwd = config.agents.find(
+                    (agent) => agent.key === trustedAgentKey
+                  )?.connectorConfig?.cwd;
+                  return typeof cwd === 'string' && cwd.trim() ? cwd : undefined;
+                })(),
+              }
+            : undefined,
+          keepEvidence: config.judge?.keepEvidence === true,
+        },
         evaluator
       );
       return res.json(result);

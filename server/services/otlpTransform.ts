@@ -134,6 +134,7 @@ export function otlpToSpans(body: any): Span[] {
           spanId,
           ...(parentSpanId ? { parentSpanId } : {}),
           name: sp?.name || '',
+          ...(sp?.kind !== undefined ? { kind: sp.kind } : {}),
           startTime,
           endTime,
           duration: endMs >= startMs ? endMs - startMs : undefined,

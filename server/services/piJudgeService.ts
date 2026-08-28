@@ -84,6 +84,10 @@ export async function evaluateWithPi(
   request: JudgeRequest,
   evaluator?: Evaluator
 ): Promise<JudgeResponse> {
+  console.warn(
+    '[DEPRECATED] The plain pi judge spawns an unrestricted CLI with filesystem/shell tools. ' +
+    'Use the agent evidence judge (provider: "agent") with restricted in-process bash instead.'
+  );
   const { trajectory, expectedOutcomes, expectedTrajectory, logs } = request;
 
   debug('PiJudge', '========== PI JUDGE REQUEST ==========');

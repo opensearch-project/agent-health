@@ -416,6 +416,51 @@ describe('Evaluation Service Index', () => {
       expect(result.sessionId).toBe('sess-strategy-d');
     });
 
+    it.each([
+      {
+        label: 'prefers per-run connector metadata over the static cwd',
+        metadata: { workspaceDir: '/tmp/per-run-fixture' },
+        expected: '/tmp/per-run-fixture',
+      },
+      {
+        label: 'falls back to the static cwd when metadata omits workspaceDir',
+        metadata: { sessionId: 'no-workspace-reported' },
+        expected: '/repo/static-fixture',
+      },
+    ])('$label for judge evidence', async ({ metadata, expected }) => {
+      const mockConnector = {
+        type: 'mock',
+        execute: jest.fn().mockResolvedValue({
+          trajectory: [{ type: 'response', content: 'Done', timestamp: new Date().toISOString() }],
+          runId: 'workspace-run',
+          rawEvents: [],
+          metadata,
+        }),
+      };
+      const mockRegistry = { getForAgent: jest.fn().mockReturnValue(mockConnector) };
+      const { callBedrockJudge } = require('@/services/evaluation/bedrockJudge');
+
+      await runEvaluationWithConnector(
+        { ...mockAgent, connectorConfig: { cwd: '/repo/static-fixture' } } as any,
+        'claude-3-sonnet',
+        mockTestCase,
+        jest.fn(),
+        { registry: mockRegistry }
+      );
+
+      expect(callBedrockJudge).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.any(Object),
+        undefined,
+        expect.any(Function),
+        expect.any(String),
+        undefined,
+        'workspace-run',
+        expect.any(Array),
+        expect.objectContaining({ workspaceDir: expected, metadata })
+      );
+    });
+
     it('should handle connector execution errors', async () => {
       const mockConnector = {
         type: 'rest',
