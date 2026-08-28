@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+- Context items can declare `prompt`, `connector`, or `documentation` dispositions so payloads and reviewer UI accurately distinguish delivered content from directives and Markdown documentation.
+
 ## [0.6.0] - 2026-08-27
 
 ### Added

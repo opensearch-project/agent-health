@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TestCase, TrajectoryStep, AgentHooks } from '@/types';
+import type { AgentContextItem, TestCase, TrajectoryStep, AgentHooks } from '@/types';
+
+/** Context that is part of the agent payload. Absent disposition preserves legacy behavior. */
+export const agentPromptContext = (context?: AgentContextItem[]): AgentContextItem[] =>
+  (context ?? []).filter(item => !item.disposition || item.disposition === 'prompt');
 
 // ============ Connector Protocol Types ============
 

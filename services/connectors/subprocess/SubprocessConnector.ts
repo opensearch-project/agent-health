@@ -12,6 +12,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { ToolCallStatus } from '@/types';
 import type { TrajectoryStep } from '@/types';
 import { BaseConnector } from '@/services/connectors/base/BaseConnector';
+import { agentPromptContext } from '@/services/connectors/types';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -65,8 +66,8 @@ export class SubprocessConnector extends BaseConnector {
     let prompt = request.testCase.initialPrompt;
 
     // Add context if available
-    if (request.testCase.context && request.testCase.context.length > 0) {
-      const contextStr = request.testCase.context
+    if (agentPromptContext(request.testCase.context).length > 0) {
+      const contextStr = agentPromptContext(request.testCase.context)
         .map(c => `${c.description}: ${c.value}`)
         .join('\n');
       prompt = `Context:\n${contextStr}\n\nQuestion: ${prompt}`;

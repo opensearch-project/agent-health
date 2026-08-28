@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { TestCase } from '@/types';
 import { getLabelColor, formatDate } from '@/lib/utils';
+import { Markdown } from '@/components/ui/markdown';
 
 interface TestCaseDetailPanelProps {
   testCase: TestCase;
@@ -80,21 +81,40 @@ export const TestCaseDetailPanel: React.FC<TestCaseDetailPanelProps> = ({ testCa
       )}
 
       {/* Context */}
-      {testCase.context && testCase.context.length > 0 && (
-        <div className="space-y-1">
-          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Context ({testCase.context.length})</h4>
-          <div className="space-y-2">
-            {testCase.context.map((ctx, i) => (
-              <Card key={i} className="bg-muted/30">
-                <CardContent className="p-2">
+      {testCase.context && testCase.context.length > 0 && (() => {
+        const delivered = testCase.context.filter(ctx => !ctx.disposition || ctx.disposition === 'prompt');
+        const directives = testCase.context.filter(ctx => ctx.disposition === 'connector');
+        const documentation = testCase.context.filter(ctx => ctx.disposition === 'documentation');
+        return (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground" data-testid="context-delivery-summary">
+              Agent receives: prompt + {delivered.length} context items · directives: {directives.length} · documentation: {documentation.length}
+            </p>
+            {delivered.length > 0 && <div className="space-y-2">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Delivered to agent</h4>
+              {delivered.map((ctx, i) => (
+                <Card key={i} className="bg-muted/30"><CardContent className="p-2">
                   <p className="text-xs font-medium text-muted-foreground mb-1">{ctx.description}</p>
                   <pre className="text-xs overflow-x-auto max-h-20 overflow-y-auto">{ctx.value.slice(0, 200)}{ctx.value.length > 200 ? '...' : ''}</pre>
-                </CardContent>
-              </Card>
-            ))}
+                </CardContent></Card>
+              ))}
+            </div>}
+            {directives.length > 0 && <div className="space-y-2">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Connector directive — not delivered</h4>
+              <div className="flex flex-wrap gap-2">{directives.map((ctx, i) => (
+                <Badge key={i} variant="outline" className="font-mono text-xs">{ctx.description}: {ctx.value}</Badge>
+              ))}</div>
+            </div>}
+            {documentation.length > 0 && <div className="space-y-2">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Documentation — not delivered</h4>
+              {documentation.map((ctx, i) => <Card key={i} className="bg-muted/30"><CardContent className="p-3">
+                <p className="text-xs font-medium text-muted-foreground mb-2">{ctx.description}</p>
+                <Markdown className="text-xs">{ctx.value}</Markdown>
+              </CardContent></Card>)}
+            </div>}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Tools */}
       {testCase.tools && testCase.tools.length > 0 && (

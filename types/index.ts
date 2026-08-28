@@ -517,9 +517,13 @@ export interface TestCaseRun {
 // Alias for backwards compatibility during migration
 export type EvaluationReport = TestCaseRun;
 
+export type ContextItemDisposition = 'prompt' | 'connector' | 'documentation';
+
 export interface AgentContextItem {
   description: string;
   value: string; // JSON stringified context data
+  /** How this item is consumed. Absent is equivalent to `prompt`. */
+  disposition?: ContextItemDisposition;
 }
 
 // Tool definition matching AG-UI/CopilotKit format

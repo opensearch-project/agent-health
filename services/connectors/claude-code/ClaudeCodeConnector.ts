@@ -11,6 +11,7 @@
 import type { TrajectoryStep } from '@/types';
 import { ToolCallStatus } from '@/types';
 import { SubprocessConnector } from '@/services/connectors/subprocess/SubprocessConnector';
+import { agentPromptContext } from '@/services/connectors/types';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -104,9 +105,9 @@ export class ClaudeCodeConnector extends SubprocessConnector {
     const parts: string[] = [];
 
     // Add system context if available
-    if (request.testCase.context && request.testCase.context.length > 0) {
+    if (agentPromptContext(request.testCase.context).length > 0) {
       parts.push('## Context');
-      for (const ctx of request.testCase.context) {
+      for (const ctx of agentPromptContext(request.testCase.context)) {
         parts.push(`**${ctx.description}:**`);
         parts.push(ctx.value);
         parts.push('');

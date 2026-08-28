@@ -28,7 +28,7 @@ export interface TestOptions {
   /** Free-form description shown in the UI. */
   description?: string;
   /** Additional context items passed to the agent alongside the prompt. */
-  context?: { description: string; value: string }[];
+  context?: { description: string; value: string; disposition?: 'prompt' | 'connector' | 'documentation' }[];
   /**
    * Labels for filtering and grouping. Use prefixed strings for what was
    * previously `category` and `difficulty`:
