@@ -612,6 +612,9 @@ export async function executeRun(
           // Eval test_case span traceId — Strategy A correlator for the trace
           // poller (see evaluationRunner for details).
           (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
+          (report as any).traceStatus = agentConfig.useTraces
+            ? ((report as any).traceStatus ?? ((report as any).spans?.length ? 'available' : 'pending'))
+            : 'not_configured';
 
           // Save the report to OpenSearch and get the actual stored ID
           const savedReport = await saveReportWithClient(client, report, {
@@ -629,7 +632,7 @@ export async function executeRun(
           // No runId requirement: the poller correlates via the report's
           // sessionId / eval traceId / service-window hints when Strategy B
           // is unavailable (REST-connector reports never carry a runId).
-          if (!hasDeterministicEval && savedReport.metricsStatus === 'pending') {
+          if (agentConfig.useTraces === true && !hasDeterministicEval && savedReport.metricsStatus === 'pending') {
             const pollPromise = startTracePollingForReport(savedReport, testCase, client, benchmark, run);
             // Attach .catch to prevent unhandled rejection if cancelled/errored before allSettled
             pendingTracePolls.push(pollPromise.catch(() => {}));
@@ -847,6 +850,9 @@ async function saveReportWithModule(storage: IStorageModule, report: any): Promi
     rawEvents: report.rawEvents || [],
     logs: report.logs || report.openSearchLogs,
     improvementStrategies: report.improvementStrategies,
+    matcherResults: report.matcherResults,
+    performanceMetrics: report.performanceMetrics,
+    traceStatus: report.traceStatus,
     // Same fix as the placeholder-update path: pass through the full
     // judge sidecar (rawResponse, extraFields, judgeDebug, parsedMetrics).
     llmJudgeResponse: report.llmJudgeResponse,
@@ -923,6 +929,9 @@ export async function runSingleUseCase(
   (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
   // Eval test_case span traceId — Strategy A correlator for the trace poller.
   (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
+  (report as any).traceStatus = agentConfig.useTraces
+    ? ((report as any).traceStatus ?? ((report as any).spans?.length ? 'available' : 'pending'))
+    : 'not_configured';
 
   // If a placeholder run was pre-created, update it instead of creating a new one.
   // We use the storage-layer field names (traceId, etc.) to match `saveReportWithModule`
@@ -962,6 +971,9 @@ export async function runSingleUseCase(
       rawEvents: report.rawEvents || [],
       logs: report.logs || report.openSearchLogs,
       improvementStrategies: report.improvementStrategies,
+      matcherResults: report.matcherResults,
+      performanceMetrics: report.performanceMetrics,
+      traceStatus: report.traceStatus,
       // The full judge response (rawResponse, parsedMetrics, extraFields,
       // judgeDebug, ...) lives on `llmJudgeResponse` and was previously
       // dropped by the placeholder-update path — callers using
@@ -995,7 +1007,7 @@ export async function runSingleUseCase(
 
   // Start trace polling for trace-mode runs. No runId requirement — see
   // startTracePollingForReportWithModule.
-  if (savedReport.metricsStatus === 'pending') {
+  if (agentConfig.useTraces === true && savedReport.metricsStatus === 'pending') {
     if (options?.awaitTraces !== false) {
       // CLI/batch mode: block until traces arrive and judge evaluates
       try {
@@ -1037,17 +1049,27 @@ export async function runSingleUseCase(
  * can re-attach polling for reports that were orphaned by a server restart.
  */
 export function startTracePollingForReportWithModule(report: EvaluationReport, testCase: TestCase, storage: IStorageModule): Promise<void> {
+  // Resolve the agent before correlation: no-trace agents intentionally do
+  // not need a correlation id and must never enter the trace timeout path.
+  const config = getConfig();
+  const allAgents = [...config.agents, ...getCustomAgents()];
+  const agentConfig = allAgents.find(a => a.key === report.agentKey);
+
+  if (agentConfig && agentConfig.useTraces !== true) {
+    const hasVerdict = report.passFailStatus === 'passed' || report.passFailStatus === 'failed' ||
+      (report.matcherResults ?? []).some(result => result.method === 'llm-judge' && !result.errored);
+    return Promise.resolve(storage.runs.update(report.id, {
+      traceStatus: 'not_configured',
+      ...(hasVerdict && report.metricsStatus === 'pending' ? { metricsStatus: 'ready' as const } : {}),
+    } as Partial<EvaluationReport>)).then(() => undefined);
+  }
+
   // No runId (e.g. REST-connector agents) is fine now: the poller derives
   // sessionId / service-window correlation hints from the report itself
   // (Strategies C/D), so polling can proceed without Strategy B.
   if (!report.runId) {
     debug('BenchmarkRunner', `No runId for report ${report.id} — polling via sessionId/service-window hints`);
   }
-
-  // Pass agent config to trace poller for hooks
-  const config = getConfig();
-  const allAgents = [...config.agents, ...getCustomAgents()];
-  const agentConfig = allAgents.find(a => a.key === report.agentKey);
 
   return tracePollingManager.startPollingAsync(
     report.id,
@@ -1088,6 +1110,7 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
           // Update report with judge results
           await storage.runs.update(report.id, {
             trajectory: finalTrajectory,
+            traceStatus: 'available',
             metricsStatus: 'ready',
             passFailStatus: judgment.passFailStatus,
             metrics: judgment.metrics,
@@ -1173,16 +1196,24 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
  * Start trace polling for the batch benchmark execution path (uses raw OpenSearch client).
  */
 function startTracePollingForReport(report: EvaluationReport, testCase: TestCase, client: Client, benchmark?: Benchmark, run?: BenchmarkRun): Promise<void> {
+  const config = getConfig();
+  const allAgents = [...config.agents, ...getCustomAgents()];
+  const agentConfig = allAgents.find(a => a.key === report.agentKey);
+
+  if (agentConfig && agentConfig.useTraces !== true) {
+    const hasVerdict = report.passFailStatus === 'passed' || report.passFailStatus === 'failed' ||
+      (report.matcherResults ?? []).some(result => result.method === 'llm-judge' && !result.errored);
+    return Promise.resolve(updateRunWithClient(client, report.id, {
+      traceStatus: 'not_configured',
+      ...(hasVerdict && report.metricsStatus === 'pending' ? { metricsStatus: 'ready' as const } : {}),
+    })).then(() => undefined);
+  }
+
   // See startTracePollingForReportWithModule: no runId → the poller falls
   // back to sessionId/service-window correlation hints from the report.
   if (!report.runId) {
     debug('BenchmarkRunner', `No runId for report ${report.id} — polling via sessionId/service-window hints`);
   }
-
-  // Pass agent config to trace poller for hooks
-  const config = getConfig();
-  const allAgents = [...config.agents, ...getCustomAgents()];
-  const agentConfig = allAgents.find(a => a.key === report.agentKey);
 
   return tracePollingManager.startPollingAsync(
     report.id,
@@ -1209,6 +1240,7 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
           );
           await updateRunWithClient(client, report.id, {
             trajectory: finalTrajectory,
+            traceStatus: 'available',
             metricsStatus: 'ready',
             passFailStatus: judgment.passFailStatus,
             metrics: judgment.metrics,

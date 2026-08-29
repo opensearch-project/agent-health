@@ -454,6 +454,7 @@ export async function runEvaluationWithConnector(
         testCaseId: testCase.id,
         testCaseVersion: testCase.currentVersion ?? 1,
         status: 'completed',
+        traceStatus: 'pending',
         metricsStatus: 'pending',
         trajectory: fullTrajectory,
         metrics: {
@@ -487,6 +488,7 @@ export async function runEvaluationWithConnector(
         testCaseId: testCase.id,
         testCaseVersion: testCase.currentVersion ?? 1,
         status: 'completed',
+        traceStatus: 'not_configured',
         trajectory: fullTrajectory,
         metrics: { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 },
         llmJudgeReasoning: '',
@@ -590,6 +592,7 @@ export async function runEvaluationWithConnector(
       ],
       improvementStrategies: judgment.improvementStrategies,
       llmJudgeResponse,
+      traceStatus: 'not_configured',
       runId: agentRunId || undefined,
       sessionId: agentSessionId || undefined,
       rawEvents,
@@ -651,6 +654,7 @@ export async function runEvaluationWithConnector(
       },
       llmJudgeReasoning: `Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       improvementStrategies: [],
+      traceStatus: agent.useTraces ? 'unavailable' : 'not_configured',
       rawEvents,
       connectorProtocol: connectorType,
     };
@@ -764,6 +768,7 @@ export async function runEvaluation(
         testCaseId: testCase.id,
         testCaseVersion: testCase.currentVersion ?? 1,
         status: 'completed',
+        traceStatus: 'pending',
         metricsStatus: 'pending', // Will be updated after traces are available
         trajectory: fullTrajectory,
         metrics: {
@@ -855,6 +860,7 @@ export async function runEvaluation(
       ],
       improvementStrategies: judgment.improvementStrategies,
       llmJudgeResponse,
+      traceStatus: 'not_configured',
       openSearchLogs: logs,
       runId: agentRunId || undefined,
       sessionId: agentSessionId || undefined,
@@ -883,6 +889,7 @@ export async function runEvaluation(
       },
       llmJudgeReasoning: `Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       improvementStrategies: [],
+      traceStatus: agent.useTraces ? 'unavailable' : 'not_configured',
       rawEvents,
     };
   }

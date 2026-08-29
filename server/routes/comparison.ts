@@ -27,6 +27,7 @@ import {
   type ComparisonRunInput,
 } from '@/server/services/comparisonDeepDiveService';
 import { debug } from '@/lib/debug';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 
 const router = Router();
 
@@ -117,13 +118,14 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
 
     reports.forEach((report: any, i) => {
       const win = resolveWindow(report);
+      const verdict = getJudgeVerdict(report);
       runInputs.push({
         key: keys[i],
         label: report.agentName || report.agentKey || `Run ${keys[i]}`,
         runId: report.runId,
         agents: win.agents,
-        passFailStatus: report.passFailStatus,
-        accuracy: report?.metrics?.accuracy,
+        passFailStatus: verdict?.status,
+        accuracy: verdict?.score ?? undefined,
         toolNames: extractToolNames(report),
         durationMs: report?.performanceMetrics?.durationMs,
         finalOutput: extractFinalOutput(report),

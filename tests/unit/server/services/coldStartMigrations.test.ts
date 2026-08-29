@@ -5,12 +5,14 @@
 
 import {
   computeMergedLabels,
+  deriveHistoricalVerdictPatch,
   migrateCategoryDifficultyToLabels,
+  migratePoisonedReportVerdicts,
   runColdStartMigrations,
   getLastMigrationStats,
 } from '@/server/services/coldStartMigrations';
 import type { IStorageModule } from '@/server/adapters/types';
-import type { TestCase } from '@/types';
+import type { EvaluationReport, TestCase } from '@/types';
 
 function tcDoc(overrides: Partial<TestCase>): TestCase {
   return {
@@ -167,6 +169,112 @@ describe('migrateCategoryDifficultyToLabels', () => {
   });
 });
 
+function reportDoc(overrides: Partial<EvaluationReport> = {}): EvaluationReport {
+  return {
+    id: 'report-1',
+    timestamp: '2026-08-24T22:42:33.122Z',
+    testCaseId: 'tc-1',
+    status: 'completed',
+    agentName: 'Agent',
+    modelName: 'model',
+    trajectory: [],
+    metrics: { accuracy: 0, faithfulness: 0 },
+    metricsStatus: 'error',
+    llmJudgeReasoning: '**Evaluator could not run.** Reason (trace_timeout)',
+    matcherResults: [{
+      description: 'judge: expected outcomes',
+      method: 'llm-judge',
+      pass: true,
+      score: 1,
+      judgeMetrics: { accuracy: 100 },
+    }],
+    ...overrides,
+  };
+}
+
+describe('migratePoisonedReportVerdicts', () => {
+  it('derives PASS/100%, clears poisoned metrics, and retains trace diagnostics', () => {
+    expect(deriveHistoricalVerdictPatch(reportDoc())).toEqual({
+      passFailStatus: 'passed',
+      metrics: { accuracy: 100 },
+      metricsStatus: 'ready',
+      traceStatus: 'unavailable',
+    });
+  });
+
+  it('is idempotent once the authoritative fields are healed', () => {
+    expect(deriveHistoricalVerdictPatch(reportDoc({
+      passFailStatus: 'passed',
+      metrics: { accuracy: 100 },
+      metricsStatus: 'ready',
+      traceStatus: 'unavailable',
+    }))).toBeNull();
+  });
+
+  it('skips genuine judge errors with no successful gating verdict', () => {
+    expect(deriveHistoricalVerdictPatch(reportDoc({
+      matcherResults: [{
+        description: 'judge failed',
+        method: 'llm-judge',
+        pass: false,
+        errored: true,
+        errorMessage: 'Bedrock validation failed',
+      }],
+    }))).toBeNull();
+  });
+
+  it('continues with an offset after a full page', async () => {
+    const fullPage = Array.from({ length: 500 }, (_, index) => reportDoc({
+      id: `healed-${index}`,
+      passFailStatus: 'passed',
+      metrics: { accuracy: 100 },
+      metricsStatus: 'ready',
+      traceStatus: 'unavailable',
+    }));
+    const poisoned = reportDoc({ id: 'page-two' });
+    const storage = {
+      runs: {
+        getAll: jest.fn()
+          .mockResolvedValueOnce({ items: fullPage, total: 501 })
+          .mockResolvedValueOnce({ items: [poisoned], total: 501 }),
+        update: jest.fn().mockResolvedValue(poisoned),
+      },
+    } as unknown as IStorageModule;
+
+    const stat = await migratePoisonedReportVerdicts(storage);
+    expect(stat).toMatchObject({ scanned: 501, updated: 1, skipped: 500 });
+    expect(storage.runs.getAll).toHaveBeenNthCalledWith(2, { from: 500, size: 500 });
+  });
+
+  it('pages through reports and only writes documents needing repair', async () => {
+    const poisoned = reportDoc({ id: 'poisoned' });
+    const healed = reportDoc({
+      id: 'healed',
+      passFailStatus: 'passed',
+      metrics: { accuracy: 100 },
+      metricsStatus: 'ready',
+      traceStatus: 'unavailable',
+    });
+    const storage = {
+      runs: {
+        getAll: jest.fn()
+          .mockResolvedValueOnce({ items: [poisoned, healed], total: 2 })
+          .mockResolvedValue({ items: [], total: 0 }),
+        update: jest.fn().mockResolvedValue(poisoned),
+      },
+    } as unknown as IStorageModule;
+
+    const stat = await migratePoisonedReportVerdicts(storage);
+    expect(stat).toMatchObject({ scanned: 2, updated: 1, skipped: 1, errors: 0 });
+    expect(storage.runs.update).toHaveBeenCalledWith('poisoned', {
+      passFailStatus: 'passed',
+      metrics: { accuracy: 100 },
+      metricsStatus: 'ready',
+      traceStatus: 'unavailable',
+    });
+  });
+});
+
 describe('runColdStartMigrations', () => {
   it('runs every migration and exposes results via getLastMigrationStats', async () => {
     const storage: Partial<IStorageModule> = {
@@ -174,13 +282,21 @@ describe('runColdStartMigrations', () => {
         getAll: jest.fn().mockResolvedValue({ items: [], total: 0 }),
         update: jest.fn(),
       } as any,
+      runs: {
+        getAll: jest.fn().mockResolvedValue({ items: [], total: 0 }),
+        update: jest.fn(),
+      } as any,
     };
     const stats = await runColdStartMigrations(storage as IStorageModule);
-    expect(stats).toHaveLength(1);
-    expect(stats[0].name).toBe('category-difficulty-to-labels');
+    expect(stats.map(stat => stat.name)).toEqual([
+      'category-difficulty-to-labels',
+      'poisoned-report-verdicts',
+    ]);
 
     const last = getLastMigrationStats();
-    expect(last).toHaveLength(1);
-    expect(last[0].name).toBe('category-difficulty-to-labels');
+    expect(last.map(stat => stat.name)).toEqual([
+      'category-difficulty-to-labels',
+      'poisoned-report-verdicts',
+    ]);
   });
 });

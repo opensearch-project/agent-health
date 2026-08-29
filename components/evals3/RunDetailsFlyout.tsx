@@ -15,19 +15,7 @@ import React from 'react';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { EvaluationReport, TestCase } from '@/types';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
-
-type ResultStatus = 'passed' | 'failed' | 'errored' | 'running' | 'pending';
-
-function getResultStatus(report: EvaluationReport): ResultStatus {
-  // Issue #242: an evaluator-error report has `metricsStatus: 'error'` and
-  // `passFailStatus: null`. Light up the amber `ERRORED` chip on the
-  // flyout pill instead of conflating with `'failed'`.
-  if (report.metricsStatus === 'error') return 'errored';
-  if (report.passFailStatus === 'passed') return 'passed';
-  if (report.passFailStatus === 'failed') return 'failed';
-  if (report.status === 'running') return 'running';
-  return 'pending';
-}
+import { getResultStatus } from './ResultStatus';
 
 interface RunDetailsFlyoutProps {
   report: EvaluationReport;
@@ -67,7 +55,7 @@ export const RunDetailsFlyout: React.FC<RunDetailsFlyoutProps> = ({
               <TestCaseInspectorPanel
                 report={report}
                 testCase={testCase}
-                status={getResultStatus(report)}
+                status={getResultStatus({ status: report.status }, report)}
               />
             </div>
           </div>

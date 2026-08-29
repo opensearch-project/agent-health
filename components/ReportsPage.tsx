@@ -16,6 +16,7 @@ import {
   GitCompare,
   ChevronRight,
   AlertCircle,
+  AlertTriangle,
   Loader2
 } from 'lucide-react';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
@@ -26,6 +27,7 @@ import { formatDate } from '@/lib/utils';
 import { RunScore } from '@/components/RunScore';
 import { fetchBatchMetrics, formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import { RunDetailsPanel } from './RunDetailsPanel';
+import { getJudgeVerdict, getTraceNotice } from '@/lib/reportVerdict';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -78,7 +80,7 @@ export const ReportsPage: React.FC = () => {
         }
         const filteredReports = filterStatus === 'all'
           ? allReports
-          : allReports.filter(r => r.passFailStatus === filterStatus);
+          : allReports.filter(r => getJudgeVerdict(r)?.status === filterStatus);
         setReports(filteredReports);
       } finally {
         setIsLoading(false);
@@ -374,6 +376,9 @@ export const ReportsPage: React.FC = () => {
                 {reports.map((report) => {
                   const testCase = testCases.find(tc => tc.id === report.testCaseId);
                   const isSelected = selectedReports.has(report.id);
+                  const verdict = getJudgeVerdict(report);
+                  const traceNotice = getTraceNotice(report);
+                  const evaluatorErrored = !verdict && report.metricsStatus === 'error';
 
                   return (
                     <TableRow
@@ -401,30 +406,46 @@ export const ReportsPage: React.FC = () => {
                         {DEFAULT_CONFIG.models[report.modelName]?.display_name || report.modelName}
                       </TableCell>
                       <TableCell>
+                        <div className="flex items-center gap-1.5">
                         <Badge
-                          variant={report.passFailStatus === 'passed' ? 'default' : 'destructive'}
-                          className={report.passFailStatus === 'passed'
+                          title={evaluatorErrored ? 'Evaluator could not produce a judge verdict' : undefined}
+                          variant={verdict?.status === 'passed' ? 'default' : 'destructive'}
+                          className={verdict?.status === 'passed'
                             ? 'bg-blue-900/30 text-opensearch-blue'
-                            : 'bg-red-900/30 text-red-400'}
+                            : evaluatorErrored
+                              ? 'bg-amber-900/30 text-amber-400'
+                              : 'bg-red-900/30 text-red-400'}
                         >
-                          {report.passFailStatus === 'passed' ? (
+                          {verdict?.status === 'passed' ? (
                             <CheckCircle2 size={12} className="mr-1" />
+                          ) : evaluatorErrored ? (
+                            <AlertTriangle size={12} className="mr-1" />
                           ) : (
                             <XCircle size={12} className="mr-1" />
                           )}
-                          {report.passFailStatus?.toUpperCase() || report.status.toUpperCase()}
+                          {verdict?.status.toUpperCase() || (evaluatorErrored ? 'ERRORED' : report.status.toUpperCase())}
                         </Badge>
+                        {traceNotice && (
+                          <span
+                            title={`${traceNotice.title} — ${traceNotice.description}`}
+                            aria-label={`${traceNotice.title}. ${traceNotice.description}`}
+                            className={traceNotice.tone === 'warning' ? 'text-amber-500' : 'text-muted-foreground'}
+                          >
+                            {traceNotice.tone === 'warning' ? <AlertTriangle size={12} /> : <AlertCircle size={12} />}
+                          </span>
+                        )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-center">
                         <RunScore
-                          metrics={report.metrics as Record<string, number | undefined>}
+                          report={report}
                           showLabel={false}
                           className="text-sm font-semibold text-opensearch-blue"
                         />
                       </TableCell>
                       <TableCell className="text-center">
                         <span className="text-sm font-semibold text-blue-400">
-                          {report.metrics.faithfulness}%
+                          {report.metrics.faithfulness != null ? `${report.metrics.faithfulness}%` : '—'}
                         </span>
                       </TableCell>
                       <TableCell className="text-center text-sm text-muted-foreground">

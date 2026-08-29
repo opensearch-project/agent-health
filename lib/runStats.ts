@@ -19,6 +19,7 @@
  */
 
 import type { BenchmarkRun, EvaluationReport, RunStats as RunStatsType } from '@/types/index.js';
+import { getJudgeVerdict } from '@/lib/reportVerdict.js';
 
 /**
  * Statistics for a benchmark run
@@ -129,27 +130,33 @@ export function calculateRunStats(
         return;
       }
 
-      // Check if evaluation is still pending (trace mode)
+      // A judge verdict is authoritative even when a later trace timeout left
+      // metricsStatus=error. matcherResults also recovers reports whose flat
+      // passFailStatus was cleared by that timeout patch.
+      const verdict = getJudgeVerdict(report);
+      if (verdict?.status === 'passed') {
+        passed++;
+        return;
+      }
+      if (verdict?.status === 'failed') {
+        failed++;
+        return;
+      }
+
+      // No verdict yet: lifecycle state controls pending vs genuine error.
       if (report.metricsStatus === 'pending' || report.metricsStatus === 'calculating') {
         pending++;
         return;
       }
-
-      // Issue #242: evaluator could not produce a verdict (judge validation
-      // error, trace timeout, etc.). Excluded from passed/failed so
-      // misconfigured evaluators don't masquerade as agent failures.
       if (report.metricsStatus === 'error') {
         errored++;
         return;
       }
 
-      // Count based on passFailStatus from LLM judge
-      if (report.passFailStatus === 'passed') {
-        passed++;
-      } else {
-        // passFailStatus === 'failed' or undefined (treat as failed)
-        failed++;
-      }
+      // Preserve the legacy ready/completed fallback for reports that predate
+      // explicit verdict fields. Historical poisoned reports do not reach this
+      // branch because matcherResults was handled above.
+      failed++;
     } else {
       // No reportId but status is completed - treat as pending
       pending++;

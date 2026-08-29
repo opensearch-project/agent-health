@@ -40,10 +40,17 @@
 import React from 'react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getRunOverallScore } from '@/lib/utils';
+import { getJudgeVerdict, type VerdictReport } from '@/lib/reportVerdict';
 
 export interface RunScoreProps {
-  /** The metrics object straight off a TestCaseRun / EvaluationReport. */
-  metrics: Record<string, number | undefined> | undefined | null;
+  /**
+   * The report is preferred when available: matcherResults is the
+   * authoritative verdict/score and survives historical trace-timeout
+   * poisoning of the flat metrics fields.
+   */
+  report?: VerdictReport | null;
+  /** Legacy metrics-only input for callers that do not have a report. */
+  metrics?: Record<string, number | undefined> | undefined | null;
   /**
    * Optional class name applied to the visible label. Each call site uses a
    * different size / color (xs muted in lists, lg in detail headers, etc.),
@@ -84,13 +91,16 @@ export function formatMetricsBreakdown(
 }
 
 export const RunScore: React.FC<RunScoreProps> = ({
+  report,
   metrics,
   className,
   showLabel = true,
   silentWhenMissing = false,
 }) => {
-  const score = getRunOverallScore(metrics);
-  const breakdown = formatMetricsBreakdown(metrics);
+  const effectiveMetrics = metrics ?? report?.metrics;
+  const verdict = getJudgeVerdict(report);
+  const score = verdict?.score ?? getRunOverallScore(effectiveMetrics);
+  const breakdown = formatMetricsBreakdown(effectiveMetrics);
   const metricCount = breakdown.length;
 
   // No metrics yet — render `—` so the user knows the run hasn't been
@@ -115,8 +125,9 @@ export const RunScore: React.FC<RunScoreProps> = ({
   // `accuracy`), we show the metric name verbatim instead of a redundant
   // "average of 1 metric". For multi-metric evaluators we list each metric
   // and its individual value so the aggregate is auditable.
-  const tooltipBody =
-    metricCount === 1
+  const tooltipBody = verdict?.score != null
+    ? `Judge-authoritative score from ${verdict.source === 'matcherResults' ? 'matcher results' : 'the report verdict'}.`
+    : metricCount === 1
       ? `Metric "${breakdown[0]}" emitted by the run's evaluator.`
       : `Average of ${metricCount} metrics emitted by the run's evaluator:\n${breakdown.join('\n')}`;
 

@@ -8,6 +8,7 @@ import {
   executeRun,
   runBenchmark,
   runSingleUseCase,
+  startTracePollingForReportWithModule,
 } from '@/services/benchmarkRunner';
 import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress } from '@/types';
 
@@ -79,12 +80,14 @@ const mockConfig = {
       name: 'Test Agent',
       endpoint: 'http://test-agent.example.com',
       headers: { 'X-Agent': 'test' },
+      useTraces: true,
     },
     {
       key: 'other-agent',
       name: 'Other Agent',
       endpoint: 'http://other-agent.example.com',
       headers: {},
+      useTraces: false,
     },
   ],
   models: {
@@ -952,7 +955,12 @@ describe('Experiment Runner', () => {
       const run = createBenchmarkRun('run-1');
 
       mockRunEvaluationWithConnector.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {}, runId: 'trace-run-id', metricsStatus: 'pending' });
-      mockRunsCreate.mockResolvedValue({ id: 'saved-report-1' });
+      mockRunsCreate.mockResolvedValue({
+        id: 'saved-report-1',
+        agentKey: 'test-agent',
+        runId: 'trace-run-id',
+        metricsStatus: 'pending',
+      });
 
       await runSingleUseCase(run, testCase, mockStorageModule);
 
@@ -972,7 +980,12 @@ describe('Experiment Runner', () => {
       });
 
       mockRunEvaluationWithConnector.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {}, runId: 'trace-run-id', metricsStatus: 'pending' });
-      mockRunsCreate.mockResolvedValue({ id: 'saved-report-1' });
+      mockRunsCreate.mockResolvedValue({
+        id: 'saved-report-1',
+        agentKey: 'test-agent',
+        runId: 'trace-run-id',
+        metricsStatus: 'pending',
+      });
 
       // Measure time — with awaitTraces: false, should return nearly instantly
       const start = Date.now();
@@ -1320,6 +1333,96 @@ describe('Experiment Runner', () => {
   });
 
   describe('trace polling callbacks', () => {
+    it('finalizes a pending judged report without polling when the report agent has useTraces=false', async () => {
+      const report = {
+        id: 'no-trace-report',
+        agentKey: 'other-agent',
+        metricsStatus: 'pending',
+        passFailStatus: 'passed',
+        matcherResults: [{ description: 'judge: expected', method: 'llm-judge', pass: true }],
+      } as any;
+      mockRunsUpdate.mockResolvedValue({ ...report, metricsStatus: 'ready', traceStatus: 'not_configured' });
+
+      await startTracePollingForReportWithModule(report, createTestCase('tc-1'), mockStorageModule);
+
+      expect(mockStartPollingAsync).not.toHaveBeenCalled();
+      expect(mockRunsUpdate).toHaveBeenCalledWith('no-trace-report', {
+        traceStatus: 'not_configured',
+        metricsStatus: 'ready',
+      });
+    });
+
+    it('recognizes a matcher-only verdict when finalizing a no-trace report', async () => {
+      const report = {
+        id: 'matcher-only-report',
+        agentKey: 'other-agent',
+        metricsStatus: 'pending',
+        matcherResults: [
+          { description: 'errored judge', method: 'llm-judge', pass: false, errored: true },
+          { description: 'authoritative judge', method: 'llm-judge', pass: true },
+        ],
+      } as any;
+      mockRunsUpdate.mockResolvedValue({ ...report, metricsStatus: 'ready', traceStatus: 'not_configured' });
+
+      await startTracePollingForReportWithModule(report, createTestCase('tc-1'), mockStorageModule);
+
+      expect(mockStartPollingAsync).not.toHaveBeenCalled();
+      expect(mockRunsUpdate).toHaveBeenCalledWith('matcher-only-report', {
+        traceStatus: 'not_configured',
+        metricsStatus: 'ready',
+      });
+    });
+
+    it('does not declare deferred metrics ready when a no-trace report has no verdict', async () => {
+      const report = {
+        id: 'unjudged-no-trace-report',
+        agentKey: 'other-agent',
+        metricsStatus: 'pending',
+        matcherResults: [{ description: 'errored judge', method: 'llm-judge', pass: false, errored: true }],
+      } as any;
+      mockRunsUpdate.mockResolvedValue({ ...report, traceStatus: 'not_configured' });
+
+      await startTracePollingForReportWithModule(report, createTestCase('tc-1'), mockStorageModule);
+
+      expect(mockStartPollingAsync).not.toHaveBeenCalled();
+      expect(mockRunsUpdate).toHaveBeenCalledWith('unjudged-no-trace-report', {
+        traceStatus: 'not_configured',
+      });
+    });
+
+    it('skips polling and records a neutral marker when useTraces is false', async () => {
+      const testCase = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = createBenchmarkRun('run-1');
+      mockConfig.agents[0].useTraces = false;
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase]);
+      mockRunEvaluationWithConnector.mockResolvedValue({
+        id: 'report-1',
+        testCaseId: 'tc-1',
+        status: 'completed',
+        passFailStatus: 'passed',
+        matcherResults: [{ description: 'judge: expected', method: 'llm-judge', pass: true, score: 1 }],
+        trajectory: [],
+        metrics: { accuracy: 100 },
+        metricsStatus: 'pending',
+        runId: 'run-id',
+      });
+      mockSaveReportWithClient.mockImplementation((_client, saved) => Promise.resolve({ ...saved, id: 'saved-report' }));
+
+      try {
+        await executeRun(experiment, run, jest.fn(), { client: mockClient });
+      } finally {
+        mockConfig.agents[0].useTraces = true;
+      }
+
+      expect(mockStartPollingAsync).not.toHaveBeenCalled();
+      expect(mockSaveReportWithClient).toHaveBeenCalledWith(
+        mockClient,
+        expect.objectContaining({ traceStatus: 'not_configured' }),
+        expect.any(Object),
+      );
+    });
+
     it('should call Bedrock judge when traces are found', async () => {
       const testCase = createTestCase('tc-1');
       const experiment = createExperiment(['tc-1']);

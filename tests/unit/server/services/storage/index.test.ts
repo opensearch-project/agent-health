@@ -490,16 +490,27 @@ describe('Storage Service', () => {
       );
     });
 
-    it('should include trace-mode fields when present', async () => {
+    it('should preserve trace diagnostics and report-page fields', async () => {
       mockClient.index.mockResolvedValue({ body: { result: 'created' } });
 
       const report = {
         testCaseId: 'tc-1',
-        metricsStatus: 'success',
+        metricsStatus: 'ready',
+        traceStatus: 'not_configured',
         traceFetchAttempts: 3,
         lastTraceFetchAt: '2024-01-01T00:00:00Z',
         traceError: null,
         spans: [{ span: 1 }],
+        performanceMetrics: { durationMs: 1250, judgeDurationMs: 250 },
+        llmJudgeResponse: {
+          modelId: 'judge-model',
+          timestamp: '2024-01-01T00:00:00Z',
+          promptTokens: 12,
+          completionTokens: 4,
+          latencyMs: 250,
+          rawResponse: '{}',
+          parsedMetrics: { accuracy: 100 },
+        },
       };
 
       await saveReport(report);
@@ -507,11 +518,14 @@ describe('Storage Service', () => {
       expect(mockClient.index).toHaveBeenCalledWith(
         expect.objectContaining({
           body: expect.objectContaining({
-            metricsStatus: 'success',
+            metricsStatus: 'ready',
+            traceStatus: 'not_configured',
             traceFetchAttempts: 3,
             lastTraceFetchAt: '2024-01-01T00:00:00Z',
             traceError: null,
             spans: [{ span: 1 }],
+            performanceMetrics: report.performanceMetrics,
+            llmJudgeResponse: report.llmJudgeResponse,
           }),
         })
       );

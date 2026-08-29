@@ -25,7 +25,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { Benchmark, BenchmarkRun, TestCase, EvaluationReport } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { getLabelColor, formatDate, getModelName, getRunOverallScore } from '@/lib/utils';
+import { getLabelColor, formatDate, getModelName } from '@/lib/utils';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 import { RunScore } from '@/components/RunScore';
 import { RunDetailsFlyout } from './RunDetailsFlyout';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
@@ -94,9 +95,9 @@ export const BenchmarkRunDetailPage: React.FC = () => {
           reportId: runResult?.reportId || null,
           report,
           status: getResultStatus(runResult, report),
-          // Mean of every populated metric on this report. Works for any
-          // evaluator without per-evaluator config lookup.
-          score: getRunOverallScore(report?.metrics as Record<string, number | undefined> | undefined),
+          // matcherResults/passFailStatus is authoritative; zeroed metrics
+          // from historical trace timeouts must not poison this row.
+          score: getJudgeVerdict(report)?.score ?? null,
         };
       });
 
@@ -292,7 +293,7 @@ export const BenchmarkRunDetailPage: React.FC = () => {
                 <div className="w-20 shrink-0 text-right">
                   {r.report
                     ? <RunScore
-                        metrics={r.report.metrics as Record<string, number | undefined>}
+                        report={r.report}
                         showLabel={false}
                         className={`text-sm font-semibold tabular-nums ${r.score !== null && r.score >= 50 ? 'text-green-500' : 'text-red-500'}`}
                       />

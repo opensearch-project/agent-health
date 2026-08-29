@@ -20,7 +20,8 @@
  *   between the QuickRunModal and `agent-health run`.
  */
 
-import type { TestCase, TrajectoryStep, EvaluationReport, EvaluationMetrics, ImprovementStrategy, PassFailStatus, MetricsStatus } from '@/types';
+import type { TestCase, TrajectoryStep, EvaluationReport, EvaluationMetrics, ImprovementStrategy, PassFailStatus, MetricsStatus, TraceStatus } from '@/types';
+import type { MatcherResult } from '@/lib/matchers/types';
 import { debug } from '@/lib/debug';
 
 /**
@@ -66,6 +67,9 @@ export interface ServerEvaluationReport {
   passFailStatus?: PassFailStatus;
   metricsStatus?: MetricsStatus;
   metrics: EvaluationMetrics;
+  matcherResults?: MatcherResult[];
+  traceStatus?: TraceStatus;
+  traceError?: string;
   trajectorySteps: number;
   llmJudgeReasoning?: string;
   improvementStrategies?: ImprovementStrategy[];

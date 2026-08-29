@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { X, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getJudgeReasoningText } from '@/lib/matchers/judgeAccessor';
 import { Button } from '@/components/ui/button';
@@ -129,7 +130,7 @@ export const TrajectoryCompareView: React.FC<TrajectoryCompareViewProps> = ({
               <div>
                 <h3 className="font-semibold">{leftLabel}</h3>
                 <div className="flex items-center gap-2 mt-1">
-                  {leftReport.passFailStatus === 'passed' ? (
+                  {getJudgeVerdict(leftReport)?.status === 'passed' ? (
                     <Badge className="bg-green-100 text-green-700 border-green-300 dark:bg-green-500/20 dark:text-green-400 dark:border-green-500/30">PASSED</Badge>
                   ) : (
                     <Badge className="bg-red-100 text-red-700 border-red-300 dark:bg-red-500/20 dark:text-red-400 dark:border-red-500/30">FAILED</Badge>
@@ -144,7 +145,7 @@ export const TrajectoryCompareView: React.FC<TrajectoryCompareViewProps> = ({
               <div>
                 <h3 className="font-semibold">{rightLabel}</h3>
                 <div className="flex items-center gap-2 mt-1">
-                  {rightReport.passFailStatus === 'passed' ? (
+                  {getJudgeVerdict(rightReport)?.status === 'passed' ? (
                     <Badge className="bg-green-100 text-green-700 border-green-300 dark:bg-green-500/20 dark:text-green-400 dark:border-green-500/30">PASSED</Badge>
                   ) : (
                     <Badge className="bg-red-100 text-red-700 border-red-300 dark:bg-red-500/20 dark:text-red-400 dark:border-red-500/30">FAILED</Badge>

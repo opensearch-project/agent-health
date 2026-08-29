@@ -11,6 +11,12 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
+import type {
+  LLMJudgeResponse,
+  TestCasePerformanceMetrics,
+  TraceStatus,
+} from '@/types';
+import type { MatcherResult } from '@/lib/matchers/types';
 
 const STORAGE_BASE_URL = ENV_CONFIG.storageApiUrl;
 
@@ -117,8 +123,11 @@ export interface StorageRunAnnotation {
   text: string;
   tags?: string[];
   author?: string;
-  createdAt: string;
-  updatedAt: string;
+  /** OpenSearch shape. */
+  createdAt?: string;
+  updatedAt?: string;
+  /** File-backed TestCaseRun shape. */
+  timestamp?: string;
 }
 
 export interface StorageRun {
@@ -131,9 +140,20 @@ export interface StorageRun {
   testCaseVersionId: string;
   agentId: string;
   modelId: string;
+  modelName?: string;
   iteration: number;
   author?: string;
-  createdAt: string;
+  /** OpenSearch documents use createdAt; file-backed run documents use timestamp. */
+  createdAt?: string;
+  timestamp?: string;
+  agentKey?: string;
+  agentName?: string;
+  agentEndpoint?: string;
+  testCaseVersion?: number;
+  runId?: string;
+  sessionId?: string;
+  judgeModelId?: string;
+  evaluatorId?: string;
   status: 'running' | 'completed' | 'failed';
   passFailStatus?: 'passed' | 'failed';
   traceId?: string;
@@ -145,17 +165,23 @@ export interface StorageRun {
     faithfulness?: number;
     latency_score?: number;
     trajectory_alignment_score?: number;
+    [key: string]: number | undefined;
   };
   annotations?: StorageRunAnnotation[];
   trajectory?: unknown[];
   rawEvents?: unknown[];
   logs?: unknown[];
+  openSearchLogs?: unknown[];
   improvementStrategies?: {
     category: string;
     issue: string;
     recommendation: string;
     priority: 'high' | 'medium' | 'low';
   }[];
+  matcherResults?: MatcherResult[];
+  llmJudgeResponse?: LLMJudgeResponse;
+  performanceMetrics?: TestCasePerformanceMetrics;
+  traceStatus?: TraceStatus;
   connectorProtocol?: string;
 }
 

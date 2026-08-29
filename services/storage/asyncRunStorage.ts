@@ -53,6 +53,7 @@ export interface GetReportsOptions {
  */
 interface TraceModeFields {
   metricsStatus?: string;
+  traceStatus?: string;
   traceFetchAttempts?: number;
   lastTraceFetchAt?: string;
   traceError?: string;
@@ -104,24 +105,28 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
 
   return {
     id: stored.id,
-    name: (stored as any).name,
-    description: (stored as any).description,
-    timestamp: stored.createdAt,
+    name: stored.name,
+    description: stored.description,
+    // File storage returns app-shaped run documents with `timestamp`, while
+    // OpenSearch returns storage-shaped documents with `createdAt`. Reading
+    // only createdAt made every file-backed report header say "Invalid Date".
+    timestamp: stored.createdAt || stored.timestamp || '',
     testCaseId: stored.testCaseId,
-    testCaseVersion: parseInt(stored.testCaseVersionId?.split('-v')[1] || '1'),
+    testCaseVersion: stored.testCaseVersion ?? parseInt(stored.testCaseVersionId?.split('-v')[1] || '1'),
     experimentId: stored.experimentId || undefined,
     experimentRunId: stored.experimentRunId || undefined,
-    agentName: (stored as any).agentName || stored.agentId,
-    agentKey: stored.agentId,
-    modelName: stored.modelId,
-    modelId: stored.modelId,
+    agentName: stored.agentName || stored.agentId,
+    agentKey: stored.agentKey || stored.agentId,
+    agentEndpoint: stored.agentEndpoint,
+    modelName: stored.modelName || stored.modelId,
+    modelId: stored.modelId || stored.modelName || '',
     // Judge model used for this run (PR #390 persists it). Without this
     // mapping, browser-side trace-recovery judging silently fell back to the
     // agent's modelId even when a distinct judge model was configured.
-    judgeModelId: (stored as any).judgeModelId,
+    judgeModelId: stored.judgeModelId,
     status: stored.status,
     passFailStatus: stored.passFailStatus as 'passed' | 'failed' | undefined,
-    evaluatorId: (stored as any).evaluatorId,
+    evaluatorId: stored.evaluatorId,
     trajectory: (stored.trajectory || []) as TrajectoryStep[],
     // Preserve every metric the judge emitted, not just the four legacy keys.
     // Custom evaluators (and even system evaluators other than RCA Default)
@@ -141,7 +146,7 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
       id: ann.id,
       reportId: stored.id,
       text: ann.text,
-      timestamp: ann.createdAt,
+      timestamp: ann.createdAt || ann.timestamp || '',
       tags: ann.tags,
       author: ann.author,
     })),
@@ -153,11 +158,16 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     traceId: (stored as any).traceId,
     sessionId: (stored as any).sessionId,
     rawEvents: stored.rawEvents as any[] | undefined,
-    logs: (stored.logs || []) as OpenSearchLog[],
+    logs: (stored.logs || stored.openSearchLogs || []) as OpenSearchLog[],
     improvementStrategies: stored.improvementStrategies as any[] | undefined,
+    // Preserve the full judge + timing surfaces returned by the file adapter.
+    // The report Overview/header needs these when traces are intentionally off.
+    llmJudgeResponse: stored.llmJudgeResponse,
+    performanceMetrics: stored.performanceMetrics,
     // Per-matcher verdicts captured by the SDK during the test body
-    matcherResults: (stored as any).matcherResults as any[] | undefined,
+    matcherResults: stored.matcherResults,
     // Trace-mode fields
+    traceStatus: stored.traceStatus,
     metricsStatus: storedAny.metricsStatus as 'pending' | 'calculating' | 'ready' | 'error' | undefined,
     traceFetchAttempts: storedAny.traceFetchAttempts,
     lastTraceFetchAt: storedAny.lastTraceFetchAt,
@@ -200,7 +210,17 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
     improvementStrategies: report.improvementStrategies,
   };
 
+  // Preserve report-page fields on both OpenSearch and file-backed paths.
+  if (report.llmJudgeResponse !== undefined) (base as any).llmJudgeResponse = report.llmJudgeResponse;
+  if (report.performanceMetrics !== undefined) (base as any).performanceMetrics = report.performanceMetrics;
+  if (report.judgeModelId !== undefined) (base as any).judgeModelId = report.judgeModelId;
+  if (report.evaluatorId !== undefined) (base as any).evaluatorId = report.evaluatorId;
+  if (report.agentName !== undefined) (base as any).agentName = report.agentName;
+  if (report.agentKey !== undefined) (base as any).agentKey = report.agentKey;
+  if (report.agentEndpoint !== undefined) (base as any).agentEndpoint = report.agentEndpoint;
+
   // Add trace-mode fields if present
+  if (report.traceStatus !== undefined) (base as any).traceStatus = report.traceStatus;
   if (report.metricsStatus !== undefined) base.metricsStatus = report.metricsStatus;
   if ((report as any).sessionId !== undefined) (base as any).sessionId = (report as any).sessionId;
   if (report.traceFetchAttempts !== undefined) base.traceFetchAttempts = report.traceFetchAttempts;
@@ -409,19 +429,15 @@ class AsyncRunStorage {
     if (updates.runId !== undefined) storageUpdates.traceId = updates.runId;
     if ((updates as any).sessionId !== undefined) (storageUpdates as any).sessionId = (updates as any).sessionId;
     if (updates.improvementStrategies !== undefined) storageUpdates.improvementStrategies = updates.improvementStrategies;
-    if ((updates as any).matcherResults !== undefined) (storageUpdates as any).matcherResults = (updates as any).matcherResults;
+    if (updates.matcherResults !== undefined) storageUpdates.matcherResults = updates.matcherResults;
+    if (updates.llmJudgeResponse !== undefined) storageUpdates.llmJudgeResponse = updates.llmJudgeResponse;
+    if (updates.performanceMetrics !== undefined) storageUpdates.performanceMetrics = updates.performanceMetrics;
 
-    // Map metrics
-    if (updates.metrics) {
-      storageUpdates.metrics = {
-        accuracy: updates.metrics.accuracy,
-        faithfulness: updates.metrics.faithfulness,
-        latency_score: updates.metrics.latency_score,
-        trajectory_alignment_score: updates.metrics.trajectory_alignment_score,
-      };
-    }
+    // Preserve every dynamic evaluator metric on update, matching create/read.
+    if (updates.metrics) storageUpdates.metrics = { ...updates.metrics };
 
     // Pass through trace-mode specific fields directly
+    if (updates.traceStatus !== undefined) storageUpdates.traceStatus = updates.traceStatus;
     if (updates.metricsStatus !== undefined) storageUpdates.metricsStatus = updates.metricsStatus;
     if (updates.traceFetchAttempts !== undefined) storageUpdates.traceFetchAttempts = updates.traceFetchAttempts;
     if (updates.lastTraceFetchAt !== undefined) storageUpdates.lastTraceFetchAt = updates.lastTraceFetchAt;

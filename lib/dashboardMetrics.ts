@@ -10,6 +10,7 @@
  */
 
 import { Benchmark, BenchmarkRun, EvaluationReport } from '@/types';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 
 /**
  * Pre-index reports by experimentRunId for O(1) lookup
@@ -107,9 +108,10 @@ function toDateString(timestamp: string): string {
  * Calculate pass rate from a set of reports
  */
 function calculatePassRate(reports: EvaluationReport[]): number {
-  if (reports.length === 0) return 0;
-  const passed = reports.filter(r => r.passFailStatus === 'passed').length;
-  return (passed / reports.length) * 100;
+  const verdicts = reports.map(getJudgeVerdict).filter((v): v is NonNullable<typeof v> => v !== null);
+  if (verdicts.length === 0) return 0;
+  const passed = verdicts.filter(v => v.status === 'passed').length;
+  return (passed / verdicts.length) * 100;
 }
 
 /**

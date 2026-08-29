@@ -76,6 +76,12 @@ module.exports = {
     'lib/**/*.ts',
     'cli/**/*.ts',
     'types/**/*.ts',
+    // Component coverage is currently opt-in while the global baseline is
+    // expanded incrementally. Include the verdict-first surfaces so their
+    // focused interaction tests contribute to patch and project coverage.
+    'components/CitationLink.tsx',
+    'components/RunDetailsContent.tsx',
+    'components/TestCaseRunsPage.tsx',
     '!**/__tests__/**',
     '!**/*.test.ts',
     '!**/dist/**',

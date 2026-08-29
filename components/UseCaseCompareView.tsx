@@ -12,7 +12,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Benchmark, BenchmarkRun, EvaluationReport, TestCase } from '@/types';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { TrajectoryCompareView } from './TrajectoryCompareView';
-import { getRunOverallScore } from '@/lib/utils';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 import { RunScore } from '@/components/RunScore';
 
 interface UseCaseCompareViewProps {
@@ -103,8 +103,8 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
     // The two reports may have been scored under different evaluators that
     // emit different metric names — the aggregate is the only comparable
     // number when each side's metric set isn't guaranteed to be the same.
-    const scoreA = getRunOverallScore(reportA.metrics as Record<string, number | undefined>);
-    const scoreB = getRunOverallScore(reportB.metrics as Record<string, number | undefined>);
+    const scoreA = getJudgeVerdict(reportA)?.score ?? null;
+    const scoreB = getJudgeVerdict(reportB)?.score ?? null;
     if (scoreA === null || scoreB === null) return null;
     const accDiff = scoreA - scoreB;
 
@@ -198,9 +198,9 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
                               </div>
                               <span className="font-medium text-sm">{useCase?.name || useCaseId}</span>
                             </div>
-                            {report?.passFailStatus === 'passed' ? (
+                            {getJudgeVerdict(report)?.status === 'passed' ? (
                               <Badge className="bg-opensearch-blue/20 text-opensearch-blue text-xs">PASSED</Badge>
-                            ) : report?.passFailStatus === 'failed' ? (
+                            ) : getJudgeVerdict(report)?.status === 'failed' ? (
                               <Badge className="bg-red-500/20 text-red-400 text-xs">FAILED</Badge>
                             ) : null}
                           </div>
@@ -245,7 +245,7 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
                           <tr className="border-b">
                             <td className="py-2 pr-4 text-muted-foreground">Status</td>
                             <td className="text-center py-2 px-2">
-                              {reportA.passFailStatus === 'passed' ? (
+                              {getJudgeVerdict(reportA)?.status === 'passed' ? (
                                 <span className="inline-flex items-center gap-1 text-opensearch-blue">
                                   <CheckCircle2 size={12} /> PASSED
                                 </span>
@@ -256,7 +256,7 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
                               )}
                             </td>
                             <td className="text-center py-2 px-2">
-                              {reportB.passFailStatus === 'passed' ? (
+                              {getJudgeVerdict(reportB)?.status === 'passed' ? (
                                 <span className="inline-flex items-center gap-1 text-opensearch-blue">
                                   <CheckCircle2 size={12} /> PASSED
                                 </span>
@@ -276,13 +276,13 @@ export const UseCaseCompareView: React.FC<UseCaseCompareViewProps> = ({
                             <td className="py-2 pr-4 text-muted-foreground">Overall Score</td>
                             <td className="text-center py-2 px-2 font-medium">
                               <RunScore
-                                metrics={reportA.metrics as Record<string, number | undefined>}
+                                report={reportA}
                                 showLabel={false}
                               />
                             </td>
                             <td className="text-center py-2 px-2 font-medium">
                               <RunScore
-                                metrics={reportB.metrics as Record<string, number | undefined>}
+                                report={reportB}
                                 showLabel={false}
                               />
                             </td>

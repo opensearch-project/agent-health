@@ -10,7 +10,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { EvaluationReport, ExperimentRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { formatDate, getModelName, getRunOverallScore } from '@/lib/utils';
+import { formatDate, getModelName } from '@/lib/utils';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 import { fetchBatchMetrics, formatTokens, formatCost, formatDuration } from '@/services/metrics';
 
 interface RunSummaryPanelProps {
@@ -50,34 +51,21 @@ export const RunSummaryPanel: React.FC<RunSummaryPanelProps> = ({
         const report = reports[result.reportId];
         if (!report) return;
 
-        // Mirror lib/runStats.ts's canonical order: metricsStatus wins
-        // over passFailStatus (which may carry a stale verdict on
-        // errored docs, or a placeholder on pending docs).
-        if (report.metricsStatus === 'pending' || report.metricsStatus === 'calculating') {
-          // Trace-mode in flight — metrics are placeholders, score is
-          // unknown. Counted as pending, not as a 0% scorer.
-          pending++;
-          return;
-        }
-        if (report.metricsStatus === 'error') {
-          // Issue #242: errored runs have zeroed metrics. Including
-          // them in the average would defeat the entire point of the
-          // dedicated bucket — skip the score aggregation here too.
-          errored++;
+        // Judge output is authoritative; metricsStatus is diagnostic once a
+        // matcher verdict exists (historical trace timeouts poisoned it).
+        const verdict = getJudgeVerdict(report);
+        if (verdict) {
+          if (verdict.score !== null) {
+            totalScore += verdict.score;
+            scoredCount++;
+          }
+          if (verdict.status === 'passed') passed++;
+          else failed++;
           return;
         }
 
-        // Real verdict — contribute to the average and bucket pass/fail.
-        const score = getRunOverallScore(report.metrics as Record<string, number | undefined>);
-        if (score !== null) {
-          totalScore += score;
-          scoredCount++;
-        }
-        if (report.passFailStatus === 'passed') {
-          passed++;
-        } else {
-          failed++;
-        }
+        if (report.metricsStatus === 'error') errored++;
+        else pending++;
       } else if (result.status === 'failed') {
         failed++;
       }

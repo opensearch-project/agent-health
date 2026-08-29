@@ -31,6 +31,7 @@ import {
 } from '@/lib/dashboardMetrics';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatRelativeTime, getModelName } from '@/lib/utils';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -82,24 +83,32 @@ interface AgentRegressionRow extends AgentImprovementRow {
 
 // ==================== Helpers ====================
 
-function computeRunStats(run: BenchmarkRun): { passed: number; failed: number; total: number } {
-  if (run.stats && run.stats.total > 0) {
-    return { passed: run.stats.passed, failed: run.stats.failed, total: run.stats.total };
-  }
+function computeRunStats(
+  run: BenchmarkRun,
+  reportsById: Map<string, EvaluationReport>,
+): { passed: number; failed: number; total: number } {
   const results = Object.values(run.results || {});
   let passed = 0, failed = 0;
-  for (const r of results) {
-    if (r.status === 'completed') passed++;
-    else if (r.status === 'failed' || r.status === 'cancelled') failed++;
+  for (const result of results) {
+    if (result.status === 'failed' || result.status === 'cancelled') {
+      failed++;
+      continue;
+    }
+    const report = result.reportId ? reportsById.get(result.reportId) : undefined;
+    const verdict = getJudgeVerdict(report);
+    if (verdict?.status === 'passed') passed++;
+    else if (verdict?.status === 'failed') failed++;
   }
-  return { passed, failed, total: results.length };
+  // Only judged/execution-failed cases participate in the dashboard rate.
+  return { passed, failed, total: passed + failed };
 }
 
-function buildRunRows(benchmarks: Benchmark[]): RunRow[] {
+function buildRunRows(benchmarks: Benchmark[], reports: EvaluationReport[]): RunRow[] {
   const rows: RunRow[] = [];
+  const reportsById = new Map(reports.map(report => [report.id, report]));
   for (const bm of benchmarks) {
     for (const run of bm.runs || []) {
-      const stats = computeRunStats(run);
+      const stats = computeRunStats(run, reportsById);
       const agentName =
         DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey)?.name ||
         run.agentKey ||
@@ -561,7 +570,8 @@ export const Dashboard: React.FC = () => {
             limit: 500,
             fields: [
               'id', 'runId', 'experimentId', 'experimentRunId', 'testCaseId',
-              'passFailStatus', 'accuracy', 'timestamp', 'agentConfig',
+              'passFailStatus', 'metrics', 'metricsStatus', 'matcherResults',
+              'status', 'timestamp', 'agentConfig',
             ],
           }),
         ]);
@@ -598,7 +608,7 @@ export const Dashboard: React.FC = () => {
   );
   const agents = useMemo(() => getUniqueAgents(benchmarks), [benchmarks]);
 
-  const allRows = useMemo(() => buildRunRows(benchmarks), [benchmarks]);
+  const allRows = useMemo(() => buildRunRows(benchmarks, reports), [benchmarks, reports]);
   const totalRuns = allRows.length;
 
   const failingRows = useMemo<RunRow[]>(

@@ -374,6 +374,51 @@ describe('TracePollingManager', () => {
       );
     });
 
+    it('keeps an existing judge verdict when trace polling times out', async () => {
+      const callbacks: PollCallbacks = {
+        onTracesFound: jest.fn(),
+        onError: jest.fn(),
+      };
+      const judgedReport = {
+        id: 'report-judged',
+        timestamp: '2026-01-01T00:00:00Z',
+        testCaseId: 'tc-1',
+        status: 'completed',
+        agentName: 'Agent',
+        modelName: 'Model',
+        trajectory: [],
+        metrics: { accuracy: 100 },
+        llmJudgeReasoning: 'Passed',
+        passFailStatus: 'passed',
+        matcherResults: [{
+          description: 'judge: expected outcomes',
+          method: 'llm-judge',
+          pass: true,
+          score: 1,
+        }],
+      } as EvaluationReport;
+
+      mockFetchTracesForRun.mockResolvedValue({ spans: [], total: 0 });
+      mockGetReportById.mockResolvedValue(judgedReport);
+      mockUpdateReport.mockResolvedValue(undefined);
+
+      tracePollingManager.startPolling('report-judged', 'run-judged', callbacks, {
+        intervalMs: 1000,
+        maxAttempts: 1,
+        agentConfig: { key: 'agent', name: 'Agent', endpoint: '', useTraces: true },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(mockUpdateReport).toHaveBeenCalledWith('report-judged', expect.objectContaining({
+        metricsStatus: 'ready',
+        traceStatus: 'unavailable',
+        traceError: expect.stringContaining('kind=trace_timeout'),
+      }));
+      const terminalPatch = mockUpdateReport.mock.calls.find(([, patch]) => (patch as any).traceStatus === 'unavailable')?.[1] as any;
+      expect(terminalPatch.passFailStatus).toBeUndefined();
+      expect(terminalPatch.metrics).toBeUndefined();
+    });
+
     it('cleans up memory when traces are found', async () => {
       const mockSpans: Span[] = [
         {
@@ -445,7 +490,7 @@ describe('TracePollingManager', () => {
       expect(tracePollingManager.getState('report-mem-max')).toBeUndefined();
     });
 
-    it('writes error status when onTracesFound callback throws', async () => {
+    it('preserves an existing verdict when onTracesFound callback throws', async () => {
       const mockSpans: Span[] = [
         {
           traceId: 'trace-cb-err',
@@ -494,11 +539,13 @@ describe('TracePollingManager', () => {
       // onTracesFound was called and threw
       expect(onTracesFound).toHaveBeenCalledWith(mockSpans, mockReport);
 
-      // Should write error status to prevent stuck pending
+      // A post-trace callback error is diagnostic only when this report has
+      // already received an authoritative judge verdict.
       expect(mockUpdateReport).toHaveBeenCalledWith(
         'report-cb-err',
         expect.objectContaining({
-          metricsStatus: 'error',
+          metricsStatus: 'ready',
+          traceStatus: 'unavailable',
           traceError: expect.stringContaining('Judge failed'),
         })
       );

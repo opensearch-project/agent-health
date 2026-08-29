@@ -255,10 +255,14 @@ export async function executeEvaluationRun(
         let placeholderRunId: string | undefined;
         try {
           const placeholder = await storageModule.runs.create({
-            // status / metricsStatus mirror what /api/evaluate persists so
-            // the runs list filter `status=running` finds this row.
+            // Only trace-enabled agents enter the trace-poll lifecycle. A
+            // no-trace placeholder used to be persisted as `pending`, so the
+            // boot recovery sweep started a poll that eventually overwrote a
+            // real judge PASS/FAIL with trace_timeout.
             status: 'running',
-            metricsStatus: 'pending',
+            ...(agentConfig.useTraces
+              ? { metricsStatus: 'pending', traceStatus: 'pending' }
+              : { traceStatus: 'not_configured' }),
             // Identity / linkage — enough for the UI's runs list to render
             // the row, and for run-details to load the test case + parent
             // evaluation run.
@@ -654,6 +658,12 @@ export async function executeEvaluationRun(
           (report as any).judgeModelId = (report as any).judgeModelId ?? run.judgeModelId;
           (report as any).experimentRunId = (report as any).experimentRunId ?? run.id;
           (report as any).experimentId = (report as any).experimentId ?? run.benchmarkId;
+          // Persist an explicit neutral marker for agents that opt out of
+          // traces. Trace availability is diagnostic metadata, never verdict
+          // state (#407).
+          (report as any).traceStatus = agentConfig.useTraces
+            ? ((report as any).traceStatus ?? ((report as any).spans?.length ? 'available' : 'pending'))
+            : 'not_configured';
           let savedReport: EvaluationReport;
           if (placeholderRunId) {
             // Mirror saveReportWithModule's update shape: pass the report
@@ -692,6 +702,7 @@ export async function executeEvaluationRun(
           // via sessionId/service-window hints when Strategy B is unavailable
           // (REST agents never get a runId; Claude Code spans carry only session.id).
           if (
+            agentConfig.useTraces === true &&
             !hasDeterministicEval &&
             agentConfig?.useTraces &&
             savedReport.metricsStatus === 'pending'
@@ -870,6 +881,13 @@ async function waitForTracesAndJudge(
   storage: IStorageModule,
   agentConfig: AgentConfig
 ): Promise<PassFailStatus | null> {
+  if (!agentConfig.useTraces) {
+    await storage.runs.update(report.id, {
+      traceStatus: 'not_configured',
+    } as Partial<EvaluationReport>);
+    return null;
+  }
+
   return new Promise<PassFailStatus | null>((resolve) => {
     tracePollingManager.startPolling(
       report.id,
@@ -915,6 +933,7 @@ async function waitForTracesAndJudge(
 
             await storage.runs.update(report.id, {
               trajectory: finalTrajectory,
+              traceStatus: 'available',
               metricsStatus: 'ready',
               passFailStatus: judgment.passFailStatus,
               metrics: judgment.metrics,

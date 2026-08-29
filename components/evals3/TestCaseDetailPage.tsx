@@ -30,7 +30,7 @@ import {
   Play, Calendar, CheckCircle2, XCircle, Pencil, AlertTriangle,
   FileText, Target, Loader2, X,
   Link as LinkIcon, Check as CheckIcon,
-  GitBranch, Activity, Scale, MessageSquare, Clock,
+  GitBranch, Activity, Scale, MessageSquare, Clock, Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -58,6 +58,7 @@ import { DEFAULT_CONFIG, getPreferredDefaultAgentKey } from '@/lib/constants';
 import { PREFS_KEYS } from '@/lib/preferences';
 import { ENV_CONFIG } from '@/lib/config';
 import { Markdown, hasRealMarkdown } from '@/components/ui/markdown';
+import { getJudgeVerdict, getTraceNotice } from '@/lib/reportVerdict';
 
 // Render a test-case prompt ("task definition"): as markdown when it actually
 // contains markdown (so headings / bullet lists indent instead of collapsing
@@ -83,12 +84,9 @@ function getTimeThreshold(range: TimeRange): Date | null {
 
 type ResultStatus = 'passed' | 'failed' | 'errored' | 'running' | 'pending';
 function getStatus(r: EvaluationReport): ResultStatus {
-  // Issue #242: evaluator-error reports are bucketed as 'errored', not
-  // 'failed'. metricsStatus wins over passFailStatus because the storage
-  // layer may still carry a stale verdict on transient runs.
+  const verdict = getJudgeVerdict(r);
+  if (verdict) return verdict.status;
   if (r.metricsStatus === 'error') return 'errored';
-  if (r.passFailStatus === 'passed') return 'passed';
-  if (r.passFailStatus === 'failed') return 'failed';
   if (r.status === 'running') return 'running';
   return 'pending';
 }
@@ -237,12 +235,11 @@ export const TestCaseDetailPage: React.FC = () => {
     return runs.filter(r => new Date(r.timestamp) >= threshold);
   }, [runs, timeRange]);
 
-  const passCount = filteredRuns.filter(r => r.passFailStatus === 'passed').length;
-  const failCount = filteredRuns.filter(r => r.passFailStatus === 'failed').length;
-  // Issue #242: evaluator-error runs are bucketed separately and excluded
-  // from the pass-rate denominator so a misconfigured judge can't drag
-  // the per-test-case pass rate to 0%.
-  const erroredCount = filteredRuns.filter(r => r.metricsStatus === 'error').length;
+  const passCount = filteredRuns.filter(r => getStatus(r) === 'passed').length;
+  const failCount = filteredRuns.filter(r => getStatus(r) === 'failed').length;
+  // metricsStatus is diagnostic once a verdict exists; only no-verdict
+  // reports remain in the evaluator-error bucket.
+  const erroredCount = filteredRuns.filter(r => getStatus(r) === 'errored').length;
   const evaluable = Math.max(0, filteredRuns.length - erroredCount);
   const passRate = evaluable > 0 ? Math.round((passCount / evaluable) * 100) : 0;
 
@@ -535,12 +532,10 @@ export const TestCaseDetailPage: React.FC = () => {
                 </div>
               ) : (
                 filteredRuns.map((run, index) => {
-                  // Issue #242: triage rows by metricsStatus FIRST so an
-                  // errored run lights up the amber AlertTriangle and not
-                  // the red XCircle (which would conflate it with a real
-                  // agent failure).
-                  const isErrored = run.metricsStatus === 'error';
-                  const isPassed = !isErrored && run.passFailStatus === 'passed';
+                  const runStatus = getStatus(run);
+                  const isErrored = runStatus === 'errored';
+                  const isPassed = runStatus === 'passed';
+                  const traceNotice = getTraceNotice(run);
                   const isSelected = run.id === selectedRunId;
                   const isLatest = index === 0;
                   const runName = getRunDisplayName(run);
@@ -567,14 +562,25 @@ export const TestCaseDetailPage: React.FC = () => {
                           runs render an amber AlertTriangle to distinguish
                           evaluator failures from agent failures. */}
                       <div
-                        className="shrink-0 mt-0.5"
-                        title={isErrored ? 'Errored (evaluator could not run)' : isPassed ? 'Passed' : 'Failed'}
+                        className="shrink-0 mt-0.5 flex items-center gap-1"
+                        title={isErrored ? 'Errored (evaluator could not run)' : isPassed ? 'Passed' : runStatus === 'failed' ? 'Failed' : 'Pending'}
                       >
                         {isErrored
                           ? <AlertTriangle size={12} className="text-amber-500" />
                           : isPassed
                             ? <CheckCircle2 size={12} className="text-green-500" />
-                            : <XCircle size={12} className="text-red-500" />}
+                            : runStatus === 'failed'
+                              ? <XCircle size={12} className="text-red-500" />
+                              : <Clock size={12} className="text-muted-foreground" />}
+                        {traceNotice && (
+                          <span
+                            title={`${traceNotice.title} — ${traceNotice.description}`}
+                            aria-label={`${traceNotice.title}. ${traceNotice.description}`}
+                            className={traceNotice.tone === 'warning' ? 'text-amber-500' : 'text-muted-foreground'}
+                          >
+                            {traceNotice.tone === 'warning' ? <AlertTriangle size={10} /> : <Info size={10} />}
+                          </span>
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         {/* Row 1: run name + Latest badge + copy-link + accuracy */}
@@ -607,7 +613,7 @@ export const TestCaseDetailPage: React.FC = () => {
                               : <LinkIcon size={11} />}
                           </button>
                           <RunScore
-                            metrics={run.metrics as Record<string, number | undefined>}
+                            report={run}
                             showLabel={false}
                             className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 ml-auto shrink-0"
                           />
@@ -714,8 +720,10 @@ export const TestCaseDetailPage: React.FC = () => {
                 </div>
               ) : (
                 filteredRuns.map((run, index) => {
-                  const isErrored = run.metricsStatus === 'error';
-                  const isPassed = !isErrored && run.passFailStatus === 'passed';
+                  const runStatus = getStatus(run);
+                  const isErrored = runStatus === 'errored';
+                  const isPassed = runStatus === 'passed';
+                  const traceNotice = getTraceNotice(run);
                   const runName = getRunDisplayName(run);
                   const evaluatorLabel = run.evaluatorId
                     ? (evaluatorNameById[run.evaluatorId] || run.evaluatorId)
@@ -728,11 +736,24 @@ export const TestCaseDetailPage: React.FC = () => {
                       className="group flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors hover:bg-muted/50 border border-transparent"
                       onClick={() => setSelectedRunId(run.id)}
                     >
-                      {isErrored
-                        ? <AlertTriangle size={14} className="text-amber-500 shrink-0" />
-                        : isPassed
-                          ? <CheckCircle2 size={14} className="text-green-500 shrink-0" />
-                          : <XCircle size={14} className="text-red-500 shrink-0" />}
+                      <span className="flex items-center gap-1 shrink-0">
+                        {isErrored
+                          ? <AlertTriangle size={14} className="text-amber-500" />
+                          : isPassed
+                            ? <CheckCircle2 size={14} className="text-green-500" />
+                            : runStatus === 'failed'
+                              ? <XCircle size={14} className="text-red-500" />
+                              : <Clock size={14} className="text-muted-foreground" />}
+                        {traceNotice && (
+                          <span
+                            title={`${traceNotice.title} — ${traceNotice.description}`}
+                            aria-label={`${traceNotice.title}. ${traceNotice.description}`}
+                            className={traceNotice.tone === 'warning' ? 'text-amber-500' : 'text-muted-foreground'}
+                          >
+                            {traceNotice.tone === 'warning' ? <AlertTriangle size={11} /> : <Info size={11} />}
+                          </span>
+                        )}
+                      </span>
                       <span className="text-xs font-semibold text-foreground truncate" title={runName}>{runName}</span>
                       {index === 0 && <Badge variant="outline" className="text-[7px] px-1 py-0 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/30">Latest</Badge>}
                       {/* Copy-link icon for the canonical /runs/<id> URL. Hidden
@@ -757,7 +778,7 @@ export const TestCaseDetailPage: React.FC = () => {
                         {run.agentName || '—'} · {evaluatorLabel} · {modelLabel} · {formatRelativeTime(run.timestamp)}
                       </span>
                       <RunScore
-                        metrics={run.metrics as Record<string, number | undefined>}
+                        report={run}
                         showLabel={false}
                         className="text-xs font-semibold text-blue-600 dark:text-blue-400 shrink-0"
                       />

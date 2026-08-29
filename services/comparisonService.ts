@@ -12,7 +12,7 @@ import {
   Category,
 } from '@/types';
 import { TEST_CASES } from '@/data/testCases';
-import { bucketRunResults } from '@/lib/runStats';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 import {
   MockTestCaseMeta,
   getMockTestCaseMeta,
@@ -46,30 +46,40 @@ export function calculateRunAggregates(
 ): RunAggregateMetrics {
   const testCaseIds = Object.keys(run.results);
 
-  // Pass/fail/errored counts: the SINGLE source of truth shared with the runs
-  // list (lib/runStats.bucketRunResults), computed from the persisted per-case
-  // verdicts — NOT the naive denormalized run.stats (which counts errored cases
-  // as passed and never tracks `errored`, #242). This keeps the comparison
-  // panel, the per-cell Errored badges, and the runs list all in agreement.
-  const buckets = bucketRunResults(run.results as Record<string, { status?: string; passFailStatus?: string }>);
-  const passedCount = buckets.passed;
-  const failedCount = buckets.failed;
-  const erroredCount = buckets.errored;
-
-  // Accuracy is averaged over the *evaluated* reports only (exclude errored and
-  // not-yet-evaluated / trace-pending), so placeholder zeros never drag it down.
+  // Derive every report through the same matcher-first helper used by row and
+  // detail surfaces. Denormalized run.results fields can be stale after a
+  // historical trace timeout cleared the report's flat verdict.
+  let passedCount = 0;
+  let failedCount = 0;
+  let erroredCount = 0;
   let totalAccuracy = 0;
   let completedCount = 0;
   for (const testCaseId of testCaseIds) {
     const result = run.results[testCaseId];
     const report = reports[result.reportId];
+    const verdict = getJudgeVerdict(report);
+
+    // Preserve a supplied judge score for aggregate-score history even when
+    // the outer execution result was marked failed, but execution failure
+    // remains the status bucket.
+    if (verdict?.score !== null && verdict?.score !== undefined) {
+      totalAccuracy += verdict.score;
+      completedCount++;
+    }
+    if (result.status === 'failed' || result.status === 'cancelled') {
+      failedCount++;
+      continue;
+    }
     if (!report) continue;
-    if (report.metricsStatus === 'error' || report.metricsStatus === 'pending' || report.metricsStatus === 'calculating') continue;
-    completedCount++;
-    totalAccuracy += report.metrics?.accuracy ?? 0;
+    if (verdict) {
+      if (verdict.status === 'passed') passedCount++;
+      else failedCount++;
+    } else if (report.metricsStatus === 'error') {
+      erroredCount++;
+    }
   }
 
-  const count = completedCount || 1; // Avoid division by zero (accuracy: over evaluable)
+  const count = completedCount || 1;
   const evaluable = Math.max(0, testCaseIds.length - erroredCount);
 
   return {
@@ -156,15 +166,15 @@ export function buildTestCaseComparisonRows(
         continue;
       }
 
+      const verdict = getJudgeVerdict(report);
       results[run.id] = {
         reportId: report.id,
         status: runResult.status === 'completed' ? 'completed' : 'failed',
-        passFailStatus: report.passFailStatus,
-        // Issue #242: surface evaluator-error reports so the comparison
-        // surface (MetricCell) can light up the amber `Errored` chip
-        // instead of conflating with `Failed`.
-        errored: report.metricsStatus === 'error',
-        accuracy: report.metrics.accuracy,
+        passFailStatus: verdict?.status,
+        // metricsStatus becomes an evaluator error only in the absence of a
+        // judge verdict; otherwise it remains secondary diagnostics.
+        errored: !verdict && report.metricsStatus === 'error',
+        accuracy: verdict?.score ?? undefined,
         faithfulness: report.metrics.faithfulness,
         trajectoryAlignment: report.metrics.trajectory_alignment_score,
         latencyScore: report.metrics.latency_score,

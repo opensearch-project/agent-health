@@ -177,7 +177,7 @@ const Sidebar = ({ context, selectedItem, onSelectItem, onToggleCollapse, isColl
                           tooltip listing each metric contribution. */}
                       {report && (
                         <RunScore
-                          metrics={report.metrics as Record<string, number | undefined>}
+                          report={report}
                           className="text-xs text-muted-foreground"
                         />
                       )}

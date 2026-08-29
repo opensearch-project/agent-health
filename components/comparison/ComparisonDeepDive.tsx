@@ -20,10 +20,11 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Sparkles, Loader2, RefreshCw, ArrowUpRight, AlertTriangle } from 'lucide-react';
+import { Sparkles, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { BenchmarkRun, EvaluationReport, TestCaseComparisonRow } from '@/types';
 import { sanitizeMarkdownUrl } from './sanitizeMarkdownUrl';
+import { CitationLink } from '@/components/CitationLink';
 
 export interface DeepDiveRunMeta {
   key: string;
@@ -181,40 +182,23 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
     <span className={`inline-flex items-center justify-center h-4 min-w-[1rem] px-1 rounded text-[0.7rem] font-bold border ${ab === 'A' ? 'bg-opensearch-blue/15 text-opensearch-blue border-opensearch-blue/40' : 'bg-purple-500/20 text-purple-300 border-purple-400/40'} ${className}`}>{ab}</span>
   );
 
-  // Custom anchor: `span:<runId>:<spanId>` → deep-link pill; others → normal link.
-  const SpanAnchor = ({ href, children }: { href?: string; children?: React.ReactNode }) => {
-    const m = /^span:([^:]+):(.+)$/.exec(href || '');
-    if (m) {
-      const [, runId, spanId] = m;
-      const who = labelByRunId.get(runId);
-      return (
-        <button
-          type="button"
-          data-span-id={spanId}
-          data-run-id={runId}
-          onClick={() => onSpanLink(pair.testCaseId, runId, spanId)}
-          title={`Open this span in the Traces tab${who ? ` (${who})` : ''}`}
-          className="inline-flex items-center gap-0.5 align-baseline rounded bg-opensearch-blue/10 px-1.5 py-0.5 text-[0.85em] font-medium text-opensearch-blue hover:bg-opensearch-blue/20 transition-colors"
-        >
-          {abByRunId.get(runId) && <span className="font-bold opacity-80">{abByRunId.get(runId)}·</span>}
-          {children}
-          <ArrowUpRight size={11} className="flex-shrink-0" />
-        </button>
-      );
-    }
-    return (
-      // `href` is already sanitized by ReactMarkdown's urlTransform
-      // (sanitizeMarkdownUrl): dangerous schemes have been dropped to ''. Guard
-      // anyway — render unsafe/empty links as plain text, never a live anchor.
-      href ? (
-        <a href={href} target="_blank" rel="noreferrer noopener" className="text-opensearch-blue hover:underline">
-          {children}
-        </a>
-      ) : (
-        <span>{children}</span>
-      )
-    );
-  };
+  // Shared custom-citation renderer: `span:<runId>:<spanId>` becomes a
+  // deep-link pill; ordinary sanitized URLs remain normal links.
+  const SpanAnchor = ({ href, children }: { href?: string; children?: React.ReactNode }) => (
+    <CitationLink
+      href={href}
+      onSpanClick={(runId, spanId) => onSpanLink(pair.testCaseId, runId, spanId)}
+      spanPrefix={(runId) => abByRunId.get(runId)
+        ? <span className="font-bold opacity-80">{abByRunId.get(runId)}·</span>
+        : null}
+      spanTitle={(runId) => {
+        const who = labelByRunId.get(runId);
+        return `Open this span in the Traces tab${who ? ` (${who})` : ''}`;
+      }}
+    >
+      {children}
+    </CitationLink>
+  );
 
   return (
     <div className="rounded-lg border border-border bg-card/40 p-4" data-testid="comparison-deep-dive">

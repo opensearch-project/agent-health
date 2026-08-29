@@ -215,6 +215,9 @@ export async function saveReportWithClient(
     actualOutcomes: [],
     llmJudgeReasoning: report.llmJudgeReasoning,
     metrics: report.metrics,
+    performanceMetrics: report.performanceMetrics,
+    llmJudgeResponse: report.llmJudgeResponse,
+    traceStatus: report.traceStatus,
     trajectory: report.trajectory,
     rawEvents: report.rawEvents || [], // Ensure empty array if null/undefined
     logs: report.logs || report.openSearchLogs,

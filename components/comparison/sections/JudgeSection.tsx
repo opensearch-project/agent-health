@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 import { RunScore } from '@/components/RunScore';
 import { getJudgeMatcherResults } from '@/lib/matchers/judgeAccessor';
 import { Markdown } from '@/components/ui/markdown';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 
 interface JudgeSectionProps {
   runs: BenchmarkRun[];
@@ -66,7 +67,8 @@ const RunJudgeCard: React.FC<{
     );
   }
 
-  const isPassed = report.passFailStatus === 'passed';
+  const verdict = getJudgeVerdict(report);
+  const isPassed = verdict?.status === 'passed';
   const improvements = report.improvementStrategies || [];
   // Canonical per-checkpoint judge verdicts (llm-judge matcherResults), with a
   // fallback to the legacy llmJudgeReasoning blob for older RCA-Default reports.
@@ -103,7 +105,7 @@ const RunJudgeCard: React.FC<{
             {/* Generic "Score: X%" with hover-tooltip listing each metric.
                 Replaces the hardcoded `Accuracy: X%` which was misleading
                 for runs scored by non-RCA-Default evaluators. */}
-            <RunScore metrics={report.metrics as Record<string, number | undefined>} />
+            <RunScore report={report} />
           </span>
         </div>
       </CardHeader>

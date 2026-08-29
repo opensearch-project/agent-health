@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { sanitizeCitationUrl } from '@/lib/citations';
+
 /**
  * Sanitize hrefs in the LLM-authored comparison deep-dive markdown before they
  * reach the DOM. The deep-dive narrative is model output, so a compromised /
@@ -21,8 +23,5 @@
  * testable under jest without pulling in ESM-only deps.
  */
 export function sanitizeMarkdownUrl(url: string): string {
-  if (!url) return '';
-  const u = url.trim();
-  if (/^span:[^:]+:.+$/i.test(u)) return u;
-  return /^(https?:|mailto:|\/|#|\.{1,2}\/)/i.test(u) ? u : '';
+  return sanitizeCitationUrl(url);
 }

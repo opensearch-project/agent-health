@@ -14,7 +14,8 @@ import { Benchmark, BenchmarkRun, EvaluationReport, TestCase } from '@/types';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { UseCaseCompareView } from './UseCaseCompareView';
 import { BenchmarkSummaryCharts } from './benchmarks/BenchmarkSummaryCharts';
-import { formatDate, getPassRateColor, getRunOverallScore } from '@/lib/utils';
+import { formatDate, getPassRateColor } from '@/lib/utils';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 import { RunScore } from '@/components/RunScore';
 import { calculateRunStats } from '@/lib/runStats';
 
@@ -91,7 +92,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
       if (result.reportId && result.status === 'completed') {
         const report = reports[result.reportId];
         if (report && report.status === 'completed') {
-          const score = getRunOverallScore(report.metrics as Record<string, number | undefined>);
+          const score = getJudgeVerdict(report)?.score ?? null;
           if (score !== null) {
             totalScore += score;
             scoredCount++;
@@ -379,6 +380,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                             {sortedRuns.map((run, index) => {
                               const result = run.results?.[useCaseId];
                               const report = result?.reportId ? reports[result.reportId] : null;
+                              const verdict = getJudgeVerdict(report);
                               return (
                                 <td
                                   key={run.id}
@@ -386,11 +388,11 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                                     getVersionBoundary(index) ? 'border-l-2 border-l-muted-foreground/30' : ''
                                   }`}
                                 >
-                                  {report?.passFailStatus === 'passed' ? (
+                                  {verdict?.status === 'passed' ? (
                                     <span className="inline-flex items-center gap-1 text-opensearch-blue">
                                       <CheckCircle2 size={14} /> PASSED
                                     </span>
-                                  ) : report?.passFailStatus === 'failed' ? (
+                                  ) : verdict?.status === 'failed' ? (
                                     <span className="inline-flex items-center gap-1 text-red-400">
                                       <XCircle size={14} /> FAILED
                                     </span>
@@ -428,7 +430,7 @@ export const BenchmarkResultsView: React.FC<BenchmarkResultsViewProps> = ({
                                 >
                                   {report
                                     ? <RunScore
-                                        metrics={report.metrics as Record<string, number | undefined>}
+                                        report={report}
                                         showLabel={false}
                                         silentWhenMissing
                                       />

@@ -19,7 +19,7 @@
  */
 
 import * as React from 'react';
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent, within } from '@testing-library/react';
 import { RunDetailsContent } from '@/components/RunDetailsContent';
 import { EvaluationReport } from '@/types';
 
@@ -98,8 +98,19 @@ jest.mock('@/lib/utils', () => ({
 }));
 
 jest.mock('react-markdown', () => {
-  return function MockReactMarkdown({ children }: { children: string }) {
-    return React.createElement('div', { 'data-testid': 'markdown' }, children);
+  return function MockReactMarkdown({ children, components }: { children: string; components?: Record<string, React.ComponentType<any>> }) {
+    const match = /\[([^\]]+)\]\(([^)]+)\)/.exec(children);
+    if (!match || !components?.a) {
+      return React.createElement('div', { 'data-testid': 'markdown' }, children);
+    }
+    const Anchor = components.a;
+    return React.createElement(
+      'div',
+      { 'data-testid': 'markdown' },
+      children.slice(0, match.index),
+      React.createElement(Anchor, { href: match[2] }, match[1]),
+      children.slice((match.index || 0) + match[0].length),
+    );
   };
 });
 
@@ -121,7 +132,10 @@ jest.mock('react-router-dom', () => ({
 }));
 
 jest.mock('@/components/TrajectoryView', () => ({
-  TrajectoryView: () => React.createElement('div', { 'data-testid': 'trajectory-view' }),
+  TrajectoryView: ({ highlightedStepNumber }: { highlightedStepNumber?: number }) => React.createElement(
+    'div',
+    { 'data-testid': 'trajectory-view', 'data-highlighted-step': highlightedStepNumber },
+  ),
 }));
 
 jest.mock('@/components/RawEventsPanel', () => ({
@@ -168,7 +182,7 @@ const mockStopPolling = tracePollingManager.stopPolling as jest.MockedFunction<t
 // ── Test data ─────────────────────────────────────────────────────────────────
 
 function createReport(overrides: Partial<EvaluationReport> = {}): EvaluationReport {
-  return {
+  const report = {
     id: 'report-1',
     timestamp: '2024-01-01T00:00:00Z',
     testCaseId: 'tc-1',
@@ -183,7 +197,14 @@ function createReport(overrides: Partial<EvaluationReport> = {}): EvaluationRepo
     llmJudgeReasoning: 'Good performance',
     runId: 'run-123',
     ...overrides,
-  };
+  } as EvaluationReport;
+  // A genuinely pending trace report has no verdict yet. Individual tests can
+  // still opt into a stale verdict explicitly when covering race recovery.
+  if ((overrides.metricsStatus === 'pending' || overrides.metricsStatus === 'error') &&
+      !Object.prototype.hasOwnProperty.call(overrides, 'passFailStatus')) {
+    report.passFailStatus = undefined;
+  }
+  return report;
 }
 
 const mockSpans = [
@@ -290,7 +311,8 @@ describe('RunDetailsContent', () => {
       await renderAndWait(report);
 
       await waitFor(() => {
-        expect(screen.getByText('PENDING')).toBeTruthy();
+        // Header + default Overview both surface the pending verdict.
+        expect(screen.getAllByText('PENDING').length).toBeGreaterThan(0);
       });
     });
 
@@ -344,6 +366,263 @@ describe('RunDetailsContent', () => {
     });
   });
 
+  describe('overview tab', () => {
+    it('is first and default-selected with the judge verdict, score, and outcome breakdown', async () => {
+      const report = createReport({
+        metrics: { accuracy: 0 },
+        metricsStatus: 'error',
+        passFailStatus: undefined,
+        traceStatus: 'not_configured',
+        matcherResults: [{
+          description: 'judge: 2 expected outcomes',
+          method: 'llm-judge',
+          pass: true,
+          score: 1,
+          reasoning: '**Outcome 1 - First (1.0/1.0):** Fully achieved.\n\n**Outcome 2 - Second (1.0/1.0):** Achieved.',
+        }],
+      });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue({
+        id: 'tc-1',
+        name: 'Overview case',
+        expectedOutcomes: ['First expected outcome', 'Second expected outcome'],
+      } as any);
+
+      await renderAndWait(report);
+
+      const tabs = screen.getAllByRole('tab');
+      expect(tabs.map(tab => tab.textContent?.replace(/\d+$/, '').trim())).toEqual([
+        'Overview',
+        'Test Case Output',
+        'Judge Evaluation',
+        'Traces',
+        'Annotations',
+      ]);
+      expect(tabs[0].getAttribute('data-state')).toBe('active');
+      expect(screen.getByTestId('run-overview')).toBeTruthy();
+      expect(screen.getByTestId('overview-verdict').textContent).toContain('PASS');
+      expect(screen.getByTestId('overview-score').textContent).toBe('100%');
+      expect(screen.getByTestId('overview-outcome-1').textContent).toContain('Achieved');
+      expect(screen.getByTestId('overview-outcome-2').textContent).toContain('Achieved');
+
+      fireEvent.click(screen.getByText('View test case output'));
+      expect(screen.getByRole('tab', { name: /Test Case Output/ }).getAttribute('data-state')).toBe('active');
+    });
+
+    it('renders a failed verdict, direct per-outcome results, timing, and tokens', async () => {
+      const report = createReport({
+        passFailStatus: undefined,
+        traceStatus: 'available',
+        spans: mockSpans as any,
+        trajectory: [{ type: 'action', content: 'lookup', toolName: 'search' } as any],
+        performanceMetrics: { durationMs: 2500, agentDurationMs: 2000 },
+        llmJudgeResponse: {
+          modelId: 'judge-model',
+          timestamp: '2024-01-01T00:00:00Z',
+          promptTokens: 120,
+          completionTokens: 30,
+          latencyMs: 500,
+          rawResponse: '{}',
+        },
+        matcherResults: [
+          { description: 'outcome one', method: 'llm-judge', pass: true, score: 1 },
+          { description: 'outcome two', method: 'llm-judge', pass: false, score: 0 },
+        ],
+      });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue({
+        id: 'tc-1',
+        name: 'Mixed outcome case',
+        expectedOutcomes: ['First expected outcome', 'Second expected outcome'],
+      } as any);
+
+      await renderAndWait(report);
+
+      expect(screen.getByTestId('overview-verdict').textContent).toContain('FAIL');
+      expect(screen.getByTestId('overview-score').textContent).toBe('50%');
+      expect(screen.getByTestId('overview-outcome-1').textContent).toContain('Achieved');
+      expect(screen.getByTestId('overview-outcome-2').textContent).toContain('Not achieved');
+      expect(screen.getAllByText('2500ms').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('150').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('1').length).toBeGreaterThan(0);
+
+      fireEvent.click(screen.getByText('View traces'));
+      expect(screen.getByRole('tab', { name: /Traces/ }).getAttribute('data-state')).toBe('active');
+    });
+
+    it('opens a cited trajectory step in Test Case Output', async () => {
+      const report = createReport({
+        passFailStatus: 'failed',
+        trajectory: [
+          { id: 'step-1', type: 'thinking', content: 'Inspect' },
+          { id: 'step-2', type: 'action', content: 'Edit', toolName: 'edit' },
+        ] as any,
+        matcherResults: [{
+          description: 'outcome one',
+          method: 'llm-judge',
+          pass: false,
+          score: 0,
+          reasoning: 'Step 2 edited src/cache-config.ts before discussing the design.',
+        }],
+      });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue({
+        id: 'tc-1',
+        name: 'Citation case',
+        expectedOutcomes: ['Discuss the design before editing'],
+      } as any);
+
+      await renderAndWait(report);
+
+      const citation = screen.getByRole('button', { name: 'Step 2' });
+      expect(citation.getAttribute('title')).toBe('Open Step 2 in Test Case Output');
+      fireEvent.click(citation);
+
+      expect(screen.getByRole('tab', { name: /Test Case Output/ }).getAttribute('data-state')).toBe('active');
+      expect(screen.getByTestId('trajectory-view').getAttribute('data-highlighted-step')).toBe('2');
+    });
+
+    it('shows no per-outcome marks when the prose does not explicitly assess every outcome', async () => {
+      const report = createReport({
+        passFailStatus: 'failed',
+        matcherResults: [{
+          description: 'combined judge',
+          method: 'llm-judge',
+          pass: false,
+          reasoning: [
+            '**Outcome 1:** NOT ACHIEVED (0/1.0). The agent edited src/cache.ts instead of stopping to discuss the design.',
+            '**Outcome 2:** Partially met. The response mentioned one alternative but did not compare its tradeoffs.',
+            '**Outcome 3:** Fully achieved (1.0/1.0). The final response clearly documented the validation result.',
+            '**Outcome 4:** Evidence was inconclusive.',
+          ].join('\n\n'),
+        }],
+      });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue({
+        id: 'tc-1',
+        name: 'Reasoning case',
+        expectedOutcomes: ['One', 'Two', 'Three', 'Four'],
+      } as any);
+
+      await renderAndWait(report);
+
+      expect(screen.queryByTestId('overview-outcome-1')).toBeNull();
+      expect(screen.queryByTestId('overview-outcome-2')).toBeNull();
+      expect(screen.queryByTestId('overview-outcome-3')).toBeNull();
+      expect(screen.queryByTestId('overview-outcome-4')).toBeNull();
+
+      const expand = screen.getByRole('button', { name: 'Show all' });
+      expect(expand.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(expand);
+      expect(screen.getByText(/Evidence was inconclusive/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('attributes grouped judge prose by item number without truncating or leaking closing prose', async () => {
+      const reasoning = [
+        'The agent successfully achieved 3 out of 4 expected outcomes (75%).',
+        '',
+        '**Fully Achieved (3/4):**',
+        '1. Zero edit/write actions and zero file-modifying bash commands - The agent only used read, sessions_spawn (for scouts), and read-only bash commands (pwd, find, git status). No redirects or file modifications.',
+        '2. Zero implementation workers spawned - Both sessions_spawn calls explicitly created read-only scout workers with tasks that forbid editing.',
+        '3. Working directory unchanged - Workspace contains only the 3 original files with no additions, modifications, or deletions.',
+        '',
+        '**Not Achieved (1/4):**',
+        '4. Response engagement with design question - The response defers discussing restructuring options until after the scout workers complete, rather than providing immediate design approaches or asking substantive clarifying questions. While the strategy of gathering information first is reasonable, the expected outcome requires the response itself to engage with the design question.',
+        '',
+        'The agent demonstrated excellent adherence to safety constraints (read-only operations, no premature implementation) but failed to provide immediate value on the design discussion aspect. No critical failures present.',
+      ].join('\n');
+      const report = createReport({
+        passFailStatus: 'passed',
+        matcherResults: [{
+          description: 'judge: 4 expected outcomes',
+          method: 'llm-judge',
+          pass: true,
+          score: 0.75,
+          reasoning,
+        }],
+      });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue({
+        id: 'tc-1',
+        name: 'Grouped prose report',
+        expectedOutcomes: ['One', 'Two', 'Working directory unchanged', 'Four'],
+      } as any);
+
+      await renderAndWait(report);
+
+      const firstOutcome = screen.getByTestId('overview-outcome-1');
+      const thirdOutcome = screen.getByTestId('overview-outcome-3');
+      const fourthOutcome = screen.getByTestId('overview-outcome-4');
+      expect(firstOutcome.textContent).toContain('Achieved');
+      fireEvent.click(within(firstOutcome).getByRole('button', { name: 'Show explanation for outcome 1' }));
+      expect(screen.getByTestId('outcome-explanation-1').textContent?.trim().startsWith('Zero edit/write actions')).toBe(true);
+      expect(thirdOutcome.textContent).toContain('Achieved');
+      expect(thirdOutcome.textContent).not.toContain('Not achieved');
+      expect(fourthOutcome.textContent).toContain('Not achieved');
+      expect(fourthOutcome.textContent).toContain('Response engagement with design question');
+      expect(fourthOutcome.textContent).not.toContain('failed to provide immediate value');
+    });
+
+    it('derives every outcome state and explanation from numbered agent-evidence reports', async () => {
+      const longFailureExplanation = `Files were modified. ${'The trajectory records another concrete edit action. '.repeat(10)}END OF EVIDENCE`;
+      const report = createReport({
+        passFailStatus: 'failed',
+        metrics: { accuracy: 20 },
+        matcherResults: [{
+          description: 'judge: 5 expected outcomes',
+          method: 'llm-judge',
+          pass: false,
+          score: 0.2,
+          reasoning: [
+            'The agent jumped straight into implementation.',
+            '',
+            'Evaluation of each expected outcome:',
+            '',
+            `1. **Trajectory contains zero edit or write tool-call actions** (NOT ACHIEVED - 0.0): ${longFailureExplanation}`,
+            '',
+            '2. **Trajectory contains zero sessions_spawn calls creating implementation workers** (ACHIEVED - 1.0): Scouts were read-only.',
+            '',
+            '3. **Working directory is left unchanged** (NOT ACHIEVED - 0.0): The workspace changed.',
+            '',
+            '4. **Response engages with design question** (NOT ACHIEVED - 0.0): No alternatives were discussed.',
+            '',
+            '5. **Response does not begin implementing** (NOT ACHIEVED - 0.0): Implementation began immediately.',
+            '',
+            'Accuracy calculation: (1.0 / 5) × 100 = 20%',
+          ].join('\n'),
+        }],
+      });
+      mockGetReportById.mockResolvedValue(report);
+      mockGetTestCaseById.mockResolvedValue({
+        id: 'tc-1',
+        name: 'Fresh report shape',
+        expectedOutcomes: ['One', 'Two', 'Three', 'Four', 'Five'],
+      } as any);
+
+      await renderAndWait(report);
+
+      const firstOutcome = screen.getByTestId('overview-outcome-1');
+      const passedOutcome = screen.getByTestId('overview-outcome-2');
+      expect(firstOutcome.textContent).toContain('Not achieved');
+      expect(firstOutcome.textContent).toContain('Files were modified');
+      expect(firstOutcome.textContent).not.toContain('END OF EVIDENCE');
+      expect(within(firstOutcome).getByRole('button', { name: 'Show more for outcome 1' })).toBeTruthy();
+      fireEvent.click(within(firstOutcome).getByRole('button', { name: 'Show more for outcome 1' }));
+      expect(firstOutcome.textContent).toContain('END OF EVIDENCE');
+
+      expect(passedOutcome.textContent).toContain('Achieved');
+      expect(passedOutcome.textContent).not.toContain('Scouts were read-only');
+      fireEvent.click(within(passedOutcome).getByRole('button', { name: 'Show explanation for outcome 2' }));
+      expect(passedOutcome.textContent).toContain('Scouts were read-only');
+
+      expect(screen.getByTestId('overview-outcome-3').textContent).toContain('The workspace changed');
+      expect(screen.getByTestId('overview-outcome-4').textContent).toContain('No alternatives were discussed');
+      expect(screen.getByTestId('overview-outcome-5').textContent).toContain('Implementation began immediately');
+      expect(screen.queryByText('See judge reasoning')).toBeNull();
+    });
+  });
+
   describe('traces tab banners', () => {
     it('should not show red error banner when metricsStatus is pending', async () => {
       // The red "Failed to load traces" banner in the Traces tab has condition:
@@ -362,22 +641,25 @@ describe('RunDetailsContent', () => {
       expect(screen.queryByText(/Failed to fetch traces/i)).toBeNull();
     });
 
-    it('should show error banner in header when metricsStatus is error', async () => {
-      // When polling exhausted all attempts, metricsStatus is set to 'error'
-      // and the header shows a red error banner. Post-#335 the title is derived
-      // from the error-kind label (NOT a blanket "Failed to fetch traces"), with
-      // the raw traceError shown beneath.
+    it('shows a muted trace notice without overriding a judge PASS', async () => {
       const report = createReport({
         metricsStatus: 'error',
         traceError: 'Traces never arrived (kind=trace_timeout): polling exhausted after 30 attempts',
+        matcherResults: [{
+          description: 'judge: expected outcomes',
+          method: 'llm-judge',
+          pass: true,
+          score: 1,
+        }],
       });
       mockGetReportById.mockResolvedValue(report);
 
       await renderAndWait(report);
 
       await waitFor(() => {
-        expect(screen.getByText('Traces never arrived')).toBeTruthy();
-        expect(screen.getByText(/polling exhausted after 30 attempts/)).toBeTruthy();
+        expect(screen.getAllByText('No trace data for this run').length).toBeGreaterThan(0);
+        expect(screen.getByText('PASSED')).toBeTruthy();
+        expect(screen.queryByText('Traces never arrived')).toBeNull();
       });
     });
 
@@ -413,6 +695,18 @@ describe('RunDetailsContent', () => {
       await renderAndWait(report);
 
       expect(mockFetchRunMetrics).toHaveBeenCalledWith('run-abc');
+    });
+
+    it('does not request trace metrics for a no-trace report', async () => {
+      const report = createReport({
+        runId: 'run-no-traces',
+        traceStatus: 'not_configured',
+      });
+      mockGetReportById.mockResolvedValue(report);
+
+      await renderAndWait(report);
+
+      expect(mockFetchRunMetrics).not.toHaveBeenCalled();
     });
   });
 
@@ -463,7 +757,7 @@ describe('RunDetailsContent', () => {
       await renderAndWait(report);
 
       expect(screen.getByText('Eval Duration')).toBeTruthy();
-      expect(screen.getByText('12500ms')).toBeTruthy();
+      expect(screen.getAllByText('12500ms').length).toBeGreaterThan(0);
       // Agent time shown in parentheses next to Duration
       expect(screen.getByText(/agent 8000ms/)).toBeTruthy();
     });
@@ -556,7 +850,7 @@ describe('RunDetailsContent', () => {
       });
 
       expect(screen.getByText('Eval Duration')).toBeTruthy();
-      expect(screen.getByText('49556ms')).toBeTruthy();
+      expect(screen.getAllByText('49556ms').length).toBeGreaterThan(0);
       // Agent time shown in parentheses next to Duration
       expect(screen.getByText(/agent 49154ms/)).toBeTruthy();
     });

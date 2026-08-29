@@ -18,6 +18,7 @@ import { asyncRunStorage } from '../storage/asyncRunStorage';
 import { executeBuildTrajectoryHook } from '@/lib/hooks';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { spansToTrajectory } from './spansToTrajectory';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 
 // Polling configuration. Defaults are overridable via env vars so that
 // CI / E2E runs without a real OpenSearch trace backend can fail fast
@@ -397,10 +398,11 @@ class TracePollingManager {
             state.running = false;
             callbacks?.onError(new Error(`Trace incomplete after ${state.maxAttempts} attempts`));
             
-            await this.patchErrorIfStillPending(reportId, buildEvaluatorErrorPatch(
+            await this.persistTraceFailure(
+              reportId,
               'trace_incomplete',
               `found ${filteredResult.spans.length} spans but no root span after ${state.maxAttempts} attempts`,
-            ) as any);
+            ).catch(err => console.error(`[TracePoller] Failed to update report error status:`, err));
             
             this.callbacks.delete(reportId);
             this.polls.delete(reportId);
@@ -458,10 +460,7 @@ class TracePollingManager {
           // Write error status so the report doesn't stay stuck in 'pending'.
           console.error(`[TracePoller] onTracesFound callback failed for report ${reportId}:`, callbackErr);
           try {
-            await asyncRunStorage.updateReport(reportId, buildEvaluatorErrorPatch(
-              'trace_callback_failed',
-              callbackErr,
-            ) as any);
+            await this.persistTraceFailure(reportId, 'trace_callback_failed', callbackErr, report);
           } catch (updateErr) {
             console.error(`[TracePoller] CRITICAL: Failed to update report ${reportId} error status after callback failure.`, updateErr);
           }
@@ -478,10 +477,15 @@ class TracePollingManager {
           callbacks?.onError(new Error(`Traces not available after ${state.maxAttempts} attempts`));
 
           // Update report with error status - critical as report will remain stuck otherwise
-          await this.patchErrorIfStillPending(reportId, buildEvaluatorErrorPatch(
-            'trace_timeout',
-            `traces not available after ${state.maxAttempts} attempts (${state.maxAttempts * state.intervalMs / 60000} minutes)`,
-          ) as any);
+          try {
+            await this.persistTraceFailure(
+              reportId,
+              'trace_timeout',
+              `traces not available after ${state.maxAttempts} attempts (${state.maxAttempts * state.intervalMs / 60000} minutes)`,
+            );
+          } catch (updateErr) {
+            console.error(`[TracePoller] CRITICAL: Failed to update report ${reportId} error status. Report may be stuck in pending state.`, updateErr);
+          }
 
           this.callbacks.delete(reportId);
           this.polls.delete(reportId);
@@ -498,10 +502,11 @@ class TracePollingManager {
         callbacks?.onError(error as Error);
 
         // Update report with error status - critical as report will remain stuck otherwise
-        await this.patchErrorIfStillPending(reportId, buildEvaluatorErrorPatch(
-          'trace_fetch_failed',
-          error,
-        ) as any);
+        try {
+          await this.persistTraceFailure(reportId, 'trace_fetch_failed', error);
+        } catch (updateErr) {
+          console.error(`[TracePoller] CRITICAL: Failed to update report ${reportId} error status. Report may be stuck in pending state.`, updateErr);
+        }
 
         this.callbacks.delete(reportId);
         this.polls.delete(reportId);
@@ -510,6 +515,52 @@ class TracePollingManager {
         state.timerId = setTimeout(() => this.poll(reportId), state.intervalMs);
       }
     }
+  }
+
+  /**
+   * Persist a terminal trace diagnostic without destroying a verdict that has
+   * already landed. Trace polling can race a no-trace/inline judge path; in
+   * that case the timeout is a warning, not a new evaluation result (#407).
+   */
+  private async persistTraceFailure(
+    reportId: string,
+    kind: 'trace_timeout' | 'trace_incomplete' | 'trace_callback_failed' | 'trace_fetch_failed',
+    error: unknown,
+    knownReport?: EvaluationReport,
+  ): Promise<void> {
+    const errorPatch = buildEvaluatorErrorPatch(kind, error);
+    let current: EvaluationReport | null = knownReport ?? null;
+    // Re-read whenever the caller does not already hold an authoritative
+    // verdict. Timeout/fetch failures can race another poller or judge that
+    // settles the report between the top-of-poll read and this write.
+    if (!getJudgeVerdict(current)) {
+      try {
+        current = (await asyncRunStorage.getReportById(reportId)) ?? current;
+      } catch {
+        // Failure persistence must still work when the storage read is
+        // unavailable; in that case there is no known verdict to protect.
+      }
+    }
+    const verdict = getJudgeVerdict(current);
+
+    if (verdict) {
+      await asyncRunStorage.updateReport(reportId, {
+        metricsStatus: 'ready',
+        traceStatus: 'unavailable',
+        traceError: errorPatch.traceError,
+      });
+      return;
+    }
+
+    // Another path already recorded a terminal evaluator error (or a ready
+    // state without a parseable legacy verdict). Do not replace that more
+    // specific result with a generic trace diagnostic.
+    if (current?.metricsStatus === 'ready' || current?.metricsStatus === 'error') return;
+
+    await asyncRunStorage.updateReport(reportId, {
+      ...errorPatch,
+      traceStatus: 'unavailable',
+    } as any);
   }
 
   /**
