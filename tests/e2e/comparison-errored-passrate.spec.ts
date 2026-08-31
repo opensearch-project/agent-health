@@ -119,11 +119,9 @@ test.describe('Comparison — errored runs excluded from pass rate', () => {
     await page.goto(`/compare/${benchmarkId}`);
     await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
 
-    // The summary table lives in the scoreboard's collapsed "All metrics" panel
-    // (which replaced the standalone "Detailed metrics" Collapsible).
-    const detailed = page.locator('button:has-text("All metrics")');
-    await detailed.waitFor({ timeout: 15000 });
-    await detailed.click();
+    // Every metric now lives directly on the scoreboard row (the old
+    // standalone "All metrics" panel / Collapsible is gone entirely).
+    await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 15000 });
 
     const passRate = page.locator(`[data-testid="run-passrate-${runId}"]`);
     await expect(passRate).toBeVisible({ timeout: 15000 });

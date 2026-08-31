@@ -5,11 +5,9 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, ChevronUp, Copy, ExternalLink, X, ArrowUpDown, Grid2x2 } from 'lucide-react';
+import { ChevronUp, ExternalLink, X, ArrowUpDown } from 'lucide-react';
 import { cn, formatRelativeTime, getModelName } from '@/lib/utils';
-import { formatCost, formatDuration } from '@/services/metrics';
-import { Button } from '@/components/ui/button';
-import { MetricComparisonPanel } from './MetricComparisonPanel';
+import { formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import type { RunAggregateMetrics, BenchmarkRun } from '@/types';
 import type { TestCaseOverlap } from '@/services/comparisonService';
 
@@ -33,7 +31,7 @@ export interface ComparisonScoreboardProps {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const formatPassRate = (v: number | undefined): string =>
+const formatPercent = (v: number | undefined): string =>
   v !== undefined ? `${Math.round(v)}%` : '--';
 
 const formatCostSafe = (v: number | undefined): string => {
@@ -45,6 +43,16 @@ const formatCostSafe = (v: number | undefined): string => {
 const formatDurationSafe = (v: number | undefined): string => {
   if (v === undefined) return '--';
   return formatDuration(v);
+};
+
+const formatTokensSafe = (v: number | undefined): string => {
+  if (v === undefined) return '--';
+  return formatTokens(v);
+};
+
+const formatCountSafe = (v: number | undefined): string => {
+  if (v === undefined) return '--';
+  return v.toLocaleString();
 };
 
 const formatDelta = (a: number | undefined, b: number | undefined, suffix = ''): string => {
@@ -68,70 +76,6 @@ const RunBadgeB: React.FC = () => (
     B
   </span>
 );
-
-// ─── Run detail drawer ───────────────────────────────────────────────────────
-
-interface RunDetailDrawerProps {
-  run: RunAggregateMetrics;
-  selectedRun: BenchmarkRun;
-  label: 'A' | 'B';
-  benchmarkId?: string;
-  getAgentName: (key: string) => string;
-  onRemove: () => void;
-}
-
-const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({ run, selectedRun, label, benchmarkId, getAgentName, onRemove }) => {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    // Best-effort: writeText() can reject (insecure context, missing
-    // permission, unsupported browser). The "Copied" affordance is a nice-to-
-    // have hint, not a critical action, so we swallow the rejection rather
-    // than surface it — but it must be caught, or a failed copy becomes an
-    // unhandled promise rejection.
-    navigator.clipboard.writeText(run.runId).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  return (
-    <div className="px-4 py-2 bg-muted/30 border-t border-border/50 text-xs space-y-1">
-      <div className="flex items-center gap-2 text-muted-foreground">
-        <span className="font-medium text-foreground">{run.runName || getAgentName(run.agentKey)}</span>
-        <span>started {formatRelativeTime(run.createdAt)}</span>
-      </div>
-      <div className="flex items-center gap-2 text-muted-foreground">
-        <span>Judge: {getModelName(selectedRun.modelId)}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <code className="text-[10px] font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-          {run.runId}
-        </code>
-        <button onClick={handleCopy} className="text-muted-foreground hover:text-foreground transition-colors" title="Copy run ID">
-          <Copy size={11} />
-        </button>
-        {copied && <span className="text-[10px] text-green-400">Copied</span>}
-      </div>
-      <div className="flex items-center gap-2 pt-1">
-        <Link
-          to={benchmarkId
-            ? `/evaluations/benchmarks/${benchmarkId}/runs/${run.runId}`
-            : `/evaluations/runs/${run.runId}`}
-          data-testid={`open-run-${run.runId}`}
-          className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300"
-        >
-          <ExternalLink size={10} /> Open run
-        </Link>
-        <button
-          onClick={onRemove}
-          className="inline-flex items-center gap-1 text-[10px] text-red-400 hover:text-red-300 ml-auto"
-        >
-          <X size={10} /> Remove
-        </button>
-      </div>
-    </div>
-  );
-};
 
 // ─── Micro pass-rate bar ─────────────────────────────────────────────────────
 
@@ -163,14 +107,14 @@ const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentNa
     <div className="flex items-center gap-3 px-4 py-2 text-xs" data-testid="scoreboard-condensed">
       <span className="inline-flex items-center gap-1">
         <RunBadgeA /> <span className="font-medium">{getAgentName(a.agentKey)}</span>
-        <span className="tabular-nums">{formatPassRate(a.passRatePercent)}</span>
+        <span className="tabular-nums">{formatPercent(a.passRatePercent)}</span>
       </span>
       {b && (
         <>
           <span className="text-muted-foreground">vs</span>
           <span className="inline-flex items-center gap-1">
             <RunBadgeB /> <span className="font-medium">{getAgentName(b.agentKey)}</span>
-            <span className="tabular-nums">{formatPassRate(b.passRatePercent)}</span>
+            <span className="tabular-nums">{formatPercent(b.passRatePercent)}</span>
           </span>
           <span
             className={cn(
@@ -202,6 +146,33 @@ const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentNa
   );
 };
 
+// ─── Judge line ──────────────────────────────────────────────────────────────
+
+/**
+ * Judge info used to live per-row in an expandable drawer, duplicated once
+ * per run. Owner feedback: show it exactly ONCE — a single muted line, not a
+ * per-run dropdown. Same judge model across all selected runs collapses to
+ * one name; differing judges show both, labeled A/B.
+ */
+const JudgeLine: React.FC<{ selectedRuns: BenchmarkRun[] }> = ({ selectedRuns }) => {
+  const modelIds = selectedRuns.map(r => r.modelId).filter((m): m is string => !!m);
+  if (modelIds.length === 0) return null;
+  const allSame = modelIds.every(m => m === modelIds[0]);
+
+  return (
+    <div className="px-4 py-1.5 text-[11px] text-muted-foreground" data-testid="scoreboard-judge-line">
+      {allSame ? (
+        <span>Judge: {getModelName(modelIds[0])}</span>
+      ) : (
+        <span>
+          Judge: A {getModelName(modelIds[0])}
+          {modelIds[1] !== undefined && <> · B {getModelName(modelIds[1])}</>}
+        </span>
+      )}
+    </div>
+  );
+};
+
 // ─── Main ComparisonScoreboard ───────────────────────────────────────────────
 
 export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
@@ -213,9 +184,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
   onSwapRuns,
   getAgentName,
 }) => {
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [isCondensed, setIsCondensed] = useState(false);
-  const [metricsExpanded, setMetricsExpanded] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const bandRef = useRef<HTMLDivElement>(null);
 
@@ -248,17 +217,23 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
     sentinelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
-  // Single-run selections still get the scoreboard (run row + "All metrics"
-  // expander) — the delta footer and swap only make sense for two runs.
+  // Single-run selections still get the scoreboard (just one row, no delta
+  // footer / swap / judge-vs-judge line).
   if (runs.length === 0) return null;
 
   const [runA, runB] = runs;
   const passRateDelta = runB ? runA.passRatePercent - runB.passRatePercent : 0;
+  const accuracyDelta = (runB && runA.avgAccuracy !== undefined && runB.avgAccuracy !== undefined)
+    ? runA.avgAccuracy - runB.avgAccuracy
+    : undefined;
   const costDelta = (runB && runA.totalCostUsd !== undefined && runB.totalCostUsd !== undefined)
     ? runA.totalCostUsd - runB.totalCostUsd
     : undefined;
   const durationDelta = (runB && runA.avgDurationMs !== undefined && runB.avgDurationMs !== undefined)
     ? runA.avgDurationMs - runB.avgDurationMs
+    : undefined;
+  const tokensDelta = (runB && runA.totalTokens !== undefined && runB.totalTokens !== undefined)
+    ? runA.totalTokens - runB.totalTokens
     : undefined;
 
   return (
@@ -282,112 +257,133 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
           />
         ) : (
           <>
-            {/* Full scoreboard table */}
+            {/* Full scoreboard table — every RunAggregateMetrics metric lives
+                on the run row itself now (no separate "All metrics" panel). */}
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border/50 text-[10px] uppercase tracking-wide text-muted-foreground">
-                    <th className="px-4 py-2 text-left w-[200px]">Run</th>
+                    <th className="px-4 py-2 text-left w-[180px]">Run</th>
                     <th className="px-3 py-2 text-right">Pass Rate</th>
+                    <th className="px-3 py-2 text-right">Avg Accuracy</th>
                     <th className="px-3 py-2 text-right">Cost</th>
                     <th className="px-3 py-2 text-right">Avg Duration</th>
+                    <th className="px-3 py-2 text-right">Tokens</th>
+                    <th className="px-3 py-2 text-right">LLM Calls</th>
+                    <th className="px-3 py-2 text-right">Tool Calls</th>
                     <th className="px-3 py-2 text-right">Coverage</th>
-                    <th className="px-2 py-2 w-8"></th>
+                    <th className="px-2 py-2 w-16"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {runs.slice(0, 2).map((run, idx) => {
                     const label = idx === 0 ? 'A' : 'B';
-                    const isExpanded = expandedRow === run.runId;
                     const Badge = idx === 0 ? RunBadgeA : RunBadgeB;
                     const barColor = idx === 0 ? 'rgb(59,130,246)' : 'rgb(168,85,247)';
+                    const benchmarkId = runBenchmarkIdById?.get(run.runId);
 
                     return (
-                      <React.Fragment key={run.runId}>
-                        <tr
-                          className="cursor-pointer hover:bg-muted/30 transition-colors group"
-                          onClick={() => setExpandedRow(isExpanded ? null : run.runId)}
-                          data-testid={`scoreboard-row-${label}`}
-                        >
-                          <td className="px-4 py-2">
-                            <div className="flex items-center gap-2">
-                              <Badge />
-                              <span className="font-medium truncate max-w-[120px]">
-                                {getAgentName(run.agentKey)}
-                              </span>
-                              <span className="text-muted-foreground text-[10px] truncate">
-                                {getModelName(run.modelId)} · {formatRelativeTime(run.createdAt)}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-right relative">
-                            <MicroBar percent={run.passRatePercent} color={barColor} />
-                            <span className="relative font-semibold tabular-nums">
-                              {formatPassRate(run.passRatePercent)}
+                      <tr
+                        key={run.runId}
+                        className="hover:bg-muted/30 transition-colors group"
+                        data-testid={`scoreboard-row-${label}`}
+                      >
+                        <td className="px-4 py-2">
+                          <div className="flex items-center gap-2">
+                            <Badge />
+                            <span className="font-medium truncate max-w-[100px]">
+                              {getAgentName(run.agentKey)}
                             </span>
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
-                            {formatCostSafe(run.totalCostUsd)}
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
-                            {formatDurationSafe(run.avgDurationMs)}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            {idx === 0 && (
-                              /* Carries the old ComparisonOverlapBanner contract
-                                 (data-testid + data-overlap) — deep links and e2e
-                                 gate on it. Per-run breakdown moves to the tooltip. */
-                              <span
-                                data-testid="comparison-overlap-banner"
-                                data-overlap={overlap.fullyOverlapping ? 'full' : 'partial'}
-                                className="text-muted-foreground cursor-help"
-                                title={
-                                  overlap.fullyOverlapping
-                                    ? `All ${overlap.runCount} runs ran the same ${overlap.totalTestCases} test case${overlap.totalTestCases === 1 ? '' : 's'} — fully comparable.`
-                                    : `${overlap.partialTestCases} case${overlap.partialTestCases === 1 ? '' : 's'} only in some runs (shown as "Not run" where skipped). ` +
-                                      overlap.perRun
-                                        .map(r => `${r.runName}: ${r.count} ran${r.uniqueCount > 0 ? `, ${r.uniqueCount} only here` : ''}`)
-                                        .join(' · ')
-                                }
-                              >
-                                {!runB ? (
-                                  <span>
-                                    {overlap.totalTestCases} case{overlap.totalTestCases === 1 ? '' : 's'}
-                                  </span>
-                                ) : overlap.fullyOverlapping ? (
-                                  <span className="text-green-400">
-                                    {overlap.sharedTestCases} shared, fully comparable
-                                  </span>
-                                ) : (
-                                  <span className="text-amber-400">
-                                    {overlap.sharedTestCases} shared / {overlap.totalTestCases} total
-                                  </span>
-                                )}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-2 py-2 text-muted-foreground">
-                            <ChevronRight
-                              size={12}
-                              className={cn('transition-transform', isExpanded && 'rotate-90')}
-                            />
-                          </td>
-                        </tr>
-                        {isExpanded && (
-                          <tr>
-                            <td colSpan={6}>
-                              <RunDetailDrawer
-                                run={run}
-                                selectedRun={selectedRuns[idx]}
-                                label={label as 'A' | 'B'}
-                                benchmarkId={runBenchmarkIdById?.get(run.runId)}
-                                getAgentName={getAgentName}
-                                onRemove={() => onRemoveRun(run.runId)}
-                              />
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
+                            <span className="text-muted-foreground text-[10px] truncate">
+                              {formatRelativeTime(run.createdAt)}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-right relative">
+                          <MicroBar percent={run.passRatePercent} color={barColor} />
+                          <span
+                            data-testid={`run-passrate-${run.runId}`}
+                            className="relative font-semibold tabular-nums"
+                          >
+                            {formatPercent(run.passRatePercent)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          <span data-testid={`run-accuracy-${run.runId}`}>
+                            {formatPercent(run.avgAccuracy)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatCostSafe(run.totalCostUsd)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatDurationSafe(run.avgDurationMs)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatTokensSafe(run.totalTokens)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatCountSafe(run.totalLlmCalls)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatCountSafe(run.totalToolCalls)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {idx === 0 && (
+                            /* Carries the old ComparisonOverlapBanner contract
+                               (data-testid + data-overlap) — deep links and e2e
+                               gate on it. Per-run breakdown moves to the tooltip. */
+                            <span
+                              data-testid="comparison-overlap-banner"
+                              data-overlap={overlap.fullyOverlapping ? 'full' : 'partial'}
+                              className="text-muted-foreground cursor-help"
+                              title={
+                                overlap.fullyOverlapping
+                                  ? `All ${overlap.runCount} runs ran the same ${overlap.totalTestCases} test case${overlap.totalTestCases === 1 ? '' : 's'} — fully comparable.`
+                                  : `${overlap.partialTestCases} case${overlap.partialTestCases === 1 ? '' : 's'} only in some runs (shown as "Not run" where skipped). ` +
+                                    overlap.perRun
+                                      .map(r => `${r.runName}: ${r.count} ran${r.uniqueCount > 0 ? `, ${r.uniqueCount} only here` : ''}`)
+                                      .join(' · ')
+                              }
+                            >
+                              {!runB ? (
+                                <span>
+                                  {overlap.totalTestCases} case{overlap.totalTestCases === 1 ? '' : 's'}
+                                </span>
+                              ) : overlap.fullyOverlapping ? (
+                                <span className="text-green-400">
+                                  {overlap.sharedTestCases} shared, fully comparable
+                                </span>
+                              ) : (
+                                <span className="text-amber-400">
+                                  {overlap.sharedTestCases} shared / {overlap.totalTestCases} total
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Link
+                              to={benchmarkId
+                                ? `/evaluations/benchmarks/${benchmarkId}/runs/${run.runId}`
+                                : `/evaluations/runs/${run.runId}`}
+                              data-testid={`open-run-${run.runId}`}
+                              title="Open run"
+                              className="inline-flex items-center text-muted-foreground hover:text-blue-400 transition-colors"
+                            >
+                              <ExternalLink size={12} />
+                            </Link>
+                            <button
+                              onClick={() => onRemoveRun(run.runId)}
+                              title="Remove"
+                              className="inline-flex items-center text-muted-foreground hover:text-red-400 transition-colors"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -420,6 +416,20 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                       </span>
                     </td>
                     <td className="px-3 py-1.5 text-right">
+                      {accuracyDelta !== undefined && (
+                        <span
+                          data-testid="scoreboard-delta-accuracy"
+                          className={cn(
+                            'tabular-nums text-[11px]',
+                            accuracyDelta > 0 ? 'text-blue-400' : accuracyDelta < 0 ? 'text-red-400' : 'text-muted-foreground'
+                          )}
+                          title={accuracyDelta === 0 ? 'No change' : undefined}
+                        >
+                          {formatDelta(runA.avgAccuracy, runB.avgAccuracy, 'pp')}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
                       {costDelta !== undefined && (
                         <span
                           data-testid="scoreboard-delta-cost"
@@ -447,6 +457,22 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                         </span>
                       )}
                     </td>
+                    <td className="px-3 py-1.5 text-right">
+                      {tokensDelta !== undefined && (
+                        <span
+                          data-testid="scoreboard-delta-tokens"
+                          className={cn(
+                            'tabular-nums text-[11px]',
+                            tokensDelta < 0 ? 'text-green-400' : tokensDelta > 0 ? 'text-red-400' : 'text-muted-foreground'
+                          )}
+                          title={tokensDelta === 0 ? 'No change' : undefined}
+                        >
+                          {tokensDelta === 0 ? '—' : (tokensDelta > 0 ? '+' : '-') + formatTokens(Math.abs(tokensDelta))}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-1.5"></td>
+                    <td className="px-3 py-1.5"></td>
                     <td className="px-3 py-1.5"></td>
                     <td className="px-2 py-1.5"></td>
                   </tr>
@@ -455,25 +481,9 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
               </table>
             </div>
 
-            {/* "All metrics" expander */}
+            {/* Judge info — once, not per-row (replaces the old per-run drawer). */}
             <div className="border-t border-border/50">
-              <button
-                onClick={() => setMetricsExpanded(!metricsExpanded)}
-                className="flex items-center gap-2 w-full text-left px-4 py-2 hover:bg-muted/30 transition-colors"
-                data-testid="scoreboard-all-metrics-toggle"
-              >
-                <Grid2x2 size={12} className="text-muted-foreground" />
-                <span className="text-[10px] font-medium">All metrics</span>
-                <ChevronRight
-                  size={12}
-                  className={cn('text-muted-foreground transition-transform ml-auto', metricsExpanded && 'rotate-90')}
-                />
-              </button>
-              {metricsExpanded && (
-                <div className="px-4 pb-3">
-                  <MetricComparisonPanel runs={runs} />
-                </div>
-              )}
+              <JudgeLine selectedRuns={selectedRuns} />
             </div>
           </>
         )}

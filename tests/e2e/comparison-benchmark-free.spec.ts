@@ -162,25 +162,30 @@ test.describe('Benchmark-free comparison (test-level primitive)', () => {
     await expect(legend.locator('[data-testid="scoreboard-row-B"]')).toBeVisible();
   });
 
-  test('run row expands into a detail drawer (copy id + deep link) and collapses again; A/B swap keeps both rows rendered', async ({ page }) => {
+  test('run row shows every metric inline and an Open-run link + Remove button (no drawer); A/B swap keeps both rows rendered', async ({ page }) => {
     await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
     await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
 
     const rowA = page.locator('[data-testid="scoreboard-row-A"]');
-    await rowA.click();
+    await expect(rowA).toBeVisible();
 
-    // Drawer: deep link back to the run detail page + the raw run id + a
-    // working "copy id" affordance.
-    const openRunLink = page.locator(`a[href="/evaluations/runs/${RUN_A}"]`);
+    // Every metric renders directly on the row (Change 2) — no click needed.
+    await expect(rowA.locator(`[data-testid="run-passrate-${RUN_A}"]`)).toBeVisible();
+    await expect(rowA.locator(`[data-testid="run-accuracy-${RUN_A}"]`)).toBeVisible();
+
+    // Inline "Open run" link (Change 3) — no drawer, no click-to-expand.
+    const openRunLink = rowA.locator(`a[href="/evaluations/runs/${RUN_A}"]`);
     await expect(openRunLink).toBeVisible();
-    await expect(page.locator(`code:has-text("${RUN_A}")`)).toBeVisible();
 
-    await page.locator('button[title="Copy run ID"]').click();
-    await expect(page.locator('text=Copied')).toBeVisible();
+    // Judge info renders exactly once for the whole scoreboard, not per row.
+    await expect(page.locator('[data-testid="scoreboard-judge-line"]')).toHaveCount(1);
 
-    // Second click on the same row collapses the drawer again.
-    await rowA.click();
-    await expect(openRunLink).not.toBeVisible();
+    // No "All metrics" expander and no chart in this flow anymore.
+    await expect(page.locator('[data-testid="scoreboard-all-metrics-toggle"]')).toHaveCount(0);
+    await expect(page.locator('.recharts-wrapper')).toHaveCount(0);
+
+    // Remove affordance is inline on the row (title="Remove"), no drawer needed.
+    await expect(rowA.locator('button[title="Remove"]')).toBeVisible();
 
     // Swap A/B via the delta-footer control — both rows re-render (no crash,
     // no request outside the mocks set up in beforeEach).

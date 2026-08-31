@@ -133,7 +133,7 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
     await page.goto(`/compare?runs=${BENCH_RUN_ID},${ADHOC_RUN_ID}`);
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
 
-    await page.locator('[data-testid="scoreboard-row-A"]').click();
+    // No click-to-expand needed anymore — the Open-run link is inline on the row.
     const openRunA = page.locator(`[data-testid="open-run-${BENCH_RUN_ID}"]`);
     await expect(openRunA).toBeVisible();
     await expect(openRunA).toHaveAttribute('href', `/evaluations/benchmarks/${BENCH_ID}/runs/${BENCH_RUN_ID}`);
@@ -152,7 +152,6 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
     await page.goto(`/compare?runs=${BENCH_RUN_ID},${ADHOC_RUN_ID}`);
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
 
-    await page.locator('[data-testid="scoreboard-row-B"]').click();
     const openRunB = page.locator(`[data-testid="open-run-${ADHOC_RUN_ID}"]`);
     await expect(openRunB).toBeVisible();
     await expect(openRunB).toHaveAttribute('href', `/evaluations/runs/${ADHOC_RUN_ID}`);
@@ -168,7 +167,6 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
     await page.goto(`/compare?runs=${BENCH_RUN_ID},${LABELED_RUN_ID}`);
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
 
-    await page.locator('[data-testid="scoreboard-row-B"]').click();
     const openRunLabeled = page.locator(`[data-testid="open-run-${LABELED_RUN_ID}"]`);
     await expect(openRunLabeled).toBeVisible();
     await expect(openRunLabeled).toHaveAttribute('href', `/evaluations/runs/${LABELED_RUN_ID}`);

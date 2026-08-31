@@ -81,25 +81,23 @@ describe('ComparisonPage detailed-metrics + run-badge fixes', () => {
     expect(src).not.toContain('<MetricsTimeSeriesChart');
   });
 
-  it('renders the ComparisonScoreboard which embeds MetricComparisonPanel', () => {
+  it('renders the ComparisonScoreboard which shows every metric on the run rows (no separate metrics panel)', () => {
     expect(src).toContain('<ComparisonScoreboard');
     const scoreboard = read('components/comparison/ComparisonScoreboard.tsx');
-    expect(scoreboard).toContain('<MetricComparisonPanel');
+    expect(scoreboard).not.toContain('MetricComparisonPanel');
     expect(src).not.toContain('RunComparisonBarChart');
     expect(src).not.toContain('MetricComparisonGrid');
   });
 
-  it('detailed-metrics shows a bar chart for graphable metrics + a metrics matrix (no deprecated legacy metrics)', () => {
-    const panel = read('components/comparison/MetricComparisonPanel.tsx');
-    expect(panel).toContain('BarChart');
-    expect(panel).toContain("from 'recharts'");
-    // matrix: a <table> with one row per metric and a column per run.
-    expect(panel).toContain('<table');
-    expect(panel).toContain('graphable');
+  it('detailed metrics render directly on the scoreboard rows, no chart, no deprecated legacy metrics', () => {
+    const scoreboard = read('components/comparison/ComparisonScoreboard.tsx');
+    // No chart anywhere in this flow (owner feedback: no charts wanted).
+    expect(scoreboard).not.toContain('recharts');
+    expect(scoreboard).not.toContain('BarChart');
     // The deprecated legacy judge metrics are NOT surfaced as comparison metrics.
-    expect(panel).not.toContain('Faithfulness');
-    expect(panel).not.toContain('avgTrajectoryScore');
-    expect(panel).not.toContain('avgLatencyScore');
+    expect(scoreboard).not.toContain('Faithfulness');
+    expect(scoreboard).not.toContain('avgTrajectoryScore');
+    expect(scoreboard).not.toContain('avgLatencyScore');
   });
 
   it('drops the run multiselect + Compare/Iterate toggle (unified search replaces the toolbar)', () => {
@@ -228,9 +226,9 @@ describe('Comparison search: default run scope, all-runs universe, single search
 });
 
 describe('Consolidated metrics matrix keeps #345 pass-rate/accuracy regression hooks', () => {
-  it('MetricComparisonPanel matrix cells carry run-passrate / run-accuracy testids', () => {
-    const src = read('components/comparison/MetricComparisonPanel.tsx');
-    expect(src).toContain('run-passrate-${runs[i].runId}');
-    expect(src).toContain('run-accuracy-${runs[i].runId}');
+  it('ComparisonScoreboard run rows carry run-passrate / run-accuracy testids', () => {
+    const src = read('components/comparison/ComparisonScoreboard.tsx');
+    expect(src).toContain('run-passrate-${run.runId}');
+    expect(src).toContain('run-accuracy-${run.runId}');
   });
 });

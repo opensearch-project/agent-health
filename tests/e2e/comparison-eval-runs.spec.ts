@@ -55,10 +55,10 @@ test.describe('Comparison Page — evaluation runs (benchmark-free)', () => {
       await expect(page.locator('text=E2E Compare Run B').first()).toBeVisible();
       // Run-centric breadcrumb points at Evaluation Runs (not Benchmarks).
       await expect(page.locator('text=Evaluation Runs').first()).toBeVisible();
-      // The comparison content rendered — the scoreboard's "All metrics"
-      // expander (which replaced the standalone "Detailed metrics" section)
-      // exists for any ≥2-run view.
-      await expect(page.locator('text=All metrics').first()).toBeVisible();
+      // The comparison content rendered — the scoreboard itself (which
+      // replaced the standalone "Detailed metrics" section and now shows
+      // every metric directly on the run rows) exists for any ≥2-run view.
+      await expect(page.locator('[data-testid="comparison-scoreboard"]').first()).toBeVisible();
     } finally {
       await api.delete(`/api/storage/evaluation-runs/${RUN_A}`).catch(() => {});
       await api.delete(`/api/storage/evaluation-runs/${RUN_B}`).catch(() => {});
