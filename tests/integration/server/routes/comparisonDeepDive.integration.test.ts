@@ -144,4 +144,74 @@ describe('Comparison Deep-Dive Route Integration Tests', () => {
       TEST_TIMEOUT
     );
   });
+
+  describe('POST /api/comparison/deep-dive - rows validation (400) [Round 2: comparison-wide results table]', () => {
+    it(
+      'returns 400 when rows is not an array',
+      async () => {
+        if (!backendAvailable) return;
+        const res = await post({ reportIds: ['a', 'b'], rows: 'not-an-array' });
+        expect(res.status).toBe(400);
+        const data = await res.json();
+        expect(data.error).toMatch(/rows must be an array/);
+      },
+      TEST_TIMEOUT
+    );
+
+    it(
+      'returns 400 when rows exceeds the entry cap',
+      async () => {
+        if (!backendAvailable) return;
+        const tooMany = Array.from({ length: 501 }, (_, i) => ({ testCaseId: `tc-${i}`, testCaseName: `Case ${i}` }));
+        const res = await post({ reportIds: ['a', 'b'], rows: tooMany });
+        expect(res.status).toBe(400);
+        const data = await res.json();
+        expect(data.error).toMatch(/rows must contain at most 500 entries/);
+      },
+      TEST_TIMEOUT
+    );
+
+    it(
+      'accepts a well-formed rows array and proceeds past validation (404 for the fake report ids, not 400)',
+      async () => {
+        if (!backendAvailable) return;
+        const res = await post({
+          reportIds: ['report-does-not-exist-aaaa', 'report-does-not-exist-bbbb'],
+          rows: [
+            { testCaseId: 'tc-1', testCaseName: 'Disagreement case', a: { passFailStatus: 'passed', score: 92 }, b: { passFailStatus: 'failed', score: 41 } },
+            { testCaseId: 'tc-2', testCaseName: 'Both pass', a: { passFailStatus: 'passed', score: 88 }, b: { passFailStatus: 'passed', score: 90 } },
+          ],
+        });
+        expect(res.status).toBe(404);
+      },
+      TEST_TIMEOUT
+    );
+
+    it(
+      'silently drops malformed individual rows (missing testCaseId) rather than 400ing the whole request',
+      async () => {
+        if (!backendAvailable) return;
+        const res = await post({
+          reportIds: ['report-does-not-exist-aaaa', 'report-does-not-exist-bbbb'],
+          rows: [{ testCaseName: 'no id here' }, 'not-even-an-object', { testCaseId: 'tc-1', testCaseName: 'valid' }],
+        });
+        // The malformed rows are dropped defensively; the request still
+        // clears validation and falls through to the normal 404 path.
+        expect(res.status).toBe(404);
+      },
+      TEST_TIMEOUT
+    );
+
+    it(
+      'omitting rows entirely still works (back-compat with the pre-round-2 request shape)',
+      async () => {
+        if (!backendAvailable) return;
+        const res = await post({
+          reportIds: ['report-does-not-exist-aaaa', 'report-does-not-exist-bbbb'],
+        });
+        expect(res.status).toBe(404);
+      },
+      TEST_TIMEOUT
+    );
+  });
 });

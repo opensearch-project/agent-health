@@ -6,12 +6,15 @@
 /**
  * Unit tests for the comparison deep-dive service.
  *
- * Guards the two things most likely to silently regress:
+ * Guards the things most likely to silently regress:
  *   1. the SYSTEM_PROMPT actually instructs the agent to hunt + report ERRORS
- *      in either/both runs (this content was lost once and re-added);
+ *      on the traced case (this content was lost once and re-added);
  *   2. buildUserPrompt threads each run's identity (key, runId, label) so the
- *      agent can cite spans with the correct runId.
- * Plus the exactly-2-runs guard on the public entry point.
+ *      agent can cite spans with the correct runId, AND (this round) threads
+ *      the full A-vs-B results table so the default prompt can analyze the
+ *      comparison as a whole, not just the one traced case;
+ *   3. the exactly-2-runs guard on the public entry point;
+ *   4. the optional systemPrompt override plumbing (Change 4, prior round).
  */
 
 import {
@@ -19,10 +22,11 @@ import {
   buildUserPrompt,
   generateComparisonDeepDive,
   type ComparisonRunInput,
+  type ComparisonRowSummary,
 } from '@/server/services/comparisonDeepDiveService';
 
 describe('comparisonDeepDiveService — SYSTEM_PROMPT', () => {
-  it('instructs the agent to hunt for errors on EACH side', () => {
+  it('instructs the agent to hunt for errors on EACH side of the traced case', () => {
     expect(SYSTEM_PROMPT).toMatch(/ERRORS/);
     expect(SYSTEM_PROMPT).toMatch(/hunt for failures on EACH side/i);
     // Mentions concrete error signals so the model knows what to look for.
@@ -31,27 +35,44 @@ describe('comparisonDeepDiveService — SYSTEM_PROMPT', () => {
     expect(SYSTEM_PROMPT).toMatch(/failed or were retried/i);
   });
 
-  it('requires an always-present Errors bullet covering side A, B, or both', () => {
-    expect(SYSTEM_PROMPT).toMatch(/\*\*Errors\*\* bullet that is ALWAYS present/);
+  it('requires an always-present Errors bullet for the traced case, covering side A, B, or both', () => {
+    expect(SYSTEM_PROMPT).toMatch(/\*\*Errors\*\* bullet for the TRACED CASE that is ALWAYS present/);
     expect(SYSTEM_PROMPT).toMatch(/side A, side B, or both/);
     // And an explicit per-side "no errors observed" when clean (never omitted).
     expect(SYSTEM_PROMPT).toMatch(/no errors observed/);
     expect(SYSTEM_PROMPT).toMatch(/never silently omit/i);
   });
 
-  it('instructs the agent to say CASE, never RUN, using the owner-mandated outcome+score template', () => {
-    // This deep-dive is per test case, not a benchmark run's aggregate pass
-    // rate -- owner feedback: "Run A passed (100/100)" reads like a run-level
-    // stat even though the panel is analyzing one case (see #398 follow-up).
-    expect(SYSTEM_PROMPT).toMatch(/CASE, never RUN/);
-    expect(SYSTEM_PROMPT).toMatch(/NEVER write "Run A" \/ "Run B"/);
-    expect(SYSTEM_PROMPT).toMatch(/On this case, A passed \(judge 100\/100\)/);
-    expect(SYSTEM_PROMPT).toMatch(/On this case, B failed \(judge 42\/100\)/);
+  it('analyzes the comparison AS A WHOLE, selectively picking rows from the results table (not a fixed rubric, not every row)', () => {
+    // Round 2 owner request: the default prompt now takes into account ALL
+    // compared cases via a results table, selectively surfacing disagreements/
+    // score gaps/category patterns — a real shift from the prior "ONE CASE
+    // only" scope, so the old "CASE, never RUN" absolute rule no longer fits
+    // (comparison-wide, run-level framing is now expected).
+    expect(SYSTEM_PROMPT).toMatch(/RESULTS TABLE/);
+    expect(SYSTEM_PROMPT).toMatch(/SELECTIVELY pick the rows that actually matter/);
+    expect(SYSTEM_PROMPT).toMatch(/Do NOT force a fixed rubric onto every row/);
+    expect(SYSTEM_PROMPT).toMatch(/do NOT walk the table top to bottom/);
+    expect(SYSTEM_PROMPT).toMatch(/COMPARISON AS A WHOLE/);
+    // Explicitly no longer forbids run-level language — the opposite of the
+    // old rule.
+    expect(SYSTEM_PROMPT).toMatch(/fine to discuss run-level \/ comparison-wide patterns/);
+    expect(SYSTEM_PROMPT).not.toMatch(/CASE, never RUN/);
+    expect(SYSTEM_PROMPT).not.toMatch(/NEVER write "Run A" \/ "Run B"/);
+  });
+
+  it('scopes the span/log tools to exactly ONE traced case and forbids claiming trace detail elsewhere', () => {
+    expect(SYSTEM_PROMPT).toMatch(/scoped to exactly ONE representative case/);
+    expect(SYSTEM_PROMPT).toMatch(/CANNOT inspect any case in the table other than the traced one/);
+    expect(SYSTEM_PROMPT).toMatch(/never claim to have traced a case you did not query/);
   });
 
   it('still asks for span citations + a tight markdown deep-dive', () => {
     expect(SYSTEM_PROMPT).toMatch(/span:<runId>:<spanId>/);
     expect(SYSTEM_PROMPT).toMatch(/headline verdict/i);
+    // Word cap bumped up this round (280 -> 350) to make room for the
+    // comparison-wide framing.
+    expect(SYSTEM_PROMPT).toMatch(/~350 words/);
   });
 
   it('instructs the agent to record a chart and follow-up experiment suggestions before writing', () => {
@@ -60,8 +81,9 @@ describe('comparisonDeepDiveService — SYSTEM_PROMPT', () => {
     expect(SYSTEM_PROMPT).toMatch(/omit either or both rather than fabricating/i);
   });
 
-  it('instructs the agent to never write a bare "N/N" judge score (misreads as a case count)', () => {
-    expect(SYSTEM_PROMPT).toMatch(/scored 100\/100 judge points/);
+  it('instructs the agent to never write a bare "N/N" judge score (misreads as a case count) using the "N/100 judge score" wording', () => {
+    expect(SYSTEM_PROMPT).toMatch(/"N\/100 judge score"/);
+    expect(SYSTEM_PROMPT).toMatch(/a 92\/100 judge score/);
     expect(SYSTEM_PROMPT).toMatch(/NEVER a bare "N\/N"/);
     expect(SYSTEM_PROMPT).toMatch(/misreads as a case count/i);
   });
@@ -92,8 +114,7 @@ describe('comparisonDeepDiveService — buildUserPrompt', () => {
     const prompt = buildUserPrompt(runs);
     expect(prompt).toMatch(/## A — aos-oncall \(Claude Code\)/);
     expect(prompt).toMatch(/## B — cp-oncall \(Claude Code\)/);
-    // Never the "Run A"/"Run B" framing -- that reads like a benchmark run's
-    // aggregate stat, not this one test case's two attempts (see #398 follow-up).
+    // Never the "Run A"/"Run B" framing in the per-run header itself.
     expect(prompt).not.toMatch(/## Run [AB]/);
     // The runId is explicitly surfaced "use this in span: citations".
     expect(prompt).toContain('subprocess-AAA');
@@ -111,6 +132,39 @@ describe('comparisonDeepDiveService — buildUserPrompt', () => {
 
   it('tells the agent to inspect BOTH runs before writing', () => {
     expect(buildUserPrompt(runs)).toMatch(/query_spans \/ query_logs on BOTH/);
+  });
+
+  it('omits the results-table section entirely when no rows are supplied (back-compat)', () => {
+    const prompt = buildUserPrompt(runs);
+    expect(prompt).not.toMatch(/Full results table/);
+  });
+
+  it('omits the results-table section for an empty rows array too', () => {
+    const prompt = buildUserPrompt(runs, []);
+    expect(prompt).not.toMatch(/Full results table/);
+  });
+
+  it('renders the full A-vs-B results table when rows are supplied, ahead of the traced-case section', () => {
+    const rows: ComparisonRowSummary[] = [
+      { testCaseId: 'tc-1', testCaseName: 'Disagreement case', a: { passFailStatus: 'passed', score: 92 }, b: { passFailStatus: 'failed', score: 41 } },
+      { testCaseId: 'tc-2', testCaseName: 'Both pass', a: { passFailStatus: 'passed', score: 88 }, b: { passFailStatus: 'passed', score: 90 } },
+      { testCaseId: 'tc-3', testCaseName: 'B never ran this one', a: { passFailStatus: 'passed', score: 75 } },
+    ];
+    const prompt = buildUserPrompt(runs, rows);
+    expect(prompt).toMatch(/## Full results table — 3 compared cases \(A vs B\)/);
+    expect(prompt).toContain('- Disagreement case — A: passed (92/100) · B: failed (41/100)');
+    expect(prompt).toContain('- Both pass — A: passed (88/100) · B: passed (90/100)');
+    expect(prompt).toContain('- B never ran this one — A: passed (75/100) · B: not run');
+    // The results table comes BEFORE the traced-case per-run sections.
+    expect(prompt.indexOf('Full results table')).toBeLessThan(prompt.indexOf('## A — aos-oncall'));
+  });
+
+  it('pluralizes "case" correctly for exactly 1 row', () => {
+    const rows: ComparisonRowSummary[] = [
+      { testCaseId: 'tc-1', testCaseName: 'Only one', a: { passFailStatus: 'passed', score: 100 } },
+    ];
+    const prompt = buildUserPrompt(runs, rows);
+    expect(prompt).toMatch(/## Full results table — 1 compared case \(A vs B\)/);
   });
 });
 
@@ -145,16 +199,18 @@ describe('comparisonDeepDiveService — optional systemPrompt override (Change 4
   const mockModel = { provider: 'mock', id: 'mock.claude-sonnet-4' };
 
   let capturedResourceLoaderOpts: any;
+  let capturedPrompt: string | undefined;
 
   beforeEach(() => {
     jest.resetModules();
     capturedResourceLoaderOpts = undefined;
+    capturedPrompt = undefined;
     jest.doMock(
       '@earendil-works/pi-coding-agent',
       () => ({
         createAgentSession: jest.fn(async () => ({
           session: {
-            prompt: jest.fn(async () => {}),
+            prompt: jest.fn(async (p: string) => { capturedPrompt = p; }),
             messages: [
               { role: 'assistant', content: [{ type: 'text', text: 'mock deep-dive markdown' }] },
             ],
@@ -201,5 +257,21 @@ describe('comparisonDeepDiveService — optional systemPrompt override (Change 4
       require('@/server/services/comparisonDeepDiveService');
     await generate({ runs, modelId: mockModel.id, systemPrompt: '   ' });
     expect(capturedResourceLoaderOpts.systemPromptOverride()).toBe(defaultPrompt);
+  });
+
+  it('threads the optional rows summary into the user prompt sent to the agent', async () => {
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+    const rows: ComparisonRowSummary[] = [
+      { testCaseId: 'tc-1', testCaseName: 'Disagreement case', a: { passFailStatus: 'passed', score: 92 }, b: { passFailStatus: 'failed', score: 41 } },
+    ];
+    await generate({ runs, modelId: mockModel.id, rows });
+    expect(capturedPrompt).toContain('Full results table');
+    expect(capturedPrompt).toContain('Disagreement case');
+  });
+
+  it('omits the results-table section when no rows are passed', async () => {
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+    await generate({ runs, modelId: mockModel.id });
+    expect(capturedPrompt).not.toContain('Full results table');
   });
 });

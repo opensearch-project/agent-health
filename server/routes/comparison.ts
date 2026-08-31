@@ -7,7 +7,7 @@
  * Comparison Routes — agentic deep-dive over two runs.
  *
  * POST /api/comparison/deep-dive
- *   body: { reportIds: [reportIdA, reportIdB], modelId? }
+ *   body: { reportIds: [reportIdA, reportIdB], modelId?, systemPrompt?, rows? }
  *   resp: { markdown, modelId, durationMs,
  *           chart?: { title, series: [{ label, a, b, unit? }] },
  *           experiments?: [{ title, rationale }],
@@ -27,6 +27,7 @@ import { getStorageModule } from '@/server/adapters';
 import {
   generateComparisonDeepDive,
   type ComparisonRunInput,
+  type ComparisonRowSummary,
 } from '@/server/services/comparisonDeepDiveService';
 import { debug } from '@/lib/debug';
 import { SYSTEM_PROMPT } from '@/server/services/comparisonDeepDiveService';
@@ -37,6 +38,12 @@ const router = Router();
  *  against pathological/abusive payloads (browser-cache-only feature — never
  *  persisted server-side). */
 const SYSTEM_PROMPT_MAX_LEN = 20000;
+
+/** Full-results-table cap — a benchmark-wide comparison could have hundreds
+ *  of rows; the client already caps at this size (ComparisonDeepDive.tsx),
+ *  this is the server-side backstop against a malformed/oversized payload. */
+const MAX_ROWS_SUMMARY = 500;
+const MAX_ROW_NAME_LEN = 200;
 
 const PROTOCOL_TO_SERVICE: Record<string, string> = {
   'claude-code': 'claude-code-agent',
@@ -105,6 +112,37 @@ function extractFinalOutput(report: any): string | undefined {
   return undefined;
 }
 
+/** One side of a raw client-supplied results-table row, loosely typed pre-validation. */
+interface RawRowSide {
+  passFailStatus?: unknown;
+  score?: unknown;
+}
+
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  return !!x && typeof x === 'object' && !Array.isArray(x);
+}
+
+/** Validate + sanitize one client-supplied results-table row. Returns undefined (drop) for a malformed row rather than 400ing the whole request — the table is a best-effort comparison-wide hint, not the core reportIds contract. */
+function sanitizeRow(raw: unknown): ComparisonRowSummary | undefined {
+  if (!isPlainObject(raw) || typeof raw.testCaseId !== 'string' || !raw.testCaseId) return undefined;
+  const sanitizeSide = (side: unknown): { passFailStatus?: string; score?: number } | undefined => {
+    if (!isPlainObject(side)) return undefined;
+    const s = side as RawRowSide;
+    const out: { passFailStatus?: string; score?: number } = {};
+    if (typeof s.passFailStatus === 'string') out.passFailStatus = s.passFailStatus;
+    if (typeof s.score === 'number' && Number.isFinite(s.score)) out.score = s.score;
+    return out;
+  };
+  return {
+    testCaseId: raw.testCaseId,
+    testCaseName: typeof raw.testCaseName === 'string' && raw.testCaseName
+      ? raw.testCaseName.slice(0, MAX_ROW_NAME_LEN)
+      : raw.testCaseId,
+    a: sanitizeSide(raw.a),
+    b: sanitizeSide(raw.b),
+  };
+}
+
 /**
  * GET /api/comparison/deep-dive/system-prompt
  *   resp: { systemPrompt: string }
@@ -118,10 +156,11 @@ router.get('/api/comparison/deep-dive/system-prompt', (_req: Request, res: Respo
 });
 
 router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => {
-  const { reportIds, modelId, systemPrompt } = (req.body || {}) as {
+  const { reportIds, modelId, systemPrompt, rows } = (req.body || {}) as {
     reportIds?: unknown;
     modelId?: string;
     systemPrompt?: unknown;
+    rows?: unknown;
   };
   if (!Array.isArray(reportIds) || reportIds.length !== 2 || !reportIds.every((x) => typeof x === 'string')) {
     return res.status(400).json({ error: 'reportIds must be an array of exactly 2 report id strings' });
@@ -138,6 +177,16 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
     if (trimmedSystemPrompt.length > SYSTEM_PROMPT_MAX_LEN) {
       return res.status(400).json({ error: `systemPrompt must be at most ${SYSTEM_PROMPT_MAX_LEN} characters` });
     }
+  }
+  let rowsSummary: ComparisonRowSummary[] | undefined;
+  if (rows !== undefined) {
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ error: 'rows must be an array' });
+    }
+    if (rows.length > MAX_ROWS_SUMMARY) {
+      return res.status(400).json({ error: `rows must contain at most ${MAX_ROWS_SUMMARY} entries` });
+    }
+    rowsSummary = rows.map(sanitizeRow).filter((r): r is ComparisonRowSummary => r !== undefined);
   }
 
   try {
@@ -177,7 +226,7 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
 
     debug('CompareDeepDiveAPI', 'reports:', reportIds.join(','), 'services:', runMeta.map((m) => m.serviceName).join(','));
 
-    const result = await generateComparisonDeepDive({ runs: runInputs, modelId, systemPrompt: trimmedSystemPrompt });
+    const result = await generateComparisonDeepDive({ runs: runInputs, modelId, systemPrompt: trimmedSystemPrompt, rows: rowsSummary });
     return res.json({ ...result, runs: runMeta });
   } catch (err: any) {
     console.error('[CompareDeepDiveAPI] error:', err);

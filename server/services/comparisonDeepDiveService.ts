@@ -20,6 +20,11 @@
  *   - cites specific spans as `[label](span:<runId>:<spanId>)` links the UI
  *     parses into deep-links into the trace view (same page).
  *
+ * As of this round, the default SYSTEM_PROMPT analyzes the comparison AS A
+ * WHOLE (a full A-vs-B results table across every compared case), rather
+ * than only the one representative case the trace tools happen to be scoped
+ * to — see `ComparisonRowSummary` / `buildUserPrompt` below.
+ *
  * This is the engine behind `POST /api/comparison/deep-dive`.
  */
 
@@ -59,6 +64,20 @@ export interface ComparisonRunInput {
   finalOutput?: string;
 }
 
+/**
+ * One row of the FULL A-vs-B results table across every compared case (not
+ * just the one representative case the trace tools are scoped to). Lets the
+ * default SYSTEM_PROMPT analyze the comparison as a whole — selectively
+ * surfacing disagreements, score gaps, and category patterns — instead of
+ * only ever discussing the single traced case.
+ */
+export interface ComparisonRowSummary {
+  testCaseId: string;
+  testCaseName: string;
+  a?: { passFailStatus?: string; score?: number };
+  b?: { passFailStatus?: string; score?: number };
+}
+
 export interface ComparisonDeepDiveResult {
   markdown: string;
   modelId: string;
@@ -82,38 +101,61 @@ async function loadPiSdk(): Promise<PiSdk> {
   }
 }
 
-export const SYSTEM_PROMPT = `You are an expert evaluator comparing how TWO (usually different) AI agents handled the SAME test case in the SAME harness. Your job is to explain — concisely and concretely — what is ACTUALLY different between how the two agents behaved on THIS CASE, grounded in their real execution traces.
+export const SYSTEM_PROMPT = `You are an expert evaluator comparing how TWO (usually different) AI agents/configurations performed across a comparison of test cases (A vs B) — not just one case. Your job is to explain — concisely and concretely — what is ACTUALLY different between A and B OVERALL, grounded in the full results table you're given and, for one representative case, in real execution traces.
 
-You have read-only, case-scoped tools that return each side's REAL OpenTelemetry data:
-  - query_spans({ run: "A" | "B", nameFilter? }) — that side's actual spans: tool calls + arguments, token usage, latency, gen_ai.* attributes. Each span has a spanId and runId.
-  - query_logs({ run: "A" | "B", query? }) — that side's correlated logs.
+You are given a RESULTS TABLE listing every compared case with each side's pass/fail and judge score. Treat this table as your primary evidence for comparison-wide claims. Do NOT force a fixed rubric onto every row and do NOT walk the table top to bottom — SELECTIVELY pick the rows that actually matter: cases where A and B disagree (one passed, one failed), cases with a large score gap, and any systematic pattern (e.g. "B fails every case in category X", "A scores lower whenever Y shows up"). It is fine to discuss run-level / comparison-wide patterns (e.g. "B passes more cases overall, but loses badly on category X") — this is expected, not a violation of scope.
+
+You ALSO have read-only tools scoped to exactly ONE representative case (the one named "Case: <name>" in the panel above this text) — use these for concrete, trace-grounded detail on THAT case only:
+  - query_spans({ run: "A" | "B", nameFilter? }) — that side's actual spans on the traced case: tool calls + arguments, token usage, latency, gen_ai.* attributes. Each span has a spanId and runId.
+  - query_logs({ run: "A" | "B", query? }) — that side's correlated logs on the traced case.
+These tools CANNOT inspect any case in the table other than the traced one — never claim to have traced a case you did not query.
 
 WORKFLOW:
-1. Call query_spans for BOTH sides (start with no nameFilter to see the shape, then narrow). PREFER what the spans show over the trajectory summary in the prompt.
-2. Compare along the axes that actually differ for THIS pair — e.g. the model each agent actually ran (from gen_ai.request.model / gen_ai.response.model in the spans), correctness/outcome, thoroughness vs. speed, tool economy (how many/which tools, structured API vs. scraping), unique discoveries (a related ticket, a code path), investigation approach (direct vs. delegated to sub-agents), evidence volume, wasted/retry calls. Do NOT force a fixed rubric; surface what's interesting and real for these two.
-3. ERRORS — explicitly hunt for failures on EACH side: spans carrying an error/exception status or error attributes (e.g. otel.status_code=ERROR, status=ERROR, error=true, exception.message / exception.type, an HTTP/result status >= 400, a non-zero exit code), tool calls that failed or were retried repeatedly, timeouts, and error-/warn-level entries from query_logs. For every error you find, note WHICH side, WHAT failed, and HOW that agent handled it — recovered, retried, worked around it, or failed outright.
-4. If a side has NO spans (traces unavailable), say so plainly and compare on the trajectory instead — never invent spans.
-5. Before writing your final answer, call \`record_deepdive_extras\` AT MOST ONCE with an optional \`chart\` (2-6 real numeric dimensions where A and B genuinely differ, skip if nothing numeric stood out) and/or an optional \`experiments\` (1-4 concrete follow-up test-case ideas grounded in what you actually found in this pair) — omit either or both rather than fabricating content.
+1. Scan the results table for the interesting rows: disagreements, large score gaps, category/label patterns. These are your candidate comparison-wide claims.
+2. Call query_spans for BOTH sides on the traced case (start with no nameFilter to see the shape, then narrow) to ground at least one claim in a real span citation.
+3. ERRORS on the traced case — explicitly hunt for failures on EACH side of that ONE case: spans carrying an error/exception status or error attributes (e.g. otel.status_code=ERROR, status=ERROR, error=true, exception.message / exception.type, an HTTP/result status >= 400, a non-zero exit code), tool calls that failed or were retried repeatedly, timeouts, and error-/warn-level entries from query_logs. For every error you find, note WHICH side, WHAT failed, and HOW that agent handled it — recovered, retried, worked around it, or failed outright. This hunt only covers the traced case; you cannot know about errors in cases you didn't query.
+4. If the traced case has NO spans (traces unavailable), say so plainly and fall back to that row's results-table entry instead — never invent spans.
+5. Before writing your final answer, call \`record_deepdive_extras\` AT MOST ONCE with an optional \`chart\` (2-6 real numeric dimensions where A and B genuinely differ, skip if nothing numeric stood out) and/or an optional \`experiments\` (1-4 concrete follow-up test-case ideas grounded in what you actually found) — omit either or both rather than fabricating content.
 
-OUTPUT — a tight markdown deep-dive of THIS ONE CASE (NOT a multi-question report). Structure:
-  - A one-line **headline verdict** (e.g. "Both resolved it correctly — A was thorough, B was ~30% faster"; mention errors here if they materially changed the outcome).
-  - 3–6 bullets of the concrete, material differences. Lead each bullet with the dimension in **bold**.
-  - An **Errors** bullet that is ALWAYS present: call out every error/failure found on side A, side B, or both — what it was, which side it hit, and how that agent handled it (recovered / retried / ignored / failed) — each backed by a span or log citation. If a side had no errors, state "no errors observed" for that side explicitly; never silently omit it.
-  - Be specific with numbers from the spans (tool counts, durations, tokens, error counts) when available.
-  - Judge score wording: when you mention either side's judge score, ALWAYS write it unambiguously, e.g. "scored 100/100 judge points" or "a 92% judge score" — NEVER a bare "N/N" or "passed (N/N)". This comparison may be one of hundreds of test cases on the page, and a bare "100/100" misreads as a case count, not a score.
-  - CASE, never RUN: this deep-dive analyzes ONE test case's two attempts (A vs B) — it is NOT a benchmark run's aggregate pass rate, so NEVER write "Run A" / "Run B", and never imply the score is a count of passed test cases. When you state an outcome together with its judge score, use exactly this template: "On this case, A passed (judge 100/100) …" or "On this case, B failed (judge 42/100) …".
+OUTPUT — a tight markdown deep-dive of the A-VS-B COMPARISON AS A WHOLE (not a walkthrough of every row, and not limited to the one traced case). Structure:
+  - A one-line **headline verdict** summarizing the overall pattern across the results table (e.g. "A wins on RCA-tagged cases but B is faster and equally accurate everywhere else"; mention an error here if it materially changed the traced case's outcome).
+  - 3–6 bullets of the concrete, material differences — SELECTED from the results table (disagreements, score gaps, category patterns) plus at least one bullet grounded in the traced case's real spans/logs. Lead each bullet with the dimension in **bold**.
+  - An **Errors** bullet for the TRACED CASE that is ALWAYS present: call out every error/failure found there on side A, side B, or both — what it was, which side it hit, and how that agent handled it (recovered / retried / ignored / failed) — each backed by a span or log citation. If the traced case had no errors, state "no errors observed" for that side explicitly; never silently omit it. (This bullet is about the traced case only — you have no trace data for the rest of the table.)
+  - Be specific with numbers: pass counts / score gaps / how many cases show a pattern from the results table, and tool counts / durations / tokens / error counts from the traced case's spans when available.
+  - Judge score wording: whenever you state a judge score, ALWAYS write it unambiguously as "N/100 judge score" (e.g. "a 92/100 judge score") — NEVER a bare "N/N", which misreads as a case count rather than a score in a page that may show hundreds of cases.
 
-SPAN CITATIONS (important): when a claim is backed by a specific span, cite it inline as a markdown link of EXACTLY this form:
+SPAN CITATIONS (important): when a claim about the TRACED case is backed by a specific span, cite it inline as a markdown link of EXACTLY this form:
     [short human label](span:<runId>:<spanId>)
-using the exact runId and spanId from the query_spans output for that side. The UI turns these into clickable links that open the span in the trace view on the same page. Cite 3–8 spans total — only where a span genuinely backs the claim. Do not fabricate spanIds; only cite spans you saw in tool output.
+using the exact runId and spanId from the query_spans output for that side. The UI turns these into clickable links that open the span in the trace view on the same page. Cite 2–6 spans total — only where a span genuinely backs the claim. Do not fabricate spanIds; only cite spans you saw in tool output. Comparison-wide claims are grounded in the results table, not a span citation — support them with the actual numbers instead.
 
-Keep it under ~280 words. No preamble, no "as an AI", no restating the task. Start with the headline.`;
+Keep it under ~350 words. No preamble, no "as an AI", no restating the task. Start with the headline.`;
 
-export function buildUserPrompt(runs: ComparisonRunInput[]): string {
-  const lines: string[] = [
-    'Compare how these two agents handled this SAME test case. Use query_spans / query_logs on BOTH (run "A" and run "B") before writing.',
-    '',
-  ];
+/** Format one results-table row as a compact, single-line A-vs-B summary. */
+function formatRowSummaryLine(row: ComparisonRowSummary): string {
+  const side = (s?: { passFailStatus?: string; score?: number }): string => {
+    if (!s) return 'not run';
+    const outcome = s.passFailStatus || 'unknown';
+    return typeof s.score === 'number' ? `${outcome} (${Math.round(s.score)}/100)` : outcome;
+  };
+  return `- ${row.testCaseName} — A: ${side(row.a)} · B: ${side(row.b)}`;
+}
+
+export function buildUserPrompt(runs: ComparisonRunInput[], rows?: ComparisonRowSummary[]): string {
+  const lines: string[] = [];
+
+  if (rows && rows.length > 0) {
+    lines.push(
+      `## Full results table — ${rows.length} compared case${rows.length === 1 ? '' : 's'} (A vs B)`,
+      'This is your primary evidence for comparison-wide claims (disagreements, score gaps, category patterns). Only the ONE case in the "Traced case" section below has span/log tools available — do not claim trace-level detail for any other row here.',
+      ...rows.map(formatRowSummaryLine),
+      ''
+    );
+  }
+
+  lines.push(
+    'Traced case (the one case with span/log tools). Use query_spans / query_logs on BOTH (run "A" and run "B") before writing — ground your Errors bullet and at least one other claim in real spans, and use the results table above for the comparison-wide narrative.',
+    ''
+  );
   for (const r of runs) {
     lines.push(`## ${r.key} — ${r.label}`);
     if (r.runId) lines.push(`- runId (use this in span: citations): ${r.runId}`);
@@ -151,6 +193,8 @@ export async function generateComparisonDeepDive(opts: {
    * built-in {@link SYSTEM_PROMPT}.
    */
   systemPrompt?: string;
+  /** Full A-vs-B results table across every compared case (see {@link ComparisonRowSummary}). */
+  rows?: ComparisonRowSummary[];
 }): Promise<ComparisonDeepDiveResult> {
   const { runs } = opts;
   const effectiveSystemPrompt = opts.systemPrompt?.trim() ? opts.systemPrompt : SYSTEM_PROMPT;
@@ -204,7 +248,7 @@ export async function generateComparisonDeepDive(opts: {
     sessionManager: SessionManager.inMemory(),
   });
 
-  await session.prompt(buildUserPrompt(runs));
+  await session.prompt(buildUserPrompt(runs, opts.rows));
   const markdown = extractFinalAssistantText(session.messages).trim();
   const durationMs = Date.now() - startTime;
   debug(
@@ -213,6 +257,8 @@ export async function generateComparisonDeepDive(opts: {
     durationMs,
     'ms, markdown len',
     markdown.length,
+    'rows:',
+    opts.rows?.length ?? 0,
     'chart:',
     !!capture.chart,
     'experiments:',

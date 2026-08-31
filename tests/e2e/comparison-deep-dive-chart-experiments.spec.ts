@@ -149,8 +149,8 @@ async function setupRoutes(page: import('@playwright/test').Page, deepDiveBody: 
   });
 }
 
-test.describe('Comparison deep-dive — header metrics (no bars) + suggested experiments', () => {
-  test('renders header metrics (not a chart) and the suggested-experiments section', async ({ page }) => {
+test.describe('Comparison deep-dive — case label (no metrics line, no chart) + suggested experiments', () => {
+  test('renders the case label (not header metrics, not a chart) and the suggested-experiments section', async ({ page }) => {
     await setupRoutes(page, deepDiveBodyWithExtras);
     await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
     await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
@@ -160,21 +160,16 @@ test.describe('Comparison deep-dive — header metrics (no bars) + suggested exp
     // against re-introducing the redundant "Performance & Outcome" bars.
     await expect(page.locator('[data-testid="deep-dive-chart"]')).toHaveCount(0);
 
-    // Header metrics: one compact, labeled line with the real per-report
-    // score/duration/tool numbers — never a bare "100/100".
-    const headerMetrics = page.locator('[data-testid="deep-dive-header-metrics"]');
-    await expect(headerMetrics).toBeVisible({ timeout: 20000 });
-    await expect(headerMetrics).toContainText('Score:');
-    await expect(headerMetrics).toContainText('100%');
-    await expect(headerMetrics).toContainText('50%');
-    await expect(headerMetrics).toContainText('Duration:');
-    await expect(headerMetrics).toContainText('36.9s');
-    await expect(headerMetrics).toContainText('29.2s');
-    await expect(headerMetrics).toContainText('Tools:');
-    await expect(headerMetrics).toContainText('3');
+    // Round 2: the compact "Score/Duration/Tools" header line is gone too —
+    // those numbers now live on the scoreboard's run rows. Only the case
+    // identity line survives (it anchors the span-citation tools' scope).
+    await expect(page.locator('[data-testid="deep-dive-header-metrics"]')).toHaveCount(0);
+    const caseLabel = page.locator('[data-testid="deep-dive-case-label"]');
+    await expect(caseLabel).toBeVisible({ timeout: 20000 });
+    await expect(caseLabel).toContainText('Case:');
 
     // Suggested experiments: heading + both suggestion titles + rationale text.
-    // Unaffected by the bars-block removal — a separate, still-wanted feature.
+    // Unaffected by the header-metrics removal — a separate, still-wanted feature.
     const experiments = page.locator('[data-testid="deep-dive-experiments"]');
     await expect(experiments).toBeVisible();
     await expect(experiments).toContainText('Suggested next experiments');
@@ -189,7 +184,7 @@ test.describe('Comparison deep-dive — header metrics (no bars) + suggested exp
     await expect(citation).toHaveAttribute('data-run-id', RUNID_A);
   });
 
-  test('renders header metrics but no experiments section when the API response omits experiments', async ({ page }) => {
+  test('renders the case label but no experiments section when the API response omits experiments', async ({ page }) => {
     const { experiments, ...bare } = deepDiveBodyWithExtras;
     await setupRoutes(page, bare);
     await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
@@ -200,11 +195,12 @@ test.describe('Comparison deep-dive — header metrics (no bars) + suggested exp
     await expect(page.locator('[data-testid="deep-dive-chart"]')).toHaveCount(0);
     // Experiments section is genuinely absent when the API omits it.
     await expect(page.locator('[data-testid="deep-dive-experiments"]')).toHaveCount(0);
-    // Header metrics are sourced from the reports, not the deep-dive API
-    // response, so they still render even when the response is bare.
-    const headerMetrics = page.locator('[data-testid="deep-dive-header-metrics"]');
-    await expect(headerMetrics).toBeVisible();
-    await expect(headerMetrics).toContainText('100%');
-    await expect(headerMetrics).toContainText('50%');
+    // No metrics line either way — only the case label, sourced from the
+    // comparison rows/pair rather than the deep-dive API response, so it
+    // still renders even when that response is bare.
+    await expect(page.locator('[data-testid="deep-dive-header-metrics"]')).toHaveCount(0);
+    const caseLabel = page.locator('[data-testid="deep-dive-case-label"]');
+    await expect(caseLabel).toBeVisible();
+    await expect(caseLabel).toContainText('Case:');
   });
 });

@@ -71,7 +71,12 @@ interface CacheEntry { markdown: string; meta: DeepDiveResponse; }
 // take effect for NEWLY generated deep-dives — an already-cached markdown
 // blob is served as-is until the user clicks "Regenerate" (or the cache key
 // changes, which never happens for a stable report-id pair).
-const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:';
+//
+// v2 (this round): the default SYSTEM_PROMPT changed from single-case to
+// comparison-wide analysis — bump the prefix so pre-existing v1-cached
+// narratives (generated under the old prompt) are never served as if they
+// were produced by the new one. A fresh generation is required once per pair.
+const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:v2:';
 const deepDiveMemCache = new Map<string, CacheEntry>();
 
 // Change 4 — editable deep-dive system prompt (browser-cache ONLY, per owner
@@ -145,6 +150,28 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   const [meta, setMeta] = useState<DeepDiveResponse | null>(null);
   const [error, setError] = useState<string>('');
 
+  // Compact A-vs-B summary of EVERY compared row (not just the traced pair) —
+  // owner request: the default prompt now analyzes the comparison as a
+  // whole, selectively picking relevant rows (disagreements, score gaps,
+  // category patterns) rather than just the one representative case. Capped
+  // so the POST body stays small even for a benchmark with hundreds of cases.
+  const MAX_SUMMARY_ROWS = 500;
+  const MAX_ROW_NAME_LEN = 120;
+  const rowsSummary = useMemo(() => {
+    if (runs.length !== 2) return [];
+    const [runA, runB] = runs;
+    return rows.slice(0, MAX_SUMMARY_ROWS).map((row) => {
+      const a = row.results[runA.id];
+      const b = row.results[runB.id];
+      return {
+        testCaseId: row.testCaseId,
+        testCaseName: (row.testCaseName || row.testCaseId).slice(0, MAX_ROW_NAME_LEN),
+        a: a ? { passFailStatus: a.passFailStatus, score: a.accuracy } : undefined,
+        b: b ? { passFailStatus: b.passFailStatus, score: b.accuracy } : undefined,
+      };
+    });
+  }, [rows, runs]);
+
   // ── Change 4: editable system prompt (browser-cache-only) ────────────────
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState<string>('');
   const [systemPromptText, setSystemPromptText] = useState<string>('');
@@ -201,6 +228,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             reportIds: [pair.reportIdA, pair.reportIdB],
+            ...(rowsSummary.length > 0 ? { rows: rowsSummary } : {}),
             ...(customSystemPrompt ? { systemPrompt: customSystemPrompt } : {}),
           }),
         });
@@ -219,7 +247,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
         setStatus('error');
       }
     },
-    [pair, onWindowAgents, systemPromptText, defaultSystemPrompt]
+    [pair, onWindowAgents, systemPromptText, defaultSystemPrompt, rowsSummary]
   );
 
   // Auto-run once per report-pair.
@@ -297,13 +325,12 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
               <AbBadge ab="A" /> {nameA} <span className="opacity-60">vs</span> <AbBadge ab="B" /> {nameB} <span className="opacity-60">· grounded in both runs' traces</span>
             </p>
             {/* Owner feedback: bare "100/100" bars misread as case counts in a
-                multi-hundred-case comparison, and duplicated numbers visible
-                elsewhere. Replaced with one compact labeled line here instead
-                of a chart — see DeepDiveHeaderMetrics. Independent of `meta`/
-                `status`, so it shows immediately (no need to wait on the LLM). */}
+                multi-hundred-case comparison. The Score/Duration/Tools line was
+                later dropped entirely too (those numbers now live in the
+                scoreboard run rows) — only the case identity survives here, so
+                span citations stay anchored to a named case. Independent of
+                `meta`/`status`, so it shows immediately. */}
             <DeepDiveHeaderMetrics
-              reportA={reports[pair.reportIdA]}
-              reportB={reports[pair.reportIdB]}
               testCaseName={pair.testCaseName}
               testCaseId={pair.testCaseId}
             />
