@@ -155,13 +155,40 @@ export function mergeTraceMetrics(
     }
   }
 
+  // Duration fallback: prefer the per-result performanceMetrics the
+  // benchmark runner already persists on run.results[testCaseId], but a
+  // second source of truth exists too — the REPORT document itself can carry
+  // its own performanceMetrics.durationMs (e.g. ad-hoc eval-run reports,
+  // where duration lives on the report rather than a benchmark's embedded
+  // result). Try the result first, then the report, per case.
   const perResultDurations = Object.values(run.results)
-    .map(r => (r as { performanceMetrics?: { durationMs?: number } }).performanceMetrics?.durationMs)
+    .map(r => {
+      const resultDuration = (r as { performanceMetrics?: { durationMs?: number } }).performanceMetrics?.durationMs;
+      if (typeof resultDuration === 'number' && resultDuration > 0) return resultDuration;
+      const report = reports[(r as TestCaseRunResult).reportId ?? ''];
+      return report?.performanceMetrics?.durationMs;
+    })
     .filter((d): d is number => typeof d === 'number' && d > 0);
   const perf = (run as ExperimentRun & { performanceMetrics?: { avgTestCaseDurationMs?: number; durationMs?: number } }).performanceMetrics;
   const fallbackAvgDurationMs = perResultDurations.length > 0
     ? Math.round(perResultDurations.reduce((a, b) => a + b, 0) / perResultDurations.length)
     : perf?.avgTestCaseDurationMs ?? (perf?.durationMs && base.totalTestCases ? Math.round(perf.durationMs / base.totalTestCases) : undefined);
+
+  // Tool-calls fallback: when there is no trace data at all (mc === 0), fall
+  // back to counting real 'action' trajectory steps across the run's reports
+  // — the SAME counting DeepDiveHeaderMetrics' (now-removed) formatToolsCell
+  // used. Only claim a fallback count when at least one report actually has
+  // a trajectory array to count (0 is a real, meaningful count; "we never
+  // saw a trajectory at all" is not — that stays a dash, not a fabricated 0).
+  let toolCallFallbackKnown = false;
+  let fallbackToolCalls = 0;
+  for (const result of Object.values(run.results)) {
+    const report = reports[result.reportId];
+    if (report && Array.isArray(report.trajectory)) {
+      toolCallFallbackKnown = true;
+      fallbackToolCalls += report.trajectory.filter(s => s?.type === 'action').length;
+    }
+  }
 
   return {
     ...base,
@@ -170,8 +197,13 @@ export function mergeTraceMetrics(
     totalOutputTokens: mc > 0 ? totalOutputTokens : undefined,
     totalCostUsd: mc > 0 ? totalCostUsd : undefined,
     avgDurationMs: mc > 0 ? Math.round(totalDurationMs / mc) : fallbackAvgDurationMs,
+    // LLM calls: no honest non-trace source exists on the report/result docs
+    // (checked against real EnterpriseRAG-Bench data — no llmCallCount-shaped
+    // field). Do NOT invent a proxy (e.g. counting 'assistant'/'thinking'
+    // steps miscounts — a single visible turn can issue multiple LLM calls
+    // in a tool-calling loop). Stays a dash without real trace data.
     totalLlmCalls: mc > 0 ? totalLlmCalls : undefined,
-    totalToolCalls: mc > 0 ? totalToolCalls : undefined,
+    totalToolCalls: mc > 0 ? totalToolCalls : (toolCallFallbackKnown ? fallbackToolCalls : undefined),
   };
 }
 
@@ -192,6 +224,31 @@ export function collectRunIdsFromReports(
     }
   }
   return runIds;
+}
+
+/**
+ * Build a `report.runId -> report.sessionId` map for every report reachable
+ * from the given runs. Threaded through to `fetchBatchMetrics` so the batch
+ * metrics endpoint can correlate via Strategy D (`session.id` — the precise,
+ * real-world-adopted correlator for closed-source connectors like Claude
+ * Code, which never stamp our own `agent_health.run.id` / `gen_ai.conversation.id`
+ * attributes) in addition to Strategy B. Entries with no sessionId are omitted.
+ */
+export function collectSessionIdsFromReports(
+  runs: ExperimentRun[],
+  reports: Record<string, EvaluationReport>
+): Record<string, string> {
+  const sessionIdByRunId: Record<string, string> = {};
+  for (const run of runs) {
+    for (const result of Object.values(run.results)) {
+      const report = reports[result.reportId];
+      const sessionId = report?.sessionId;
+      if (report?.runId && sessionId && !sessionIdByRunId[report.runId]) {
+        sessionIdByRunId[report.runId] = sessionId;
+      }
+    }
+  }
+  return sessionIdByRunId;
 }
 
 /**

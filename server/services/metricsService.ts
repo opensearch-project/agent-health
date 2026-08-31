@@ -277,12 +277,69 @@ export function computeMetricsFromSpans(
 }
 
 /**
+ * Build the `should` clauses matching ANY of a run's known trace-correlation
+ * identities — Strategy B (`agent_health.run.id` / `gen_ai.conversation.id`,
+ * requires the agent to have adopted our attribute convention) OR Strategy D
+ * (`session.id`, the precise per-run correlator real closed-source connectors
+ * like Claude Code actually stamp on every span — see AGENTS.md's trace
+ * correlation conventions / services/traces/tracesService.ts). Without
+ * Strategy D, agents that only ever emit `session.id` (never our custom
+ * attribute) always miss this query and the batch metrics show `--`
+ * indefinitely, even though the SAME spans are found by the Traces tab.
+ */
+function buildRunIdShouldClauses(ids: string[], sessionIds: string[]): Record<string, unknown>[] {
+  const clauses: Record<string, unknown>[] = [
+    { terms: { 'attributes.agent_health.run.id': ids } },
+    { terms: { 'attributes.gen_ai.conversation.id': ids } },
+  ];
+  if (sessionIds.length > 0) {
+    // `.keyword` sub-field for exact match on a hyphenated UUID (a bare
+    // analyzed text field would tokenize on the hyphens and match nothing) —
+    // mirrors tracesService.ts's Strategy D handling. Also try the raw
+    // (non-keyword) field and the Data-Prepper plain-raw `@`-encoded key,
+    // since the attribute lands under a different literal key per schema.
+    clauses.push(
+      { terms: { 'attributes.session.id.keyword': sessionIds } },
+      { terms: { 'attributes.session.id': sessionIds } },
+      { terms: { 'span.attributes.session@id': sessionIds } }
+    );
+  }
+  return clauses;
+}
+
+/** Resolve which requested id a span actually matched, for grouping spans
+ *  back to the runId that requested them (Strategy B by either attribute,
+ *  else Strategy D via the sessionId -> runId reverse lookup). */
+function resolveSpanRunId(
+  span: OpenSearchSpanSource,
+  idSet: Set<string>,
+  sessionIdToRunId: Map<string, string>
+): string | undefined {
+  const attrs = span.attributes || {};
+  const byRunIdAttr = attrs['agent_health.run.id'] as string | undefined;
+  if (byRunIdAttr && idSet.has(byRunIdAttr)) return byRunIdAttr;
+  const byConversationId = attrs['gen_ai.conversation.id'] as string | undefined;
+  if (byConversationId && idSet.has(byConversationId)) return byConversationId;
+  if (sessionIdToRunId.size > 0) {
+    const sessionId = (attrs['session.id'] as string | undefined) ?? (attrs['session@id'] as string | undefined);
+    if (sessionId && sessionIdToRunId.has(sessionId)) return sessionIdToRunId.get(sessionId);
+  }
+  return undefined;
+}
+
+/**
  * Compute metrics from OpenSearch traces for a single run
+ *
+ * @param sessionId - Optional Strategy-D correlator (e.g. Claude Code's
+ *   `session.id`) to OR into the query alongside Strategy B, for agents that
+ *   never stamp our own `agent_health.run.id` / `gen_ai.conversation.id`.
  */
 export async function computeMetrics(
   runId: string,
-  osConfig: OpenSearchConfig | { client: Client; indexPattern?: string }
+  osConfig: OpenSearchConfig | { client: Client; indexPattern?: string },
+  sessionId?: string
 ): Promise<MetricsResult> {
+  const sessionIds = sessionId ? [sessionId] : [];
   if ('client' in osConfig) {
     const indexPattern = osConfig.indexPattern || 'otel-v1-apm-span-*';
     const response = await osConfig.client.search({
@@ -293,10 +350,7 @@ export async function computeMetrics(
         query: {
           bool: {
             must: [
-              { bool: { should: [
-                { term: { 'attributes.agent_health.run.id': runId } },
-                { term: { 'attributes.gen_ai.conversation.id': runId } },
-              ], minimum_should_match: 1 } }
+              { bool: { should: buildRunIdShouldClauses([runId], sessionIds), minimum_should_match: 1 } }
             ]
           }
         }
@@ -315,10 +369,7 @@ export async function computeMetrics(
     query: {
       bool: {
         must: [
-          { bool: { should: [
-            { term: { 'attributes.agent_health.run.id': runId } },
-            { term: { 'attributes.gen_ai.conversation.id': runId } },
-          ], minimum_should_match: 1 } }
+          { bool: { should: buildRunIdShouldClauses([runId], sessionIds), minimum_should_match: 1 } }
         ]
       }
     }
@@ -347,10 +398,15 @@ export async function computeMetrics(
 /**
  * Compute metrics for multiple runs using bulk OpenSearch terms query.
  * Issues one query per chunk instead of one query per run ID.
+ *
+ * @param sessionIdByRunId - Optional Strategy-D correlator map (runId ->
+ *   agent-emitted session.id), OR'd into each chunk's query alongside
+ *   Strategy B — see {@link buildRunIdShouldClauses}.
  */
 export async function computeBatchMetrics(
   runIds: string[],
-  osConfig: OpenSearchConfig | { client: Client; indexPattern?: string }
+  osConfig: OpenSearchConfig | { client: Client; indexPattern?: string },
+  sessionIdByRunId?: Record<string, string>
 ): Promise<MetricsResult[]> {
   if (runIds.length === 0) return [];
 
@@ -365,6 +421,14 @@ export async function computeBatchMetrics(
   if ('client' in osConfig) {
     const indexPattern = osConfig.indexPattern || 'otel-v1-apm-span-*';
     const chunkResults = await Promise.all(chunks.map(async (chunk) => {
+      const idSet = new Set(chunk);
+      const sessionIdToRunId = new Map<string, string>();
+      if (sessionIdByRunId) {
+        for (const rid of chunk) {
+          const sid = sessionIdByRunId[rid];
+          if (sid) sessionIdToRunId.set(sid, rid);
+        }
+      }
       try {
         const response = await osConfig.client.search({
           index: indexPattern,
@@ -375,10 +439,10 @@ export async function computeBatchMetrics(
             query: {
               bool: {
                 must: [
-                  { bool: { should: [
-                    { terms: { 'attributes.agent_health.run.id': chunk } },
-                    { terms: { 'attributes.gen_ai.conversation.id': chunk } },
-                  ], minimum_should_match: 1 } }
+                  { bool: {
+                    should: buildRunIdShouldClauses(chunk, Array.from(sessionIdToRunId.keys())),
+                    minimum_should_match: 1,
+                  } }
                 ]
               }
             }
@@ -398,7 +462,7 @@ export async function computeBatchMetrics(
         const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
         for (const rid of chunk) spansByRunId.set(rid, []);
         for (const span of allSpans) {
-          const rid = span.attributes?.['agent_health.run.id'] as string | undefined;
+          const rid = resolveSpanRunId(span, idSet, sessionIdToRunId);
           if (rid && spansByRunId.has(rid)) {
             spansByRunId.get(rid)!.push(span);
           }
@@ -423,6 +487,14 @@ export async function computeBatchMetrics(
   const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
 
   const chunkResults = await Promise.all(chunks.map(async (chunk) => {
+    const idSet = new Set(chunk);
+    const sessionIdToRunId = new Map<string, string>();
+    if (sessionIdByRunId) {
+      for (const rid of chunk) {
+        const sid = sessionIdByRunId[rid];
+        if (sid) sessionIdToRunId.set(sid, rid);
+      }
+    }
     const query = {
       size: 10000,
       sort: [{ startTime: { order: 'asc' } }],
@@ -430,10 +502,10 @@ export async function computeBatchMetrics(
       query: {
         bool: {
           must: [
-            { bool: { should: [
-              { terms: { 'attributes.agent_health.run.id': chunk } },
-              { terms: { 'attributes.gen_ai.conversation.id': chunk } },
-            ], minimum_should_match: 1 } }
+            { bool: {
+              should: buildRunIdShouldClauses(chunk, Array.from(sessionIdToRunId.keys())),
+              minimum_should_match: 1,
+            } }
           ]
         }
       }
@@ -471,7 +543,7 @@ export async function computeBatchMetrics(
     const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
     for (const rid of chunk) spansByRunId.set(rid, []);
     for (const span of allSpans) {
-      const rid = span.attributes?.['agent_health.run.id'] as string | undefined;
+      const rid = resolveSpanRunId(span, idSet, sessionIdToRunId);
       if (rid && spansByRunId.has(rid)) {
         spansByRunId.get(rid)!.push(span);
       }

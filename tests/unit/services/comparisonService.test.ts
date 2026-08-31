@@ -7,6 +7,7 @@ import {
   calculateRunAggregates,
   mergeTraceMetrics,
   collectRunIdsFromReports,
+  collectSessionIdsFromReports,
   buildTestCaseComparisonRows,
   findBestRunForMetric,
   calculateDelta,
@@ -290,6 +291,65 @@ describe('comparisonService', () => {
       const runIds = collectRunIdsFromReports(runs, reports);
 
       expect(runIds).toEqual(['same-run']);
+    });
+  });
+
+  describe('collectSessionIdsFromReports', () => {
+    it('builds a runId -> sessionId map for Strategy-D correlation', () => {
+      const runs: BenchmarkRun[] = [
+        {
+          id: 'exp-run-1',
+          name: 'Run 1',
+          createdAt: '2024-01-01',
+          agentKey: 'agent-1',
+          modelId: 'model-1',
+          status: 'completed',
+          results: {
+            'tc-1': { reportId: 'report-1', status: 'completed' },
+            'tc-2': { reportId: 'report-2', status: 'completed' },
+          },
+        },
+      ];
+
+      const reports: Record<string, EvaluationReport> = {
+        'report-1': { id: 'report-1', testCaseId: 'tc-1', runId: 'agent-run-1', sessionId: 'session-aaa' } as EvaluationReport,
+        'report-2': { id: 'report-2', testCaseId: 'tc-2', runId: 'agent-run-2', sessionId: 'session-bbb' } as EvaluationReport,
+      };
+
+      const sessionIdByRunId = collectSessionIdsFromReports(runs, reports);
+
+      expect(sessionIdByRunId).toEqual({
+        'agent-run-1': 'session-aaa',
+        'agent-run-2': 'session-bbb',
+      });
+    });
+
+    it('omits entries whose report has no runId or no sessionId (nothing to correlate on)', () => {
+      const runs: BenchmarkRun[] = [
+        {
+          id: 'exp-run-1',
+          name: 'Run 1',
+          createdAt: '2024-01-01',
+          agentKey: 'agent-1',
+          modelId: 'model-1',
+          status: 'completed',
+          results: {
+            'tc-1': { reportId: 'report-1', status: 'completed' },
+            'tc-2': { reportId: 'report-2', status: 'completed' },
+            'tc-3': { reportId: 'report-3', status: 'completed' },
+          },
+        },
+      ];
+
+      const reports: Record<string, EvaluationReport> = {
+        'report-1': { id: 'report-1', testCaseId: 'tc-1', runId: 'agent-run-1' } as EvaluationReport, // no sessionId
+        'report-2': { id: 'report-2', testCaseId: 'tc-2', sessionId: 'session-orphan' } as EvaluationReport, // no runId
+        'report-3': { id: 'report-3', testCaseId: 'tc-3', runId: 'agent-run-3', sessionId: 'session-ccc' } as EvaluationReport,
+      };
+
+      const sessionIdByRunId = collectSessionIdsFromReports(runs, reports);
+
+      expect(sessionIdByRunId).toEqual({ 'agent-run-3': 'session-ccc' });
     });
   });
 
@@ -1257,6 +1317,87 @@ describe('comparisonService', () => {
     it('avgDurationMs is undefined when no trace metrics, no per-result durations, and no run-level perf exist', () => {
       const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithRunIds, new Map());
       expect(merged.avgDurationMs).toBeUndefined();
+    });
+
+    it('falls back to the REPORT document\'s performanceMetrics.durationMs when the per-result field is absent (e.g. ad-hoc eval-run reports)', () => {
+      // Round-2 owner bug hunt: some report shapes carry performanceMetrics on
+      // the report doc itself rather than on run.results[tc] (the benchmark-
+      // embedded shape the existing fallback already reads).
+      const reportsWithOwnDurations: Record<string, EvaluationReport> = {
+        'report-1': { id: 'report-1', testCaseId: 'tc-1', runId: 'trace-run-1', performanceMetrics: { durationMs: 57000, agentDurationMs: 57000 } } as unknown as EvaluationReport,
+        'report-2': { id: 'report-2', testCaseId: 'tc-2', runId: 'trace-run-2', performanceMetrics: { durationMs: 22600, agentDurationMs: 22600 } } as unknown as EvaluationReport,
+      };
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithOwnDurations, new Map());
+      expect(merged.avgDurationMs).toBe(Math.round((57000 + 22600) / 2));
+    });
+
+    it('prefers the per-result duration over the report-level one when both are present', () => {
+      const runWithPerResultDurations = {
+        ...runWithReports,
+        results: {
+          'tc-1': { reportId: 'report-1', status: 'completed', passFailStatus: 'passed', performanceMetrics: { durationMs: 1000 } },
+          'tc-2': { reportId: 'report-2', status: 'completed', passFailStatus: 'passed', performanceMetrics: { durationMs: 3000 } },
+        },
+      } as unknown as BenchmarkRun;
+      const reportsWithDifferentDurations: Record<string, EvaluationReport> = {
+        'report-1': { id: 'report-1', testCaseId: 'tc-1', runId: 'trace-run-1', performanceMetrics: { durationMs: 999999 } } as unknown as EvaluationReport,
+        'report-2': { id: 'report-2', testCaseId: 'tc-2', runId: 'trace-run-2', performanceMetrics: { durationMs: 999999 } } as unknown as EvaluationReport,
+      };
+      const merged = mergeTraceMetrics(baseAgg, runWithPerResultDurations, reportsWithDifferentDurations, new Map());
+      expect(merged.avgDurationMs).toBe(2000); // (1000 + 3000) / 2, not the report-level 999999s
+    });
+
+    it('falls back to counting real trajectory "action" steps for totalToolCalls when there is no trace data at all', () => {
+      const reportsWithTrajectories: Record<string, EvaluationReport> = {
+        'report-1': {
+          id: 'report-1', testCaseId: 'tc-1', runId: 'trace-run-1',
+          trajectory: [
+            { id: 't1', timestamp: 0, type: 'action', content: '', toolName: 'search' },
+            { id: 't2', timestamp: 0, type: 'tool_result', content: '' },
+            { id: 't3', timestamp: 0, type: 'action', content: '', toolName: 'read' },
+          ],
+        } as unknown as EvaluationReport,
+        'report-2': {
+          id: 'report-2', testCaseId: 'tc-2', runId: 'trace-run-2',
+          trajectory: [
+            { id: 't4', timestamp: 0, type: 'action', content: '', toolName: 'search' },
+          ],
+        } as unknown as EvaluationReport,
+      };
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithTrajectories, new Map());
+      expect(merged.totalToolCalls).toBe(3); // 2 action steps (report-1) + 1 (report-2)
+      // No honest LLM-call source exists on the report/result docs — must NOT
+      // invent a proxy (e.g. counting 'assistant'/'thinking' steps miscounts).
+      expect(merged.totalLlmCalls).toBeUndefined();
+      expect(merged.totalCostUsd).toBeUndefined();
+      expect(merged.totalTokens).toBeUndefined();
+    });
+
+    it('renders a real "0" tool-call count (not a dash) when a report has an empty-but-present trajectory', () => {
+      const reportsWithEmptyTrajectory: Record<string, EvaluationReport> = {
+        'report-1': { id: 'report-1', testCaseId: 'tc-1', runId: 'trace-run-1', trajectory: [] } as unknown as EvaluationReport,
+        'report-2': { id: 'report-2', testCaseId: 'tc-2', runId: 'trace-run-2', trajectory: [] } as unknown as EvaluationReport,
+      };
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithEmptyTrajectory, new Map());
+      expect(merged.totalToolCalls).toBe(0);
+    });
+
+    it('leaves totalToolCalls undefined (not a fabricated 0) when no report has any trajectory at all', () => {
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithRunIds, new Map());
+      expect(merged.totalToolCalls).toBeUndefined();
+    });
+
+    it('uses real trace-derived totalToolCalls (not the trajectory fallback) when trace metrics exist', () => {
+      const traceMetricsMap = new Map<string, TraceMetrics>([
+        ['trace-run-1', traceMetrics({ runId: 'trace-run-1', toolCalls: 7 })],
+        ['trace-run-2', traceMetrics({ runId: 'trace-run-2', toolCalls: 9 })],
+      ]);
+      const reportsWithTrajectories: Record<string, EvaluationReport> = {
+        'report-1': { id: 'report-1', testCaseId: 'tc-1', runId: 'trace-run-1', trajectory: [{ id: 't1', timestamp: 0, type: 'action', content: '' }] } as unknown as EvaluationReport,
+        'report-2': { id: 'report-2', testCaseId: 'tc-2', runId: 'trace-run-2', trajectory: [] } as unknown as EvaluationReport,
+      };
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithTrajectories, traceMetricsMap);
+      expect(merged.totalToolCalls).toBe(16); // trace-derived sum, NOT the 1-action fallback count
     });
   });
 });

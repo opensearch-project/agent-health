@@ -37,7 +37,7 @@ export async function fetchRunMetrics(runId: string): Promise<TraceMetrics> {
  * @param runIds - Array of run IDs to fetch metrics for
  * @returns Object containing individual metrics and aggregate statistics
  */
-export async function fetchBatchMetrics(runIds: string[]): Promise<{
+export async function fetchBatchMetrics(runIds: string[], sessionIdByRunId?: Record<string, string>): Promise<{
   metrics: TraceMetrics[];
   aggregate: {
     totalRuns: number;
@@ -59,7 +59,7 @@ export async function fetchBatchMetrics(runIds: string[]): Promise<{
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ runIds })
+    body: JSON.stringify(sessionIdByRunId ? { runIds, sessionIds: sessionIdByRunId } : { runIds })
   });
 
   if (!response.ok) {

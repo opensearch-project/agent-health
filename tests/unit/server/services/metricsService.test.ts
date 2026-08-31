@@ -571,10 +571,13 @@ describe('metricsService', () => {
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       // Strategy B now matches agent_health.run.id OR the OTEL-standard
-      // gen_ai.conversation.id (both stamped = runId by our producers).
+      // gen_ai.conversation.id (both stamped = runId by our producers). Both
+      // single-run and batch queries share buildRunIdShouldClauses, which
+      // always uses `terms` (array) even for a single id — functionally
+      // identical to `term`, but lets the two code paths share one builder.
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should[0].term['attributes.agent_health.run.id']).toBe('test-run-123');
-      expect(should[1].term['attributes.gen_ai.conversation.id']).toBe('test-run-123');
+      expect(should[0].terms['attributes.agent_health.run.id']).toEqual(['test-run-123']);
+      expect(should[1].terms['attributes.gen_ai.conversation.id']).toEqual(['test-run-123']);
     });
 
     it('should use default index pattern when not provided', async () => {
@@ -596,6 +599,35 @@ describe('metricsService', () => {
         'http://localhost:9200/otel-v1-apm-span-*/_search',
         expect.any(Object)
       );
+    });
+
+    it('ORs in Strategy-D session.id clauses when a sessionId is supplied (agents that never stamp agent_health.run.id / gen_ai.conversation.id, e.g. Claude Code)', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ hits: { hits: [] } }),
+      });
+
+      await computeMetrics('test-run-123', defaultConfig, 'e84af53e-6920-44a5-bd75-5ee6cebf58c6');
+
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const should = requestBody.query.bool.must[0].bool.should;
+      expect(should[0].terms['attributes.agent_health.run.id']).toEqual(['test-run-123']);
+      expect(should[1].terms['attributes.gen_ai.conversation.id']).toEqual(['test-run-123']);
+      const sessionClause = should.find((c: any) => c.terms?.['attributes.session.id.keyword']);
+      expect(sessionClause.terms['attributes.session.id.keyword']).toEqual(['e84af53e-6920-44a5-bd75-5ee6cebf58c6']);
+    });
+
+    it('does not add session.id clauses when no sessionId is supplied (unchanged query shape)', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ hits: { hits: [] } }),
+      });
+
+      await computeMetrics('test-run-123', defaultConfig);
+
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const should = requestBody.query.bool.must[0].bool.should;
+      expect(should).toHaveLength(2);
     });
   });
 
@@ -728,6 +760,97 @@ describe('metricsService', () => {
       expect(result).toHaveLength(2);
       expect(result[0].status).toBe('pending');
       expect(result[1].status).toBe('pending');
+    });
+
+    it('ORs in Strategy-D session.id terms (one per runId) when sessionIdByRunId is supplied', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ hits: { hits: [] } }),
+      });
+
+      await computeBatchMetrics(
+        ['run-1', 'run-2'],
+        defaultConfig,
+        { 'run-1': 'session-aaa', 'run-2': 'session-bbb' }
+      );
+
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const should = requestBody.query.bool.must[0].bool.should;
+      const sessionClause = should.find((c: any) => c.terms?.['attributes.session.id.keyword']);
+      expect(sessionClause.terms['attributes.session.id.keyword'].sort()).toEqual(['session-aaa', 'session-bbb']);
+    });
+
+    it('groups a session.id-matched span back to the runId that requested that session (Strategy D grouping)', async () => {
+      // The Claude-Code motivating case: this span carries NEITHER
+      // agent_health.run.id NOR gen_ai.conversation.id -- only session.id, so
+      // the OLD grouping logic (agent_health.run.id only) would silently drop
+      // this span and the run would show "--" despite the span existing.
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          hits: {
+            hits: [
+              {
+                _source: {
+                  name: 'agent.run',
+                  traceId: 'trace-sessioned',
+                  durationInNanos: 1000000000,
+                  status: { code: 1 },
+                  attributes: {
+                    'session.id': 'session-aaa',
+                    'gen_ai.usage.input_tokens': 40,
+                    'gen_ai.usage.output_tokens': 10,
+                    'gen_ai.request.model': 'anthropic.claude-sonnet-4',
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      });
+
+      const result = await computeBatchMetrics(
+        ['run-1', 'run-2'],
+        defaultConfig,
+        { 'run-1': 'session-aaa', 'run-2': 'session-bbb' }
+      );
+
+      const run1 = result.find(r => r.runId === 'run-1')!;
+      const run2 = result.find(r => r.runId === 'run-2')!;
+      expect(run1.status).toBe('success');
+      expect(run1.inputTokens).toBe(40);
+      expect(run2.status).toBe('pending'); // no span carried session-bbb
+    });
+
+    it('groups a gen_ai.conversation.id-matched span back to its runId (pre-existing grouping gap, fixed alongside Strategy D)', () => {
+      // Regression: the OLD grouping code only ever checked
+      // `agent_health.run.id` when routing a matched span back to its runId --
+      // a span that matched via the OR'd `gen_ai.conversation.id` clause was
+      // silently dropped even though the query itself matched it.
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          hits: {
+            hits: [
+              {
+                _source: {
+                  name: 'agent.run',
+                  traceId: 'trace-conv',
+                  durationInNanos: 500000000,
+                  status: { code: 1 },
+                  attributes: { 'gen_ai.conversation.id': 'run-2' },
+                },
+              },
+            ],
+          },
+        }),
+      });
+
+      return computeBatchMetrics(['run-1', 'run-2'], defaultConfig).then((result) => {
+        const run2 = result.find(r => r.runId === 'run-2')!;
+        expect(run2.status).toBe('success');
+        expect(run2.durationMs).toBe(500);
+      });
     });
   });
 });
