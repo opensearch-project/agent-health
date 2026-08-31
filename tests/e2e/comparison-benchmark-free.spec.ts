@@ -146,12 +146,14 @@ test.describe('Benchmark-free comparison (test-level primitive)', () => {
     await expect(page.locator('[data-testid="comparison-search"]')).toContainText('2 of');
 
     // The honesty surface: the scoreboard's coverage cell carries the overlap
-    // contract (was a standalone banner). Partial overlap shows shared/total
-    // inline; the per-run "only here" breakdown lives in the tooltip.
+    // contract (was a standalone banner). Partial overlap shows a plain
+    // "N in both · M only in A/B" statement (bug #4, iteration 4: reworded
+    // from "N shared / M total" — owner feedback that phrasing was
+    // confusing); the per-run "only here" breakdown lives in the tooltip.
     const banner = page.locator('[data-testid="comparison-overlap-banner"]');
     await expect(banner).toBeVisible();
     await expect(banner).toHaveAttribute('data-overlap', 'partial');
-    await expect(banner).toContainText('shared');
+    await expect(banner).toContainText('in both');
     await expect(banner).toHaveAttribute('title', /only in some runs/);
 
     // A/B legend: the scoreboard IS the legend now — one row per run with the

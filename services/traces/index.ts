@@ -35,22 +35,42 @@ function getApiBaseUrl(): string {
 /**
  * Fetch traces from the backend API
  * Backend handles config resolution (file or env vars) - no headers needed from frontend
+ *
+ * Bounded by a client-side timeout (default 20s, see {@link TRACE_FETCH_TIMEOUT_MS}):
+ * a hung/unresponsive trace backend must surface as a clear error the caller
+ * can retry, never an indefinite pending fetch (the Traces tab's loading
+ * spinner has no other way to resolve if the network call itself never
+ * settles).
  */
-export async function fetchTraces(params: TraceQueryParams): Promise<TraceSearchResult> {
-  const response = await fetch(`${getApiBaseUrl()}/api/traces`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(params)
-  });
+export const TRACE_FETCH_TIMEOUT_MS = 20000;
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+export async function fetchTraces(params: TraceQueryParams, timeoutMs: number = TRACE_FETCH_TIMEOUT_MS): Promise<TraceSearchResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/api/traces`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    return response.json();
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Traces request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-
-  return response.json();
 }
 
 /**

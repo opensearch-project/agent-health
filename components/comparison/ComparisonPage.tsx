@@ -818,6 +818,18 @@ export const ComparisonPage: React.FC = () => {
             {/* Comparison Scoreboard — replaces VerdictStrip + ComparisonOverlapBanner + MetricComparisonPanel Collapsible.
                 Renders for single-run views too (run row + "All metrics"), like
                 the old standalone Detailed-metrics panel did. */}
+            {selectedRuns.length === 2 && (
+              <p className="text-xs text-muted-foreground px-1" data-testid="comparison-summary-line">
+                Comparing <span className="font-medium text-foreground">{selectedRuns[0].name}</span>
+                {' '}vs{' '}
+                <span className="font-medium text-foreground">{selectedRuns[1].name}</span>
+                {benchmark?.name && (
+                  <>
+                    {' '}· benchmark <span className="font-medium text-foreground">{benchmark.name}</span>
+                  </>
+                )}
+              </p>
+            )}
             {selectedRuns.length >= 1 && (
               <ComparisonScoreboard
                 runs={runAggregates}

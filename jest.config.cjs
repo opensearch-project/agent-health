@@ -48,6 +48,10 @@ module.exports = {
     // Mock browser-only modules
     '^dagre$': '<rootDir>/__mocks__/dagre.ts',
     '^@xyflow/react$': '<rootDir>/__mocks__/xyflow-react.ts',
+    // Mock raw CSS imports (e.g. @xyflow/react/dist/style.css) — Jest has no
+    // CSS transform and would otherwise throw a syntax error on the first
+    // `import '*.css'` it hits.
+    '\\.css$': '<rootDir>/__mocks__/styleMock.ts',
     // Mock OpenTelemetry incubating module (not installed by default)
     '^@opentelemetry/semantic-conventions/incubating$': '<rootDir>/__mocks__/@opentelemetry/semantic-conventions/incubating.ts',
     // Mock chai (chai@5 is ESM-only and Jest's CJS loader can't import

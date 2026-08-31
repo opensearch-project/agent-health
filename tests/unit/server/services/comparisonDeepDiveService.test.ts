@@ -284,10 +284,68 @@ describe('comparisonDeepDiveService — optional systemPrompt override (browser-
     expect(capturedPrompt).not.toContain('Full results table');
   });
 
-  it('registers exactly one extensionFactory (the comparison-wide trace tools)', async () => {
+  it('registers exactly one extensionFactory (the comparison-wide trace tools)', () => {
     const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
-    await generate({ runs, modelId: mockModel.id, ...baseOpts });
-    expect(capturedResourceLoaderOpts.extensionFactories).toHaveLength(1);
-    expect(typeof capturedResourceLoaderOpts.extensionFactories[0]).toBe('function');
+    return generate({ runs, modelId: mockModel.id, ...baseOpts }).then(() => {
+      expect(capturedResourceLoaderOpts.extensionFactories).toHaveLength(1);
+      expect(typeof capturedResourceLoaderOpts.extensionFactories[0]).toBe('function');
+    });
+  });
+});
+
+describe('comparisonDeepDiveService — DEEP_DIVE_DEADLINE_MS (owner bug: "What\'s actually different" appeared to hang forever)', () => {
+  // Same pi-SDK mock pattern as above, but `session.prompt()` never resolves
+  // — simulating a genuinely stuck agent loop (Bedrock throttling with no
+  // bounded retry, a runaway tool-call cycle, etc.). Without a server-side
+  // deadline this would hold the HTTP response open indefinitely.
+  const runs: ComparisonRunInput[] = [
+    { key: 'A', label: 'agent A', runId: 'run-a', reportId: 'rep-a' },
+    { key: 'B', label: 'agent B', runId: 'run-b', reportId: 'rep-b' },
+  ];
+  const baseOpts = { defaultCaseId: 'tc-default', caseReports: new Map(), getReport: async () => null };
+  const mockModel = { provider: 'mock', id: 'mock.claude-sonnet-4' };
+
+  beforeEach(() => {
+    jest.resetModules();
+    jest.useFakeTimers();
+    jest.doMock(
+      '@earendil-works/pi-coding-agent',
+      () => ({
+        createAgentSession: jest.fn(async () => ({
+          session: {
+            // Never resolves — the agent loop is stuck.
+            prompt: jest.fn(() => new Promise(() => {})),
+            messages: [],
+          },
+        })),
+        SessionManager: { inMemory: jest.fn(() => ({})) },
+        AuthStorage: { create: jest.fn(() => ({})) },
+        ModelRegistry: {
+          create: jest.fn(() => ({
+            getAvailable: jest.fn(async () => [mockModel]),
+          })),
+        },
+        DefaultResourceLoader: jest.fn().mockImplementation(() => ({ reload: jest.fn(async () => {}) })),
+        getAgentDir: jest.fn(() => '/tmp/mock-agent-dir'),
+      }),
+      { virtual: true }
+    );
+  });
+
+  afterEach(() => {
+    jest.dontMock('@earendil-works/pi-coding-agent');
+    jest.useRealTimers();
+  });
+
+  it('rejects with a clear, retryable timeout error instead of hanging forever once the deadline elapses', async () => {
+    const { generateComparisonDeepDive: generate, DEEP_DIVE_DEADLINE_MS } = require('@/server/services/comparisonDeepDiveService');
+    expect(DEEP_DIVE_DEADLINE_MS).toBeGreaterThan(0);
+
+    const promise = generate({ runs, modelId: mockModel.id, ...baseOpts });
+    const assertion = expect(promise).rejects.toThrow(
+      new RegExp(`timed out after ${Math.round(DEEP_DIVE_DEADLINE_MS / 1000)}s`)
+    );
+    await jest.advanceTimersByTimeAsync(DEEP_DIVE_DEADLINE_MS);
+    await assertion;
   });
 });

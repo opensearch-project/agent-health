@@ -484,7 +484,14 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
   const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Get run IDs from reports
+  // Get run IDs from reports. Deliberately NOT filtered by agentRunId
+  // presence (bug fix): a run whose report has no runId/traceId/sessionId at
+  // all (e.g. a REST connector with no OTel instrumentation) must still get a
+  // traceData entry so the component can resolve to the honest "no traces"
+  // empty state — dropping it here left `runInfos` empty and `fetchAllTraces`
+  // bailed out before ever setting `isLoading`/`traceData`, so the Traces tab
+  // was stuck showing the loading spinner FOREVER with zero network activity
+  // (repro: stark-retail comparison, a REST agent with no runId anywhere).
   const runInfos = useMemo(() => {
     return runs.map(run => {
       const result = run.results[useCaseId];
@@ -499,7 +506,7 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
         traceId: report?.traceId || null,
         sessionId: report?.sessionId || null,
       };
-    }).filter(info => info.agentRunId);
+    });
   }, [runs, reports, useCaseId]);
 
   // Fetch traces for all runs
@@ -511,10 +518,8 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
     const newTraceData = new Map<string, TraceData>();
 
     for (const info of runInfos) {
-      if (!info.agentRunId) continue;
-
       newTraceData.set(info.experimentRunId, {
-        runId: info.agentRunId,
+        runId: info.agentRunId || info.experimentRunId,
         runName: info.runName,
         spans: [],
         spanTree: [],
@@ -528,14 +533,36 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
     // Fetch traces in parallel
     await Promise.all(
       runInfos.map(async (info) => {
-        if (!info.agentRunId) return;
+        // Look the Strategy-C window up by reportId first (stable across the
+        // runId/traceId mapping), falling back to the run id for safety.
+        const wa = windowAgentsByRunId?.get(info.reportId || '') || (info.agentRunId ? windowAgentsByRunId?.get(info.agentRunId) : undefined);
+        const hasAnyCorrelator = !!(info.agentRunId || info.traceId || info.sessionId || wa?.serviceName);
+
+        // No correlator of ANY kind for this run+case (no runId, no traceId,
+        // no session.id, no Strategy-C window) — a query would just 400/no-op
+        // server-side anyway. Resolve immediately to "no spans" instead of
+        // issuing a network call we already know can't succeed; this is what
+        // used to leave the tab loading forever.
+        if (!hasAnyCorrelator) {
+          setTraceData(prev => {
+            const updated = new Map(prev);
+            updated.set(info.experimentRunId, {
+              runId: info.agentRunId || info.experimentRunId,
+              runName: info.runName,
+              spans: [],
+              spanTree: [],
+              timeRange: { startTime: 0, endTime: 0, duration: 0 },
+              loading: false,
+              error: null,
+            });
+            return updated;
+          });
+          return;
+        }
 
         try {
-          // Look the Strategy-C window up by reportId first (stable across the
-          // runId/traceId mapping), falling back to the run id for safety.
-          const wa = windowAgentsByRunId?.get(info.reportId || '') || windowAgentsByRunId?.get(info.agentRunId);
           const result = await fetchTracesForRun({
-            runId: info.agentRunId,
+            runId: info.agentRunId || undefined,
             // Strategy A / D: the run's own traceId / session.id correlate
             // immediately, without waiting for the deep-dive's window hints.
             traceId: info.traceId || undefined,
@@ -552,7 +579,7 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
           setTraceData(prev => {
             const updated = new Map(prev);
             updated.set(info.experimentRunId, {
-              runId: info.agentRunId!,
+              runId: info.agentRunId || info.experimentRunId,
               runName: info.runName,
               spans: spanTree,
               spanTree: categorizedTree,
@@ -566,12 +593,18 @@ export const TraceFlowComparison: React.FC<TraceFlowComparisonProps> = ({
           setTraceData(prev => {
             const updated = new Map(prev);
             updated.set(info.experimentRunId, {
-              runId: info.agentRunId!,
+              runId: info.agentRunId || info.experimentRunId,
               runName: info.runName,
               spans: [],
               spanTree: [],
               timeRange: { startTime: 0, endTime: 0, duration: 0 },
               loading: false,
+              // fetchTraces() (services/traces/index.ts) now times out on its
+              // own (default 20s) rather than hanging indefinitely, so this
+              // catch is reachable for a genuinely slow/unresponsive backend
+              // too — not just 4xx/5xx — and always resolves to the error
+              // state below (with its existing Retry button) instead of an
+              // indefinite spinner.
               error: error instanceof Error ? error.message : 'Failed to fetch traces',
             });
             return updated;

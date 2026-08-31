@@ -31,11 +31,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { JudgeModelSelect } from '@/components/JudgeModelSelect';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
-import { computeRunStats } from '@/lib/runStats';
-import { executeBenchmarkRun } from '@/services/client';
+import { computeRunStats, getEffectiveRunStatus, isRunInProgress } from '@/lib/runStats';
+import { executeBenchmarkRun, listEvaluationRuns } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
-import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, Evaluator } from '@/types';
+import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, Evaluator, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { formatDate, getModelName } from '@/lib/utils';
@@ -63,16 +64,8 @@ interface UseCaseRunStatus {
 const POLL_INTERVAL_MS = 2000;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const getEffectiveRunStatus = (run: BenchmarkRun): BenchmarkRun['status'] => {
-  if (run.status) return run.status;
-  const results = Object.values(run.results || {});
-  if (results.some(r => r.status === 'running')) return 'running';
-  if (results.some(r => r.status === 'pending') &&
-      !results.some(r => r.status === 'completed' || r.status === 'failed')) return 'running';
-  if (results.some(r => r.status === 'completed') || results.some(r => r.status === 'failed')) return 'completed';
-  return 'failed';
-};
+// getEffectiveRunStatus moved to @/lib/runStats (shared with EvalRunsPage.tsx
+// — both runs-list surfaces must agree on what counts as "running").
 
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -86,6 +79,13 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
   const [benchmark, setBenchmark] = useState<Benchmark | null>(null);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
+
+  // Runs associated with this benchmark via `evaluationRun.benchmarkId` but
+  // NOT embedded in `benchmark.runs[]` (bug #6, 2026-09-01: eval-runs created
+  // outside the "Add Run" embedded-run path — e.g. CLI/API/scheduled runs —
+  // are standalone `evaluation-run` docs and never show up on this page at
+  // all, even once completed, because nothing here ever queried them).
+  const [associatedEvalRuns, setAssociatedEvalRuns] = useState<EvaluationRun[]>([]);
 
   // Run pagination
   const [totalRuns, setTotalRuns] = useState(0);
@@ -181,8 +181,17 @@ export const BenchmarkRunsPage2: React.FC = () => {
       const options = isPolling
         ? { fields: 'polling' as const, runsSize: 100 }
         : { runsSize: 100 };
-      const exp = await asyncBenchmarkStorage.getById(benchmarkId, options);
+      const [exp, evalRunsResult] = await Promise.all([
+        asyncBenchmarkStorage.getById(benchmarkId, options),
+        // Best-effort: a failure here still leaves the embedded benchmark.runs
+        // working, same fallback pattern as EvalRunsPage.tsx.
+        listEvaluationRuns({ benchmarkId, size: 100 }).then(r => r.evaluationRuns).catch(err => {
+          console.error('Failed to load associated evaluation-runs:', err);
+          return [] as EvaluationRun[];
+        }),
+      ]);
       if (!exp) { navigate(parentPath); return; }
+      setAssociatedEvalRuns(evalRunsResult);
 
       const expAny = exp as any;
       if (expAny.totalRuns !== undefined) {
@@ -266,8 +275,30 @@ export const BenchmarkRunsPage2: React.FC = () => {
     () => computeVersionData(benchmark), [benchmark]
   );
 
+  const selectedVersionData = useMemo(
+    () => getSelectedVersionData(versionData, testCaseVersion), [versionData, testCaseVersion]
+  );
+
+  const versionTestCases = useMemo(
+    () => getVersionTestCases(testCases, selectedVersionData), [selectedVersionData, testCases]
+  );
+
+  const allMergedRuns = useMemo(() => {
+    // Merge embedded runs with associated-but-not-embedded eval-runs, deduped
+    // by id (an eval-run migrated into benchmark.runs would otherwise be
+    // double-counted). EvaluationRun is shape-compatible with BenchmarkRun for
+    // every field this page reads (id, status, results, testCaseSnapshots,
+    // createdAt, agentKey, modelId) — same convergence as EvalRunsPage.tsx.
+    const embeddedIds = new Set((benchmark?.runs || []).map(r => r.id));
+    const extra = associatedEvalRuns
+      .filter(er => !embeddedIds.has(er.id))
+      .map(er => er as unknown as BenchmarkRun);
+    return [...(benchmark?.runs || []), ...extra];
+  }, [benchmark?.runs, associatedEvalRuns]);
+
   const filteredRuns = useMemo(
-    () => filterRunsByVersion(benchmark?.runs, runVersionFilter), [benchmark?.runs, runVersionFilter]
+    () => filterRunsByVersion(allMergedRuns, runVersionFilter),
+    [allMergedRuns, runVersionFilter]
   );
 
   const recentCompletedRuns = useMemo(
@@ -304,6 +335,17 @@ export const BenchmarkRunsPage2: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportIdsKey]);
 
+  // Ids of merged-in rows that are standalone evaluation-run docs, not
+  // embedded in benchmark.runs[]. Row-level Delete/Cancel call
+  // benchmark-embedded-run-specific APIs (asyncBenchmarkStorage.deleteRun /
+  // cancelBenchmarkRun scoped by benchmarkId+runId) that don't apply to
+  // these — gate those actions off for this set rather than risk a wrong-API
+  // 404 or silent no-op.
+  const evalRunOnlyIds = useMemo(() => {
+    const embeddedIds = new Set((benchmark?.runs || []).map(r => r.id));
+    return new Set(associatedEvalRuns.filter(er => !embeddedIds.has(er.id)).map(er => er.id));
+  }, [benchmark?.runs, associatedEvalRuns]);
+
   const hasMultipleVersions = versionData.length > 1;
 
   // ─── Run Stats ───────────────────────────────────────────────────────────
@@ -322,14 +364,12 @@ export const BenchmarkRunsPage2: React.FC = () => {
   }, []);
 
   const hasPendingEvaluations = useMemo(() => {
-    if (!benchmark?.runs) return false;
-    return benchmark.runs.some(run => run.stats?.pending && run.stats.pending > 0);
-  }, [benchmark?.runs]);
+    return filteredRuns.some(run => run.stats?.pending && run.stats.pending > 0);
+  }, [filteredRuns]);
 
   const hasServerInProgressRuns = useMemo(() => {
-    if (!benchmark?.runs) return false;
-    return benchmark.runs.some(run => getEffectiveRunStatus(run) === 'running');
-  }, [benchmark?.runs]);
+    return filteredRuns.some(run => isRunInProgress(run));
+  }, [filteredRuns]);
 
   // Polling
   useEffect(() => {
@@ -474,7 +514,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
     );
   }
 
-  const runs = benchmark.runs || [];
+  const runs = allMergedRuns;
   const hasMultipleRuns = runs.length >= 2;
 
   return (
@@ -722,7 +762,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
                               <span className="text-muted-foreground">/ {stats.total}</span>
                             </div>
                           )}
-                          {getEffectiveRunStatus(run) === 'running' && (
+                          {getEffectiveRunStatus(run) === 'running' && !evalRunOnlyIds.has(run.id) && (
                             <Button
                               variant="outline" size="sm"
                               disabled={isCancelling(run.id)}
@@ -733,6 +773,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
                               {isCancelling(run.id) ? 'Cancelling...' : 'Cancel'}
                             </Button>
                           )}
+                          {!evalRunOnlyIds.has(run.id) && (
                           <Button
                             variant="ghost" size="icon"
                             onClick={e => { e.stopPropagation(); handleDeleteRun(run); }}
@@ -744,6 +785,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
                               ? <Loader2 size={14} className="animate-spin" />
                               : <Trash2 size={14} />}
                           </Button>
+                          )}
                         </div>
                       </div>
                       <div className="mt-3 pt-3 border-t">

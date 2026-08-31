@@ -342,5 +342,90 @@ describe('EvalRunsPage — inline rename', () => {
     expect(screen.getByTestId('run-row-rename-eval-run-1-error').textContent).toMatch(/name must not be empty/);
     // Reverted — the original name is back (still in the input since we stayed in edit mode).
     expect(input.value).toBe('Will Fail');
+
+describe('EvalRunsPage — in-flight (running) run indication (bug #5, 2026-09-01)', () => {
+  // Before the fix: a running run rendered with zero visual distinction from
+  // a small, already-finished run (no badge, `total` capped at whatever few
+  // cases had started), and the page never refreshed on its own to reflect
+  // progress — to the owner it looked like nothing was happening at all.
+  function makeRunningEvalRun(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'eval-run-running-1',
+      docType: 'evaluation-run',
+      name: 'Claude-code with traces',
+      createdAt: new Date().toISOString(),
+      status: 'running',
+      agentKey: 'agent-a',
+      modelId: 'claude-3',
+      sources: [],
+      trigger: 'ui',
+      // Planned 62 cases, only 9 have started so far — the exact live-repro shape.
+      testCaseSnapshots: new Array(62).fill({ id: 'tc-x', version: 1, name: 'tc-x' }),
+      results: Object.fromEntries(
+        Array.from({ length: 9 }, (_, i) => [`tc-${i}`, { reportId: `r-${i}`, status: 'failed' }])
+      ),
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    mockGetAllBenchmarks.mockResolvedValue([]);
+  });
+
+  it('shows a "Running" badge on a run whose status is running, and reports the PLANNED total (62) not just the started count (9)', async () => {
+    mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [makeRunningEvalRun()] });
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Claude-code with traces')).toBeTruthy());
+    const row = screen.getByText('Claude-code with traces').closest('tr') as HTMLElement;
+    expect(row.querySelector('[data-testid="run-row-status-running"]')).toBeTruthy();
+    // 0 passed / 9 failed (started so far) / total 62 (planned) — not total 9.
+    expect(row.querySelector('.text-green-500')?.textContent).toBe('0');
+    expect(row.querySelector('.text-red-500')?.textContent).toBe('9');
+    expect(row.textContent).toContain('62');
+  });
+
+  it('never shows the running badge for a completed run', async () => {
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [makeRunningEvalRun({ id: 'eval-run-done-1', name: 'Finished Run', status: 'completed', testCaseSnapshots: [{}, {}], results: { 'tc-0': { reportId: 'r-0', status: 'completed', passFailStatus: 'passed' }, 'tc-1': { reportId: 'r-1', status: 'completed', passFailStatus: 'failed' } } }),
+      ],
+    });
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Finished Run')).toBeTruthy());
+    const row = screen.getByText('Finished Run').closest('tr') as HTMLElement;
+    expect(row.querySelector('[data-testid="run-row-status-running"]')).toBeNull();
+  });
+
+  it('polls for fresh data (regression: page fetched once on mount and never updated a running run\'s progress) while a run is in progress', async () => {
+    mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [makeRunningEvalRun()] });
+    jest.useFakeTimers();
+    try {
+      await act(async () => { render(React.createElement(EvalRunsPage)); });
+      const callsAfterMount = mockListEvaluationRuns.mock.calls.length;
+      expect(callsAfterMount).toBeGreaterThan(0);
+
+      await act(async () => { jest.advanceTimersByTime(5000); });
+      expect(mockListEvaluationRuns.mock.calls.length).toBeGreaterThan(callsAfterMount);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does NOT poll when every known run has reached a terminal status (no wasted background requests)', async () => {
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [makeRunningEvalRun({ id: 'eval-run-done-2', name: 'Finished Run 2', status: 'completed', testCaseSnapshots: [{}], results: { 'tc-0': { reportId: 'r-0', status: 'completed', passFailStatus: 'passed' } } })],
+    });
+    jest.useFakeTimers();
+    try {
+      await act(async () => { render(React.createElement(EvalRunsPage)); });
+      const callsAfterMount = mockListEvaluationRuns.mock.calls.length;
+      expect(callsAfterMount).toBeGreaterThan(0);
+
+      await act(async () => { jest.advanceTimersByTime(10000); });
+      expect(mockListEvaluationRuns.mock.calls.length).toBe(callsAfterMount);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

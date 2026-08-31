@@ -18,7 +18,7 @@
  * and updated incrementally as test cases complete.
  */
 
-import type { BenchmarkRun, EvaluationReport, RunStats as RunStatsType } from '@/types/index.js';
+import type { BenchmarkRun, EvaluationReport, RunStats as RunStatsType, BenchmarkRunStatus } from '@/types/index.js';
 
 /**
  * Statistics for a benchmark run
@@ -63,9 +63,20 @@ export interface RunStats {
  * the evaluator couldn't produce one (judge validation error, trace timeout).
  * Excluded from passed/failed — exactly as calculateRunStats does via the
  * report's metricsStatus.
+ *
+ * `plannedTotal` (bug: runs list showed no in-flight indication, 2026-09-01):
+ * for a genuinely in-progress run, `results` only gets an entry once a test
+ * case has actually STARTED — a run 9 cases into a planned 62 has a
+ * `results` map of length 9, so `total` here would report 9, not 62. Pass
+ * the run's snapshotted test-case count (`testCaseSnapshots.length`) as
+ * `plannedTotal` and the shortfall (planned - observed) is folded into
+ * `pending` so the invariant `total === passed+failed+errored+pending` still
+ * holds and callers see the true "53 more to go" total instead of a
+ * misleadingly small, already-100%-accounted-for total that looks finished.
  */
 export function bucketRunResults(
-  results: Record<string, { status?: string; passFailStatus?: string }> | undefined
+  results: Record<string, { status?: string; passFailStatus?: string }> | undefined,
+  plannedTotal?: number
 ): Pick<RunStats, 'passed' | 'failed' | 'errored' | 'pending' | 'total'> {
   let passed = 0, failed = 0, errored = 0, pending = 0, total = 0;
   for (const r of Object.values(results || {})) {
@@ -79,6 +90,10 @@ export function bucketRunResults(
       continue;
     }
     pending++; // unknown / no status
+  }
+  if (plannedTotal !== undefined && plannedTotal > total) {
+    pending += plannedTotal - total;
+    total = plannedTotal;
   }
   return { passed, failed, errored, pending, total };
 }
@@ -218,10 +233,12 @@ export function computeRunStats(
   run: {
     results?: Record<string, { status?: string; passFailStatus?: string }>;
     stats?: Partial<RunStatsType> | null;
+    testCaseSnapshots?: unknown[];
   }
 ): Pick<RunStatsType, 'passed' | 'failed' | 'errored' | 'pending' | 'total'> {
+  const plannedTotal = run.testCaseSnapshots?.length;
   if (run.results && Object.keys(run.results).length > 0) {
-    return bucketRunResults(run.results);
+    return bucketRunResults(run.results, plannedTotal);
   }
   if (run.stats && (run.stats.total ?? 0) > 0) {
     return {
@@ -232,7 +249,7 @@ export function computeRunStats(
       total: run.stats.total ?? 0,
     };
   }
-  return { passed: 0, failed: 0, errored: 0, pending: 0, total: 0 };
+  return { passed: 0, failed: 0, errored: 0, pending: 0, total: plannedTotal || 0 };
 }
 
 export function computeRunStatsFromReports(
@@ -253,4 +270,36 @@ export function computeRunStatsFromReports(
     errored: fullStats.errored,
     total: fullStats.total,
   };
+}
+
+/**
+ * Single canonical "is this run actively in progress" check, shared by every
+ * runs-list surface (bug: the Evaluation Runs page and the benchmark-scoped
+ * Runs panel each grew their own copy of this, and only one of them actually
+ * rendered a running indicator). `status` is authoritative when present
+ * (always true for `EvaluationRun`; `BenchmarkRun.status` is only undefined
+ * for legacy pre-status data). Falls back to inspecting `results` so legacy
+ * runs without a top-level `status` still get a sensible effective status.
+ */
+export function getEffectiveRunStatus(
+  run: { status?: BenchmarkRunStatus; results?: Record<string, { status?: string }> }
+): BenchmarkRunStatus {
+  if (run.status) return run.status;
+  const results = Object.values(run.results || {});
+  if (results.some(r => r.status === 'running')) return 'running';
+  if (results.some(r => r.status === 'pending') &&
+      !results.some(r => r.status === 'completed' || r.status === 'failed')) return 'running';
+  if (results.some(r => r.status === 'completed') || results.some(r => r.status === 'failed')) return 'completed';
+  return 'failed';
+}
+
+/**
+ * True when a run has neither reached a terminal status nor accounted for
+ * every planned test case yet. Used to decide whether a runs-list page
+ * should keep polling for live updates.
+ */
+export function isRunInProgress(
+  run: { status?: BenchmarkRunStatus; results?: Record<string, { status?: string }> }
+): boolean {
+  return getEffectiveRunStatus(run) === 'running';
 }

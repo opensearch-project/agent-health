@@ -62,6 +62,11 @@ interface DeepDiveResponse {
   experiments?: ExperimentSuggestion[];
 }
 
+// Client-side backstop timeout (see the generate() usage below) — slightly
+// above the server's own DEEP_DIVE_DEADLINE_MS (180s, comparisonDeepDiveService.ts)
+// so the server's clearer timeout message wins the race under normal conditions.
+const DEEP_DIVE_FETCH_TIMEOUT_MS = 200_000;
+
 interface CacheEntry { markdown: string; meta: DeepDiveResponse; }
 
 // The agentic deep-dive is expensive (runs an in-process agent over both runs'
@@ -225,6 +230,15 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
       }
       setStatus('loading');
       setError('');
+      setLoadingStartedAt(Date.now());
+      // Client-side backstop on top of the server's own DEEP_DIVE_DEADLINE_MS
+      // (180s): if the connection itself hangs (dropped response, proxy
+      // buffering, etc.) the fetch must still resolve to a retryable error
+      // instead of leaving the spinner running forever. Set slightly above the
+      // server deadline so the server's own clearer timeout message wins the
+      // race under normal conditions.
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => controller.abort(), DEEP_DIVE_FETCH_TIMEOUT_MS);
       try {
         // Only send a systemPrompt override when it genuinely differs from the
         // built-in default — an unmodified textarea should hit the server's
@@ -239,6 +253,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
             ...(rowsSummary.length > 0 ? { rows: rowsSummary } : {}),
             ...(customSystemPrompt ? { systemPrompt: customSystemPrompt } : {}),
           }),
+          signal: controller.signal,
         });
         if (!res.ok) {
           const e = await res.json().catch(() => ({}));
@@ -251,12 +266,32 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
         setStatus('done');
         onWindowAgents(data.runs || []);
       } catch (e: any) {
-        setError(e?.message || String(e));
+        setError(e?.name === 'AbortError' ? `Timed out after ${Math.round(DEEP_DIVE_FETCH_TIMEOUT_MS / 1000)}s waiting for a response.` : (e?.message || String(e)));
         setStatus('error');
+      } finally {
+        clearTimeout(abortTimer);
       }
     },
     [pair, onWindowAgents, systemPromptText, defaultSystemPrompt, rowsSummary]
   );
+
+  // Elapsed-time indicator while generating — owner bug report: the panel
+  // could appear stuck for a long comparison-wide analysis (real repro: ~50s
+  // for 62 cases with no trace data at all) with zero feedback, indistinguishable
+  // from actually hung. Ticks once a second only while status === 'loading'.
+  const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    if (status !== 'loading' || !loadingStartedAt) {
+      setElapsedSec(0);
+      return;
+    }
+    setElapsedSec(Math.floor((Date.now() - loadingStartedAt) / 1000));
+    const id = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - loadingStartedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [status, loadingStartedAt]);
 
   // Auto-run once per report-pair.
   useEffect(() => {
@@ -399,9 +434,17 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
       </div>
 
       {status === 'loading' && (
-        <div className="flex items-center gap-2 py-6 justify-center text-sm text-muted-foreground">
-          <Loader2 size={15} className="animate-spin" />
-          Inspecting both runs' spans &amp; logs…
+        <div className="flex flex-col items-center gap-1 py-6 justify-center text-sm text-muted-foreground" data-testid="deep-dive-loading">
+          <div className="flex items-center gap-2">
+            <Loader2 size={15} className="animate-spin" />
+            Inspecting both runs' spans &amp; logs…
+            <span className="tabular-nums" data-testid="deep-dive-loading-elapsed">({elapsedSec}s)</span>
+          </div>
+          {elapsedSec >= 30 && (
+            <p className="text-[11px] text-muted-foreground/70">
+              A comparison-wide analysis over many cases can take a minute or two — still working.
+            </p>
+          )}
         </div>
       )}
 

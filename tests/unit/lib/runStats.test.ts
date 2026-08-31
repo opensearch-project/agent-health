@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { calculateRunStats, getReportIdsFromRun, bucketRunResults, computeRunStats } from '@/lib/runStats';
+import { calculateRunStats, getReportIdsFromRun, bucketRunResults, computeRunStats, getEffectiveRunStatus, isRunInProgress } from '@/lib/runStats';
 import type { BenchmarkRun, EvaluationReport } from '@/types';
 
 describe('runStats', () => {
@@ -385,6 +385,42 @@ describe('runStats', () => {
       expect(bucketRunResults({})).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 0 });
       expect(bucketRunResults(undefined)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 0 });
     });
+
+    // Bug (2026-09-01): the runs list showed no in-flight indication for a
+    // genuinely running run — root cause was `total` reporting only the
+    // count of test cases that have STARTED (i.e. have a `results` entry),
+    // not the run's planned size. A run 9 cases into a planned 62 looked
+    // identical to a tiny, already-finished 9-case run.
+    describe('plannedTotal (in-flight total fix)', () => {
+      it('folds the shortfall between plannedTotal and observed results into pending', () => {
+        const b = bucketRunResults(
+          { a: { status: 'failed' }, b: { status: 'failed' } },
+          62
+        );
+        expect(b).toEqual({ passed: 0, failed: 2, errored: 0, pending: 60, total: 62 });
+      });
+
+      it('is a no-op when plannedTotal equals the observed count (a genuinely completed run)', () => {
+        const b = bucketRunResults(
+          { a: { status: 'completed', passFailStatus: 'passed' }, b: { status: 'completed', passFailStatus: 'failed' } },
+          2
+        );
+        expect(b).toEqual({ passed: 1, failed: 1, errored: 0, pending: 0, total: 2 });
+      });
+
+      it('is a no-op when plannedTotal is smaller than the observed count (never shrinks total)', () => {
+        const b = bucketRunResults(
+          { a: { status: 'completed', passFailStatus: 'passed' }, b: { status: 'completed', passFailStatus: 'passed' } },
+          1
+        );
+        expect(b.total).toBe(2);
+      });
+
+      it('is a no-op when plannedTotal is omitted (back-compat, existing callers unaffected)', () => {
+        const b = bucketRunResults({ a: { status: 'failed' } });
+        expect(b).toEqual({ passed: 0, failed: 1, errored: 0, pending: 0, total: 1 });
+      });
+    });
   });
 
   describe('computeRunStats', () => {
@@ -439,6 +475,43 @@ describe('runStats', () => {
     it('defaults missing individual stats fields to 0 (partial/legacy stats blob)', () => {
       const run = { results: {}, stats: { total: 5 } as any };
       expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 5 });
+    });
+
+    it('threads run.testCaseSnapshots.length through as plannedTotal for an in-progress run', () => {
+      const run = {
+        results: { 'tc-1': { status: 'failed' }, 'tc-2': { status: 'failed' } },
+        testCaseSnapshots: new Array(62).fill({ id: 'x', version: 1, name: 'x' }),
+      };
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 2, errored: 0, pending: 60, total: 62 });
+    });
+
+    it('does not affect a completed run whose testCaseSnapshots length already matches results', () => {
+      const run = {
+        results: { 'tc-1': { status: 'completed', passFailStatus: 'passed' }, 'tc-2': { status: 'completed', passFailStatus: 'failed' } },
+        testCaseSnapshots: [{}, {}],
+      };
+      expect(computeRunStats(run)).toEqual({ passed: 1, failed: 1, errored: 0, pending: 0, total: 2 });
+    });
+
+    it('reports the planned total (not 0) when a run has testCaseSnapshots but no results yet at all', () => {
+      const run = { results: {}, testCaseSnapshots: new Array(10).fill({}) };
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 10 });
+    });
+  });
+
+  describe('getEffectiveRunStatus / isRunInProgress (bug #5/#6: no in-flight indication on runs-list pages)', () => {
+    it('trusts an explicit status field first', () => {
+      expect(getEffectiveRunStatus({ status: 'running' })).toBe('running');
+      expect(getEffectiveRunStatus({ status: 'completed' })).toBe('completed');
+      expect(isRunInProgress({ status: 'running' })).toBe(true);
+      expect(isRunInProgress({ status: 'completed' })).toBe(false);
+    });
+
+    it('falls back to inspecting results for legacy runs with no top-level status', () => {
+      expect(getEffectiveRunStatus({ results: { a: { status: 'running' } } })).toBe('running');
+      expect(getEffectiveRunStatus({ results: { a: { status: 'pending' } } })).toBe('running');
+      expect(getEffectiveRunStatus({ results: { a: { status: 'completed' } } })).toBe('completed');
+      expect(getEffectiveRunStatus({ results: {} })).toBe('failed');
     });
   });
 

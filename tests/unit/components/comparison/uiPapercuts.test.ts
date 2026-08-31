@@ -232,3 +232,16 @@ describe('Consolidated metrics matrix keeps #345 pass-rate/accuracy regression h
     expect(src).toContain('run-accuracy-${run.runId}');
   });
 });
+
+describe('"Comparing A vs B" summary line — owner: "runs info should be communicated"', () => {
+  it('ComparisonPage renders a compact Comparing-A-vs-B line above the scoreboard, naming the benchmark when scoped', () => {
+    const src = read('components/comparison/ComparisonPage.tsx');
+    expect(src).toContain('data-testid="comparison-summary-line"');
+    expect(src).toContain('Comparing');
+    expect(src).toContain('selectedRuns[0].name');
+    expect(src).toContain('selectedRuns[1].name');
+    expect(src).toContain('benchmark?.name');
+    // Only renders for an actual A-vs-B (2-run) comparison.
+    expect(src).toMatch(/selectedRuns\.length === 2 &&[\s\S]{0,120}data-testid="comparison-summary-line"/);
+  });
+});

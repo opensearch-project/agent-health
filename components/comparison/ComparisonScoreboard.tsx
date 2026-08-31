@@ -63,6 +63,23 @@ const formatDelta = (a: number | undefined, b: number | undefined, suffix = ''):
   return `${sign}${Math.round(diff)}${suffix}`;
 };
 
+/**
+ * Coverage cell label — owner feedback: "how many tests are tested in both
+ * — Coverage column is confusing". Reworded from "N shared / M total" to a
+ * plain statement of overlap, naming WHICH side carries the extra cases (the
+ * common real-world shape: a small smoke run vs. a full benchmark run), e.g.
+ * "6 in both · 56 only in A". Falls back to just "N in both" if, unusually,
+ * neither side has any test cases the other lacks (shouldn't happen once
+ * `fullyOverlapping` is false, but stay defensive).
+ */
+const formatCoverageLabel = (overlap: TestCaseOverlap): string => {
+  const parts = [`${overlap.sharedTestCases} in both`];
+  overlap.perRun.slice(0, 2).forEach((r, i) => {
+    if (r.uniqueCount > 0) parts.push(`${r.uniqueCount} only in ${i === 0 ? 'A' : 'B'}`);
+  });
+  return parts.join(' · ');
+};
+
 // ─── Badge sub-components ────────────────────────────────────────────────────
 
 const RunBadgeA: React.FC = () => (
@@ -263,7 +280,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border/50 text-[10px] uppercase tracking-wide text-muted-foreground">
-                    <th className="px-4 py-2 text-left w-[180px]">Run</th>
+                    <th className="px-4 py-2 text-left w-[240px]">Run</th>
                     <th className="px-3 py-2 text-right">Pass Rate</th>
                     <th className="px-3 py-2 text-right">Avg Accuracy</th>
                     <th className="px-3 py-2 text-right">Cost</th>
@@ -289,14 +306,19 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                         data-testid={`scoreboard-row-${label}`}
                       >
                         <td className="px-4 py-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
                             <Badge />
-                            <span className="font-medium truncate max-w-[100px]">
-                              {getAgentName(run.agentKey)}
-                            </span>
-                            <span className="text-muted-foreground text-[10px] truncate">
-                              {formatRelativeTime(run.createdAt)}
-                            </span>
+                            <div className="min-w-0">
+                              {/* Run name leads (owner: "runs info should be
+                                  communicated — what are we comparing here?") —
+                                  agent/model/time move to a secondary line. */}
+                              <div className="font-medium text-[12px] truncate max-w-[220px]" title={run.runName}>
+                                {run.runName || getAgentName(run.agentKey)}
+                              </div>
+                              <div className="text-muted-foreground text-[10px] truncate max-w-[220px]">
+                                {getAgentName(run.agentKey)} — {getModelName(run.modelId)} · {formatRelativeTime(run.createdAt)}
+                              </div>
+                            </div>
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right relative">
@@ -352,11 +374,11 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                                 </span>
                               ) : overlap.fullyOverlapping ? (
                                 <span className="text-green-400">
-                                  {overlap.sharedTestCases} shared, fully comparable
+                                  {overlap.sharedTestCases} in both, fully comparable
                                 </span>
                               ) : (
                                 <span className="text-amber-400">
-                                  {overlap.sharedTestCases} shared / {overlap.totalTestCases} total
+                                  {formatCoverageLabel(overlap)}
                                 </span>
                               )}
                             </span>

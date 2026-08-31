@@ -99,6 +99,32 @@ export interface ComparisonDeepDiveResult {
   visitedCases: VisitedCaseRef[];
 }
 
+/**
+ * Hard ceiling on the agent loop's wall-clock time. Owner bug report: "What's
+ * actually different" appeared to never load (waited minutes) on a 62-row
+ * comparison with no trace data at all — in that specific repro the agent
+ * loop DID complete (~50s), just with zero client-side feedback, but there is
+ * no other guard against a genuinely stuck loop (e.g. Bedrock throttling with
+ * no bounded retry, a runaway tool-call cycle). Without this, a real hang
+ * would keep the HTTP request — and therefore the client's fetch — open
+ * forever, since there is no server-side deadline anywhere in this path.
+ * Generous enough for a large results table + a couple of trace-tool round
+ * trips; bounded so a genuine hang always resolves to a clear, retryable error
+ * instead of an indefinite spinner.
+ */
+export const DEEP_DIVE_DEADLINE_MS = 180_000;
+
+/** Race a promise against a deadline; rejects with `message` if it fires first. */
+function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+}
+
 /** Dynamically load the pi SDK (optionalDependency) with an actionable error. */
 async function loadPiSdk(): Promise<PiSdk> {
   const PI_SDK_MODULE = '@earendil-works/pi-coding-agent';
@@ -268,7 +294,11 @@ export async function generateComparisonDeepDive(opts: {
     sessionManager: SessionManager.inMemory(),
   });
 
-  await session.prompt(buildUserPrompt(runs, opts.rows, defaultCaseId));
+  await withDeadline(
+    session.prompt(buildUserPrompt(runs, opts.rows, defaultCaseId)),
+    DEEP_DIVE_DEADLINE_MS,
+    `Comparison deep-dive timed out after ${Math.round(DEEP_DIVE_DEADLINE_MS / 1000)}s — the agent loop did not finish in time. Try Regenerate.`
+  );
   const markdown = extractFinalAssistantText(session.messages).trim();
   const durationMs = Date.now() - startTime;
   debug(

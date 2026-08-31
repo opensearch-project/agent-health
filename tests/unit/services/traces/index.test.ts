@@ -334,6 +334,41 @@ describe('Traces Service Index', () => {
       // When JSON parsing fails, it falls back to 'Unknown error' message
       await expect(fetchTraces({})).rejects.toThrow('Unknown error');
     });
+
+    it('passes an AbortSignal to fetch so a hung backend can be aborted, never left pending forever', async () => {
+      // Bug hunt (owner repro): the Traces tab could get stuck in its loading
+      // state with ZERO network activity for an unrelated client-side reason
+      // (see TraceFlowComparison.test.ts), but if the /api/traces call itself
+      // ever genuinely hangs, fetchTraces must still be abortable rather than
+      // pending forever.
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ spans: [], total: 0 }),
+      });
+
+      await fetchTraces({ traceId: 't1' });
+
+      const callOpts = (global.fetch as jest.Mock).mock.calls[0][1];
+      expect(callOpts.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('rejects with a clear timeout message (not an indefinite pending promise) when the request never settles', async () => {
+      jest.useFakeTimers();
+      // Simulate a hung backend: fetch() never resolves/rejects on its own.
+      (global.fetch as jest.Mock).mockImplementation(
+        (_url: string, opts: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            opts.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          })
+      );
+
+      const promise = fetchTraces({ traceId: 't1' }, 5000);
+      const assertion = expect(promise).rejects.toThrow('Traces request timed out after 5s');
+      await jest.advanceTimersByTimeAsync(5000);
+      await assertion;
+
+      jest.useRealTimers();
+    });
   });
 
   describe('fetchTraceById', () => {

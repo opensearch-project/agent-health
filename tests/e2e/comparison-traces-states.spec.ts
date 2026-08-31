@@ -159,4 +159,45 @@ test.describe('Comparison Traces tab — loading vs not-present + timing', () =>
     const resolveMs = Date.now() - t0;
     console.log(`[trace-load-timing] absent: tab-open → "no traces found" terminal = ${resolveMs}ms`);
   });
+
+  test('a REST agent with NO correlator on either side (no runId/traceId/sessionId) resolves to the empty state WITHOUT ever calling /api/traces (bug #2, 2026-09-01)', async ({ page }) => {
+    // Regression: runInfos used to .filter(info => info.agentRunId), so a
+    // pair of reports with no correlator at all produced an EMPTY runInfos
+    // array, and fetchAllTraces() early-returned before ever calling
+    // setIsLoading/setTraceData — a permanent spinner with zero network
+    // activity. Root cause: components/comparison/sections/TraceFlowComparison.tsx.
+    let tracesCalled = false;
+    await page.route('**/api/traces', async (r) => { tracesCalled = true; return json(r, { backend: 'opensearch', spans: [], total: 0 }); });
+
+    // Override the report route for this test only: neither report carries
+    // ANY correlator (traceId/runId/sessionId) — the exact REST-agent shape
+    // from the live repro (internal-rest-agent-example, connectorProtocol 'rest').
+    const noCorrelatorReport = (id: string, agent: string) => ({
+      id, createdAt: '2026-02-01T10:00:00Z', testCaseId: TC, agentId: agent,
+      modelId: 'claude-opus-4-8', status: 'completed', passFailStatus: 'passed',
+      metrics: { accuracy: 100 }, trajectory: [],
+    });
+    await page.route(/\/api\/storage\/runs\?ids=/, (r) => {
+      const ids = (new URL(r.request().url()).searchParams.get('ids') || '').split(',');
+      const runs: unknown[] = [];
+      if (ids.some((id) => id.includes('rep-a'))) runs.push(noCorrelatorReport('rep-a', 'demo'));
+      if (ids.some((id) => id.includes('rep-b'))) runs.push(noCorrelatorReport('rep-b', 'pulsar'));
+      return json(r, { runs, total: runs.length });
+    });
+    await page.route('**/api/storage/runs/**', (r) => {
+      const u = r.request().url();
+      if (u.includes('rep-a')) return json(r, noCorrelatorReport('rep-a', 'demo'));
+      if (u.includes('rep-b')) return json(r, noCorrelatorReport('rep-b', 'pulsar'));
+      return r.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+    });
+
+    await openTracesTab(page);
+
+    const empty = page.locator('[data-testid="trace-flow-empty"]');
+    await expect(empty).toBeVisible({ timeout: 5000 });
+    // The real regression signal: no doomed network round-trip was ever
+    // attempted for a pair with zero correlators (timing itself is noisy in
+    // CI — page-load overhead dwarfs the mocked delay either way).
+    expect(tracesCalled).toBe(false);
+  });
 });
