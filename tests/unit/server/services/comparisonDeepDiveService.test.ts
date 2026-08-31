@@ -130,3 +130,76 @@ describe('comparisonDeepDiveService — generateComparisonDeepDive guard', () =>
     ).rejects.toThrow(/exactly 2 runs/);
   });
 });
+
+describe('comparisonDeepDiveService — optional systemPrompt override (Change 4, browser-cache-only)', () => {
+  // The pi SDK is an optional dependency, dynamically imported and not
+  // installed in this test environment — mock it (virtual module) so we can
+  // capture exactly what `systemPromptOverride()` the service hands to the
+  // resource loader, which is the one piece of new plumbing worth a unit test
+  // here (the server route owns request validation; see the integration test).
+  const runs: ComparisonRunInput[] = [
+    { key: 'A', label: 'agent A', runId: 'run-a' },
+    { key: 'B', label: 'agent B', runId: 'run-b' },
+  ];
+
+  const mockModel = { provider: 'mock', id: 'mock.claude-sonnet-4' };
+
+  let capturedResourceLoaderOpts: any;
+
+  beforeEach(() => {
+    jest.resetModules();
+    capturedResourceLoaderOpts = undefined;
+    jest.doMock(
+      '@earendil-works/pi-coding-agent',
+      () => ({
+        createAgentSession: jest.fn(async () => ({
+          session: {
+            prompt: jest.fn(async () => {}),
+            messages: [
+              { role: 'assistant', content: [{ type: 'text', text: 'mock deep-dive markdown' }] },
+            ],
+          },
+        })),
+        SessionManager: { inMemory: jest.fn(() => ({})) },
+        AuthStorage: { create: jest.fn(() => ({})) },
+        ModelRegistry: {
+          create: jest.fn(() => ({
+            getAvailable: jest.fn(async () => [mockModel]),
+          })),
+        },
+        DefaultResourceLoader: jest.fn().mockImplementation((opts: any) => {
+          capturedResourceLoaderOpts = opts;
+          return { reload: jest.fn(async () => {}) };
+        }),
+        getAgentDir: jest.fn(() => '/tmp/mock-agent-dir'),
+      }),
+      { virtual: true }
+    );
+  });
+
+  afterEach(() => {
+    jest.dontMock('@earendil-works/pi-coding-agent');
+  });
+
+  it('uses the built-in SYSTEM_PROMPT when no override is passed', async () => {
+    const { generateComparisonDeepDive: generate, SYSTEM_PROMPT: defaultPrompt } =
+      require('@/server/services/comparisonDeepDiveService');
+    const result = await generate({ runs, modelId: mockModel.id });
+    expect(capturedResourceLoaderOpts.systemPromptOverride()).toBe(defaultPrompt);
+    expect(result.markdown).toBe('mock deep-dive markdown');
+  });
+
+  it('threads a caller-supplied systemPrompt into systemPromptOverride instead of the default', async () => {
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+    const custom = 'CUSTOM PROMPT: focus only on token usage.';
+    await generate({ runs, modelId: mockModel.id, systemPrompt: custom });
+    expect(capturedResourceLoaderOpts.systemPromptOverride()).toBe(custom);
+  });
+
+  it('falls back to the default when systemPrompt is only whitespace', async () => {
+    const { generateComparisonDeepDive: generate, SYSTEM_PROMPT: defaultPrompt } =
+      require('@/server/services/comparisonDeepDiveService');
+    await generate({ runs, modelId: mockModel.id, systemPrompt: '   ' });
+    expect(capturedResourceLoaderOpts.systemPromptOverride()).toBe(defaultPrompt);
+  });
+});

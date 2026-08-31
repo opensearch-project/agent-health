@@ -20,7 +20,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Sparkles, Loader2, RefreshCw, ArrowUpRight, AlertTriangle, Lightbulb } from 'lucide-react';
+import { Sparkles, Loader2, RefreshCw, ArrowUpRight, AlertTriangle, Lightbulb, ChevronRight, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { BenchmarkRun, EvaluationReport, TestCaseComparisonRow } from '@/types';
 import { sanitizeMarkdownUrl } from './sanitizeMarkdownUrl';
@@ -73,6 +73,12 @@ interface CacheEntry { markdown: string; meta: DeepDiveResponse; }
 // changes, which never happens for a stable report-id pair).
 const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:';
 const deepDiveMemCache = new Map<string, CacheEntry>();
+
+// Change 4 — editable deep-dive system prompt (browser-cache ONLY, per owner
+// request: no server-side persistence). A custom prompt is stored under this
+// single, global (not per-pair) localStorage key — it applies to whichever
+// pair the user next regenerates.
+const SYSTEM_PROMPT_CACHE_KEY = 'agent-health:deepdive:system-prompt';
 
 const deepDiveCache = {
   has(key: string): boolean {
@@ -139,6 +145,38 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   const [meta, setMeta] = useState<DeepDiveResponse | null>(null);
   const [error, setError] = useState<string>('');
 
+  // ── Change 4: editable system prompt (browser-cache-only) ────────────────
+  const [defaultSystemPrompt, setDefaultSystemPrompt] = useState<string>('');
+  const [systemPromptText, setSystemPromptText] = useState<string>('');
+  const [systemPromptOpen, setSystemPromptOpen] = useState(false);
+
+  useEffect(() => {
+    let cached: string | null = null;
+    try { cached = localStorage.getItem(SYSTEM_PROMPT_CACHE_KEY); } catch { /* ignore */ }
+    if (cached) setSystemPromptText(cached);
+
+    fetch('/api/comparison/deep-dive/system-prompt')
+      .then(res => (res.ok ? res.json() : null))
+      .then((data: { systemPrompt?: string } | null) => {
+        if (!data?.systemPrompt) return;
+        setDefaultSystemPrompt(data.systemPrompt);
+        // No cached override yet — prefill with the real default so the
+        // textarea never starts blank while the fetch is in flight.
+        if (!cached) setSystemPromptText(data.systemPrompt);
+      })
+      .catch(() => { /* best-effort; textarea stays on the cached/blank value */ });
+  }, []);
+
+  const handleSystemPromptChange = useCallback((value: string) => {
+    setSystemPromptText(value);
+    try { localStorage.setItem(SYSTEM_PROMPT_CACHE_KEY, value); } catch { /* quota/unavailable */ }
+  }, []);
+
+  const handleResetSystemPrompt = useCallback(() => {
+    try { localStorage.removeItem(SYSTEM_PROMPT_CACHE_KEY); } catch { /* ignore */ }
+    setSystemPromptText(defaultSystemPrompt);
+  }, [defaultSystemPrompt]);
+
   const generate = useCallback(
     async (force = false) => {
       if (!pair) return;
@@ -153,10 +191,18 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
       setStatus('loading');
       setError('');
       try {
+        // Only send a systemPrompt override when it genuinely differs from the
+        // built-in default — an unmodified textarea should hit the server's
+        // own default rather than round-tripping an identical copy.
+        const customSystemPrompt =
+          systemPromptText.trim() && systemPromptText !== defaultSystemPrompt ? systemPromptText : undefined;
         const res = await fetch('/api/comparison/deep-dive', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reportIds: [pair.reportIdA, pair.reportIdB] }),
+          body: JSON.stringify({
+            reportIds: [pair.reportIdA, pair.reportIdB],
+            ...(customSystemPrompt ? { systemPrompt: customSystemPrompt } : {}),
+          }),
         });
         if (!res.ok) {
           const e = await res.json().catch(() => ({}));
@@ -173,7 +219,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
         setStatus('error');
       }
     },
-    [pair, onWindowAgents]
+    [pair, onWindowAgents, systemPromptText, defaultSystemPrompt]
   );
 
   // Auto-run once per report-pair.
@@ -267,6 +313,49 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
           <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs flex-shrink-0" onClick={() => generate(true)}>
             <RefreshCw size={12} /> Regenerate
           </Button>
+        )}
+      </div>
+
+      {/* Change 4 — editable system prompt (browser-cache only, nothing
+          persisted server-side). Collapsed by default; edits are saved to
+          localStorage as they're typed and threaded into the next
+          Regenerate call when they differ from the built-in default. */}
+      <div className="mb-2 border border-border/60 rounded-md">
+        <button
+          type="button"
+          onClick={() => setSystemPromptOpen(o => !o)}
+          className="flex items-center gap-1.5 w-full text-left px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          data-testid="deep-dive-system-prompt-toggle"
+        >
+          <ChevronRight size={12} className={systemPromptOpen ? 'rotate-90 transition-transform' : 'transition-transform'} />
+          System prompt
+        </button>
+        {systemPromptOpen && (
+          <div className="px-2.5 pb-2.5 space-y-1.5">
+            <textarea
+              value={systemPromptText}
+              onChange={(e) => handleSystemPromptChange(e.target.value)}
+              rows={8}
+              data-testid="deep-dive-system-prompt-textarea"
+              className="w-full text-[11px] font-mono leading-snug rounded border border-border bg-background p-2 resize-y focus:outline-none focus:ring-1 focus:ring-opensearch-blue"
+              placeholder="Loading default system prompt…"
+            />
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-muted-foreground/70">
+                Edits are saved in this browser only — click Regenerate above to re-run with the edited prompt.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 gap-1 text-[10px] flex-shrink-0"
+                onClick={handleResetSystemPrompt}
+                disabled={!defaultSystemPrompt || systemPromptText === defaultSystemPrompt}
+                data-testid="deep-dive-system-prompt-reset"
+              >
+                <RotateCcw size={10} /> Reset to default
+              </Button>
+            </div>
+          </div>
         )}
       </div>
 

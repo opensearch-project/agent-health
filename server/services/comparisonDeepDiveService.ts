@@ -144,8 +144,16 @@ export function buildUserPrompt(runs: ComparisonRunInput[]): string {
 export async function generateComparisonDeepDive(opts: {
   runs: ComparisonRunInput[];
   modelId?: string;
+  /**
+   * Owner-editable override for the deep-dive agent's system prompt
+   * (browser-cache-only feature: the frontend persists edits in
+   * localStorage, never server-side). When omitted, falls back to the
+   * built-in {@link SYSTEM_PROMPT}.
+   */
+  systemPrompt?: string;
 }): Promise<ComparisonDeepDiveResult> {
   const { runs } = opts;
+  const effectiveSystemPrompt = opts.systemPrompt?.trim() ? opts.systemPrompt : SYSTEM_PROMPT;
   if (runs.length !== 2) {
     throw new Error(`Comparison deep-dive expects exactly 2 runs, got ${runs.length}`);
   }
@@ -170,7 +178,7 @@ export async function generateComparisonDeepDive(opts: {
   const resourceLoader = new DefaultResourceLoader({
     cwd: process.cwd(),
     agentDir: getAgentDir(),
-    systemPromptOverride: () => SYSTEM_PROMPT,
+    systemPromptOverride: () => effectiveSystemPrompt,
     appendSystemPromptOverride: () => [],
     extensionFactories: [createComparisonTraceExtension(runs, serverUrl, capture)],
     // Full isolation for a HEADLESS in-process session. Without noExtensions

@@ -29,8 +29,14 @@ import {
   type ComparisonRunInput,
 } from '@/server/services/comparisonDeepDiveService';
 import { debug } from '@/lib/debug';
+import { SYSTEM_PROMPT } from '@/server/services/comparisonDeepDiveService';
 
 const router = Router();
+
+/** Owner-editable system-prompt cap: generous for a full rewrite, but bounded
+ *  against pathological/abusive payloads (browser-cache-only feature — never
+ *  persisted server-side). */
+const SYSTEM_PROMPT_MAX_LEN = 20000;
 
 const PROTOCOL_TO_SERVICE: Record<string, string> = {
   'claude-code': 'claude-code-agent',
@@ -99,10 +105,39 @@ function extractFinalOutput(report: any): string | undefined {
   return undefined;
 }
 
+/**
+ * GET /api/comparison/deep-dive/system-prompt
+ *   resp: { systemPrompt: string }
+ *
+ * Serves the built-in SYSTEM_PROMPT so the client's editable disclosure can
+ * prefill with the real default (rather than duplicating it in frontend
+ * source) and offer an accurate "Reset to default".
+ */
+router.get('/api/comparison/deep-dive/system-prompt', (_req: Request, res: Response) => {
+  return res.json({ systemPrompt: SYSTEM_PROMPT });
+});
+
 router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => {
-  const { reportIds, modelId } = (req.body || {}) as { reportIds?: unknown; modelId?: string };
+  const { reportIds, modelId, systemPrompt } = (req.body || {}) as {
+    reportIds?: unknown;
+    modelId?: string;
+    systemPrompt?: unknown;
+  };
   if (!Array.isArray(reportIds) || reportIds.length !== 2 || !reportIds.every((x) => typeof x === 'string')) {
     return res.status(400).json({ error: 'reportIds must be an array of exactly 2 report id strings' });
+  }
+  let trimmedSystemPrompt: string | undefined;
+  if (systemPrompt !== undefined) {
+    if (typeof systemPrompt !== 'string') {
+      return res.status(400).json({ error: 'systemPrompt must be a string' });
+    }
+    trimmedSystemPrompt = systemPrompt.trim();
+    if (trimmedSystemPrompt.length === 0) {
+      return res.status(400).json({ error: 'systemPrompt must not be empty' });
+    }
+    if (trimmedSystemPrompt.length > SYSTEM_PROMPT_MAX_LEN) {
+      return res.status(400).json({ error: `systemPrompt must be at most ${SYSTEM_PROMPT_MAX_LEN} characters` });
+    }
   }
 
   try {
@@ -142,7 +177,7 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
 
     debug('CompareDeepDiveAPI', 'reports:', reportIds.join(','), 'services:', runMeta.map((m) => m.serviceName).join(','));
 
-    const result = await generateComparisonDeepDive({ runs: runInputs, modelId });
+    const result = await generateComparisonDeepDive({ runs: runInputs, modelId, systemPrompt: trimmedSystemPrompt });
     return res.json({ ...result, runs: runMeta });
   } catch (err: any) {
     console.error('[CompareDeepDiveAPI] error:', err);
