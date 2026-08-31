@@ -8,10 +8,12 @@
  * 2-run comparison.
  *
  * Calls POST /api/comparison/deep-dive, which runs an in-process pi agent with
- * read-only trace tools over BOTH runs and returns a concise markdown deep-dive
- * citing specific spans as `[label](span:<runId>:<spanId>)`. We render the
- * markdown and turn those span citations into clickable pills that deep-link
- * into the Traces tab of the relevant run on the same page (via onSpanLink).
+ * read-only trace tools over BOTH runs — comparison-wide: the agent can pull
+ * real spans/logs for ANY case in the results table, not just one fixed pair
+ * — and returns a concise markdown deep-dive citing specific spans as
+ * `[label](span:<caseId>:<runId>:<spanId>)`. We render the markdown and turn
+ * those span citations into clickable pills that deep-link into the Traces
+ * tab of the RIGHT case row on the same page (via onSpanLink).
  *
  * The agent run is ~30-60s and costs tokens, so results are cached in-memory by
  * report-id pair; the panel auto-runs once per pair and offers a regenerate.
@@ -24,10 +26,11 @@ import { Sparkles, Loader2, RefreshCw, ArrowUpRight, AlertTriangle, Lightbulb, C
 import { Button } from '@/components/ui/button';
 import { BenchmarkRun, EvaluationReport, TestCaseComparisonRow } from '@/types';
 import { sanitizeMarkdownUrl } from './sanitizeMarkdownUrl';
-import { DeepDiveHeaderMetrics } from './DeepDiveHeaderMetrics';
 
 export interface DeepDiveRunMeta {
   key: string;
+  /** testCaseId this window-agent hint is for — comparison-wide tracing means a citation can name ANY case. */
+  caseId?: string;
   reportId: string;
   runId?: string;
   serviceName?: string;
@@ -72,11 +75,13 @@ interface CacheEntry { markdown: string; meta: DeepDiveResponse; }
 // blob is served as-is until the user clicks "Regenerate" (or the cache key
 // changes, which never happens for a stable report-id pair).
 //
-// v2 (this round): the default SYSTEM_PROMPT changed from single-case to
-// comparison-wide analysis — bump the prefix so pre-existing v1-cached
-// narratives (generated under the old prompt) are never served as if they
-// were produced by the new one. A fresh generation is required once per pair.
-const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:v2:';
+// v3 (this round): comparison-wide TRACING — the agent can now pull real
+// spans/logs for ANY case in the results table (not just one pre-resolved
+// representative pair), and span citations carry the caseId
+// (span:<caseId>:<runId>:<spanId>). Bump the prefix again so pre-existing
+// v2-cached narratives (generated under the single-representative-case
+// tracing model) are never served as if they came from the new one.
+const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:v3:';
 const deepDiveMemCache = new Map<string, CacheEntry>();
 
 // Change 4 — editable deep-dive system prompt (browser-cache ONLY, per owner
@@ -151,10 +156,13 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   const [error, setError] = useState<string>('');
 
   // Compact A-vs-B summary of EVERY compared row (not just the traced pair) —
-  // owner request: the default prompt now analyzes the comparison as a
-  // whole, selectively picking relevant rows (disagreements, score gaps,
-  // category patterns) rather than just the one representative case. Capped
-  // so the POST body stays small even for a benchmark with hundreds of cases.
+  // owner request: the default prompt analyzes the comparison as a whole,
+  // selectively picking relevant rows (disagreements, score gaps, category
+  // patterns) rather than just one representative case. Each side's reportId
+  // is included too (this round) so the server can resolve ANY row's real
+  // spans/logs on demand — comparison-wide tracing, not just one fixed case.
+  // Capped so the POST body stays small even for a benchmark with hundreds of
+  // cases.
   const MAX_SUMMARY_ROWS = 500;
   const MAX_ROW_NAME_LEN = 120;
   const rowsSummary = useMemo(() => {
@@ -166,8 +174,8 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
       return {
         testCaseId: row.testCaseId,
         testCaseName: (row.testCaseName || row.testCaseId).slice(0, MAX_ROW_NAME_LEN),
-        a: a ? { passFailStatus: a.passFailStatus, score: a.accuracy } : undefined,
-        b: b ? { passFailStatus: b.passFailStatus, score: b.accuracy } : undefined,
+        a: a ? { passFailStatus: a.passFailStatus, score: a.accuracy, reportId: a.reportId } : undefined,
+        b: b ? { passFailStatus: b.passFailStatus, score: b.accuracy, reportId: b.reportId } : undefined,
       };
     });
   }, [rows, runs]);
@@ -256,11 +264,17 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pair?.cacheKey]);
 
-  // Map a cited runId → which agent label (for nicer pill titles).
+  // Map a cited runId → which agent label (for nicer pill titles). Each
+  // meta.runs entry now carries `key` ('A'|'B') directly — comparison-wide
+  // tracing means the entries are no longer 1:1 positionally with `runs`
+  // (there can be many, one per visited case per side), so look up the
+  // agentKey by key rather than by array index.
   const labelByRunId = useMemo(() => {
     const m = new Map<string, string>();
-    (meta?.runs || []).forEach((r, i) => {
-      if (r.runId) m.set(r.runId, getAgentName(runs[i]?.agentKey) || r.key);
+    (meta?.runs || []).forEach((r) => {
+      if (!r.runId) return;
+      const run = r.key === 'B' ? runs[1] : runs[0];
+      m.set(r.runId, (run && getAgentName(run.agentKey)) || r.key);
     });
     return m;
   }, [meta, runs, getAgentName]);
@@ -271,26 +285,34 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   const nameB = getAgentName(runs[1].agentKey);
 
   // A = runs[0], B = runs[1] (the URL order). Surface the A/B mapping
-  // everywhere — header + span-citation pills — so a `span:subprocess-…`
+  // everywhere — header + span-citation pills — so a `span:<caseId>:<runId>:...`
   // citation is unambiguous about which run it belongs to.
   const abByRunId = new Map<string, 'A' | 'B'>();
-  (meta?.runs || []).forEach((r, i) => { if (r.runId) abByRunId.set(r.runId, i === 0 ? 'A' : 'B'); });
+  (meta?.runs || []).forEach((r) => { if (r.runId) abByRunId.set(r.runId, r.key === 'B' ? 'B' : 'A'); });
   const AbBadge = ({ ab, className = '' }: { ab: 'A' | 'B'; className?: string }) => (
     <span className={`inline-flex items-center justify-center h-4 min-w-[1rem] px-1 rounded text-[0.7rem] font-bold border ${ab === 'A' ? 'bg-opensearch-blue/15 text-opensearch-blue border-opensearch-blue/40' : 'bg-purple-500/20 text-purple-300 border-purple-400/40'} ${className}`}>{ab}</span>
   );
 
-  // Custom anchor: `span:<runId>:<spanId>` → deep-link pill; others → normal link.
+  // Custom anchor: comparison-wide tracing citations are
+  // `span:<caseId>:<runId>:<spanId>` — deep-link into the Traces tab of THAT
+  // case. Back-compat: a bare `span:<runId>:<spanId>` (2-part, e.g. from an
+  // older cached narrative or a model that ignored the new format) falls back
+  // to the panel's default/representative case.
   const SpanAnchor = ({ href, children }: { href?: string; children?: React.ReactNode }) => {
-    const m = /^span:([^:]+):(.+)$/.exec(href || '');
-    if (m) {
-      const [, runId, spanId] = m;
+    const m3 = /^span:([^:]+):([^:]+):(.+)$/.exec(href || '');
+    const m2 = !m3 ? /^span:([^:]+):(.+)$/.exec(href || '') : null;
+    if (m3 || m2) {
+      const caseId = m3 ? m3[1] : pair.testCaseId;
+      const runId = m3 ? m3[2] : m2![1];
+      const spanId = m3 ? m3[3] : m2![2];
       const who = labelByRunId.get(runId);
       return (
         <button
           type="button"
           data-span-id={spanId}
           data-run-id={runId}
-          onClick={() => onSpanLink(pair.testCaseId, runId, spanId)}
+          data-case-id={caseId}
+          onClick={() => onSpanLink(caseId, runId, spanId)}
           title={`Open this span in the Traces tab${who ? ` (${who})` : ''}`}
           className="inline-flex items-center gap-0.5 align-baseline rounded bg-opensearch-blue/10 px-1.5 py-0.5 text-[0.85em] font-medium text-opensearch-blue hover:bg-opensearch-blue/20 transition-colors"
         >
@@ -324,16 +346,6 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
             <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
               <AbBadge ab="A" /> {nameA} <span className="opacity-60">vs</span> <AbBadge ab="B" /> {nameB} <span className="opacity-60">· grounded in both runs' traces</span>
             </p>
-            {/* Owner feedback: bare "100/100" bars misread as case counts in a
-                multi-hundred-case comparison. The Score/Duration/Tools line was
-                later dropped entirely too (those numbers now live in the
-                scoreboard run rows) — only the case identity survives here, so
-                span citations stay anchored to a named case. Independent of
-                `meta`/`status`, so it shows immediately. */}
-            <DeepDiveHeaderMetrics
-              testCaseName={pair.testCaseName}
-              testCaseId={pair.testCaseId}
-            />
           </div>
         </div>
         {status === 'done' && (
@@ -436,7 +448,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
             </div>
           )}
           {meta && (
-            <p className="text-[10px] text-muted-foreground/70 mt-3 pt-2 border-t border-border">
+            <p className="text-[10px] text-muted-foreground/70 mt-3 pt-2 border-t border-border" data-testid="deep-dive-footer">
               Generated by {meta.modelId.split('/').pop()} in {(meta.durationMs / 1000).toFixed(0)}s · click a
               highlighted span to open it in the Traces tab below
             </p>

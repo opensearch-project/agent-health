@@ -11,8 +11,10 @@
  * Used as ReactMarkdown's `urlTransform` (which otherwise would have to be
  * disabled entirely to let our custom `span:` scheme through — that disabling
  * was the XSS hole flagged by the PR Code-Diff-Analyzer):
- *   - the custom `span:<runId>:<spanId>` scheme passes through untouched
- *     (SpanAnchor turns it into a deep-link button, never an `<a href>`);
+ *   - the custom `span:` scheme passes through untouched (SpanAnchor turns it
+ *     into a deep-link button, never an `<a href>`) — both the current
+ *     `span:<caseId>:<runId>:<spanId>` (comparison-wide tracing) and the
+ *     back-compat 2-part `span:<runId>:<spanId>` form;
  *   - http/https/mailto and relative (`/`, `#`, `./`, `../`) URLs are allowed;
  *   - everything else (notably `javascript:`) is dropped to '' so no dangerous
  *     scheme can ever reach an anchor.

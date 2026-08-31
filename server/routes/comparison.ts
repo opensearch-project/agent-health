@@ -7,30 +7,36 @@
  * Comparison Routes — agentic deep-dive over two runs.
  *
  * POST /api/comparison/deep-dive
- *   body: { reportIds: [reportIdA, reportIdB], modelId?, systemPrompt?, rows? }
+ *   body: { reportIds: [defaultReportIdA, defaultReportIdB], modelId?, systemPrompt?, rows? }
  *   resp: { markdown, modelId, durationMs,
  *           chart?: { title, series: [{ label, a, b, unit? }] },
  *           experiments?: [{ title, rationale }],
- *           runs: [{ key, reportId, runId, serviceName, startedAt, endedAt }] }
+ *           runs: [{ key, caseId, reportId, runId, serviceName, startedAt, endedAt }] }
  *
- * Resolves each run's trace identity SERVER-SIDE (serviceName from the live
- * agent config, wall-clock window from the saved report) — the frontend
- * DEFAULT_CONFIG is static and wouldn't know dynamically-added agents — then
- * runs the in-process comparison agent (pi SDK + run-scoped trace tools).
- * The returned `runs[]` give the frontend exactly the window-agent hints it
- * needs to deep-link span citations into the Traces tab.
+ * `reportIds` names the DEFAULT case (used by the trace tools when the agent
+ * omits `caseId`) — resolved eagerly, same as before. `rows[]` (optional, see
+ * comparisonDeepDiveService.ComparisonRowSummary) now also carries each side's
+ * reportId per case, which THIS round's comparison-wide tracing uses to
+ * resolve any OTHER case's trace identity lazily, one report at a time, only
+ * when the agent actually asks for it (never prefetched for every row).
+ *
+ * The returned `runs[]` are only the (case, side) pairs the agent actually
+ * queried during this generation — exactly the window-agent hints the
+ * frontend needs to deep-link each span citation into the Traces tab of the
+ * RIGHT case row.
  */
 
 import { Router, Request, Response } from 'express';
-import { loadConfigSync } from '@/lib/config/index';
 import { getStorageModule } from '@/server/adapters';
 import {
   generateComparisonDeepDive,
   type ComparisonRunInput,
   type ComparisonRowSummary,
 } from '@/server/services/comparisonDeepDiveService';
-import { debug } from '@/lib/debug';
 import { SYSTEM_PROMPT } from '@/server/services/comparisonDeepDiveService';
+import type { CaseReportRef } from '@/server/services/comparisonTraceTools';
+import { resolveReportTraceContext, extractToolNames, extractFinalOutput } from '@/server/services/comparisonCaseResolver';
+import { debug } from '@/lib/debug';
 
 const router = Router();
 
@@ -45,77 +51,11 @@ const SYSTEM_PROMPT_MAX_LEN = 20000;
 const MAX_ROWS_SUMMARY = 500;
 const MAX_ROW_NAME_LEN = 200;
 
-const PROTOCOL_TO_SERVICE: Record<string, string> = {
-  'claude-code': 'claude-code-agent',
-  kiro: 'kiro-agent',
-  pi: 'pi-agent',
-  'agui-streaming': 'observio-sample-agent',
-};
-
-const SLACK_MS = 60_000;
-const FALLBACK_LOOKBACK_MS = 30 * 60_000;
-
-/** Resolve the OTel service.name an agent emits spans under. */
-function resolveServiceName(report: any): string | undefined {
-  const agent = report?.agentKey
-    ? loadConfigSync().agents.find((a) => a.key === report.agentKey)
-    : undefined;
-  return (
-    agent?.traceServiceName ||
-    agent?.connectorConfig?.env?.OTEL_SERVICE_NAME ||
-    (report?.connectorProtocol && PROTOCOL_TO_SERVICE[report.connectorProtocol]) ||
-    (report?.agentKey ? `${report.agentKey}-agent` : undefined)
-  );
-}
-
-/** Derive the Strategy-C window + serviceName hint for a run (mirrors RunDetailsContent). */
-function resolveWindow(report: any): {
-  serviceName?: string;
-  startedAt: number;
-  endedAt: number;
-  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number }>;
-} {
-  const serviceName = resolveServiceName(report);
-  // `report.timestamp` is NOT reliably the run END — trace-mode / subprocess
-  // reports (Claude Code) are persisted at run START, so an end-anchored
-  // backward window lands BEFORE the run and matches no spans (deep-dive then
-  // reports "no traces"). Anchor SYMMETRICALLY around the timestamp by
-  // ±(duration + slack) so the window covers the run whether the timestamp is
-  // its start or end. Mirrors services/traces/judgeAgentsHints.ts.
-  const ts = Date.parse(report?.timestamp || '') || Date.now();
-  const durationMs = report?.performanceMetrics?.durationMs ?? 0;
-  const span = durationMs > 0 ? durationMs + SLACK_MS : FALLBACK_LOOKBACK_MS;
-  const startedAt = ts - span;
-  const endedAt = ts + span;
-  const agents = serviceName
-    ? [{ serviceName, startedAt, endedAt }]
-    : undefined;
-  return { serviceName, startedAt, endedAt, agents };
-}
-
-function extractToolNames(report: any): string[] {
-  const traj = Array.isArray(report?.trajectory) ? report.trajectory : [];
-  return traj
-    .filter((s: any) => s?.type === 'action' && s?.toolName)
-    .map((s: any) => s.toolName as string);
-}
-
-function extractFinalOutput(report: any): string | undefined {
-  if (typeof report?.finalOutput === 'string' && report.finalOutput.trim()) return report.finalOutput;
-  if (typeof report?.output === 'string' && report.output.trim()) return report.output;
-  const traj = Array.isArray(report?.trajectory) ? report.trajectory : [];
-  for (let i = traj.length - 1; i >= 0; i--) {
-    const s = traj[i];
-    const text = s?.content ?? s?.text ?? s?.output;
-    if (typeof text === 'string' && text.trim().length > 0) return text;
-  }
-  return undefined;
-}
-
 /** One side of a raw client-supplied results-table row, loosely typed pre-validation. */
 interface RawRowSide {
   passFailStatus?: unknown;
   score?: unknown;
+  reportId?: unknown;
 }
 
 function isPlainObject(x: unknown): x is Record<string, unknown> {
@@ -125,12 +65,13 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
 /** Validate + sanitize one client-supplied results-table row. Returns undefined (drop) for a malformed row rather than 400ing the whole request — the table is a best-effort comparison-wide hint, not the core reportIds contract. */
 function sanitizeRow(raw: unknown): ComparisonRowSummary | undefined {
   if (!isPlainObject(raw) || typeof raw.testCaseId !== 'string' || !raw.testCaseId) return undefined;
-  const sanitizeSide = (side: unknown): { passFailStatus?: string; score?: number } | undefined => {
+  const sanitizeSide = (side: unknown): { passFailStatus?: string; score?: number; reportId?: string } | undefined => {
     if (!isPlainObject(side)) return undefined;
     const s = side as RawRowSide;
-    const out: { passFailStatus?: string; score?: number } = {};
+    const out: { passFailStatus?: string; score?: number; reportId?: string } = {};
     if (typeof s.passFailStatus === 'string') out.passFailStatus = s.passFailStatus;
     if (typeof s.score === 'number' && Number.isFinite(s.score)) out.score = s.score;
+    if (typeof s.reportId === 'string' && s.reportId) out.reportId = s.reportId;
     return out;
   };
   return {
@@ -191,42 +132,96 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
 
   try {
     const storage = getStorageModule();
-    const reports = await Promise.all((reportIds as string[]).map((id) => storage.runs.getById(id)));
-    const missing = reportIds.filter((_, i) => !reports[i]);
+
+    // Lazy, memoized report fetch shared by the default-case resolution below
+    // AND the trace tools' per-case resolution (comparisonTraceTools.ts) — a
+    // case the agent never asks about never triggers a fetch.
+    const reportCache = new Map<string, any | null>();
+    const getReport = async (id: string): Promise<any | null> => {
+      if (reportCache.has(id)) return reportCache.get(id);
+      const r = await storage.runs.getById(id);
+      reportCache.set(id, r ?? null);
+      return r ?? null;
+    };
+
+    const defaultReports = await Promise.all((reportIds as string[]).map((id) => getReport(id)));
+    const missing = reportIds.filter((_, i) => !defaultReports[i]);
     if (missing.length) {
       return res.status(404).json({ error: `report(s) not found: ${missing.join(', ')}` });
     }
 
-    const keys = ['A', 'B'];
-    const runInputs: ComparisonRunInput[] = [];
-    const runMeta: Array<{ key: string; reportId: string; runId?: string; serviceName?: string; startedAt: number; endedAt: number }> = [];
-
-    reports.forEach((report: any, i) => {
-      const win = resolveWindow(report);
-      runInputs.push({
+    const keys = ['A', 'B'] as const;
+    const runInputs: ComparisonRunInput[] = defaultReports.map((report: any, i) => {
+      const ctx = resolveReportTraceContext(report);
+      return {
         key: keys[i],
         label: report.agentName || report.agentKey || `Run ${keys[i]}`,
-        runId: report.runId,
-        agents: win.agents,
+        reportId: reportIds[i] as string,
+        runId: ctx.runId,
+        agents: ctx.agents,
         passFailStatus: report.passFailStatus,
         accuracy: report?.metrics?.accuracy,
         toolNames: extractToolNames(report),
         durationMs: report?.performanceMetrics?.durationMs,
         finalOutput: extractFinalOutput(report),
-      });
-      runMeta.push({
-        key: keys[i],
-        reportId: reportIds[i] as string,
-        runId: report.runId,
-        serviceName: win.serviceName,
-        startedAt: win.startedAt,
-        endedAt: win.endedAt,
-      });
+      };
     });
 
-    debug('CompareDeepDiveAPI', 'reports:', reportIds.join(','), 'services:', runMeta.map((m) => m.serviceName).join(','));
+    // testCaseId of the default case — read straight off either report
+    // (both sides evaluated the same case for this pair) rather than trusting
+    // the client to send it separately.
+    const defaultCaseId: string =
+      defaultReports[0]?.testCaseId || defaultReports[1]?.testCaseId || (reportIds[0] as string);
 
-    const result = await generateComparisonDeepDive({ runs: runInputs, modelId, systemPrompt: trimmedSystemPrompt, rows: rowsSummary });
+    // Comparison-wide tracing: testCaseId -> per-side reportId, for EVERY
+    // case in the results table — lets the trace tools resolve any row's
+    // trace identity on demand (see comparisonTraceTools.ts). Seeded with the
+    // default pair so query_spans({caseId: defaultCaseId}) always resolves,
+    // even if `rows` was omitted or the default case fell outside the cap.
+    const caseReports = new Map<string, CaseReportRef>();
+    for (const row of rowsSummary || []) {
+      caseReports.set(row.testCaseId, { a: row.a?.reportId, b: row.b?.reportId });
+    }
+    const existingDefault = caseReports.get(defaultCaseId) || {};
+    caseReports.set(defaultCaseId, {
+      a: existingDefault.a ?? (reportIds[0] as string),
+      b: existingDefault.b ?? (reportIds[1] as string),
+    });
+
+    debug(
+      'CompareDeepDiveAPI',
+      'default reports:',
+      reportIds.join(','),
+      'defaultCaseId:',
+      defaultCaseId,
+      'cases available for wide tracing:',
+      caseReports.size
+    );
+
+    const result = await generateComparisonDeepDive({
+      runs: runInputs,
+      defaultCaseId,
+      caseReports,
+      getReport,
+      modelId,
+      systemPrompt: trimmedSystemPrompt,
+      rows: rowsSummary,
+    });
+
+    // runs[] meta: only the (case, side) pairs the agent actually queried —
+    // each already carries the window-agent hints the Traces tab needs
+    // (keyed by reportId, which the client maps generically regardless of
+    // how many entries there are).
+    const runMeta = result.visitedCases.map((v) => ({
+      key: v.key,
+      caseId: v.caseId,
+      reportId: v.reportId,
+      runId: v.runId,
+      serviceName: v.serviceName,
+      startedAt: v.startedAt,
+      endedAt: v.endedAt,
+    }));
+
     return res.json({ ...result, runs: runMeta });
   } catch (err: any) {
     console.error('[CompareDeepDiveAPI] error:', err);

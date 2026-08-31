@@ -119,10 +119,11 @@ test.describe('Comparison insights band', () => {
 
       // Chip filters the table: Split → exactly the 2 split cases.
       // Scoped to `table` (the Table Compare grid) — a 2-run selection also
-      // renders the "What's actually different" deep-dive panel, whose header
-      // names its representative case (e.g. "Case: q1 [basic] both pass")
-      // outside any `<table>`, so an unscoped `text=` locator would false-match
-      // there regardless of this filter (see PR #398 e2e-tests fix-up).
+      // renders the "What's actually different" deep-dive panel, whose footer
+      // names its representative case (e.g. "· spans from case: q1 [basic]
+      // both pass") outside any `<table>`, so an unscoped `text=` locator
+      // would false-match there regardless of this filter (see PR #398
+      // e2e-tests fix-up).
       const table = page.locator('table');
       await page.getByTestId('agreement-chip-split').click();
       await expect(table.getByText('q4 [semantic] split').first()).toBeVisible();

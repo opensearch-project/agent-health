@@ -17,6 +17,7 @@
 import {
   createComparisonTraceExtension,
   type DeepDiveCapture,
+  type CaseReportRef,
 } from '@/server/services/comparisonTraceTools';
 import type { ComparisonRunInput } from '@/server/services/comparisonDeepDiveService';
 
@@ -186,14 +187,23 @@ interface CapturedTool {
 }
 
 const RUNS: ComparisonRunInput[] = [
-  { key: 'A', label: 'agent A', runId: 'run-A' },
-  { key: 'B', label: 'agent B', runId: 'run-B' },
+  { key: 'A', label: 'agent A', runId: 'run-A', reportId: 'rep-default-a' },
+  { key: 'B', label: 'agent B', runId: 'run-B', reportId: 'rep-default-b' },
 ];
+const DEFAULT_CASE_ID = 'tc-default';
 
-function collectTools(capture: DeepDiveCapture = {}): { tools: Map<string, CapturedTool>; capture: DeepDiveCapture } {
+function collectTools(
+  capture: DeepDiveCapture = {},
+  opts: {
+    caseReports?: Map<string, CaseReportRef>;
+    getReport?: (reportId: string) => Promise<any | null>;
+  } = {}
+): { tools: Map<string, CapturedTool>; capture: DeepDiveCapture } {
   const tools = new Map<string, CapturedTool>();
   const pi: any = { registerTool: (t: CapturedTool) => tools.set(t.name, t) };
-  createComparisonTraceExtension(RUNS, 'http://localhost:4055', capture)(pi);
+  const caseReports = opts.caseReports ?? new Map<string, CaseReportRef>();
+  const getReport = opts.getReport ?? (async () => null);
+  createComparisonTraceExtension(RUNS, DEFAULT_CASE_ID, caseReports, getReport, 'http://localhost:4055', capture)(pi);
   return { tools, capture };
 }
 
@@ -266,6 +276,107 @@ describe('createComparisonTraceExtension', () => {
     const tools = new Map<string, CapturedTool>();
     const pi: any = { registerTool: (t: CapturedTool) => tools.set(t.name, t) };
     // No capture arg — must not throw at registration time.
-    expect(() => createComparisonTraceExtension(RUNS, 'http://localhost:4055')(pi)).not.toThrow();
+    expect(() =>
+      createComparisonTraceExtension(RUNS, DEFAULT_CASE_ID, new Map(), async () => null, 'http://localhost:4055')(pi)
+    ).not.toThrow();
+  });
+
+  describe('query_spans — comparison-wide case selection', () => {
+    const globalFetch = global.fetch;
+    afterEach(() => {
+      global.fetch = globalFetch;
+    });
+
+    function mockTracesResponse(spans: any[]) {
+      global.fetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({ spans }),
+      })) as any;
+    }
+
+    it('uses the default run/case (no fetch) when caseId is omitted', async () => {
+      mockTracesResponse([{ spanId: 'sp1', traceId: 't1', name: 'agent.run' }]);
+      const getReport = jest.fn(async () => null);
+      const { tools, capture } = collectTools({}, { getReport });
+
+      const res = await tools.get('query_spans')!.execute('t1', { run: 'A' });
+      const parsed = parseText(res);
+
+      expect(getReport).not.toHaveBeenCalled();
+      expect(parsed.caseId).toBe(DEFAULT_CASE_ID);
+      expect(parsed.runId).toBe('run-A');
+      expect(parsed.spanCount).toBe(1);
+      // The default case gets recorded as visited too.
+      expect(capture.visitedCases).toEqual([
+        expect.objectContaining({ key: 'A', caseId: DEFAULT_CASE_ID, reportId: 'rep-default-a', runId: 'run-A' }),
+      ]);
+    });
+
+    it('resolves an ARBITRARY case by caseId, fetching ONLY that case\'s report (lazy, not prefetched)', async () => {
+      mockTracesResponse([{ spanId: 'sp2', traceId: 't2', name: 'agent.run' }]);
+      const caseReports = new Map<string, CaseReportRef>([
+        ['tc-other', { a: 'rep-other-a', b: 'rep-other-b' }],
+      ]);
+      const getReport = jest.fn(async (id: string) =>
+        id === 'rep-other-a' ? { runId: 'run-other-a', agentKey: 'demo' } : null
+      );
+      const { tools, capture } = collectTools({}, { caseReports, getReport });
+
+      const res = await tools.get('query_spans')!.execute('t1', { run: 'A', caseId: 'tc-other' });
+      const parsed = parseText(res);
+
+      // Only the ONE requested report was fetched — never the whole table.
+      expect(getReport).toHaveBeenCalledTimes(1);
+      expect(getReport).toHaveBeenCalledWith('rep-other-a');
+      expect(parsed.caseId).toBe('tc-other');
+      expect(parsed.runId).toBe('run-other-a');
+      expect(capture.visitedCases).toEqual([
+        expect.objectContaining({ key: 'A', caseId: 'tc-other', reportId: 'rep-other-a', runId: 'run-other-a' }),
+      ]);
+    });
+
+    it('errors (no fetch) when the requested side has no report for that case', async () => {
+      const caseReports = new Map<string, CaseReportRef>([
+        ['tc-b-only', { b: 'rep-b-only' }], // side A never ran this case
+      ]);
+      const getReport = jest.fn(async () => null);
+      const { tools, capture } = collectTools({}, { caseReports, getReport });
+
+      const res = await tools.get('query_spans')!.execute('t1', { run: 'A', caseId: 'tc-b-only' });
+      const parsed = parseText(res);
+
+      expect(getReport).not.toHaveBeenCalled();
+      expect(parsed.error).toMatch(/No report for run A on case 'tc-b-only'/);
+      expect(capture.visitedCases).toBeUndefined();
+    });
+
+    it('errors when caseId is unknown to the results table at all', async () => {
+      const { tools } = collectTools();
+      const res = await tools.get('query_spans')!.execute('t1', { run: 'A', caseId: 'tc-does-not-exist' });
+      expect(parseText(res).error).toMatch(/No report for run A on case 'tc-does-not-exist'/);
+    });
+
+    it('errors when the resolved report has no runId/window at all', async () => {
+      const caseReports = new Map<string, CaseReportRef>([['tc-notraceable', { a: 'rep-notraceable' }]]);
+      const getReport = jest.fn(async () => ({ /* no runId, no serviceable agentKey/timestamp-derivable window */ }));
+      const { tools } = collectTools({}, { caseReports, getReport });
+
+      const res = await tools.get('query_spans')!.execute('t1', { run: 'A', caseId: 'tc-notraceable' });
+      expect(parseText(res).error).toMatch(/traces unavailable for this case/);
+    });
+
+    it('errors on an unknown run key regardless of caseId', async () => {
+      const { tools } = collectTools();
+      const res = await tools.get('query_spans')!.execute('t1', { run: 'C', caseId: 'tc-default' });
+      expect(parseText(res).error).toMatch(/Unknown run 'C'/);
+    });
+
+    it('dedupes visitedCases by reportId across repeated calls for the same case', async () => {
+      mockTracesResponse([{ spanId: 'sp1', traceId: 't1', name: 'agent.run' }]);
+      const { tools, capture } = collectTools();
+      await tools.get('query_spans')!.execute('t1', { run: 'A' });
+      await tools.get('query_spans')!.execute('t2', { run: 'A', nameFilter: 'agent' });
+      expect(capture.visitedCases).toHaveLength(1);
+    });
   });
 });

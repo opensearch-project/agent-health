@@ -139,7 +139,7 @@ describe('Comparison Deep-Dive Route Integration Tests', () => {
         // Sanity: matches a stable, distinctive phrase from the real prompt
         // (services/comparisonDeepDiveService.ts SYSTEM_PROMPT) without
         // duplicating the whole string in the test.
-        expect(data.systemPrompt).toMatch(/span:<runId>:<spanId>/);
+        expect(data.systemPrompt).toMatch(/span:<caseId>:<runId>:<spanId>/);
       },
       TEST_TIMEOUT
     );
