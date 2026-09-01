@@ -55,6 +55,9 @@ export const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000;
 /** Reject new (non-deduped) job starts once this many are simultaneously `running` — each one holds an in-process pi agent session + makes real model calls, so an unbounded number would be a resource/cost hazard. */
 export const DEFAULT_MAX_CONCURRENT_JOBS = 3;
 
+/** Cap on TOTAL retained jobs (running + terminal) per store. Beyond this, the oldest TERMINAL (done/error) jobs are evicted first — a running job is never evicted, no matter how old, since evicting it would orphan its in-flight generation with nothing left to report the result to. Bounds worst-case memory even if a client population regenerates far more distinct report-pair/prompt/rows combinations than the 30-minute TTL alone would ever naturally clear. */
+export const DEFAULT_MAX_RETAINED_JOBS = 50;
+
 export class DeepDiveJobStore<T> {
   private jobs = new Map<string, DeepDiveJobRecord<T>>();
   /** key -> jobId, tracked only while that job is genuinely `running` (de-dupe lookup). */
@@ -62,7 +65,8 @@ export class DeepDiveJobStore<T> {
 
   constructor(
     private readonly ttlMs: number = DEFAULT_JOB_TTL_MS,
-    private readonly maxConcurrent: number = DEFAULT_MAX_CONCURRENT_JOBS
+    private readonly maxConcurrent: number = DEFAULT_MAX_CONCURRENT_JOBS,
+    private readonly maxRetained: number = DEFAULT_MAX_RETAINED_JOBS
   ) {}
 
   /** Drop any job whose terminal state (or, for a still-running job, its start time) is older than the TTL. Lazy — runs on every read/write rather than a background timer, so there's no interval to leak/unref in tests or short-lived processes. */
@@ -84,6 +88,31 @@ export class DeepDiveJobStore<T> {
       if (job.status === 'running') n++;
     }
     return n;
+  }
+
+  /**
+   * Enforce {@link DEFAULT_MAX_RETAINED_JOBS}: evict the OLDEST terminal
+   * (done/error) jobs, by completion time, until the store is back at/under
+   * the cap or there are no more terminal jobs left to evict. A running job
+   * is NEVER evicted — if every single tracked job happens to be running
+   * (only possible when maxConcurrent > maxRetained, an intentionally
+   * unusual configuration), the store is simply allowed to exceed the cap
+   * until one of them finishes.
+   */
+  private evictOverflow(): void {
+    let overflow = this.jobs.size - this.maxRetained;
+    if (overflow <= 0) return;
+    const terminal = [...this.jobs.values()]
+      .filter((j) => j.status !== 'running')
+      .sort((a, b) => (a.completedAt ?? a.startedAt) - (b.completedAt ?? b.startedAt));
+    for (const job of terminal) {
+      if (overflow <= 0) break;
+      this.jobs.delete(job.id);
+      if (this.jobIdByKey.get(job.key) === job.id) {
+        this.jobIdByKey.delete(job.key);
+      }
+      overflow--;
+    }
   }
 
   /**
@@ -117,6 +146,7 @@ export class DeepDiveJobStore<T> {
     const job: DeepDiveJobRecord<T> = { id, key, status: 'running', startedAt: Date.now() };
     this.jobs.set(id, job);
     this.jobIdByKey.set(key, id);
+    this.evictOverflow();
 
     // Fire-and-forget: this is the whole point of the async-job conversion —
     // the HTTP request that created this job has already returned by the
@@ -161,9 +191,44 @@ export class DeepDiveJobStore<T> {
  * independent) + same effective prompt inputs (systemPrompt override, rows
  * table) => same key => a second concurrent POST for it rides the existing
  * job instead of paying for a second generation.
+ *
+ * The `rows` table is hashed SEPARATELY and CANONICALLY (each row reduced to
+ * a stable, explicit-field-order string, then the whole set sorted before
+ * joining) rather than relying on `JSON.stringify` over whatever shape/order
+ * the caller happens to pass — two POSTs for the SAME report pair and prompt
+ * but a DIFFERENT rows table must never collapse onto the same job (the
+ * second caller would silently get the first caller's unrelated result), and
+ * conversely the SAME logical rows table re-sent in a different order should
+ * still hash identically rather than triggering a needless duplicate
+ * generation.
  */
 export function computeDeepDiveDedupeKey(reportIds: string[], systemPrompt?: string, rows?: unknown): string {
   const sortedIds = [...reportIds].sort();
-  const payload = JSON.stringify({ ids: sortedIds, systemPrompt: systemPrompt || null, rows: rows ?? null });
+  const rowsHash = crypto.createHash('sha256').update(canonicalizeRowsForHash(rows)).digest('hex');
+  const payload = JSON.stringify({ ids: sortedIds, systemPrompt: systemPrompt || null, rowsHash });
   return crypto.createHash('sha256').update(payload).digest('hex');
+}
+
+/**
+ * Reduce an (untrusted, loosely-typed) rows table to a stable string for
+ * hashing: each row -> a fixed-field-order line, then the set of lines
+ * sorted before joining so row ORDER never affects the result (only
+ * CONTENT does). Defensive against non-array/malformed input (falls back to
+ * a plain JSON.stringify) since this runs before any request-body
+ * validation in the route.
+ */
+function canonicalizeRowsForHash(rows: unknown): string {
+  if (!Array.isArray(rows)) return JSON.stringify(rows ?? null);
+  const side = (s: unknown): string => {
+    if (!s || typeof s !== 'object') return '';
+    const o = s as Record<string, unknown>;
+    const score = typeof o.score === 'number' && Number.isFinite(o.score) ? o.score : '';
+    return `${o.passFailStatus ?? ''}|${score}|${o.reportId ?? ''}`;
+  };
+  const lines = rows.map((r) => {
+    if (!r || typeof r !== 'object') return JSON.stringify(r);
+    const row = r as Record<string, unknown>;
+    return `${row.testCaseId ?? ''}|${row.testCaseName ?? ''}|${side(row.a)}|${side(row.b)}`;
+  });
+  return lines.sort().join('\n');
 }

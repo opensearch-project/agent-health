@@ -292,4 +292,117 @@ describe('computeDeepDiveDedupeKey', () => {
   it('a different report PAIR (not just order) produces a different key', () => {
     expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'])).not.toBe(computeDeepDiveDedupeKey(['rep-a', 'rep-c']));
   });
+
+  // Hardening round (codex review of PR #460): the SAME report pair + prompt
+  // but a DIFFERENT rows table must never collapse onto the same dedupe key
+  // -- a second caller would otherwise silently get the FIRST caller's
+  // unrelated result. The single "differs when the rows table differs" test
+  // above already covers the basic case; these are the sharper edge cases a
+  // naive JSON.stringify-based hash could still get wrong.
+  describe('rows discrimination + canonicalization (hardening round)', () => {
+    it('discriminates when only ONE row differs among many identical ones', () => {
+      const base = Array.from({ length: 20 }, (_, i) => ({ testCaseId: `tc-${i}`, testCaseName: `Case ${i}` }));
+      const changed = base.map((r, i) => (i === 10 ? { ...r, testCaseId: 'tc-DIFFERENT' } : r));
+      expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, base)).not.toBe(
+        computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, changed)
+      );
+    });
+
+    it('discriminates on a per-side score/passFailStatus/reportId difference even when testCaseId/testCaseName are identical', () => {
+      const rowsA = [{ testCaseId: 'tc-1', testCaseName: 'Case 1', a: { passFailStatus: 'passed', score: 92, reportId: 'rep-x' } }];
+      const rowsB = [{ testCaseId: 'tc-1', testCaseName: 'Case 1', a: { passFailStatus: 'passed', score: 41, reportId: 'rep-x' } }];
+      expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, rowsA)).not.toBe(
+        computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, rowsB)
+      );
+    });
+
+    it('discriminates between an empty rows array and rows omitted entirely', () => {
+      expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, [])).not.toBe(
+        computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined)
+      );
+    });
+
+    it('is CANONICAL: the same rows re-sent in a different order hash identically (no needless duplicate generation)', () => {
+      const row1 = { testCaseId: 'tc-1', testCaseName: 'Case 1', a: { passFailStatus: 'passed', score: 92 } };
+      const row2 = { testCaseId: 'tc-2', testCaseName: 'Case 2', a: { passFailStatus: 'failed', score: 10 } };
+      expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, [row1, row2])).toBe(
+        computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, [row2, row1])
+      );
+    });
+
+    it('does not throw on a malformed/non-array rows payload (defensive -- this runs before route-level validation)', () => {
+      expect(() => computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, 'not-an-array' as any)).not.toThrow();
+      expect(() => computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, [null, 'not-an-object', 42] as any)).not.toThrow();
+      // Different malformed payloads still discriminate from each other.
+      expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, 'a' as any)).not.toBe(
+        computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, 'b' as any)
+      );
+    });
+  });
+});
+
+describe('DeepDiveJobStore — retained-jobs cap (hardening round, codex review of PR #460)', () => {
+  it('evicts the OLDEST terminal (done) job once the retained-jobs cap is exceeded', async () => {
+    const store = new DeepDiveJobStore<string>(30 * 60 * 1000, 10, 2); // maxRetained = 2
+
+    const d1 = deferred<string>();
+    const first = store.start('key-1', () => d1.promise);
+    d1.resolve('first done');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const d2 = deferred<string>();
+    const second = store.start('key-2', () => d2.promise);
+    d2.resolve('second done');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.size()).toBe(2);
+
+    // A third job pushes the store over the cap -- the OLDEST terminal job
+    // (first) must be evicted, not the second.
+    const d3 = deferred<string>();
+    const third = store.start('key-3', () => d3.promise);
+
+    expect(store.get(first.jobId)).toBeUndefined();
+    expect(store.get(second.jobId)?.result).toBe('second done');
+    expect(store.get(third.jobId)?.status).toBe('running');
+    expect(store.size()).toBeLessThanOrEqual(2);
+  });
+
+  it('NEVER evicts a running job to make room, even when every other job is also running', () => {
+    const store = new DeepDiveJobStore<string>(30 * 60 * 1000, 10, 2); // maxRetained = 2
+
+    const first = store.start('key-1', () => deferred<string>().promise);
+    const second = store.start('key-2', () => deferred<string>().promise);
+    const third = store.start('key-3', () => deferred<string>().promise);
+
+    // All three are still running -- none evicted, even though 3 > maxRetained (2).
+    expect(store.get(first.jobId)?.status).toBe('running');
+    expect(store.get(second.jobId)?.status).toBe('running');
+    expect(store.get(third.jobId)?.status).toBe('running');
+    expect(store.size()).toBe(3);
+  });
+
+  it('a job evicted for capacity is genuinely gone (get() returns undefined, matching TTL-eviction semantics)', async () => {
+    const store = new DeepDiveJobStore<string>(30 * 60 * 1000, 10, 1); // maxRetained = 1
+
+    const d1 = deferred<string>();
+    const first = store.start('key-1', () => d1.promise);
+    d1.resolve('done');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    store.start('key-2', () => deferred<string>().promise);
+
+    expect(store.get(first.jobId)).toBeUndefined();
+  });
+
+  it('defaults maxRetained to DEFAULT_MAX_RETAINED_JOBS when not specified', () => {
+    const store = new DeepDiveJobStore<string>();
+    // Not directly introspectable, but constructing with defaults must not throw
+    // and must behave sanely for a small number of jobs well under the cap.
+    const { jobId } = store.start('key-1', () => deferred<string>().promise);
+    expect(store.get(jobId)).toBeDefined();
+  });
 });
