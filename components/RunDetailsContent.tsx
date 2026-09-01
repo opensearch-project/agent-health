@@ -154,24 +154,41 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   // This allows the UI to update without a page refresh when metricsStatus changes
   const [liveReport, setLiveReport] = useState<EvaluationReport>(report);
   const [reportLoading, setReportLoading] = useState(false);
+  const [trajectoryLoading, setTrajectoryLoading] = useState(false);
+  const [trajectoryLoaded, setTrajectoryLoaded] = useState(report.trajectory.length > 0);
+  const [rawEventsLoading, setRawEventsLoading] = useState(false);
+  const [rawEventsLoaded, setRawEventsLoaded] = useState(report.rawEvents !== undefined);
+  const [judgeRawLoading, setJudgeRawLoading] = useState(false);
+  const [judgeRawLoaded, setJudgeRawLoaded] = useState(report.llmJudgeResponse?.rawResponse !== undefined);
 
-  // Sync liveReport when prop changes (switching between reports)
-  // Immediately fetch fresh data from storage to avoid stale metricsStatus
+  const mergeFreshReport = (fresh: EvaluationReport) => {
+    setLiveReport(current => current.id !== fresh.id
+      ? fresh
+      : {
+          ...current,
+          ...fresh,
+          llmJudgeResponse: current.llmJudgeResponse || fresh.llmJudgeResponse
+            ? { ...current.llmJudgeResponse, ...fresh.llmJudgeResponse }
+            : undefined,
+        });
+  };
+
+  // Sync liveReport when the prop changes and refresh only the core projection.
+  // Heavy report sections are hydrated independently by the tabs below.
   useEffect(() => {
-    // Mark as loading to prevent showing stale "pending" banner
+    setLiveReport(report);
+    setTrajectoryLoaded(report.trajectory.length > 0);
+    setRawEventsLoaded(report.rawEvents !== undefined);
+    setJudgeRawLoaded(report.llmJudgeResponse?.rawResponse !== undefined);
+    setTrajectoryLoading(false);
+    setRawEventsLoading(false);
+    setJudgeRawLoading(false);
     setReportLoading(true);
 
-    // Fetch the latest from storage to get updated metricsStatus
-    asyncRunStorage.getReportById(report.id).then(freshReport => {
-      if (freshReport) {
-        setLiveReport(freshReport);
-      } else {
-        // Fall back to prop if not found in storage
-        setLiveReport(report);
-      }
+    asyncRunStorage.getReportById(report.id, 'core').then(freshReport => {
+      if (freshReport) mergeFreshReport(freshReport);
     }).catch(error => {
       console.warn('[RunDetails] Failed to fetch fresh report:', error);
-      setLiveReport(report);
     }).finally(() => {
       setReportLoading(false);
     });
@@ -185,10 +202,10 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
 
     const interval = setInterval(async () => {
       try {
-        const updated = await asyncRunStorage.getReportById(liveReport.id);
+        const updated = await asyncRunStorage.getReportById(liveReport.id, 'core');
         if (updated && updated.metricsStatus !== 'pending') {
           console.info('[RunDetails] Report status changed to:', updated.metricsStatus);
-          setLiveReport(updated);
+          mergeFreshReport(updated);
         }
       } catch (error) {
         console.warn('[RunDetails] Failed to poll report status:', error);
@@ -251,12 +268,12 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     // Determine if this is AG-UI protocol (which has convertible rawEvents)
     const isAguiProtocol = (() => {
       // Explicit connector protocol (new reports)
-      if (report.connectorProtocol) {
-        return report.connectorProtocol === 'agui-streaming';
+      if (liveReport.connectorProtocol) {
+        return liveReport.connectorProtocol === 'agui-streaming';
       }
       // Infer from rawEvents structure (legacy reports without connectorProtocol)
-      if (report.rawEvents && report.rawEvents.length > 0) {
-        const firstEvent = report.rawEvents[0];
+      if (liveReport.rawEvents && liveReport.rawEvents.length > 0) {
+        const firstEvent = liveReport.rawEvents[0];
         // Subprocess/claude-code rawEvents have type: 'stdout' | 'stderr'
         // AG-UI rawEvents have different event types (e.g., 'RUN_STARTED', 'TEXT_MESSAGE_CONTENT', etc.)
         return firstEvent.type !== 'stdout' && firstEvent.type !== 'stderr';
@@ -265,15 +282,85 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     })();
 
     // Only compute trajectory from rawEvents for AG-UI protocol
-    if (isAguiProtocol && report.rawEvents && report.rawEvents.length > 0) {
-      const computed = computeTrajectoryFromRawEvents(report.rawEvents);
+    if (isAguiProtocol && liveReport.rawEvents && liveReport.rawEvents.length > 0) {
+      const computed = computeTrajectoryFromRawEvents(liveReport.rawEvents);
       // Fall back to stored trajectory if computation returns empty (e.g., malformed events)
-      return computed.length > 0 ? computed : report.trajectory;
+      return computed.length > 0 ? computed : liveReport.trajectory;
     }
 
     // Use stored trajectory directly for subprocess/claude-code/other protocols
-    return report.trajectory;
-  }, [report.rawEvents, report.trajectory, report.connectorProtocol]);
+    return liveReport.trajectory;
+  }, [liveReport.rawEvents, liveReport.trajectory, liveReport.connectorProtocol]);
+
+  const loadTrajectorySection = async () => {
+    if (trajectoryLoaded || trajectoryLoading) return;
+    setTrajectoryLoading(true);
+    try {
+      const section = await asyncRunStorage.getReportById(report.id, 'trajectory');
+      if (section) {
+        setLiveReport(current => current.id === section.id
+          ? { ...current, trajectory: section.trajectory }
+          : current);
+        setTrajectoryLoaded(true);
+      }
+    } catch (error) {
+      console.warn('[RunDetails] Failed to load trajectory:', error);
+    } finally {
+      setTrajectoryLoading(false);
+    }
+  };
+
+  const loadRawEventsSection = async () => {
+    if (rawEventsLoaded || rawEventsLoading) return;
+    setRawEventsLoading(true);
+    try {
+      const section = await asyncRunStorage.getReportById(report.id, 'rawEvents');
+      if (section) {
+        setLiveReport(current => current.id === section.id
+          ? { ...current, rawEvents: section.rawEvents }
+          : current);
+        setRawEventsLoaded(true);
+      }
+    } catch (error) {
+      console.warn('[RunDetails] Failed to load raw events:', error);
+    } finally {
+      setRawEventsLoading(false);
+    }
+  };
+
+  const loadJudgeRawSection = async () => {
+    if (judgeRawLoaded || judgeRawLoading) return;
+    setJudgeRawLoading(true);
+    try {
+      const section = await asyncRunStorage.getReportById(report.id, 'judgeRawResponse');
+      if (section) {
+        setLiveReport(current => current.id === section.id
+          ? {
+              ...current,
+              llmJudgeResponse: current.llmJudgeResponse || section.llmJudgeResponse
+                ? { ...current.llmJudgeResponse, ...section.llmJudgeResponse }
+                : undefined,
+            }
+          : current);
+        setJudgeRawLoaded(true);
+      }
+    } catch (error) {
+      console.warn('[RunDetails] Failed to load raw judge response:', error);
+    } finally {
+      setJudgeRawLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'trajectory') void loadTrajectorySection();
+    if (activeTab === 'judge') void loadJudgeRawSection();
+  }, [activeTab, report.id]);
+
+  useEffect(() => {
+    if (activeTab === 'trajectory' && trajectoryViewMode === 'raw') {
+      void loadRawEventsSection();
+    }
+  }, [activeTab, trajectoryViewMode, report.id]);
 
   const modelDisplayName = DEFAULT_CONFIG.models[report.modelName]?.display_name || report.modelName;
 
@@ -831,7 +918,11 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="w-full justify-start rounded-none border-b bg-card h-auto p-0">
-          <TabsTrigger value="trajectory" className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue">
+          <TabsTrigger
+            value="trajectory"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue"
+            onClick={() => void loadTrajectorySection()}
+          >
             <GitBranch size={14} className="mr-2" /> Test Case Output
             <Badge variant="secondary" className="ml-2">{trajectory.length}</Badge>
           </TabsTrigger>
@@ -847,7 +938,11 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
               : report.logs && <Badge variant="secondary" className="ml-2">{report.logs.length}</Badge>
             }
           </TabsTrigger>
-          <TabsTrigger value="judge" className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue">
+          <TabsTrigger
+            value="judge"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue"
+            onClick={() => void loadJudgeRawSection()}
+          >
             <Scale size={14} className="mr-2" /> Judge Evaluation
           </TabsTrigger>
           <TabsTrigger value="annotations" className="rounded-none border-b-2 border-transparent data-[state=active]:border-opensearch-blue data-[state=active]:text-opensearch-blue">
@@ -895,10 +990,22 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
 
             {/* Conditional View */}
             {trajectoryViewMode === 'processed' ? (
-              <TrajectoryView steps={trajectory} loading={false} />
+              trajectoryLoading && !trajectoryLoaded ? (
+                <div className="flex items-center justify-center py-12 text-muted-foreground">
+                  <Loader2 className="animate-spin mr-2" size={20} />
+                  Loading test case output...
+                </div>
+              ) : (
+                <TrajectoryView steps={trajectory} loading={false} />
+              )
+            ) : rawEventsLoading && !rawEventsLoaded ? (
+              <div className="flex items-center justify-center py-12 text-muted-foreground">
+                <Loader2 className="animate-spin mr-2" size={20} />
+                Loading raw events...
+              </div>
             ) : (
-              report.rawEvents && report.rawEvents.length > 0 ? (
-                <RawEventsPanel events={report.rawEvents} />
+              liveReport.rawEvents && liveReport.rawEvents.length > 0 ? (
+                <RawEventsPanel events={liveReport.rawEvents} />
               ) : (
                 <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                   <Terminal size={48} className="mb-4 opacity-20" />
@@ -1094,6 +1201,12 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </TabsContent>
 
           <TabsContent value="judge" className="p-6 mt-0 space-y-6 overflow-y-auto">
+            {judgeRawLoading && !judgeRawLoaded && (
+              <div className="flex items-center text-xs text-muted-foreground">
+                <Loader2 className="animate-spin mr-2" size={14} />
+                Loading raw judge details...
+              </div>
+            )}
             {/* Evaluator Info */}
             {evaluator && (
               <div>

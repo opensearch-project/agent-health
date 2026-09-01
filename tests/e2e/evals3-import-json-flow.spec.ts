@@ -53,22 +53,19 @@ test.describe('JSON import flow — created-ids-from-bulk-response regression', 
     });
 
     // Capture the bulk-create response so the test can independently verify
-    // the ids it returns are the same ones the benchmark ends up with.
-    let bulkCreatedIds: string[] = [];
-    page.on('response', async (res) => {
-      if (res.request().method() === 'POST' && /\/api\/storage\/test-cases\/bulk(\?|$)/.test(res.url())) {
-        try {
-          const body = await res.json();
-          bulkCreatedIds = (body.testCases || []).map((tc: any) => tc.id);
-          createdTestCaseIds.push(...bulkCreatedIds);
-        } catch { /* ignore */ }
-      }
-    });
-
+    // the ids it returns are the same ones the benchmark ends up with. Await
+    // the response explicitly: async page.on('response') handlers are not
+    // joined by Playwright, so navigation can win the race with res.json().
     await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
 
+    const bulkResponsePromise = page.waitForResponse(res =>
+      res.request().method() === 'POST' && /\/api\/storage\/test-cases\/bulk(\?|$)/.test(res.url()),
+    );
     await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
+    const bulkBody = await (await bulkResponsePromise).json();
+    const bulkCreatedIds = (bulkBody.testCases || []).map((tc: any) => tc.id);
+    createdTestCaseIds.push(...bulkCreatedIds);
 
     // On success the handler navigates to the new benchmark's runs page —
     // the pre-fix bug logged an error and returned without navigating.
@@ -96,21 +93,16 @@ test.describe('JSON import flow — created-ids-from-bulk-response regression', 
       if (msg.type() === 'error') consoleErrors.push(msg.text());
     });
 
-    let bulkCreatedIds: string[] = [];
-    page.on('response', async (res) => {
-      if (res.request().method() === 'POST' && /\/api\/storage\/test-cases\/bulk(\?|$)/.test(res.url())) {
-        try {
-          const body = await res.json();
-          bulkCreatedIds = (body.testCases || []).map((tc: any) => tc.id);
-          createdTestCaseIds.push(...bulkCreatedIds);
-        } catch { /* ignore */ }
-      }
-    });
-
     await page.goto('/evaluations/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
 
+    const bulkResponsePromise = page.waitForResponse(res =>
+      res.request().method() === 'POST' && /\/api\/storage\/test-cases\/bulk(\?|$)/.test(res.url()),
+    );
     await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
+    const bulkBody = await (await bulkResponsePromise).json();
+    const bulkCreatedIds = (bulkBody.testCases || []).map((tc: any) => tc.id);
+    createdTestCaseIds.push(...bulkCreatedIds);
 
     await page.waitForURL(/\/evaluations\/benchmarks\/[^/]+\/runs/, { timeout: 15000 });
 

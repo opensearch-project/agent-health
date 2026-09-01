@@ -461,7 +461,7 @@ export class ApiClient {
    */
   async getReportById(reportId: string): Promise<TestCaseRun | null> {
     const res = await fetch(
-      `${this.baseUrl}/api/storage/runs/${encodeURIComponent(reportId)}`
+      `${this.baseUrl}/api/storage/runs/${encodeURIComponent(reportId)}?include=full`
     );
 
     if (res.status === 404) {

@@ -47,6 +47,7 @@ import type {
 import { STORAGE_INDEXES } from '../../middleware/dataSourceConfig.js';
 import { assertNotMigrating } from '../../services/migrationLock.js';
 import { describeOpenSearchError } from '../../services/opensearchClientFactory.js';
+import { RUN_SUMMARY_FIELDS } from '../runSummary.js';
 
 // ============================================================================
 // Helpers
@@ -697,6 +698,7 @@ class OpenSearchRunOperations implements IRunOperations {
           from,
           sort: [{ createdAt: { order: 'desc' } }],
           query,
+          ...(options?._source?.length ? { _source: options._source } : {}),
         },
       });
 
@@ -713,16 +715,19 @@ class OpenSearchRunOperations implements IRunOperations {
   }
 
   async getByTestCase(testCaseId: string, size?: number, from?: number): Promise<{ items: TestCaseRun[]; total: number }> {
-    return this.search({ testCaseId }, { size, from });
+    return this.search({ testCaseId }, { size, from, _source: [...RUN_SUMMARY_FIELDS] });
   }
 
   async getByExperiment(experimentId: string, size?: number): Promise<TestCaseRun[]> {
-    const { items } = await this.search({ experimentId }, { size });
+    const { items } = await this.search({ experimentId }, { size, _source: [...RUN_SUMMARY_FIELDS] });
     return items;
   }
 
   async getByExperimentRun(experimentId: string, runId: string, size?: number): Promise<TestCaseRun[]> {
-    const { items } = await this.search({ experimentId, experimentRunId: runId }, { size });
+    const { items } = await this.search(
+      { experimentId, experimentRunId: runId },
+      { size, _source: [...RUN_SUMMARY_FIELDS] },
+    );
     return items;
   }
 
@@ -733,7 +738,7 @@ class OpenSearchRunOperations implements IRunOperations {
   }> {
     const filters: RunSearchFilters = { experimentId, testCaseId };
     if (experimentRunId) filters.experimentRunId = experimentRunId;
-    const { items } = await this.search(filters, { size: 1000 });
+    const { items } = await this.search(filters, { size: 1000, _source: [...RUN_SUMMARY_FIELDS] });
 
     const maxIteration = items.reduce((max, r) => Math.max(max, (r as any).iteration || 0), 0);
     return { items, total: items.length, maxIteration };

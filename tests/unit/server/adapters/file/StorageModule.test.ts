@@ -78,6 +78,72 @@ describe('FileStorageModule', () => {
     });
   });
 
+  describe('runs', () => {
+    it('applies pagination before lazily loading legacy report documents', async () => {
+      for (let index = 0; index < 3; index++) {
+        await mod.runs.create({
+          id: `legacy-${index}`,
+          timestamp: new Date(1_700_000_000_000 + index).toISOString(),
+          testCaseId: 'tc-legacy',
+          status: 'completed',
+          rawEvents: [{ payload: 'x'.repeat(1_000) }],
+        } as any);
+      }
+      fs.rmSync(path.join(tmpDir, 'runs', '.summaries'), { recursive: true, force: true });
+
+      const listed = await mod.runs.getAll({ size: 1, _source: ['id', 'status'] });
+      const cached = fs.readdirSync(path.join(tmpDir, 'runs', '.summaries'));
+
+      expect(listed.items).toHaveLength(1);
+      expect(listed.total).toBe(3);
+      expect(cached).toHaveLength(1);
+    });
+
+    it('lists a 50 MB report as a summary while getById keeps the full document', async () => {
+      const rawPayload = 'x'.repeat(50 * 1024 * 1024);
+      await mod.runs.create({
+        id: 'huge-report',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        testCaseId: 'tc-huge',
+        status: 'completed',
+        passFailStatus: 'passed',
+        metrics: { accuracy: 100 },
+        matcherResults: [{
+          description: 'large report matcher',
+          pass: true,
+          method: 'llm-judge',
+          reasoning: 'r'.repeat(2_000),
+        }],
+        rawEvents: [{ rawPayload }],
+        trajectory: [{ type: 'assistant', content: 'detail trajectory' }],
+        llmJudgeResponse: { rawResponse: 'detail judge response' },
+      } as any);
+      fs.rmSync(path.join(tmpDir, 'runs', '.summaries'), { recursive: true, force: true });
+
+      const listed = await mod.runs.getAll({ size: 1, _source: [
+        'id', 'testCaseId', 'status', 'metrics', 'matcherResults',
+        'rawEvents', 'trajectory', 'llmJudgeResponse', 'rawResponse',
+      ] });
+      const detail = await mod.runs.getById('huge-report');
+
+      expect(listed.items).toHaveLength(1);
+      expect(listed.items[0]).toMatchObject({
+        id: 'huge-report',
+        testCaseId: 'tc-huge',
+        status: 'completed',
+        metrics: { accuracy: 100 },
+      });
+      expect((listed.items[0] as any).rawEvents).toBeUndefined();
+      expect((listed.items[0] as any).trajectory).toBeUndefined();
+      expect((listed.items[0] as any).llmJudgeResponse).toBeUndefined();
+      expect((listed.items[0] as any).rawResponse).toBeUndefined();
+      expect((listed.items[0] as any).matcherResults[0].reasoning.length).toBeLessThanOrEqual(501);
+      expect((detail as any).rawEvents[0].rawPayload).toHaveLength(50 * 1024 * 1024);
+      expect((detail as any).trajectory[0].content).toBe('detail trajectory');
+      expect((detail as any).llmJudgeResponse.rawResponse).toBe('detail judge response');
+    });
+  });
+
   describe('benchmarks', () => {
     // Regression: benchmarks and evaluation-runs share the same on-disk `benchmarks/`
     // dir, discriminated by `docType`. Without the docType filter, an eval-run

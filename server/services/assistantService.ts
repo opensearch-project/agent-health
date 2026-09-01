@@ -346,7 +346,7 @@ The user is running Agent Health locally:
 - **Backend** (Express, REST): http://localhost:${backendPort}
 
 Prefer hitting the backend API directly (faster and more structured than DOM scraping). Useful endpoints:
-- \`GET /api/storage/runs/:id\` — single run report (includes trajectory, judge reasoning, metrics, pass/fail)
+- \`GET /api/storage/runs/:id\` — single run core (judge reasoning, metrics, pass/fail); use \`?include=full\` for trajectory/raw payloads
 - \`GET /api/storage/runs/by-benchmark/:benchmarkId\` — all runs for a benchmark
 - \`GET /api/storage/benchmarks/:id\` — benchmark definition + run summaries (use \`?fields=full\` for detail)
 - \`GET /api/storage/test-cases/:id\` — test case definition with expected outcomes

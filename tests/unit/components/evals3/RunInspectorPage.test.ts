@@ -192,7 +192,7 @@ describe('RunInspectorPage — lazy report loading', () => {
     // Full report fetched only for the selected (first) row.
     await waitFor(() => expect(mockGetReportById).toHaveBeenCalled());
     expect(mockGetReportById).toHaveBeenCalledTimes(1);
-    expect(mockGetReportById).toHaveBeenCalledWith('rep-0');
+    expect(mockGetReportById).toHaveBeenCalledWith('rep-0', 'core');
   });
 
   it('falls back to execution status when the summary batch fails', async () => {
@@ -240,7 +240,7 @@ describe('RunInspectorPage — lazy report loading', () => {
 
     // Row 110 is beyond the 100-row window; the deep link bumps the window.
     await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(120));
-    await waitFor(() => expect(mockGetReportById).toHaveBeenCalledWith('rep-110'));
+    await waitFor(() => expect(mockGetReportById).toHaveBeenCalledWith('rep-110', 'core'));
   });
 
   it('shows error + Retry instead of an infinite skeleton, and Retry recovers', async () => {
@@ -299,7 +299,7 @@ describe('RunInspectorPage — lazy report loading', () => {
     // Window resets to the first page for the new run.
     await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(100));
     // And the first row of the new run is auto-selected (selection reset).
-    await waitFor(() => expect(mockGetReportById).toHaveBeenCalledWith('rep-0'));
+    await waitFor(() => expect(mockGetReportById).toHaveBeenCalledWith('rep-0', 'core'));
   });
 
   it('fans out trace-polling recovery for pending rows using the summary report', async () => {

@@ -177,7 +177,13 @@ describe('Runs Storage Routes', () => {
 
       await handler(req, res);
 
-      expect(mockRunsGetAll).toHaveBeenCalledWith({ size: 50, from: 0, _source: undefined });
+      expect(mockRunsGetAll).toHaveBeenCalledWith({
+        size: 50,
+        from: 0,
+        _source: expect.arrayContaining([
+          'id', 'testCaseId', 'matcherResults', 'metrics', 'status', 'passFailStatus',
+        ]),
+      });
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           runs: expect.arrayContaining([
@@ -203,7 +209,7 @@ describe('Runs Storage Routes', () => {
       });
     });
 
-    it('should not pass _source when fields query param is missing', async () => {
+    it('should always apply a safe summary projection when fields are omitted', async () => {
       mockRunsGetAll.mockResolvedValue({ items: [], total: 0 });
 
       const { req, res } = createMocks({}, {}, {});
@@ -214,8 +220,27 @@ describe('Runs Storage Routes', () => {
       expect(mockRunsGetAll).toHaveBeenCalledWith({
         size: 100,
         from: 0,
-        _source: undefined,
+        _source: expect.arrayContaining([
+          'id', 'runId', 'testCaseId', 'status', 'passFailStatus', 'metrics',
+        ]),
       });
+      const projection = mockRunsGetAll.mock.calls[0][0]._source;
+      expect(projection).not.toContain('rawEvents');
+      expect(projection).not.toContain('trajectory');
+      expect(projection).not.toContain('llmJudgeResponse');
+      expect(projection).not.toContain('rawResponse');
+    });
+
+    it('accepts limit as an alias for size', async () => {
+      mockRunsGetAll.mockResolvedValue({ items: [], total: 0 });
+
+      const { req, res } = createMocks({}, {}, { limit: '5' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+
+      await handler(req, res);
+
+      expect(mockRunsGetAll).toHaveBeenCalledWith(expect.objectContaining({ size: 5 }));
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ size: 5 }));
     });
 
     it('should return only sample data when storage unavailable', async () => {
@@ -235,13 +260,14 @@ describe('Runs Storage Routes', () => {
       );
     });
 
-    it('batch ids path returns full docs minus rawEvents when no fields given', async () => {
+    it('batch ids path preserves full comparison fields when no projection is given', async () => {
       mockRunsGetById.mockImplementation(async (id: string) => ({
         id,
         testCaseId: 'tc-1',
         status: 'completed',
         passFailStatus: 'passed',
         trajectory: [{ type: 'assistant', content: 's' }],
+        llmJudgeReasoning: 'why it passed',
         rawEvents: [{ type: 'RAW' }],
       }));
 
@@ -253,7 +279,9 @@ describe('Runs Storage Routes', () => {
       expect(mockRunsGetById).toHaveBeenCalledTimes(2);
       const body = (res.json as jest.Mock).mock.calls[0][0];
       expect(body.total).toBe(2);
-      expect(body.runs[0].trajectory).toBeDefined();
+      expect(body.runs[0].status).toBe('completed');
+      expect(body.runs[0].trajectory).toEqual([{ type: 'assistant', content: 's' }]);
+      expect(body.runs[0].llmJudgeReasoning).toBe('why it passed');
       expect(body.runs[0].rawEvents).toBeUndefined();
     });
 
@@ -374,6 +402,70 @@ describe('Runs Storage Routes', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'run-123' })
       );
+    });
+
+    it('defaults to core and omits heavy report fields', async () => {
+      mockRunsGetById.mockResolvedValue({
+        id: 'run-heavy',
+        testCaseId: 'tc-123',
+        trajectory: [{ type: 'response', content: 'done' }],
+        rawEvents: [{ type: 'stdout', data: 'large' }],
+        llmJudgeResponse: { modelId: 'judge', rawResponse: 'large raw response' },
+      });
+
+      const { req, res } = createMocks({ id: 'run-heavy' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/:id');
+      await handler(req, res);
+
+      expect(res.json).toHaveBeenCalledWith({
+        id: 'run-heavy',
+        testCaseId: 'tc-123',
+        llmJudgeResponse: { modelId: 'judge' },
+      });
+    });
+
+    it('preserves the complete document for include=full', async () => {
+      const full = {
+        id: 'run-heavy',
+        trajectory: [{ type: 'response', content: 'done' }],
+        rawEvents: [{ type: 'stdout', data: 'large' }],
+        llmJudgeResponse: { rawResponse: 'large raw response' },
+      };
+      mockRunsGetById.mockResolvedValue(full);
+
+      const { req, res } = createMocks({ id: 'run-heavy' }, {}, { include: 'full' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/:id');
+      await handler(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(full);
+    });
+
+    it.each([
+      ['trajectory', { id: 'run-heavy', trajectory: [{ type: 'response' }] }],
+      ['rawEvents', { id: 'run-heavy', rawEvents: [{ type: 'stdout' }] }],
+      ['judgeRawResponse', { id: 'run-heavy', llmJudgeResponse: { rawResponse: 'raw' } }],
+    ])('returns only the targeted %s section', async (include, expected) => {
+      mockRunsGetById.mockResolvedValue({
+        id: 'run-heavy',
+        trajectory: [{ type: 'response' }],
+        rawEvents: [{ type: 'stdout' }],
+        llmJudgeResponse: { modelId: 'judge', rawResponse: 'raw' },
+      });
+
+      const { req, res } = createMocks({ id: 'run-heavy' }, {}, { include });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/:id');
+      await handler(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(expected);
+    });
+
+    it('rejects unknown detail projections', async () => {
+      const { req, res } = createMocks({ id: 'run-123' }, {}, { include: 'everything' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs/:id');
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(mockRunsGetById).not.toHaveBeenCalled();
     });
 
     it('should return 404 when run not found', async () => {
@@ -610,9 +702,21 @@ describe('Runs Storage Routes', () => {
   });
 
   describe('GET /api/storage/runs/by-test-case/:testCaseId', () => {
-    it('should return runs for test case', async () => {
+    it('should return runs for test case with all list UI metadata', async () => {
       mockRunsGetByTestCase.mockResolvedValue({
-        items: [{ id: 'run-123', testCaseId: 'tc-123' }],
+        items: [{
+          id: 'run-123',
+          name: 'Baseline',
+          description: 'Before prompt tuning',
+          testCaseId: 'tc-123',
+          agentId: 'demo',
+          modelId: 'demo-model',
+          createdAt: '2024-02-01T00:00:00Z',
+          status: 'completed',
+          passFailStatus: 'passed',
+          metricsStatus: 'ready',
+          metrics: { accuracy: 95 },
+        }],
         total: 1,
       });
 
@@ -624,7 +728,20 @@ describe('Runs Storage Routes', () => {
       expect(mockRunsGetByTestCase).toHaveBeenCalledWith('tc-123', 100, 0);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          runs: expect.any(Array),
+          runs: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'run-123',
+              name: 'Baseline',
+              description: 'Before prompt tuning',
+              agentId: 'demo',
+              modelId: 'demo-model',
+              createdAt: '2024-02-01T00:00:00Z',
+              status: 'completed',
+              passFailStatus: 'passed',
+              metricsStatus: 'ready',
+              metrics: { accuracy: 95 },
+            }),
+          ]),
           total: expect.any(Number),
           size: 100,
           from: 0,

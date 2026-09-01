@@ -32,6 +32,11 @@ import type {
   Evaluator,
   RunResultStatus,
 } from '../../../types/index.js';
+import {
+  getRunSummaryFields,
+  RUN_SUMMARY_FIELDS,
+  toRunSummary,
+} from '../runSummary.js';
 import type {
   IStorageModule,
   ITestCaseOperations,
@@ -422,16 +427,83 @@ class FileRunOperations implements IRunOperations {
   constructor(private baseDir: string) {}
 
   private get dir() { return path.join(this.baseDir, 'runs'); }
+  private get summaryDir() { return path.join(this.dir, '.summaries'); }
 
   private docPath(id: string): string {
     return path.join(this.dir, `${sanitizeId(id)}.json`);
   }
 
+  private summaryPath(id: string): string {
+    return path.join(this.summaryDir, `${sanitizeId(id)}.json`);
+  }
+
+  private writeSummary(run: TestCaseRun): void {
+    // Sidecars make filtered lists cheap after create/update and keep unbounded
+    // report payloads out of memory. A failed sidecar write must not fail the
+    // primary report write; legacy files are lazily backfilled on read.
+    try {
+      writeJsonFile(this.summaryPath(run.id), toRunSummary(run as TestCaseRun & Record<string, any>));
+    } catch {
+      // Best-effort cache only.
+    }
+  }
+
+  private readSummary(fileName: string, fields?: readonly string[]): TestCaseRun | null {
+    const id = path.basename(fileName, '.json');
+    const fullPath = path.join(this.dir, fileName);
+    const cachedPath = this.summaryPath(id);
+    let summary = fs.existsSync(cachedPath)
+      && fs.statSync(cachedPath).mtimeMs >= fs.statSync(fullPath).mtimeMs
+      ? readJsonFile<TestCaseRun>(cachedPath)
+      : null;
+    if (!summary) {
+      const full = readJsonFile<TestCaseRun>(fullPath);
+      if (!full) return null;
+      summary = toRunSummary(full as TestCaseRun & Record<string, any>);
+      this.writeSummary(full);
+    }
+    return toRunSummary(summary as TestCaseRun & Record<string, any>, fields);
+  }
+
+  private readAllSummaries(fields?: readonly string[]): TestCaseRun[] {
+    return listJsonFiles(this.dir)
+      .map(file => this.readSummary(file, fields))
+      .filter((run): run is TestCaseRun => run !== null)
+      .sort((a, b) => new Date(b.timestamp || (b as any).createdAt || 0).getTime()
+        - new Date(a.timestamp || (a as any).createdAt || 0).getTime());
+  }
+
   async getAll(options?: PaginationOptions): Promise<{ items: TestCaseRun[]; total: number }> {
-    const all = readAllFromDir<TestCaseRun>(this.dir).sort(
-      (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
-    );
-    return paginate(all, options);
+    if (!options?._source?.length) {
+      const all = readAllFromDir<TestCaseRun>(this.dir).sort(
+        (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+      );
+      return paginate(all, options);
+    }
+
+    // Sort inexpensive directory metadata, apply pagination, and only then
+    // parse the selected report files. This prevents `limit=5` from reading a
+    // workspace's entire multi-GB run history into memory.
+    const files = listJsonFiles(this.dir)
+      .map(file => {
+        const id = path.basename(file, '.json');
+        const cached = readJsonFile<TestCaseRun>(this.summaryPath(id));
+        const fallback = fs.statSync(path.join(this.dir, file)).mtimeMs;
+        const sortMs = cached
+          ? new Date(cached.timestamp || (cached as any).createdAt || 0).getTime()
+          : fallback;
+        return { file, sortMs };
+      })
+      .sort((a, b) => b.sortMs - a.sortMs);
+    const total = files.length;
+    const from = options.from ?? 0;
+    const size = options.size ?? total;
+    const fields = getRunSummaryFields(options._source);
+    const items = files
+      .slice(from, from + size)
+      .map(({ file }) => this.readSummary(file, fields))
+      .filter((run): run is TestCaseRun => run !== null);
+    return { items, total };
   }
 
   async getById(id: string): Promise<TestCaseRun | null> {
@@ -448,6 +520,7 @@ class FileRunOperations implements IRunOperations {
     } as TestCaseRun;
 
     writeJsonFile(this.docPath(id), doc);
+    this.writeSummary(doc);
     return doc;
   }
 
@@ -457,6 +530,7 @@ class FileRunOperations implements IRunOperations {
 
     const doc: TestCaseRun = { ...existing, ...updates, id };
     writeJsonFile(this.docPath(id), doc);
+    this.writeSummary(doc);
     return doc;
   }
 
@@ -464,14 +538,20 @@ class FileRunOperations implements IRunOperations {
     const fp = this.docPath(id);
     if (fs.existsSync(fp)) {
       fs.unlinkSync(fp);
+      const summary = this.summaryPath(id);
+      if (fs.existsSync(summary)) fs.unlinkSync(summary);
       return { deleted: true };
     }
     return { deleted: false };
   }
 
   async search(filters: RunSearchFilters, options?: PaginationOptions): Promise<{ items: TestCaseRun[]; total: number }> {
-    const { items: all } = await this.getAll();
-    let filtered = all;
+    // Filtering only needs summary metadata. Legacy full documents are read
+    // one-at-a-time and cached as small sidecars instead of being retained.
+    const fields = options?._source?.length
+      ? Array.from(new Set([...RUN_SUMMARY_FIELDS, ...options._source]))
+      : undefined;
+    let filtered = fields ? this.readAllSummaries(fields) : (await this.getAll()).items;
 
     if (filters.experimentId) {
       filtered = filtered.filter(r => r.experimentId === filters.experimentId);
@@ -503,20 +583,29 @@ class FileRunOperations implements IRunOperations {
       });
     }
 
-    return paginate(filtered, options);
+    const page = paginate(filtered, options);
+    if (options?._source?.length) {
+      page.items = page.items.map(run =>
+        toRunSummary(run as TestCaseRun & Record<string, any>, options._source)
+      );
+    }
+    return page;
   }
 
   async getByTestCase(testCaseId: string, size?: number, from?: number): Promise<{ items: TestCaseRun[]; total: number }> {
-    return this.search({ testCaseId }, { size, from });
+    return this.search({ testCaseId }, { size, from, _source: [...RUN_SUMMARY_FIELDS] });
   }
 
   async getByExperiment(experimentId: string, size?: number): Promise<TestCaseRun[]> {
-    const { items } = await this.search({ experimentId }, { size });
+    const { items } = await this.search({ experimentId }, { size, _source: [...RUN_SUMMARY_FIELDS] });
     return items;
   }
 
   async getByExperimentRun(experimentId: string, runId: string, size?: number): Promise<TestCaseRun[]> {
-    const { items } = await this.search({ experimentId, experimentRunId: runId }, { size });
+    const { items } = await this.search(
+      { experimentId, experimentRunId: runId },
+      { size, _source: [...RUN_SUMMARY_FIELDS] },
+    );
     return items;
   }
 
@@ -527,7 +616,7 @@ class FileRunOperations implements IRunOperations {
   }> {
     const filters: RunSearchFilters = { experimentId, testCaseId };
     if (experimentRunId) filters.experimentRunId = experimentRunId;
-    const { items } = await this.search(filters);
+    const { items } = await this.search(filters, { _source: [...RUN_SUMMARY_FIELDS] });
 
     const maxIteration = items.reduce((max, r) => Math.max(max, (r as any).iteration || 0), 0);
     return { items, total: items.length, maxIteration };
@@ -564,6 +653,7 @@ class FileRunOperations implements IRunOperations {
     run.annotations.push(fullAnnotation);
 
     writeJsonFile(this.docPath(runId), run);
+    this.writeSummary(run);
     return fullAnnotation;
   }
 
@@ -581,6 +671,7 @@ class FileRunOperations implements IRunOperations {
     };
 
     writeJsonFile(this.docPath(runId), run);
+    this.writeSummary(run);
     return run.annotations![idx];
   }
 
@@ -594,12 +685,13 @@ class FileRunOperations implements IRunOperations {
     if (run.annotations.length === originalLength) return { deleted: false };
 
     writeJsonFile(this.docPath(runId), run);
+    this.writeSummary(run);
     return { deleted: true };
   }
 
   async countsByTestCase(): Promise<Record<string, number>> {
     const counts: Record<string, number> = {};
-    for (const run of readAllFromDir<TestCaseRun>(this.dir)) {
+    for (const run of this.readAllSummaries(['id', 'testCaseId'])) {
       if (run.testCaseId) {
         counts[run.testCaseId] = (counts[run.testCaseId] || 0) + 1;
       }

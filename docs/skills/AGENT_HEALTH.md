@@ -460,7 +460,7 @@ primitive returns `llmJudgeReasoning`.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/storage/runs` | List runs. Query: `size?`, `from?`, `fields?` |
-| GET | `/api/storage/runs/:id` | Get run by ID |
+| GET | `/api/storage/runs/:id` | Get run by ID. `include=core` (default), `full`, `trajectory`, `rawEvents`, or `judgeRawResponse` |
 | POST | `/api/storage/runs` | Create run |
 | PATCH | `/api/storage/runs/:id` | Update run |
 | DELETE | `/api/storage/runs/:id` | Delete run |

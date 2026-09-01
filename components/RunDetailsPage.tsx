@@ -264,7 +264,7 @@ export const RunDetailsPage: React.FC = () => {
         const reportIds = Object.values(expRun.results || {}).map(r => r.reportId).filter(Boolean);
         const siblingReports: EvaluationReport[] = [];
         for (const reportId of reportIds) {
-          const report = await asyncRunStorage.getReportById(reportId);
+          const report = await asyncRunStorage.getReportById(reportId, 'core');
           if (report) {
             siblingReports.push(report);
           }
@@ -326,7 +326,7 @@ export const RunDetailsPage: React.FC = () => {
       }
       // Case 2: Standalone run (runId is a reportId)
       else {
-        const standaloneReport = await asyncRunStorage.getReportById(runId);
+        const standaloneReport = await asyncRunStorage.getReportById(runId, 'core');
 
         if (!standaloneReport) {
           console.error('[RunDetailsPage] Report not found:', runId);

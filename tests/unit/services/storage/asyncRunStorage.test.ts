@@ -230,7 +230,7 @@ describe('AsyncRunStorage', () => {
 
       const result = await asyncRunStorage.getReportById('run-1');
 
-      expect(mockOsRuns.getById).toHaveBeenCalledWith('run-1');
+      expect(mockOsRuns.getById).toHaveBeenCalledWith('run-1', 'full');
       expect(result).not.toBeNull();
       expect(result?.id).toBe('run-1');
     });
@@ -563,6 +563,23 @@ describe('AsyncRunStorage', () => {
       const result = await asyncRunStorage.getReportById('run-no-perf');
 
       expect(result?.performanceMetrics).toBeUndefined();
+    });
+
+    it('preserves the projected structured judge response', async () => {
+      const mockStorageRun = {
+        ...createMockStorageRun('run-judge'),
+        llmJudgeResponse: {
+          score: 88,
+          reasoning: 'Structured reasoning',
+          rawResponse: { requestId: 'raw-1' },
+        },
+      };
+      mockOsRuns.getById.mockResolvedValue(mockStorageRun);
+
+      const result = await asyncRunStorage.getReportById('run-judge', 'core');
+
+      expect(mockOsRuns.getById).toHaveBeenCalledWith('run-judge', 'core');
+      expect(result?.llmJudgeResponse).toEqual(mockStorageRun.llmJudgeResponse);
     });
 
     it('handles trace-mode fields in conversion', async () => {

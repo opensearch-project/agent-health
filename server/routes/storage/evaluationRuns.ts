@@ -17,6 +17,7 @@ import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
 import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.js';
+import { toEvaluationRunSummary } from '../../adapters/runSummary.js';
 
 const router = Router();
 
@@ -63,7 +64,10 @@ router.get('/api/storage/evaluation-runs', async (req: Request, res: Response) =
 
     const result = await storage.evaluationRuns.list({ ...filters, ...pagination, ...sorting });
 
-    res.json({ evaluationRuns: result.items, total: result.total });
+    res.json({
+      evaluationRuns: result.items.map(toEvaluationRunSummary),
+      total: result.total,
+    });
   } catch (error: any) {
     console.error('[StorageAPI] List evaluation runs failed:', error.message);
     res.status(500).json({ error: error.message });

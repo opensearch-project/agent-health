@@ -562,6 +562,38 @@ describe('RunDetailsContent', () => {
     });
   });
 
+  describe('lazy report sections', () => {
+    it('loads core and the visible output first, then raw events when opened', async () => {
+      const core = createReport({ trajectory: [], rawEvents: undefined });
+      const trajectory = createReport({
+        trajectory: [{ type: 'response', content: 'Lazy output' } as any],
+      });
+      const raw = createReport({
+        trajectory: [],
+        rawEvents: [{ type: 'stdout', data: 'Lazy raw event' } as any],
+      });
+      mockGetReportById.mockImplementation(async (_id, include) => {
+        if (include === 'trajectory') return trajectory;
+        if (include === 'rawEvents') return raw;
+        return core;
+      });
+
+      await renderAndWait(core);
+      expect(mockGetReportById).toHaveBeenCalledWith('report-1', 'core');
+      // This branch intentionally defaults to Test Case Output rather than an
+      // Overview tab, so the visible trajectory projection hydrates at mount.
+      expect(mockGetReportById).toHaveBeenCalledWith('report-1', 'trajectory');
+      expect(mockGetReportById).not.toHaveBeenCalledWith('report-1', 'rawEvents');
+      expect(screen.getByRole('tab', { name: /Test Case Output/i }).getAttribute('data-state')).toBe('active');
+      expect(mockGetReportById).not.toHaveBeenCalledWith('report-1', 'rawEvents');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Raw Events' }));
+      await waitFor(() => {
+        expect(mockGetReportById).toHaveBeenCalledWith('report-1', 'rawEvents');
+      });
+    });
+  });
+
   // Issue #320: the auto-recovery effect must delegate to the SHARED
   // ensureTracePollingForReport (canonical judge surface, server-verdict-wins
   // guard) instead of the old inline judge that raced the server poller.

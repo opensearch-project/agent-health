@@ -237,7 +237,7 @@ export const RunInspectorPage: React.FC = () => {
     if (!selectedReportId) { setSelectedReport(null); return; }
     setReportLoading(true);
     let cancelled = false;
-    asyncRunStorage.getReportById(selectedReportId)
+    asyncRunStorage.getReportById(selectedReportId, 'core')
       .then(report => { if (!cancelled) setSelectedReport(report || null); })
       .catch(() => { if (!cancelled) setSelectedReport(null); })
       .finally(() => { if (!cancelled) setReportLoading(false); });

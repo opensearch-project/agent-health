@@ -319,7 +319,9 @@ async function pollForReport(
   const startTime = Date.now();
   while (Date.now() - startTime < POLL_TIMEOUT_MS) {
     try {
-      const res = await fetch(`/api/storage/runs/${encodeURIComponent(reportId)}`);
+      // Disconnect recovery returns the same complete result shape as the SSE
+      // path, so this legacy full consumer opts out of the detail default.
+      const res = await fetch(`/api/storage/runs/${encodeURIComponent(reportId)}?include=full`);
       if (res.status === 404) {
         // Placeholder may not have been created (storage not configured).
         return null;
@@ -350,7 +352,7 @@ async function pollForReport(
   }
   // Timed out — return whatever the latest snapshot looks like.
   try {
-    const res = await fetch(`/api/storage/runs/${encodeURIComponent(reportId)}`);
+    const res = await fetch(`/api/storage/runs/${encodeURIComponent(reportId)}?include=full`);
     if (res.ok) {
       const report = (await res.json()) as EvaluationReport & { id: string };
       return {
