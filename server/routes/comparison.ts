@@ -66,6 +66,20 @@ const SYSTEM_PROMPT_MAX_LEN = 20000;
  *  this is the server-side backstop against a malformed/oversized payload. */
 const MAX_ROWS_SUMMARY = 500;
 const MAX_ROW_NAME_LEN = 200;
+/** Server-side defense-in-depth cap on id-shaped fields within a row
+ *  (testCaseId, and each side's reportId) — real ids from this app are far
+ *  shorter; anything past this is either malformed or a deliberately
+ *  oversized payload. A row failing this check is dropped silently, same as
+ *  any other malformed row (see sanitizeRow) — the results table is a
+ *  best-effort hint, not the core reportIds contract. */
+const MAX_ROW_ID_LEN = 128;
+/** Hard cap on the TOTAL serialized size of the raw `rows` payload (before
+ *  any per-entry sanitization) — the per-entry count cap above bounds the
+ *  number of rows, but not how large each one could be crafted to be (e.g.
+ *  very long testCaseName/testCaseId/reportId strings). 256KB is generous
+ *  for even a full 500-row table of realistic names, but bounds worst-case
+ *  request body size a client could otherwise inflate arbitrarily. */
+const MAX_ROWS_PAYLOAD_BYTES = 256 * 1024;
 
 /** One (case, side) window-agent hint the trace tools actually resolved during a generation — same shape the client has always rendered. */
 interface DeepDiveRunMeta {
@@ -95,25 +109,39 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
   return !!x && typeof x === 'object' && !Array.isArray(x);
 }
 
-/** Validate + sanitize one client-supplied results-table row. Returns undefined (drop) for a malformed row rather than 400ing the whole request — the table is a best-effort comparison-wide hint, not the core reportIds contract. */
+/** Validate + sanitize one client-supplied results-table row. Returns undefined (drop) for a malformed row — including one whose testCaseId or either side's reportId exceeds {@link MAX_ROW_ID_LEN} — rather than 400ing the whole request, since the results table is a best-effort comparison-wide hint, not the core reportIds contract. */
 function sanitizeRow(raw: unknown): ComparisonRowSummary | undefined {
   if (!isPlainObject(raw) || typeof raw.testCaseId !== 'string' || !raw.testCaseId) return undefined;
+  if (raw.testCaseId.length > MAX_ROW_ID_LEN) return undefined;
+  let sideExceedsIdCap = false;
   const sanitizeSide = (side: unknown): { passFailStatus?: string; score?: number; reportId?: string } | undefined => {
     if (!isPlainObject(side)) return undefined;
     const s = side as RawRowSide;
     const out: { passFailStatus?: string; score?: number; reportId?: string } = {};
     if (typeof s.passFailStatus === 'string') out.passFailStatus = s.passFailStatus;
     if (typeof s.score === 'number' && Number.isFinite(s.score)) out.score = s.score;
-    if (typeof s.reportId === 'string' && s.reportId) out.reportId = s.reportId;
+    if (typeof s.reportId === 'string' && s.reportId) {
+      if (s.reportId.length > MAX_ROW_ID_LEN) {
+        sideExceedsIdCap = true;
+      } else {
+        out.reportId = s.reportId;
+      }
+    }
     return out;
   };
+  const a = sanitizeSide(raw.a);
+  const b = sanitizeSide(raw.b);
+  // Either side's reportId being oversized drops the WHOLE row (same
+  // treatment as an oversized testCaseId) rather than silently continuing
+  // with a truncated/partial reportId that could resolve to the WRONG report.
+  if (sideExceedsIdCap) return undefined;
   return {
     testCaseId: raw.testCaseId,
     testCaseName: typeof raw.testCaseName === 'string' && raw.testCaseName
       ? raw.testCaseName.slice(0, MAX_ROW_NAME_LEN)
       : raw.testCaseId,
-    a: sanitizeSide(raw.a),
-    b: sanitizeSide(raw.b),
+    a,
+    b,
   };
 }
 
@@ -159,6 +187,10 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
     }
     if (rows.length > MAX_ROWS_SUMMARY) {
       return res.status(400).json({ error: `rows must contain at most ${MAX_ROWS_SUMMARY} entries` });
+    }
+    const rowsPayloadBytes = Buffer.byteLength(JSON.stringify(rows), 'utf8');
+    if (rowsPayloadBytes > MAX_ROWS_PAYLOAD_BYTES) {
+      return res.status(400).json({ error: `rows payload too large (${rowsPayloadBytes} bytes, max ${MAX_ROWS_PAYLOAD_BYTES})` });
     }
     rowsSummary = rows.map(sanitizeRow).filter((r): r is ComparisonRowSummary => r !== undefined);
   }

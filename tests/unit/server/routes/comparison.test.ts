@@ -52,7 +52,11 @@ import comparisonRouter from '@/server/routes/comparison';
 
 function makeApp(): Application {
   const app = express();
-  app.use(express.json());
+  // Match the real app's body-size limit (server/middleware/index.ts) so
+  // this test's own MAX_ROWS_PAYLOAD_BYTES check (well under 10mb) is what
+  // actually rejects an oversized rows payload, not Express's default
+  // 100kb json() limit kicking in first with a misleading 413.
+  app.use(express.json({ limit: '10mb' }));
   app.use(comparisonRouter);
   return app;
 }
@@ -311,5 +315,96 @@ describe('Comparison routes', () => {
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'storage cluster unreachable' });
     expect(mockGenerateComparisonDeepDive).not.toHaveBeenCalled();
+  });
+
+  describe('rows[] input caps (hardening round, codex review of PR #460)', () => {
+    beforeEach(() => {
+      mockLoadConfigSync.mockReturnValue({ agents: [] });
+      mockRunsGetById.mockResolvedValue({ id: 'report-a', timestamp: '2024-01-01T00:00:00.000Z' });
+      mockGenerateComparisonDeepDive.mockResolvedValue({ markdown: 'ok', modelId: 'm', durationMs: 1, visitedCases: [] });
+    });
+
+    it('silently drops a row whose testCaseId exceeds the 128-char id cap, without 400ing the request', async () => {
+      const oversizedId = 'x'.repeat(129);
+      const res = await request(app)
+        .post('/api/comparison/deep-dive')
+        .send({
+          reportIds: ['report-a', 'report-b'],
+          rows: [
+            { testCaseId: oversizedId, testCaseName: 'Oversized' },
+            { testCaseId: 'tc-ok', testCaseName: 'Fine' },
+          ],
+        });
+
+      expect(res.status).toBe(202);
+      const rowsPassed = mockGenerateComparisonDeepDive.mock.calls[0][0].rows;
+      expect(rowsPassed).toHaveLength(1);
+      expect(rowsPassed[0].testCaseId).toBe('tc-ok');
+    });
+
+    it('accepts a testCaseId at exactly the 128-char cap (boundary)', async () => {
+      const exactlyAtCap = 'x'.repeat(128);
+      const res = await request(app)
+        .post('/api/comparison/deep-dive')
+        .send({ reportIds: ['report-a', 'report-b'], rows: [{ testCaseId: exactlyAtCap, testCaseName: 'Boundary' }] });
+
+      expect(res.status).toBe(202);
+      const rowsPassed = mockGenerateComparisonDeepDive.mock.calls[0][0].rows;
+      expect(rowsPassed).toHaveLength(1);
+      expect(rowsPassed[0].testCaseId).toBe(exactlyAtCap);
+    });
+
+    it('silently drops a row whose SIDE reportId exceeds the 128-char id cap, without 400ing the request', async () => {
+      const oversizedReportId = 'r'.repeat(129);
+      const res = await request(app)
+        .post('/api/comparison/deep-dive')
+        .send({
+          reportIds: ['report-a', 'report-b'],
+          rows: [
+            { testCaseId: 'tc-1', testCaseName: 'Bad side', a: { passFailStatus: 'passed', reportId: oversizedReportId } },
+            { testCaseId: 'tc-2', testCaseName: 'Fine', a: { passFailStatus: 'passed', reportId: 'rep-ok' } },
+          ],
+        });
+
+      expect(res.status).toBe(202);
+      const rowsPassed = mockGenerateComparisonDeepDive.mock.calls[0][0].rows;
+      expect(rowsPassed).toHaveLength(1);
+      expect(rowsPassed[0].testCaseId).toBe('tc-2');
+    });
+
+    it('truncates an oversized testCaseName to 200 chars rather than dropping the row', async () => {
+      const longName = 'y'.repeat(300);
+      const res = await request(app)
+        .post('/api/comparison/deep-dive')
+        .send({ reportIds: ['report-a', 'report-b'], rows: [{ testCaseId: 'tc-1', testCaseName: longName }] });
+
+      expect(res.status).toBe(202);
+      const rowsPassed = mockGenerateComparisonDeepDive.mock.calls[0][0].rows;
+      expect(rowsPassed).toHaveLength(1);
+      expect(rowsPassed[0].testCaseName).toHaveLength(200);
+    });
+
+    it('returns 400 when the total serialized rows payload exceeds the 256KB cap, before ever touching storage', async () => {
+      // A single row whose testCaseName alone is well past 256KB once serialized.
+      const hugeName = 'z'.repeat(300 * 1024);
+      const res = await request(app)
+        .post('/api/comparison/deep-dive')
+        .send({ reportIds: ['report-a', 'report-b'], rows: [{ testCaseId: 'tc-1', testCaseName: hugeName }] });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/rows payload too large/i);
+      expect(mockRunsGetById).not.toHaveBeenCalled();
+      expect(mockGenerateComparisonDeepDive).not.toHaveBeenCalled();
+    });
+
+    it('accepts a large-but-under-cap rows payload (e.g. 500 rows of realistic names)', async () => {
+      const rows = Array.from({ length: 500 }, (_, i) => ({ testCaseId: `tc-${i}`, testCaseName: `A reasonably descriptive test case name ${i}` }));
+      const res = await request(app)
+        .post('/api/comparison/deep-dive')
+        .send({ reportIds: ['report-a', 'report-b'], rows });
+
+      expect(res.status).toBe(202);
+      expect(mockGenerateComparisonDeepDive.mock.calls[0][0].rows).toHaveLength(500);
+    });
   });
 });
