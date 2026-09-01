@@ -18,6 +18,8 @@ import {
   createComparisonTraceExtension,
   type DeepDiveCapture,
   type CaseReportRef,
+  DEEP_DIVE_MAX_DISTINCT_CASES,
+  DEEP_DIVE_MAX_TOOL_CALLS,
 } from '@/server/services/comparisonTraceTools';
 import type { ComparisonRunInput } from '@/server/services/comparisonDeepDiveService';
 
@@ -377,6 +379,140 @@ describe('createComparisonTraceExtension', () => {
       await tools.get('query_spans')!.execute('t1', { run: 'A' });
       await tools.get('query_spans')!.execute('t2', { run: 'A', nameFilter: 'agent' });
       expect(capture.visitedCases).toHaveLength(1);
+    });
+  });
+
+  describe('amplification guards (hardening round, codex review of PR #460)', () => {
+    function mockTracesResponse(spans: any[] = []) {
+      global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ spans }) })) as any;
+    }
+    const globalFetch = global.fetch;
+    afterEach(() => {
+      global.fetch = globalFetch;
+    });
+
+    /** N distinct, individually-traceable cases (tc-0 .. tc-{n-1}), each with its own resolvable report. */
+    function manyCaseReports(n: number): { caseReports: Map<string, CaseReportRef>; getReport: jest.Mock } {
+      const caseReports = new Map<string, CaseReportRef>();
+      for (let i = 0; i < n; i++) {
+        caseReports.set(`tc-${i}`, { a: `rep-${i}-a`, b: `rep-${i}-b` });
+      }
+      const getReport = jest.fn(async (id: string) => ({ runId: `run-${id}`, agentKey: 'demo' }));
+      return { caseReports, getReport };
+    }
+
+    it('allows exactly DEEP_DIVE_MAX_DISTINCT_CASES distinct (non-default) cases to be lazily fetched', async () => {
+      mockTracesResponse();
+      const { caseReports, getReport } = manyCaseReports(DEEP_DIVE_MAX_DISTINCT_CASES);
+      const { tools } = collectTools({}, { caseReports, getReport });
+
+      for (let i = 0; i < DEEP_DIVE_MAX_DISTINCT_CASES; i++) {
+        const res = await tools.get('query_spans')!.execute(`t${i}`, { run: 'A', caseId: `tc-${i}` });
+        expect(parseText(res).error).toBeUndefined();
+      }
+      expect(getReport).toHaveBeenCalledTimes(DEEP_DIVE_MAX_DISTINCT_CASES);
+    });
+
+    it('blocks the (N+1)th DISTINCT case with a polite budget-exhausted error, without ever fetching its report', async () => {
+      mockTracesResponse();
+      const { caseReports, getReport } = manyCaseReports(DEEP_DIVE_MAX_DISTINCT_CASES + 1);
+      const { tools } = collectTools({}, { caseReports, getReport });
+
+      for (let i = 0; i < DEEP_DIVE_MAX_DISTINCT_CASES; i++) {
+        await tools.get('query_spans')!.execute(`t${i}`, { run: 'A', caseId: `tc-${i}` });
+      }
+      const overBudget = await tools.get('query_spans')!.execute('t-over', { run: 'A', caseId: `tc-${DEEP_DIVE_MAX_DISTINCT_CASES}` });
+      const parsed = parseText(overBudget);
+
+      expect(parsed.error).toMatch(/Case budget exhausted/i);
+      expect(parsed.error).toMatch(new RegExp(`max ${DEEP_DIVE_MAX_DISTINCT_CASES}`));
+      // The (N+1)th case's report was never fetched -- the budget check is
+      // BEFORE the lazy fetch, not after.
+      expect(getReport).toHaveBeenCalledTimes(DEEP_DIVE_MAX_DISTINCT_CASES);
+    });
+
+    it('re-querying an ALREADY-counted case stays free even once the distinct-case budget is exhausted', async () => {
+      mockTracesResponse();
+      const { caseReports, getReport } = manyCaseReports(DEEP_DIVE_MAX_DISTINCT_CASES);
+      const { tools } = collectTools({}, { caseReports, getReport });
+
+      for (let i = 0; i < DEEP_DIVE_MAX_DISTINCT_CASES; i++) {
+        await tools.get('query_spans')!.execute(`t${i}`, { run: 'A', caseId: `tc-${i}` });
+      }
+      // Re-query case tc-0 (already counted) on side B (a fresh report fetch
+      // for the OTHER side of an already-visited case is not a NEW distinct
+      // case) -- must succeed, not be blocked by the exhausted budget.
+      const again = await tools.get('query_spans')!.execute('t-again', { run: 'B', caseId: 'tc-0' });
+      expect(parseText(again).error).toBeUndefined();
+    });
+
+    it('the DEFAULT case (no caseId) never counts against the distinct-case budget', async () => {
+      mockTracesResponse();
+      const { caseReports, getReport } = manyCaseReports(DEEP_DIVE_MAX_DISTINCT_CASES);
+      const { tools } = collectTools({}, { caseReports, getReport });
+
+      for (let i = 0; i < DEEP_DIVE_MAX_DISTINCT_CASES; i++) {
+        await tools.get('query_spans')!.execute(`t${i}`, { run: 'A', caseId: `tc-${i}` });
+      }
+      // The budget is already fully consumed by the loop above; the DEFAULT
+      // case (no caseId, already-resolved report, no lazy fetch) must still
+      // succeed since it was never counted in the first place.
+      const defaultCase = await tools.get('query_spans')!.execute('t-default', { run: 'A' });
+      expect(parseText(defaultCase).error).toBeUndefined();
+    });
+
+    it('shares the SAME distinct-case budget between query_spans and query_logs (one generation, one budget)', async () => {
+      mockTracesResponse();
+      const { caseReports, getReport } = manyCaseReports(DEEP_DIVE_MAX_DISTINCT_CASES + 1);
+      const { tools } = collectTools({}, { caseReports, getReport });
+
+      for (let i = 0; i < DEEP_DIVE_MAX_DISTINCT_CASES; i++) {
+        await tools.get('query_spans')!.execute(`t${i}`, { run: 'A', caseId: `tc-${i}` });
+      }
+      // query_logs, not query_spans, hits the SAME exhausted budget.
+      const res = await tools.get('query_logs')!.execute('t-logs', { run: 'A', caseId: `tc-${DEEP_DIVE_MAX_DISTINCT_CASES}` });
+      expect(parseText(res).error).toMatch(/Case budget exhausted/i);
+    });
+
+    it('caps the OVERALL tool-call count at DEEP_DIVE_MAX_TOOL_CALLS, independent of the case budget', async () => {
+      mockTracesResponse();
+      // A single case, repeatedly re-queried -- never hits the case budget,
+      // but SHOULD hit the overall tool-call budget.
+      const { tools } = collectTools();
+      let lastError: string | undefined;
+      for (let i = 0; i < DEEP_DIVE_MAX_TOOL_CALLS + 5; i++) {
+        const res = await tools.get('query_spans')!.execute(`t${i}`, { run: 'A' });
+        lastError = parseText(res).error;
+      }
+      expect(lastError).toMatch(/Tool-call budget exhausted/i);
+      expect(lastError).toMatch(new RegExp(`max ${DEEP_DIVE_MAX_TOOL_CALLS}`));
+    });
+
+    it('the tool-call budget is per-generation: a FRESH createComparisonTraceExtension call gets a fresh budget', async () => {
+      mockTracesResponse();
+      const { tools: tools1 } = collectTools();
+      for (let i = 0; i < DEEP_DIVE_MAX_TOOL_CALLS; i++) {
+        await tools1.get('query_spans')!.execute(`t${i}`, { run: 'A' });
+      }
+      const exhausted = await tools1.get('query_spans')!.execute('t-over', { run: 'A' });
+      expect(parseText(exhausted).error).toMatch(/Tool-call budget exhausted/i);
+
+      // A brand-new extension instance (a new job/generation) is NOT affected
+      // by the previous instance's exhausted budget.
+      const { tools: tools2 } = collectTools();
+      const fresh = await tools2.get('query_spans')!.execute('t-fresh', { run: 'A' });
+      expect(parseText(fresh).error).toBeUndefined();
+    });
+
+    it('counts query_logs calls against the SAME overall tool-call budget as query_spans', async () => {
+      mockTracesResponse();
+      global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ entries: [] }) })) as any;
+      const { tools } = collectTools();
+      for (let i = 0; i < DEEP_DIVE_MAX_TOOL_CALLS; i++) {
+        await tools.get('query_logs')!.execute(`t${i}`, { run: 'A' });
+      }
+      const res = await tools.get('query_spans')!.execute('t-over', { run: 'A' });
+      expect(parseText(res).error).toMatch(/Tool-call budget exhausted/i);
     });
   });
 });

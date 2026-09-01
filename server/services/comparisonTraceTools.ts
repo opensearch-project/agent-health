@@ -89,6 +89,30 @@ function recordVisited(capture: DeepDiveCapture, ref: VisitedCaseRef): void {
   capture.visitedCases.push(ref);
 }
 
+/**
+ * Amplification guards for a single deep-dive generation (hardening round,
+ * codex review of PR #460). Without these, a runaway or adversarially-
+ * prompted agent could turn one HTTP request into an unbounded number of
+ * report fetches + outbound /api/traces or /api/logs calls — the comparison
+ * results table can carry up to 500 rows, and the agent is explicitly told
+ * it can trace ANY of them by caseId.
+ *
+ *   - DEEP_DIVE_MAX_DISTINCT_CASES: caps how many DISTINCT cases (beyond the
+ *     already-resolved default) the agent can lazily fetch a report for.
+ *     The default case itself doesn't count — its report was already
+ *     resolved eagerly by the route before the agent ever ran.
+ *   - DEEP_DIVE_MAX_TOOL_CALLS: an overall ceiling on query_spans/query_logs
+ *     invocations (successful or not) per generation, independent of the
+ *     pi session's own tool-loop limits (defense in depth if the session
+ *     doesn't already enforce one, or enforces a much looser one).
+ *
+ * Both budgets are scoped to ONE createComparisonTraceExtension() call —
+ * i.e. one generation/job — since generateComparisonDeepDive() constructs a
+ * fresh extension (and therefore fresh closures below) per call.
+ */
+export const DEEP_DIVE_MAX_DISTINCT_CASES = 12;
+export const DEEP_DIVE_MAX_TOOL_CALLS = 40;
+
 export function createComparisonTraceExtension(
   /** Default/fallback case (used when the agent omits `caseId`) — same shape as before. */
   defaultRuns: ComparisonRunInput[],
@@ -103,6 +127,33 @@ export function createComparisonTraceExtension(
 ): PiExtensionFactory {
   const byKey = new Map(defaultRuns.map((r) => [r.key.toUpperCase(), r]));
   const keys = defaultRuns.map((r) => `"${r.key.toUpperCase()}"`).join(' or ');
+
+  // Amplification-guard state — scoped to this one generation (see the doc
+  // comment above createComparisonTraceExtension).
+  const lazilyFetchedCaseIds = new Set<string>();
+  let toolCallCount = 0;
+
+  /** Call at the very top of query_spans/query_logs.execute, before any real work. Returns an error object to short-circuit the tool call once the overall budget is exhausted, else undefined. */
+  function checkToolCallBudget(): { error: string } | undefined {
+    toolCallCount++;
+    if (toolCallCount > DEEP_DIVE_MAX_TOOL_CALLS) {
+      return {
+        error: `Tool-call budget exhausted (max ${DEEP_DIVE_MAX_TOOL_CALLS} query_spans/query_logs calls per generation) — stop querying and write your narrative now with what you've already found.`,
+      };
+    }
+    return undefined;
+  }
+
+  /** Call from resolveSide right before a NON-default case would trigger a lazy report fetch. Returns an error object once the distinct-case budget is exhausted for a genuinely NEW case, else undefined (and records the case as visited). Re-visiting an already-counted case is always free. */
+  function checkCaseFetchBudget(caseId: string): { error: string } | undefined {
+    if (!lazilyFetchedCaseIds.has(caseId) && lazilyFetchedCaseIds.size >= DEEP_DIVE_MAX_DISTINCT_CASES) {
+      return {
+        error: `Case budget exhausted (already inspected ${lazilyFetchedCaseIds.size} distinct case${lazilyFetchedCaseIds.size === 1 ? '' : 's'}, max ${DEEP_DIVE_MAX_DISTINCT_CASES} per generation) — analyze with what you have and write your narrative now.`,
+      };
+    }
+    lazilyFetchedCaseIds.add(caseId);
+    return undefined;
+  }
 
   const resolveDefault = (run: unknown): ComparisonRunInput | undefined =>
     byKey.get(String(run ?? '').trim().toUpperCase());
@@ -148,6 +199,8 @@ export function createComparisonTraceExtension(
         error: `No report for run ${sideKey} on case '${caseId}' — that side may not have run this case, or the case id is wrong.`,
       };
     }
+    const budgetErr = checkCaseFetchBudget(caseId);
+    if (budgetErr) return budgetErr;
     const report = await getReport(reportId);
     if (!report) {
       return { error: `Report ${reportId} (case '${caseId}', run ${sideKey}) was not found in storage.` };
@@ -188,6 +241,8 @@ export function createComparisonTraceExtension(
         ),
       }),
       async execute(_toolCallId: string, params: { run?: string; caseId?: string; nameFilter?: string }) {
+        const budgetErr = checkToolCallBudget();
+        if (budgetErr) return textResult(budgetErr);
         const resolved = await resolveSide(String(params.run ?? ''), params.caseId);
         if (resolved.error || !resolved.ctx || !resolved.caseId || !resolved.reportId) {
           return textResult({ error: resolved.error ?? 'Could not resolve this case.' });
@@ -265,6 +320,8 @@ export function createComparisonTraceExtension(
         query: Type.Optional(Type.String({ description: 'Optional substring/text filter for log lines' })),
       }),
       async execute(_toolCallId: string, params: { run?: string; caseId?: string; query?: string }) {
+        const budgetErr = checkToolCallBudget();
+        if (budgetErr) return textResult(budgetErr);
         const resolved = await resolveSide(String(params.run ?? ''), params.caseId);
         if (resolved.error || !resolved.ctx || !resolved.caseId || !resolved.reportId) {
           return textResult({ error: resolved.error ?? 'Could not resolve this case.' });
