@@ -21,7 +21,7 @@
  * unambiguous.
  */
 
-import { test, expect } from './fixtures/test-fixtures';
+import { test, expect, mockDeepDiveJob } from './fixtures/test-fixtures';
 import type { Route } from '@playwright/test';
 
 const RUN_A = 'eval-run-dlA';
@@ -111,7 +111,7 @@ async function setupRoutes(page: import('@playwright/test').Page) {
     return r.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
   });
   await page.route('**/api/metrics/batch', (r) => json(r, { metrics: [] }));
-  await page.route('**/api/comparison/deep-dive', (r) => json(r, deepDiveBody));
+  await mockDeepDiveJob(page, { result: deepDiveBody });
   await page.route('**/api/traces', (r) => {
     const body = JSON.parse(r.request().postData() || '{}');
     const tid = body.traceId as string | undefined;

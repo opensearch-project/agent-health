@@ -116,6 +116,57 @@ if (process.env.E2E_COVERAGE === 'true') {
   fs.mkdirSync(COVERAGE_DIR, { recursive: true });
 }
 
+/**
+ * Mock the async deep-dive job pattern (POST /api/comparison/deep-dive ->
+ * { jobId }, then GET /api/comparison/deep-dive/jobs/:jobId polled until
+ * done/error — see server/routes/comparison.ts). Centralized here because
+ * essentially every comparison e2e spec that cares about the deep-dive
+ * panel's RESULT (not just a quick error/503) needs to mock BOTH endpoints
+ * consistently.
+ */
+export interface DeepDiveJobMockOptions {
+  /** The DeepDiveResponse-shaped body to serve once the job reaches 'done' — static, or computed from the parsed POST body (e.g. to echo back what the client sent). */
+  result?: unknown | ((postBody: any) => unknown);
+  /** Called with the parsed POST body every time a new job is started (side-effect capture for assertions — does not affect what's served). */
+  onPost?: (postBody: any) => void;
+  /**
+   * How many 'running' polls to serve before settling. Defaults to 0 (the
+   * very first poll already returns the terminal state) — set higher to
+   * exercise the loading/elapsed-time UI across multiple poll ticks.
+   */
+  runningPolls?: number;
+  /** When set, the job settles in the 'error' state with this message instead of 'done'. */
+  errorMessage?: string;
+  /** Fixed jobId to hand back (defaults to a stable stub id — fine since these mocks never actually dedupe/cap). */
+  jobId?: string;
+}
+
+export async function mockDeepDiveJob(page: Page, opts: DeepDiveJobMockOptions = {}): Promise<void> {
+  const jobId = opts.jobId || 'stub-deep-dive-job';
+  let pollCount = 0;
+  let resultForThisJob: unknown = opts.result;
+
+  await page.route('**/api/comparison/deep-dive', async (route) => {
+    const postBody = JSON.parse(route.request().postData() || '{}');
+    opts.onPost?.(postBody);
+    resultForThisJob = typeof opts.result === 'function' ? (opts.result as (b: any) => unknown)(postBody) : opts.result;
+    pollCount = 0;
+    await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ jobId }) });
+  });
+
+  await page.route(`**/api/comparison/deep-dive/jobs/${jobId}`, async (route) => {
+    const elapsedMs = (pollCount + 1) * 1000;
+    if (pollCount < (opts.runningPolls ?? 0)) {
+      pollCount++;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'running', elapsedMs }) });
+    }
+    if (opts.errorMessage) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'error', elapsedMs, error: opts.errorMessage }) });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'done', elapsedMs, result: resultForThisJob }) });
+  });
+}
+
 // Extended test with fixtures and optional coverage collection
 export const test = base.extend<{
   authenticatedPage: Page;

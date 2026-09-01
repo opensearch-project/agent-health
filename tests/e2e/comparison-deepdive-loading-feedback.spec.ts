@@ -4,26 +4,33 @@
  */
 
 /**
- * Comparison deep-dive ("What's actually different") \u2014 loading feedback and
- * error/retry (bug #1, iteration 4, 2026-09-01).
+ * Comparison deep-dive ("What's actually different") \u2014 async job pattern
+ * (iteration 5) + loading feedback / error / retry (bug #1, iteration 4).
  *
- * Owner report from the live tunnel: the panel "never loads" \u2014 investigation
- * found the request itself completes (~50s for a large comparison-wide
- * analysis), but the UI gave zero feedback while waiting (a bare spinner,
- * indistinguishable from a genuine hang) and no error/retry surface if it
- * ever DID fail or time out. Fixed:
- *   - client: an elapsed-seconds counter next to the spinner, plus a
- *     reassuring hint after 30s (components/comparison/ComparisonDeepDive.tsx).
- *   - client: a bounded AbortController timeout (200s) so a stuck request
- *     surfaces a clear, retryable error instead of hanging forever.
- *   - server: comparisonDeepDiveService.ts wraps the agent call in a 180s
- *     deadline for the same reason server-side.
+ * Iteration 4 found the deep-dive request itself completes (~50s for a large
+ * comparison-wide analysis) but the UI gave zero feedback while waiting.
+ * Iteration 5's owner report: the PUBLIC TUNNEL PROXY enforces a gateway
+ * timeout SHORTER than that generation time, so holding the whole generation
+ * inside one long-lived POST dies with a 524 for tunnel users even though
+ * localhost works fine \u2014 an in-request deadline can't fix a proxy timing
+ * out the connection out from under it. Fixed by converting the endpoint to
+ * an async job:
+ *   - POST /api/comparison/deep-dive validates + kicks off generation
+ *     in-process, returns { jobId } in well under a second \u2014 no connection
+ *     is ever held open for the actual generation.
+ *   - GET /api/comparison/deep-dive/jobs/:jobId is polled every ~2.5s until
+ *     status is 'done' (result) or 'error'.
+ *   - The elapsed-seconds counter next to the spinner (iteration 4) is
+ *     unchanged \u2014 it just now ticks across POST + however many polls a
+ *     generation takes, instead of across one long fetch.
+ *   - Regenerate cancels/ignores any still-in-flight poll loop from a
+ *     previous generation.
  *
- * Deterministic: /api/comparison/deep-dive is mocked via page.route() with a
- * controllable delay/failure, no LLM/AWS creds required.
+ * Deterministic: /api/comparison/deep-dive (+ /jobs/:jobId) mocked via the
+ * shared mockDeepDiveJob() fixture helper, no LLM/AWS creds required.
  */
 
-import { test, expect } from './fixtures/test-fixtures';
+import { test, expect, mockDeepDiveJob } from './fixtures/test-fixtures';
 import type { Route } from '@playwright/test';
 
 const RUN_A = 'eval-run-ddloadA';
@@ -74,15 +81,37 @@ async function setupRoutes(page: import('@playwright/test').Page) {
   await page.route('**/api/traces', (r) => json(r, { backend: 'opensearch', spans: [], total: 0 }));
 }
 
-test.describe('Comparison deep-dive \u2014 loading feedback + error/retry (bug #1)', () => {
+test.describe('Comparison deep-dive \u2014 async job pattern + loading feedback + error/retry', () => {
   test.beforeEach(async ({ page }) => { await setupRoutes(page); });
 
-  test('shows an incrementing elapsed-seconds counter while the request is in flight, then renders the result', async ({ page }) => {
-    let deepDiveCalls = 0;
-    await page.route('**/api/comparison/deep-dive', async (r) => {
-      deepDiveCalls++;
-      await new Promise((res) => setTimeout(res, 2500));
-      return json(r, { markdown: 'Both runs handled the case correctly.', modelId: 'stub/model', durationMs: 2500, runs: [] });
+  test('POST returns fast (well under a second) and never holds a connection open across the full generation', async ({ page }) => {
+    await mockDeepDiveJob(page, {
+      result: { markdown: 'Both runs handled the case correctly.', modelId: 'stub/model', durationMs: 2500, runs: [] },
+      runningPolls: 1,
+    });
+
+    let postTimeMs = -1;
+    page.on('response', (res) => {
+      if (res.url().endsWith('/api/comparison/deep-dive') && res.request().method() === 'POST') {
+        postTimeMs = Date.now();
+      }
+    });
+    const t0 = Date.now();
+    await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
+    await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+    await expect.poll(() => postTimeMs).toBeGreaterThan(0);
+    // The whole point of the async-job conversion: POST settles almost
+    // immediately (jobId only) -- nowhere near the ~2.5s+ the mocked
+    // generation itself simulates via runningPolls.
+    expect(postTimeMs - t0).toBeLessThan(2000);
+  });
+
+  test('polls across multiple "running" responses, ticking the elapsed-seconds counter, and reaches the rendered result', async ({ page }) => {
+    await mockDeepDiveJob(page, {
+      result: { markdown: 'Both runs handled the case correctly.', modelId: 'stub/model', durationMs: 2500, runs: [] },
+      // 2 'running' ticks before 'done' -- proves this is genuinely polling,
+      // not a single-shot response dressed up as a job.
+      runningPolls: 2,
     });
 
     await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
@@ -94,37 +123,47 @@ test.describe('Comparison deep-dive \u2014 loading feedback + error/retry (bug #
     await expect(elapsed).toBeVisible();
     const firstReading = await elapsed.textContent();
 
-    // The counter genuinely ticks forward, not a static "(0s)" placeholder.
+    // The counter genuinely ticks forward across polls, not a static "(0s)" placeholder.
     await page.waitForTimeout(1200);
     await expect(elapsed).not.toHaveText(firstReading || '');
 
-    // Then the panel settles on the real markdown \u2014 not stuck loading forever.
-    await expect(page.locator('[data-testid="comparison-deep-dive"]')).toContainText('Both runs handled the case correctly.', { timeout: 10000 });
+    // Then the panel settles on the real markdown -- not stuck loading forever.
+    await expect(page.locator('[data-testid="comparison-deep-dive"]')).toContainText('Both runs handled the case correctly.', { timeout: 15000 });
     await expect(loading).toHaveCount(0);
-    expect(deepDiveCalls).toBe(1);
   });
 
-  test('surfaces a retryable error (never an indefinite spinner) when the deep-dive request fails, and Try again re-fires it', async ({ page }) => {
-    let deepDiveCalls = 0;
-    await page.route('**/api/comparison/deep-dive', async (r) => {
-      deepDiveCalls++;
-      if (deepDiveCalls === 1) {
-        return r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'agent session crashed' }) });
-      }
-      return json(r, { markdown: 'Recovered on retry.', modelId: 'stub/model', durationMs: 100, runs: [] });
-    });
+  test('a job that settles in the error state surfaces a retryable error (never an indefinite spinner), and Try again starts a fresh job', async ({ page }) => {
+    await mockDeepDiveJob(page, { errorMessage: 'agent session crashed' });
 
     await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
     await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
 
     await expect(page.getByText(/Couldn't generate the deep-dive/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/agent session crashed/i)).toBeVisible();
     await expect(page.locator('[data-testid="deep-dive-loading"]')).toHaveCount(0);
+
+    // Re-mock a successful job for the retry.
+    await mockDeepDiveJob(page, { result: { markdown: 'Recovered on retry.', modelId: 'stub/model', durationMs: 100, runs: [] } });
 
     const retryBtn = page.getByRole('button', { name: /try again/i });
     await expect(retryBtn).toBeVisible();
     await retryBtn.click();
 
     await expect(page.locator('[data-testid="comparison-deep-dive"]')).toContainText('Recovered on retry.', { timeout: 10000 });
-    expect(deepDiveCalls).toBe(2);
+  });
+
+  test('a synchronous POST failure (before any job is created) surfaces immediately, never issuing a poll', async ({ page }) => {
+    let jobsPolled = false;
+    await page.route('**/api/comparison/deep-dive/jobs/**', (r) => { jobsPolled = true; return r.abort(); });
+    await page.route('**/api/comparison/deep-dive', (r) =>
+      r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'storage lookup failed' }) })
+    );
+
+    await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
+    await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+
+    await expect(page.getByText(/Couldn't generate the deep-dive/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/storage lookup failed/i)).toBeVisible();
+    expect(jobsPolled).toBe(false);
   });
 });

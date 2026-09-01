@@ -5,11 +5,15 @@
 
 /**
  * E2E for iteration-4 clarity fixes #3 and #4 (owner feedback on the live
- * comparison page):
+ * comparison page), amended in iteration 5:
  *
  *  #3 — run names must be prominent on scoreboard rows (agent/model/time as
- *       secondary), plus a "Comparing <A> vs <B> [· benchmark <name>]" line
- *       above the scoreboard.
+ *       secondary). Iteration 5 REMOVED the "Comparing <A> vs <B> ·
+ *       benchmark <name>" line iteration 4 added above the scoreboard (owner:
+ *       no new vertical space) -- benchmark identity now lives ONLY in the
+ *       page breadcrumb, run identity lives ONLY on the A/B scoreboard rows,
+ *       with a title tooltip so a truncated run name is fully readable on
+ *       hover.
  *  #4 — the Coverage column reworded from "N shared / M total" to a plain
  *       overlap statement ("6 in both · 56 only in A"), green when fully
  *       comparable, amber otherwise.
@@ -18,7 +22,7 @@
  * mocked via page.route(), no real backend data required.
  */
 
-import { test, expect } from './fixtures/test-fixtures';
+import { test, expect, mockDeepDiveJob } from './fixtures/test-fixtures';
 import type { Route } from '@playwright/test';
 
 const RUN_A = 'eval-run-clarity-a';
@@ -81,7 +85,7 @@ function report(id: string, agentKey: string, runId: string) {
   };
 }
 
-test.describe('Comparison page \u2014 run-name prominence, summary line, coverage wording (bugs #3/#4)', () => {
+test.describe('Comparison page \u2014 run-name prominence, no summary line, coverage wording (bugs #3/#4)', () => {
   test.beforeEach(async ({ page }) => {
     await page.route('**/api/storage/benchmarks**', (route) => {
       const url = new URL(route.request().url());
@@ -113,28 +117,44 @@ test.describe('Comparison page \u2014 run-name prominence, summary line, coverag
         aggregate: {},
       });
     });
-    await page.route('**/api/comparison/deep-dive', (route) => json(route, { markdown: 'stub', modelId: 'stub/model', durationMs: 1, runs: [] }));
+    await mockDeepDiveJob(page, { result: { markdown: 'stub', modelId: 'stub/model', durationMs: 1, runs: [] } });
   });
 
-  test('shows the run name prominently on each row, with agent/model/time as secondary', async ({ page }) => {
+  test('shows the run name prominently on each row, with agent/model/time as secondary, and a full-name tooltip on hover (truncated names must be readable)', async ({ page }) => {
     await page.goto(`/compare/${BENCH_ID}?runs=${RUN_A},${RUN_B}`);
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
 
     const rowA = page.locator('[data-testid="scoreboard-row-A"]');
     await expect(rowA).toContainText('stark-retail smoke (6 tests, subset ingest)');
     await expect(rowA).toContainText('internal-rest-agent-example');
+
+    // Owner (iteration 5): a truncated run name must be FULLY readable on
+    // hover -- the title attribute carries the complete name.
+    const runNameCell = rowA.locator('div[title="stark-retail smoke (6 tests, subset ingest)"]');
+    await expect(runNameCell).toHaveCount(1);
   });
 
-  test('renders a "Comparing <A> vs <B> · benchmark <name>" summary line above the scoreboard', async ({ page }) => {
+  test('does NOT render a "Comparing A vs B" summary line (iteration 5: removed, no new vertical space) -- benchmark identity lives only in the breadcrumb', async ({ page }) => {
     await page.goto(`/compare/${BENCH_ID}?runs=${RUN_A},${RUN_B}`);
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
 
-    const summary = page.locator('[data-testid="comparison-summary-line"]');
-    await expect(summary).toBeVisible();
-    await expect(summary).toContainText('Comparing');
-    await expect(summary).toContainText('stark-retail smoke (6 tests, subset ingest)');
-    await expect(summary).toContainText('stark-retail \u2014 mock run 1 (subset ingest)');
-    await expect(summary).toContainText('internal-benchmark-example');
+    await expect(page.locator('[data-testid="comparison-summary-line"]')).toHaveCount(0);
+
+    // Breadcrumb carries the benchmark name instead: Evaluations > <name> > Compare Runs.
+    const crumb = page.locator('nav[aria-label="Breadcrumb"]');
+    await expect(crumb).toContainText('internal-benchmark-example');
+    await expect(crumb).toContainText('Compare Runs');
+    await expect(crumb.locator('a', { hasText: 'internal-benchmark-example' })).toHaveAttribute('href', `/evaluations/benchmarks/${BENCH_ID}/runs`);
+  });
+
+  test('clicking the benchmark breadcrumb crumb navigates to that benchmark\'s page', async ({ page }) => {
+    await page.goto(`/compare/${BENCH_ID}?runs=${RUN_A},${RUN_B}`);
+    await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
+
+    const crumb = page.locator('nav[aria-label="Breadcrumb"]');
+    await crumb.locator('a', { hasText: 'internal-benchmark-example' }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/evaluations/benchmarks/${BENCH_ID}(/|$)`));
   });
 
   test('coverage banner plainly states "N in both \u00b7 M only in B" (amber) for the 6-vs-62 partial overlap', async ({ page }) => {

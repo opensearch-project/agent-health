@@ -233,15 +233,26 @@ describe('Consolidated metrics matrix keeps #345 pass-rate/accuracy regression h
   });
 });
 
-describe('"Comparing A vs B" summary line — owner: "runs info should be communicated"', () => {
-  it('ComparisonPage renders a compact Comparing-A-vs-B line above the scoreboard, naming the benchmark when scoped', () => {
+describe('"Comparing A vs B" summary line — REMOVED (iteration 5, owner feedback: no new vertical space; benchmark identity lives in the breadcrumb, run identity lives on the A/B rows)', () => {
+  it('ComparisonPage no longer renders a standalone Comparing-A-vs-B summary line', () => {
     const src = read('components/comparison/ComparisonPage.tsx');
-    expect(src).toContain('data-testid="comparison-summary-line"');
-    expect(src).toContain('Comparing');
-    expect(src).toContain('selectedRuns[0].name');
-    expect(src).toContain('selectedRuns[1].name');
-    expect(src).toContain('benchmark?.name');
-    // Only renders for an actual A-vs-B (2-run) comparison.
-    expect(src).toMatch(/selectedRuns\.length === 2 &&[\s\S]{0,120}data-testid="comparison-summary-line"/);
+    expect(src).not.toContain('data-testid="comparison-summary-line"');
+    expect(src).not.toContain('selectedRuns[0].name');
+  });
+
+  it('ComparisonPage breadcrumb inserts the benchmark name (owner: benchmark identity lives ONLY in the breadcrumb)', () => {
+    const src = read('components/comparison/ComparisonPage.tsx');
+    expect(src).toMatch(/benchmark\?\.name[\s\S]{0,120}href.*evaluations\/benchmarks/);
+  });
+});
+
+describe('Scoreboard run-name title tooltip — owner: truncated run name must be FULLY readable on hover', () => {
+  it('the run-name cell\'s title attribute always matches the displayed text, including the runName-missing fallback', () => {
+    const src = read('components/comparison/ComparisonScoreboard.tsx');
+    // Regression: title={run.runName} alone would render title="undefined"
+    // text (i.e. no tooltip) whenever runName is falsy, even though the
+    // fallback getAgentName(...) text IS displayed — title and displayed
+    // text must use the identical fallback expression.
+    expect(src).toMatch(/title=\{run\.runName \|\| getAgentName\(run\.agentKey\)\}/);
   });
 });

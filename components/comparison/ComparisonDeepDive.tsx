@@ -19,7 +19,7 @@
  * report-id pair; the panel auto-runs once per pair and offers a regenerate.
  */
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Sparkles, Loader2, RefreshCw, ArrowUpRight, AlertTriangle, Lightbulb, ChevronRight, RotateCcw } from 'lucide-react';
@@ -62,10 +62,28 @@ interface DeepDiveResponse {
   experiments?: ExperimentSuggestion[];
 }
 
-// Client-side backstop timeout (see the generate() usage below) — slightly
-// above the server's own DEEP_DIVE_DEADLINE_MS (180s, comparisonDeepDiveService.ts)
-// so the server's clearer timeout message wins the race under normal conditions.
+/** GET /api/comparison/deep-dive/jobs/:jobId response (async job pattern, iteration 5). `result` mirrors {@link DeepDiveResponse} exactly -- only present once `status === 'done'`. */
+interface DeepDiveJobPollResponse {
+  status: 'running' | 'done' | 'error';
+  elapsedMs: number;
+  result?: DeepDiveResponse;
+  error?: string;
+}
+
+// Client-side backstop budget for the WHOLE POST-then-poll cycle (see the
+// generate() usage below) -- slightly above the server's own
+// DEEP_DIVE_DEADLINE_MS (180s, comparisonDeepDiveService.ts) so the server's
+// clearer timeout message wins the race under normal conditions. Iteration 5:
+// this used to bound a single long-lived fetch via AbortController; the
+// async-job conversion means no single request is ever held open for the
+// full generation any more (that's the whole point -- it's what fixes the
+// tunnel proxy's 524), so this now just bounds total wall-clock time across
+// the POST + all the polls.
 const DEEP_DIVE_FETCH_TIMEOUT_MS = 200_000;
+// How often to poll GET /api/comparison/deep-dive/jobs/:jobId while a
+// generation is running. Each poll is a fast, cheap round trip -- never a
+// long-lived connection a proxy could time out on.
+const DEEP_DIVE_POLL_INTERVAL_MS = 2500;
 
 interface CacheEntry { markdown: string; meta: DeepDiveResponse; }
 
@@ -217,6 +235,19 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
     setSystemPromptText(defaultSystemPrompt);
   }, [defaultSystemPrompt]);
 
+  // Guards a poll loop against writing state after it's been superseded --
+  // by a NEWER generate() call (Regenerate clicked again, or the pair
+  // changed while a poll was in flight) or by the component unmounting.
+  // Each generate() call owns its own token object; the poll loop checks
+  // `token.cancelled` before every state update and before scheduling the
+  // next poll.
+  const activeGenerationRef = useRef<{ cancelled: boolean } | null>(null);
+  useEffect(() => {
+    return () => {
+      if (activeGenerationRef.current) activeGenerationRef.current.cancelled = true;
+    };
+  }, []);
+
   const generate = useCallback(
     async (force = false) => {
       if (!pair) return;
@@ -228,24 +259,30 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
         onWindowAgents(c.meta.runs || []);
         return;
       }
+
+      // Supersede any in-flight poll loop (a previous Regenerate, or a pair
+      // switch) before starting this one.
+      if (activeGenerationRef.current) activeGenerationRef.current.cancelled = true;
+      const token = { cancelled: false };
+      activeGenerationRef.current = token;
+
       setStatus('loading');
       setError('');
-      setLoadingStartedAt(Date.now());
-      // Client-side backstop on top of the server's own DEEP_DIVE_DEADLINE_MS
-      // (180s): if the connection itself hangs (dropped response, proxy
-      // buffering, etc.) the fetch must still resolve to a retryable error
-      // instead of leaving the spinner running forever. Set slightly above the
-      // server deadline so the server's own clearer timeout message wins the
-      // race under normal conditions.
-      const controller = new AbortController();
-      const abortTimer = setTimeout(() => controller.abort(), DEEP_DIVE_FETCH_TIMEOUT_MS);
+      const startedAt = Date.now();
+      setLoadingStartedAt(startedAt);
+
       try {
         // Only send a systemPrompt override when it genuinely differs from the
         // built-in default — an unmodified textarea should hit the server's
         // own default rather than round-tripping an identical copy.
         const customSystemPrompt =
           systemPromptText.trim() && systemPromptText !== defaultSystemPrompt ? systemPromptText : undefined;
-        const res = await fetch('/api/comparison/deep-dive', {
+
+        // 1. Kick off generation — returns a jobId almost immediately (no
+        // connection is held open for the actual generation any more, which is
+        // exactly what fixes the tunnel proxy's 524 gateway timeout on a slow
+        // wide analysis).
+        const postRes = await fetch('/api/comparison/deep-dive', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -253,23 +290,51 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
             ...(rowsSummary.length > 0 ? { rows: rowsSummary } : {}),
             ...(customSystemPrompt ? { systemPrompt: customSystemPrompt } : {}),
           }),
-          signal: controller.signal,
         });
-        if (!res.ok) {
-          const e = await res.json().catch(() => ({}));
-          throw new Error(e.error || `HTTP ${res.status}`);
+        if (!postRes.ok) {
+          const e = await postRes.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${postRes.status}`);
         }
-        const data: DeepDiveResponse = await res.json();
-        deepDiveCache.set(pair.cacheKey, { markdown: data.markdown, meta: data });
-        setMarkdown(data.markdown);
-        setMeta(data);
-        setStatus('done');
-        onWindowAgents(data.runs || []);
+        const { jobId } = (await postRes.json()) as { jobId: string };
+        if (token.cancelled) return;
+
+        // 2. Poll every few seconds until the job is done/error, or our own
+        // client-side budget elapses (mirrors the pre-async-job behavior --
+        // a genuinely stuck generation still surfaces a clear, retryable
+        // error instead of polling forever).
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          if (token.cancelled) return;
+          if (Date.now() - startedAt > DEEP_DIVE_FETCH_TIMEOUT_MS) {
+            throw new Error(`Timed out after ${Math.round(DEEP_DIVE_FETCH_TIMEOUT_MS / 1000)}s waiting for a response.`);
+          }
+          await new Promise((resolve) => setTimeout(resolve, DEEP_DIVE_POLL_INTERVAL_MS));
+          if (token.cancelled) return;
+
+          const pollRes = await fetch(`/api/comparison/deep-dive/jobs/${jobId}`);
+          if (!pollRes.ok) {
+            const e = await pollRes.json().catch(() => ({}));
+            throw new Error(e.error || `HTTP ${pollRes.status}`);
+          }
+          const poll: DeepDiveJobPollResponse = await pollRes.json();
+          if (token.cancelled) return;
+
+          if (poll.status === 'running') continue;
+          if (poll.status === 'error') throw new Error(poll.error || 'Deep-dive generation failed');
+
+          // done — result mirrors the pre-async-job POST response exactly.
+          const data = poll.result as DeepDiveResponse;
+          deepDiveCache.set(pair.cacheKey, { markdown: data.markdown, meta: data });
+          setMarkdown(data.markdown);
+          setMeta(data);
+          setStatus('done');
+          onWindowAgents(data.runs || []);
+          return;
+        }
       } catch (e: any) {
-        setError(e?.name === 'AbortError' ? `Timed out after ${Math.round(DEEP_DIVE_FETCH_TIMEOUT_MS / 1000)}s waiting for a response.` : (e?.message || String(e)));
+        if (token.cancelled) return;
+        setError(e?.message || String(e));
         setStatus('error');
-      } finally {
-        clearTimeout(abortTimer);
       }
     },
     [pair, onWindowAgents, systemPromptText, defaultSystemPrompt, rowsSummary]

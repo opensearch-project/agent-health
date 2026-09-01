@@ -18,7 +18,7 @@
  * creds or seeded backend data required.
  */
 
-import { test, expect } from './fixtures/test-fixtures';
+import { test, expect, mockDeepDiveJob } from './fixtures/test-fixtures';
 import type { Route } from '@playwright/test';
 
 const RUN_A = 'eval-run-declutter-a';
@@ -84,9 +84,7 @@ test.describe('Comparison scoreboard — all metrics on the row, no chart, judge
       return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
     });
     await page.route('**/api/metrics/batch**', (route) => json(route, { metrics: [] }));
-    await page.route('**/api/comparison/deep-dive', (route) =>
-      json(route, { markdown: 'stub', modelId: 'stub/model', durationMs: 1, runs: [] })
-    );
+    await mockDeepDiveJob(page, { result: { markdown: 'stub', modelId: 'stub/model', durationMs: 1, runs: [] } });
   });
 
   test('every metric column renders on the run rows and no chart/expander appears', async ({ page }) => {

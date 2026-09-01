@@ -6,24 +6,34 @@
 /**
  * Comparison Routes — agentic deep-dive over two runs.
  *
+ * ASYNC JOB PATTERN (iteration 5): the deep-dive generation takes ~50-180s
+ * for a wide, comparison-wide analysis. The public tunnel proxy enforces a
+ * gateway timeout SHORTER than that, so holding the generation inside one
+ * long-lived POST (round-4's approach — an in-request deadline, still
+ * present as a per-generation ceiling) dies with a 524 for tunnel users even
+ * though localhost works. Fix: the POST kicks off generation in-process and
+ * returns immediately; the client polls a job-status endpoint.
+ *
  * POST /api/comparison/deep-dive
  *   body: { reportIds: [defaultReportIdA, defaultReportIdB], modelId?, systemPrompt?, rows? }
- *   resp: { markdown, modelId, durationMs,
- *           chart?: { title, series: [{ label, a, b, unit? }] },
- *           experiments?: [{ title, rationale }],
- *           runs: [{ key, caseId, reportId, runId, serviceName, startedAt, endedAt }] }
+ *   Validates synchronously (400s) and resolves the two default reports
+ *   synchronously (404 if either is missing) — exactly as before. On success,
+ *   starts (or dedupes onto) a background job and returns immediately:
+ *   resp: { jobId } (202 Accepted)
+ *   A second POST for the SAME (reportIds, systemPrompt, rows) while a job
+ *   for it is still `running` returns that SAME jobId rather than starting a
+ *   second generation (see comparisonDeepDiveJobStore.computeDeepDiveDedupeKey).
+ *   429 when already at the concurrency cap and there's no running job to
+ *   dedupe onto (comparisonDeepDiveJobStore.DeepDiveJobCapacityError).
  *
- * `reportIds` names the DEFAULT case (used by the trace tools when the agent
- * omits `caseId`) — resolved eagerly, same as before. `rows[]` (optional, see
- * comparisonDeepDiveService.ComparisonRowSummary) now also carries each side's
- * reportId per case, which THIS round's comparison-wide tracing uses to
- * resolve any OTHER case's trace identity lazily, one report at a time, only
- * when the agent actually asks for it (never prefetched for every row).
- *
- * The returned `runs[]` are only the (case, side) pairs the agent actually
- * queried during this generation — exactly the window-agent hints the
- * frontend needs to deep-link each span citation into the Traces tab of the
- * RIGHT case row.
+ * GET /api/comparison/deep-dive/jobs/:jobId
+ *   resp: { status: 'running'|'done'|'error', elapsedMs, result?, error? }
+ *   `result` (only present when status === 'done') has the EXACT SAME shape
+ *   the old synchronous POST used to return directly: { markdown, modelId,
+ *   durationMs, chart?, experiments?, runs: [...] } — so the client's render
+ *   path is unchanged, it just now reads `result` off a poll response
+ *   instead of the POST response body.
+ *   404 when jobId is unknown (never existed, or TTL-evicted after 30min).
  */
 
 import { Router, Request, Response } from 'express';
@@ -32,10 +42,16 @@ import {
   generateComparisonDeepDive,
   type ComparisonRunInput,
   type ComparisonRowSummary,
+  type ComparisonDeepDiveResult,
 } from '@/server/services/comparisonDeepDiveService';
 import { SYSTEM_PROMPT } from '@/server/services/comparisonDeepDiveService';
 import type { CaseReportRef } from '@/server/services/comparisonTraceTools';
 import { resolveReportTraceContext, extractToolNames, extractFinalOutput } from '@/server/services/comparisonCaseResolver';
+import {
+  DeepDiveJobStore,
+  DeepDiveJobCapacityError,
+  computeDeepDiveDedupeKey,
+} from '@/server/services/comparisonDeepDiveJobStore';
 import { debug } from '@/lib/debug';
 
 const router = Router();
@@ -50,6 +66,23 @@ const SYSTEM_PROMPT_MAX_LEN = 20000;
  *  this is the server-side backstop against a malformed/oversized payload. */
 const MAX_ROWS_SUMMARY = 500;
 const MAX_ROW_NAME_LEN = 200;
+
+/** One (case, side) window-agent hint the trace tools actually resolved during a generation — same shape the client has always rendered. */
+interface DeepDiveRunMeta {
+  key: string;
+  caseId?: string;
+  reportId?: string;
+  runId?: string;
+  serviceName?: string;
+  startedAt?: number;
+  endedAt?: number;
+}
+
+/** The full response body shape — identical to what the (pre-iteration-5) synchronous POST used to return, and what GET .../jobs/:jobId now returns under `result` once `status === 'done'`. */
+type DeepDiveJobResult = ComparisonDeepDiveResult & { runs: DeepDiveRunMeta[] };
+
+/** Module-level singleton — one job store per server process, matching the pre-existing in-memory-only, no-persistence-needed nature of the deep-dive cache (client-side localStorage is the durable cache; this is purely in-flight bookkeeping). */
+const deepDiveJobStore = new DeepDiveJobStore<DeepDiveJobResult>();
 
 /** One side of a raw client-supplied results-table row, loosely typed pre-validation. */
 interface RawRowSide {
@@ -198,35 +231,71 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
       caseReports.size
     );
 
-    const result = await generateComparisonDeepDive({
-      runs: runInputs,
-      defaultCaseId,
-      caseReports,
-      getReport,
-      modelId,
-      systemPrompt: trimmedSystemPrompt,
-      rows: rowsSummary,
-    });
+    const dedupeKey = computeDeepDiveDedupeKey(reportIds as string[], trimmedSystemPrompt, rowsSummary);
 
-    // runs[] meta: only the (case, side) pairs the agent actually queried —
-    // each already carries the window-agent hints the Traces tab needs
-    // (keyed by reportId, which the client maps generically regardless of
-    // how many entries there are).
-    const runMeta = result.visitedCases.map((v) => ({
-      key: v.key,
-      caseId: v.caseId,
-      reportId: v.reportId,
-      runId: v.runId,
-      serviceName: v.serviceName,
-      startedAt: v.startedAt,
-      endedAt: v.endedAt,
-    }));
+    let jobId: string;
+    let deduped: boolean;
+    try {
+      const started = deepDiveJobStore.start(dedupeKey, async (): Promise<DeepDiveJobResult> => {
+        const result = await generateComparisonDeepDive({
+          runs: runInputs,
+          defaultCaseId,
+          caseReports,
+          getReport,
+          modelId,
+          systemPrompt: trimmedSystemPrompt,
+          rows: rowsSummary,
+        });
+        // runs[] meta: only the (case, side) pairs the agent actually
+        // queried — each already carries the window-agent hints the Traces
+        // tab needs (keyed by reportId, which the client maps generically
+        // regardless of how many entries there are). Same shape the old
+        // synchronous response returned.
+        const runMeta: DeepDiveRunMeta[] = result.visitedCases.map((v) => ({
+          key: v.key,
+          caseId: v.caseId,
+          reportId: v.reportId,
+          runId: v.runId,
+          serviceName: v.serviceName,
+          startedAt: v.startedAt,
+          endedAt: v.endedAt,
+        }));
+        return { ...result, runs: runMeta };
+      });
+      jobId = started.jobId;
+      deduped = started.deduped;
+    } catch (capacityErr) {
+      if (capacityErr instanceof DeepDiveJobCapacityError) {
+        return res.status(429).json({ error: capacityErr.message });
+      }
+      throw capacityErr;
+    }
 
-    return res.json({ ...result, runs: runMeta });
+    debug('CompareDeepDiveAPI', 'job', jobId, deduped ? '(deduped onto existing running job)' : '(new)');
+    return res.status(202).json({ jobId });
   } catch (err: any) {
     console.error('[CompareDeepDiveAPI] error:', err);
     return res.status(500).json({ error: err?.message ?? String(err) });
   }
+});
+
+/**
+ * GET /api/comparison/deep-dive/jobs/:jobId
+ * See module doc comment above for the response contract.
+ */
+router.get('/api/comparison/deep-dive/jobs/:jobId', (req: Request, res: Response) => {
+  const job = deepDiveJobStore.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: `job not found: ${req.params.jobId}` });
+  }
+  const elapsedMs = (job.completedAt ?? Date.now()) - job.startedAt;
+  if (job.status === 'running') {
+    return res.json({ status: 'running', elapsedMs });
+  }
+  if (job.status === 'error') {
+    return res.json({ status: 'error', elapsedMs, error: job.error });
+  }
+  return res.json({ status: 'done', elapsedMs, result: job.result });
 });
 
 export default router;

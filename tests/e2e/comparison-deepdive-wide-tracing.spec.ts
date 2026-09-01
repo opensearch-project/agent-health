@@ -23,7 +23,7 @@
  *      unmodified — this spec focuses on the NEW 3-part contract only.
  */
 
-import { test, expect } from './fixtures/test-fixtures';
+import { test, expect, mockDeepDiveJob } from './fixtures/test-fixtures';
 import type { Route } from '@playwright/test';
 
 const RUN_A = 'eval-run-wideA';
@@ -129,9 +129,9 @@ async function setupRoutes(page: import('@playwright/test').Page, capturedBodies
     return r.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
   });
   await page.route('**/api/metrics/batch**', (r) => json(r, { metrics: [] }));
-  await page.route('**/api/comparison/deep-dive', async (r) => {
-    capturedBodies.push(JSON.parse(r.request().postData() || '{}'));
-    await json(r, deepDiveBody);
+  await mockDeepDiveJob(page, {
+    result: deepDiveBody,
+    onPost: (body) => capturedBodies.push(body),
   });
   await page.route('**/api/traces', (r) => {
     const body = JSON.parse(r.request().postData() || '{}');

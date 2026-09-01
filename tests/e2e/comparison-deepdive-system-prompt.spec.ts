@@ -16,7 +16,7 @@
  * are all mocked via page.route() — no LLM/AWS creds required.
  */
 
-import { test, expect } from './fixtures/test-fixtures';
+import { test, expect, mockDeepDiveJob } from './fixtures/test-fixtures';
 import type { Route } from '@playwright/test';
 
 const RUN_A = 'eval-run-sysprompt-a';
@@ -86,9 +86,7 @@ async function setupRoutes(page: import('@playwright/test').Page) {
   await page.route('**/api/comparison/deep-dive/system-prompt', (route) =>
     json(route, { systemPrompt: DEFAULT_SYSTEM_PROMPT })
   );
-  await page.route('**/api/comparison/deep-dive', (route) =>
-    json(route, { markdown: 'stub deep-dive markdown', modelId: 'stub/model', durationMs: 1, runs: [] })
-  );
+  await mockDeepDiveJob(page, { result: { markdown: 'stub deep-dive markdown', modelId: 'stub/model', durationMs: 1, runs: [] } });
 }
 
 test.describe('Comparison deep-dive — editable system prompt (browser-cache only)', () => {
@@ -151,9 +149,9 @@ test.describe('Comparison deep-dive — editable system prompt (browser-cache on
 
   test('regenerating with an edited prompt sends it to the server as systemPrompt', async ({ page }) => {
     let capturedBody: any = null;
-    await page.route('**/api/comparison/deep-dive', async (route) => {
-      capturedBody = JSON.parse(route.request().postData() || '{}');
-      await json(route, { markdown: 'regenerated with custom prompt', modelId: 'stub/model', durationMs: 1, runs: [] });
+    await mockDeepDiveJob(page, {
+      result: { markdown: 'regenerated with custom prompt', modelId: 'stub/model', durationMs: 1, runs: [] },
+      onPost: (body) => { capturedBody = body; },
     });
 
     await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);

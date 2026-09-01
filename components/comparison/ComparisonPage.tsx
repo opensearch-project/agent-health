@@ -747,6 +747,15 @@ export const ComparisonPage: React.FC = () => {
         <Breadcrumbs
           items={[
             { label: 'Evaluations', href: '/evaluations/benchmarks' },
+            // Iteration 5 (owner): insert the benchmark-name crumb for
+            // benchmark-scoped comparisons. Links to .../runs (the actual
+            // benchmark detail route, App.tsx) rather than the bare
+            // /evaluations/benchmarks/:id — there is no route for the bare
+            // path, so it would silently fall through to the app's
+            // catch-all and redirect to "/".
+            ...(benchmark?.name
+              ? [{ label: benchmark.name, href: `/evaluations/benchmarks/${benchmark.id}/runs` }]
+              : []),
             { label: 'Compare Runs' },
           ]}
           actions={
@@ -817,19 +826,13 @@ export const ComparisonPage: React.FC = () => {
 
             {/* Comparison Scoreboard — replaces VerdictStrip + ComparisonOverlapBanner + MetricComparisonPanel Collapsible.
                 Renders for single-run views too (run row + "All metrics"), like
-                the old standalone Detailed-metrics panel did. */}
-            {selectedRuns.length === 2 && (
-              <p className="text-xs text-muted-foreground px-1" data-testid="comparison-summary-line">
-                Comparing <span className="font-medium text-foreground">{selectedRuns[0].name}</span>
-                {' '}vs{' '}
-                <span className="font-medium text-foreground">{selectedRuns[1].name}</span>
-                {benchmark?.name && (
-                  <>
-                    {' '}· benchmark <span className="font-medium text-foreground">{benchmark.name}</span>
-                  </>
-                )}
-              </p>
-            )}
+                the old standalone Detailed-metrics panel did.
+                Iteration-5 amendment (owner feedback): the "Comparing A vs B
+                · benchmark X" line above this that iteration 4 added is GONE
+                — benchmark identity lives only in the breadcrumb above, run
+                identity lives only on the A/B scoreboard rows themselves
+                (ComparisonScoreboard.tsx). No new vertical space vs. the
+                pre-iteration-4 layout. */}
             {selectedRuns.length >= 1 && (
               <ComparisonScoreboard
                 runs={runAggregates}

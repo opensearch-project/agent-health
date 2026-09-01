@@ -23,7 +23,7 @@
  * real OpenSearch/trace cluster required.
  */
 
-import { test, expect } from './fixtures/test-fixtures';
+import { test, expect, mockDeepDiveJob } from './fixtures/test-fixtures';
 import type { Route } from '@playwright/test';
 
 const RUN_A = 'eval-run-notrace-a';
@@ -107,9 +107,7 @@ test.describe('Comparison scoreboard — honest no-trace fallbacks (Duration + T
       }));
       return json(route, { metrics, aggregate: {} });
     });
-    await page.route('**/api/comparison/deep-dive', (route) =>
-      json(route, { markdown: 'stub', modelId: 'stub/model', durationMs: 1, runs: [] })
-    );
+    await mockDeepDiveJob(page, { result: { markdown: 'stub', modelId: 'stub/model', durationMs: 1, runs: [] } });
   });
 
   test('Avg Duration and Tool Calls show real numbers; Cost/Tokens/LLM Calls stay "--" (no fabricated proxy)', async ({ page }) => {

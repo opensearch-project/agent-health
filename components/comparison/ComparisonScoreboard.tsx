@@ -312,7 +312,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                               {/* Run name leads (owner: "runs info should be
                                   communicated — what are we comparing here?") —
                                   agent/model/time move to a secondary line. */}
-                              <div className="font-medium text-[12px] truncate max-w-[220px]" title={run.runName}>
+                              <div className="font-medium text-[12px] truncate max-w-[220px]" title={run.runName || getAgentName(run.agentKey)}>
                                 {run.runName || getAgentName(run.agentKey)}
                               </div>
                               <div className="text-muted-foreground text-[10px] truncate max-w-[220px]">
