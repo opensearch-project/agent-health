@@ -298,7 +298,8 @@ export async function updateEvaluationRun(
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to update evaluation run: ${response.statusText}`);
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || 'Failed to update evaluation run');
   }
 
   return response.json();

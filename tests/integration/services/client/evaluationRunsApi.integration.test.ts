@@ -269,5 +269,32 @@ describe('evaluationRunsApi', () => {
         body: JSON.stringify({ name: 'Renamed Run' }),
       });
     });
+
+    it('surfaces the server\'s validation error message on a 400 (not a generic statusText)', async () => {
+      // Regression: this previously discarded the response body and threw
+      // `Failed to update evaluation run: ${statusText}` ("Bad Request") —
+      // the rename UI's inline error text (see InlineRenameField.tsx) would
+      // show that generic string instead of e.g. "name must not be empty",
+      // even though the route already returns a specific { error } message.
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        json: () => Promise.resolve({ error: 'name must not be empty' }),
+      } as unknown as Response);
+
+      await expect(updateEvaluationRun('r1', { name: '' } as any)).rejects.toThrow('name must not be empty');
+    });
+
+    it('falls back to the response statusText when the error response has no JSON body', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.reject(new Error('not json')),
+      } as unknown as Response);
+
+      await expect(updateEvaluationRun('r1', { name: 'x' } as any)).rejects.toThrow('Internal Server Error');
+    });
   });
 });

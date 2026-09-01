@@ -38,8 +38,6 @@ export interface InlineRenameFieldProps {
   maxLength?: number;
   /** Stable prefix for data-testid on the text/button/input/error nodes. */
   testId?: string;
-  /** Hide the pencil entirely (e.g. rename isn't supported for this row kind). */
-  disabled?: boolean;
 }
 
 export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
@@ -49,13 +47,17 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
   textClassName,
   maxLength = 200,
   testId,
-  disabled,
 }) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Synchronous re-entrancy guard: Enter (keydown) and blur can both target
+  // the same commit within one JS tick, before the `saving` STATE update
+  // (async, batched) is visible to a second call's closure. A ref updates
+  // immediately, so the second call sees it and no-ops.
+  const committingRef = useRef(false);
 
   // Keep the draft in sync with upstream changes (e.g. a poll refresh)
   // while not editing; never clobber an in-progress edit.
@@ -76,7 +78,7 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
   };
 
   const commit = async () => {
-    if (saving) return;
+    if (committingRef.current) return;
     const trimmed = draft.trim();
     if (!trimmed) {
       setError('Name cannot be empty');
@@ -87,6 +89,7 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
       setError(null);
       return;
     }
+    committingRef.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -96,6 +99,7 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
       setError(err?.message || 'Failed to rename');
     } finally {
       setSaving(false);
+      committingRef.current = false;
     }
   };
 
@@ -105,7 +109,11 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
         <Input
           ref={inputRef}
           value={draft}
-          maxLength={maxLength}
+          // A small buffer above the trimmed-value cap: validation caps the
+          // TRIMMED value, so a user padding with leading/trailing spaces
+          // around an otherwise-valid name must not be blocked by the raw
+          // HTML maxLength before they even get to trim it down.
+          maxLength={maxLength + 20}
           disabled={saving}
           data-testid={testId ? `${testId}-input` : undefined}
           className={textClassName}
@@ -130,18 +138,16 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
       <span className={`truncate ${textClassName || ''}`} data-testid={testId ? `${testId}-text` : undefined}>
         {value}
       </span>
-      {!disabled && (
-        <button
-          type="button"
-          title="Rename"
-          aria-label="Rename"
-          data-testid={testId ? `${testId}-edit-btn` : undefined}
-          className="opacity-0 group-hover/rename:opacity-100 focus:opacity-100 text-muted-foreground hover:text-foreground transition-opacity shrink-0"
-          onClick={startEditing}
-        >
-          <Pencil size={12} />
-        </button>
-      )}
+      <button
+        type="button"
+        title="Rename"
+        aria-label="Rename"
+        data-testid={testId ? `${testId}-edit-btn` : undefined}
+        className="opacity-0 group-hover/rename:opacity-100 focus:opacity-100 text-muted-foreground hover:text-foreground transition-opacity shrink-0"
+        onClick={startEditing}
+      >
+        <Pencil size={12} />
+      </button>
     </div>
   );
 };

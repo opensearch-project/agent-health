@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { mostRecentTime, sortRunsByRecency, sortGroupsByRecency } from '@/lib/runSort';
+import { mostRecentTime, sortGroupsByRecency } from '@/lib/runSort';
 
 describe('mostRecentTime', () => {
   it('returns 0 for an empty list', () => {
@@ -25,27 +25,6 @@ describe('mostRecentTime', () => {
       { createdAt: '2024-01-01T00:00:00Z' },
     ];
     expect(mostRecentTime(items)).toBe(new Date('2024-01-01T00:00:00Z').getTime());
-  });
-});
-
-describe('sortRunsByRecency', () => {
-  it('sorts newest first', () => {
-    const runs = [
-      { id: 'a', createdAt: '2024-01-01T00:00:00Z' },
-      { id: 'b', createdAt: '2024-06-01T00:00:00Z' },
-      { id: 'c', createdAt: '2024-03-01T00:00:00Z' },
-    ];
-    expect(sortRunsByRecency(runs).map(r => r.id)).toEqual(['b', 'c', 'a']);
-  });
-
-  it('does not mutate the input array', () => {
-    const runs = [
-      { id: 'a', createdAt: '2024-01-01T00:00:00Z' },
-      { id: 'b', createdAt: '2024-06-01T00:00:00Z' },
-    ];
-    const original = [...runs];
-    sortRunsByRecency(runs);
-    expect(runs).toEqual(original);
   });
 });
 

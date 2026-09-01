@@ -30,14 +30,6 @@ export function mostRecentTime(items: HasCreatedAt[]): number {
 }
 
 /**
- * Sort run rows newest-first by `createdAt`. Pure reverse-chronological —
- * the default the owner asked for (not grouped-by-name-then-time).
- */
-export function sortRunsByRecency<T extends HasCreatedAt>(items: T[]): T[] {
-  return [...items].sort((a, b) => mostRecentTime([b]) - mostRecentTime([a]));
-}
-
-/**
  * Sort groups (e.g. "runs grouped by benchmark") by each group's most
  * recent run — descending, so the group with the latest activity is first.
  * Ties (including empty groups, which compare equal at 0) preserve the

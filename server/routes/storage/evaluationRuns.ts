@@ -733,6 +733,14 @@ router.patch('/api/storage/evaluation-runs/:id', async (req: Request, res: Respo
       // trimmed, length-capped) — see lib/runName.ts. Deliberately narrow: a
       // rename request must never smuggle in other field changes, and this
       // route already only reads `name` off `allowedFields` for that purpose.
+      //
+      // NOTE: this repo's tsconfig.json does not set strict/strictNullChecks,
+      // under which `if (!validated.ok) { validated.error }` silently fails to
+      // narrow the union (verified: TS reports `validated.error` as missing on
+      // the `{ ok: true }` member even inside the negated branch). The explicit
+      // `=== false` equality check below narrows correctly under both strict
+      // and non-strict settings — use this form for any future discriminated-
+      // union check in this file/route tree.
       const validated = validateRunNameUpdate(name);
       if (validated.ok === false) {
         return res.status(400).json({ error: validated.error });

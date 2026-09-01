@@ -5,8 +5,7 @@
 
 /**
  * Validation for renaming an evaluation run (PATCH /api/storage/evaluation-runs/:id
- * `{ name }`). Shared between the server route and any client-side pre-check so
- * the rule lives in exactly one place.
+ * `{ name }`). This is the server route's authoritative check.
  *
  * Rename is intentionally narrow: it only ever touches `name`. No version bump,
  * no stats recompute — this file has no opinion on anything but the string.
