@@ -58,7 +58,20 @@ jest.mock('@/lib/utils', () => ({
   formatRelativeTime: jest.fn(() => 'just now'),
   getModelName: jest.fn((id: string) => id),
   cn: jest.fn((...args: unknown[]) => args.filter(Boolean).join(' ')),
+  // Defensive: a separately-merged feature (Judge/Evaluator columns) added a
+  // fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`) call inside
+  // loadData()'s Promise.all AND imports these two label helpers from
+  // @/lib/utils. Mocking them here (even before/without that feature
+  // present in this branch) keeps this file merge-order-independent —
+  // without a global.fetch mock, that call throws synchronously in jsdom,
+  // rejecting the WHOLE Promise.all and silently leaving benchmarks/evalRuns
+  // state at their initial empty arrays (loadData's own try/catch swallows
+  // it), which breaks every test in this file that expects real rows.
+  getJudgeModelLabel: jest.fn(() => 'Judge'),
+  getEvaluatorLabel: jest.fn(() => 'Evaluator'),
 }));
+
+global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ evaluators: [] }) })) as any;
 
 jest.mock('@/components/evals3/Breadcrumbs', () => ({
   Breadcrumbs: ({ actions }: { actions?: React.ReactNode }) =>
@@ -120,25 +133,33 @@ describe('EvalRunsPage — empty state colSpan (issue: left status-icon column r
     mockGetAllBenchmarks.mockResolvedValue([]);
   });
 
-  it('uses colSpan=8 for the empty-state row in flat view (was 9 before the icon column was removed)', async () => {
+  it('the empty-state row colSpan in flat view always matches the number of rendered column headers', async () => {
     const { container } = await renderPage();
 
     await waitFor(() => {
+      const headerCount = container.querySelectorAll('thead th').length;
       const cell = container.querySelector('tbody td[colspan]') as HTMLTableCellElement | null;
       expect(cell).toBeTruthy();
-      expect(cell!.colSpan).toBe(8);
+      // Self-consistent invariant (robust to future column additions/removals,
+      // e.g. the Judge/Evaluator columns) rather than a hardcoded magic
+      // number — a mismatch here means the empty-state row visually doesn't
+      // span the full table width.
+      expect(cell!.colSpan).toBe(headerCount);
+      expect(headerCount).toBeGreaterThan(0);
     });
   });
 
-  it('uses colSpan=7 for the empty-state row in grouped view (was 8 before the icon column was removed)', async () => {
+  it('the empty-state row colSpan in grouped view always matches the number of rendered column headers', async () => {
     const { container } = await renderPage();
 
     fireEvent.click(screen.getByTestId('viewmode-grouped'));
 
     await waitFor(() => {
+      const headerCount = container.querySelectorAll('thead th').length;
       const cell = container.querySelector('tbody td[colspan]') as HTMLTableCellElement | null;
       expect(cell).toBeTruthy();
-      expect(cell!.colSpan).toBe(7);
+      expect(cell!.colSpan).toBe(headerCount);
+      expect(headerCount).toBeGreaterThan(0);
     });
   });
 });
