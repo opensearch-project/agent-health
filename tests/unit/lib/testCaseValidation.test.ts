@@ -28,6 +28,57 @@ describe('testCaseValidation', () => {
       expect(result.success).toBe(true);
     });
 
+    it('accepts an absent fixture for backward compatibility', () => {
+      const result = testCaseSchema.safeParse({
+        name: 'Legacy case',
+        category: 'RCA',
+        difficulty: 'Medium',
+        initialPrompt: 'Investigate',
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.fixture).toBeUndefined();
+    });
+
+    it('validates a complete pinned fixture envelope', () => {
+      const fixture = {
+        type: 'filesystem-workspace',
+        ref: 'cache-refactor',
+        integrity: 'sha256:AbC123_-=',
+        payload: { files: [{ path: 'src/cache.ts', sha256: 'deadbeef' }] },
+      };
+      const result = testCaseSchema.safeParse({
+        name: 'Fixture case',
+        category: 'RCA',
+        difficulty: 'Medium',
+        initialPrompt: 'Investigate',
+        fixture,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.fixture).toEqual(fixture);
+    });
+
+    it.each([
+      [{ ref: 'workspace', integrity: 'sha256:abc123' }, 'fixture.type', 'Fixture type is required'],
+      [{ type: 'filesystem-workspace', ref: '   ', integrity: 'sha256:abc123' }, 'fixture.ref', 'Fixture ref must be a non-empty string'],
+      [{ type: 'filesystem-workspace', ref: 'workspace' }, 'fixture.integrity', 'Fixture integrity is required'],
+      [{ type: 'filesystem-workspace', ref: 'workspace', integrity: 'not-a-pin' }, 'fixture.integrity', 'algorithm:digest'],
+    ])('rejects an invalid fixture with an actionable error: %j', (fixture, path, message) => {
+      const result = validateTestCaseJson({
+        name: 'Fixture case',
+        category: 'RCA',
+        difficulty: 'Medium',
+        initialPrompt: 'Investigate',
+        fixture,
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path, message: expect.stringContaining(message) }),
+      ]));
+    });
+
     it('should require name', () => {
       const invalidTestCase = {
         category: 'RCA',
@@ -312,6 +363,30 @@ describe('testCaseValidation', () => {
       expect(parsed.description).toBe('A description');
       expect(parsed.subcategory).toBe('Log Analysis');
       expect(parsed.context).toEqual([{ description: 'Key', value: 'Value' }]);
+    });
+
+    it('round-trips a fixture between JSON and form state without dropping its payload', () => {
+      const fixture = {
+        type: 'filesystem-workspace',
+        ref: 'cache-refactor',
+        integrity: 'sha256:abc123',
+        payload: { files: ['src/cache.ts'] },
+      };
+      const formState: TestCaseFormState = {
+        name: 'Test',
+        description: '',
+        category: 'RCA',
+        subcategory: '',
+        difficulty: 'Easy',
+        initialPrompt: 'Test',
+        context: [],
+        fixture,
+        expectedOutcomes: [],
+      };
+
+      const serialized = serializeFormToJson(formState);
+      expect(JSON.parse(serialized).fixture).toEqual(fixture);
+      expect(parseJsonToFormState(serialized).data?.fixture).toEqual(fixture);
     });
 
     it('should exclude empty optional fields', () => {

@@ -29,6 +29,29 @@ describe('FileStorageModule', () => {
         ).rejects.toThrow('Test case name is required');
       });
 
+      it('round-trips a fixture envelope and opaque payload through plain JSON storage', async () => {
+        const fixture = {
+          type: 'filesystem-workspace',
+          ref: 'cache-refactor',
+          integrity: 'sha256:abc123',
+          payload: { manifest: { files: [{ path: 'src/cache.ts', mode: 420 }] } },
+        };
+
+        const created = await mod.testCases.create({
+          name: 'Fixture case',
+          initialPrompt: 'Investigate the workspace',
+          fixture,
+        });
+        const fetched = await mod.testCases.getById(created.id);
+        const onDisk = JSON.parse(fs.readFileSync(
+          path.join(tmpDir, 'test-cases', `${created.id}-v1.json`),
+          'utf8',
+        ));
+
+        expect(fetched?.fixture).toEqual(fixture);
+        expect(onDisk.fixture).toEqual(fixture);
+      });
+
       it('should create and retrieve a test case', async () => {
         const created = await mod.testCases.create({
           name: 'My Test Case',
@@ -51,6 +74,31 @@ describe('FileStorageModule', () => {
         await expect(
           mod.testCases.update('nonexistent-id', { name: 'Updated' })
         ).rejects.toThrow('Test case nonexistent-id not found');
+      });
+
+      it('creates a new version when fixture content changes', async () => {
+        const created = await mod.testCases.create({
+          name: 'Versioned fixture',
+          initialPrompt: 'Investigate',
+          fixture: {
+            type: 'filesystem-workspace',
+            ref: 'workspace-v1',
+            integrity: 'sha256:aaa111',
+          },
+        });
+
+        const updated = await mod.testCases.update(created.id, {
+          fixture: {
+            type: 'filesystem-workspace',
+            ref: 'workspace-v2',
+            integrity: 'sha256:bbb222',
+          },
+        });
+        const versions = await mod.testCases.getVersions(created.id);
+
+        expect(updated.version).toBe(2);
+        expect(versions).toHaveLength(2);
+        expect(versions.map((version) => version.fixture?.ref)).toEqual(['workspace-v2', 'workspace-v1']);
       });
 
       it('should update an existing entity', async () => {

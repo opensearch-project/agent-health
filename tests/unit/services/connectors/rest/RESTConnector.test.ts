@@ -88,6 +88,34 @@ describe('RESTConnector', () => {
       });
     });
 
+    it('never delivers fixture envelope content to the agent', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ response: 'Test response' }),
+        headers: new Map(),
+      });
+      const fixture = {
+        type: 'filesystem-workspace-delivery-sentinel',
+        ref: 'fixture-ref-delivery-sentinel',
+        integrity: 'sha256:integrityDeliverySentinel',
+        payload: { manifest: 'payload-delivery-sentinel' },
+      };
+      const request: ConnectorRequest = {
+        testCase: { ...mockTestCase, fixture },
+        modelId: 'test-model',
+      };
+
+      await connector.execute('http://localhost:8080/api', request, mockAuth);
+
+      const deliveredBody = (global.fetch as jest.Mock).mock.calls[0][1].body as string;
+      expect(deliveredBody).toContain(mockTestCase.initialPrompt);
+      expect(deliveredBody).toContain('test-cluster');
+      expect(deliveredBody).not.toContain(fixture.type);
+      expect(deliveredBody).not.toContain(fixture.ref);
+      expect(deliveredBody).not.toContain(fixture.integrity);
+      expect(deliveredBody).not.toContain(fixture.payload.manifest);
+    });
+
     it('should include auth headers', async () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,

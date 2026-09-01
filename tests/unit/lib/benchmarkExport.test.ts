@@ -43,6 +43,22 @@ describe('benchmarkExport', () => {
       });
     });
 
+    it('round-trips a fixture envelope through benchmark export and import validation', () => {
+      const fixture = {
+        type: 'filesystem-workspace',
+        ref: 'cache-refactor',
+        integrity: 'sha256:abc123',
+        payload: { files: ['src/cache.ts'] },
+      };
+
+      const exported = convertTestCasesToExportFormat([makeTestCase({ fixture })]);
+      const validation = validateTestCasesArrayJson(exported);
+
+      expect(exported[0].fixture).toEqual(fixture);
+      expect(validation.valid).toBe(true);
+      expect(validation.data?.[0].fixture).toEqual(fixture);
+    });
+
     it('should exclude system fields like id, labels, versions, createdAt', () => {
       const testCases = [makeTestCase()];
       const result = convertTestCasesToExportFormat(testCases);

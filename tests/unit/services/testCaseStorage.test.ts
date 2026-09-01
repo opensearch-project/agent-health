@@ -263,6 +263,21 @@ describe('TestCaseStorage', () => {
       expect(result?.initialPrompt).toBe('New prompt content');
     });
 
+    it('treats fixture edits as content changes and snapshots the new envelope', () => {
+      const fixture = {
+        type: 'filesystem-workspace',
+        ref: 'cache-refactor-v2',
+        integrity: 'sha256:bbb222',
+        payload: { files: ['a.ts', 'b.ts'] },
+      };
+
+      const result = testCaseStorage.update('tc-existing', { fixture });
+
+      expect(result?.currentVersion).toBe(2);
+      expect(result?.fixture).toEqual(fixture);
+      expect(result?.versions[1].fixture).toEqual(fixture);
+    });
+
     it('should update category and difficulty', () => {
       const result = testCaseStorage.update('tc-existing', {
         category: 'New Category',

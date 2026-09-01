@@ -19,6 +19,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { projectDataDir } from '../../../lib/config/statePaths.js';
+import { assertValidTestCaseFixture } from '../../../lib/testCaseFixture.js';
 import type {
   TestCase,
   Benchmark,
@@ -155,6 +156,7 @@ class FileTestCaseOperations implements ITestCaseOperations {
   }
 
   async create(testCase: Partial<TestCase>): Promise<TestCase> {
+    assertValidTestCaseFixture(testCase);
     if (!testCase.name) throw new Error('Test case name is required');
     const now = new Date().toISOString();
     const id = testCase.id || `tc-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -172,6 +174,7 @@ class FileTestCaseOperations implements ITestCaseOperations {
   }
 
   async update(id: string, updates: Partial<TestCase>): Promise<TestCase> {
+    assertValidTestCaseFixture(updates);
     const current = await this.getById(id);
     if (!current) throw new Error(`Test case ${id} not found`);
     const currentVer = this.ver(current);
@@ -260,6 +263,7 @@ class FileTestCaseOperations implements ITestCaseOperations {
     const results: TestCase[] = [];
 
     for (const tc of testCases) {
+      assertValidTestCaseFixture(tc);
       const existing = all.find(
         e => e.name === tc.name && (tc.sourceFile ? e.sourceFile === tc.sourceFile : true)
       );

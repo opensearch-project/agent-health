@@ -389,6 +389,14 @@ describe('OpenSearchStorageModule', () => {
       it('should throw when name is missing', async () => {
         await expect(mod.testCases.create({ initialPrompt: 'test' })).rejects.toThrow('Test case name is required');
       });
+
+      it('rejects an invalid fixture before indexing', async () => {
+        await expect(mod.testCases.create({
+          name: 'Invalid fixture',
+          fixture: { type: 'filesystem-workspace', ref: '', integrity: 'not-pinned' } as any,
+        })).rejects.toThrow('Invalid test-case fixture');
+        expect(mockClient.index).not.toHaveBeenCalled();
+      });
     });
 
     describe('update', () => {
@@ -411,6 +419,13 @@ describe('OpenSearchStorageModule', () => {
         mockClient.search.mockResolvedValue(makeSearchResponse([]));
 
         await expect(mod.testCases.update('tc-new', { name: 'New' })).rejects.toThrow('Test case tc-new not found');
+      });
+
+      it('rejects an invalid fixture before loading the existing version', async () => {
+        await expect(mod.testCases.update('tc-1', {
+          fixture: { type: '', ref: 'workspace', integrity: 'sha256:abc123' } as any,
+        })).rejects.toThrow('Invalid test-case fixture');
+        expect(mockClient.search).not.toHaveBeenCalled();
       });
     });
 
@@ -521,6 +536,16 @@ describe('OpenSearchStorageModule', () => {
         const result = await mod.testCases.bulkCreate([]);
 
         expect(result).toEqual(expect.objectContaining({ created: 0, errors: 0 }));
+      });
+
+      it('rejects an invalid fixture on the bulk-upsert path', async () => {
+        mockClient.search.mockResolvedValue(makeSearchResponse([]));
+
+        await expect(mod.testCases.bulkUpsert([{
+          name: 'Invalid fixture',
+          fixture: { type: 'filesystem-workspace', ref: 'workspace', integrity: 'not-pinned' } as any,
+        }])).rejects.toThrow('Invalid test-case fixture');
+        expect(mockClient.index).not.toHaveBeenCalled();
       });
     });
   });

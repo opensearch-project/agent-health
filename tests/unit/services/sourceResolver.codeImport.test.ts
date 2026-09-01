@@ -153,7 +153,17 @@ describe('resolveTestCaseSources - code-import', () => {
     mockLoadModule.mockResolvedValue({
       testCases: [{
         name: 'Test',
-        options: { prompt: 'Analyze', category: 'RCA', difficulty: 'Medium' },
+        options: {
+          prompt: 'Analyze',
+          category: 'RCA',
+          difficulty: 'Medium',
+          fixture: {
+            type: 'filesystem-workspace',
+            ref: 'workspace',
+            integrity: 'sha256:abc123',
+            payload: { files: ['a.ts'] },
+          },
+        },
         evaluate: jest.fn(),
         hash: 'sha256hash',
       }],
@@ -176,6 +186,12 @@ describe('resolveTestCaseSources - code-import', () => {
       expect.objectContaining({
         name: 'Test',
         initialPrompt: 'Analyze',
+        fixture: {
+          type: 'filesystem-workspace',
+          ref: 'workspace',
+          integrity: 'sha256:abc123',
+          payload: { files: ['a.ts'] },
+        },
         sourceFile: '/abs/path/tests.eval.ts',
         sourceHash: 'sha256hash',
       }),

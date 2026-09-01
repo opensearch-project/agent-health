@@ -93,6 +93,18 @@ describe('indexMappings', () => {
       expect(props.context.enabled).toBe(false);
     });
 
+    it('indexes the fixture envelope while keeping its payload opaque', () => {
+      const mappings = getIndexMappings();
+      const key = Object.keys(mappings).find((k) => k.includes('test_cases'))!;
+      const fixture = mappings[key].mappings.properties.fixture;
+
+      expect(fixture.type).toBe('object');
+      expect(fixture.properties.type).toEqual({ type: 'keyword' });
+      expect(fixture.properties.ref).toEqual({ type: 'keyword' });
+      expect(fixture.properties.integrity).toEqual({ type: 'keyword' });
+      expect(fixture.properties.payload).toEqual({ type: 'object', enabled: false });
+    });
+
     it('should have date fields for timestamps', () => {
       const mappings = getIndexMappings();
       const key = Object.keys(mappings).find((k) => k.includes('test_cases'))!;

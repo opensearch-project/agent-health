@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TestCase, TestCaseVersion, AgentContextItem, AgentToolDefinition } from '@/types';
+import type { TestCase, TestCaseVersion, TestCaseFixture, AgentContextItem, AgentToolDefinition } from '@/types';
 import { TEST_CASES } from '@/data/testCases';
 
 // Storage keys
@@ -21,6 +21,7 @@ export interface CreateTestCaseInput {
   difficulty: 'Easy' | 'Medium' | 'Hard';
   initialPrompt: string;
   context: AgentContextItem[];
+  fixture?: TestCaseFixture;
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
   expectedTrajectory: {
@@ -45,6 +46,7 @@ export interface UpdateTestCaseInput {
   difficulty?: 'Easy' | 'Medium' | 'Hard';
   initialPrompt?: string;
   context?: AgentContextItem[];
+  fixture?: TestCaseFixture;
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
   expectedTrajectory?: {
@@ -153,6 +155,7 @@ class TestCaseStorage {
       createdAt: now,
       initialPrompt: input.initialPrompt,
       context: input.context,
+      fixture: input.fixture,
       tools: input.tools,
       expectedPPL: input.expectedPPL,
       expectedTrajectory: input.expectedTrajectory,
@@ -183,6 +186,7 @@ class TestCaseStorage {
       // Current version content (mirrors latest version)
       initialPrompt: input.initialPrompt,
       context: input.context,
+      fixture: input.fixture,
       tools: input.tools,
       expectedPPL: input.expectedPPL,
       expectedTrajectory: input.expectedTrajectory,
@@ -215,6 +219,7 @@ class TestCaseStorage {
     const contentFields: (keyof UpdateTestCaseInput)[] = [
       'initialPrompt',
       'context',
+      'fixture',
       'tools',
       'expectedPPL',
       'expectedTrajectory',
@@ -234,6 +239,7 @@ class TestCaseStorage {
         createdAt: now,
         initialPrompt: updates.initialPrompt ?? existing.initialPrompt,
         context: updates.context ?? existing.context,
+        fixture: updates.fixture ?? existing.fixture,
         tools: updates.tools ?? existing.tools,
         expectedPPL: updates.expectedPPL ?? existing.expectedPPL,
         expectedTrajectory: updates.expectedTrajectory ?? existing.expectedTrajectory,
@@ -246,6 +252,7 @@ class TestCaseStorage {
       // Update current version content fields
       existing.initialPrompt = newVersion.initialPrompt;
       existing.context = newVersion.context;
+      existing.fixture = newVersion.fixture;
       existing.tools = newVersion.tools;
       existing.expectedPPL = newVersion.expectedPPL;
       existing.expectedTrajectory = newVersion.expectedTrajectory;

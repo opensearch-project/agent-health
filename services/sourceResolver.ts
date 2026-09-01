@@ -367,6 +367,7 @@ async function resolveCodeImport(
         ...(difficulty ? { difficulty } : {}),
         initialPrompt: tc.options.prompt,
         context: tc.options.context,
+        ...(tc.options.fixture ? { fixture: tc.options.fixture } : {}),
         labels,
         sourceFile,
         sourceHash: tc.hash,

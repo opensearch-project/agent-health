@@ -15,6 +15,7 @@ import { debug } from '@/lib/debug';
 import { getStorageModule } from '../../adapters/index.js';
 import { SAMPLE_TEST_CASES } from '../../../cli/demo/sampleTestCases.js';
 import type { TestCase, StorageMetadata } from '../../../types/index.js';
+import { validateTestCaseFixture } from '../../../lib/testCaseFixture.js';
 
 const router = Router();
 
@@ -319,6 +320,13 @@ router.get('/api/storage/test-cases/:id/versions/:version', async (req: Request,
 router.post('/api/storage/test-cases', async (req: Request, res: Response) => {
   try {
     const testCase = { ...req.body };
+    const fixtureValidation = validateTestCaseFixture(testCase);
+    if (!fixtureValidation.valid) {
+      return res.status(400).json({
+        error: `Invalid test-case fixture: ${fixtureValidation.errors.join('; ')}`,
+        errors: fixtureValidation.errors,
+      });
+    }
 
     // Reject creating with demo- prefix
     if (testCase.id && isSampleId(testCase.id)) {
@@ -344,6 +352,14 @@ router.put('/api/storage/test-cases/:id', async (req: Request, res: Response) =>
     // Reject modifying sample data
     if (isSampleId(id)) {
       return res.status(400).json({ error: 'Cannot modify sample data. Sample test cases are read-only.' });
+    }
+
+    const fixtureValidation = validateTestCaseFixture(req.body);
+    if (!fixtureValidation.valid) {
+      return res.status(400).json({
+        error: `Invalid test-case fixture: ${fixtureValidation.errors.join('; ')}`,
+        errors: fixtureValidation.errors,
+      });
     }
 
     const storage = getStorageModule();
@@ -397,6 +413,16 @@ router.post('/api/storage/test-cases/bulk', async (req: Request, res: Response) 
     const { testCases } = req.body;
     if (!Array.isArray(testCases)) {
       return res.status(400).json({ error: 'testCases must be an array' });
+    }
+
+    const fixtureErrors = testCases.flatMap((testCase, index) =>
+      validateTestCaseFixture(testCase).errors.map((error) => `testCases.${index}.${error}`),
+    );
+    if (fixtureErrors.length > 0) {
+      return res.status(400).json({
+        error: `Invalid test-case fixture: ${fixtureErrors.join('; ')}`,
+        errors: fixtureErrors,
+      });
     }
 
     // Check for demo- prefixes

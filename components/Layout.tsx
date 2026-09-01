@@ -324,7 +324,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               <img src={OpenSearchLogo} alt="OpenSearch" className="w-7 h-7" />
             </div>
           )}
-          
+
           {/* Search bar - only show when expanded */}
           {!collapsed && (
             <div className="relative">

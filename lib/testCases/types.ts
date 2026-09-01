@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { TrajectoryStep } from '@/types';
+import type { TestCaseFixture, TrajectoryStep } from '@/types';
 import type { TracesAccessor } from '../matchers/index.js';
 
 /**
@@ -29,6 +29,11 @@ export interface TestOptions {
   description?: string;
   /** Additional context items passed to the agent alongside the prompt. */
   context?: { description: string; value: string }[];
+  /**
+   * Content-pinned setup state materialized by the connector. This envelope
+   * is persisted and versioned but never included in agent-delivery content.
+   */
+  fixture?: TestCaseFixture;
   /**
    * Labels for filtering and grouping. Use prefixed strings for what was
    * previously `category` and `difficulty`:

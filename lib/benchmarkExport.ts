@@ -27,6 +27,10 @@ export function convertTestCasesToExportFormat(testCases: TestCase[]): Validated
       exported.subcategory = tc.subcategory;
     }
 
+    if (tc.fixture) {
+      exported.fixture = tc.fixture;
+    }
+
     return exported;
   });
 }

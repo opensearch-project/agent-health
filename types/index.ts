@@ -544,6 +544,18 @@ export interface AgentToolDefinition {
 // Category = grouping for use cases (e.g., 'Group by Error Type')
 export type Category = 'Baseline' | 'Smart Contextual Menu' | 'RCA' | 'Conversational Queries' | 'Top 10 Browsed Products' | 'Errors by Service' | 'Group by Error Type' | string;
 
+/**
+ * Content-pinned world materialized by a connector before a test case runs.
+ * Agent Health owns the identity/integrity envelope; the connector owns the
+ * opaque payload shape. Fixtures are never included in agent-delivery content.
+ */
+export interface TestCaseFixture {
+  type: string;
+  ref: string;
+  integrity: string;
+  payload?: Record<string, unknown>;
+}
+
 // Version snapshot - immutable record of test case content at a point in time
 export interface TestCaseVersion {
   version: number;
@@ -554,6 +566,7 @@ export interface TestCaseVersion {
   // the runner to skip agent invocation entirely (deterministic-only tests).
   initialPrompt?: string;
   context: AgentContextItem[];
+  fixture?: TestCaseFixture;
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
   expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
@@ -617,6 +630,7 @@ export interface TestCase {
   // (deterministic-only tests where the runner skips agent invocation).
   initialPrompt?: string;
   context: AgentContextItem[]; // AG-UI format context passed to agent
+  fixture?: TestCaseFixture; // Pinned setup state; never delivered to the agent
   tools?: AgentToolDefinition[]; // Tools available to the agent (client-provided)
   expectedPPL?: string; // Expected PPL query for validation
   expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior

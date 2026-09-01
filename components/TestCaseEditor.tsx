@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LabelPicker } from '@/components/ui/label-picker';
-import { TestCase, AgentContextItem } from '@/types';
+import { TestCase, AgentContextItem, TestCaseFixture } from '@/types';
 import { asyncTestCaseStorage } from '@/services/storage';
 import {
   ValidationError,
@@ -44,6 +44,10 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
   const [labels, setLabels] = useState<string[]>(testCase?.labels || []);
   const [initialPrompt, setInitialPrompt] = useState(testCase?.initialPrompt || '');
   const [context, setContext] = useState<AgentContextItem[]>(testCase?.context || []);
+  // The visual form does not edit connector-owned payloads, but keeping the
+  // envelope in form state prevents mode switches or unrelated edits from
+  // silently dropping a fixture authored in JSON/SDK form.
+  const [fixture, setFixture] = useState<TestCaseFixture | undefined>(testCase?.fixture);
   const [expectedOutcomes, setExpectedOutcomes] = useState<string[]>(
     testCase?.expectedOutcomes || ['']
   );
@@ -170,6 +174,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
         difficulty: parsed.difficulty || 'Medium',
         initialPrompt,
         context,
+        fixture,
         expectedOutcomes,
       });
       setJsonContent(json);
@@ -199,6 +204,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
           }
           setInitialPrompt(parsed.initialPrompt || '');
           setContext(Array.isArray(parsed.context) ? parsed.context : []);
+          setFixture(parsed.fixture);
           setExpectedOutcomes(
             Array.isArray(parsed.expectedOutcomes) && parsed.expectedOutcomes.length > 0
               ? parsed.expectedOutcomes
@@ -211,6 +217,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
           setLabels([]);
           setInitialPrompt('');
           setContext([]);
+          setFixture(undefined);
           setExpectedOutcomes(['']);
         }
       }
@@ -252,6 +259,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
             labels,
             initialPrompt,
             context,
+            fixture,
             expectedOutcomes: filteredOutcomes,
           });
           if (updated) {
@@ -265,6 +273,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
             labels,
             initialPrompt,
             context,
+            fixture,
             expectedOutcomes: filteredOutcomes,
           });
           onSave(created);
@@ -297,6 +306,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
             difficulty: tc.difficulty,
             initialPrompt: tc.initialPrompt,
             context: (tc.context || []) as AgentContextItem[],
+            fixture: tc.fixture,
             expectedOutcomes: tc.expectedOutcomes || [],
           }));
 
@@ -333,6 +343,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
               difficulty: data.difficulty,
               initialPrompt: data.initialPrompt,
               context: (data.context || []) as AgentContextItem[],
+              fixture: data.fixture,
               expectedOutcomes: data.expectedOutcomes || [],
             });
             if (updated) {
@@ -348,6 +359,7 @@ export const TestCaseEditor: React.FC<TestCaseEditorProps> = ({
               difficulty: data.difficulty,
               initialPrompt: data.initialPrompt,
               context: (data.context || []) as AgentContextItem[],
+              fixture: data.fixture,
               expectedOutcomes: data.expectedOutcomes || [],
             });
             onSave(created);
