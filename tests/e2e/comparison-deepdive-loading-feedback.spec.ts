@@ -166,4 +166,48 @@ test.describe('Comparison deep-dive \u2014 async job pattern + loading feedback 
     await expect(page.getByText(/storage lookup failed/i)).toBeVisible();
     expect(jobsPolled).toBe(false);
   });
+
+  test('a 404 on GET .../jobs/:jobId mid-poll (job evicted / server restarted) surfaces a visible, retryable error — never an infinite poll (hardening round, codex review of PR #460)', async ({ page }) => {
+    let pollCount = 0;
+    await page.route('**/api/comparison/deep-dive', (r) =>
+      r.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ jobId: 'evicted-job' }) })
+    );
+    await page.route('**/api/comparison/deep-dive/jobs/evicted-job', (r) => {
+      pollCount++;
+      if (pollCount === 1) {
+        // First poll: genuinely still running.
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'running', elapsedMs: 2500 }) });
+      }
+      // Every poll after that: the job is GONE (TTL/retained-cap eviction,
+      // or the server restarted mid-poll and lost all in-memory jobs) —
+      // exactly what server/routes/comparison.ts's GET handler returns for
+      // an unknown jobId.
+      return r.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'job not found: evicted-job' }) });
+    });
+
+    await page.goto(`/compare?runs=${RUN_A},${RUN_B}`);
+    await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
+
+    // Loading first (the first poll said "running")...
+    await expect(page.locator('[data-testid="deep-dive-loading"]')).toBeVisible({ timeout: 10000 });
+
+    // ...then a VISIBLE error, not an infinite spinner — the very next poll
+    // 404s and the client must treat that as terminal, not just retry
+    // forever silently.
+    await expect(page.getByText(/Couldn't generate the deep-dive/i)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/job not found/i)).toBeVisible();
+    await expect(page.locator('[data-testid="deep-dive-loading"]')).toHaveCount(0);
+
+    // And it's genuinely retryable: Try again starts a FRESH job (new jobId),
+    // which is polled independently of the evicted one.
+    await page.route('**/api/comparison/deep-dive', (r) =>
+      r.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ jobId: 'fresh-job' }) })
+    );
+    await page.route('**/api/comparison/deep-dive/jobs/fresh-job', (r) =>
+      r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'done', elapsedMs: 100, result: { markdown: 'Recovered after eviction.', modelId: 'stub/model', durationMs: 100, runs: [] } }) })
+    );
+
+    await page.getByRole('button', { name: /try again/i }).click();
+    await expect(page.locator('[data-testid="comparison-deep-dive"]')).toContainText('Recovered after eviction.', { timeout: 10000 });
+  });
 });
