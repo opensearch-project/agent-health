@@ -455,6 +455,66 @@ describe('Evaluation Runs API', () => {
       expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith('run-1', { name: 'New name' });
     });
 
+    it('trims whitespace off a renamed value before persisting', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+      mockEvaluationRunsUpdate.mockResolvedValue({ id: 'run-1', name: 'New name' });
+
+      const res = await request(app).patch('/api/storage/evaluation-runs/run-1').send({ name: '  New name  ' });
+
+      expect(res.status).toBe(200);
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith('run-1', { name: 'New name' });
+    });
+
+    it('rejects an empty name with 400 and does not call update', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+
+      const res = await request(app).patch('/api/storage/evaluation-runs/run-1').send({ name: '' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/must not be empty/);
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a whitespace-only name with 400', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+
+      const res = await request(app).patch('/api/storage/evaluation-runs/run-1').send({ name: '   ' });
+
+      expect(res.status).toBe(400);
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-string name with 400', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+
+      const res = await request(app).patch('/api/storage/evaluation-runs/run-1').send({ name: 42 });
+
+      expect(res.status).toBe(400);
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a name over the 200-char cap with 400', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+
+      const res = await request(app).patch('/api/storage/evaluation-runs/run-1').send({ name: 'x'.repeat(201) });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/200 characters or fewer/);
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+    });
+
+    it('a rename does not touch other fields (no version bump / stats change smuggled in)', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+      mockEvaluationRunsUpdate.mockResolvedValue({ id: 'run-1', name: 'New name' });
+
+      const res = await request(app)
+        .patch('/api/storage/evaluation-runs/run-1')
+        .send({ name: 'New name', stats: { passed: 999 }, version: 5, status: 'failed' });
+
+      expect(res.status).toBe(200);
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith('run-1', { name: 'New name' });
+    });
+
     it('maps a meta.statusCode 404 error to a 404 response', async () => {
       mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
       const err: any = new Error('not found');

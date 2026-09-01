@@ -26,13 +26,14 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
-import { getEvaluationRun } from '@/services/client';
+import { getEvaluationRun, updateEvaluationRun } from '@/services/client';
 import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, EvaluationReport, isEvaluationRun } from '@/types';
 import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
+import { InlineRenameField } from './InlineRenameField';
 import { Breadcrumbs } from './Breadcrumbs';
 import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
 import { RerunConfirmDialog } from './RerunConfirmDialog';
@@ -435,6 +436,21 @@ export const RunInspectorPage: React.FC = () => {
   // bodies like onClick handlers).
   const evalRun: EvaluationRun | null = isEvaluationRun(run) ? run : null;
 
+  // Rename only PATCHes the top-level EvaluationRun collection (see
+  // server/routes/storage/evaluationRuns.ts) — legacy benchmark-embedded
+  // runs have no equivalent endpoint, same gating as the Re-run button above.
+  const handleRenameRun = async (newName: string) => {
+    if (!evalRun) return;
+    const previousName = run.name;
+    setRun(r => (r ? { ...r, name: newName } : r));
+    try {
+      await updateEvaluationRun(run.id, { name: newName });
+    } catch (err) {
+      setRun(r => (r ? { ...r, name: previousName } : r));
+      throw err;
+    }
+  };
+
   return (
     <div className="h-full flex flex-col max-md:h-auto max-md:overflow-visible">
       {/* ── Top Bar ──────────────────────────────────────────────── */}
@@ -458,7 +474,16 @@ export const RunInspectorPage: React.FC = () => {
         />
         <div className="flex items-center justify-between mt-1">
           <div className="flex-1 min-w-0">
-            <h2 className="text-lg font-bold truncate">{run.name}</h2>
+            {evalRun ? (
+              <InlineRenameField
+                value={run.name}
+                onSave={handleRenameRun}
+                textClassName="text-lg font-bold"
+                testId="run-inspector-rename"
+              />
+            ) : (
+              <h2 className="text-lg font-bold truncate">{run.name}</h2>
+            )}
             {/* Provenance chip visibility is a DOC concern (does this run
                 object actually carry rerunOf data?), not a route concern --
                 isEvaluationRun() narrows `run` so `.rerunOf` is type-safe. */}

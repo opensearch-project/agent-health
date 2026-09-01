@@ -44,8 +44,10 @@ jest.mock('@/services/storage', () => ({
 }));
 
 const mockListEvaluationRuns = jest.fn();
+const mockUpdateEvaluationRun = jest.fn();
 jest.mock('@/services/client', () => ({
   listEvaluationRuns: (...a: unknown[]) => mockListEvaluationRuns(...a),
+  updateEvaluationRun: (...a: unknown[]) => mockUpdateEvaluationRun(...a),
 }));
 
 jest.mock('@/lib/constants', () => ({
@@ -110,6 +112,7 @@ beforeEach(() => {
   window.localStorage.clear();
   mockGetReportSummariesByIds.mockResolvedValue({});
   mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [] });
+  mockUpdateEvaluationRun.mockResolvedValue({});
 });
 
 describe('EvalRunsPage — empty state colSpan (issue: left status-icon column removal)', () => {
@@ -220,5 +223,124 @@ describe('EvalRunsPage — top-level evaluation-runs merge (RunRow convergence)'
     // 1 passed / 0 failed / 0 errored / total 1 for the single passed result.
     expect(row.querySelector('.text-green-500')?.textContent).toBe('1');
     expect(row.querySelector('.text-red-500')?.textContent).toBe('0');
+  });
+});
+
+describe('EvalRunsPage — grouped view sorts groups by recency, not benchmark name', () => {
+  // Both timestamps must fall inside the default 30d time-range filter, so
+  // use "recent" offsets rather than far-past/future dates.
+  const recentIso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+
+  it('orders benchmark groups by their most recent run, not alphabetically', async () => {
+    // Regression for the owner-reported bug: grouping used to sort groups
+    // alphabetically ("Apple" before "Zebra") regardless of activity. The
+    // group with the most recent run must render first.
+    mockGetAllBenchmarks.mockResolvedValue([
+      makeBenchmark({
+        id: 'bench-apple', name: 'Apple Benchmark',
+        runs: [makeRun({ id: 'run-old', name: 'Old Run', createdAt: recentIso(6 * 3600_000) })],
+      }),
+      makeBenchmark({
+        id: 'bench-zebra', name: 'Zebra Benchmark',
+        runs: [makeRun({ id: 'run-new', name: 'New Run', createdAt: recentIso(1 * 3600_000) })],
+      }),
+    ]);
+
+    await renderPage();
+    fireEvent.click(screen.getByTestId('viewmode-grouped'));
+
+    await waitFor(() => expect(screen.getByText('Zebra Benchmark')).toBeTruthy());
+    const zebraEl = screen.getByText('Zebra Benchmark');
+    const appleEl = screen.getByText('Apple Benchmark');
+    // DOCUMENT_POSITION_FOLLOWING (4) on appleEl relative to zebraEl means
+    // zebra comes first in DOM order — i.e. rendered before apple, even
+    // though "Apple" sorts alphabetically first.
+    // eslint-disable-next-line no-bitwise
+    expect(zebraEl.compareDocumentPosition(appleEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('defaults to flat view with newest-first sort (not grouped-by-name)', async () => {
+    mockGetAllBenchmarks.mockResolvedValue([
+      makeBenchmark({
+        id: 'bench-1', name: 'Some Benchmark',
+        runs: [
+          makeRun({ id: 'run-old', name: 'Older Run', createdAt: recentIso(6 * 3600_000) }),
+          makeRun({ id: 'run-new', name: 'Newer Run', createdAt: recentIso(1 * 3600_000) }),
+        ],
+      }),
+    ]);
+
+    await renderPage();
+
+    // Flat is the default (no explicit toggle click) and rows sort newest-first.
+    expect(screen.getByTestId('viewmode-flat').className).toMatch(/bg-muted/);
+    await waitFor(() => expect(screen.getByText('Newer Run')).toBeTruthy());
+    const rows = screen.getAllByTestId('run-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('Newer Run');
+    expect(rows[1].textContent).toContain('Older Run');
+  });
+});
+
+describe('EvalRunsPage — inline rename', () => {
+  beforeEach(() => {
+    mockGetAllBenchmarks.mockResolvedValue([
+      makeBenchmark({ id: 'bench-1', name: 'Benchmark One', runs: [makeRun({ id: 'run-1', name: 'Run One' })] }),
+    ]);
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [
+        {
+          id: 'eval-run-1',
+          docType: 'evaluation-run',
+          name: 'Ad-hoc Eval Run',
+          createdAt: new Date().toISOString(),
+          status: 'completed',
+          agentKey: 'agent-a',
+          modelId: 'claude-3',
+          sources: [],
+          trigger: 'ui',
+          testCaseSnapshots: [],
+          results: {},
+        },
+      ],
+    });
+  });
+
+  it('shows a rename pencil for eval-run rows but not for legacy benchmark-embedded rows', async () => {
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Ad-hoc Eval Run')).toBeTruthy());
+    expect(screen.getByTestId('run-row-rename-eval-run-1-edit-btn')).toBeTruthy();
+    // 'Run One' is a legacy benchmark-embedded row (kind: 'benchmark') — no PATCH route for it.
+    expect(screen.queryByTestId('run-row-rename-run-1-edit-btn')).toBeNull();
+  });
+
+  it('renames an eval-run row and persists via updateEvaluationRun, with optimistic UI update', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('Ad-hoc Eval Run')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('run-row-rename-eval-run-1-edit-btn'));
+    const input = screen.getByTestId('run-row-rename-eval-run-1-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Renamed Run' } });
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); });
+
+    expect(mockUpdateEvaluationRun).toHaveBeenCalledWith('eval-run-1', { name: 'Renamed Run' });
+    await waitFor(() => expect(screen.getByText('Renamed Run')).toBeTruthy());
+  });
+
+  it('reverts the optimistic rename and shows an error when the server rejects it', async () => {
+    mockUpdateEvaluationRun.mockRejectedValue(new Error('name must not be empty'));
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('Ad-hoc Eval Run')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('run-row-rename-eval-run-1-edit-btn'));
+    const input = screen.getByTestId('run-row-rename-eval-run-1-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Will Fail' } });
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); });
+
+    await waitFor(() => expect(screen.getByTestId('run-row-rename-eval-run-1-error')).toBeTruthy());
+    expect(screen.getByTestId('run-row-rename-eval-run-1-error').textContent).toMatch(/name must not be empty/);
+    // Reverted — the original name is back (still in the input since we stayed in edit mode).
+    expect(input.value).toBe('Will Fail');
   });
 });

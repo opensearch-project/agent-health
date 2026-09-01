@@ -28,6 +28,7 @@ import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
 import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.js';
+import { validateRunNameUpdate } from '../../../lib/runName.js';
 
 const router = Router();
 
@@ -727,7 +728,17 @@ router.patch('/api/storage/evaluation-runs/:id', async (req: Request, res: Respo
 
     const { name, description, benchmarkId } = req.body;
     const allowedFields: Record<string, any> = {};
-    if (name !== undefined) allowedFields.name = name;
+    if (name !== undefined) {
+      // Rename is the one PATCH-able field with a validation rule (non-empty,
+      // trimmed, length-capped) — see lib/runName.ts. Deliberately narrow: a
+      // rename request must never smuggle in other field changes, and this
+      // route already only reads `name` off `allowedFields` for that purpose.
+      const validated = validateRunNameUpdate(name);
+      if (validated.ok === false) {
+        return res.status(400).json({ error: validated.error });
+      }
+      allowedFields.name = validated.value;
+    }
     if (description !== undefined) allowedFields.description = description;
     if (benchmarkId !== undefined) allowedFields.benchmarkId = benchmarkId;
 

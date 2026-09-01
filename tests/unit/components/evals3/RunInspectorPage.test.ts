@@ -59,6 +59,7 @@ jest.mock('@/services/storage', () => ({
 
 jest.mock('@/services/client', () => ({
   getEvaluationRun: jest.fn(),
+  updateEvaluationRun: jest.fn(),
 }));
 
 const mockEnsurePolling = jest.fn();
@@ -932,3 +933,85 @@ describe('RunInspectorPage — Re-run button (isEvaluationRun-keyed)', () => {
   });
 });
 
+
+describe('RunInspectorPage — inline rename (eval-run mode only)', () => {
+  it('renders the title as plain text (no rename pencil) in benchmark mode', async () => {
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(1));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Run 1')).toBeTruthy());
+    expect(screen.queryByTestId('run-inspector-rename-edit-btn')).toBeNull();
+  });
+
+  it('renders a rename pencil in eval-run mode and persists a rename via updateEvaluationRun', async () => {
+    mockParams = { benchmarkId: undefined, runId: 'eval-run-1' };
+    const { getEvaluationRun, updateEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue({
+      id: 'eval-run-1',
+      docType: 'evaluation-run',
+      name: 'Original Name',
+      agentKey: 'demo',
+      modelId: 'model-1',
+      createdAt: '2024-01-01T00:00:00Z',
+      status: 'completed',
+      sources: [],
+      trigger: 'ui',
+      testCaseSnapshots: [],
+      results: {},
+    });
+    updateEvaluationRun.mockResolvedValue({});
+
+    mockTestCasesGetByIds.mockResolvedValue([]);
+    mockGetReportSummariesByIds.mockResolvedValue({});
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('run-inspector-rename-edit-btn')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('run-inspector-rename-edit-btn'));
+
+    const input = screen.getByTestId('run-inspector-rename-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Renamed via Inspector' } });
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); });
+
+    expect(updateEvaluationRun).toHaveBeenCalledWith('eval-run-1', { name: 'Renamed via Inspector' });
+    await waitFor(() => expect(screen.getByText('Renamed via Inspector')).toBeTruthy());
+  });
+
+  it('reverts the header title and shows an error when the rename PATCH fails', async () => {
+    mockParams = { benchmarkId: undefined, runId: 'eval-run-1' };
+    const { getEvaluationRun, updateEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue({
+      id: 'eval-run-1',
+      docType: 'evaluation-run',
+      name: 'Original Name',
+      agentKey: 'demo',
+      modelId: 'model-1',
+      createdAt: '2024-01-01T00:00:00Z',
+      status: 'completed',
+      sources: [],
+      trigger: 'ui',
+      testCaseSnapshots: [],
+      results: {},
+    });
+    updateEvaluationRun.mockRejectedValue(new Error('name must be 200 characters or fewer'));
+
+    mockTestCasesGetByIds.mockResolvedValue([]);
+    mockGetReportSummariesByIds.mockResolvedValue({});
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('run-inspector-rename-edit-btn')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('run-inspector-rename-edit-btn'));
+
+    const input = screen.getByTestId('run-inspector-rename-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'x'.repeat(201) } });
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); });
+
+    await waitFor(() => expect(screen.getByTestId('run-inspector-rename-error')).toBeTruthy());
+    expect(screen.getByTestId('run-inspector-rename-error').textContent).toMatch(/200 characters or fewer/);
+  });
+});
