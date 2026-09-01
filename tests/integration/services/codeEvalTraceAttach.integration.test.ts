@@ -35,7 +35,7 @@ jest.mock('@/services/evaluation', () => ({
   invokeAgent: jest.fn(),
   callBedrockJudge: jest.fn(),
 }));
-jest.mock('@/services/connectors/server', () => ({
+jest.mock('@/connectors/server', () => ({
   connectorRegistry: { getForAgent: jest.fn() },
 }));
 jest.mock('@/lib/config/index', () => ({

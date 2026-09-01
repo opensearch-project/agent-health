@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ConnectorAuth, ConnectorRequest } from '@/services/connectors/types';
+import type { ConnectorAuth, ConnectorRequest } from '@/connectors/types';
 import type { TestCase } from '@/types';
 import { ToolCallStatus } from '@/types';
 
@@ -11,7 +11,7 @@ jest.mock('child_process', () => ({
   spawn: mockSpawn,
 }));
 
-import { PiConnector, createAgentHealthPiConnector } from '@/services/connectors/pi/PiConnector';
+import { PiConnector, createAgentHealthPiConnector } from '@/connectors/pi';
 import { EventEmitter } from 'events';
 
 describe('PiConnector Integration Tests', () => {

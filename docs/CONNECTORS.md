@@ -31,14 +31,14 @@ Connectors are protocol adapters that handle communication with different types 
 ### 1. Extend BaseConnector
 
 ```typescript
-import { BaseConnector } from '@/services/connectors';
+import { BaseConnector } from '@/connectors';
 import type {
   ConnectorAuth,
   ConnectorRequest,
   ConnectorResponse,
   ConnectorProgressCallback,
   ConnectorRawEventCallback,
-} from '@/services/connectors/types';
+} from '@/connectors/types';
 import type { TrajectoryStep } from '@/types';
 
 export class MyConnector extends BaseConnector {
@@ -142,7 +142,7 @@ export class MyConnector extends BaseConnector {
 ### 2. Register the Connector
 
 ```typescript
-import { connectorRegistry } from '@/services/connectors';
+import { connectorRegistry } from '@/connectors';
 import { MyConnector } from './MyConnector';
 
 // Register on module load
@@ -283,14 +283,14 @@ async execute(endpoint, request, auth, onProgress, onRawEvent) {
 
 Some connectors require Node.js APIs (like `child_process`) and cannot run in the browser:
 
-**Browser-safe connectors** (in `services/connectors/index.ts`):
+**Browser-safe connectors** (in `connectors/index.ts`):
 - `agui-streaming`
 - `rest`
 - `openai-compatible`
 - `langgraph`
 - `mock`
 
-**Server-only connectors** (in `services/connectors/server.ts`):
+**Server-only connectors** (in `connectors/server.ts`):
 - `subprocess`
 - `claude-code`
 - `kiro`
@@ -516,19 +516,19 @@ The repository includes **Observio**, a reference ReAct agent in `observio-sampl
 
 ### REST API Connector
 
-See `services/connectors/rest/RESTConnector.ts` for a complete example of a non-streaming HTTP connector.
+See `connectors/rest/index.ts` for a complete example of a non-streaming HTTP connector.
 
 ### Subprocess Connector
 
-See `services/connectors/subprocess/SubprocessConnector.ts` for a complete example of a CLI tool connector.
+See `connectors/subprocess/index.ts` for a complete example of a CLI tool connector.
 
 ### Claude Code Connector
 
-See `services/connectors/claude-code/ClaudeCodeConnector.ts` for a complete example extending SubprocessConnector with custom output parsing.
+See `connectors/claude-code/index.ts` for a complete example extending SubprocessConnector with custom output parsing.
 
 ### Kiro Connector
 
-See `services/connectors/kiro/KiroConnector.ts` for a `SubprocessConnector`
+See `connectors/kiro/index.ts` for a `SubprocessConnector`
 subclass that overrides `parseStderrChunk()` to convert Kiro's stderr-borne
 `[tool] Running:` / `[tool] status:` markers into structured `action` +
 `tool_result` steps. The base `SubprocessConnector` also persists `stderr` to

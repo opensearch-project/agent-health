@@ -25,7 +25,7 @@ import type { Client } from '@opensearch-project/opensearch';
 import type { IStorageModule } from '@/server/adapters/types';
 import { runEvaluationWithConnector, callBedrockJudge, invokeAgent, computeSdkMatcherSessionMetrics } from './evaluation';
 import { buildEvaluatorErrorPatch } from './evaluation/evaluatorError';
-import { connectorRegistry } from '@/services/connectors/server';
+import { connectorRegistry } from '@/connectors/server';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import {

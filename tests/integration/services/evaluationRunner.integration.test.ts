@@ -26,7 +26,7 @@ jest.mock('@/services/evaluation', () => ({
   callBedrockJudge: (...args: any[]) => mockCallBedrockJudge(...args),
 }));
 
-jest.mock('@/services/connectors/server', () => ({
+jest.mock('@/connectors/server', () => ({
   connectorRegistry: { getConnector: jest.fn() },
 }));
 

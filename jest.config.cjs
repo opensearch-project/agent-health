@@ -8,8 +8,8 @@ module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
   setupFiles: ['<rootDir>/jest.setup.cjs'],
-  roots: ['<rootDir>/tests'],
-  testMatch: ['**/tests/**/*.test.ts'],
+  roots: ['<rootDir>/tests', '<rootDir>/connectors'],
+  testMatch: ['**/*.test.ts'],
   moduleNameMapper: {
     '^@/lib/config$': '<rootDir>/__mocks__/@/lib/config.ts',
     // Mock packagePaths to avoid import.meta.url issues in Jest
@@ -72,6 +72,7 @@ module.exports = {
   // Coverage configuration
   collectCoverageFrom: [
     'services/**/*.ts',
+    'connectors/**/*.ts',
     'server/**/*.ts',
     'lib/**/*.ts',
     'cli/**/*.ts',
@@ -141,7 +142,7 @@ module.exports = {
       // through `tee`, so the coverage-threshold failure (real unit coverage is
       // ~71% stmts / 61% branches, because integration-owned paths like
       // cli/commands, server/routes, server/adapters/{file,opensearch},
-      // server/services/codingAgents and services/connectors/pi are covered by
+      // server/services/codingAgents and connectors/pi are covered by
       // the separate integration-tests job, not unit) was silently swallowed.
       // These thresholds are set just below the current real unit coverage so
       // CI enforces a no-regression ratchet that is honestly green. Raise them

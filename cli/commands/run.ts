@@ -25,7 +25,7 @@ import type { AgentConfig, TrajectoryStep } from '@/types/index.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
 
 // Import server connectors to ensure they're registered
-import { connectorRegistry } from '@/services/connectors/server.js';
+import { connectorRegistry } from '@/connectors/server.js';
 
 interface RunOptions {
   agent: string[];

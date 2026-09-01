@@ -65,7 +65,7 @@ jest.mock('@/server/middleware/index', () => ({
   setupSpaFallback: mockSetupSpaFallback,
 }));
 
-jest.mock('@/services/connectors/server', () => ({}));
+jest.mock('@/connectors/server', () => ({}));
 
 jest.mock('@/lib/telemetry', () => ({
   initEvalTracerProvider: jest.fn(),

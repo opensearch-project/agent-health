@@ -38,7 +38,7 @@ export interface AssistantContext {
 }
 
 // Connector protocol for agent communication
-export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code' | 'pi' | 'strands' | 'langgraph' | 'mock';
+export type ConnectorProtocol = 'agui-streaming' | 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code' | 'kiro' | 'pi' | 'pi-web' | 'strands' | 'langgraph' | 'mock' | (string & {});
 
 export interface ModelConfig {
   model_id: string;
@@ -553,6 +553,8 @@ export interface TestCaseVersion {
   // initialPrompt is optional: code-based test cases without a prompt cause
   // the runner to skip agent invocation entirely (deterministic-only tests).
   initialPrompt?: string;
+  /** Structured connector fixture; legacy context fixtures remain supported. */
+  fixture?: AgentFixtureEnvelope;
   context: AgentContextItem[];
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
@@ -570,6 +572,16 @@ export interface TestCaseVersion {
 }
 
 // TestCase is referred to as "Use Case" in the UI
+export interface AgentFixtureEnvelope {
+  /** Connector-specific fixture kind (pi-web supports `filesystem-workspace`). */
+  type: string;
+  /** Fixture path relative to the connector's configured fixture directory. */
+  ref: string;
+  /** Content integrity, currently `sha256:<digest>`. */
+  integrity: string;
+  payload?: Record<string, unknown>;
+}
+
 export interface TestCase {
   id: string;
   name: string;
@@ -616,6 +628,8 @@ export interface TestCase {
   // Optional because code-based test cases may have no prompt at all
   // (deterministic-only tests where the runner skips agent invocation).
   initialPrompt?: string;
+  /** Structured connector fixture; legacy context fixtures remain supported. */
+  fixture?: AgentFixtureEnvelope;
   context: AgentContextItem[]; // AG-UI format context passed to agent
   tools?: AgentToolDefinition[]; // Tools available to the agent (client-provided)
   expectedPPL?: string; // Expected PPL query for validation

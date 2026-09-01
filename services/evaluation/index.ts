@@ -11,9 +11,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { AgentConfig, EvaluationReport, TestCase, TrajectoryStep, OpenSearchLog, LLMJudgeResponse, ConnectorProtocol, BeforeRequestContext, AfterResponseContext, TestCasePerformanceMetrics } from '@/types';
 import { executeBeforeRequestHook, executeAfterResponseHook } from '@/lib/hooks';
-import { AGUIToTrajectoryConverter, consumeSSEStream, buildAgentPayload } from '@/services/agent';
 import { AGUIEvent } from '@/types/agui';
-import { generateMockTrajectory } from './mockTrajectory';
 import { callBedrockJudge } from './bedrockJudge';
 import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/judgeAccessor';
 import type { MatcherResult } from '@/lib/matchers/types';
@@ -54,10 +52,7 @@ import type {
   AgentConfigWithConnector,
   ConnectorRegistry,
   AgentConnector,
-} from '@/services/connectors';
-
-// Toggle between mock and real agent
-const USE_MOCK_AGENT = false;
+} from '@/connectors';
 
 /**
  * Build ConnectorAuth from AgentConfig.
@@ -669,43 +664,46 @@ async function runRealAgentEvaluation(
   onStep: (step: TrajectoryStep) => void,
   onRawEvent?: (event: AGUIEvent) => void
 ): Promise<{ trajectory: TrajectoryStep[], runId: string | null, rawEvents: AGUIEvent[] }> {
-  const trajectory: TrajectoryStep[] = [];
-  const rawEvents: AGUIEvent[] = [];
-  const converter = new AGUIToTrajectoryConverter();
-
-  const agentPayload = buildAgentPayload(testCase, modelId);
-
-  debug('Eval', 'Agent payload:', JSON.stringify(agentPayload).substring(0, 500));
-
-  // Use proxy to avoid CORS issues when calling agent endpoint
-  const proxyPayload = {
-    endpoint: agent.endpoint,
-    payload: agentPayload,
-    headers: agent.headers,
-    agentKey: agent.key,
+  // Preserve this legacy browser path's CORS proxy envelope, but resolve and
+  // execute the protocol through the same connector registry as every other
+  // invocation. There is no second hardcoded AG-UI implementation here.
+  const { connectorRegistry } = await import('@/connectors');
+  const originalBeforeRequest = agent.hooks?.beforeRequest;
+  const proxiedAgent: AgentConfig = {
+    ...agent,
+    connectorType: agent.connectorType ?? 'agui-streaming',
+    endpoint: ENV_CONFIG.agentProxyUrl,
+    hooks: {
+      ...agent.hooks,
+      beforeRequest: async context => {
+        const hookResult = originalBeforeRequest
+          ? await originalBeforeRequest(context)
+          : context;
+        return {
+          endpoint: ENV_CONFIG.agentProxyUrl,
+          payload: {
+            endpoint: agent.endpoint,
+            payload: hookResult.payload,
+            headers: agent.headers,
+            agentKey: agent.key,
+          },
+          headers: hookResult.headers,
+        };
+      },
+    },
   };
 
   debug('Eval', 'Using proxy:', ENV_CONFIG.agentProxyUrl);
-
-  await consumeSSEStream(
-    ENV_CONFIG.agentProxyUrl,
-    proxyPayload,
-    (event: AGUIEvent) => {
-      // Capture raw event for debugging
-      rawEvents.push(event);
-      onRawEvent?.(event);
-
-      // Convert to trajectory steps
-      const steps = converter.processEvent(event);
-      steps.forEach(step => {
-        trajectory.push(step);
-        onStep(step);
-      });
-    }
-  );
-
-  const runId = converter.getRunId();
-  return { trajectory, runId, rawEvents };
+  const result = await invokeAgent(proxiedAgent, modelId, testCase, {
+    registry: connectorRegistry,
+    onStep,
+    onRawEvent,
+  });
+  return {
+    trajectory: result.trajectory,
+    runId: result.runId,
+    rawEvents: result.rawEvents as AGUIEvent[],
+  };
 }
 
 /**
@@ -735,18 +733,10 @@ export async function runEvaluation(
   const evalStartTime = Date.now();
 
   try {
-    if (USE_MOCK_AGENT) {
-      fullTrajectory = await generateMockTrajectory(testCase);
-      for (const step of fullTrajectory) {
-        onStep(step);
-        await new Promise(r => setTimeout(r, 300));
-      }
-    } else {
-      const result = await runRealAgentEvaluation(agent, modelId, testCase, onStep, onRawEvent);
-      fullTrajectory = result.trajectory;
-      agentRunId = result.runId;
-      rawEvents = result.rawEvents;
-    }
+    const result = await runRealAgentEvaluation(agent, modelId, testCase, onStep, onRawEvent);
+    fullTrajectory = result.trajectory;
+    agentRunId = result.runId;
+    rawEvents = result.rawEvents;
 
     debug('Eval', 'Trajectory captured:', fullTrajectory.length, 'steps');
     debug('Eval', 'Raw events captured:', rawEvents.length);

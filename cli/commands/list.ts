@@ -17,7 +17,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import { loadConfig, type ResolvedConfig } from '@/lib/config/index.js';
-import { connectorRegistry } from '@/services/connectors/server.js';
+import { connectorRegistry } from '@/connectors/server.js';
 import { ensureServer, createServerCleanup, type EnsureServerResult } from '@/cli/utils/serverLifecycle.js';
 import { ApiClient, type ListResponseWithMeta } from '@/cli/utils/apiClient.js';
 import type { StorageMetadata, TestCase, Benchmark } from '@/types/index.js';

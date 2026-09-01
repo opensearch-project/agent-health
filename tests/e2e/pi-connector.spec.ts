@@ -31,7 +31,7 @@ test.describe('PI Agent Configuration in Settings', () => {
     await page.waitForTimeout(300);
 
     // PI connector type should be listed as an option
-    const piOption = page.locator('[role="option"]:has-text("pi")');
+    const piOption = page.getByRole('option', { name: 'pi', exact: true });
     await expect(piOption).toBeVisible({ timeout: 5000 });
   });
 
@@ -61,7 +61,7 @@ test.describe('PI Agent Configuration in Settings', () => {
     await page.waitForTimeout(300);
 
     // Select the 'pi' connector type
-    const piOption = page.locator('[role="option"]:has-text("pi")');
+    const piOption = page.getByRole('option', { name: 'pi', exact: true });
     await piOption.click();
     await page.waitForTimeout(300);
 

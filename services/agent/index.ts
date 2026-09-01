@@ -3,13 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/**
- * Agent Communication Module
- * Exports clean API for interacting with the Ampabhi-SOAP agent
- */
-
-export { AGUIToTrajectoryConverter, computeTrajectoryFromRawEvents } from './aguiConverter';
-export { SSEClient, consumeSSEStream } from './sseStream';
-export { buildAgentPayload, buildMultiTurnPayload } from './payloadBuilder';
-export type { SSEClientOptions } from './sseStream';
-export type { AgentMessage, AgentRequestPayload } from './payloadBuilder';
+/** @deprecated AG-UI protocol helpers now live with `connectors/agui`. */
+export { AGUIToTrajectoryConverter, computeTrajectoryFromRawEvents } from '../../connectors/agui/aguiConverter';
+export { SSEClient, consumeSSEStream } from '../../connectors/agui/sseStream';
+export { buildAgentPayload, buildMultiTurnPayload } from '../../connectors/agui/payloadBuilder';

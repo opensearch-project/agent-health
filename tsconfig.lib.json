@@ -13,7 +13,8 @@
     "  lib/dist/lib/config/...",
     "  lib/dist/lib/matchers/...",
     "  lib/dist/lib/testCases/...",
-    "  lib/dist/services/connectors/...",
+    "  lib/dist/connectors/...",
+    "  lib/dist/services/connectors/... (compatibility re-exports)",
     "  lib/dist/services/traces/...",
     "  lib/dist/services/agent/...",
     "  lib/dist/types/index.js"
@@ -53,6 +54,7 @@
   "include": [
     "lib/**/*.ts",
     "services/agent/**/*.ts",
+    "connectors/**/*.ts",
     "services/connectors/**/*.ts",
     "services/traces/**/*.ts",
     "types/**/*.ts"
@@ -66,6 +68,7 @@
     "**/*.spec.tsx",
     "lib/dist",
     "services/adapters",
-    "services/connectors/server.ts"
+    "services/connectors/server.ts",
+    "connectors/server.ts"
   ]
 }

@@ -25,7 +25,7 @@ import type {
   SkillBenchmarkResult,
   SkillEvalProgressEvent,
 } from '@/types';
-import type { ConnectorRegistry } from '@/services/connectors';
+import type { ConnectorRegistry } from '@/connectors';
 import { runEvaluationWithConnector } from '@/services/evaluation';
 import { gradeAssertions } from './grader';
 import { aggregateResults } from './aggregator';

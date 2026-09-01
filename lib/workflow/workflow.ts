@@ -146,14 +146,14 @@ async function connectorInvoke(
 ): Promise<AgentRunResult> {
   const [{ loadConfig }, { getConnectorForAgent }] = await Promise.all([
     import('@/lib/config/index.js'),
-    import('@/services/connectors/registry.js'),
+    import('@/connectors/registry.js'),
   ]);
   // Importing the connectors barrel auto-registers the browser-safe connectors
   // (agui, mock, rest, ...). server.js adds the server-only ones (claude-code,
   // subprocess, strands). Both are needed depending on the agent's connector.
-  await import('@/services/connectors/index.js');
+  await import('@/connectors/index.js');
   try {
-    await import('@/services/connectors/server.js');
+    await import('@/connectors/server.js');
   } catch {
     /* server-only connectors unavailable in this context — browser-safe still work */
   }
