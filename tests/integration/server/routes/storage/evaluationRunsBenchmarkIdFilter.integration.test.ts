@@ -30,7 +30,10 @@ const checkBackend = async (): Promise<boolean> => {
   try {
     const r = await fetch(`${BASE_URL}/api/storage/health`);
     const d = await r.json();
-    return d.status === 'connected';
+    // Both storage backends report `status: 'ok'` on success (see
+    // server/adapters/{file,opensearch}/StorageModule.ts `health()`) —
+    // 'connected' is not a value either backend ever returns.
+    return d.status === 'ok';
   } catch {
     return false;
   }
