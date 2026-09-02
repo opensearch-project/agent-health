@@ -119,7 +119,7 @@ export const RerunConfirmDialog: React.FC<RerunConfirmDialogProps> = ({ run, ope
     (evaluatorId || undefined) !== run.evaluatorId ||
     (judgeModelId || undefined) !== run.judgeModelId ||
     concurrency !== (run.concurrency || 1) ||
-    benchmarkId !== (run.benchmarkId || NO_BENCHMARK);
+    (benchmarkId !== NO_BENCHMARK && benchmarkId !== (run.benchmarkId || NO_BENCHMARK));
 
   const handleConfirm = async () => {
     setSubmitting(true);
@@ -131,9 +131,16 @@ export const RerunConfirmDialog: React.FC<RerunConfirmDialogProps> = ({ run, ope
         judgeModelId: judgeModelId !== (run.judgeModelId || '') ? (judgeModelId || null) : undefined,
         evaluatorId: evaluatorId !== (run.evaluatorId || '') ? (evaluatorId || null) : undefined,
         concurrency: concurrency !== (run.concurrency || 1) ? concurrency : undefined,
-        benchmarkId: benchmarkId !== (run.benchmarkId || NO_BENCHMARK)
-          ? (benchmarkId === NO_BENCHMARK ? null : benchmarkId)
-          : undefined,
+        // The sentinel ALWAYS means "leave the test-case source alone" —
+        // never sends an explicit `null` clear. For a benchmark-sourced run,
+        // `sources` and the `benchmarkId` association are the SAME field in
+        // practice; a `null` override that cleared `benchmarkId` while
+        // `applyRerunOverrides` left `sources` untouched produced an
+        // internally-inconsistent run (association cleared, test cases
+        // still resolved from the very benchmark that was "cleared") —
+        // codex_review finding. Only an explicit, DIFFERENT benchmark
+        // selection is ever sent as an override.
+        benchmarkId: benchmarkId !== NO_BENCHMARK && benchmarkId !== run.benchmarkId ? benchmarkId : undefined,
       };
       const result = await rerunEvaluationRun(run.id, overrides);
       setSubmitting(false);

@@ -16,6 +16,8 @@ import {
   isRunTerminal,
   countJudgeFailed,
   getRunActionVisibility,
+  isOldEnoughForZombieCancel,
+  ZOMBIE_CANCEL_MIN_AGE_MS,
 } from '@/lib/runActions';
 
 function evalRun(overrides: any = {}) {
@@ -159,5 +161,26 @@ describe('getRunActionVisibility — full matrix', () => {
       results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
     });
     expect(getRunActionVisibility(run).canRetryJudgement).toBe(true);
+  });
+});
+
+describe('isOldEnoughForZombieCancel', () => {
+  it('is false for a run created just now', () => {
+    expect(isOldEnoughForZombieCancel(new Date().toISOString())).toBe(false);
+  });
+
+  it('is false for a run created just under the threshold ago', () => {
+    const createdAt = new Date(Date.now() - (ZOMBIE_CANCEL_MIN_AGE_MS - 500)).toISOString();
+    expect(isOldEnoughForZombieCancel(createdAt)).toBe(false);
+  });
+
+  it('is true for a run created well past the threshold ago', () => {
+    const createdAt = new Date(Date.now() - (ZOMBIE_CANCEL_MIN_AGE_MS + 5000)).toISOString();
+    expect(isOldEnoughForZombieCancel(createdAt)).toBe(true);
+  });
+
+  it('is true (fails open) when createdAt is missing/unparseable — legacy docs should not be blocked forever', () => {
+    expect(isOldEnoughForZombieCancel(undefined)).toBe(true);
+    expect(isOldEnoughForZombieCancel('not-a-date')).toBe(true);
   });
 });

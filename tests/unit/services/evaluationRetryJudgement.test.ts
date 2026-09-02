@@ -59,6 +59,7 @@ function makeTestCase(id: string): TestCase {
 function makeStorage() {
   const reports: Record<string, any> = {};
   const testCases: Record<string, TestCase> = {};
+  const testCaseVersions: Record<string, TestCase> = {};
   return {
     runs: {
       getById: jest.fn((id: string) => Promise.resolve(reports[id] || null)),
@@ -69,12 +70,14 @@ function makeStorage() {
     },
     testCases: {
       getById: jest.fn((id: string) => Promise.resolve(testCases[id] || null)),
+      getVersion: jest.fn((id: string, version: number) => Promise.resolve(testCaseVersions[`${id}@${version}`] || null)),
     },
     evaluationRuns: {
       update: jest.fn((_id: string, patch: any) => Promise.resolve(patch)),
     },
     _reports: reports,
     _testCases: testCases,
+    _testCaseVersions: testCaseVersions,
   } as any;
 }
 
@@ -209,6 +212,66 @@ describe('retryJudgementForRun', () => {
     expect(outcome.retried).toBe(1);
     expect(outcome.skipped).toBe(1);
     expect(outcome.skipReasons.tc1).toBe('judge unavailable');
+  });
+
+  it("judges against the RUN'S SNAPSHOTTED test-case version, not the current (possibly edited) one", async () => {
+    const storage = makeStorage();
+    storage._reports['r1'] = { id: 'r1', trajectory: [] };
+    // Current doc has drifted since the run executed...
+    storage._testCases['tc1'] = { ...makeTestCase('tc1'), expectedOutcomes: ['edited after the run'] };
+    // ...but the version pinned in testCaseSnapshots still has the ORIGINAL criteria.
+    storage._testCaseVersions['tc1@1'] = { ...makeTestCase('tc1'), expectedOutcomes: ['original criteria at run time'] };
+    mockCallBedrockJudge.mockResolvedValue({
+      passFailStatus: 'passed', metrics: {}, llmJudgeReasoning: 'ok', improvementStrategies: [],
+    });
+
+    const run = makeRun({
+      testCaseSnapshots: [{ id: 'tc1', version: 1, name: 'Case tc1' }],
+      results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } as any },
+    });
+
+    const outcome = await retryJudgementForRun(run, storage);
+    expect(outcome.retried).toBe(1);
+    expect(storage.testCases.getVersion).toHaveBeenCalledWith('tc1', 1);
+    expect(storage.testCases.getById).not.toHaveBeenCalled();
+    expect(mockCallBedrockJudge).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ expectedOutcomes: ['original criteria at run time'] }),
+      undefined, undefined, undefined, undefined, undefined, []
+    );
+  });
+
+  it('falls back to the current test-case doc when the run has no snapshot version recorded (legacy run)', async () => {
+    const storage = makeStorage();
+    storage._reports['r1'] = { id: 'r1', trajectory: [] };
+    storage._testCases['tc1'] = makeTestCase('tc1');
+    mockCallBedrockJudge.mockResolvedValue({
+      passFailStatus: 'passed', metrics: {}, llmJudgeReasoning: 'ok', improvementStrategies: [],
+    });
+
+    const run = makeRun({
+      testCaseSnapshots: [], // legacy run, no snapshot version for tc1
+      results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } as any },
+    });
+
+    const outcome = await retryJudgementForRun(run, storage);
+    expect(outcome.retried).toBe(1);
+    expect(storage.testCases.getById).toHaveBeenCalledWith('tc1');
+    expect(storage.testCases.getVersion).not.toHaveBeenCalled();
+  });
+
+  it('skips when the snapshotted test-case version no longer exists, with a version-specific reason', async () => {
+    const storage = makeStorage();
+    storage._reports['r1'] = { id: 'r1', trajectory: [] };
+    // No entry in _testCaseVersions for tc1@1 — that historical version was pruned/never existed.
+    const run = makeRun({
+      testCaseSnapshots: [{ id: 'tc1', version: 1, name: 'Case tc1' }],
+      results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } as any },
+    });
+
+    const outcome = await retryJudgementForRun(run, storage);
+    expect(outcome.skipped).toBe(1);
+    expect(outcome.skipReasons.tc1).toMatch(/version 1 no longer exists/i);
   });
 
   it('does not touch results/results that are agent-failed, pending, or already passed', async () => {

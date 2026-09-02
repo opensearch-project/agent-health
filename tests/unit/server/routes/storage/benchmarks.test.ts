@@ -1355,7 +1355,7 @@ describe('Experiments Storage Routes', () => {
     it('zombie fallback: marks a running-but-tokenless run cancelled with an audit note', async () => {
       mockBenchmarksGetById.mockResolvedValue({
         id: 'exp-123',
-        runs: [{ id: 'run-1', status: 'running' }],
+        runs: [{ id: 'run-1', status: 'running', createdAt: new Date(Date.now() - 10000).toISOString() }],
       });
       mockBenchmarksUpdateRun.mockResolvedValue(true);
       const { req, res } = createMocks({ id: 'exp-123' }, { runId: 'run-1' });
@@ -1373,6 +1373,20 @@ describe('Experiments Storage Routes', () => {
       );
       // The happy-path OpenSearch script update (raw client) must NOT also fire.
       expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it('409s (retryable) instead of taking the zombie fallback when the run was created moments ago', async () => {
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-123',
+        runs: [{ id: 'run-1', status: 'running', createdAt: new Date().toISOString() }],
+      });
+      const { req, res } = createMocks({ id: 'exp-123' }, { runId: 'run-1' });
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/cancel');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(mockBenchmarksUpdateRun).not.toHaveBeenCalled();
     });
   });
 });

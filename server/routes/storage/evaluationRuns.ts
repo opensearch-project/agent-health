@@ -25,6 +25,7 @@ import {
   type RetryJudgementScope,
   type RetryJudgementSummary,
 } from '../../../services/evaluation/retryJudgement.js';
+import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
 import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
@@ -418,6 +419,15 @@ router.post('/api/storage/evaluation-runs/:id/cancel', async (req: Request, res:
     }
     if (run.status !== 'running') {
       return res.status(400).json({ error: `Run is not currently running (status: ${run.status})` });
+    }
+    if (!isOldEnoughForZombieCancel(run.createdAt)) {
+      // Too close to creation to safely assume "no token yet" means "no
+      // executor anywhere" — the executor may simply not have registered
+      // its token yet. Ask the caller to retry shortly rather than risk
+      // marking a run cancelled moments before it starts executing.
+      return res.status(409).json({
+        error: `Run was created less than ${ZOMBIE_CANCEL_MIN_AGE_MS / 1000}s ago; its executor may not have started yet. Try cancelling again in a moment.`,
+      });
     }
 
     const cancelNote = 'Cancelled: no active executor found for this run (process restarted or crashed) — marked cancelled directly.';

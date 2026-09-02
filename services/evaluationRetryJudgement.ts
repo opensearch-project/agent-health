@@ -88,10 +88,22 @@ export async function retryJudgementForRun(
         outcome.skipReasons[testCaseId] = `Report ${reportId} no longer exists`;
         continue;
       }
-      const testCase: TestCase | null = await storage.testCases.getById(testCaseId);
+      // Judge against the EXACT test-case content the original run used
+      // (its snapshotted version), not today's edited definition —
+      // otherwise "retry judgement" silently becomes "re-grade this old
+      // trajectory against different criteria", which is a different
+      // operation with a misleading name (codex_review finding). Falls
+      // back to the current doc only for legacy runs with no snapshot
+      // version recorded.
+      const snapshotVersion = run.testCaseSnapshots?.find(s => s.id === testCaseId)?.version;
+      const testCase: TestCase | null = snapshotVersion != null
+        ? await storage.testCases.getVersion(testCaseId, snapshotVersion)
+        : await storage.testCases.getById(testCaseId);
       if (!testCase) {
         outcome.skipped++;
-        outcome.skipReasons[testCaseId] = `Test case ${testCaseId} no longer exists`;
+        outcome.skipReasons[testCaseId] = snapshotVersion != null
+          ? `Test case ${testCaseId} version ${snapshotVersion} no longer exists`
+          : `Test case ${testCaseId} no longer exists`;
         continue;
       }
 

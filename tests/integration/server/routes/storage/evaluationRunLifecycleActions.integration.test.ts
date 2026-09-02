@@ -155,7 +155,11 @@ describe('Run lifecycle actions — cancel zombie fallback / rerun with tweaks /
       // Seeded directly via PUT (never went through the real create/execute
       // path), so no in-memory cancellation token exists for it — exactly
       // the "executor is gone" zombie scenario.
-      const run = await seedEvalRun({ status: 'running' });
+      // createdAt in the past: the zombie fallback requires a run to be
+      // ZOMBIE_CANCEL_MIN_AGE_MS old before it fires (guards the narrow
+      // create->register-token window), so a just-created 'running' run
+      // would otherwise 409 here instead of exercising the fallback.
+      const run = await seedEvalRun({ status: 'running', createdAt: new Date(Date.now() - 10000).toISOString() });
       cleanupIds.evalRuns.push(run.id);
 
       const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}/cancel`, { method: 'POST' });
@@ -184,6 +188,20 @@ describe('Run lifecycle actions — cancel zombie fallback / rerun with tweaks /
       const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/does-not-exist-lifecycle/cancel`, { method: 'POST' });
       expect(res.status).toBe(404);
     }, 15000);
+
+    it('409s (retryable) instead of the zombie fallback when the run was created moments ago', async () => {
+      if (!backendAvailable) return;
+      // No `createdAt` override — defaults to "now" in seedEvalRun.
+      const run = await seedEvalRun({ status: 'running' });
+      cleanupIds.evalRuns.push(run.id);
+
+      const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}/cancel`, { method: 'POST' });
+      expect(res.status).toBe(409);
+
+      const getRes = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}`);
+      const persisted = await getRes.json();
+      expect(persisted.status).toBe('running'); // untouched
+    }, 15000);
   });
 
   describe('Cancel — zombie fallback (legacy benchmark-embedded run)', () => {
@@ -194,7 +212,7 @@ describe('Run lifecycle actions — cancel zombie fallback / rerun with tweaks /
       const bm = await seedBenchmark({
         runs: [{
           id: runId, name: 'BM Run', agentKey: 'demo', modelId: 'claude-sonnet',
-          status: 'running', createdAt: new Date().toISOString(), results: {},
+          status: 'running', createdAt: new Date(Date.now() - 10000).toISOString(), results: {},
         }],
       });
       cleanupIds.benchmarks.push(bm.id);

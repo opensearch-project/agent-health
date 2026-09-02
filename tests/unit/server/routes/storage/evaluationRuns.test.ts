@@ -309,7 +309,7 @@ describe('Evaluation Runs API', () => {
     });
 
     it('zombie fallback: marks a running run cancelled with an audit note when no executor is found', async () => {
-      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'zombie-1', status: 'running' });
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'zombie-1', status: 'running', createdAt: new Date(Date.now() - 10000).toISOString() });
       mockEvaluationRunsUpdate.mockResolvedValueOnce({ id: 'zombie-1', status: 'cancelled' });
 
       const res = await request(app).post('/api/storage/evaluation-runs/zombie-1/cancel');
@@ -321,6 +321,25 @@ describe('Evaluation Runs API', () => {
         'zombie-1',
         expect.objectContaining({ status: 'cancelled', cancelNote: expect.stringContaining('no active executor') })
       );
+    });
+
+    it('409s (retryable) instead of taking the zombie fallback when the run was created moments ago', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'brand-new-1', status: 'running', createdAt: new Date().toISOString() });
+
+      const res = await request(app).post('/api/storage/evaluation-runs/brand-new-1/cancel');
+
+      expect(res.status).toBe(409);
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not block the zombie fallback on legacy docs with no createdAt', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'legacy-1', status: 'running' });
+      mockEvaluationRunsUpdate.mockResolvedValueOnce({ id: 'legacy-1', status: 'cancelled' });
+
+      const res = await request(app).post('/api/storage/evaluation-runs/legacy-1/cancel');
+
+      expect(res.status).toBe(200);
+      expect(res.body.viaFallback).toBe(true);
     });
 
     it('cancels an active run and marks it cancelled', async () => {
@@ -502,6 +521,53 @@ describe('Evaluation Runs API', () => {
       mockRetryJudgementForRun.mockRejectedValueOnce(new Error('judge down'));
       const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
       expect(res.status).toBe(500);
+    });
+
+    it('409s a second concurrent retry-judgement request for the SAME run while the first is still in flight', async () => {
+      const runDoc = {
+        id: 'run-1', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+      };
+      mockEvaluationRunsGetById.mockResolvedValue(runDoc);
+
+      let resolveFirst: (v: any) => void;
+      let signalStarted: () => void;
+      const firstStarted = new Promise<void>(resolve => { signalStarted = resolve; });
+      mockRetryJudgementForRun.mockImplementationOnce(() => {
+        signalStarted();
+        return new Promise(resolve => { resolveFirst = resolve; });
+      });
+
+      // supertest is thenable-lazy — a request isn't actually dispatched
+      // until something drives its promise (`.then`/`.catch`/`await`). Kick
+      // off dispatch explicitly, then wait for the mock's OWN synchronous
+      // signal (not a timer) that the handler has reached (and registered
+      // in) the in-progress guard before firing the second request.
+      const firstReq = request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      firstReq.catch(() => {});
+      await firstStarted;
+
+      const secondRes = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      expect(secondRes.status).toBe(409);
+      expect(secondRes.body.error).toMatch(/already in progress/i);
+
+      resolveFirst!({ retried: 1, nowPassed: 1, stillFailed: 0, skipped: 0, skipReasons: {} });
+      const firstRes = await firstReq;
+      expect(firstRes.status).toBe(200);
+    });
+
+    it('releases the in-progress guard after a failure, so a later request is not blocked forever', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({
+        id: 'run-1', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+      });
+      mockRetryJudgementForRun.mockRejectedValueOnce(new Error('judge down'));
+      const failedRes = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      expect(failedRes.status).toBe(500);
+
+      mockRetryJudgementForRun.mockResolvedValueOnce({ retried: 1, nowPassed: 1, stillFailed: 0, skipped: 0, skipReasons: {} });
+      const retryRes = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      expect(retryRes.status).toBe(200);
     });
   });
 

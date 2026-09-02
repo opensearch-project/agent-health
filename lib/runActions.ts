@@ -100,6 +100,45 @@ const RETRY_JUDGEMENT_STILL_RUNNING_REASON = 'Retry judgement is only available 
 const RETRY_JUDGEMENT_NONE_FAILED_REASON = 'No judge-failed test cases to retry';
 
 /**
+ * Minimum time a run must have been persisted before a Cancel request with
+ * no in-memory executor token is allowed to take the "zombie" fallback path
+ * (mark cancelled directly — see getRunActionVisibility callers in the
+ * cancel routes). Guards the narrow window right after a run is created:
+ * the doc is persisted (and therefore visible to a concurrent Cancel
+ * request) strictly before its executor registers its cancellation token,
+ * so a Cancel that lands in that gap would otherwise mark a run "cancelled"
+ * moments before its own executor starts making progress on it. A brand-new
+ * run is also the case the fallback is LEAST useful for — "zombie" (no
+ * executor anywhere) is far more plausible once a run has been running for
+ * a while than in its first couple of seconds.
+ */
+export const ZOMBIE_CANCEL_MIN_AGE_MS = 5000;
+
+/**
+ * True once a run is old enough that a tokenless Cancel request can safely
+ * assume its executor (if any) would already have registered a
+ * cancellation token — i.e. it's safe to treat "no token" as "no executor"
+ * rather than "executor hasn't started yet".
+ *
+ * NOTE — known limitation, not fixed by this check: cancellation tokens are
+ * tracked in an in-memory `Map` scoped to ONE server process. In a
+ * multi-process/clustered deployment, a Cancel request routed to a
+ * DIFFERENT process than the one executing the run will always find no
+ * token there, regardless of run age, and this zombie fallback will mark
+ * the run cancelled in storage even though it's alive and progressing on
+ * another process. This mirrors a pre-existing, documented constraint of
+ * this codebase's run-execution model (see AGENTS.md's "orphan-run
+ * recovery" notes: "active is tracked per-process"); fixing it for real
+ * needs the same heartbeat-based ownership (`run.heartbeatAt`) that doc
+ * already calls out as the eventual replacement. Out of scope here.
+ */
+export function isOldEnoughForZombieCancel(createdAt: string | undefined, now: number = Date.now()): boolean {
+  const created = createdAt ? Date.parse(createdAt) : NaN;
+  if (Number.isNaN(created)) return true; // no timestamp to compare against — don't block on it
+  return now - created >= ZOMBIE_CANCEL_MIN_AGE_MS;
+}
+
+/**
  * Compute the full action-visibility matrix for one run. Pure function —
  * safe to call from both React components and server-side route validation
  * so the two never drift.

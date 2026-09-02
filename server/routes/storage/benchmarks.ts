@@ -29,6 +29,7 @@ import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.j
 import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '../../../lib/judgeFailureSummary.js';
+import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
 
 /**
  * Normalize benchmark data for legacy documents without version fields.
@@ -1475,6 +1476,11 @@ router.post('/api/storage/benchmarks/:id/cancel', async (req: Request, res: Resp
     }
     if (run.status !== 'running') {
       return res.status(400).json({ error: `Run is not currently running (status: ${run.status})` });
+    }
+    if (!isOldEnoughForZombieCancel(run.createdAt)) {
+      return res.status(409).json({
+        error: `Run was created less than ${ZOMBIE_CANCEL_MIN_AGE_MS / 1000}s ago; its executor may not have started yet. Try cancelling again in a moment.`,
+      });
     }
 
     const cancelNote = 'Cancelled: no active executor found for this run (process restarted or crashed) — marked cancelled directly.';
