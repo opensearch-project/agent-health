@@ -209,4 +209,78 @@ describe('TestCaseDetailPage definition-first hierarchy', () => {
     const runsSection = await screen.findByTestId('test-case-runs-section');
     await waitFor(() => expect(within(runsSection).getByText('2 runs')).toBeTruthy());
   });
+
+  it('renders a still-judging run with a spinner (not a false "Failed" verdict)', async () => {
+    // Regression test: /api/evaluate (UI mode, awaitTraces:false) returns
+    // its SSE 'completed' event with metricsStatus:'pending' for trace-mode
+    // agents (see traceBlocking.integration.test.ts). Before this fix, the
+    // runs-list row classified anything that wasn't `passFailStatus ===
+    // 'passed'` as failed — a freshly-run, not-yet-judged report rendered
+    // with a red XCircle "Failed" icon, indistinguishable from a genuine
+    // failure.
+    const pendingRun = {
+      ...report,
+      id: 'report-pending',
+      name: 'Autonomy calibration #2',
+      status: 'completed',
+      passFailStatus: undefined,
+      metricsStatus: 'pending',
+    };
+    mockGetReports.mockResolvedValue({ reports: [pendingRun], total: 1 });
+
+    render(React.createElement(TestCaseDetailPage));
+
+    const runsSection = await screen.findByTestId('test-case-runs-section');
+    fireEvent.click(within(runsSection).getByRole('button', { name: /Run history/i }));
+
+    await waitFor(() => expect(screen.getByText('Autonomy calibration #2')).toBeTruthy());
+    expect(screen.getByTitle('Judging…')).toBeTruthy();
+    expect(screen.queryByTitle('Failed')).toBeNull();
+  });
+
+  it('polls for updates while a run is pending and stops once it resolves', async () => {
+    // Regression test for the reported bug: the page fetched the run list
+    // exactly once after a run finished streaming, so a trace-mode run
+    // left at metricsStatus:'pending' (see server/routes/evaluation.ts's
+    // `awaitTraces: false`) never picked up its real verdict once the
+    // background trace-judge completed — the row just sat there, stuck,
+    // until a manual page reload. This asserts the page re-fetches on a
+    // timer while anything is pending, and stops polling once resolved.
+    jest.useFakeTimers();
+    try {
+      const pendingRun = {
+        ...report,
+        id: 'report-pending',
+        name: 'Autonomy calibration #2',
+        status: 'completed',
+        passFailStatus: undefined,
+        metricsStatus: 'pending',
+      };
+      const resolvedRun = { ...pendingRun, passFailStatus: 'passed', metricsStatus: 'ready' };
+
+      mockGetReports.mockResolvedValueOnce({ reports: [pendingRun], total: 1 });
+
+      render(React.createElement(TestCaseDetailPage));
+
+      const runsSection = await screen.findByTestId('test-case-runs-section');
+      fireEvent.click(within(runsSection).getByRole('button', { name: /Run history/i }));
+      await waitFor(() => expect(screen.getByTitle('Judging…')).toBeTruthy());
+
+      expect(mockGetReports).toHaveBeenCalledTimes(1);
+
+      // Next poll tick returns the resolved run.
+      mockGetReports.mockResolvedValueOnce({ reports: [resolvedRun], total: 1 });
+      await jest.advanceTimersByTimeAsync(5000);
+      await waitFor(() => expect(mockGetReports).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByTitle('Passed')).toBeTruthy());
+
+      // No more pending runs — polling must stop (no further calls even
+      // after another full interval elapses).
+      mockGetReports.mockClear();
+      await jest.advanceTimersByTimeAsync(10000);
+      expect(mockGetReports).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

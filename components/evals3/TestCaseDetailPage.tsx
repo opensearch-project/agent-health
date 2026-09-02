@@ -169,6 +169,27 @@ export const TestCaseDetailPage: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Poll while any run is still pending judgment or actively running.
+  //
+  // /api/evaluate (UI mode) uses `awaitTraces: false` (see server/routes/
+  // evaluation.ts) — for trace-mode agents it sends the SSE 'completed'
+  // event, and `handleStartRun` below does its one-shot `loadData()`,
+  // *before* the background trace-judge finishes (metricsStatus stays
+  // 'pending' until then). Without this poll, a freshly-run test case
+  // shows up in the list looking wrong (see the `getStatus`-based row icon
+  // below) and never updates to the real passed/failed verdict until the
+  // user manually reloads the page — this is what surfaced as "Run Test
+  // twice, the page doesn't show the new runs" (the new rows WERE there,
+  // just permanently stuck rendering as an unjudged/failed placeholder).
+  // Mirrors the identical pattern in RunDetailsPage.tsx.
+  useEffect(() => {
+    const hasPending = runs.some(r => getStatus(r) === 'pending' || r.status === 'running');
+    if (hasPending) {
+      const interval = setInterval(loadData, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [runs, loadData]);
+
   // Auto-collapse the global app sidebar while inspecting a single test case.
   // Run pages are dense, multi-pane views; the global nav competes with the
   // page's own left list (test runs / test cases). Restore on unmount so
@@ -572,8 +593,20 @@ export const TestCaseDetailPage: React.FC = () => {
                   // errored run lights up the amber AlertTriangle and not
                   // the red XCircle (which would conflate it with a real
                   // agent failure).
-                  const isErrored = run.metricsStatus === 'error';
-                  const isPassed = !isErrored && run.passFailStatus === 'passed';
+                  //
+                  // Runs still awaiting judgment (trace-mode agents return
+                  // via /api/evaluate with metricsStatus: 'pending' before
+                  // the background judge finishes — see
+                  // server/routes/evaluation.ts) or still executing must be
+                  // distinguished from a genuine 'Failed' verdict, otherwise
+                  // a run the owner just kicked off renders as failed with
+                  // no score, indistinguishable from a real failure, until
+                  // the poll above (or a manual reload) picks up the final
+                  // result.
+                  const runStatus = getStatus(run);
+                  const isErrored = runStatus === 'errored';
+                  const isPassed = runStatus === 'passed';
+                  const isPendingOrRunning = runStatus === 'pending' || runStatus === 'running';
                   const isSelected = run.id === selectedRunId;
                   const isLatest = index === 0;
                   const runName = getRunDisplayName(run);
@@ -601,13 +634,15 @@ export const TestCaseDetailPage: React.FC = () => {
                           evaluator failures from agent failures. */}
                       <div
                         className="shrink-0 mt-0.5"
-                        title={isErrored ? 'Errored (evaluator could not run)' : isPassed ? 'Passed' : 'Failed'}
+                        title={isErrored ? 'Errored (evaluator could not run)' : isPendingOrRunning ? 'Judging…' : isPassed ? 'Passed' : 'Failed'}
                       >
                         {isErrored
                           ? <AlertTriangle size={12} className="text-amber-500" />
-                          : isPassed
-                            ? <CheckCircle2 size={12} className="text-green-500" />
-                            : <XCircle size={12} className="text-red-500" />}
+                          : isPendingOrRunning
+                            ? <Loader2 size={12} className="text-blue-500 animate-spin" />
+                            : isPassed
+                              ? <CheckCircle2 size={12} className="text-green-500" />
+                              : <XCircle size={12} className="text-red-500" />}
                       </div>
                       <div className="flex-1 min-w-0">
                         {/* Row 1: run name + Latest badge + copy-link + accuracy */}
@@ -724,8 +759,10 @@ export const TestCaseDetailPage: React.FC = () => {
                 </div>
               ) : (
                 filteredRuns.map((run, index) => {
-                  const isErrored = run.metricsStatus === 'error';
-                  const isPassed = !isErrored && run.passFailStatus === 'passed';
+                  const runStatus = getStatus(run);
+                  const isErrored = runStatus === 'errored';
+                  const isPassed = runStatus === 'passed';
+                  const isPendingOrRunning = runStatus === 'pending' || runStatus === 'running';
                   const runName = getRunDisplayName(run);
                   const evaluatorLabel = run.evaluatorId
                     ? (evaluatorNameById[run.evaluatorId] || run.evaluatorId)
@@ -740,9 +777,11 @@ export const TestCaseDetailPage: React.FC = () => {
                     >
                       {isErrored
                         ? <AlertTriangle size={14} className="text-amber-500 shrink-0" />
-                        : isPassed
-                          ? <CheckCircle2 size={14} className="text-green-500 shrink-0" />
-                          : <XCircle size={14} className="text-red-500 shrink-0" />}
+                        : isPendingOrRunning
+                          ? <Loader2 size={14} className="text-blue-500 shrink-0 animate-spin" />
+                          : isPassed
+                            ? <CheckCircle2 size={14} className="text-green-500 shrink-0" />
+                            : <XCircle size={14} className="text-red-500 shrink-0" />}
                       <span className="text-xs font-semibold text-foreground truncate" title={runName}>{runName}</span>
                       {index === 0 && <Badge variant="outline" className="text-[7px] px-1 py-0 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/30">Latest</Badge>}
                       {/* Copy-link icon for the canonical /runs/<id> URL. Hidden
