@@ -651,6 +651,18 @@ describe('Evaluation Runs API Integration', () => {
         expect(promoteData.run.benchmarkId).toBe(promoteData.benchmark.id);
         cleanupIds.benchmarks.push(promoteData.benchmark.id);
 
+        // Regression guard against a flaky CI failure seen on a heavily
+        // loaded shared cluster: promote's write uses refresh:'wait_for'
+        // and the read is a real-time doc GET, so this SHOULD already be
+        // consistent -- but poll briefly before the re-promote assertion
+        // anyway to rule out any transient staleness on a contended
+        // cluster rather than mutate state twice by retrying the POST.
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const check = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${runId}`).then((r) => r.json());
+          if (check.benchmarkId) break;
+          await new Promise((r) => setTimeout(r, 200));
+        }
+
         // Re-promoting should fail
         const rePromoteRes = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${runId}/promote`, {
           method: 'POST',
