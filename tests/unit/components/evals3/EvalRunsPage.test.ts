@@ -366,6 +366,8 @@ describe('EvalRunsPage — inline rename', () => {
     expect(screen.getByTestId('run-row-rename-eval-run-1-error').textContent).toMatch(/name must not be empty/);
     // Reverted — the original name is back (still in the input since we stayed in edit mode).
     expect(input.value).toBe('Will Fail');
+  });
+});
 
 describe('EvalRunsPage — in-flight (running) run indication (bug #5, 2026-09-01)', () => {
   // Before the fix: a running run rendered with zero visual distinction from
