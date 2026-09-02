@@ -217,7 +217,10 @@ describe('TestCaseDetailPage definition-first hierarchy', () => {
     // runs-list row classified anything that wasn't `passFailStatus ===
     // 'passed'` as failed — a freshly-run, not-yet-judged report rendered
     // with a red XCircle "Failed" icon, indistinguishable from a genuine
-    // failure.
+    // failure. The shared `getResultStatus` helper (ResultStatus.tsx) maps
+    // `status:'completed'` + `metricsStatus:'pending'` to the granular
+    // 'pending_traces' state — its tooltip is "Agent done — waiting for
+    // traces...", not a generic "Judging…".
     const pendingRun = {
       ...report,
       id: 'report-pending',
@@ -234,11 +237,40 @@ describe('TestCaseDetailPage definition-first hierarchy', () => {
     fireEvent.click(within(runsSection).getByRole('button', { name: /Run history/i }));
 
     await waitFor(() => expect(screen.getByText('Autonomy calibration #2')).toBeTruthy());
-    expect(screen.getByTitle('Judging…')).toBeTruthy();
+    expect(screen.getByTitle('Agent done — waiting for traces...')).toBeTruthy();
     expect(screen.queryByTitle('Failed')).toBeNull();
   });
 
-  it('polls for updates while a run is pending and stops once it resolves', async () => {
+  it('a genuinely failed run (no verdict yet) still renders "Failed", not pending', async () => {
+    // Regression guard for a hazard introduced by naively reusing
+    // getResultStatus: a run whose AGENT execution itself failed
+    // (`status: 'failed'`, e.g. a connector/subprocess error — see the
+    // /api/evaluate catch block in server/routes/evaluation.ts) never gets
+    // a passFailStatus or a non-error metricsStatus. It must still render
+    // as failed, not be swept into the same "pending" bucket as a run that
+    // is legitimately still awaiting judgment.
+    const failedRun = {
+      ...report,
+      id: 'report-agent-crashed',
+      name: 'Autonomy calibration #3',
+      status: 'failed',
+      passFailStatus: undefined,
+      metricsStatus: undefined,
+    };
+    mockGetReports.mockResolvedValue({ reports: [failedRun], total: 1 });
+
+    render(React.createElement(TestCaseDetailPage));
+
+    const runsSection = await screen.findByTestId('test-case-runs-section');
+    fireEvent.click(within(runsSection).getByRole('button', { name: /Run history/i }));
+
+    await waitFor(() => expect(screen.getByText('Autonomy calibration #3')).toBeTruthy());
+    expect(screen.getByTitle('Failed')).toBeTruthy();
+    expect(screen.queryByTitle('Agent done — waiting for traces...')).toBeNull();
+    expect(screen.queryByTitle('Running LLM judge...')).toBeNull();
+  });
+
+  it('polls for updates while a run is pending and stops once it resolves, without re-showing the page skeleton', async () => {
     // Regression test for the reported bug: the page fetched the run list
     // exactly once after a run finished streaming, so a trace-mode run
     // left at metricsStatus:'pending' (see server/routes/evaluation.ts's
@@ -246,6 +278,9 @@ describe('TestCaseDetailPage definition-first hierarchy', () => {
     // background trace-judge completed — the row just sat there, stuck,
     // until a manual page reload. This asserts the page re-fetches on a
     // timer while anything is pending, and stops polling once resolved.
+    // It also asserts the poll uses the lightweight `refreshRuns` path
+    // (not the full `loadData`), i.e. it must never re-show the full-page
+    // skeleton / hide the definition hero while polling in the background.
     jest.useFakeTimers();
     try {
       const pendingRun = {
@@ -262,9 +297,10 @@ describe('TestCaseDetailPage definition-first hierarchy', () => {
 
       render(React.createElement(TestCaseDetailPage));
 
+      const hero = await screen.findByTestId('test-case-definition-hero');
       const runsSection = await screen.findByTestId('test-case-runs-section');
       fireEvent.click(within(runsSection).getByRole('button', { name: /Run history/i }));
-      await waitFor(() => expect(screen.getByTitle('Judging…')).toBeTruthy());
+      await waitFor(() => expect(screen.getByTitle('Agent done — waiting for traces...')).toBeTruthy());
 
       expect(mockGetReports).toHaveBeenCalledTimes(1);
 
@@ -273,6 +309,12 @@ describe('TestCaseDetailPage definition-first hierarchy', () => {
       await jest.advanceTimersByTimeAsync(5000);
       await waitFor(() => expect(mockGetReports).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(screen.getByTitle('Passed')).toBeTruthy());
+
+      // The definition hero (only rendered once past the loading-skeleton
+      // branch) must have stayed mounted the whole time — proving the poll
+      // never toggled `isLoading` back to true.
+      expect(hero).toBeTruthy();
+      expect(screen.getByTestId('test-case-definition-hero')).toBe(hero);
 
       // No more pending runs — polling must stop (no further calls even
       // after another full interval elapses).

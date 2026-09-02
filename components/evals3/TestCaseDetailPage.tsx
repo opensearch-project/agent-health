@@ -27,7 +27,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  Play, Calendar, CheckCircle2, XCircle, Pencil, AlertTriangle,
+  Play, Calendar, Pencil, AlertTriangle,
   FileText, Loader2, X, ChevronDown, ChevronRight, History,
   Link as LinkIcon, Check as CheckIcon,
   GitBranch, Activity, Scale, MessageSquare,
@@ -53,6 +53,7 @@ import { TestCaseEditor } from '@/components/TestCaseEditor';
 import { TrajectoryView } from '@/components/TrajectoryView';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import { TestCaseInspectorPanel } from '@/components/evals3/TestCaseInspectorPanel';
+import { getResultStatus, StatusIcon, getStatusDescription } from '@/components/evals3/ResultStatus';
 import { runServerEvaluation } from '@/services/client/evaluationApi';
 import { DEFAULT_CONFIG, getPreferredDefaultAgentKey } from '@/lib/constants';
 import { PREFS_KEYS } from '@/lib/preferences';
@@ -83,17 +84,16 @@ function getTimeThreshold(range: TimeRange): Date | null {
   return new Date(Date.now() - ms[range]);
 }
 
-type ResultStatus = 'passed' | 'failed' | 'errored' | 'running' | 'pending';
-function getStatus(r: EvaluationReport): ResultStatus {
-  // Issue #242: evaluator-error reports are bucketed as 'errored', not
-  // 'failed'. metricsStatus wins over passFailStatus because the storage
-  // layer may still carry a stale verdict on transient runs.
-  if (r.metricsStatus === 'error') return 'errored';
-  if (r.passFailStatus === 'passed') return 'passed';
-  if (r.passFailStatus === 'failed') return 'failed';
-  if (r.status === 'running') return 'running';
-  return 'pending';
-}
+// Status derivation + icon/description now come from the shared
+// ResultStatus.tsx module (already used by RunInspectorPage,
+// BenchmarkRunDetailPage, RunDetailsPage) instead of a local, narrower
+// re-implementation. The local version this file used to have only
+// checked `r.status === 'running'` and otherwise defaulted everything
+// (including a genuinely failed agent run with `status: 'failed'` and no
+// `passFailStatus`) to 'pending' — `getResultStatus` correctly maps that
+// case to 'failed', and additionally distinguishes 'pending_traces' /
+// 'pending_judgment' so the runs list and inspector panel show *why* a
+// run is still pending, not just a generic spinner.
 
 export const TestCaseDetailPage: React.FC = () => {
   const { testCaseId } = useParams<{ testCaseId: string }>();
@@ -142,53 +142,95 @@ export const TestCaseDetailPage: React.FC = () => {
   // the real saved reportId once the server emits the completion event.
   const RUNNING_RUN_ID = '__running__';
 
-  const loadData = useCallback(async () => {
+  // Re-fetches just the runs list (no isLoading toggle, no not-found
+  // redirect, no auto-select-first-run). Shared by the initial load and the
+  // background poll below — the poll must NOT drop the page back into the
+  // full-page skeleton (see `isLoading` gate a few lines below `return`)
+  // every 5s while a run is pending, which would defeat the point of this
+  // fix by blanking the page the user is actively looking at.
+  const refreshRuns = useCallback(async () => {
     if (!testCaseId) return;
-    setIsLoading(true);
     try {
-      const [tc, { reports, total }] = await Promise.all([
-        asyncTestCaseStorage.getById(testCaseId),
-        asyncRunStorage.getReportsByTestCase(testCaseId),
-      ]);
-      if (!tc) { navigate('/evaluations/test-cases'); return; }
-      setTestCase(tc);
+      const { reports, total } = await asyncRunStorage.getReportsByTestCase(testCaseId);
       const sorted = reports.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       setRuns(sorted);
       setTotalRuns(total);
-      // Auto-select first run, auto-open definition if no runs (only on initial load)
       if (sorted.length > 0 && !initialSelectionDone.current) {
         setSelectedRunId(sorted[0].id);
         initialSelectionDone.current = true;
       }
     } catch (error) {
+      console.error('Failed to refresh test case runs:', error);
+    }
+  }, [testCaseId]);
+
+  const loadData = useCallback(async () => {
+    if (!testCaseId) return;
+    setIsLoading(true);
+    try {
+      const [tc] = await Promise.all([
+        asyncTestCaseStorage.getById(testCaseId),
+        refreshRuns(),
+      ]);
+      if (!tc) { navigate('/evaluations/test-cases'); return; }
+      setTestCase(tc);
+    } catch (error) {
       console.error('Failed to load test case:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [testCaseId, navigate]);
+  }, [testCaseId, navigate, refreshRuns]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // How many still-pending runs this page has polled for in a row, and the
+  // budget before giving up on an orphaned pending run (bounded so opening a
+  // test case with one permanently-stuck pending doc doesn't poll forever —
+  // mirrors the server's own trace-poll give-up convention, ~5 minutes at
+  // the default 10s interval). Reset to 0 whenever a fresh run starts (see
+  // `handleStartRun`) so a new run always gets the full budget.
+  const pollAttemptsRef = React.useRef(0);
+  const POLL_INTERVAL_MS = 5000;
+  const MAX_POLL_ATTEMPTS = 60; // 60 * 5s = 5 minutes
 
   // Poll while any run is still pending judgment or actively running.
   //
   // /api/evaluate (UI mode) uses `awaitTraces: false` (see server/routes/
   // evaluation.ts) — for trace-mode agents it sends the SSE 'completed'
-  // event, and `handleStartRun` below does its one-shot `loadData()`,
-  // *before* the background trace-judge finishes (metricsStatus stays
-  // 'pending' until then). Without this poll, a freshly-run test case
-  // shows up in the list looking wrong (see the `getStatus`-based row icon
-  // below) and never updates to the real passed/failed verdict until the
-  // user manually reloads the page — this is what surfaced as "Run Test
-  // twice, the page doesn't show the new runs" (the new rows WERE there,
-  // just permanently stuck rendering as an unjudged/failed placeholder).
-  // Mirrors the identical pattern in RunDetailsPage.tsx.
+  // event, and `handleStartRun` below does its one-shot refresh, *before*
+  // the background trace-judge finishes (metricsStatus stays 'pending'
+  // until then). Without this poll, a freshly-run test case shows up in
+  // the list looking wrong (see the shared `getResultStatus`-driven row
+  // icon below) and never updates to the real passed/failed verdict until
+  // the user manually reloads the page — this is what surfaced as "Run
+  // Test twice, the page doesn't show the new runs" (the new rows WERE
+  // there, just permanently stuck rendering as an unjudged/failed
+  // placeholder). Mirrors the identical pattern in RunDetailsPage.tsx,
+  // with two additions: (1) a `setTimeout` chain instead of `setInterval`
+  // so a slow refresh can never overlap with the next tick — the effect
+  // only reschedules once `refreshRuns` has fully resolved and `runs` has
+  // been updated (or left unchanged) — and (2) the attempt cap above.
   useEffect(() => {
-    const hasPending = runs.some(r => getStatus(r) === 'pending' || r.status === 'running');
-    if (hasPending) {
-      const interval = setInterval(loadData, 5000);
-      return () => clearInterval(interval);
+    const hasPending = runs.some(
+      r => ['pending', 'pending_traces', 'pending_judgment', 'running'].includes(getResultStatus({ status: r.status }, r)),
+    );
+    if (!hasPending) {
+      pollAttemptsRef.current = 0;
+      return;
     }
-  }, [runs, loadData]);
+    if (pollAttemptsRef.current >= MAX_POLL_ATTEMPTS) return;
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      pollAttemptsRef.current += 1;
+      refreshRuns();
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [runs, refreshRuns]);
 
   // Auto-collapse the global app sidebar while inspecting a single test case.
   // Run pages are dense, multi-pane views; the global nav competes with the
@@ -310,6 +352,9 @@ export const TestCaseDetailPage: React.FC = () => {
     // setIsRunning(true) and the next render where two clicks can both
     // see isRunning=false. This synchronous check closes that window.
     if (!testCase || isRunning) return;
+    // A fresh run always gets the full poll budget, even if a stale
+    // orphaned pending run on this page had already exhausted it.
+    pollAttemptsRef.current = 0;
     setIsRunConfigOpen(false);
     setRunsExpanded(true);
     setIsRunning(true);
@@ -589,24 +634,12 @@ export const TestCaseDetailPage: React.FC = () => {
                 </div>
               ) : (
                 filteredRuns.map((run, index) => {
-                  // Issue #242: triage rows by metricsStatus FIRST so an
-                  // errored run lights up the amber AlertTriangle and not
-                  // the red XCircle (which would conflate it with a real
-                  // agent failure).
-                  //
-                  // Runs still awaiting judgment (trace-mode agents return
-                  // via /api/evaluate with metricsStatus: 'pending' before
-                  // the background judge finishes — see
-                  // server/routes/evaluation.ts) or still executing must be
-                  // distinguished from a genuine 'Failed' verdict, otherwise
-                  // a run the owner just kicked off renders as failed with
-                  // no score, indistinguishable from a real failure, until
-                  // the poll above (or a manual reload) picks up the final
-                  // result.
-                  const runStatus = getStatus(run);
-                  const isErrored = runStatus === 'errored';
-                  const isPassed = runStatus === 'passed';
-                  const isPendingOrRunning = runStatus === 'pending' || runStatus === 'running';
+                  // Shared status derivation (see ResultStatus.tsx) —
+                  // correctly distinguishes a genuinely failed run
+                  // (`status: 'failed'`, no verdict yet) from one still
+                  // awaiting judgment (`metricsStatus: 'pending'`), which a
+                  // local isPassed/isErrored-only check can't tell apart.
+                  const runStatus = getResultStatus({ status: run.status }, run);
                   const isSelected = run.id === selectedRunId;
                   const isLatest = index === 0;
                   const runName = getRunDisplayName(run);
@@ -626,23 +659,17 @@ export const TestCaseDetailPage: React.FC = () => {
                       }`}
                       onClick={() => setSelectedRunId(run.id)}
                     >
-                      {/* Pass/fail/errored icon — the only place status is
-                          shown. The text label was previously here too, but
-                          the run name is more useful and the icon already
-                          conveys status at a glance. Issue #242: errored
-                          runs render an amber AlertTriangle to distinguish
-                          evaluator failures from agent failures. */}
-                      <div
-                        className="shrink-0 mt-0.5"
-                        title={isErrored ? 'Errored (evaluator could not run)' : isPendingOrRunning ? 'Judging…' : isPassed ? 'Passed' : 'Failed'}
-                      >
-                        {isErrored
-                          ? <AlertTriangle size={12} className="text-amber-500" />
-                          : isPendingOrRunning
-                            ? <Loader2 size={12} className="text-blue-500 animate-spin" />
-                            : isPassed
-                              ? <CheckCircle2 size={12} className="text-green-500" />
-                              : <XCircle size={12} className="text-red-500" />}
+                      {/* Status icon — the only place status is shown. The
+                          text label was previously here too, but the run
+                          name is more useful and the icon already conveys
+                          status at a glance. Shared StatusIcon/
+                          getStatusDescription (ResultStatus.tsx) give a
+                          distinct icon + tooltip per state (passed/failed/
+                          errored/running/pending/pending_traces/
+                          pending_judgment) instead of collapsing everything
+                          non-passed into "Failed". */}
+                      <div className="shrink-0 mt-0.5" title={getStatusDescription(runStatus)}>
+                        <StatusIcon status={runStatus} size={12} />
                       </div>
                       <div className="flex-1 min-w-0">
                         {/* Row 1: run name + Latest badge + copy-link + accuracy */}
@@ -723,7 +750,7 @@ export const TestCaseDetailPage: React.FC = () => {
             <TestCaseInspectorPanel
               report={selectedRun}
               testCase={testCase}
-              status={getStatus(selectedRun)}
+              status={getResultStatus({ status: selectedRun.status }, selectedRun)}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -759,10 +786,7 @@ export const TestCaseDetailPage: React.FC = () => {
                 </div>
               ) : (
                 filteredRuns.map((run, index) => {
-                  const runStatus = getStatus(run);
-                  const isErrored = runStatus === 'errored';
-                  const isPassed = runStatus === 'passed';
-                  const isPendingOrRunning = runStatus === 'pending' || runStatus === 'running';
+                  const runStatus = getResultStatus({ status: run.status }, run);
                   const runName = getRunDisplayName(run);
                   const evaluatorLabel = run.evaluatorId
                     ? (evaluatorNameById[run.evaluatorId] || run.evaluatorId)
@@ -775,13 +799,7 @@ export const TestCaseDetailPage: React.FC = () => {
                       className="group flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors hover:bg-muted/50 border border-transparent"
                       onClick={() => setSelectedRunId(run.id)}
                     >
-                      {isErrored
-                        ? <AlertTriangle size={14} className="text-amber-500 shrink-0" />
-                        : isPendingOrRunning
-                          ? <Loader2 size={14} className="text-blue-500 shrink-0 animate-spin" />
-                          : isPassed
-                            ? <CheckCircle2 size={14} className="text-green-500 shrink-0" />
-                            : <XCircle size={14} className="text-red-500 shrink-0" />}
+                      <span className="shrink-0"><StatusIcon status={runStatus} size={14} /></span>
                       <span className="text-xs font-semibold text-foreground truncate" title={runName}>{runName}</span>
                       {index === 0 && <Badge variant="outline" className="text-[7px] px-1 py-0 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/30">Latest</Badge>}
                       {/* Copy-link icon for the canonical /runs/<id> URL. Hidden

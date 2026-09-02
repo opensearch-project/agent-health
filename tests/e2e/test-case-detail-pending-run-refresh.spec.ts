@@ -89,7 +89,7 @@ test.describe('Test Case Detail — pending run renders correctly and self-refre
     if (!healthRes.ok()) test.skip(true, 'Backend storage not available');
   });
 
-  test('Run Test → new run shows as "Judging…" (not Failed) then flips to Passed on its own', async ({
+  test('Run Test → new run shows as pending-judgment (not Failed) then flips to Passed on its own', async ({
     page,
     request,
     testData,
@@ -138,7 +138,9 @@ test.describe('Test Case Detail — pending run renders correctly and self-refre
     // The new run appears (loadData() ran after the SSE 'completed' event)
     // — and, pre-fix, it would have shown as a red "Failed" icon.
     await expect(page.getByText(runName).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTitle('Judging…').first()).toBeVisible();
+    // shows as a spinner tied to the granular reason it's pending (see
+    // ResultStatus.tsx's `getStatusDescription`) — not a red "Failed".
+    await expect(page.getByTitle('Agent done — waiting for traces...').first()).toBeVisible();
     await expect(page.getByTitle('Failed')).toHaveCount(0);
 
     // Simulate the background trace-judge completing — exactly what
@@ -151,6 +153,6 @@ test.describe('Test Case Detail — pending run renders correctly and self-refre
     // Without any reload/interaction, the page's poll (every 5s while a
     // run is pending/running) must pick up the real verdict.
     await expect(page.getByTitle('Passed').first()).toBeVisible({ timeout: 12_000 });
-    await expect(page.getByTitle('Judging…')).toHaveCount(0);
+    await expect(page.getByTitle('Agent done — waiting for traces...')).toHaveCount(0);
   });
 });
