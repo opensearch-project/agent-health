@@ -1334,6 +1334,46 @@ describe('Experiments Storage Routes', () => {
         error: 'Run not found or already completed',
       });
     });
+
+    it('zombie fallback: 400s when the run exists in the doc but is not running', async () => {
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-123',
+        runs: [{ id: 'run-1', status: 'completed' }],
+      });
+      const { req, res } = createMocks({ id: 'exp-123' }, { runId: 'run-1' });
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/cancel');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('not currently running') })
+      );
+      expect(mockBenchmarksUpdateRun).not.toHaveBeenCalled();
+    });
+
+    it('zombie fallback: marks a running-but-tokenless run cancelled with an audit note', async () => {
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-123',
+        runs: [{ id: 'run-1', status: 'running' }],
+      });
+      mockBenchmarksUpdateRun.mockResolvedValue(true);
+      const { req, res } = createMocks({ id: 'exp-123' }, { runId: 'run-1' });
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/cancel');
+
+      await handler(req, res);
+
+      expect(mockBenchmarksUpdateRun).toHaveBeenCalledWith(
+        'exp-123',
+        'run-1',
+        expect.objectContaining({ status: 'cancelled', cancelNote: expect.stringContaining('no active executor') })
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ cancelled: true, runId: 'run-1', viaFallback: true })
+      );
+      // The happy-path OpenSearch script update (raw client) must NOT also fire.
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
   });
 });
 

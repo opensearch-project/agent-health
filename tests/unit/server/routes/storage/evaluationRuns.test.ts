@@ -68,6 +68,11 @@ jest.mock('@/lib/resolveAgentModel', () => ({
   resolveAgentModel: jest.fn().mockReturnValue('resolved-model'),
 }));
 
+const mockRetryJudgementForRun = jest.fn();
+jest.mock('@/services/evaluationRetryJudgement', () => ({
+  retryJudgementForRun: (...args: any[]) => mockRetryJudgementForRun(...args),
+}));
+
 import express, { Application } from 'express';
 const request = require('supertest');
 import evaluationRunsRouter from '@/server/routes/storage/evaluationRuns';
@@ -290,9 +295,32 @@ describe('Evaluation Runs API', () => {
   });
 
   describe('POST /api/storage/evaluation-runs/:id/cancel', () => {
-    it('404s when there is no active cancellation token for the id', async () => {
+    it('404s when the run does not exist and there is no active cancellation token', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce(null);
       const res = await request(app).post('/api/storage/evaluation-runs/nope/cancel');
       expect(res.status).toBe(404);
+    });
+
+    it('400s when the run exists but is not running and there is no active cancellation token', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'run-1', status: 'completed' });
+      const res = await request(app).post('/api/storage/evaluation-runs/run-1/cancel');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/not currently running/i);
+    });
+
+    it('zombie fallback: marks a running run cancelled with an audit note when no executor is found', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'zombie-1', status: 'running' });
+      mockEvaluationRunsUpdate.mockResolvedValueOnce({ id: 'zombie-1', status: 'cancelled' });
+
+      const res = await request(app).post('/api/storage/evaluation-runs/zombie-1/cancel');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.viaFallback).toBe(true);
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(
+        'zombie-1',
+        expect.objectContaining({ status: 'cancelled', cancelNote: expect.stringContaining('no active executor') })
+      );
     });
 
     it('cancels an active run and marks it cancelled', async () => {
@@ -348,6 +376,132 @@ describe('Evaluation Runs API', () => {
 
       resolveExec!({ results: {}, stats: {} });
       await postPromise;
+    });
+  });
+
+  describe('POST /api/storage/evaluation-runs/:id/rerun', () => {
+    const sourceRun: any = {
+      id: 'eval-run-src', docType: 'evaluation-run', name: 'Source Run', status: 'completed',
+      agentKey: 'agent-a', modelId: 'model-a', judgeModelId: 'judge-a', evaluatorId: 'ev-a', concurrency: 2,
+      sources: [{ type: 'test-case-ids', ids: ['tc-1'] }],
+      testCaseSnapshots: [{ id: 'tc-1', version: 1, name: 'TC 1' }],
+      results: {}, createdAt: '2026-01-01T00:00:00Z',
+    };
+
+    beforeEach(() => {
+      mockEvaluationRunsGetById.mockResolvedValue(sourceRun);
+      mockEvaluationRunsCreate.mockResolvedValue(undefined);
+      mockExecuteEvaluationRun.mockResolvedValue({ results: {}, stats: { total: 1 } });
+    });
+
+    it('404s when the source run does not exist', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce(null);
+      const res = await request(app).post('/api/storage/evaluation-runs/nope/rerun');
+      expect(res.status).toBe(404);
+    });
+
+    it('duplicates the source config verbatim and reports modified:false when no overrides are sent', async () => {
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({});
+      expect(res.status).toBe(201);
+      expect(res.body.modified).toBe(false);
+      expect(res.body.run.modified).toBeUndefined();
+      expect(res.body.run.rerunOf).toBe('eval-run-src');
+      expect(res.body.run.agentKey).toBe('agent-a');
+      expect(res.body.run.evaluatorId).toBe('ev-a');
+      expect(res.body.run.concurrency).toBe(2);
+    });
+
+    it('applies overrides, flags modified:true, and still records rerunOf', async () => {
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({
+        agentKey: 'agent-b', concurrency: 5, name: 'Custom Name',
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.modified).toBe(true);
+      expect(res.body.run.modified).toBe(true);
+      expect(res.body.run.rerunOf).toBe('eval-run-src');
+      expect(res.body.run.agentKey).toBe('agent-b');
+      expect(res.body.run.concurrency).toBe(5);
+      expect(res.body.run.name).toBe('Custom Name');
+      // Unmentioned fields still carried over from the source.
+      expect(res.body.run.evaluatorId).toBe('ev-a');
+    });
+
+    it('clears judgeModelId/evaluatorId via null overrides and flags modified:true', async () => {
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({
+        judgeModelId: null, evaluatorId: null,
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.modified).toBe(true);
+      expect(res.body.run.judgeModelId).toBeUndefined();
+      expect(res.body.run.evaluatorId).toBeUndefined();
+    });
+
+    it('400s when the source run has no agentKey and no override supplies one', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ ...sourceRun, agentKey: undefined });
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('409s when source resolution fails for the (possibly overridden) sources', async () => {
+      mockResolveTestCaseSources.mockRejectedValueOnce(new Error('benchmark gone'));
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({});
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/benchmark gone/);
+    });
+  });
+
+  describe('POST /api/storage/evaluation-runs/:id/retry-judgement', () => {
+    it('404s when the run does not exist', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce(null);
+      const res = await request(app).post('/api/storage/evaluation-runs/nope/retry-judgement');
+      expect(res.status).toBe(404);
+    });
+
+    it('400s when the run has no judge-failed test cases', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'run-1', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' } },
+      });
+      const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/no judge-failed/i);
+      expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
+    });
+
+    it('400s when the run is still running, even with a judge-failed-shaped result', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'run-1', docType: 'evaluation-run', status: 'running',
+        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+      });
+      const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      expect(res.status).toBe(400);
+      expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
+    });
+
+    it('200s and forwards the outcome when applicable', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'run-1', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+      });
+      mockRetryJudgementForRun.mockResolvedValueOnce({ retried: 1, nowPassed: 1, stillFailed: 0, skipped: 0, skipReasons: {} });
+
+      const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ retried: 1, nowPassed: 1, stillFailed: 0, skipped: 0, skipReasons: {} });
+      expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'run-1' }),
+        expect.anything()
+      );
+    });
+
+    it('500s when retryJudgementForRun throws', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'run-1', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+      });
+      mockRetryJudgementForRun.mockRejectedValueOnce(new Error('judge down'));
+      const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      expect(res.status).toBe(500);
     });
   });
 

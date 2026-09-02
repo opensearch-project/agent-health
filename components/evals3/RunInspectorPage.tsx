@@ -26,12 +26,14 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
-import { getEvaluationRun, updateEvaluationRun } from '@/services/client';
+import { getEvaluationRun, updateEvaluationRun, cancelEvaluationRun, deleteEvaluationRun } from '@/services/client';
+import { cancelBenchmarkRun } from '@/services/client/benchmarkApi';
 import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, EvaluationReport, isEvaluationRun } from '@/types';
 import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
+import { getRunActionVisibility } from '@/lib/runActions';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
 import { InlineRenameField } from './InlineRenameField';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -39,6 +41,7 @@ import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
 import { RerunConfirmDialog } from './RerunConfirmDialog';
 import { RetryJudgementConfirmDialog } from './RetryJudgementConfirmDialog';
 import type { RetryJudgementSummary } from '@/services/client';
+import { RunActionsMenu } from './RunActionsMenu';
 
 interface TestCaseResult {
   testCaseId: string;
@@ -287,6 +290,34 @@ export const RunInspectorPage: React.FC = () => {
   }, [benchmarkId, runId, mode, navigate, targetReportId]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Delete/Cancel/Retry-Judgement (RunActionsMenu). Dispatch based on
+  // `mode` — same benchmark-vs-evaluation-run split as EvalRunsPage/
+  // EvalRunDetailPage. Delete navigates away (there's nothing left to
+  // inspect); Cancel/Retry-Judgement just reload this page's data.
+  const handleDelete = async () => {
+    if (mode === 'benchmark' && benchmarkId) {
+      await asyncBenchmarkStorage.deleteRun(benchmarkId, runId!);
+      navigate(`/evaluations/benchmarks/${benchmarkId}/runs`);
+    } else {
+      await deleteEvaluationRun(runId!);
+      navigate('/evaluations/runs');
+    }
+  };
+
+  const handleCancel = async () => {
+    if (mode === 'benchmark' && benchmarkId) {
+      await cancelBenchmarkRun(benchmarkId, runId!);
+    } else {
+      await cancelEvaluationRun(runId!);
+    }
+    await loadData();
+  };
+
+  // Retry judgement from the kebab opens the same confirm dialog as the
+  // dedicated header button — one code path (RetryJudgementConfirmDialog →
+  // retryJudgement() with progress polling), not a second fire-and-forget one.
+  const handleRetryJudgement = () => { setRetryJudgementDialogOpen(true); };
 
   // Resolve the source run name for the rerunOf provenance chip (EvaluationRun only).
   useEffect(() => {
@@ -625,6 +656,17 @@ export const RunInspectorPage: React.FC = () => {
               <GitCompare size={12} />
               Compare
             </Button>
+            <RunActionsMenu
+              runId={runId!}
+              runName={run.name}
+              isRunning={run.status === 'running'}
+              canRetryJudgement={getRunActionVisibility(run as any).canRetryJudgement}
+              retryJudgementDisabledReason={getRunActionVisibility(run as any).retryJudgementDisabledReason}
+              onDelete={handleDelete}
+              onCancel={handleCancel}
+              onRetryJudgement={handleRetryJudgement}
+              variant="header"
+            />
           </div>
         </div>
         {/* Run-level judge-failure banner (lib/judgeFailureSummary.ts). Before

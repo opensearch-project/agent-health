@@ -17,8 +17,8 @@ import { PREFS_KEYS } from '@/lib/preferences';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   GitCompare, Calendar, CheckCircle2, XCircle, Play,
-  Trash2, Plus, X, Loader2, Circle, Check, Clock,
-  StopCircle, Ban, Pencil, AlertTriangle,
+  Plus, X, Loader2, Circle, Check, Clock,
+  Ban, Pencil, AlertTriangle, RotateCcw,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -34,13 +34,14 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { computeRunStats, getEffectiveRunStatus, isRunInProgress } from '@/lib/runStats';
-import { executeBenchmarkRun, listEvaluationRuns } from '@/services/client';
+import { executeBenchmarkRun, listEvaluationRuns, deleteEvaluationRun, cancelEvaluationRun } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
 import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, Evaluator, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { formatDate, getModelName } from '@/lib/utils';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
+import { RunActionsMenu } from '@/components/evals3/RunActionsMenu';
 import {
   computeVersionData,
   filterRunsByVersion,
@@ -170,7 +171,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
   const [showEditor, setShowEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
 
-  const { isCancelling, handleCancelRun } = useBenchmarkCancellation();
+  const { handleCancelRun } = useBenchmarkCancellation();
 
   // ─── Data Loading ────────────────────────────────────────────────────────
 
@@ -383,10 +384,10 @@ export const BenchmarkRunsPage2: React.FC = () => {
     );
   };
 
-  const handleAddRun = () => {
+  const handleAddRun = (sourceRun?: BenchmarkRun) => {
     if (!benchmark) return;
     if (isRunning) { alert('A run is already in progress.'); return; }
-    const latestRun = getLatestRun(benchmark);
+    const latestRun = sourceRun || getLatestRun(benchmark);
     const runNumber = (benchmark.runs?.length || 0) + 1;
     // Use latest run's config, fall back to persisted preferences, then defaults
     let defaultAgent = DEFAULT_CONFIG.agents[0]?.key || '';
@@ -464,7 +465,6 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
   const handleDeleteRun = async (run: BenchmarkRun) => {
     if (!benchmarkId) return;
-    if (!window.confirm(`Delete run "${run.name}"? This cannot be undone.`)) return;
     setDeleteState({ isDeleting: true, deletingId: run.id, status: 'idle', message: '' });
     try {
       const success = await asyncBenchmarkStorage.deleteRun(benchmarkId, run.id);
@@ -478,6 +478,23 @@ export const BenchmarkRunsPage2: React.FC = () => {
     } catch (error) {
       setDeleteState({ isDeleting: false, deletingId: null, status: 'error',
         message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}` });
+    }
+  };
+
+  // Standalone evaluation-run rows (not embedded in benchmark.runs[]) are
+  // deleted via the top-level evaluation-runs API — the benchmark-scoped
+  // deleteRun would 404 / silently no-op for them.
+  const handleDeleteEvalRun = async (run: BenchmarkRun) => {
+    setDeleteState({ isDeleting: true, deletingId: run.id, status: 'idle', message: '' });
+    try {
+      await deleteEvaluationRun(run.id);
+      setDeleteState({ isDeleting: false, deletingId: null, status: 'success', message: `"${run.name}" deleted` });
+      setTimeout(() => setDeleteState(s => ({ ...s, status: 'idle', message: '' })), 3000);
+      loadBenchmark();
+    } catch (error) {
+      setDeleteState({ isDeleting: false, deletingId: null, status: 'error',
+        message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}` });
+      throw error;
     }
   };
 
@@ -541,7 +558,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
           >
             <Pencil size={12} className="mr-1" />Edit
           </Button>
-          <Button size="sm" className="h-7 text-xs bg-opensearch-blue hover:bg-blue-600" onClick={handleAddRun} disabled={isRunning}>
+          <Button size="sm" className="h-7 text-xs bg-opensearch-blue hover:bg-blue-600" onClick={() => handleAddRun()} disabled={isRunning}>
             {isRunning
               ? <><Loader2 size={12} className="mr-1 animate-spin" />Running...</>
               : <><Plus size={12} className="mr-1" />Add Run</>}
@@ -754,30 +771,37 @@ export const BenchmarkRunsPage2: React.FC = () => {
                               <span className="text-muted-foreground">/ {stats.total}</span>
                             </div>
                           )}
-                          {getEffectiveRunStatus(run) === 'running' && !evalRunOnlyIds.has(run.id) && (
-                            <Button
-                              variant="outline" size="sm"
-                              disabled={isCancelling(run.id)}
-                              onClick={e => { e.stopPropagation(); if (benchmarkId) handleCancelRun(benchmarkId, run.id, loadBenchmark); }}
-                              className="text-red-700 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 hover:bg-red-500/10 border-red-500/30 disabled:opacity-50"
-                            >
-                              {isCancelling(run.id) ? <Loader2 size={14} className="mr-1 animate-spin" /> : <StopCircle size={14} className="mr-1" />}
-                              {isCancelling(run.id) ? 'Cancelling...' : 'Cancel'}
-                            </Button>
-                          )}
-                          {!evalRunOnlyIds.has(run.id) && (
+                          {/* Re-run: reuses the same "Configure Run" (Add Run)
+                              dialog, prefilled from THIS row's config instead
+                              of the benchmark's latest run — consistency over
+                              a bespoke rerun endpoint for the legacy
+                              benchmark-embedded run model. */}
                           <Button
-                            variant="ghost" size="icon"
-                            onClick={e => { e.stopPropagation(); handleDeleteRun(run); }}
-                            disabled={deleteState.isDeleting && deleteState.deletingId === run.id}
-                            className="text-red-700 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 hover:bg-red-500/10"
-                            title="Delete run"
+                            variant="outline" size="sm"
+                            data-testid={`benchmark-run-rerun-btn-${run.id}`}
+                            onClick={e => { e.stopPropagation(); handleAddRun(run); }}
+                            title="Re-run with this run's configuration"
                           >
-                            {deleteState.isDeleting && deleteState.deletingId === run.id
-                              ? <Loader2 size={14} className="animate-spin" />
-                              : <Trash2 size={14} />}
+                            <RotateCcw size={14} className="mr-1" /> Re-run
                           </Button>
-                          )}
+                          {/* Delete/Cancel dispatch: rows that are standalone
+                              evaluation-run docs (evalRunOnlyIds, merged in
+                              from listEvaluationRuns) hit the top-level
+                              evaluation-runs API; embedded benchmark.runs[]
+                              rows hit the benchmark-scoped nested-run API. */}
+                          <RunActionsMenu
+                            runId={run.id}
+                            runName={run.name}
+                            isRunning={getEffectiveRunStatus(run) === 'running'}
+                            canRetryJudgement={false}
+                            retryJudgementDisabledReason="Retry judgement isn't available for legacy benchmark-embedded runs yet"
+                            onDelete={() => evalRunOnlyIds.has(run.id) ? handleDeleteEvalRun(run) : handleDeleteRun(run)}
+                            onCancel={async () => {
+                              if (evalRunOnlyIds.has(run.id)) { await cancelEvaluationRun(run.id); await loadBenchmark(); return; }
+                              if (benchmarkId) return handleCancelRun(benchmarkId, run.id, loadBenchmark);
+                            }}
+                            onRetryJudgement={() => {}}
+                          />
                         </div>
                       </div>
                       <div className="mt-3 pt-3 border-t">

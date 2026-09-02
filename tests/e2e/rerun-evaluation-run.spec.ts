@@ -116,12 +116,15 @@ test.describe('Re-run an evaluation run', () => {
     const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
 
-    // Name preview reflects the "(re-run)" suffix computed client-side.
-    await expect(page.locator('[data-testid="rerun-name-preview"]')).toHaveText(`${SOURCE_NAME} (re-run)`);
+    // Name preview reflects the "(re-run)" suffix computed client-side, and
+    // is editable.
+    await expect(page.locator('[data-testid="rerun-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
-    // Agent/judge summary present.
-    await expect(dialog).toContainText('Agent:');
-    await expect(dialog).toContainText('Judge:');
+    // Prefilled Agent / Evaluator / Judge Model fields present — the owner
+    // explicitly wants the evaluator visible on the rerun path, not just
+    // carried silently.
+    await expect(page.locator('[data-testid="rerun-agent-trigger"]')).toBeVisible();
+    await expect(page.locator('[data-testid="rerun-evaluator-trigger"]')).toBeVisible();
     // judgeModelId is displayed via getModelName() (human-readable), not the raw id.
     await expect(dialog).toContainText('Claude Sonnet 4.6');
 
@@ -200,7 +203,7 @@ test.describe('Re-run an evaluation run', () => {
 
     const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('[data-testid="rerun-name-preview"]')).toHaveText(`${SOURCE_NAME} (re-run)`);
+    await expect(page.locator('[data-testid="rerun-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible();
@@ -311,7 +314,7 @@ test.describe('Run inspector — Re-run button (eval-run mode)', () => {
 
     const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('[data-testid="rerun-name-preview"]')).toHaveText(`${SOURCE_NAME} (re-run)`);
+    await expect(page.locator('[data-testid="rerun-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible();
@@ -356,7 +359,11 @@ test.describe('Run inspector — Re-run button hidden for benchmark-embedded run
 
     benchmarkId = `e2e-inspect-bm-${Date.now()}`;
     runId = `e2e-inspect-bm-run-${Date.now()}`;
-    
+
+    // POST create (not PUT) — PUT /api/storage/benchmarks/:id requires the
+    // doc to already exist and 404s otherwise (verified against the real
+    // route); this beforeAll previously always 404'd here and silently
+    // skipped every test in this describe block.
     const bmRes = await request.post('/api/storage/benchmarks', {
       data: {
         id: benchmarkId,

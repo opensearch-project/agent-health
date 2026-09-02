@@ -28,13 +28,17 @@ import {
 import { EvaluationRun, TestCaseSnapshot } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { computeRunStats } from '@/lib/runStats';
+import { getRunActionVisibility } from '@/lib/runActions';
 import { formatRelativeTime, getModelName } from '@/lib/utils';
 import {
   getEvaluationRun,
   cancelEvaluationRun,
+  deleteEvaluationRun,
+  retryJudgementEvaluationRun,
   promoteEvaluationRun,
 } from '@/services/client/evaluationRunsApi';
 import { RerunConfirmDialog } from './RerunConfirmDialog';
+import { RunActionsMenu } from './RunActionsMenu';
 import { Breadcrumbs } from './Breadcrumbs';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -153,6 +157,18 @@ export const EvalRunDetailPage: React.FC = () => {
     } finally {
       setPromoting(false);
     }
+  };
+
+  const handleDelete = async () => {
+    if (!runId) return;
+    await deleteEvaluationRun(runId);
+    navigate('/evaluations/runs');
+  };
+
+  const handleRetryJudgement = async () => {
+    if (!runId) return;
+    await retryJudgementEvaluationRun(runId);
+    await loadRun();
   };
 
   if (loading) {
@@ -309,6 +325,18 @@ export const EvalRunDetailPage: React.FC = () => {
                   View Benchmark
                 </Button>
               )}
+              <RunActionsMenu
+                runId={run.id}
+                runName={run.name}
+                isRunning={run.status === 'running'}
+                hideCancel
+                canRetryJudgement={getRunActionVisibility(run).canRetryJudgement}
+                retryJudgementDisabledReason={getRunActionVisibility(run).retryJudgementDisabledReason}
+                onDelete={handleDelete}
+                onCancel={handleCancel}
+                onRetryJudgement={handleRetryJudgement}
+                variant="header"
+              />
             </div>
           </div>
 

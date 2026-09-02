@@ -266,19 +266,65 @@ export async function promoteEvaluationRun(
  * independent run (fresh id, "<name> (re-run)"), linked back via
  * `rerunOf`. The new run starts executing immediately server-side; poll
  * `getEvaluationRun(runId)` for progress (same as any 'running' run).
+ *
+ * `overrides` lets the caller tweak the config before launching (agent,
+ * judge model, evaluator, concurrency, or swap the test-case source to a
+ * different benchmark) — every field optional; omitted fields keep the
+ * source run's value. When any override actually changes the effective
+ * config, the response's `modified` is `true` (the new run is flagged the
+ * same way) so a tweaked re-run is never mistaken for a faithful duplicate.
  */
-export async function rerunEvaluationRun(id: string): Promise<{
+export interface RerunOverrides {
+  name?: string;
+  agentKey?: string;
+  judgeModelId?: string | null;
+  evaluatorId?: string | null;
+  concurrency?: number;
+  benchmarkId?: string | null;
+}
+
+export async function rerunEvaluationRun(id: string, overrides?: RerunOverrides): Promise<{
   runId: string;
   run: EvaluationRun;
   defaultsApplied: string[];
+  modified: boolean;
 }> {
   const response = await fetch(`/api/storage/evaluation-runs/${id}/rerun`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(overrides || {}),
   });
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({ error: response.statusText }));
     throw new Error(err.error || 'Failed to re-run evaluation run');
+  }
+
+  return response.json();
+}
+
+/**
+ * Retry judgement for a terminal run's judge-failed test cases, in place,
+ * without re-invoking the agent. Only applicable when the run is terminal
+ * and has at least one judge-failed case (see lib/runActions.ts). The
+ * server 400s with a clear reason when called on a non-applicable run.
+ */
+export interface RetryJudgementOutcome {
+  retried: number;
+  nowPassed: number;
+  stillFailed: number;
+  skipped: number;
+  skipReasons: Record<string, string>;
+}
+
+export async function retryJudgementEvaluationRun(id: string): Promise<RetryJudgementOutcome> {
+  const response = await fetch(`/api/storage/evaluation-runs/${id}/retry-judgement`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || 'Failed to retry judgement');
   }
 
   return response.json();

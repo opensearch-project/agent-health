@@ -1461,7 +1461,35 @@ router.post('/api/storage/benchmarks/:id/cancel', async (req: Request, res: Resp
 
   const cancellationToken = activeRuns.get(runId);
   if (!cancellationToken) {
-    return res.status(404).json({ error: 'Run not found or already completed' });
+    // No in-memory cancellation token for this run id — either the run
+    // already finished, or the executor that was running it is gone while
+    // the run doc is still marked 'running' (server process restarted or
+    // crashed; "zombie" run — the "Not able to cancel this run" bug report
+    // this fixes). Distinguish the two by checking the persisted status:
+    // only fall back to a doc-status-only cancel when it's still 'running'.
+    const storage = getStorageModule();
+    const benchmark = await storage.benchmarks.getById(id);
+    const run = benchmark?.runs?.find(r => r.id === runId);
+    if (!run) {
+      return res.status(404).json({ error: 'Run not found or already completed' });
+    }
+    if (run.status !== 'running') {
+      return res.status(400).json({ error: `Run is not currently running (status: ${run.status})` });
+    }
+
+    const cancelNote = 'Cancelled: no active executor found for this run (process restarted or crashed) — marked cancelled directly.';
+    try {
+      await storage.benchmarks.updateRun(id, runId, {
+        status: 'cancelled',
+        completedAt: new Date().toISOString(),
+        cancelNote,
+      } as any);
+    } catch (error: any) {
+      console.error('[StorageAPI] Zombie-cancel doc update failed:', error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ cancelled: true, runId, viaFallback: true, note: cancelNote });
   }
 
   // Set cancellation flag
