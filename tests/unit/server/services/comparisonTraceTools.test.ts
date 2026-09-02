@@ -25,7 +25,13 @@ import type { ComparisonRunInput } from '@/server/services/comparisonDeepDiveSer
 
 function registerTools(runs: any[], serverUrl = 'http://server.test') {
   const tools: Record<string, any> = {};
-  const factory = createComparisonTraceExtension(runs as any, serverUrl);
+  const factory = createComparisonTraceExtension(
+    runs as any,
+    'default-case',
+    new Map(),
+    async () => null,
+    serverUrl
+  );
   factory({
     registerTool(tool: any) {
       tools[tool.name] = tool;
@@ -59,8 +65,7 @@ describe('comparisonTraceTools', () => {
 
     const unavailable = await tools.query_spans.execute('tool-2', { run: 'A' });
     expect(unavailable.details).toEqual({
-      run: 'A',
-      error: 'No runId or window hints for this run — traces unavailable.',
+      error: 'No runId or window hints for the default case on run A — traces unavailable.',
     });
 
     const unknownLogs = await tools.query_logs.execute('tool-3', { run: 'B' });
@@ -100,6 +105,7 @@ describe('comparisonTraceTools', () => {
     });
     expect(result.details).toEqual({
       run: 'A',
+      caseId: 'default-case',
       runId: 'run-a',
       label: 'Run A',
       spanCount: 1,
@@ -115,6 +121,7 @@ describe('comparisonTraceTools', () => {
         },
       ],
       warning: 'partial data',
+      citeAs: 'span:default-case:run-a:<spanId>',
     });
   });
 
@@ -125,6 +132,7 @@ describe('comparisonTraceTools', () => {
     const httpError = await tools.query_spans.execute('tool-5', { run: 'A' });
     expect(httpError.details).toEqual({
       run: 'A',
+      caseId: 'default-case',
       error: 'traces query failed: HTTP 503',
     });
 
@@ -132,6 +140,7 @@ describe('comparisonTraceTools', () => {
     const thrownError = await tools.query_spans.execute('tool-6', { run: 'A' });
     expect(thrownError.details).toEqual({
       run: 'A',
+      caseId: 'default-case',
       error: 'traces query error: socket hang up',
     });
   });
@@ -152,6 +161,7 @@ describe('comparisonTraceTools', () => {
     });
     expect(result.details).toEqual({
       run: 'A',
+      caseId: 'default-case',
       runId: 'run-a',
       logs: [{ message: 'boom' }],
       total: 1,
@@ -162,8 +172,7 @@ describe('comparisonTraceTools', () => {
     const missingRunIdTools = registerTools([{ key: 'A', label: 'Run A' }]);
     const unavailable = await missingRunIdTools.query_logs.execute('tool-8', { run: 'A' });
     expect(unavailable.details).toEqual({
-      run: 'A',
-      error: 'No runId for this run — logs unavailable.',
+      error: 'No runId or window hints for the default case on run A — traces unavailable.',
     });
 
     const tools = registerTools([{ key: 'A', label: 'Run A', runId: 'run-a' }]);
@@ -171,6 +180,7 @@ describe('comparisonTraceTools', () => {
     const httpError = await tools.query_logs.execute('tool-9', { run: 'A' });
     expect(httpError.details).toEqual({
       run: 'A',
+      caseId: 'default-case',
       error: 'logs query failed: HTTP 404',
     });
 
@@ -178,6 +188,7 @@ describe('comparisonTraceTools', () => {
     const thrownError = await tools.query_logs.execute('tool-10', { run: 'A' });
     expect(thrownError.details).toEqual({
       run: 'A',
+      caseId: 'default-case',
       error: 'logs query error: network timeout',
     });
   });
