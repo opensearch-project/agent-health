@@ -275,14 +275,6 @@ export const BenchmarkRunsPage2: React.FC = () => {
     () => computeVersionData(benchmark), [benchmark]
   );
 
-  const selectedVersionData = useMemo(
-    () => getSelectedVersionData(versionData, testCaseVersion), [versionData, testCaseVersion]
-  );
-
-  const versionTestCases = useMemo(
-    () => getVersionTestCases(testCases, selectedVersionData), [selectedVersionData, testCases]
-  );
-
   const allMergedRuns = useMemo(() => {
     // Merge embedded runs with associated-but-not-embedded eval-runs, deduped
     // by id (an eval-run migrated into benchmark.runs would otherwise be
