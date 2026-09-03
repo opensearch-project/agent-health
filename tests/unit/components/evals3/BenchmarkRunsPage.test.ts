@@ -33,6 +33,7 @@ const mockNavigate = jest.fn();
 jest.mock('react-router-dom', () => ({
   useParams: () => ({ benchmarkId: 'bench-1' }),
   useNavigate: () => mockNavigate,
+  useLocation: () => ({ pathname: '/evaluations/benchmarks/bench-1/runs' }),
 }));
 
 const mockGetById = jest.fn();
@@ -43,6 +44,7 @@ jest.mock('@/services/storage', () => ({
     deleteRun: jest.fn(async () => true),
   },
   asyncTestCaseStorage: { getByIds: (...a: unknown[]) => mockGetByIds(...a) },
+  asyncRunStorage: { getReportSummariesByIds: jest.fn(async () => ({})) },
 }));
 
 const mockListEvaluationRuns = jest.fn();
@@ -78,6 +80,17 @@ jest.mock('@/components/evals3/Breadcrumbs', () => ({
 
 jest.mock('@/components/BenchmarkEditor', () => ({
   BenchmarkEditor: () => null,
+}));
+
+// BenchmarkCasesTab/CaseHeatStrip pull in a deep chain (BenchmarkCaseDefinition
+// -> TestCaseDetailPanel -> ContextDispositionGroups -> components/ui/markdown.tsx
+// -> react-markdown, which is ESM-only and not in this suite's ts-jest
+// transformIgnorePatterns allow-list). This test suite doesn't exercise the
+// Cases tab UI at all, so stub both out rather than pull that chain in for
+// every test in this file.
+jest.mock('@/components/evals3/BenchmarkCasesTab', () => ({
+  BenchmarkCasesTab: () => null,
+  CaseHeatStrip: () => null,
 }));
 
 jest.mock('@/components/JudgeModelSelect', () => ({
