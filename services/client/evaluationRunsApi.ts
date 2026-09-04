@@ -305,29 +305,17 @@ export async function rerunEvaluationRun(id: string, overrides?: RerunOverrides)
 
 /**
  * Retry judgement for a terminal run's judge-failed test cases, in place,
- * without re-invoking the agent. Only applicable when the run is terminal
- * and has at least one judge-failed case (see lib/runActions.ts). The
- * server 400s with a clear reason when called on a non-applicable run.
+ * without re-invoking the agent — the RunActionsMenu (kebab) entry point.
+ * Thin alias over {@link retryJudgement} (default `scope=errored`, polls the
+ * 202 job to completion) so every surface funnels through the ONE
+ * fire-and-poll client path; the server 409s with a clear reason when the
+ * run is still executing or a retry is already in flight. Applicability is
+ * gated client-side by `getRunActionVisibility` (lib/runActions.ts), which
+ * counts the same "completed agent, no judge verdict" cases the server's
+ * `scope=errored` selection re-judges.
  */
-export interface RetryJudgementOutcome {
-  retried: number;
-  nowPassed: number;
-  stillFailed: number;
-  skipped: number;
-  skipReasons: Record<string, string>;
-}
-
-export async function retryJudgementEvaluationRun(id: string): Promise<RetryJudgementOutcome> {
-  const response = await fetch(`/api/storage/evaluation-runs/${id}/retry-judgement`, {
-    method: 'POST',
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(err.error || 'Failed to retry judgement');
-  }
-
-  return response.json();
+export async function retryJudgementEvaluationRun(id: string): Promise<RetryJudgementSummary> {
+  return retryJudgement(id, 'errored');
 }
 
 /**

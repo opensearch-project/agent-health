@@ -69,8 +69,10 @@ jest.mock('@/lib/resolveAgentModel', () => ({
 }));
 
 const mockRetryJudgementForRun = jest.fn();
-jest.mock('@/services/evaluationRetryJudgement', () => ({
+const mockCountRetryableCases = jest.fn();
+jest.mock('@/services/evaluation/retryJudgement', () => ({
   retryJudgementForRun: (...args: any[]) => mockRetryJudgementForRun(...args),
+  countRetryableCases: (...args: any[]) => mockCountRetryableCases(...args),
 }));
 
 import express, { Application } from 'express';
@@ -469,105 +471,111 @@ describe('Evaluation Runs API', () => {
     });
   });
 
-  describe('POST /api/storage/evaluation-runs/:id/retry-judgement', () => {
+  describe('POST /api/storage/evaluation-runs/:id/retry-judgement (kebab entry point → shared 202+poll job)', () => {
+    const summary = { retried: 1, succeeded: 1, failed: 0, results: [{ testCaseId: 'tc1', reportId: 'r1', outcome: 'succeeded', passFailStatus: 'passed' }] };
+
+    beforeEach(() => {
+      mockRetryJudgementForRun.mockReset();
+      mockCountRetryableCases.mockReset();
+      mockCountRetryableCases.mockResolvedValue(1);
+    });
+
+    /** Drive the background job to a terminal state via the status endpoint. */
+    async function pollStatus(id: string, attempts = 50) {
+      for (let i = 0; i < attempts; i++) {
+        const res = await request(app).get(`/api/storage/evaluation-runs/${id}/retry-judgement/status`);
+        if (res.status === 200 && res.body.status !== 'running') return res.body;
+        await new Promise(r => setTimeout(r, 5));
+      }
+      throw new Error('retry-judgement job did not settle');
+    }
+
     it('404s when the run does not exist', async () => {
       mockEvaluationRunsGetById.mockResolvedValueOnce(null);
       const res = await request(app).post('/api/storage/evaluation-runs/nope/retry-judgement');
       expect(res.status).toBe(404);
     });
 
-    it('400s when the run has no judge-failed test cases', async () => {
-      mockEvaluationRunsGetById.mockResolvedValueOnce({
-        id: 'run-1', docType: 'evaluation-run', status: 'completed',
-        results: { tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' } },
-      });
-      const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
-      expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/no judge-failed/i);
-      expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
-    });
-
-    it('400s when the run is still running, even with a judge-failed-shaped result', async () => {
+    it('409s when the run is still running, even with a judge-failed-shaped result', async () => {
       mockEvaluationRunsGetById.mockResolvedValueOnce({
         id: 'run-1', docType: 'evaluation-run', status: 'running',
-        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
       });
       const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
     });
 
-    it('200s and forwards the outcome when applicable', async () => {
+    it('202s immediately with the pre-flight total, then exposes the summary via the status poll', async () => {
       mockEvaluationRunsGetById.mockResolvedValueOnce({
-        id: 'run-1', docType: 'evaluation-run', status: 'completed',
-        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+        id: 'run-202', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
       });
-      mockRetryJudgementForRun.mockResolvedValueOnce({ retried: 1, nowPassed: 1, stillFailed: 0, skipped: 0, skipReasons: {} });
+      mockRetryJudgementForRun.mockResolvedValueOnce(summary);
 
-      const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ retried: 1, nowPassed: 1, stillFailed: 0, skipped: 0, skipReasons: {} });
+      const res = await request(app).post('/api/storage/evaluation-runs/run-202/retry-judgement');
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual(expect.objectContaining({ jobId: 'run-202', status: 'running', total: 1 }));
       expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'run-1' }),
-        expect.anything()
+        expect.objectContaining({ id: 'run-202' }),
+        expect.anything(),
+        expect.objectContaining({ scope: 'errored' })
       );
+
+      const job = await pollStatus('run-202');
+      expect(job.status).toBe('completed');
+      expect(job.summary).toEqual(summary);
     });
 
-    it('500s when retryJudgementForRun throws', async () => {
+    it('surfaces a pipeline failure through the status poll (not a 500 on the POST)', async () => {
       mockEvaluationRunsGetById.mockResolvedValueOnce({
-        id: 'run-1', docType: 'evaluation-run', status: 'completed',
-        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+        id: 'run-fail', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
       });
       mockRetryJudgementForRun.mockRejectedValueOnce(new Error('judge down'));
-      const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
-      expect(res.status).toBe(500);
+      const res = await request(app).post('/api/storage/evaluation-runs/run-fail/retry-judgement');
+      expect(res.status).toBe(202);
+      const job = await pollStatus('run-fail');
+      expect(job.status).toBe('failed');
+      expect(job.error).toMatch(/judge down/);
     });
 
     it('409s a second concurrent retry-judgement request for the SAME run while the first is still in flight', async () => {
       const runDoc = {
-        id: 'run-1', docType: 'evaluation-run', status: 'completed',
-        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+        id: 'run-409', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
       };
       mockEvaluationRunsGetById.mockResolvedValue(runDoc);
 
       let resolveFirst: (v: any) => void;
-      let signalStarted: () => void;
-      const firstStarted = new Promise<void>(resolve => { signalStarted = resolve; });
-      mockRetryJudgementForRun.mockImplementationOnce(() => {
-        signalStarted();
-        return new Promise(resolve => { resolveFirst = resolve; });
-      });
+      mockRetryJudgementForRun.mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }));
 
-      // supertest is thenable-lazy — a request isn't actually dispatched
-      // until something drives its promise (`.then`/`.catch`/`await`). Kick
-      // off dispatch explicitly, then wait for the mock's OWN synchronous
-      // signal (not a timer) that the handler has reached (and registered
-      // in) the in-progress guard before firing the second request.
-      const firstReq = request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
-      firstReq.catch(() => {});
-      await firstStarted;
+      const firstRes = await request(app).post('/api/storage/evaluation-runs/run-409/retry-judgement');
+      expect(firstRes.status).toBe(202);
 
-      const secondRes = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      const secondRes = await request(app).post('/api/storage/evaluation-runs/run-409/retry-judgement');
       expect(secondRes.status).toBe(409);
       expect(secondRes.body.error).toMatch(/already in progress/i);
 
-      resolveFirst!({ retried: 1, nowPassed: 1, stillFailed: 0, skipped: 0, skipReasons: {} });
-      const firstRes = await firstReq;
-      expect(firstRes.status).toBe(200);
+      resolveFirst!(summary);
+      const job = await pollStatus('run-409');
+      expect(job.status).toBe('completed');
     });
 
     it('releases the in-progress guard after a failure, so a later request is not blocked forever', async () => {
       mockEvaluationRunsGetById.mockResolvedValue({
-        id: 'run-1', docType: 'evaluation-run', status: 'completed',
-        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+        id: 'run-release', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
       });
       mockRetryJudgementForRun.mockRejectedValueOnce(new Error('judge down'));
-      const failedRes = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
-      expect(failedRes.status).toBe(500);
+      const failedRes = await request(app).post('/api/storage/evaluation-runs/run-release/retry-judgement');
+      expect(failedRes.status).toBe(202);
+      await pollStatus('run-release');
 
-      mockRetryJudgementForRun.mockResolvedValueOnce({ retried: 1, nowPassed: 1, stillFailed: 0, skipped: 0, skipReasons: {} });
-      const retryRes = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
-      expect(retryRes.status).toBe(200);
+      mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+      const retryRes = await request(app).post('/api/storage/evaluation-runs/run-release/retry-judgement');
+      expect(retryRes.status).toBe(202);
+      await pollStatus('run-release');
     });
   });
 

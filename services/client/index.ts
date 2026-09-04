@@ -62,5 +62,4 @@ export {
   type RetryJudgementCaseResult,
   type RetryJudgementJobStatus,
   type RerunOverrides,
-  type RetryJudgementOutcome,
 } from './evaluationRunsApi';

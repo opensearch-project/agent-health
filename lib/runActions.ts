@@ -19,13 +19,19 @@
  *     RerunConfirmDialog / EvalRunsPage).
  *   - Retry judgement: only EvaluationRun docs, only when the run is
  *     terminal (not running) AND it has at least one test case whose agent
- *     execution completed but whose judge verdict was 'failed' (a
- *     judge-failed case, as opposed to an agent-failed one — retrying the
- *     judge on a case the agent itself never finished has nothing to
- *     re-grade).
+ *     execution completed but the judge produced NO verdict (a judge-failed
+ *     / "errored" case — trace timeout, judge 400, "evaluator could not
+ *     run" — as opposed to an agent-failed one — retrying the judge on a
+ *     case the agent itself never finished has nothing to re-grade). Same
+ *     predicate the retry-judgement pipeline itself selects on
+ *     (services/evaluation/retryJudgement.ts `isJudgeFailedCase`, keyed on
+ *     the report's `metricsStatus: 'error'`, which the runner mirrors onto
+ *     the run's results map as a `completed` result with no
+ *     `passFailStatus`) and that `lib/runStats` buckets as `errored`.
  */
 
 import type { BenchmarkRun, EvaluationRun } from '@/types';
+import { isEvaluationRun as isEvaluationRunDoc } from '@/types';
 
 /** Minimal shape both BenchmarkRun and EvaluationRun satisfy for these checks. */
 export type RunLike = Pick<BenchmarkRun | EvaluationRun, 'status' | 'results'> & {
@@ -38,9 +44,13 @@ export type RunLike = Pick<BenchmarkRun | EvaluationRun, 'status' | 'results'> &
  * benchmark-embedded BenchmarkRun (`benchmark.runs[]`). The two share a lot
  * of shape but only EvaluationRun docs carry `docType: 'evaluation-run'` and
  * support the rerun/retry-judgement endpoints.
+ *
+ * Null-tolerant wrapper over the typed predicate in `types/index.ts` (the
+ * single source of truth for the docType discriminator) — kept so callers
+ * holding a possibly-null run don't need their own guard.
  */
 export function isEvaluationRun(run: RunLike | null | undefined): run is EvaluationRun {
-  return !!run && (run as any).docType === 'evaluation-run';
+  return !!run && isEvaluationRunDoc(run as BenchmarkRun | EvaluationRun);
 }
 
 /** True while the run has an in-progress executor that a Cancel action could stop. */
@@ -55,13 +65,15 @@ export function isRunTerminal(run: RunLike | null | undefined): boolean {
 
 /**
  * Count test cases where the AGENT finished (`status === 'completed'`) but
- * the JUDGE's verdict was 'failed' — i.e. cases retrying judgement could
- * plausibly flip. Deliberately excludes:
+ * the JUDGE produced no verdict (`passFailStatus` neither 'passed' nor
+ * 'failed') — the "errored" bucket of `lib/runStats` `bucketRunResults`
+ * (issue #242) and exactly the set `POST .../retry-judgement` (default
+ * `scope=errored`) will re-judge. Deliberately excludes:
  *   - `status !== 'completed'` (agent-failed/cancelled/pending cases — no
  *     trajectory to re-judge, or nothing ran).
- *   - `passFailStatus` absent/undefined (evaluator errored, not "failed" —
- *     see issue #242; re-judging those is legitimate too but is out of
- *     scope for THIS predicate, which only counts unambiguous judge fails).
+ *   - a real 'failed' verdict — the judge DID run and graded the case; that
+ *     is a legitimate result, not a judge failure (re-grading it is
+ *     `scope=all`, opt-in from the inspector's dedicated button).
  *
  * `passFailStatus` isn't declared on `EvaluationRun['results']`'s static
  * type (a pre-existing gap — evaluationRunner.ts writes it via an `as any`
@@ -71,8 +83,10 @@ export function countJudgeFailed(run: RunLike | null | undefined): number {
   if (!run?.results) return 0;
   let count = 0;
   for (const r of Object.values(run.results)) {
-    const result = r as { status?: string; passFailStatus?: string };
-    if (result.status === 'completed' && result.passFailStatus === 'failed') count++;
+    const result = r as { status?: string; passFailStatus?: string | null };
+    if (result.status !== 'completed') continue;
+    if (result.passFailStatus === 'passed' || result.passFailStatus === 'failed') continue;
+    count++;
   }
   return count;
 }

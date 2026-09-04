@@ -117,7 +117,7 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
     expect(getRes.status()).toBe(404);
   });
 
-  test('Retry judgement is enabled only for a terminal run with a judge-failed case, and flips it to passed', async ({ page, request, testData }) => {
+  test('Retry judgement is enabled only for a terminal run with a judge-failed (no-verdict) case, and flips it to passed', async ({ page, request, testData }) => {
     const tcRes = await request.post('/api/storage/test-cases', {
       data: {
         name: `e2e-retry-judgement-tc-${Date.now()}`,
@@ -133,7 +133,10 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
       data: {
         testCaseId, agentName: 'Demo Agent', agentKey: 'demo',
         modelName: 'demo-model', modelId: 'demo-model',
-        status: 'completed', passFailStatus: 'failed',
+        // Judge-failed = agent completed but the evaluator produced NO
+        // verdict (metricsStatus 'error'), the same shape the runner
+        // persists for trace timeouts / judge errors — NOT a graded 'failed'.
+        status: 'completed', metricsStatus: 'error', passFailStatus: null,
         trajectory: [{ type: 'response', content: 'no root cause found' }],
         metrics: { accuracy: 20, faithfulness: 20, latency_score: 80, trajectory_alignment_score: 20 },
         timestamp: new Date().toISOString(),
@@ -150,7 +153,7 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
         agentKey: 'demo', modelId: 'claude-sonnet', judgeModelId: 'demo-model',
         sources: [{ type: 'test-case-ids', ids: [testCaseId] }],
         trigger: 'api', testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'tc' }],
-        results: { [testCaseId]: { status: 'completed', passFailStatus: 'failed', reportId: report.id } },
+        results: { [testCaseId]: { status: 'completed', reportId: report.id } },
         createdAt: new Date().toISOString(),
       },
     });
@@ -167,7 +170,8 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
 
     // No inline error surfaced by the menu, and the server-side effect is
     // real: the demo judge's accuracy floor (0.7+) always resolves to
-    // 'passed', so the run's persisted stats flip from failed to passed.
+    // 'passed', so the run's persisted stats flip from errored to passed
+    // (the client polls the shared 202 job to completion at a 2s cadence).
     // Poll the API directly rather than asserting on a specific pixel
     // (the stats row has no data-testid) — the UI-visible contract under
     // test is "clicking the enabled menu item doesn't error and the action

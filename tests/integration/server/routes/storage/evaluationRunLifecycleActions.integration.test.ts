@@ -14,9 +14,10 @@
  *   - Rerun with tweaks: POST .../rerun with an overrides body produces a
  *     new run whose config reflects the overrides, still links `rerunOf`,
  *     and is flagged `modified: true` (vs `false` for an untouched rerun).
- *   - Retry judgement: re-judges a terminal run's judge-failed test cases
- *     in place (using the `demo-model` judge provider so this needs no AWS
- *     credentials), and 400s when not applicable.
+ *   - Retry judgement: re-judges a terminal run's judge-failed (no-verdict)
+ *     test cases in place via the shared 202+poll job (using the
+ *     `demo-model` judge provider so this needs no AWS credentials), against
+ *     the test-case VERSION the run snapshotted.
  *
  * Requires the backend server to be running (see tests/integration/testConfig).
  */
@@ -327,32 +328,22 @@ describe('Run lifecycle actions — cancel zombie fallback / rerun with tweaks /
     }, 30000);
   });
 
-  describe('Retry judgement', () => {
-    it('400s when the run has no judge-failed test cases', async () => {
-      if (!backendAvailable) return;
-      const run = await seedEvalRun({
-        status: 'completed',
-        results: { tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r-nonexistent' } },
-      });
-      cleanupIds.evalRuns.push(run.id);
-
-      const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}/retry-judgement`, { method: 'POST' });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/no judge-failed/i);
-    }, 15000);
-
-    it('400s when the run is still running, even with a judge-failed-shaped result', async () => {
-      if (!backendAvailable) return;
-      const run = await seedEvalRun({
-        status: 'running',
-        results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r-nonexistent' } },
-      });
-      cleanupIds.evalRuns.push(run.id);
-
-      const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}/retry-judgement`, { method: 'POST' });
-      expect(res.status).toBe(400);
-    }, 15000);
+  describe('Retry judgement (kebab entry point → shared 202+poll job; snapshotted test-case version)', () => {
+    // The route itself (404/409 gates, errored-only selection, scope=all,
+    // double-submit guard, status poll) is covered by
+    // evaluationRuns.retryJudgement.integration.test.ts. This block covers
+    // what THIS change adds to the shared pipeline: the judge is run against
+    // the test-case VERSION the run snapshotted, not today's definition.
+    const pollRetryJudgement = async (runId: string, maxAttempts = 100): Promise<any> => {
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${runId}/retry-judgement/status`);
+        if (!res.ok) throw new Error(`Status poll failed: ${res.status} ${await res.text()}`);
+        const job = await res.json();
+        if (job.status === 'completed' || job.status === 'failed') return job;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      throw new Error(`retry-judgement job for ${runId} did not complete within ${maxAttempts} polls`);
+    };
 
     it('404s when the run does not exist', async () => {
       if (!backendAvailable) return;
@@ -360,46 +351,73 @@ describe('Run lifecycle actions — cancel zombie fallback / rerun with tweaks /
       expect(res.status).toBe(404);
     }, 15000);
 
-    it('re-judges a judge-failed case using the demo judge and updates the report + run stats', async () => {
+    it('re-judges a judge-failed (no-verdict) case against its snapshotted test-case version and updates report + run stats', async () => {
       if (!backendAvailable) return;
 
-      const tc1 = await createTestCase('Retry Judgement TC1');
+      const tc1 = await createTestCase('Retry Judgement Snapshot TC1');
       cleanupIds.testCases.push(tc1);
 
-      const report = await seedReport({ testCaseId: tc1, passFailStatus: 'failed' });
+      const report = await seedReport({ testCaseId: tc1, metricsStatus: 'error', passFailStatus: null });
       cleanupIds.reports.push(report.id);
 
       const run = await seedEvalRun({
         status: 'completed',
         judgeModelId: 'demo-model',
-        testCaseSnapshots: [{ id: tc1, version: 1, name: 'Retry Judgement TC1' }],
-        results: { [tc1]: { status: 'completed', passFailStatus: 'failed', reportId: report.id } },
+        testCaseSnapshots: [{ id: tc1, version: 1, name: 'Retry Judgement Snapshot TC1' }],
+        results: { [tc1]: { status: 'completed', reportId: report.id } },
       });
       cleanupIds.evalRuns.push(run.id);
 
       const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}/retry-judgement`, { method: 'POST' });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.retried).toBe(1);
-      expect(body.skipped).toBe(0);
+      expect(res.status).toBe(202);
+      const started = await res.json();
+      expect(started.total).toBe(1);
+
+      const job = await pollRetryJudgement(run.id);
+      expect(job.status).toBe('completed');
+      expect(job.summary.retried).toBe(1);
+      expect(job.summary.succeeded).toBe(1);
       // The demo/mock judge's accuracy floor (0.7+) always resolves to
       // 'passed' — see server/routes/judge.ts generateMockEvaluation.
-      expect(body.nowPassed).toBe(1);
+      expect(job.summary.results[0].passFailStatus).toBe('passed');
 
-      const getRunRes = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}`);
-      const persistedRun = await getRunRes.json();
+      const persistedRun = await (await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}`)).json();
       expect(persistedRun.results[tc1].passFailStatus).toBe('passed');
       expect(persistedRun.stats.passed).toBe(1);
-      expect(persistedRun.stats.failed).toBe(0);
+      expect(persistedRun.stats.errored ?? 0).toBe(0);
 
-      const getReportRes = await fetch(`${BASE_URL}/api/storage/runs/${report.id}`);
-      const persistedReport = await getReportRes.json();
+      const persistedReport = await (await fetch(`${BASE_URL}/api/storage/runs/${report.id}`)).json();
       expect(persistedReport.passFailStatus).toBe('passed');
       expect(persistedReport.llmJudgeReasoning).toBeTruthy();
+    }, 30000);
 
-      // Retrying again is a true no-op now (no judge-failed cases left).
-      const secondRes = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}/retry-judgement`, { method: 'POST' });
-      expect(secondRes.status).toBe(400);
+    it('records a version-specific failure (and does not fall back to the current doc) when the snapshotted version no longer exists', async () => {
+      if (!backendAvailable) return;
+
+      const tc1 = await createTestCase('Retry Judgement Missing Version TC');
+      cleanupIds.testCases.push(tc1);
+
+      const report = await seedReport({ testCaseId: tc1, metricsStatus: 'error', passFailStatus: null });
+      cleanupIds.reports.push(report.id);
+
+      const run = await seedEvalRun({
+        status: 'completed',
+        judgeModelId: 'demo-model',
+        testCaseSnapshots: [{ id: tc1, version: 99, name: 'Retry Judgement Missing Version TC' }],
+        results: { [tc1]: { status: 'completed', reportId: report.id } },
+      });
+      cleanupIds.evalRuns.push(run.id);
+
+      const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${run.id}/retry-judgement`, { method: 'POST' });
+      expect(res.status).toBe(202);
+      const job = await pollRetryJudgement(run.id);
+      expect(job.status).toBe('completed');
+      expect(job.summary.failed).toBe(1);
+      expect(job.summary.results[0].error).toBe('test case version 99 not found');
+
+      // Report untouched — the judge never ran.
+      const persistedReport = await (await fetch(`${BASE_URL}/api/storage/runs/${report.id}`)).json();
+      expect(persistedReport.metricsStatus).toBe('error');
     }, 30000);
   });
 });

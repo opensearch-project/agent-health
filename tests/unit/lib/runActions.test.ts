@@ -63,14 +63,14 @@ describe('isRunRunning / isRunTerminal', () => {
 });
 
 describe('countJudgeFailed', () => {
-  it('counts only completed results with passFailStatus failed', () => {
+  it('counts only completed results with NO judge verdict (the errored bucket the retry pipeline re-judges)', () => {
     const run = evalRun({
       results: {
-        tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' },
-        tc2: { status: 'completed', passFailStatus: 'failed', reportId: 'r2' },
-        tc3: { status: 'completed', passFailStatus: 'failed', reportId: 'r3' },
-        tc4: { status: 'failed', reportId: 'r4' }, // agent-failed, not judge-failed
-        tc5: { status: 'completed', reportId: 'r5' }, // errored (no verdict) — not counted
+        tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' }, // graded — not counted
+        tc2: { status: 'completed', passFailStatus: 'failed', reportId: 'r2' }, // graded (real fail) — not counted
+        tc3: { status: 'completed', reportId: 'r3' },                            // errored (no verdict) — counted
+        tc4: { status: 'completed', passFailStatus: null, reportId: 'r4' },      // errored (explicit null) — counted
+        tc5: { status: 'failed', reportId: 'r5' },                                // agent-failed, nothing to re-judge
         tc6: { status: 'pending' },
       },
     });
@@ -113,7 +113,7 @@ describe('getRunActionVisibility — full matrix', () => {
   it('retry judgement is false for benchmark-embedded runs regardless of status/results', () => {
     const run = benchmarkRun({
       status: 'completed',
-      results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+      results: { tc1: { status: 'completed', reportId: 'r1' } },
     });
     const visibility = getRunActionVisibility(run);
     expect(visibility.canRetryJudgement).toBe(false);
@@ -123,17 +123,20 @@ describe('getRunActionVisibility — full matrix', () => {
   it('retry judgement is false while an EvaluationRun is still running, even with judge-failed cases', () => {
     const run = evalRun({
       status: 'running',
-      results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+      results: { tc1: { status: 'completed', reportId: 'r1' } },
     });
     const visibility = getRunActionVisibility(run);
     expect(visibility.canRetryJudgement).toBe(false);
     expect(visibility.retryJudgementDisabledReason).toMatch(/only available once the run finishes/i);
   });
 
-  it('retry judgement is false for a terminal EvaluationRun with zero judge-failed cases', () => {
+  it('retry judgement is false for a terminal EvaluationRun with zero judge-failed cases (graded pass AND graded fail both count as judged)', () => {
     const run = evalRun({
       status: 'completed',
-      results: { tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' } },
+      results: {
+        tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' },
+        tc2: { status: 'completed', passFailStatus: 'failed', reportId: 'r2' },
+      },
     });
     const visibility = getRunActionVisibility(run);
     expect(visibility.canRetryJudgement).toBe(false);
@@ -146,7 +149,7 @@ describe('getRunActionVisibility — full matrix', () => {
       status: 'completed',
       results: {
         tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' },
-        tc2: { status: 'completed', passFailStatus: 'failed', reportId: 'r2' },
+        tc2: { status: 'completed', reportId: 'r2' },
       },
     });
     const visibility = getRunActionVisibility(run);
@@ -158,7 +161,7 @@ describe('getRunActionVisibility — full matrix', () => {
   it('retry judgement is true for a "failed" (not just "completed") terminal run with judge-failed cases', () => {
     const run = evalRun({
       status: 'failed',
-      results: { tc1: { status: 'completed', passFailStatus: 'failed', reportId: 'r1' } },
+      results: { tc1: { status: 'completed', reportId: 'r1' } },
     });
     expect(getRunActionVisibility(run).canRetryJudgement).toBe(true);
   });
