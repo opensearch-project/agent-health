@@ -207,18 +207,50 @@ export class ApiClient {
    *
    * Prioritizes:
    * 1. Exact ID match
-   * 2. Exact name match (case-sensitive)
+   * 2. Exact name match
+   * 3. Trimmed, case-insensitive name match — but only when unambiguous.
+   *    Name-keyed identity is fragile ("My Bench" vs "my bench " used to
+   *    silently create a second benchmark); a unique fuzzy match reuses the
+   *    existing doc instead of minting a duplicate. An ambiguous fuzzy match
+   *    returns null so the caller fails loudly rather than guessing — callers
+   *    that would CREATE on null must use {@link findBenchmarkDetailed} to
+   *    distinguish "not found" from "ambiguous" (creating a third
+   *    near-duplicate on ambiguity would defeat the whole point).
    */
   async findBenchmark(identifier: string): Promise<Benchmark | null> {
+    const { benchmark } = await this.findBenchmarkDetailed(identifier);
+    return benchmark;
+  }
+
+  /**
+   * Ambiguity-aware variant of {@link findBenchmark}. `ambiguousMatches` is
+   * non-empty only when no exact match exists and 2+ benchmarks collide on
+   * the trimmed/case-insensitive name — the caller must refuse to guess
+   * (and must NOT create a new benchmark under the colliding name).
+   */
+  async findBenchmarkDetailed(
+    identifier: string
+  ): Promise<{ benchmark: Benchmark | null; ambiguousMatches: Benchmark[] }> {
     // 1. Exact ID match
     const byId = await this.getBenchmark(identifier);
     if (byId) {
-      return byId;
+      return { benchmark: byId, ambiguousMatches: [] };
     }
 
-    // 2. Exact name match (case-sensitive)
+    // 2. Exact name match
     const benchmarks = await this.listBenchmarks();
-    return benchmarks.find((b) => b.name === identifier) || null;
+    const exact = benchmarks.find((b) => b.name === identifier);
+    if (exact) {
+      return { benchmark: exact, ambiguousMatches: [] };
+    }
+
+    // 3. Unique trimmed case-insensitive match
+    const norm = (s: string) => s.trim().toLowerCase();
+    const fuzzy = benchmarks.filter((b) => norm(b.name) === norm(identifier));
+    if (fuzzy.length === 1) {
+      return { benchmark: fuzzy[0], ambiguousMatches: [] };
+    }
+    return { benchmark: null, ambiguousMatches: fuzzy.length > 1 ? fuzzy : [] };
   }
 
   /**

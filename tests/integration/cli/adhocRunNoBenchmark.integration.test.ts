@@ -86,7 +86,6 @@ describe('Ad-hoc evaluation runs do not create benchmarks (quick-mode dedup)', (
       const benchmarksBefore = await client.listBenchmarks();
 
       // Same "command" twice: identical ad-hoc runs (what quick mode now issues)
-      const runs: Array<{ id: string; benchmarkId?: string }> = [];
       for (let i = 0; i < 2; i++) {
         const run = await client.createEvaluationRun(
           {
@@ -98,35 +97,16 @@ describe('Ad-hoc evaluation runs do not create benchmarks (quick-mode dedup)', (
           },
           () => {}
         );
-        if (run?.id) {
-          createdRunIds.push(run.id);
-          runs.push({ id: run.id, benchmarkId: (run as any).benchmarkId });
-        }
+        if (run?.id) createdRunIds.push(run.id);
       }
-      expect(runs).toHaveLength(2);
 
       const benchmarksAfter = await client.listBenchmarks();
 
-      // NOTE: other integration tests run concurrently and may legitimately
-      // create benchmarks, so a global count comparison is racy. Assert the
-      // actual invariant instead:
-      //  1. the ad-hoc runs are benchmark-free,
-      //  2. no benchmark (new or old) contains our seeded test case,
-      //  3. no new quick-* benchmark appeared.
-      for (const r of runs) {
-        expect(r.benchmarkId).toBeUndefined();
-      }
-      const referencing = benchmarksAfter.filter((b) =>
-        (b.testCaseIds || []).some((id) => createdTestCaseIds.includes(id))
+      // No benchmark docs minted by ad-hoc runs — and definitely no quick-* ones
+      expect(benchmarksAfter.length).toBe(benchmarksBefore.length);
+      expect(benchmarksAfter.filter((b) => /^quick-\d+$/.test(b.name))).toEqual(
+        benchmarksBefore.filter((b) => /^quick-\d+$/.test(b.name))
       );
-      expect(referencing).toEqual([]);
-      const beforeQuick = new Set(
-        benchmarksBefore.filter((b) => /^quick-\d+$/.test(b.name)).map((b) => b.id)
-      );
-      const newQuick = benchmarksAfter.filter(
-        (b) => /^quick-\d+$/.test(b.name) && !beforeQuick.has(b.id)
-      );
-      expect(newQuick).toEqual([]);
     },
     TEST_TIMEOUT
   );
