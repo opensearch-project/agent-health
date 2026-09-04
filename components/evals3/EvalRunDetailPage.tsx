@@ -16,7 +16,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Loader2, CheckCircle2, XCircle, Clock, AlertTriangle,
-  ChevronDown, ChevronRight, ArrowLeft, Bookmark, RotateCcw, Link2,
+  ChevronDown, ChevronRight, ArrowLeft, Bookmark, Link2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -86,7 +86,6 @@ export const EvalRunDetailPage: React.FC = () => {
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [promoteName, setPromoteName] = useState('');
   const [promoting, setPromoting] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   // Provenance: when this run was itself created via re-run, look up the
   // source run's name for the chip (falls back to a truncated id if the
@@ -132,17 +131,13 @@ export const EvalRunDetailPage: React.FC = () => {
     return () => { cancelled = true; };
   }, [run?.rerunOf]);
 
+  // Cancel lives in the RunActionsMenu kebab, which owns its own busy
+  // spinner + inline error surface — so this just performs the call and
+  // rethrows for the menu to display.
   const handleCancel = async () => {
     if (!runId) return;
-    setCancelling(true);
-    try {
-      await cancelEvaluationRun(runId);
-      await loadRun();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setCancelling(false);
-    }
+    await cancelEvaluationRun(runId);
+    await loadRun();
   };
 
   const handlePromote = async () => {
@@ -264,24 +259,20 @@ export const EvalRunDetailPage: React.FC = () => {
 
             {/* Actions */}
             <div className="flex items-center gap-2">
-              {/* Re-run: kick off a brand-new, independent run with the exact
-                  same config (agent, test-case sources, evaluator, judge
-                  model) via POST .../rerun, linked back via `rerunOf`.
-                  Available regardless of this run's status — re-running a
-                  still-running run is fine, the duplicate is independent. */}
-              <Button
-                variant="outline"
-                size="sm"
-                data-testid="rerun-run-btn"
-                onClick={() => setRerunDialogOpen(true)}
-              >
-                <RotateCcw size={14} className="mr-1" /> Re-run
-              </Button>
+              {/* Lifecycle actions (Re-run / Cancel / Retry judgement /
+                  Delete) all live in the "…" kebab below — same treatment
+                  as the inspector header (owner papercut: no standalone
+                  Re-run / Cancel buttons next to the kebab). Re-run kicks
+                  off a brand-new, independent run with the exact same
+                  config via POST .../rerun, linked back via `rerunOf`;
+                  available regardless of this run's status — re-running a
+                  still-running run is fine, the duplicate is independent.
+                  The non-lifecycle page actions below stay as buttons. */}
               {/* Secondary path: open the New-Run composer pre-filled from
                   this run's config instead of launching immediately, so the
                   user can tweak agent/judge/sources/benchmark first. Restores
                   the capability the old "Re-run" button used to provide
-                  before it became the one-click duplicate above — flagged by
+                  before it became the one-click duplicate — flagged by
                   codex_review as a real loss otherwise (the composer has no
                   other way to start a new run pre-filled from an existing
                   one). */}
@@ -305,12 +296,6 @@ export const EvalRunDetailPage: React.FC = () => {
               >
                 Customize before re-running…
               </Button>
-              {run.status === 'running' && (
-                <Button variant="destructive" size="sm" onClick={handleCancel} disabled={cancelling}>
-                  {cancelling ? <Loader2 size={14} className="mr-1 animate-spin" /> : null}
-                  Cancel
-                </Button>
-              )}
               {!run.benchmarkId && run.status === 'completed' && (
                 <Button variant="outline" size="sm" onClick={() => setPromoteOpen(true)}>
                   <Bookmark size={14} className="mr-1" /> Convert to Benchmark
@@ -329,9 +314,10 @@ export const EvalRunDetailPage: React.FC = () => {
                 runId={run.id}
                 runName={run.name}
                 isRunning={run.status === 'running'}
-                hideCancel
+                onRerun={() => setRerunDialogOpen(true)}
                 canRetryJudgement={getRunActionVisibility(run).canRetryJudgement}
                 retryJudgementDisabledReason={getRunActionVisibility(run).retryJudgementDisabledReason}
+                judgeFailedCount={getRunActionVisibility(run).judgeFailedCount}
                 onDelete={handleDelete}
                 onCancel={handleCancel}
                 onRetryJudgement={handleRetryJudgement}

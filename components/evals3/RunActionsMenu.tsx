@@ -5,15 +5,17 @@
 
 /*
  * RunActionsMenu — shared kebab menu for the run-lifecycle action matrix:
- * Delete, Cancel, Retry Judgement. Used identically on every run surface
- * (runs list rows, benchmark runs list rows, run detail/report page,
- * inspector header) so the affordance is consistent everywhere.
+ * Re-run (opt-in), Cancel, Retry Judgement, Delete. Used identically on
+ * every run surface (runs list rows, run detail/report page, inspector
+ * header) so the affordance is consistent everywhere.
  *
- * Re-run is deliberately NOT in this menu — every surface already has its
- * own dedicated, tested Re-run button/icon (RerunConfirmDialog); folding it
- * in here would just be a second path to the same action. This menu owns
- * the three actions that previously had NO consistent home (some surfaces
- * had inline buttons, most had nothing).
+ * Re-run is opt-in via `onRerun`: the run report page and the inspector
+ * header used to carry standalone Re-run / Retry-judgement / Compare
+ * buttons NEXT TO this kebab, which the owner asked to collapse — on those
+ * surfaces the kebab is now the single home for every lifecycle action. The
+ * runs-list rows keep their existing tested Re-run icon and don't pass
+ * `onRerun`, so the item simply isn't rendered there (no second path to the
+ * same action).
  *
  * Purely presentational + confirm/loading state — the actual API calls are
  * owned by the parent page (different pages have different post-action
@@ -22,7 +24,7 @@
  */
 
 import React, { useState } from 'react';
-import { MoreHorizontal, Trash2, StopCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { MoreHorizontal, Trash2, StopCircle, RefreshCw, RotateCcw, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -39,15 +41,24 @@ export interface RunActionsMenuProps {
   /** Cancel is only rendered while true (spec: "cancel only for ongoing ones"). */
   isRunning: boolean;
   /**
-   * Suppress the Cancel item even while running — for pages that already
-   * render their own dedicated Cancel button (e.g. EvalRunDetailPage) and
-   * would otherwise show the action twice. Defaults to false (Cancel shown
-   * whenever `isRunning`).
+   * Render a Re-run item that calls this (typically opens the prefilled
+   * RerunConfirmDialog). Omitted → no Re-run item (surfaces with their own
+   * Re-run affordance, e.g. the runs-list row icon).
    */
-  hideCancel?: boolean;
+  onRerun?: () => void;
+  /** Re-run item enablement; defaults to true when `onRerun` is given. */
+  canRerun?: boolean;
+  /** Tooltip/title shown on the disabled Re-run item when applicable. */
+  rerunDisabledReason?: string;
   canRetryJudgement: boolean;
   /** Tooltip/title shown on the disabled Retry Judgement item when applicable. */
   retryJudgementDisabledReason?: string;
+  /**
+   * When provided, the Retry Judgement label reads "Retry judgement (N)" so
+   * the user sees how many judge-failed cases the action will re-judge —
+   * the same count the RetryJudgementConfirmDialog is handed.
+   */
+  judgeFailedCount?: number;
   onDelete: () => Promise<void> | void;
   onCancel: () => Promise<void> | void;
   onRetryJudgement: () => Promise<void> | void;
@@ -60,9 +71,12 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
   runId,
   runName,
   isRunning,
-  hideCancel = false,
+  onRerun,
+  canRerun = true,
+  rerunDisabledReason,
   canRetryJudgement,
   retryJudgementDisabledReason,
+  judgeFailedCount,
   onDelete,
   onCancel,
   onRetryJudgement,
@@ -108,6 +122,7 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
           <button
             data-testid={`run-actions-menu-trigger-${runId}`}
             title="Run actions"
+            aria-label="Run actions"
             className={`${triggerSizeClass} inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors`}
             onClick={e => e.stopPropagation()}
           >
@@ -115,7 +130,17 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align={align} onClick={e => e.stopPropagation()}>
-          {isRunning && !hideCancel && (
+          {onRerun && (
+            <DropdownMenuItem
+              data-testid={`run-action-rerun-${runId}`}
+              disabled={!canRerun || busy !== null}
+              title={!canRerun ? rerunDisabledReason : undefined}
+              onSelect={e => { e.preventDefault(); if (canRerun) { setMenuOpen(false); onRerun(); } }}
+            >
+              <RotateCcw size={14} className="mr-2" /> Re-run
+            </DropdownMenuItem>
+          )}
+          {isRunning && (
             <DropdownMenuItem
               data-testid={`run-action-cancel-${runId}`}
               disabled={busy !== null}
@@ -128,9 +153,18 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
             data-testid={`run-action-retry-judgement-${runId}`}
             disabled={!canRetryJudgement || busy !== null}
             title={!canRetryJudgement ? retryJudgementDisabledReason : undefined}
-            onSelect={e => { e.preventDefault(); if (canRetryJudgement) runAction('retry-judgement', onRetryJudgement); }}
+            onSelect={e => {
+              e.preventDefault();
+              if (!canRetryJudgement) return;
+              // Close first: on the inspector this opens the
+              // RetryJudgementConfirmDialog, and a modal dialog stacked on a
+              // still-open modal dropdown fights over focus.
+              setMenuOpen(false);
+              runAction('retry-judgement', onRetryJudgement);
+            }}
           >
-            <RefreshCw size={14} className="mr-2" /> Retry judgement
+            <RefreshCw size={14} className="mr-2" />
+            {judgeFailedCount === undefined ? 'Retry judgement' : `Retry judgement (${judgeFailedCount})`}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem

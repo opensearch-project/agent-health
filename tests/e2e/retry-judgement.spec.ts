@@ -21,7 +21,17 @@
 
 import { test, expect } from './fixtures/test-fixtures';
 
-test.describe('Run inspector — Retry judgement button', () => {
+// Retry judgement lives in the header "…" kebab (owner papercut: the
+// standalone header button was removed). Open the kebab and return the item.
+async function openRetryJudgementItem(page: import('@playwright/test').Page, runId: string) {
+  await expect(page.locator('[data-testid="inspector-retry-judgement-btn"]')).toHaveCount(0);
+  await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
+  const item = page.locator(`[data-testid="run-action-retry-judgement-${runId}"]`);
+  await expect(item).toBeVisible({ timeout: 15000 });
+  return item;
+}
+
+test.describe('Run inspector — Retry judgement (kebab item)', () => {
   let testCaseId: string | null = null;
   let runId: string | null = null;
   let erroredReportId: string | null = null;
@@ -93,16 +103,16 @@ test.describe('Run inspector — Retry judgement button', () => {
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('button renders with the judge-failed count and is enabled', async ({ page }) => {
+  test('kebab item renders with the judge-failed count and is enabled', async ({ page }) => {
     test.skip(!seeded, 'Could not seed run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    const btn = page.locator('[data-testid="inspector-retry-judgement-btn"]');
-    await expect(btn).toBeVisible({ timeout: 15000 });
+    const btn = await openRetryJudgementItem(page, runId!);
     await expect(btn).toContainText('Retry judgement (1)');
-    await expect(btn).not.toBeDisabled();
+    await expect(btn).not.toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
   });
 
   test('clicking opens a confirm dialog showing the count + judge model', async ({ page }) => {
@@ -111,7 +121,7 @@ test.describe('Run inspector — Retry judgement button', () => {
     await page.goto(`/evaluations/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    await page.locator('[data-testid="inspector-retry-judgement-btn"]').click();
+    await (await openRetryJudgementItem(page, runId!)).click();
 
     const dialog = page.locator('[data-testid="retry-judgement-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
@@ -162,7 +172,7 @@ test.describe('Run inspector — Retry judgement button', () => {
 
     await page.goto(`/evaluations/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await page.locator('[data-testid="inspector-retry-judgement-btn"]').click();
+    await (await openRetryJudgementItem(page, runId!)).click();
 
     const dialog = page.locator('[data-testid="retry-judgement-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
@@ -183,7 +193,7 @@ test.describe('Run inspector — Retry judgement button', () => {
   });
 });
 
-test.describe('Run inspector — Retry judgement button disabled when no judge failures', () => {
+test.describe('Run inspector — Retry judgement kebab item disabled when no judge failures', () => {
   let testCaseId: string | null = null;
   let runId: string | null = null;
   let passedReportId: string | null = null;
@@ -249,16 +259,18 @@ test.describe('Run inspector — Retry judgement button disabled when no judge f
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('button is visible but disabled when there are no judge-failed cases', async ({ page }) => {
+  test('kebab item is present but disabled when there are no judge-failed cases', async ({ page }) => {
     test.skip(!seeded, 'Could not seed run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    const btn = page.locator('[data-testid="inspector-retry-judgement-btn"]');
-    await expect(btn).toBeVisible({ timeout: 15000 });
+    const btn = await openRetryJudgementItem(page, runId!);
     await expect(btn).toContainText('Retry judgement (0)');
-    await expect(btn).toBeDisabled();
+    // Radix marks disabled items via aria-disabled / data-disabled.
+    await expect(btn).toHaveAttribute('aria-disabled', 'true');
+    await expect(btn).toHaveAttribute('title', 'No judge-failed cases to retry');
+    await page.keyboard.press('Escape');
   });
 });
 
@@ -276,7 +288,7 @@ test.describe('Run inspector — Retry judgement button disabled when no judge f
  * carries docType) over the embedded projection when one exists — same class
  * of bug as the Re-run button fix (goyamegh/rerun-idspace-fix).
  */
-test.describe('Run inspector — Retry judgement button on the BENCHMARK-scoped route (regression)', () => {
+test.describe('Run inspector — Retry judgement kebab item on the BENCHMARK-scoped route (regression)', () => {
   let testCaseId: string | null = null;
   let benchmarkId: string | null = null;
   let runId: string | null = null;
@@ -383,16 +395,16 @@ test.describe('Run inspector — Retry judgement button on the BENCHMARK-scoped 
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('button renders with the judge-failed count on the benchmark-scoped inspector route', async ({ page }) => {
+  test('kebab item renders with the judge-failed count on the benchmark-scoped inspector route', async ({ page }) => {
     test.skip(!seeded, 'Could not seed benchmark-linked run (storage not configured?)');
 
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    const btn = page.locator('[data-testid="inspector-retry-judgement-btn"]');
-    await expect(btn).toBeVisible({ timeout: 15000 });
+    const btn = await openRetryJudgementItem(page, runId!);
     await expect(btn).toContainText('Retry judgement (1)');
-    await expect(btn).not.toBeDisabled();
+    await expect(btn).not.toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
   });
 
   test('clicking opens the confirm dialog on the benchmark-scoped route too', async ({ page }) => {
@@ -401,7 +413,7 @@ test.describe('Run inspector — Retry judgement button on the BENCHMARK-scoped 
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    await page.locator('[data-testid="inspector-retry-judgement-btn"]').click();
+    await (await openRetryJudgementItem(page, runId!)).click();
 
     const dialog = page.locator('[data-testid="retry-judgement-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });

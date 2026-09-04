@@ -98,12 +98,17 @@ test.describe('Re-run an evaluation run', () => {
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('Re-run button is visible on the run report page header', async ({ page }) => {
+  test('Re-run lives in the report page header kebab (no standalone Re-run button)', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${sourceRunId}`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await expect(page.locator('[data-testid="rerun-run-btn"]')).toBeVisible({ timeout: 15000 });
+    // Owner papercut: standalone lifecycle buttons removed; kebab is the only home.
+    await expect(page.locator('[data-testid="rerun-run-btn"]')).toHaveCount(0);
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await expect(page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`)).toBeVisible({ timeout: 15000 });
+    await expect(page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`)).toBeEnabled();
+    await page.keyboard.press('Escape');
   });
 
   test('clicking Re-run opens a confirm dialog with name preview + agent/judge summary', async ({ page }) => {
@@ -111,7 +116,8 @@ test.describe('Re-run an evaluation run', () => {
 
     await page.goto(`/evaluations/runs/${sourceRunId}`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await page.locator('[data-testid="rerun-run-btn"]').click();
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
 
     const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
@@ -152,7 +158,8 @@ test.describe('Re-run an evaluation run', () => {
 
     await page.goto(`/evaluations/runs/${sourceRunId}`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await page.locator('[data-testid="rerun-run-btn"]').click();
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
     await expect(page.locator('[data-testid="rerun-confirm-dialog"]')).toBeVisible({ timeout: 10000 });
 
     await page.locator('[data-testid="rerun-confirm-btn"]').click();
@@ -183,7 +190,7 @@ test.describe('Re-run an evaluation run', () => {
 
     await page.goto(`/evaluations/runs/${sourceRunId}`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await expect(page.locator('[data-testid="rerun-run-btn"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`)).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="rerun-provenance-chip"]')).toHaveCount(0);
   });
 
@@ -293,24 +300,33 @@ test.describe('Run inspector — Re-run button (eval-run mode)', () => {
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('Re-run button is visible in the inspector page header (eval-run mode)', async ({ page }) => {
+  test('Re-run is an enabled kebab item in the inspector header (eval-run mode); no standalone buttons', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    
-    const rerunBtn = page.locator('[data-testid="inspector-rerun-btn"]');
-    await expect(rerunBtn).toBeVisible({ timeout: 15000 });
-    await expect(rerunBtn).not.toBeDisabled();
+
+    // Owner papercut: no standalone Re-run / Retry judgement / Compare buttons.
+    await expect(page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`)).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="inspector-rerun-btn"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="inspector-retry-judgement-btn"]')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Compare' })).toHaveCount(0);
+
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    const rerunItem = page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`);
+    await expect(rerunItem).toBeVisible({ timeout: 10000 });
+    await expect(rerunItem).toBeEnabled();
+    await page.keyboard.press('Escape');
   });
 
-  test('inspector Re-run button opens confirm dialog', async ({ page }) => {
+  test('inspector kebab Re-run opens confirm dialog', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    
-    await page.locator('[data-testid="inspector-rerun-btn"]').click();
+
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
 
     const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
@@ -388,15 +404,20 @@ test.describe('Run inspector — Re-run button hidden for benchmark-embedded run
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('Re-run button is disabled for benchmark-embedded runs', async ({ page }) => {
+  test('kebab Re-run item is disabled for benchmark-embedded runs', async ({ page }) => {
     test.skip(!seeded, 'Could not seed benchmark run (storage not configured?)');
 
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    const rerunBtn = page.locator('[data-testid="inspector-rerun-btn"]');
-    await expect(rerunBtn).toBeVisible({ timeout: 15000 });
-    await expect(rerunBtn).toBeDisabled();
+    await expect(page.locator('[data-testid="inspector-rerun-btn"]')).toHaveCount(0);
+    await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
+    const rerunItem = page.locator(`[data-testid="run-action-rerun-${runId}"]`);
+    await expect(rerunItem).toBeVisible({ timeout: 15000 });
+    // Radix marks disabled items via aria-disabled / data-disabled (not the
+    // native `disabled` attribute), so assert the accessible state.
+    await expect(rerunItem).toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
   });
 });
 
@@ -503,15 +524,17 @@ test.describe('Run inspector — Re-run enabled on the benchmark-scoped route fo
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('Re-run button is enabled on the benchmark-scoped inspector route', async ({ page }) => {
+  test('kebab Re-run item is enabled on the benchmark-scoped inspector route', async ({ page }) => {
     test.skip(!seeded, 'Could not seed dual-written run (storage not configured?)');
 
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    const rerunBtn = page.locator('[data-testid="inspector-rerun-btn"]');
-    await expect(rerunBtn).toBeVisible({ timeout: 15000 });
-    await expect(rerunBtn).not.toBeDisabled();
+    await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
+    const rerunItem = page.locator(`[data-testid="run-action-rerun-${runId}"]`);
+    await expect(rerunItem).toBeVisible({ timeout: 15000 });
+    await expect(rerunItem).not.toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
   });
 
   test('provenance chip renders on the benchmark-scoped inspector route', async ({ page }) => {
