@@ -363,6 +363,34 @@ describe('RunConfigDialog — rerun mode (prepopulated from the source run)', ()
     const missing = screen.getByTestId('run-config-evaluator-missing-item') as HTMLOptionElement;
     expect(missing.disabled).toBe(true);
     expect(evaluatorTrigger().getAttribute('data-value')).toBe('deleted-evaluator');
+    // Known-gone evaluator blocks submit until another is chosen (RCA Default counts).
+    expect(submitBtn().disabled).toBe(true);
+    fireEvent.change(nativeSelectFor(evaluatorTrigger()), { target: { value: '__default__' } });
+    expect(screen.queryByTestId('run-config-evaluator-missing-hint')).toBeNull();
+    expect(submitBtn().disabled).toBe(false);
+  });
+
+  it('does NOT flag the evaluator as missing when the evaluator list failed to load (a network blip must not block re-runs)', async () => {
+    (global as any).fetch = jest.fn(async () => { throw new Error('offline'); });
+    render(dlg({ mode: 'rerun', open: true, onOpenChange: jest.fn(), onRerun: jest.fn(), sourceRun: sourceRun }));
+    await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+    expect(screen.queryByTestId('run-config-evaluator-missing-hint')).toBeNull();
+    expect(submitBtn().disabled).toBe(false);
+  });
+
+  it('keeps in-progress edits when the parent refetches the SAME run (new object, same id) while the dialog is open', () => {
+    const onOpenChange = jest.fn();
+    const { rerender } = render(dlg({ mode: 'rerun', open: true, onOpenChange, onRerun: jest.fn(), sourceRun: sourceRun }));
+    fireEvent.change(concurrencyInput(), { target: { value: '8' } });
+    fireEvent.change(nameInput(), { target: { value: 'My tweaked name' } });
+    // Parent polls → a fresh object for the same run (e.g. stats updated).
+    rerender(dlg({ mode: 'rerun', open: true, onOpenChange, onRerun: jest.fn(), sourceRun: { ...sourceRun, stats: { total: 2 } } as any }));
+    expect(concurrencyInput().value).toBe('8');
+    expect(nameInput().value).toBe('My tweaked name');
+    // A DIFFERENT run id does re-seed.
+    rerender(dlg({ mode: 'rerun', open: true, onOpenChange, onRerun: jest.fn(), sourceRun: { ...sourceRun, id: 'eval-run-other', name: 'Other', concurrency: 5 } as any }));
+    expect(concurrencyInput().value).toBe('5');
+    expect(nameInput().value).toBe('Other (re-run)');
   });
 
   it('re-seeds from the source run each time it opens (a stale tweak never leaks into the next open)', async () => {

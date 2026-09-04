@@ -318,6 +318,60 @@ test.describe('Re-run from the inspector kebab — the SAME dialog as Add Run, p
   });
 });
 
+test.describe('Re-run dialog — source-run agent no longer in config (real Radix Select)', () => {
+  test('shows the retired agent key as the disabled current selection with a hint, blocks Re-run, and re-enables after picking a configured agent', async ({ page, request, testData }) => {
+    const tcRes = await request.post('/api/storage/test-cases', {
+      data: {
+        name: `e2e-rerun-missing-agent-tc-${Date.now()}`,
+        category: 'Test', difficulty: 'Easy', initialPrompt: 'q', expectedOutcomes: ['a'],
+      },
+    });
+    test.skip(!tcRes.ok(), 'Could not create test case (storage not configured?)');
+    const tc = await tcRes.json();
+    const testCaseId = tc.id || tc.testCase?.id;
+    testData.testCase(testCaseId);
+
+    const runId = `eval-run-e2e-missing-agent-${Date.now()}`;
+    const res = await request.put(`/api/storage/evaluation-runs/${runId}`, {
+      data: {
+        id: runId, name: 'E2E Missing Agent Source', status: 'completed',
+        agentKey: 'retired-agent-e2e', modelId: 'claude-sonnet',
+        sources: [{ type: 'test-case-ids', ids: [testCaseId] }],
+        trigger: 'api', testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'tc' }],
+        results: {}, createdAt: new Date().toISOString(),
+      },
+    });
+    test.skip(!res.ok(), 'Could not seed source run');
+    testData.evaluationRun(runId);
+
+    await page.goto(`/evaluations/runs/${runId}`);
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
+    await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${runId}"]`).click();
+    await expect(page.locator('[data-testid="run-config-dialog"]')).toBeVisible({ timeout: 10000 });
+
+    // Never silently swapped: the trigger shows the retired key, the hint
+    // explains, and submit is blocked.
+    await expect(page.locator('[data-testid="run-config-agent-trigger"]')).toContainText('retired-agent-e2e');
+    await expect(page.locator('[data-testid="run-config-agent-missing-hint"]')).toBeVisible();
+    await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeDisabled();
+
+    // The retired entry is present but disabled in the (real Radix) list;
+    // picking a configured agent clears the hint and re-enables submit.
+    await page.locator('[data-testid="run-config-agent-trigger"]').click();
+    await page.waitForSelector('[role="listbox"]', { timeout: 5000 });
+    await expect(page.locator('[data-testid="run-config-agent-missing-item"]')).toHaveAttribute('data-disabled', '');
+    await page.locator('[role="option"]:has-text("Demo Agent")').click();
+    await expect(page.locator('[data-testid="run-config-agent-missing-hint"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="run-config-agent-trigger"]')).toContainText('Demo Agent');
+    await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeEnabled();
+    await expect(page.locator('[data-testid="run-config-modified-hint"]')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.locator('[data-testid="run-config-dialog"]')).not.toBeVisible();
+  });
+});
+
 test.describe('Run inspector header — action menu + Cancel-only-while-running', () => {
   test('inspector header exposes the same action menu for evaluation runs', async ({ page, request, testData }) => {
     const tcRes = await request.post('/api/storage/test-cases', {

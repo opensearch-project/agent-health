@@ -120,38 +120,58 @@ export function valuesFromRun(run: EvaluationRun): RunConfigValues {
   };
 }
 
-export interface RunConfigDialogProps {
-  mode: 'create' | 'rerun';
+interface RunConfigDialogCommonProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /**
-   * create mode: seed values (name/agent/evaluator/judge carried from the
-   * latest run or persisted prefs — the parent decides). Re-applied every
-   * time the dialog opens.
-   */
-  initialValues?: Partial<RunConfigValues>;
-  /** create mode: the fixed test-case source (shown read-only). */
-  benchmark?: Pick<Benchmark, 'id' | 'name' | 'testCaseIds'> | null;
-  /** create mode: receives the final values; the parent starts the run. */
-  onStart?: (values: RunConfigValues) => void | Promise<void>;
-  /** rerun mode: the source run. Dialog renders nothing while null. */
-  sourceRun?: EvaluationRun | null;
-  /** rerun mode: called with the new run's id once POST …/rerun succeeds. */
-  onRerun?: (newRunId: string) => void;
 }
 
-export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
-  mode, open, onOpenChange, initialValues, benchmark, onStart, sourceRun, onRerun,
-}) => {
-  const isRerun = mode === 'rerun';
+export interface RunConfigDialogCreateProps extends RunConfigDialogCommonProps {
+  mode: 'create';
+  /**
+   * Seed values (name/agent/evaluator/judge carried from the latest run or
+   * persisted prefs — the parent decides). Read when the dialog OPENS; the
+   * parent sets them synchronously before flipping `open`.
+   */
+  initialValues?: Partial<RunConfigValues>;
+  /** The fixed test-case source (shown read-only). */
+  benchmark?: Pick<Benchmark, 'id' | 'name' | 'testCaseIds'> | null;
+  /** Receives the final values; the parent starts the run. */
+  onStart: (values: RunConfigValues) => void | Promise<void>;
+}
+
+export interface RunConfigDialogRerunProps extends RunConfigDialogCommonProps {
+  mode: 'rerun';
+  /** The source run. Dialog renders nothing while null. */
+  sourceRun: EvaluationRun | null;
+  /** Called with the new run's id once POST …/rerun succeeds. */
+  onRerun: (newRunId: string) => void;
+}
+
+/** Discriminated on `mode` so create-only / rerun-only props can't be mixed. */
+export type RunConfigDialogProps = RunConfigDialogCreateProps | RunConfigDialogRerunProps;
+
+export const RunConfigDialog: React.FC<RunConfigDialogProps> = (props) => {
+  const { mode, open, onOpenChange } = props;
+  const isRerun = props.mode === 'rerun';
+  const sourceRun = props.mode === 'rerun' ? props.sourceRun : null;
+  const initialValues = props.mode === 'create' ? props.initialValues : undefined;
+  const benchmark = props.mode === 'create' ? props.benchmark : null;
   const [values, setValues] = useState<RunConfigValues>({ name: '', agentKey: '', modelId: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
+  // True only after GET /evaluators SUCCEEDED — a failed fetch must not make
+  // every evaluator look "missing" (and block submit) on a network blip.
   const [evaluatorsLoaded, setEvaluatorsLoaded] = useState(false);
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
 
   // Seed on every open: from the source run (rerun) or the caller (create).
+  // Keyed on the source run's IDENTITY (id), not the object: parents poll /
+  // refetch the run while the dialog is open, and a fresh object with the
+  // same id must NOT wipe the user's in-progress edits (codex finding).
+  // `initialValues` is read at open time only — the create-mode parent sets
+  // it synchronously before flipping `open`.
+  const sourceRunId = sourceRun?.id ?? null;
   useEffect(() => {
     if (!open) return;
     if (isRerun) {
@@ -160,7 +180,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
       setValues({ name: '', agentKey: '', modelId: '', ...initialValues });
     }
     setError(null);
-  }, [open, isRerun, sourceRun]);
+  }, [open, isRerun, sourceRunId]);
 
   // Evaluators (both modes) + benchmarks (rerun's source-swap select).
   useEffect(() => {
@@ -171,10 +191,12 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
         const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`);
         if (response.ok) {
           const data = await response.json();
-          if (!cancelled) setEvaluators(data.evaluators || []);
+          if (!cancelled) {
+            setEvaluators(data.evaluators || []);
+            setEvaluatorsLoaded(true);
+          }
         }
       } catch { /* dropdown just shows the default option */ }
-      if (!cancelled) setEvaluatorsLoaded(true);
       if (isRerun) {
         try {
           const bms = await asyncBenchmarkStorage.getAll();
@@ -214,7 +236,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
         const result = await rerunEvaluationRun(sourceRun.id, overrides);
         setSubmitting(false);
         onOpenChange(false);
-        onRerun?.(result.runId);
+        props.onRerun(result.runId);
       } catch (err: any) {
         setSubmitting(false);
         setError(err?.message || 'Failed to re-run evaluation run');
@@ -230,12 +252,14 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
       judgeModelId: values.judgeModelId || undefined,
       concurrency: values.concurrency ?? undefined,
     };
-    await onStart?.(out);
+    if (props.mode === 'create') await props.onStart(out);
   };
 
   if (isRerun && !sourceRun) return null;
 
-  const canSubmit = !submitting && !!values.name.trim() && !!values.agentKey && !agentMissing;
+  // A run whose agent or evaluator is KNOWN to be gone would only fail
+  // downstream — block submit until the user picks a configured one.
+  const canSubmit = !submitting && !!values.name.trim() && !!values.agentKey && !agentMissing && !evaluatorMissing;
   const sourceTestCaseCount = sourceRun?.testCaseSnapshots?.length ?? 0;
 
   return (
@@ -335,7 +359,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
               {evaluatorMissing && (
                 <div className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1" data-testid="run-config-evaluator-missing-hint">
                   <AlertTriangle size={11} />
-                  Evaluator "{values.evaluatorId}" no longer exists — the run will fail to judge unless you pick another.
+                  Evaluator "{values.evaluatorId}" no longer exists — pick another evaluator to continue.
                 </div>
               )}
             </div>
