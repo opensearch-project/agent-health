@@ -335,8 +335,69 @@ describe('EvalRunsPage — inline rename', () => {
 
     await waitFor(() => expect(screen.getByText('Ad-hoc Eval Run')).toBeTruthy());
     expect(screen.getByTestId('run-row-rename-eval-run-1-edit-btn')).toBeTruthy();
-    // 'Run One' is a legacy benchmark-embedded row (kind: 'benchmark') — no PATCH route for it.
+    // 'Run One' is a legacy benchmark-embedded row (kind: 'benchmark') AND has
+    // no matching id in listEvaluationRuns() — genuinely no PATCH route exists
+    // for it (pre-#399 run, never dual-written).
     expect(screen.queryByTestId('run-row-rename-run-1-edit-btn')).toBeNull();
+  });
+
+  // Regression test for #465: a run created WITH a benchmarkId is
+  // dual-written (#399) as BOTH the embedded BenchmarkRun projection (never
+  // carries `docType`, sourced into the row list via the benchmarks loop)
+  // AND a first-class EvaluationRun doc (returned by listEvaluationRuns()).
+  // The row-merge's id-dedup keeps the FIRST (benchmark-sourced,
+  // `kind: 'benchmark'`) copy of that run — gating the pencil on `kind`
+  // (instead of "does a first-class doc exist for this id") hid rename for
+  // every such row, i.e. the overwhelming majority of real production runs.
+  // This fixture reproduces that exact dual-written shape: the SAME id
+  // appears both embedded in benchmark.runs[] (no docType) and in
+  // listEvaluationRuns()'s response (docType: 'evaluation-run').
+  it('shows a rename pencil for a benchmark-embedded row that is ALSO a first-class evaluation-run doc (dual-write), and displays the CANONICAL name', async () => {
+    mockGetAllBenchmarks.mockResolvedValue([
+      makeBenchmark({
+        id: 'bench-1',
+        name: 'Benchmark One',
+        // Deliberately stale/different name -- the embedded projection is a
+        // write-once snapshot the server never updates again (a prior
+        // rename via PATCH /api/storage/evaluation-runs/:id only touches
+        // the top-level doc). The row must display the canonical name, not
+        // this stale one, or a rename would appear to silently do nothing
+        // for every dual-written run (the exact e2e failure #465 hit before
+        // this fix).
+        runs: [makeRun({ id: 'dual-written-run-1', name: 'Stale Embedded Name' })],
+      }),
+    ]);
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [
+        {
+          id: 'dual-written-run-1',
+          docType: 'evaluation-run',
+          name: 'Dual Written Run',
+          createdAt: new Date().toISOString(),
+          status: 'completed',
+          agentKey: 'agent-a',
+          modelId: 'claude-3',
+          benchmarkId: 'bench-1',
+          sources: [{ type: 'benchmark', benchmarkId: 'bench-1' }],
+          trigger: 'ui',
+          testCaseSnapshots: [],
+          results: {},
+        },
+      ],
+    });
+
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Dual Written Run')).toBeTruthy());
+    // The row is sourced via the benchmarks loop (kind: 'benchmark' — its
+    // inspector link stays the benchmark-scoped route), but a first-class
+    // doc exists for its id, so rename must still be available.
+    expect(screen.getByTestId('run-row-rename-dual-written-run-1-edit-btn')).toBeTruthy();
+    // The stale embedded name must NOT be what's rendered.
+    expect(screen.queryByText('Stale Embedded Name')).toBeNull();
+    // Exactly one row rendered for this id — the merge's dedup must not
+    // double-render it once per source.
+    expect(screen.getAllByText('Dual Written Run')).toHaveLength(1);
   });
 
   it('renames an eval-run row and persists via updateEvaluationRun, with optimistic UI update', async () => {

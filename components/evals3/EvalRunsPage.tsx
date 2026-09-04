@@ -81,6 +81,23 @@ const RUNS_PER_PAGE = 50;
 interface RunRow {
   run: BenchmarkRun;
   kind: 'benchmark' | 'eval-run';
+  /**
+   * Whether a first-class EvaluationRun doc (docType: 'evaluation-run')
+   * exists for this run's id, independent of `kind`. Runs created WITH a
+   * benchmarkId are dual-written (#399) as BOTH the embedded BenchmarkRun
+   * projection (`kind: 'benchmark'`, never carries `docType`, sourced first
+   * in the merge below) AND the standalone doc -- but the id-dedup below
+   * always keeps the FIRST (benchmark-sourced) row, so `kind` alone answers
+   * "which loop produced this row", not "does a PATCH-able doc exist for
+   * it". Rename/Re-run (both PATCH/act on the evaluation-runs collection,
+   * which the embedded projection has no equivalent endpoint for) must gate
+   * on THIS, not `kind` -- see #465: gating the row-level rename pencil on
+   * `kind` hid it for every dual-written benchmark run (the overwhelming
+   * majority of real runs), even though its PATCH endpoint works fine.
+   * Mirrors RunInspectorPage's `resolveCanonicalEvaluationRun` resolution,
+   * batched here (one Set lookup per row) instead of N+1 fetches.
+   */
+  canRename: boolean;
   benchmarkId: string;
   benchmarkName: string;
   agentName: string;
@@ -239,9 +256,29 @@ export const EvalRunsPage: React.FC = () => {
   const allRunRows = useMemo<RunRow[]>(() => {
     const threshold = getTimeThreshold(timeRange);
     const rows: RunRow[] = [];
+    // First-class EvaluationRun docs (fetched below into `evalRuns`), keyed
+    // by id -- used for BOTH (a) deciding rename/re-run capability and (b)
+    // sourcing display data (name, results/stats) for benchmark-sourced rows
+    // regardless of which loop produced them. The embedded BenchmarkRun
+    // projection is a write-once snapshot the server never updates again
+    // (PATCH /api/storage/evaluation-runs/:id only touches the top-level
+    // doc -- see server/routes/storage/evaluationRuns.ts) -- so once a
+    // canonical doc exists for an id, treat it as the source of truth for
+    // everything this page renders about that run, same as
+    // RunInspectorPage's resolveCanonicalEvaluationRun. Only `kind` (which
+    // loop produced the row) stays keyed on the embedded copy, because that
+    // decides the route (benchmark-scoped vs top-level inspector link) --
+    // a legitimate route concern, not a doc-shape concern.
+    const evalRunsById = new Map(evalRuns.map(er => [er.id, er] as const));
 
     for (const bm of benchmarks) {
-      for (const run of bm.runs || []) {
+      for (const embeddedRun of bm.runs || []) {
+        const canonical = evalRunsById.get(embeddedRun.id);
+        // Shape-compatible with BenchmarkRun for every field this page reads
+        // (id, name, agentKey, modelId, createdAt, results, stats) -- same
+        // cast the eval-run merge below already relies on.
+        const run = canonical ? (canonical as unknown as BenchmarkRun) : embeddedRun;
+
         if (threshold && new Date(run.createdAt) < threshold) continue;
         if (selectedAgent !== 'all' && run.agentKey !== selectedAgent) continue;
 
@@ -261,6 +298,7 @@ export const EvalRunsPage: React.FC = () => {
         rows.push({
           run,
           kind: 'benchmark',
+          canRename: !!canonical,
           benchmarkId: bm.id,
           benchmarkName: bm.name,
           agentName,
@@ -303,6 +341,7 @@ export const EvalRunsPage: React.FC = () => {
       rows.push({
         run,
         kind: 'eval-run',
+        canRename: true,
         benchmarkId: er.benchmarkId ?? '',
         benchmarkName,
         agentName,
@@ -656,8 +695,13 @@ export const EvalRunsPage: React.FC = () => {
           </button>
         </td>
         <td className="px-2 py-1.5 align-middle">
+          {/* Rename capability is a DOC concern (does a first-class,
+              PATCH-able EvaluationRun doc exist for this id?), not a `kind`
+              (which loop sourced this row) concern -- see `canRename` on
+              RunRow. #465: gating this on `kind` hid the pencil for every
+              dual-written benchmark-embedded run. */}
           <div className="flex items-center gap-1.5">
-            {rr.kind === 'eval-run' ? (
+            {rr.canRename ? (
               <InlineRenameField
                 value={rr.run.name}
                 onSave={newName => handleRenameEvalRun(rr.run.id, newName)}
