@@ -15,7 +15,8 @@
  * grouped-view group-header row, infinite-scroll sentinel row) down by one,
  * and switched `computeRunStats` to the shared `lib/runStats` helper. These
  * tests mount the real page and exercise:
- *  - the empty-state row's `colSpan` in BOTH view modes (flat=8, grouped=7)
+ *  - the empty-state row's `colSpan` in BOTH view modes (flat=9, grouped=8;
+ *    the run-actions kebab menu column added one more to each)
  *  - the Flat/Grouped view toggle actually re-rendering the table (Benchmark
  *    column only shown in flat mode; group header rows only in grouped mode)
  *  - stats computed via lib/runStats.computeRunStats flow into the rendered
@@ -48,6 +49,9 @@ const mockUpdateEvaluationRun = jest.fn();
 jest.mock('@/services/client', () => ({
   listEvaluationRuns: (...a: unknown[]) => mockListEvaluationRuns(...a),
   updateEvaluationRun: (...a: unknown[]) => mockUpdateEvaluationRun(...a),
+  deleteEvaluationRun: jest.fn(),
+  cancelEvaluationRun: jest.fn(),
+  retryJudgementEvaluationRun: jest.fn(),
 }));
 
 jest.mock('@/lib/constants', () => ({

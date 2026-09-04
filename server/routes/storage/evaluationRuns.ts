@@ -17,6 +17,7 @@ import {
   checkBenchmarkSourcesStillExist,
   buildRerunConfig,
   computeRerunName,
+  applyRerunOverrides,
 } from '../../../services/evaluationRerun.js';
 import {
   retryJudgementForRun,
@@ -24,6 +25,7 @@ import {
   type RetryJudgementScope,
   type RetryJudgementSummary,
 } from '../../../services/evaluation/retryJudgement.js';
+import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
 import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
@@ -389,32 +391,72 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
 router.post('/api/storage/evaluation-runs/:id/cancel', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    const storage = getStorageModule();
 
     const cancellationToken = activeCancellationTokens.get(id);
-    if (!cancellationToken) {
-      return res.status(404).json({ error: 'Run not found or not currently executing' });
+    if (cancellationToken) {
+      cancellationToken.cancel();
+      await storage.evaluationRuns.update(id, {
+        status: 'cancelled',
+        completedAt: new Date().toISOString(),
+      });
+      return res.json({ success: true });
     }
 
-    cancellationToken.cancel();
+    // No in-memory cancellation token for this run id. This happens whenever
+    // the executor that was running it is gone but the run doc is still
+    // marked 'running' — the server process that started it restarted or
+    // crashed ("zombie" run; the exact "Not able to cancel this run" bug
+    // report this fixes). There's nothing left to signal, but the run is
+    // never going to make progress either, so fall back to a doc-status
+    // update: mark it cancelled directly, with an audit note distinguishing
+    // this path from a graceful in-process cancel.
+    const run = await storage.evaluationRuns.getById(id);
+    if (!run) {
+      return res.status(404).json({ error: 'Evaluation run not found' });
+    }
+    if (run.status !== 'running') {
+      return res.status(400).json({ error: `Run is not currently running (status: ${run.status})` });
+    }
+    if (!isOldEnoughForZombieCancel(run.createdAt)) {
+      // Too close to creation to safely assume "no token yet" means "no
+      // executor anywhere" — the executor may simply not have registered
+      // its token yet. Ask the caller to retry shortly rather than risk
+      // marking a run cancelled moments before it starts executing.
+      return res.status(409).json({
+        error: `Run was created less than ${ZOMBIE_CANCEL_MIN_AGE_MS / 1000}s ago; its executor may not have started yet. Try cancelling again in a moment.`,
+      });
+    }
 
-    const storage = getStorageModule();
+    const cancelNote = 'Cancelled: no active executor found for this run (process restarted or crashed) — marked cancelled directly.';
     await storage.evaluationRuns.update(id, {
       status: 'cancelled',
       completedAt: new Date().toISOString(),
-    });
+      cancelNote,
+    } as any);
 
-    res.json({ success: true });
+    res.json({ success: true, viaFallback: true, note: cancelNote });
   } catch (error: any) {
     console.error('[StorageAPI] Cancel evaluation run failed:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// POST /api/storage/evaluation-runs/:id/rerun - Duplicate a run's config into a fresh, independent run
+// POST /api/storage/evaluation-runs/:id/rerun - Duplicate a run's config into a fresh, independent run.
+// Accepts an optional body of overrides (all fields optional -- omitted
+// fields keep the source run's config unchanged):
+//   { name?, agentKey?, judgeModelId?, evaluatorId?, concurrency?, benchmarkId? }
+// judgeModelId/evaluatorId/benchmarkId accept `null` to explicitly clear
+// back to "use default" (see lib/evaluationRerun.ts RerunOverrides). When
+// any override actually changes the effective config, the new run is
+// flagged `modified: true` in addition to recording `rerunOf` -- so a
+// tweaked re-run is never mistaken for a faithful duplicate.
 router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const storage = getStorageModule();
+    const overrides = req.body && Object.keys(req.body).length > 0 ? req.body : undefined;
+    const nameOverride: string | undefined = typeof overrides?.name === 'string' && overrides.name.trim() ? overrides.name.trim() : undefined;
 
     const sourceRun = await storage.evaluationRuns.getById(id);
     if (!sourceRun) {
@@ -433,18 +475,26 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
     // regardless of benchmarkVersion (pre-existing behavior, shared by every
     // run-creation path, not rerun-specific) — see the caveat on
     // checkBenchmarkSourcesStillExist() in services/evaluationRerun.ts.
-    const benchmarkError = await checkBenchmarkSourcesStillExist(sourceRun, storage);
-    if (benchmarkError) {
-      return res.status(409).json({ error: benchmarkError });
+    // Skipped when the request overrides the benchmark association -- the
+    // user is deliberately moving off the source run's original benchmark,
+    // so its existence is no longer relevant (the NEW benchmark is
+    // validated below via resolveTestCaseSources instead).
+    if (overrides?.benchmarkId === undefined) {
+      const benchmarkError = await checkBenchmarkSourcesStillExist(sourceRun, storage);
+      if (benchmarkError) {
+        return res.status(409).json({ error: benchmarkError });
+      }
     }
 
     // Duplicate the source run's config, applying explicit defaults for
-    // fields missing on legacy run documents.
+    // fields missing on legacy run documents, then layer any user-supplied
+    // overrides on top.
     const built = buildRerunConfig(sourceRun);
     if ('error' in built) {
       return res.status(400).json({ error: built.error });
     }
-    const { config, defaultsApplied } = built;
+    const { defaultsApplied } = built;
+    const { config, modified } = applyRerunOverrides(built.config, overrides);
 
     // Resolve sources up front (same as the create route) so a stale/removed
     // benchmark, deleted test case, or missing import file surfaces as a
@@ -460,11 +510,13 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
 
     const newRunId = `eval-run-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     const now = new Date().toISOString();
-    const newName = computeRerunName(sourceRun.name);
+    const newName = nameOverride || computeRerunName(sourceRun.name);
 
     // Resolve the agent's model fresh from its current config — same rule as
     // the create route (the agent owns its model; config.modelId is only the
-    // legacy fallback if resolution comes up empty).
+    // legacy fallback if resolution comes up empty). Uses `config.agentKey`
+    // (post-override) so an agent-swap override resolves THAT agent's model,
+    // not the source run's.
     let resolvedModelId = config.modelId;
     try {
       const cfg = loadConfigSync();
@@ -499,6 +551,7 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
       benchmarkId: config.benchmarkId,
       benchmarkVersion: config.benchmarkVersion,
       rerunOf: sourceRun.id,
+      ...(modified ? { modified: true } : {}),
     };
 
     await storage.evaluationRuns.create(newRun);
@@ -506,7 +559,7 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
     // Respond immediately with the new run's id — the caller (report page)
     // polls GET /:id for progress, matching how it already treats any
     // 'running' run. Execution continues below without blocking the response.
-    res.status(201).json({ runId: newRunId, run: newRun, defaultsApplied });
+    res.status(201).json({ runId: newRunId, run: newRun, defaultsApplied, modified });
 
     const cancellationToken = createCancellationToken();
     activeCancellationTokens.set(newRunId, cancellationToken);

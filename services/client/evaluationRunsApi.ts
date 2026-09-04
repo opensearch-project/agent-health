@@ -266,14 +266,33 @@ export async function promoteEvaluationRun(
  * independent run (fresh id, "<name> (re-run)"), linked back via
  * `rerunOf`. The new run starts executing immediately server-side; poll
  * `getEvaluationRun(runId)` for progress (same as any 'running' run).
+ *
+ * `overrides` lets the caller tweak the config before launching (agent,
+ * judge model, evaluator, concurrency, or swap the test-case source to a
+ * different benchmark) — every field optional; omitted fields keep the
+ * source run's value. When any override actually changes the effective
+ * config, the response's `modified` is `true` (the new run is flagged the
+ * same way) so a tweaked re-run is never mistaken for a faithful duplicate.
  */
-export async function rerunEvaluationRun(id: string): Promise<{
+export interface RerunOverrides {
+  name?: string;
+  agentKey?: string;
+  judgeModelId?: string | null;
+  evaluatorId?: string | null;
+  concurrency?: number;
+  benchmarkId?: string | null;
+}
+
+export async function rerunEvaluationRun(id: string, overrides?: RerunOverrides): Promise<{
   runId: string;
   run: EvaluationRun;
   defaultsApplied: string[];
+  modified: boolean;
 }> {
   const response = await fetch(`/api/storage/evaluation-runs/${id}/rerun`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(overrides || {}),
   });
 
   if (!response.ok) {
@@ -282,6 +301,21 @@ export async function rerunEvaluationRun(id: string): Promise<{
   }
 
   return response.json();
+}
+
+/**
+ * Retry judgement for a terminal run's judge-failed test cases, in place,
+ * without re-invoking the agent — the RunActionsMenu (kebab) entry point.
+ * Thin alias over {@link retryJudgement} (default `scope=errored`, polls the
+ * 202 job to completion) so every surface funnels through the ONE
+ * fire-and-poll client path; the server 409s with a clear reason when the
+ * run is still executing or a retry is already in flight. Applicability is
+ * gated client-side by `getRunActionVisibility` (lib/runActions.ts), which
+ * counts the same "completed agent, no judge verdict" cases the server's
+ * `scope=errored` selection re-judges.
+ */
+export async function retryJudgementEvaluationRun(id: string): Promise<RetryJudgementSummary> {
+  return retryJudgement(id, 'errored');
 }
 
 /**

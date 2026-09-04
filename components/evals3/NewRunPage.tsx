@@ -101,7 +101,7 @@ export const NewRunPage: React.FC = () => {
   // source run's stored config so the composer opens pre-filled, letting the
   // user tweak agent/judge/sources/benchmark before launching (the primary
   // "Re-run" button on that page launches an identical duplicate directly,
-  // without this detour — see RerunConfirmDialog). Shape is a subset of the
+  // without this detour — see RunConfigDialog). Shape is a subset of the
   // run document; loose-typed (location.state is `unknown`).
   const restartFrom = (location.state as any)?.restartFrom as
     | Partial<{ name: string; sources: TestCaseSource[]; agentKey: string; evaluatorId: string; judgeModelId: string; benchmarkId: string }>

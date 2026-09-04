@@ -51,6 +51,7 @@ export {
   deleteEvaluationRun,
   promoteEvaluationRun,
   rerunEvaluationRun,
+  retryJudgementEvaluationRun,
   updateEvaluationRun,
   retryJudgement,
   getRetryJudgementStatus,
@@ -60,4 +61,5 @@ export {
   type RetryJudgementSummary,
   type RetryJudgementCaseResult,
   type RetryJudgementJobStatus,
+  type RerunOverrides,
 } from './evaluationRunsApi';

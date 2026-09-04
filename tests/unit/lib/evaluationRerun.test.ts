@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { computeRerunName, buildRerunConfig } from '@/lib/evaluationRerun';
+import { computeRerunName, buildRerunConfig, applyRerunOverrides } from '@/lib/evaluationRerun';
 import type { EvaluationRun } from '@/types';
 
 function makeRun(overrides: Partial<EvaluationRun> = {}): EvaluationRun {
@@ -160,5 +160,90 @@ describe('buildRerunConfig', () => {
     const result = buildRerunConfig(run);
     expect('error' in result).toBe(false);
     expect((result as any).config.modelId).toBe('');
+  });
+});
+
+describe('applyRerunOverrides', () => {
+  const baseConfig = {
+    sources: [{ type: 'test-case-ids' as const, ids: ['tc-1'] }],
+    agentKey: 'demo',
+    modelId: 'claude-sonnet',
+    judgeModelId: 'judge-model-a',
+    evaluatorId: 'ev-1',
+    concurrency: 2,
+    benchmarkId: undefined,
+    benchmarkVersion: undefined,
+  };
+
+  it('returns the config unchanged with modified:false when no overrides are given', () => {
+    expect(applyRerunOverrides(baseConfig)).toEqual({ config: baseConfig, modified: false });
+  });
+
+  it('returns modified:false when overrides are given but every value matches the source', () => {
+    const result = applyRerunOverrides(baseConfig, {
+      agentKey: 'demo', judgeModelId: 'judge-model-a', evaluatorId: 'ev-1', concurrency: 2,
+    });
+    expect(result.modified).toBe(false);
+  });
+
+  it('flags modified:true and applies an agentKey override', () => {
+    const result = applyRerunOverrides(baseConfig, { agentKey: 'other-agent' });
+    expect(result.modified).toBe(true);
+    expect(result.config.agentKey).toBe('other-agent');
+    // Other fields untouched.
+    expect(result.config.judgeModelId).toBe('judge-model-a');
+  });
+
+  it('flags modified:true and applies a judgeModelId override, including clearing to default via null', () => {
+    const withOverride = applyRerunOverrides(baseConfig, { judgeModelId: 'judge-model-b' });
+    expect(withOverride.modified).toBe(true);
+    expect(withOverride.config.judgeModelId).toBe('judge-model-b');
+
+    const cleared = applyRerunOverrides(baseConfig, { judgeModelId: null });
+    expect(cleared.modified).toBe(true);
+    expect(cleared.config.judgeModelId).toBeUndefined();
+  });
+
+  it('flags modified:true and applies an evaluatorId override, including clearing to default via null', () => {
+    const withOverride = applyRerunOverrides(baseConfig, { evaluatorId: 'ev-2' });
+    expect(withOverride.modified).toBe(true);
+    expect(withOverride.config.evaluatorId).toBe('ev-2');
+
+    const cleared = applyRerunOverrides(baseConfig, { evaluatorId: null });
+    expect(cleared.modified).toBe(true);
+    expect(cleared.config.evaluatorId).toBeUndefined();
+  });
+
+  it('flags modified:true and applies a concurrency override', () => {
+    const result = applyRerunOverrides(baseConfig, { concurrency: 5 });
+    expect(result.modified).toBe(true);
+    expect(result.config.concurrency).toBe(5);
+  });
+
+  it('flags modified:true and swaps the test-case source to a benchmark when benchmarkId is overridden', () => {
+    const result = applyRerunOverrides(baseConfig, { benchmarkId: 'bm-1' });
+    expect(result.modified).toBe(true);
+    expect(result.config.benchmarkId).toBe('bm-1');
+    expect(result.config.sources).toEqual([{ type: 'benchmark', benchmarkId: 'bm-1' }]);
+    // Swapping benchmarks invalidates any previously-pinned version.
+    expect(result.config.benchmarkVersion).toBeUndefined();
+  });
+
+  it('clears the benchmark association without touching sources that were never benchmark-sourced', () => {
+    // benchmarkId can be a pure bookkeeping association (NewRunPage's
+    // "Associate with Benchmark" step) independent of the source TYPE —
+    // clearing it must not touch unrelated sources.
+    const withAssociation = { ...baseConfig, benchmarkId: 'bm-0' };
+    const result = applyRerunOverrides(withAssociation, { benchmarkId: null });
+    expect(result.modified).toBe(true);
+    expect(result.config.benchmarkId).toBeUndefined();
+    expect(result.config.sources).toEqual(baseConfig.sources);
+  });
+
+  it('combines multiple overrides in one call', () => {
+    const result = applyRerunOverrides(baseConfig, { agentKey: 'other-agent', concurrency: 8 });
+    expect(result.modified).toBe(true);
+    expect(result.config.agentKey).toBe('other-agent');
+    expect(result.config.concurrency).toBe(8);
   });
 });

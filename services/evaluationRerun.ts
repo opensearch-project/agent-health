@@ -14,8 +14,14 @@
 import type { EvaluationRun } from '@/types';
 import type { IStorageModule } from '@/server/adapters/types';
 
-export { computeRerunName, buildRerunConfig } from '@/lib/evaluationRerun';
-export type { RerunConfig, BuildRerunConfigResult, BuildRerunConfigError } from '@/lib/evaluationRerun';
+export { computeRerunName, buildRerunConfig, applyRerunOverrides } from '@/lib/evaluationRerun';
+export type {
+  RerunConfig,
+  BuildRerunConfigResult,
+  BuildRerunConfigError,
+  RerunOverrides,
+  ApplyRerunOverridesResult,
+} from '@/lib/evaluationRerun';
 
 /**
  * Collect every (benchmarkId, benchmarkVersion) pair a source run references

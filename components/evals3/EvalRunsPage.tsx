@@ -31,16 +31,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
-import { listEvaluationRuns, updateEvaluationRun } from '@/services/client';
+import { listEvaluationRuns, updateEvaluationRun, deleteEvaluationRun, cancelEvaluationRun, retryJudgementEvaluationRun } from '@/services/client';
+import { cancelBenchmarkRun } from '@/services/client/benchmarkApi';
 import { Benchmark, TestCase, BenchmarkRun, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { computeRunStats, getEffectiveRunStatus } from '@/lib/runStats';
 import { sortGroupsByRecency } from '@/lib/runSort';
+import { getRunActionVisibility } from '@/lib/runActions';
 import { formatRelativeTime, getModelName, getJudgeModelLabel, getEvaluatorLabel } from '@/lib/utils';
 import { Breadcrumbs } from './Breadcrumbs';
 import { InlineRenameField } from './InlineRenameField';
-import { RerunConfirmDialog } from './RerunConfirmDialog';
+import { RunConfigDialog } from './RunConfigDialog';
+import { RunActionsMenu } from './RunActionsMenu';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────
 
@@ -103,12 +106,12 @@ interface RunRow {
  * numbers) so the three `colSpan` sites (empty state, infinite-scroll
  * sentinel, group-header row) stay in sync when a column is added/removed.
  * FLAT = checkbox, status, Run, Benchmark, Agent, Model, Judge, Evaluator,
- * Timestamp, Annotations, Pass/Fail/Total. GROUPED drops the Benchmark
- * column. The group-header row's own colSpan is GROUPED_COLUMN_COUNT - 1
+ * Timestamp, Annotations, Pass/Fail/Total, Re-run, Actions (kebab). GROUPED
+ * drops the Benchmark column. The group-header row's own colSpan is GROUPED_COLUMN_COUNT - 1
  * (the checkbox cell is rendered as its own separate <td> before it).
  */
-const FLAT_COLUMN_COUNT = 10;
-const GROUPED_COLUMN_COUNT = 9;
+const FLAT_COLUMN_COUNT = 11;
+const GROUPED_COLUMN_COUNT = 10;
 
 function SortHeader({ label, active, dir, onClick, className }: {
   label: string; active: boolean; dir: 'asc' | 'desc'; onClick: () => void; className?: string;
@@ -434,6 +437,35 @@ export const EvalRunsPage: React.FC = () => {
     setSort(prev => prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'desc' });
   };
 
+  // Delete/Cancel/Retry-Judgement row actions (RunActionsMenu). Dispatch to
+  // the right endpoint based on `kind` — eval-run rows hit the top-level
+  // evaluation-runs API, legacy benchmark-embedded rows hit the benchmark's
+  // nested-run API (same split every other action on this page already
+  // makes, e.g. the Re-run icon). All three refresh the list on success so
+  // stats/status reflect the change without a full page reload.
+  const handleDeleteRow = async (rr: RunRow) => {
+    if (rr.kind === 'eval-run') {
+      await deleteEvaluationRun(rr.run.id);
+    } else {
+      await asyncBenchmarkStorage.deleteRun(rr.benchmarkId, rr.run.id);
+    }
+    await loadData();
+  };
+
+  const handleCancelRow = async (rr: RunRow) => {
+    if (rr.kind === 'eval-run') {
+      await cancelEvaluationRun(rr.run.id);
+    } else {
+      await cancelBenchmarkRun(rr.benchmarkId, rr.run.id);
+    }
+    await loadData();
+  };
+
+  const handleRetryJudgementRow = async (rr: RunRow) => {
+    await retryJudgementEvaluationRun(rr.run.id);
+    await loadData();
+  };
+
   const toggleGroup = (id: string) => {
     setCollapsedGroups(prev => {
       const n = new Set(prev);
@@ -757,6 +789,23 @@ export const EvalRunsPage: React.FC = () => {
             <span className="text-[10px] text-muted-foreground" title="Re-run isn't available for legacy benchmark-embedded runs">—</span>
           )}
         </td>
+        <td className="relative px-2 py-1.5 align-middle text-center w-8" onClick={e => e.stopPropagation()}>
+          {(() => {
+            const visibility = getRunActionVisibility(rr.run as any);
+            return (
+              <RunActionsMenu
+                runId={rr.run.id}
+                runName={rr.run.name}
+                isRunning={visibility.canCancel}
+                canRetryJudgement={visibility.canRetryJudgement}
+                retryJudgementDisabledReason={visibility.retryJudgementDisabledReason}
+                onDelete={() => handleDeleteRow(rr)}
+                onCancel={() => handleCancelRow(rr)}
+                onRetryJudgement={() => handleRetryJudgementRow(rr)}
+              />
+            );
+          })()}
+        </td>
       </tr>
     );
   };
@@ -1055,6 +1104,7 @@ export const EvalRunsPage: React.FC = () => {
               <th className="h-7 px-2 text-center align-middle font-medium text-xs text-muted-foreground bg-background border-b whitespace-nowrap">Annotations</th>
               <SortHeader label="Pass/Fail/Total" active={sort.field === 'results'} dir={sort.dir} onClick={() => handleSort('results')} className="text-right" />
               <th className="h-7 w-10 px-2 align-middle bg-background border-b" />
+              <th className="h-7 w-8 px-2 align-middle bg-background border-b" />
             </tr>
           </thead>
           <tbody className="[&_tr:last-child]:border-0">
@@ -1132,8 +1182,9 @@ export const EvalRunsPage: React.FC = () => {
       </div>
 
       {/* Re-run Confirm Dialog — shared with EvalRunDetailPage */}
-      <RerunConfirmDialog
-        run={rerunTarget}
+      <RunConfigDialog
+        mode="rerun"
+        sourceRun={rerunTarget}
         open={rerunDialogOpen}
         onOpenChange={open => { setRerunDialogOpen(open); if (!open) setRerunTarget(null); }}
         onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}`)}

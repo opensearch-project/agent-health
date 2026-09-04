@@ -64,6 +64,8 @@ jest.mock('@/services/storage', () => ({
 jest.mock('@/services/client', () => ({
   getEvaluationRun: jest.fn(),
   updateEvaluationRun: jest.fn(),
+  cancelEvaluationRun: jest.fn(),
+  deleteEvaluationRun: jest.fn(),
 }));
 
 const mockEnsurePolling = jest.fn();
@@ -88,6 +90,8 @@ jest.mock('@/components/ui/skeleton', () => ({
 }));
 jest.mock('@/components/ui/button', () => ({
   Button: ({ children, ...props }: any) => React.createElement('button', props, children),
+  // The kebab's delete-confirm AlertDialog composes buttonVariants().
+  buttonVariants: () => '',
 }));
 jest.mock('@/components/ui/scroll-area', () => ({
   ScrollArea: ({ children }: any) => React.createElement('div', null, children),
@@ -104,12 +108,12 @@ jest.mock('@/components/evals3/Breadcrumbs', () => ({
   Breadcrumbs: () => React.createElement('nav', { 'data-testid': 'breadcrumbs' }),
 }));
 
-jest.mock('@/components/evals3/RerunConfirmDialog', () => ({
-  RerunConfirmDialog: ({ run, open, onOpenChange, onRerun }: any) => (
-    open && run ? React.createElement(
+jest.mock('@/components/evals3/RunConfigDialog', () => ({
+  RunConfigDialog: ({ mode, sourceRun, open, onOpenChange }: any) => (
+    open && sourceRun ? React.createElement(
       'div',
-      { 'data-testid': 'rerun-confirm-dialog', onClick: () => onOpenChange(false) },
-      `Dialog for ${run.id}`,
+      { 'data-testid': 'run-config-dialog', 'data-mode': mode, onClick: () => onOpenChange(false) },
+      `Dialog for ${sourceRun.id}`,
     ) : null
   ),
 }));
@@ -128,6 +132,30 @@ jest.mock('@/components/evals3/RetryJudgementConfirmDialog', () => ({
       `Retry dialog for ${run.id} (${count})`,
     ) : null
   ),
+}));
+
+// The header's lifecycle actions live in the RunActionsMenu kebab (Radix
+// DropdownMenu). Radix needs real pointer events + portals to open in jsdom,
+// so render the menu content inline: each item becomes a plain <button>
+// carrying the same data-testid / disabled / title, with onClick mapped to
+// Radix's onSelect. The gating under test is the page's, not Radix's.
+jest.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: any) => React.createElement('div', { 'data-testid': 'run-actions-menu' }, children),
+  DropdownMenuTrigger: ({ children }: any) => React.createElement('div', null, children),
+  DropdownMenuContent: ({ children }: any) => React.createElement('div', { role: 'menu' }, children),
+  DropdownMenuSeparator: () => null,
+  DropdownMenuItem: ({ children, onSelect, disabled, title, className, ...props }: any) =>
+    React.createElement(
+      'button',
+      {
+        role: 'menuitem',
+        disabled,
+        title,
+        onClick: (e: any) => { if (!disabled) onSelect?.({ preventDefault: () => e?.preventDefault?.() }); },
+        ...props,
+      },
+      children,
+    ),
 }));
 
 // IntersectionObserver stub that records instances so tests can fire hits.
@@ -225,6 +253,13 @@ function makeTestCases(caseCount: number) {
 }
 
 const renderPage = () => render(React.createElement(RunInspectorPage));
+
+// Kebab items (data-testid is suffixed with the run id, which varies per
+// fixture). `get*` throws when absent so they compose with waitFor().
+const rerunItem = () => screen.getByTestId(/^run-action-rerun-/) as HTMLButtonElement;
+const retryJudgementItem = () => screen.getByTestId(/^run-action-retry-judgement-/) as HTMLButtonElement;
+const cancelItem = () => screen.queryByTestId(/^run-action-cancel-/) as HTMLButtonElement | null;
+const deleteItem = () => screen.getByTestId(/^run-action-delete-/) as HTMLButtonElement;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -477,8 +512,8 @@ describe('RunInspectorPage — Re-run button (eval-run mode)', () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByTestId('inspector-rerun-btn')).toBeTruthy());
-    expect((screen.getByTestId('inspector-rerun-btn') as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    expect((rerunItem()).disabled).toBe(false);
   });
 
   it('opens re-run dialog when Re-run button clicked', async () => {
@@ -502,11 +537,11 @@ describe('RunInspectorPage — Re-run button (eval-run mode)', () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByTestId('inspector-rerun-btn')).toBeTruthy());
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('inspector-rerun-btn'));
+    fireEvent.click(rerunItem());
 
-    await waitFor(() => expect(screen.getByTestId('rerun-confirm-dialog')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('run-config-dialog')).toBeTruthy());
   });
 
   it('renders provenance chip when rerunOf is present', async () => {
@@ -644,7 +679,7 @@ describe('RunInspectorPage — benchmark-mode fallback for not-yet-linked runs',
     // file. (Superseded expectation: this run used to stay artificially
     // disabled because Re-run was gated on route `mode` instead of the
     // run's actual doc type.)
-    const rerunBtn = screen.getByTestId('inspector-rerun-btn') as HTMLButtonElement;
+    const rerunBtn = rerunItem();
     expect(rerunBtn.disabled).toBe(false);
   });
 
@@ -722,7 +757,7 @@ describe('RunInspectorPage — Re-run button (benchmark mode)', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
-    expect((screen.getByTestId('inspector-rerun-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect((rerunItem()).disabled).toBe(true);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     warnSpy.mockRestore();
   });
@@ -736,10 +771,10 @@ describe('RunInspectorPage — Re-run button (benchmark mode)', () => {
 
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
 
-    const rerunBtn = screen.getByTestId('inspector-rerun-btn') as HTMLButtonElement;
+    const rerunBtn = rerunItem();
     expect(rerunBtn.disabled).toBe(true);
-    expect(rerunBtn.parentElement?.getAttribute('title')).toBe(
-      'Re-run is only available for evaluation runs, not benchmark-embedded runs'
+    expect(rerunBtn.getAttribute('title')).toBe(
+      "Re-run isn't available for legacy benchmark-embedded runs"
     );
     expect(screen.queryByTestId('rerun-provenance-chip')).toBeNull();
   });
@@ -774,8 +809,8 @@ describe('RunInspectorPage — Retry judgement button (docType-keyed, not route-
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByTestId('inspector-retry-judgement-btn')).toBeTruthy());
-    const btn = screen.getByTestId('inspector-retry-judgement-btn') as HTMLButtonElement;
+    await waitFor(() => expect(retryJudgementItem()).toBeTruthy());
+    const btn = retryJudgementItem();
     expect(btn.disabled).toBe(false);
     expect(btn.textContent).toContain('Retry judgement (1)');
   });
@@ -793,8 +828,8 @@ describe('RunInspectorPage — Retry judgement button (docType-keyed, not route-
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByTestId('inspector-retry-judgement-btn')).toBeTruthy());
-    const btn = screen.getByTestId('inspector-retry-judgement-btn') as HTMLButtonElement;
+    await waitFor(() => expect(retryJudgementItem()).toBeTruthy());
+    const btn = retryJudgementItem();
     expect(btn.disabled).toBe(false);
     expect(btn.textContent).toContain('Retry judgement (2)');
   });
@@ -809,8 +844,8 @@ describe('RunInspectorPage — Retry judgement button (docType-keyed, not route-
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByTestId('inspector-retry-judgement-btn')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('inspector-retry-judgement-btn'));
+    await waitFor(() => expect(retryJudgementItem()).toBeTruthy());
+    fireEvent.click(retryJudgementItem());
 
     await waitFor(() => expect(screen.getByTestId('retry-judgement-confirm-dialog')).toBeTruthy());
     expect(screen.getByTestId('retry-judgement-confirm-dialog').textContent).toContain('run-1');
@@ -824,7 +859,7 @@ describe('RunInspectorPage — Retry judgement button (docType-keyed, not route-
     await waitFor(() => expect(getEvaluationRun.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
-  it('does NOT render Retry judgement for a true legacy BenchmarkRun (no first-class doc) via the BENCHMARK route', async () => {
+  it('renders Retry judgement DISABLED (with the legacy-run reason) for a true legacy BenchmarkRun (no first-class doc) via the BENCHMARK route', async () => {
     mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
     mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
     // Default beforeEach already rejects getEvaluationRun ("not found") —
@@ -835,7 +870,10 @@ describe('RunInspectorPage — Retry judgement button (docType-keyed, not route-
     renderPage();
 
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
-    expect(screen.queryByTestId('inspector-retry-judgement-btn')).toBeNull();
+    const item = retryJudgementItem();
+    expect(item.disabled).toBe(true);
+    expect(item.getAttribute('title')).toBe("Retry judgement isn't available for legacy benchmark-embedded runs");
+    expect(item.textContent).toContain('Retry judgement (0)');
   });
 });
 
@@ -887,7 +925,7 @@ describe('RunInspectorPage — Re-run button (isEvaluationRun-keyed)', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
-    expect((screen.getByTestId('inspector-rerun-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect((rerunItem()).disabled).toBe(true);
     expect(screen.queryByTestId('rerun-provenance-chip')).toBeNull();
   });
 
@@ -904,7 +942,7 @@ describe('RunInspectorPage — Re-run button (isEvaluationRun-keyed)', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
-    expect((screen.getByTestId('inspector-rerun-btn') as HTMLButtonElement).disabled).toBe(false);
+    expect((rerunItem()).disabled).toBe(false);
   });
 
   it('shows the provenance chip for a dual-written evaluation-run reached via the benchmark-scoped route', async () => {
@@ -934,10 +972,10 @@ describe('RunInspectorPage — Re-run button (isEvaluationRun-keyed)', () => {
 
     renderPage();
 
-    await waitFor(() => expect((screen.getByTestId('inspector-rerun-btn') as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByTestId('inspector-rerun-btn'));
+    await waitFor(() => expect((rerunItem()).disabled).toBe(false));
+    fireEvent.click(rerunItem());
 
-    await waitFor(() => expect(screen.getByTestId('rerun-confirm-dialog')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('run-config-dialog')).toBeTruthy());
   });
 });
 
@@ -1021,5 +1059,123 @@ describe('RunInspectorPage — inline rename (eval-run mode only)', () => {
 
     await waitFor(() => expect(screen.getByTestId('run-inspector-rename-error')).toBeTruthy());
     expect(screen.getByTestId('run-inspector-rename-error').textContent).toMatch(/200 characters or fewer/);
+  });
+});
+
+/*
+ * Header composition (owner papercut on PR #468): the standalone Re-run /
+ * Retry judgement / Compare header buttons are gone; the "…" kebab is the
+ * ONLY home for lifecycle actions, and it carries exactly four entries with
+ * the gating the buttons used to have. Compare is not a lifecycle action
+ * and is intentionally absent from the kebab (still reachable from the runs
+ * list / compare nav).
+ */
+describe('RunInspectorPage — header actions live only in the kebab', () => {
+  const headerButtonsAbsent = () => {
+    expect(screen.queryByTestId('inspector-rerun-btn')).toBeNull();
+    expect(screen.queryByTestId('inspector-retry-judgement-btn')).toBeNull();
+    // Compare: no header button (text or icon) — only the kebab's items
+    // render "menuitem" roles, and none of them is Compare.
+    expect(screen.queryByRole('button', { name: /compare/i })).toBeNull();
+    expect(screen.queryByText(/^Compare$/)).toBeNull();
+  };
+
+  const kebabHasExactlyFourKinds = (expectCancel: boolean) => {
+    const items = screen.getAllByRole('menuitem');
+    const kinds = items.map(el => (el.getAttribute('data-testid') || '').replace(/^run-action-/, '').replace(/-run-1$|-eval-run-1$/, ''));
+    const expected = expectCancel
+      ? ['rerun', 'cancel', 'retry-judgement', 'delete']
+      : ['rerun', 'retry-judgement', 'delete'];
+    expect(kinds).toEqual(expected);
+    expect(kinds).not.toContain('compare');
+  };
+
+  it('RUNNING eval-run: Re-run enabled, Cancel present, Retry judgement disabled ("finished" reason), Delete present', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue({ ...makeEvaluationRunFixture('eval-run-1', 2, [0]), status: 'running' });
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeErroredSummaries(2, [0]));
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    headerButtonsAbsent();
+    kebabHasExactlyFourKinds(true);
+    expect(rerunItem().disabled).toBe(false);
+    expect(cancelItem()).not.toBeNull();
+    expect(retryJudgementItem().disabled).toBe(true);
+    expect(retryJudgementItem().getAttribute('title')).toBe('Retry judgement is only available once the run has finished');
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (1)');
+    expect(deleteItem()).toBeTruthy();
+    expect(screen.getByLabelText('Run actions')).toBeTruthy();
+  });
+
+  it('COMPLETED eval-run WITH judge failures: Re-run + Retry judgement (N) enabled, no Cancel', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 3, [0, 2]));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue(makeErroredSummaries(3, [0, 2]));
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    headerButtonsAbsent();
+    kebabHasExactlyFourKinds(false);
+    expect(rerunItem().disabled).toBe(false);
+    expect(cancelItem()).toBeNull();
+    expect(retryJudgementItem().disabled).toBe(false);
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (2)');
+  });
+
+  it('COMPLETED eval-run, CLEAN: Retry judgement (0) disabled with the "no judge-failed" reason; Re-run enabled', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    headerButtonsAbsent();
+    kebabHasExactlyFourKinds(false);
+    expect(rerunItem().disabled).toBe(false);
+    expect(cancelItem()).toBeNull();
+    expect(retryJudgementItem().disabled).toBe(true);
+    expect(retryJudgementItem().getAttribute('title')).toBe('No judge-failed cases to retry');
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (0)');
+  });
+
+  it('kebab Retry judgement opens the SAME RetryJudgementConfirmDialog with the count (one pipeline, not a second fire-and-forget path)', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 3, [1]));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue(makeErroredSummaries(3, [1]));
+
+    renderPage();
+
+    await waitFor(() => expect(retryJudgementItem().disabled).toBe(false));
+    fireEvent.click(retryJudgementItem());
+    await waitFor(() => expect(screen.getByTestId('retry-judgement-confirm-dialog')).toBeTruthy());
+    expect(screen.getByTestId('retry-judgement-confirm-dialog').textContent).toContain('(1)');
+  });
+
+  it('kebab Delete opens a confirm (no bare-click delete) — the destructive call is NOT made until confirmed', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 1));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+
+    renderPage();
+
+    await waitFor(() => expect(deleteItem()).toBeTruthy());
+    fireEvent.click(deleteItem());
+    await waitFor(() => expect(screen.getByTestId('run-delete-confirm-eval-run-1')).toBeTruthy());
+    const { deleteEvaluationRun } = require('@/services/client');
+    expect(deleteEvaluationRun).not.toHaveBeenCalled();
   });
 });

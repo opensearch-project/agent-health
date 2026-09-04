@@ -1070,6 +1070,13 @@ export interface BenchmarkRun {
    * path); runs with equal digests are directly comparable. See {@link BenchmarkImage}.
    */
   imageDigest?: string;
+
+  /**
+   * Audit note set when a run is cancelled without a live executor found
+   * (e.g. the server process that started it restarted or crashed —
+   * "zombie" run). See POST /api/storage/benchmarks/:id/cancel.
+   */
+  cancelNote?: string;
 }
 
 // Parent entity - persisted to localStorage['benchmarks']
@@ -1225,6 +1232,23 @@ export interface EvaluationRun {
    * it's a point-in-time provenance link, not a live reference.
    */
   rerunOf?: string;
+  /**
+   * True when this run was created via re-run but with one or more config
+   * overrides applied (agent/evaluator/judge model/concurrency/benchmark
+   * source) — i.e. the launched config is NOT an exact duplicate of
+   * `rerunOf`. `rerunOf` is still recorded either way; this flag just
+   * distinguishes a faithful duplicate from a tweaked re-run so the UI can
+   * label it accurately ("re-run" vs "re-run (modified)"). Undefined (not
+   * `false`) when this run wasn't created via re-run at all.
+   */
+  modified?: boolean;
+  /**
+   * Audit note set when a run is cancelled without a live executor found
+   * (e.g. the server process that started it restarted or crashed —
+   * "zombie" run). Distinguishes a graceful in-process cancel from a
+   * doc-status-only fallback cancel. See POST .../:id/cancel.
+   */
+  cancelNote?: string;
 }
 
 /**

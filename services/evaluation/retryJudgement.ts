@@ -359,12 +359,24 @@ export async function retryJudgementForRun(
         results.push({ testCaseId, reportId: result?.reportId || '', outcome: 'failed', error: 'report not found' });
         return;
       }
+      // Judge against the test-case version the run actually SNAPSHOTTED
+      // (testCaseSnapshots[].version), not today's possibly-edited
+      // definition — otherwise "retry" silently becomes "re-grade against
+      // different criteria" and the run's verdicts stop being comparable
+      // with each other. Falls back to the current doc only for legacy runs
+      // that recorded no snapshot version.
+      const snapshotVersion = run.testCaseSnapshots?.find(s => s.id === testCaseId)?.version;
       let testCase: TestCase | null = null;
       try {
-        testCase = await storage.testCases.getById(testCaseId);
+        testCase = snapshotVersion != null
+          ? await storage.testCases.getVersion(testCaseId, snapshotVersion)
+          : await storage.testCases.getById(testCaseId);
       } catch { /* handled below via null check */ }
       if (!testCase) {
-        results.push({ testCaseId, reportId: report.id, outcome: 'failed', error: 'test case not found' });
+        results.push({
+          testCaseId, reportId: report.id, outcome: 'failed',
+          error: snapshotVersion != null ? `test case version ${snapshotVersion} not found` : 'test case not found',
+        });
         return;
       }
 

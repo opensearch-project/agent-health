@@ -175,6 +175,7 @@ describe('retryJudgementForRun', () => {
       } as any,
       testCases: {
         getById: jest.fn(async (id: string) => ({ id, name: id, expectedOutcomes: ['does the thing'] })),
+        getVersion: jest.fn(async (id: string, version: number) => ({ id, version, name: id, expectedOutcomes: [`does the thing (v${version})`] })),
       } as any,
     };
   }
@@ -413,6 +414,69 @@ describe('retryJudgementForRun', () => {
     expect(summary.retried).toBe(1);
     expect(summary.failed).toBe(1);
     expect(summary.results[0].error).toBe('test case not found');
+    expect(mockedCallBedrockJudge).not.toHaveBeenCalled();
+  });
+
+  it('judges against the SNAPSHOTTED test-case version (testCaseSnapshots[].version), not the current doc', async () => {
+    mockedCallBedrockJudge.mockResolvedValue({
+      passFailStatus: 'passed',
+      metrics: { accuracy: 100, faithfulness: 100, latency_score: 100, trajectory_alignment_score: 100 },
+      llmJudgeReasoning: 'ok',
+      improvementStrategies: [],
+    });
+    const reports: Record<string, EvaluationReport> = {
+      'r-snap': makeReport({ id: 'r-snap', testCaseId: 'tc-snap', metricsStatus: 'error' as any }),
+    };
+    const storage = makeStorage(reports);
+    const run = makeRun({
+      testCaseSnapshots: [{ id: 'tc-snap', version: 3, name: 'tc-snap' } as any],
+      results: { 'tc-snap': { reportId: 'r-snap', status: 'completed' } as any },
+    });
+
+    const summary = await retryJudgementForRun(run, storage as any);
+
+    expect(summary.succeeded).toBe(1);
+    expect(storage.testCases.getVersion).toHaveBeenCalledWith('tc-snap', 3);
+    expect(storage.testCases.getById).not.toHaveBeenCalled();
+    // The judge saw the v3 definition, not whatever getById would return today.
+    const judgeArgs = mockedCallBedrockJudge.mock.calls[0];
+    expect(JSON.stringify(judgeArgs)).toContain('does the thing (v3)');
+  });
+
+  it('falls back to the current test-case doc when the run recorded no snapshot version (legacy runs)', async () => {
+    mockedCallBedrockJudge.mockResolvedValue({
+      passFailStatus: 'passed',
+      metrics: { accuracy: 100, faithfulness: 100, latency_score: 100, trajectory_alignment_score: 100 },
+      llmJudgeReasoning: 'ok',
+      improvementStrategies: [],
+    });
+    const reports: Record<string, EvaluationReport> = {
+      'r-legacy': makeReport({ id: 'r-legacy', testCaseId: 'tc-legacy', metricsStatus: 'error' as any }),
+    };
+    const storage = makeStorage(reports);
+    const run = makeRun({ testCaseSnapshots: [], results: { 'tc-legacy': { reportId: 'r-legacy', status: 'completed' } as any } });
+
+    await retryJudgementForRun(run, storage as any);
+
+    expect(storage.testCases.getById).toHaveBeenCalledWith('tc-legacy');
+    expect(storage.testCases.getVersion).not.toHaveBeenCalled();
+  });
+
+  it('records a version-specific failure when the snapshotted test-case version no longer exists', async () => {
+    const reports: Record<string, EvaluationReport> = {
+      'r-snap-gone': makeReport({ id: 'r-snap-gone', testCaseId: 'tc-snap-gone', metricsStatus: 'error' as any }),
+    };
+    const storage = makeStorage(reports);
+    (storage.testCases.getVersion as jest.Mock).mockResolvedValue(null);
+    const run = makeRun({
+      testCaseSnapshots: [{ id: 'tc-snap-gone', version: 2, name: 'tc' } as any],
+      results: { 'tc-snap-gone': { reportId: 'r-snap-gone', status: 'completed' } as any },
+    });
+
+    const summary = await retryJudgementForRun(run, storage as any);
+
+    expect(summary.failed).toBe(1);
+    expect(summary.results[0].error).toBe('test case version 2 not found');
     expect(mockedCallBedrockJudge).not.toHaveBeenCalled();
   });
 
