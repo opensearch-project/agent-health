@@ -18,6 +18,7 @@ import { SAMPLE_BENCHMARKS, isSampleBenchmarkId } from '../../../cli/demo/sample
 import { SAMPLE_TEST_CASES } from '../../../cli/demo/sampleTestCases.js';
 import { Benchmark, BenchmarkRun, BenchmarkProgress, RunConfigInput, TestCase, BenchmarkVersion, TestCaseSnapshot, StorageMetadata, RunStats, EvaluationReport } from '../../../types/index.js';
 import { linkTestCaseIdsToBenchmark } from '../../../services/benchmarkPromotion.js';
+import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
 import {
   executeRun,
   createCancellationToken,
@@ -29,7 +30,6 @@ import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.j
 import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '../../../lib/judgeFailureSummary.js';
-import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
 
 /**
  * Normalize benchmark data for legacy documents without version fields.
