@@ -14,10 +14,11 @@
  * Two shapes depending on provenance:
  *
  *   • SDK / code-imported tests (`testCase.sourceFile` set) — show the
- *     file path plus the full eval-file source as an IDE-style code view
- *     (EvalSourceCodeView). We still can't render the `evaluate` function
- *     body in isolation (it's a JS closure at runtime), but the whole file
- *     that defines it is captured at import time and rendered here.
+ *     file path header with a [Pretty | Evaluate function | Whole file]
+ *     segmented view of THIS test (SdkTestDefinitionView): the resolved
+ *     `test()` options rendered like the JSON definition, the evaluate
+ *     callback text, or the whole eval file. Older records without the
+ *     per-test `definition` capture fall back to the whole-file view.
  *
  *   • JSON tests (no sourceFile) — lead with a reader-oriented definition
  *     (prompt, expected outcomes, context, and metadata). The complete
@@ -33,7 +34,7 @@ import React, { useState } from 'react';
 import { ChevronRight, ChevronDown, FileCode2, Braces, Copy, Check } from 'lucide-react';
 import { TestCase } from '@/types';
 import { Badge } from '@/components/ui/badge';
-import { EvalSourceCodeView } from '@/components/evals3/EvalSourceCodeView';
+import { SdkTestDefinitionView } from '@/components/evals3/SdkTestDefinitionView';
 import { TestCaseDefinition } from '@/components/TestCaseDefinition';
 
 interface CollapsibleTestCaseDefinitionProps {
@@ -60,7 +61,7 @@ export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefiniti
   const json = isSdk ? '' : JSON.stringify(testCase, null, 2);
 
   // JSON branch only — the SDK branch's copy affordance lives inside
-  // EvalSourceCodeView's header (copies the full source, not just the path).
+  // SdkTestDefinitionView (the whole-file segment's copy button copies the source).
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const text = json;
@@ -104,11 +105,11 @@ export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefiniti
       {open && (
         <div className="px-4 pb-3">
           {isSdk ? (
-            // SDK test: EvalSourceCodeView IS the whole surface — its own
-            // header already shows the source path + language badge + line
-            // count + copy button, so the old standalone "Source File" row
-            // and sha256 line were redundant duplicates (owner feedback).
-            <EvalSourceCodeView testCase={testCase} maxHeight="360px" />
+            // SDK test: SdkTestDefinitionView IS the whole surface — its
+            // header shows the source path + language badge, so the old
+            // standalone "Source File" row and sha256 line stay gone
+            // (owner feedback). Pretty view of THIS test by default.
+            <SdkTestDefinitionView testCase={testCase} maxHeight="360px" />
           ) : (
             <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
               <TestCaseDefinition testCase={testCase} compact />

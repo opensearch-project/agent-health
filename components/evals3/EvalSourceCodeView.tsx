@@ -33,17 +33,11 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import Prism from 'prismjs';
-// eslint-disable-next-line import/no-duplicates
-import 'prismjs/components/prism-clike.js';
-// eslint-disable-next-line import/no-duplicates
-import 'prismjs/components/prism-javascript.js';
-// eslint-disable-next-line import/no-duplicates
-import 'prismjs/components/prism-typescript.js';
 import { FileCode2, Copy, Check, AlertCircle, ChevronRight, ChevronDown } from 'lucide-react';
 import { TestCase } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { detectSourceLanguage } from '@/lib/utils';
+import { HighlightedCodeBlock } from '@/components/evals3/HighlightedCodeBlock';
 
 interface EvalSourceCodeViewProps {
   testCase: TestCase | null;
@@ -52,20 +46,6 @@ interface EvalSourceCodeViewProps {
   maxHeight?: string;
   /** Whether the code panel starts expanded. Default: false (collapsed). */
   defaultOpen?: boolean;
-}
-
-function highlight(code: string, language: 'javascript' | 'typescript'): string {
-  const grammar = language === 'javascript' ? Prism.languages.javascript : Prism.languages.typescript;
-  try {
-    return Prism.highlight(code, grammar, language);
-  } catch {
-    // Prism should never throw on arbitrary text, but if it somehow does,
-    // fail open to escaped plain text rather than crashing the page.
-    return code
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
 }
 
 export const EvalSourceCodeView: React.FC<EvalSourceCodeViewProps> = ({
@@ -84,21 +64,9 @@ export const EvalSourceCodeView: React.FC<EvalSourceCodeViewProps> = ({
     [testCase?.sourceFileName, testCase?.sourceFile]
   );
 
-  // Highlight only once the panel has been opened — collapsed rows never pay
-  // the Prism cost. useMemo keeps the result cached across re-renders after.
-  const highlightedHtml = useMemo(() => {
-    if (!open || !testCase?.sourceCode) return '';
-    return highlight(testCase.sourceCode, testCase.sourceLanguage || language);
-  }, [open, testCase?.sourceCode, testCase?.sourceLanguage, language]);
-
+  // Highlighting happens inside HighlightedCodeBlock, which is only mounted
+  // once the panel is open — collapsed rows never pay the Prism cost.
   const lineCount = testCase?.sourceCode ? testCase.sourceCode.split('\n').length : 0;
-  // Must run unconditionally (before the early `return null` below) — React
-  // hooks can't be called conditionally without breaking the hooks order
-  // invariant across renders.
-  const lineNumbers = useMemo(
-    () => Array.from({ length: lineCount }, (_, i) => i + 1).join('\n'),
-    [lineCount]
-  );
 
   if (!testCase || !isCodeSdk) return null;
 
@@ -170,27 +138,13 @@ export const EvalSourceCodeView: React.FC<EvalSourceCodeViewProps> = ({
       </div>
 
       {open && (testCase.sourceCode ? (
-        <div
-          className="eval-source-code overflow-auto"
-          style={{ maxHeight }}
-          data-testid="eval-source-code-body"
-        >
-          <div className="flex text-[11px] leading-5 font-mono">
-            <pre
-              aria-hidden="true"
-              data-testid="eval-source-line-numbers"
-              className="sticky left-0 z-[1] select-none text-right pr-3 pl-3 py-3 m-0 text-muted-foreground/50 bg-muted/40 border-r border-border shrink-0"
-            >
-              {lineNumbers}
-            </pre>
-            <pre className="flex-1 py-3 pl-3 pr-4 m-0">
-              <code
-                className="eval-source-highlight"
-                dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-              />
-            </pre>
-          </div>
-        </div>
+        <HighlightedCodeBlock
+          code={testCase.sourceCode}
+          language={testCase.sourceLanguage || language}
+          maxHeight={maxHeight}
+          testId="eval-source-code-body"
+          gutterTestId="eval-source-line-numbers"
+        />
       ) : (
         // Backfill placeholder — code-SDK test case persisted before
         // `sourceCode` existed as a field. Don't pretend we have the file;

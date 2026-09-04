@@ -179,6 +179,33 @@ describe('Test Cases Storage Routes', () => {
       expect(tc.sourceFileName).toBe('rca.eval.ts');
       expect(tc.sourceLanguage).toBe('typescript');
     });
+
+    // Per-test SDK definition capture (options + evaluate body text) is the
+    // second heavy per-record blob; list views strip it the same way.
+    it('fields=summary strips definition (per-test SDK capture) as well', async () => {
+      mockStorage.testCases.getAll.mockResolvedValue({
+        items: [
+          {
+            id: 'tc-code-2',
+            name: 'Code SDK Test 2',
+            initialPrompt: 'short prompt',
+            sourceFile: 'evals/rca.eval.ts',
+            definition: { registeredAs: 'sdk', options: { prompt: 'x' }, bodySource: 'y'.repeat(5000) },
+          },
+        ],
+        total: 1,
+      });
+
+      const { req, res } = createMocks({}, {}, { fields: 'summary' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+      await handler(req, res);
+
+      const payload = (res.json as jest.Mock).mock.calls[0][0];
+      const tc = payload.testCases.find((t: any) => t.id === 'tc-code-2');
+      expect(tc).toBeDefined();
+      expect(tc.definition).toBeUndefined();
+      expect(tc.sourceFile).toBe('evals/rca.eval.ts');
+    });
   });
 
   describe('GET /api/storage/test-cases/:id', () => {

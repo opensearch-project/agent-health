@@ -964,6 +964,10 @@ export function createBenchmarkCommand(): Command {
                   sourceCode: loaded.fileSource,
                   sourceFileName,
                   sourceLanguage,
+                  // Per-test slice of the above: THIS test's resolved
+                  // options + evaluate body. Lets the run report show one
+                  // test's definition instead of the whole file.
+                  definition: tc.definition,
                   description: tc.options.description,
                   // Forward expectedOutcomes / expectedTrajectory — see
                   // services/sourceResolver.ts for rationale. Without

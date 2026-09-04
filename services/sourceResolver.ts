@@ -377,6 +377,10 @@ async function resolveCodeImport(
         sourceCode: loaded.fileSource,
         sourceFileName,
         sourceLanguage,
+        // Per-test slice: THIS test's resolved options + evaluate body, so
+        // the run report can show one test rather than the whole file.
+        // Optional-chained: older loader mocks don't return it.
+        ...(tc.definition ? { definition: tc.definition } : {}),
         // Forward expectedOutcomes / expectedTrajectory so server-side
         // evaluators (`-e <evaluator>`, /api/evaluate) can grade the run
         // even when the test was authored as a code-based .eval.js. Inline

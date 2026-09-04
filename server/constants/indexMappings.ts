@@ -57,6 +57,11 @@ export function getIndexMappings(): IndexMappings {
           forwardedProps: { type: 'object', enabled: false },
           expectedOutcome: { type: 'text' },
           expectedTrajectory: { type: 'object', enabled: false },
+          // Per-test SDK definition capture (resolved test() options + the
+          // evaluate body text). Stored for display only — never queried —
+          // and `options` is user-shaped, so keep it out of dynamic mapping
+          // the same way `context` / `expectedTrajectory` are.
+          definition: { type: 'object', enabled: false },
           category: { type: 'keyword' },
           difficulty: { type: 'keyword' },
           tags: { type: 'keyword' },

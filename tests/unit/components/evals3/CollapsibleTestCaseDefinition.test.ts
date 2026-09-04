@@ -89,6 +89,45 @@ describe('CollapsibleTestCaseDefinition — SDK branch (no redundant rows)', () 
     fireEvent.click(screen.getByTestId('eval-source-toggle'));
     expect(screen.getByTestId('eval-source-code-body')).toBeTruthy();
   });
+
+  // Legacy SDK record (no per-test `definition`) → whole-file fallback with
+  // a re-import hint, so nothing regresses for test cases imported before
+  // the capture existed.
+  it('legacy SDK record (no definition) shows the whole-file fallback + re-import hint', () => {
+    render(h(CollapsibleTestCaseDefinition, { testCase: sdkTc(), defaultOpen: true }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('legacy');
+    expect(screen.getByTestId('sdk-definition-legacy-hint')).toBeTruthy();
+    expect(screen.queryByTestId('sdk-definition-segments')).toBeNull();
+  });
+
+  // Captured SDK record → Pretty view of THIS test by default, segments to
+  // switch to the evaluate function or the whole file.
+  it('captured SDK record renders Pretty by default with only this test\'s options', () => {
+    const tc = baseTestCase({
+      name: 'only-me',
+      sourceFile: 'dist/suite.eval.js',
+      sourceFileName: 'suite.eval.js',
+      sourceLanguage: 'javascript',
+      sourceHash: 'h',
+      sourceCode: "test('other-one', {prompt:'x'}, () => {});\ntest('only-me', {prompt:'Only my prompt'}, () => {});",
+      definition: {
+        registeredAs: 'sdk',
+        options: { prompt: 'Only my prompt', expectedOutcomes: ['just mine'] },
+        bodySource: '() => { mine(); }',
+      },
+    });
+    render(h(CollapsibleTestCaseDefinition, { testCase: tc, defaultOpen: true }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('captured');
+    expect(screen.getByTestId('sdk-definition-segment-pretty').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByText('Only my prompt')).toBeTruthy();
+    expect(screen.getByText('just mine')).toBeTruthy();
+    expect(screen.queryByText(/other-one/)).toBeNull();
+    // Header still shows the path exactly once; no old duplicate rows.
+    expect(screen.getAllByText('dist/suite.eval.js')).toHaveLength(1);
+    expect(screen.queryByText(/sha256:/)).toBeNull();
+    fireEvent.click(screen.getByTestId('sdk-definition-segment-evaluate'));
+    expect(screen.getByTestId('sdk-definition-evaluate-body').textContent).toContain('mine()');
+  });
 });
 
 describe('CollapsibleTestCaseDefinition — JSON branch (unchanged)', () => {

@@ -36,6 +36,9 @@ function toSummary(doc: any): any {
     // / sourceFileName / sourceLanguage stay), not its full text. The Test
     // Case detail page fetches the full (non-summary) record via getById.
     sourceCode: undefined,
+    // Same reasoning for the per-test definition capture (options + evaluate
+    // body text): only the selected row's detail view needs it.
+    definition: undefined,
   };
 }
 

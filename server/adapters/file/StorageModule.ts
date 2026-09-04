@@ -299,8 +299,17 @@ class FileTestCaseOperations implements ITestCaseOperations {
 
       if (existing) {
         if (existing.sourceHash === tc.sourceHash) {
+          // See OpenSearchTestCaseOperations.bulkUpsert: backfill a missing
+          // per-test `definition` in place (same version) — never overwrite.
+          if (!existing.definition && tc.definition) {
+            const ver = this.ver(existing) || 1;
+            const doc = { ...existing, definition: tc.definition } as TestCase;
+            writeJsonFile(this.docPath(existing.id, ver), doc);
+            results.push(doc);
+          } else {
+            results.push(existing);
+          }
           unchanged++;
-          results.push(existing);
         } else {
           const updatedTc = await this.update(existing.id, {
             ...tc,
