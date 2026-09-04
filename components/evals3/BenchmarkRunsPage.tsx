@@ -20,15 +20,11 @@ import {
   Trash2, Plus, X, Loader2, Circle, Check, Clock,
   StopCircle, Ban, Pencil, AlertTriangle,
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { JudgeModelSelect } from '@/components/JudgeModelSelect';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
@@ -36,9 +32,8 @@ import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/
 import { computeRunStats, getEffectiveRunStatus, isRunInProgress } from '@/lib/runStats';
 import { executeBenchmarkRun, listEvaluationRuns } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
-import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, Evaluator, EvaluationRun } from '@/types';
+import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { ENV_CONFIG } from '@/lib/config';
 import { formatDate, getModelName } from '@/lib/utils';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import {
@@ -47,7 +42,8 @@ import {
   effectiveRunVersionFilter,
   VersionData,
 } from '@/lib/benchmarkVersionUtils';
-import { RunConfigForExecution } from '@/components/BenchmarkEditor';
+import { RunConfigDialog, RunConfigValues } from '@/components/evals3/RunConfigDialog';
+import type { RunConfigForExecution } from '@/components/BenchmarkEditor';
 import { BenchmarkEditor } from '@/components/BenchmarkEditor';
 import { BenchmarkCasesTab, CaseHeatStrip } from '@/components/evals3/BenchmarkCasesTab';
 import { getRecentCompletedRuns } from '@/lib/benchmarkCaseReview';
@@ -96,29 +92,9 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
   // Run config dialog
   const [isRunConfigOpen, setIsRunConfigOpen] = useState(false);
-  const [runConfigValues, setRunConfigValues] = useState<RunConfigForExecution>({
+  const [runConfigValues, setRunConfigValues] = useState<RunConfigValues>({
     name: '', description: '', agentKey: '', modelId: '',
   });
-
-  // Evaluators for the run config dialog. Loaded once on mount so the
-  // "Evaluator" dropdown can show human-readable names. Mirrors
-  // TestCaseDetailPage so both "Configure Run" entry points expose the
-  // same evaluator selection.
-  const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`);
-        if (!response.ok) return;
-        const data = await response.json();
-        if (!cancelled) setEvaluators(data.evaluators || []);
-      } catch (error) {
-        console.error('Failed to load evaluators:', error);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
 
   // Running state
   const [isRunning, setIsRunning] = useState(false);
@@ -414,8 +390,9 @@ export const BenchmarkRunsPage2: React.FC = () => {
     setIsRunConfigOpen(true);
   };
 
-  const handleStartRun = async () => {
+  const handleStartRun = async (values: RunConfigValues) => {
     if (!benchmark) return;
+    setRunConfigValues(values);
     setIsRunConfigOpen(false);
     const initialStatuses: UseCaseRunStatus[] = (benchmark.testCaseIds || []).map(id => {
       const testCase = testCases.find(tc => tc.id === id);
@@ -426,7 +403,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
     setRunProgress(null);
     try {
       await executeBenchmarkRun(
-        benchmark.id, runConfigValues,
+        benchmark.id, values,
         (progress: BenchmarkProgress) => {
           setRunProgress(progress);
           setUseCaseStatuses(prev => prev.map((uc, index) => {
@@ -947,106 +924,17 @@ export const BenchmarkRunsPage2: React.FC = () => {
         </div>
       )}
 
-      {/* ── Run Configuration Dialog ───────────────────────────────────── */}
-      {isRunConfigOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-md" data-testid="run-config-dialog">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-lg">Configure Run</CardTitle>
-              <Button variant="ghost" size="icon" onClick={() => setIsRunConfigOpen(false)}>
-                <X size={18} />
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="run-name">Run Name</Label>
-                <Input
-                  id="run-name"
-                  value={runConfigValues.name}
-                  onChange={e => setRunConfigValues(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="e.g., Baseline, With Fix, Claude 4 Test"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="run-description">Description (optional)</Label>
-                <Textarea
-                  id="run-description"
-                  value={runConfigValues.description || ''}
-                  onChange={e => setRunConfigValues(prev => ({ ...prev, description: e.target.value || undefined }))}
-                  placeholder="Describe what this run tests or changes..."
-                  rows={2}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Agent</Label>
-                {/* The agent's LLM is owned by its agent-health.config.ts
-                    connectorConfig — there is no agent-model picker. */}
-                <Select
-                  value={runConfigValues.agentKey}
-                  onValueChange={val => setRunConfigValues(prev => ({ ...prev, agentKey: val }))}
-                >
-                  <SelectTrigger data-testid="run-config-agent-trigger"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {DEFAULT_CONFIG.agents.map(agent => (
-                      <SelectItem key={agent.key} value={agent.key}>{agent.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  {/* Evaluator — picks the scoring config + (default)
-                      judge prompt and judge model. "RCA Default" maps to
-                      undefined; the server resolves the built-in default. */}
-                  <Label>Evaluator</Label>
-                  <Select
-                    value={runConfigValues.evaluatorId || '__default__'}
-                    onValueChange={val => setRunConfigValues(prev => ({
-                      ...prev,
-                      evaluatorId: val === '__default__' ? undefined : val,
-                    }))}
-                  >
-                    <SelectTrigger data-testid="run-config-evaluator-trigger">
-                      <SelectValue placeholder="RCA Default" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__default__">RCA Default</SelectItem>
-                      {evaluators.map(evaluator => (
-                        <SelectItem key={evaluator.id} value={evaluator.id}>
-                          {evaluator.name} {evaluator.isSystem ? '(System)' : ''}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  {/* Judge Model — customer-supplied LLM for the judge,
-                      distinct from the agent's model. "Use evaluator
-                      default" maps to undefined; the server resolves
-                      from evaluator.inferenceConfig.modelId then
-                      BEDROCK_MODEL_ID. Includes ALL providers since
-                      this dropdown controls the judge LLM only. */}
-                  <Label>Judge Model</Label>
-                  <JudgeModelSelect
-                    value={runConfigValues.judgeModelId ?? ''}
-                    onValueChange={val => setRunConfigValues(prev => ({
-                      ...prev,
-                      judgeModelId: val || undefined,
-                    }))}
-                    allowDefault={true}
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="ghost" onClick={() => setIsRunConfigOpen(false)}>Cancel</Button>
-                <Button onClick={handleStartRun} disabled={!runConfigValues.name.trim()} className="bg-opensearch-blue hover:bg-blue-600">
-                  <Play size={16} className="mr-1" /> Start Run
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+      {/* ── Run Configuration Dialog — the shared RunConfigDialog (create
+          mode). The SAME component serves Re-run (rerun mode, prepopulated
+          from the source run) so the two never drift apart again. */}
+      <RunConfigDialog
+        mode="create"
+        open={isRunConfigOpen}
+        onOpenChange={setIsRunConfigOpen}
+        initialValues={runConfigValues}
+        benchmark={benchmark}
+        onStart={handleStartRun}
+      />
     </div>
   );
 };

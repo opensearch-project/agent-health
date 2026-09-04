@@ -188,7 +188,7 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
   });
 });
 
-test.describe('Re-run dialog — prefilled + editable (Add-Run field set)', () => {
+test.describe('Re-run dialog — the shared RunConfigDialog, prefilled + editable', () => {
   test('prefills agent/evaluator/judge model from the source run, and shows a modified hint when tweaked', async ({ page, request, testData }) => {
     const tcRes = await request.post('/api/storage/test-cases', {
       data: {
@@ -220,29 +220,101 @@ test.describe('Re-run dialog — prefilled + editable (Add-Run field set)', () =
     await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${runId}"]`).click();
 
-    const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
 
     // Prefilled name.
-    await expect(page.locator('[data-testid="rerun-name-input"]')).toHaveValue('E2E Rerun Prefill Source (re-run)');
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue('E2E Rerun Prefill Source (re-run)');
     // Evaluator visible + prefilled (owner-requested — not just carried silently).
-    await expect(page.locator('[data-testid="rerun-evaluator-trigger"]')).toContainText('Factuality');
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toContainText('Factuality');
     // Agent visible + prefilled.
-    await expect(page.locator('[data-testid="rerun-agent-trigger"]')).toBeVisible();
+    await expect(page.locator('[data-testid="run-config-agent-trigger"]')).toBeVisible();
 
     // No "modified" hint yet — nothing has been tweaked.
-    await expect(page.locator('[data-testid="rerun-modified-hint"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="run-config-modified-hint"]')).toHaveCount(0);
 
-    // Tweak concurrency via the Advanced section -> modified hint appears.
-    await page.locator('[data-testid="rerun-advanced-toggle"]').click();
-    const concurrencyInput = page.locator('[data-testid="rerun-concurrency-input"]');
+    // Concurrency is a first-class field (owner: "Concurrency is also missing
+    // in the Run dialog box"), prepopulated from the run doc. Tweaking it
+    // flips the modified hint.
+    const concurrencyInput = page.locator('[data-testid="run-config-concurrency-input"]');
     await expect(concurrencyInput).toHaveValue('3');
     await concurrencyInput.fill('7');
-    await expect(page.locator('[data-testid="rerun-modified-hint"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="run-config-modified-hint"]')).toBeVisible({ timeout: 5000 });
 
     // Dismiss without submitting — no run created.
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible();
+  });
+});
+
+test.describe('Re-run from the inspector kebab — the SAME dialog as Add Run, prepopulated', () => {
+  test('opens RunConfigDialog prepopulated (name / agent / evaluator / concurrency) and submitting creates a run linked via rerunOf', async ({ page, request, testData }) => {
+    const tcRes = await request.post('/api/storage/test-cases', {
+      data: {
+        name: `e2e-inspector-rerun-tc-${Date.now()}`,
+        category: 'Test', difficulty: 'Easy', initialPrompt: 'q', expectedOutcomes: ['a'],
+      },
+    });
+    test.skip(!tcRes.ok(), 'Could not create test case (storage not configured?)');
+    const tc = await tcRes.json();
+    const testCaseId = tc.id || tc.testCase?.id;
+    testData.testCase(testCaseId);
+
+    const runId = `eval-run-e2e-inspector-rerun-${Date.now()}`;
+    const res = await request.put(`/api/storage/evaluation-runs/${runId}`, {
+      data: {
+        id: runId, name: 'E2E Inspector Rerun Source', status: 'completed',
+        agentKey: 'demo', modelId: 'claude-sonnet', judgeModelId: 'demo-model',
+        evaluatorId: 'system-factuality', concurrency: 2,
+        sources: [{ type: 'test-case-ids', ids: [testCaseId] }],
+        trigger: 'api', testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'tc' }],
+        results: {}, createdAt: new Date().toISOString(),
+      },
+    });
+    test.skip(!res.ok(), 'Could not seed source run');
+    testData.evaluationRun(runId);
+
+    await page.goto(`/evaluations/runs/${runId}/inspect`);
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
+    await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${runId}"]`).click();
+
+    // ONE dialog component for both entry points: the same data-testid the
+    // benchmark page's "Add Run" renders, here in rerun mode.
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await expect(dialog).toHaveAttribute('data-mode', 'rerun');
+
+    // Prepopulated from the run doc's ACTUAL values.
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue('E2E Inspector Rerun Source (re-run)');
+    await expect(page.locator('[data-testid="run-config-agent-trigger"]')).toContainText('Demo');
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toContainText('Factuality');
+    await expect(page.locator('[data-testid="run-config-concurrency-input"]')).toHaveValue('2');
+    await expect(page.locator('[data-testid="run-config-modified-hint"]')).toHaveCount(0);
+
+    // Submit as a faithful duplicate — a REAL run is created against the
+    // demo agent (cheap), linked back via rerunOf, and we land on it.
+    await page.locator('[data-testid="run-config-submit-btn"]').click();
+    await expect(page).toHaveURL(/\/evaluations\/runs\/eval-run-[^/]+$/, { timeout: 15000 });
+    const newRunId = page.url().split('/evaluations/runs/')[1].split(/[/?#]/)[0];
+    expect(newRunId).not.toBe(runId);
+    testData.evaluationRun(newRunId);
+
+    const newRun = await (await request.get(`/api/storage/evaluation-runs/${newRunId}`)).json();
+    expect(newRun.rerunOf).toBe(runId);
+    expect(newRun.modified).toBeFalsy();
+    expect(newRun.concurrency).toBe(2);
+    expect(newRun.evaluatorId).toBe('system-factuality');
+    expect(newRun.agentKey).toBe('demo');
+
+    // The duplicate actually executes → per-test-case report docs; track
+    // them once it settles so nothing leaks into the shared cluster.
+    await expect.poll(async () => {
+      const r = await (await request.get(`/api/storage/evaluation-runs/${newRunId}`)).json();
+      return ['completed', 'failed', 'cancelled'].includes(r.status) ? r.status : null;
+    }, { timeout: 120000, intervals: [2000] }).not.toBeNull();
+    const settled = await (await request.get(`/api/storage/evaluation-runs/${newRunId}`)).json();
+    for (const r of Object.values(settled.results || {}) as any[]) if (r?.reportId) testData.run(r.reportId);
   });
 });
 

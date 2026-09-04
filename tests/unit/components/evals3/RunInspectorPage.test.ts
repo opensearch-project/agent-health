@@ -108,12 +108,12 @@ jest.mock('@/components/evals3/Breadcrumbs', () => ({
   Breadcrumbs: () => React.createElement('nav', { 'data-testid': 'breadcrumbs' }),
 }));
 
-jest.mock('@/components/evals3/RerunConfirmDialog', () => ({
-  RerunConfirmDialog: ({ run, open, onOpenChange, onRerun }: any) => (
-    open && run ? React.createElement(
+jest.mock('@/components/evals3/RunConfigDialog', () => ({
+  RunConfigDialog: ({ mode, sourceRun, open, onOpenChange }: any) => (
+    open && sourceRun ? React.createElement(
       'div',
-      { 'data-testid': 'rerun-confirm-dialog', onClick: () => onOpenChange(false) },
-      `Dialog for ${run.id}`,
+      { 'data-testid': 'run-config-dialog', 'data-mode': mode, onClick: () => onOpenChange(false) },
+      `Dialog for ${sourceRun.id}`,
     ) : null
   ),
 }));
@@ -551,7 +551,7 @@ describe('RunInspectorPage — Re-run button (eval-run mode)', () => {
 
     fireEvent.click(rerunItem());
 
-    await waitFor(() => expect(screen.getByTestId('rerun-confirm-dialog')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('run-config-dialog')).toBeTruthy());
   });
 
   it('renders provenance chip when rerunOf is present', async () => {
@@ -1035,7 +1035,7 @@ describe('RunInspectorPage — Re-run button (isEvaluationRun-keyed)', () => {
     await waitFor(() => expect((rerunItem()).disabled).toBe(false));
     fireEvent.click(rerunItem());
 
-    await waitFor(() => expect(screen.getByTestId('rerun-confirm-dialog')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('run-config-dialog')).toBeTruthy());
   });
 });
 

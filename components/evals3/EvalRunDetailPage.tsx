@@ -37,7 +37,7 @@ import {
   retryJudgementEvaluationRun,
   promoteEvaluationRun,
 } from '@/services/client/evaluationRunsApi';
-import { RerunConfirmDialog } from './RerunConfirmDialog';
+import { RunConfigDialog } from './RunConfigDialog';
 import { RunActionsMenu } from './RunActionsMenu';
 import { Breadcrumbs } from './Breadcrumbs';
 
@@ -476,8 +476,9 @@ export const EvalRunDetailPage: React.FC = () => {
       </Dialog>
 
       {/* Re-run Confirm Dialog */}
-      <RerunConfirmDialog
-        run={run}
+      <RunConfigDialog
+        mode="rerun"
+        sourceRun={run}
         open={rerunDialogOpen}
         onOpenChange={setRerunDialogOpen}
         onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}`)}

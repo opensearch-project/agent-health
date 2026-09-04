@@ -131,7 +131,7 @@ test.describe('Evals3 Benchmark Runs Page', () => {
   // way to drive the run-level evaluatorId / judgeModelId that the server
   // already accepted on POST /api/storage/benchmarks/:id/execute.
 
-  test('Configure Run dialog renders Agent, Agent Model, Evaluator and Judge Model fields', async ({ page }) => {
+  test('Configure Run dialog renders Agent, Evaluator, Judge Model and Concurrency fields', async ({ page }) => {
     test.skip(!benchmarkId, 'No benchmark created');
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs`);
     await page.waitForSelector('h2', { timeout: 30_000 });
@@ -160,6 +160,16 @@ test.describe('Evals3 Benchmark Runs Page', () => {
     // assertion doesn't depend on which evaluators the test backend has
     // loaded (the placeholder "RCA Default" is always present).
     await expect(dialog.locator('[data-testid="run-config-evaluator-trigger"]')).toBeVisible();
+
+    // Concurrency is a first-class field of the Add-Run dialog (owner:
+    // "Concurrency is also missing in the Run dialog box"). Empty means the
+    // server default, shown as the placeholder; the create-mode dialog is
+    // the SAME component Re-run opens (data-mode distinguishes them).
+    await expect(dialog).toHaveAttribute('data-mode', 'create');
+    await expect(dialog.getByText('Concurrency', { exact: true })).toBeVisible();
+    const concurrency = dialog.locator('[data-testid="run-config-concurrency-input"]');
+    await expect(concurrency).toHaveValue('');
+    await expect(concurrency).toHaveAttribute('placeholder', '1 (default)');
   });
 
   test('Start Run posts evaluatorId from the dialog through to the unified runner', async ({ page }) => {
@@ -207,6 +217,9 @@ test.describe('Evals3 Benchmark Runs Page', () => {
       await items.nth(0).click();
     }
 
+    // Set a concurrency so we can assert it rides along to the runner.
+    await page.locator('[data-testid="run-config-concurrency-input"]').fill('3');
+
     await page.click('button:has-text("Start Run")');
 
     // Wait for the route handler to capture the unified SSE request body.
@@ -220,6 +233,7 @@ test.describe('Evals3 Benchmark Runs Page', () => {
     expect(executeBody.agentKey).toBeTruthy();
     expect(executeBody.modelId).toBeTruthy();
     expect(executeBody.name).toBeTruthy();
+    expect(executeBody.concurrency).toBe(3);
     // What this assertion actually proves: the dialog never leaks the
     // internal '__default__' sentinel into the request body. After
     // JSON.parse(), an omitted field and an explicit `undefined` are

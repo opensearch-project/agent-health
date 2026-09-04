@@ -38,7 +38,7 @@ import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
 import { InlineRenameField } from './InlineRenameField';
 import { Breadcrumbs } from './Breadcrumbs';
 import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
-import { RerunConfirmDialog } from './RerunConfirmDialog';
+import { RunConfigDialog } from './RunConfigDialog';
 import { RetryJudgementConfirmDialog } from './RetryJudgementConfirmDialog';
 import type { RetryJudgementSummary } from '@/services/client';
 import { RunActionsMenu } from './RunActionsMenu';
@@ -578,7 +578,7 @@ export const RunInspectorPage: React.FC = () => {
                 keys on `getRunActionVisibility(run)` (docType + status +
                 judge-failed count), never on URL-derived `mode`.
                   - Re-run: EvaluationRun docs only (BenchmarkRun has no
-                    rerun endpoint) → opens the prefilled RerunConfirmDialog.
+                    rerun endpoint) → opens the prefilled RunConfigDialog.
                   - Retry judgement: EvaluationRun + terminal + >0
                     judge-failed cases; label carries the count. Salvages
                     judge-failed cases at judge cost only — never re-invokes
@@ -640,8 +640,9 @@ export const RunInspectorPage: React.FC = () => {
 
       {/* Re-run Confirm Dialog (EvaluationRun only) -- doc concern, see above. */}
       {evalRun && (
-        <RerunConfirmDialog
-          run={evalRun}
+        <RunConfigDialog
+          mode="rerun"
+          sourceRun={evalRun}
           open={rerunDialogOpen}
           onOpenChange={setRerunDialogOpen}
           onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}`)}

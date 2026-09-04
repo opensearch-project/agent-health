@@ -42,7 +42,7 @@ import { getRunActionVisibility } from '@/lib/runActions';
 import { formatRelativeTime, getModelName, getJudgeModelLabel, getEvaluatorLabel } from '@/lib/utils';
 import { Breadcrumbs } from './Breadcrumbs';
 import { InlineRenameField } from './InlineRenameField';
-import { RerunConfirmDialog } from './RerunConfirmDialog';
+import { RunConfigDialog } from './RunConfigDialog';
 import { RunActionsMenu } from './RunActionsMenu';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────
@@ -1187,8 +1187,9 @@ export const EvalRunsPage: React.FC = () => {
       </div>
 
       {/* Re-run Confirm Dialog — shared with EvalRunDetailPage */}
-      <RerunConfirmDialog
-        run={rerunTarget}
+      <RunConfigDialog
+        mode="rerun"
+        sourceRun={rerunTarget}
         open={rerunDialogOpen}
         onOpenChange={open => { setRerunDialogOpen(open); if (!open) setRerunTarget(null); }}
         onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}`)}

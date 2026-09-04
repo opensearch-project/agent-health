@@ -16,7 +16,7 @@
  *   - Re-run: only top-level EvaluationRun docs (docType === 'evaluation-run').
  *     Legacy benchmark-embedded BenchmarkRun rows don't support the
  *     provenance-tracked rerun endpoint (pre-existing constraint — see
- *     RerunConfirmDialog / EvalRunsPage).
+ *     RunConfigDialog / EvalRunsPage).
  *   - Retry judgement: only EvaluationRun docs, only when the run is
  *     terminal (not running) AND it has at least one test case whose agent
  *     execution completed but the judge produced NO verdict (a judge-failed

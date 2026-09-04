@@ -119,18 +119,18 @@ test.describe('Re-run an evaluation run', () => {
     await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
 
-    const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
 
     // Name preview reflects the "(re-run)" suffix computed client-side, and
     // is editable.
-    await expect(page.locator('[data-testid="rerun-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
     // Prefilled Agent / Evaluator / Judge Model fields present — the owner
     // explicitly wants the evaluator visible on the rerun path, not just
     // carried silently.
-    await expect(page.locator('[data-testid="rerun-agent-trigger"]')).toBeVisible();
-    await expect(page.locator('[data-testid="rerun-evaluator-trigger"]')).toBeVisible();
+    await expect(page.locator('[data-testid="run-config-agent-trigger"]')).toBeVisible();
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toBeVisible();
     // judgeModelId is displayed via getModelName() (human-readable), not the raw id.
     await expect(dialog).toContainText('Claude Sonnet 4.6');
 
@@ -160,9 +160,9 @@ test.describe('Re-run an evaluation run', () => {
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
-    await expect(page.locator('[data-testid="rerun-confirm-dialog"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="run-config-dialog"]')).toBeVisible({ timeout: 10000 });
 
-    await page.locator('[data-testid="rerun-confirm-btn"]').click();
+    await page.locator('[data-testid="run-config-submit-btn"]').click();
 
     await expect(page).toHaveURL(/\/evaluations\/runs\/mocked-rerun-target$/, { timeout: 10000 });
     expect(rerunRequested).toBe(true);
@@ -208,9 +208,9 @@ test.describe('Re-run an evaluation run', () => {
     await expect(rowBtn).toBeVisible({ timeout: 15000 });
     await rowBtn.click();
 
-    const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('[data-testid="rerun-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible();
@@ -328,9 +328,9 @@ test.describe('Run inspector — Re-run button (eval-run mode)', () => {
     await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
 
-    const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('[data-testid="rerun-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible();

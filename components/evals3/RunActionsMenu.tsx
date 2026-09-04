@@ -42,7 +42,7 @@ export interface RunActionsMenuProps {
   isRunning: boolean;
   /**
    * Render a Re-run item that calls this (typically opens the prefilled
-   * RerunConfirmDialog). Omitted → no Re-run item (surfaces with their own
+   * RunConfigDialog). Omitted → no Re-run item (surfaces with their own
    * Re-run affordance, e.g. the runs-list row icon).
    */
   onRerun?: () => void;
