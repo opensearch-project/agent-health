@@ -48,13 +48,9 @@ jest.mock('@/services/storage', () => ({
 }));
 
 const mockListEvaluationRuns = jest.fn();
-const mockDeleteEvaluationRun = jest.fn(async () => ({ success: true }));
-const mockCancelEvaluationRun = jest.fn(async () => ({ success: true }));
 jest.mock('@/services/client', () => ({
   executeBenchmarkRun: jest.fn(),
   listEvaluationRuns: (...a: unknown[]) => mockListEvaluationRuns(...a),
-  deleteEvaluationRun: (...a: unknown[]) => mockDeleteEvaluationRun(...a),
-  cancelEvaluationRun: (...a: unknown[]) => mockCancelEvaluationRun(...a),
 }));
 
 jest.mock('@/hooks/useBenchmarkCancellation', () => ({
@@ -215,28 +211,24 @@ describe('BenchmarkRunsPage2 — associated (non-embedded) eval-runs merge (bug 
     expect(screen.getAllByText('Migrated Run')).toHaveLength(1);
   });
 
-  it('renders the run-actions kebab for a merged-in (non-embedded) associated run — Delete dispatches to the top-level evaluation-runs API, not the benchmark-embedded one', async () => {
+  it('does not render Delete/Cancel for a merged-in (non-embedded) associated run — those APIs are benchmark-embedded-run-specific', async () => {
     mockGetById.mockResolvedValue(makeBenchmark());
     mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [makeAssociatedEvalRun()] });
     await renderPage();
 
     await waitFor(() => expect(screen.getByText('Claude-code with traces')).toBeTruthy());
     const card = screen.getByText('Claude-code with traces').closest('.p-4') as HTMLElement;
-    // The old inline benchmark-scoped Delete/Cancel buttons are gone (their
-    // APIs 404 for a standalone evaluation-run doc); the shared kebab is
-    // rendered instead and routes by run kind.
     expect(card.querySelector('[title="Delete run"]')).toBeNull();
-    expect(card.querySelector('[data-testid="run-actions-menu-trigger-eval-run-running-1"]')).toBeTruthy();
+    expect(card.textContent).not.toContain('Cancel');
   });
 
-  it('renders the run-actions kebab (and a Re-run button) for a genuinely embedded run', async () => {
+  it('still renders Delete for a genuinely embedded run', async () => {
     mockGetById.mockResolvedValue(makeBenchmark());
     await renderPage();
 
     await waitFor(() => expect(screen.getByText('Embedded Run')).toBeTruthy());
     const card = screen.getByText('Embedded Run').closest('.p-4') as HTMLElement;
-    expect(card.querySelector('[data-testid="run-actions-menu-trigger-run-embedded-1"]')).toBeTruthy();
-    expect(card.querySelector('[data-testid="benchmark-run-rerun-btn-run-embedded-1"]')).toBeTruthy();
+    expect(card.querySelector('[title="Delete run"]')).toBeTruthy();
   });
 
   it('is resilient to the evaluation-runs fetch failing (embedded runs still render)', async () => {
