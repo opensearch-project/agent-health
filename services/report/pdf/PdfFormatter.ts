@@ -27,10 +27,15 @@ async function loadPuppeteer(): Promise<any> {
   try {
     const { esmRequire } = await import('./esmRequire');
     return esmRequire('puppeteer');
-  } catch {
+  } catch (err: any) {
+    // puppeteer >= 25 is ESM-only and supports Node >= 22.12; on older Node the
+    // optional dependency is skipped at install time (or, if force-installed,
+    // cannot be require()d), so say so instead of a bare module-not-found.
     throw new Error(
       'PDF generation requires puppeteer. Install it with: npm install puppeteer\n' +
-      'Note: puppeteer is an optional dependency and only needed for PDF report generation.'
+      'Note: puppeteer is an optional dependency and only needed for PDF report generation. ' +
+      `It needs Node >= 22.12 (running ${process.version}). ` +
+      `(${err?.message ?? String(err)})`
     );
   }
 }

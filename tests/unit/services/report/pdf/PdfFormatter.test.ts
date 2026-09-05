@@ -172,11 +172,21 @@ describe('PdfFormatter', () => {
       jest.restoreAllMocks();
     });
 
-    it('should throw error with install instructions', async () => {
+    it('should throw error with install instructions, the Node >= 22.12 floor, and the underlying cause', async () => {
       const { PdfFormatter: FreshPdfFormatter } = require('@/services/report/pdf/PdfFormatter');
       const freshFormatter = new FreshPdfFormatter();
 
-      await expect(freshFormatter.generate(mockReportData)).rejects.toThrow('puppeteer');
+      const err: Error = await freshFormatter.generate(mockReportData).catch((e: Error) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toContain('npm install puppeteer');
+      // puppeteer >= 25 is ESM-only / Node >= 22.12; on older Node the optional
+      // dep is skipped at install, so the message must say WHY, not just "install it".
+      expect(err.message).toContain('Node >= 22.12');
+      expect(err.message).toContain(`running ${process.version}`);
+      // The underlying loader failure is appended for diagnosis instead of
+      // being swallowed (under Jest's CJS transform that is the ESM fallback's
+      // own error; in a real ESM bundle it is the module-not-found).
+      expect(err.message).toMatch(/\(.+\)$/);
     });
   });
 });

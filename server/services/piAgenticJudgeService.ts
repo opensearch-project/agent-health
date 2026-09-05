@@ -256,12 +256,14 @@ export async function evaluateWithPiAgenticTrace(
     `http://localhost:${readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001'}`;
   const startTime = Date.now();
 
-  const { createAgentSession, SessionManager, AuthStorage, ModelRegistry, DefaultResourceLoader, getAgentDir } =
+  const { createAgentSession, SessionManager, ModelRuntime, DefaultResourceLoader, getAgentDir } =
     await loadPiSdk();
 
-  const authStorage = AuthStorage.create();
-  const modelRegistry = ModelRegistry.create(authStorage);
-  const available = await modelRegistry.getAvailable();
+  // pi >= 0.80.8 replaced the `AuthStorage` + `ModelRegistry` pair with the
+  // async `ModelRuntime` facade (~/.pi/agent/auth.json + models.json by
+  // default). `getAvailable()` still returns the credentialed models.
+  const modelRuntime = await ModelRuntime.create();
+  const available = await modelRuntime.getAvailable();
   // Prefer the exact model the run is configured to judge with; fall back to a
   // recent Claude from the credentialed models.
   const model = findRequestedModel(available, request.modelId) ?? pickJudgeModel(available);
@@ -307,8 +309,7 @@ export async function evaluateWithPiAgenticTrace(
 
   const { session } = await createAgentSession({
     model,
-    authStorage,
-    modelRegistry,
+    modelRuntime,
     resourceLoader,
     // Restrict to ONLY the run-scoped trace tools registered by the extension
     // factory (when available — `tools: []` in trajectory-only mode disables
