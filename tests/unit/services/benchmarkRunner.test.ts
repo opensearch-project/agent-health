@@ -1228,6 +1228,50 @@ describe('Experiment Runner', () => {
       }));
       expect(mockRunsCreate).not.toHaveBeenCalled();
     });
+
+    it('forwards report.matcherResults on the placeholder-update path (existingReportId) — regression for the unified judge surface being silently dropped', async () => {
+      const testCase = createTestCase('tc-1');
+      const run = createBenchmarkRun('run-1');
+      const matcherResults = [
+        { description: 'judge: identifies root cause', pass: true, method: 'llm-judge', improvementStrategies: [{ category: 'x', issue: 'y', recommendation: 'z', priority: 'high' }] },
+      ];
+
+      mockRunEvaluationWithConnector.mockResolvedValue({
+        id: 'report-1',
+        status: 'completed',
+        passFailStatus: 'passed',
+        trajectory: [],
+        metrics: { accuracy: 0.9 },
+        matcherResults,
+      });
+      mockRunsUpdate.mockResolvedValue({ id: 'existing-report-id', timestamp: '2024-01-01T00:00:00Z' });
+
+      await runSingleUseCase(run, testCase, mockStorageModule, undefined, undefined, 'existing-report-id');
+
+      expect(mockRunsUpdate).toHaveBeenCalledWith('existing-report-id', expect.objectContaining({ matcherResults }));
+    });
+
+    it('forwards report.matcherResults on the create path (no existingReportId, saveReportWithModule) — regression for the unified judge surface being silently dropped', async () => {
+      const testCase = createTestCase('tc-1');
+      const run = createBenchmarkRun('run-1');
+      const matcherResults = [
+        { description: 'judge: identifies root cause', pass: true, method: 'llm-judge', improvementStrategies: [{ category: 'x', issue: 'y', recommendation: 'z', priority: 'high' }] },
+      ];
+
+      mockRunEvaluationWithConnector.mockResolvedValue({
+        id: 'report-1',
+        status: 'completed',
+        passFailStatus: 'passed',
+        trajectory: [],
+        metrics: { accuracy: 0.9 },
+        matcherResults,
+      });
+      mockRunsCreate.mockResolvedValue({ id: 'saved-report-1', timestamp: '2024-01-01T00:00:00Z', metricsStatus: 'ready' });
+
+      await runSingleUseCase(run, testCase, mockStorageModule);
+
+      expect(mockRunsCreate).toHaveBeenCalledWith(expect.objectContaining({ matcherResults }));
+    });
   });
 
   describe('performance metrics', () => {

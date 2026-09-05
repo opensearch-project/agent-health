@@ -66,27 +66,6 @@ In addition to the trajectory shown in the prompt you have these tools that retu
 These tools are hard-scoped to this single run — you cannot query other runs. PREFER verifying claims against this real data over trusting the trajectory narrative. Confirm a span exists before crediting a tool call, check real token usage before crediting a budget claim, and look for log evidence before crediting a root-cause claim.`;
 
 /**
- * Addendum appended instead of {@link AGENT_TRACE_TOOL_ADDENDUM} when the
- * request carries no trace correlation (no `runId`, no `agents` hint — see
- * `hasTraceCorrelation`). This is the normal, expected case for an agent
- * declared `useTraces: false` (not OTel-instrumented) — there is nothing to
- * correlate, not a bug. The judge must know it has NO trace tools this run
- * so it grounds its verdict in the trajectory/response actually shown in
- * the prompt instead of hallucinating span/log checks it never performed
- * (or silently trying to call query_spans/query_logs, which don't exist in
- * this mode).
- */
-const NO_TRACE_TOOLS_ADDENDUM = `
-
----
-
-## No trace-query tools available for this run
-
-This run's agent is not instrumented with OpenTelemetry (or agent-health could not correlate this run to any trace/session), so \`query_spans\` and \`query_logs\` are NOT available to you for this evaluation.
-
-Judge STRICTLY from the trajectory and the agent's final response shown in the prompt above. Do NOT claim to have checked spans, logs, token usage, or latency data — you were not given any. Do NOT reference \`query_spans\`/\`query_logs\` or "the real OTel data" in your reasoning; ground every claim only in what the trajectory/response actually shows.`;
-
-/**
  * Dynamically load the pi SDK (optionalDependency). Throws a clear, actionable
  * error when it isn't installed rather than a raw module-not-found.
  *
@@ -128,15 +107,12 @@ function bedrockBaseId(id: string): string {
  * Exported for unit testing; production callers go through
  * {@link evaluateWithPiAgenticTrace}.
  */
-export function buildAgentTraceJudgeSystemPrompt(
-  evaluator?: { systemPrompt?: string },
-  traceToolsAvailable: boolean = true
-): string {
+export function buildAgentTraceJudgeSystemPrompt(evaluator?: { systemPrompt?: string }): string {
   const baseSystemPrompt =
     evaluator?.systemPrompt && evaluator.systemPrompt.trim().length > 0
       ? evaluator.systemPrompt
       : DEFAULT_AGENT_TRACE_JUDGE_BASE_PROMPT;
-  return baseSystemPrompt + (traceToolsAvailable ? AGENT_TRACE_TOOL_ADDENDUM : NO_TRACE_TOOLS_ADDENDUM);
+  return baseSystemPrompt + AGENT_TRACE_TOOL_ADDENDUM;
 }
 
 /**
@@ -204,50 +180,29 @@ export function extractFinalAssistantText(messages: any[]): string {
 /**
  * Evaluate a trajectory with the agent trace judge (in-process pi SDK).
  *
- * Two modes, selected by `traceToolsAvailable` (the caller —
- * server/routes/judge.ts — computes this via `hasTraceCorrelation(runId,
- * agents)` and passes the result in):
- *   - `true` (trace-tools mode): `request.runId` or a `request.agents`
- *     correlation hint (serviceName+window / sessionId) is present. The
- *     judge gets the real `query_spans`/`query_logs` tools scoped to this
- *     run and is instructed to verify claims against them.
- *   - `false` (trajectory-only mode): no correlation hint exists — the
- *     normal case for an agent declared `useTraces: false` (not
- *     OTel-instrumented), or one whose spans just can't be correlated. The
- *     judge gets NO trace tools at all and is told so explicitly (see
- *     {@link NO_TRACE_TOOLS_ADDENDUM}) so it grounds its verdict in the
- *     trajectory/response instead of hallucinating span checks. This
- *     NEVER throws for lack of correlation — pre-fix (#461/#462 lineage)
- *     the route hard-400'd here instead, which is what turned an entire
- *     62-case run against a non-instrumented REST agent into 62 judge
- *     failures with `passFailStatus: null` instead of 62 real verdicts.
+ * Requires EITHER `request.runId` OR at least one `request.agents` correlation
+ * hint (serviceName+window / sessionId — see hasTraceCorrelation) so the trace
+ * tools have something to scope to. Without either, the tools report "no run
+ * id or trace correlation hints" and the judge degrades to a trajectory-only
+ * judgement rather than failing — the route's gate (server/routes/judge.ts)
+ * rejects the request before it reaches here in that case.
  *
- * The resolved mode is persisted on the response as `judgeMode` (see
- * {@link JudgeResponse.judgeMode}) so reports/comparisons can show whether a
- * verdict had real trace evidence behind it.
- *
- * @param request - The judge request. `runId`/`agents` are used only to
- *   decide tool scoping when `traceToolsAvailable` is true.
+ * @param request - The judge request, must include `runId` for trace scoping.
  * @param evaluator - Optional saved evaluator. When provided, its `systemPrompt`
- *   replaces the default base prompt; the trace-tool (or trajectory-only)
- *   addendum is ALWAYS appended on top so the judge's understanding of its
- *   own tool access is never silently dropped by a custom prompt.
+ *   replaces the default base prompt; the trace-tool addendum is ALWAYS
+ *   appended on top so the judge knows `query_spans`/`query_logs` exist
+ *   regardless of how the user customizes the base prompt. Its
  *   `scoringConfig.metrics` drives dynamic metric extraction in the parsed
  *   response.
- * @param traceToolsAvailable - Whether to wire up `query_spans`/`query_logs`
- *   for this evaluation. Defaults to `true` for callers that don't pass it
- *   (back-compat with any caller written before this param existed) — the
- *   route always passes an explicit value.
  */
 export async function evaluateWithPiAgenticTrace(
   request: JudgeRequest,
-  evaluator?: Evaluator,
-  traceToolsAvailable: boolean = true
+  evaluator?: Evaluator
 ): Promise<JudgeResponse> {
   const { trajectory, expectedOutcomes, expectedTrajectory, logs, runId, agents } = request;
 
   debug('AgentJudge', '========== AGENT TRACE JUDGE (in-process) ==========');
-  debug('AgentJudge', 'runId:', runId ?? '(none)', 'trajectory steps:', trajectory.length, 'traceToolsAvailable:', traceToolsAvailable);
+  debug('AgentJudge', 'runId:', runId ?? '(none)', 'trajectory steps:', trajectory.length);
   debug('AgentJudge', 'Evaluator:', evaluator ? `${evaluator.name} (${evaluator.id})` : '(none, using default prompt)');
 
   const userPrompt = buildEvaluationPrompt(trajectory, expectedOutcomes, expectedTrajectory, logs);
@@ -273,24 +228,18 @@ export async function evaluateWithPiAgenticTrace(
   debug('AgentJudge', 'model:', `${model.provider}/${model.id}`);
 
   // Compose the system prompt: saved evaluator's prompt (if any) replaces
-  // the default base, then the trace-tool (or trajectory-only) addendum is
-  // unconditionally appended. Editing the saved prompt cannot accidentally
-  // break either contract — a regression test in piAgenticJudgeService.test
+  // the default base, then the trace-tool addendum is unconditionally
+  // appended. Editing the saved prompt cannot accidentally break the
+  // trace-judging contract — a regression test in piAgenticJudgeService.test
   // pins this invariant.
-  const systemPrompt = buildAgentTraceJudgeSystemPrompt(evaluator, traceToolsAvailable);
+  const systemPrompt = buildAgentTraceJudgeSystemPrompt(evaluator);
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: process.cwd(),
     agentDir: getAgentDir(),
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
-    // Only register the trace-query tool extension when there's something to
-    // scope it to. Without this guard, a trajectory-only evaluation would
-    // still expose query_spans/query_logs — tools the system prompt just told
-    // the model it doesn't have — confusing the model and reintroducing the
-    // "no run id or trace correlation hints" failure mode inside the tool
-    // call instead of at the route.
-    extensionFactories: traceToolsAvailable ? [createTraceJudgeExtension(runId, serverUrl, agents)] : [],
+    extensionFactories: [createTraceJudgeExtension(runId, serverUrl, agents)],
     // Full isolation for this HEADLESS in-process session. Without
     // noExtensions the loader auto-loads the user's global ~/.pi/agent
     // extensions (e.g. an interactive status-bar extension) whose render
@@ -311,13 +260,10 @@ export async function evaluateWithPiAgenticTrace(
     modelRegistry,
     resourceLoader,
     // Restrict to ONLY the run-scoped trace tools registered by the extension
-    // factory (when available — `tools: []` in trajectory-only mode disables
-    // ALL tools, including the trace ones, matching `extensionFactories` above).
-    // `tools: []` disables all built-in tools (read/bash/grep/...) either way so
+    // factory. `tools: []` disables all built-in tools (read/bash/grep/...) so
     // the judge cannot read the project's filesystem — it may only inspect this
-    // run's spans/logs when they're available. This is the core scoping
-    // guarantee of the trace judge.
-    tools: traceToolsAvailable ? ['query_spans', 'query_logs'] : [],
+    // run's spans/logs. This is the core scoping guarantee of the trace judge.
+    tools: ['query_spans', 'query_logs'],
     sessionManager: SessionManager.inMemory(),
   });
 
@@ -339,17 +285,20 @@ export async function evaluateWithPiAgenticTrace(
     userPrompt,
   });
   if (judgeDebug) parsed.judgeDebug = judgeDebug;
-  // Per RFC 004: individual judge verdicts never carry recommendations
-  // (those belong to the insights synthesis layer). Forcing an empty array
-  // also keeps the persisted matcherResults.improvementStrategies shape stable
-  // regardless of what the model emitted.
+  // RFC 004 originally argued individual judge verdicts shouldn't carry
+  // recommendations (those belonged to a separate insights synthesis
+  // layer) and forced this to `[]` unconditionally. That stance is stale:
+  // the shipped UI (RunDetailsContent's "Improvement Strategies" section,
+  // MatcherResultsPanel's enriched row) renders per-verdict strategies for
+  // every other judge provider (bedrock, openai-compatible, litellm,
+  // claude-code, pi, agentic), and evaluator prompts explicitly ask the
+  // model for `improvement_strategies`. Silently discarding what the model
+  // emitted here made the agentic trace judge behave differently from every
+  // other provider on the same evaluator. Keep whatever parseJudgeResponse
+  // extracted (already shaped as ImprovementStrategy[], `[]` when the model
+  // emitted none).
   return {
     ...parsed,
-    improvementStrategies: [],
-    // Persisted downstream (services/evaluation/*, evaluationRunner.ts,
-    // benchmarkRunner.ts) onto TestCaseRun.judgeMode so reports/comparisons
-    // can show which cases had real trace evidence vs. trajectory-only
-    // reasoning.
-    judgeMode: traceToolsAvailable ? 'trace-tools' : 'trajectory-only',
+    judgeMode: 'trace-tools',
   };
 }

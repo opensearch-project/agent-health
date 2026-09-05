@@ -514,7 +514,6 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       const result = await evaluateWithPiAgenticTrace(
         { trajectory, expectedOutcomes, expectedTrajectory, logs, runId, modelId: resolvedModelId, agents },
         evaluator,
-        traceToolsAvailable
       );
       return res.json(result);
     }
