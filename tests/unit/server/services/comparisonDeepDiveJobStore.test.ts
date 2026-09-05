@@ -264,6 +264,17 @@ describe('computeDeepDiveDedupeKey', () => {
     expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'])).toBe(computeDeepDiveDedupeKey(['rep-b', 'rep-a']));
   });
 
+  it('differs when modelId differs, and a request without modelId hashes like the pre-selector payload', () => {
+    const base = computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined);
+    expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined, undefined)).toBe(base);
+    expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined, '')).toBe(base);
+    const fable = computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined, 'us.anthropic.claude-fable-5-1');
+    const sonnet = computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined, 'us.anthropic.claude-sonnet-4-6');
+    expect(fable).not.toBe(base);
+    expect(fable).not.toBe(sonnet);
+    expect(computeDeepDiveDedupeKey(['rep-b', 'rep-a'], undefined, undefined, 'us.anthropic.claude-fable-5-1')).toBe(fable);
+  });
+
   it('differs when systemPrompt differs', () => {
     expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], 'prompt one')).not.toBe(
       computeDeepDiveDedupeKey(['rep-a', 'rep-b'], 'prompt two')

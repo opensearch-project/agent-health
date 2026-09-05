@@ -109,9 +109,9 @@ async function loadPiSdk(): Promise<PiSdk> {
   }
 }
 
-/** Strip the Bedrock inference-profile region prefix (us./eu./global./au.). */
-function bedrockBaseId(id: string): string {
-  return id.replace(/^(us|eu|global|au)\./, '');
+/** Strip the Bedrock inference-profile region prefix (us./eu./global./au./jp./apac.). */
+export function bedrockBaseId(id: string): string {
+  return id.replace(/^(us|eu|global|au|jp|apac)\./, '');
 }
 
 /**
@@ -165,26 +165,87 @@ export function findRequestedModel<T extends { provider: string; id: string }>(
   );
 }
 
-/** Pick a judge model from the available (credentialed) models, preferring a recent Claude. */
+/**
+ * Score a registry model id for the agentic JUDGE's silent fallback (used
+ * when a run's configured `judgeModelId` is not available): prefers a recent
+ * Claude 4.x Sonnet/Opus on a region/global inference profile.
+ *
+ * DELIBERATELY NOT Claude-5-aware. The judge fallback decides which model
+ * grades a run when the configured one is missing — silently moving it to a
+ * newer model family would change verdicts between otherwise identical runs
+ * and break cross-run comparability. Newer-family preference lives in
+ * {@link scoreNewestClaudeModel} and is opted into by callers (the comparison
+ * deep-dive) whose output is narrative, not a persisted score.
+ *
+ * Exported for unit tests and for composition by other pickers.
+ */
+export function scoreJudgeModel(modelId: string): number {
+  const id = modelId.toLowerCase();
+  let s = 0;
+  if (id.includes('sonnet')) s += 100;
+  else if (id.includes('opus')) s += 90;
+  else if (id.includes('claude')) s += 50;
+  // Prefer an inference-profile (region-prefixed) Claude 4.x; the 4.x bare
+  // ids fail on-demand on Bedrock, and the older 3.x models are penalized.
+  if (id.includes('-4-5') || id.includes('-4-6')) s += 20;
+  else if (id.includes('-4-') || id.includes('sonnet-4') || id.includes('opus-4')) s += 15;
+  if (id.includes('claude-3') || id.includes('-3-5') || id.includes('-3-7')) s -= 40;
+  // Prefer region/global inference profiles over bare ids (bare 4.x can't run on-demand).
+  if (id.startsWith(regionInferencePrefix()) || id.startsWith('global.')) s += 8;
+  else if (/^(eu|au|apac|jp)\./.test(id)) s -= 8; // wrong-region profile
+  return s;
+}
+
+/**
+ * Parse the Claude family + version out of a Bedrock/Anthropic model id.
+ * `us.anthropic.claude-fable-5-1` -> { family: 'fable', major: 5, minor: 1 };
+ * `anthropic.claude-sonnet-4-5-20250929-v1:0` -> { family: 'sonnet', major: 4, minor: 5 };
+ * `claude-opus-4-6-v1` -> { family: 'opus', major: 4, minor: 6 }. Returns
+ * undefined for non-Claude ids. Legacy `claude-3-5-sonnet` ordering is not
+ * parsed (no newest-family concern there — it's already penalized).
+ */
+export function parseClaudeVersion(modelId: string): { family: string; major: number; minor: number } | undefined {
+  const m = /claude-([a-z]+)-(\d{1,2})(?!\d)(?:-(\d{1,2})(?!\d))?/.exec(modelId.toLowerCase());
+  if (!m) return undefined;
+  // A trailing date stamp (`-20250929`) or `-v1` is never mistaken for a minor:
+  // major/minor are 1-2 digit runs not followed by another digit, and `v1`
+  // starts with a letter.
+  return { family: m[1], major: Number(m[2]), minor: m[3] !== undefined ? Number(m[3]) : 0 };
+}
+
+/**
+ * Score a registry model id preferring the NEWEST Claude family available:
+ * Claude 5.x (fable / mythos / opus-5 / sonnet-5 / ...) ranks above every
+ * 4.x, a higher minor wins within a major (5.1 > 5.0), and within Claude 5
+ * the `fable` line is the preferred general model. Inference-profile /
+ * region preference and the 3.x penalty are inherited from
+ * {@link scoreJudgeModel} so a bare (on-demand-incapable) id never outranks
+ * its `us.`/`global.` profile.
+ *
+ * Used by the comparison deep-dive's default model pick — owner ask: "What
+ * model is run for What's actually different? I want it to be Fable 5.1."
+ */
+export function scoreNewestClaudeModel(modelId: string): number {
+  let s = scoreJudgeModel(modelId);
+  const v = parseClaudeVersion(modelId);
+  if (v && v.major >= 5) {
+    // Clear every 4.x (max judge score ~128) regardless of family tie-breaks.
+    s += 200 + (v.major - 5) * 100 + v.minor * 10;
+    if (v.family === 'fable') s += 5;
+  }
+  return s;
+}
+
+/** Pick a judge model from the available (credentialed) models, preferring a recent Claude 4.x (see {@link scoreJudgeModel}). */
 export function pickJudgeModel<T extends { provider: string; id: string }>(models: T[]): T | undefined {
   if (!models.length) return undefined;
-  const score = (m: T) => {
-    const id = m.id.toLowerCase();
-    let s = 0;
-    if (id.includes('sonnet')) s += 100;
-    else if (id.includes('opus')) s += 90;
-    else if (id.includes('claude')) s += 50;
-    // Prefer an inference-profile (region-prefixed) Claude 4.x; the 4.x bare
-    // ids fail on-demand on Bedrock, and the older 3.x models are penalized.
-    if (id.includes('-4-5') || id.includes('-4-6')) s += 20;
-    else if (id.includes('-4-') || id.includes('sonnet-4') || id.includes('opus-4')) s += 15;
-    if (id.includes('claude-3') || id.includes('-3-5') || id.includes('-3-7')) s -= 40;
-    // Prefer region/global inference profiles over bare ids (bare 4.x can't run on-demand).
-    if (id.startsWith(regionInferencePrefix()) || id.startsWith('global.')) s += 8;
-    else if (/^(eu|au|apac)\./.test(id)) s -= 8; // wrong-region profile
-    return s;
-  };
-  return [...models].sort((a, b) => score(b) - score(a))[0];
+  return [...models].sort((a, b) => scoreJudgeModel(b.id) - scoreJudgeModel(a.id))[0];
+}
+
+/** Pick the newest available Claude (Fable 5.1 when present) — see {@link scoreNewestClaudeModel}. */
+export function pickNewestClaudeModel<T extends { provider: string; id: string }>(models: T[]): T | undefined {
+  if (!models.length) return undefined;
+  return [...models].sort((a, b) => scoreNewestClaudeModel(b.id) - scoreNewestClaudeModel(a.id))[0];
 }
 
 /** Extract the final assistant text (the verdict JSON) from pi session messages. */

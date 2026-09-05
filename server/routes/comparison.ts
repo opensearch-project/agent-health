@@ -6,7 +6,7 @@
 /**
  * Comparison Routes — agentic deep-dive over two runs.
  *
- * ASYNC JOB PATTERN (iteration 5): the deep-dive generation takes ~50-180s
+ * ASYNC JOB PATTERN (iteration 5): the deep-dive generation takes ~1-10 min
  * for a wide, comparison-wide analysis. The public tunnel proxy enforces a
  * gateway timeout SHORTER than that, so holding the generation inside one
  * long-lived POST (round-4's approach — an in-request deadline, still
@@ -40,6 +40,7 @@ import { Router, Request, Response } from 'express';
 import { getStorageModule } from '@/server/adapters';
 import {
   generateComparisonDeepDive,
+  listDeepDiveModels,
   type ComparisonRunInput,
   type ComparisonRowSummary,
   type ComparisonDeepDiveResult,
@@ -60,6 +61,9 @@ const router = Router();
  *  against pathological/abusive payloads (browser-cache-only feature — never
  *  persisted server-side). */
 const SYSTEM_PROMPT_MAX_LEN = 20000;
+
+/** Cap on the optional `modelId` (a Bedrock inference-profile id is ~50 chars; anything past this is malformed). */
+const MODEL_ID_MAX_LEN = 200;
 
 /** Full-results-table cap — a benchmark-wide comparison could have hundreds
  *  of rows; the client already caps at this size (ComparisonDeepDive.tsx),
@@ -157,15 +161,38 @@ router.get('/api/comparison/deep-dive/system-prompt', (_req: Request, res: Respo
   return res.json({ systemPrompt: SYSTEM_PROMPT });
 });
 
+/**
+ * GET /api/comparison/deep-dive/models
+ *   resp: { models: [{ provider, id, name }], defaultId: string | null }
+ *
+ * The models the panel's selector offers, read live from the pi registry
+ * (only ones THIS server can invoke — see selectDeepDiveModelOptions).
+ * `defaultId` is what a POST without `modelId` runs on (newest Claude, i.e.
+ * Fable 5.1 when available). Empty list when the optional pi SDK is absent.
+ */
+router.get('/api/comparison/deep-dive/models', async (_req: Request, res: Response) => {
+  return res.json(await listDeepDiveModels());
+});
+
 router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => {
   const { reportIds, modelId, systemPrompt, rows } = (req.body || {}) as {
     reportIds?: unknown;
-    modelId?: string;
+    modelId?: unknown;
     systemPrompt?: unknown;
     rows?: unknown;
   };
   if (!Array.isArray(reportIds) || reportIds.length !== 2 || !reportIds.every((x) => typeof x === 'string')) {
     return res.status(400).json({ error: 'reportIds must be an array of exactly 2 report id strings' });
+  }
+  let trimmedModelId: string | undefined;
+  if (modelId !== undefined) {
+    if (typeof modelId !== 'string') {
+      return res.status(400).json({ error: 'modelId must be a string' });
+    }
+    trimmedModelId = modelId.trim();
+    if (trimmedModelId.length === 0 || trimmedModelId.length > MODEL_ID_MAX_LEN) {
+      return res.status(400).json({ error: `modelId must be 1-${MODEL_ID_MAX_LEN} characters` });
+    }
   }
   let trimmedSystemPrompt: string | undefined;
   if (systemPrompt !== undefined) {
@@ -263,7 +290,10 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
       caseReports.size
     );
 
-    const dedupeKey = computeDeepDiveDedupeKey(reportIds as string[], trimmedSystemPrompt, rowsSummary);
+    // modelId is part of the de-dupe key: switching the selector to Fable
+    // while a Sonnet generation is running must start a NEW job, not attach
+    // to the in-flight one and hand back a result from the wrong model.
+    const dedupeKey = computeDeepDiveDedupeKey(reportIds as string[], trimmedSystemPrompt, rowsSummary, trimmedModelId);
 
     let jobId: string;
     let deduped: boolean;
@@ -274,7 +304,7 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
           defaultCaseId,
           caseReports,
           getReport,
-          modelId,
+          modelId: trimmedModelId,
           systemPrompt: trimmedSystemPrompt,
           rows: rowsSummary,
         });

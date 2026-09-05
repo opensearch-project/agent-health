@@ -11,6 +11,9 @@
  * traceJudgeTools.test.ts) that don't need a model.
  */
 
+// Deep-dive model-selection helpers (kept as a separate import so this hunk
+// stays independent of the judge-regression tests' import lines).
+import { pickNewestClaudeModel, scoreJudgeModel, scoreNewestClaudeModel, parseClaudeVersion } from '@/server/services/piAgenticJudgeService';
 import { pickJudgeModel, extractFinalAssistantText, findRequestedModel, buildAgentTraceJudgeSystemPrompt } from '@/server/services/piAgenticJudgeService';
 
 describe('pickJudgeModel', () => {
@@ -29,6 +32,94 @@ describe('pickJudgeModel', () => {
 
   it('falls back to the first model when none are claude', () => {
     expect(pickJudgeModel([m('x', 'gpt-4o'), m('y', 'gemini-2')])?.id).toBe('gpt-4o');
+  });
+
+  // The judge's silent fallback (used when a run's configured judgeModelId is
+  // unavailable) is DELIBERATELY not Claude-5-aware: moving it to a newer
+  // family would change verdicts between otherwise-identical runs. Pin it.
+  it('judge fallback stays on Claude 4.x Sonnet even when Fable 5.1 is available (verdict comparability)', () => {
+    process.env.AWS_REGION = 'us-east-1';
+    const registry = [
+      m('amazon-bedrock', 'us.anthropic.claude-fable-5-1'),
+      m('amazon-bedrock', 'us.anthropic.claude-fable-5'),
+      m('amazon-bedrock', 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'),
+      m('amazon-bedrock', 'us.anthropic.claude-sonnet-4-6'),
+      m('amazon-bedrock', 'us.anthropic.claude-opus-4-8'),
+    ];
+    expect(pickJudgeModel(registry)?.id).toMatch(/claude-sonnet-4-[56]/);
+    expect(scoreJudgeModel('us.anthropic.claude-fable-5-1')).toBeLessThan(scoreJudgeModel('us.anthropic.claude-sonnet-4-6'));
+  });
+});
+
+describe('parseClaudeVersion', () => {
+  it('parses family/major/minor from Bedrock inference-profile ids', () => {
+    expect(parseClaudeVersion('us.anthropic.claude-fable-5-1')).toEqual({ family: 'fable', major: 5, minor: 1 });
+    expect(parseClaudeVersion('global.anthropic.claude-fable-5')).toEqual({ family: 'fable', major: 5, minor: 0 });
+    expect(parseClaudeVersion('anthropic.claude-sonnet-4-5-20250929-v1:0')).toEqual({ family: 'sonnet', major: 4, minor: 5 });
+    expect(parseClaudeVersion('us.anthropic.claude-opus-4-6-v1')).toEqual({ family: 'opus', major: 4, minor: 6 });
+    expect(parseClaudeVersion('us.anthropic.claude-opus-4-8')).toEqual({ family: 'opus', major: 4, minor: 8 });
+  });
+  it('does not mistake a date stamp for a minor version', () => {
+    // `claude-opus-4-20250514` — the 8-digit run is not a minor.
+    expect(parseClaudeVersion('anthropic.claude-opus-4-20250514-v1:0')).toEqual({ family: 'opus', major: 4, minor: 0 });
+  });
+  it('returns undefined for non-Claude ids', () => {
+    expect(parseClaudeVersion('openai.gpt-5.5')).toBeUndefined();
+    expect(parseClaudeVersion('zai.glm-5')).toBeUndefined();
+  });
+});
+
+describe('pickNewestClaudeModel / scoreNewestClaudeModel (deep-dive default: owner wants Fable 5.1)', () => {
+  const m = (id: string) => ({ provider: 'amazon-bedrock', id });
+  const OLD = process.env.AWS_REGION;
+  afterEach(() => { process.env.AWS_REGION = OLD; });
+
+  // The real registry snapshot (subset) from the machine that motivated this
+  // change — the OLD picker chose global.anthropic.claude-sonnet-4-5 here.
+  const registry = [
+    m('anthropic.claude-sonnet-4-6'),
+    m('anthropic.claude-opus-4-8'),
+    m('us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
+    m('global.anthropic.claude-sonnet-4-5-20250929-v1:0'),
+    m('us.anthropic.claude-sonnet-4-6'),
+    m('us.anthropic.claude-opus-4-8'),
+    m('eu.anthropic.claude-fable-5'),
+    m('global.anthropic.claude-fable-5'),
+    m('us.anthropic.claude-fable-5'),
+    m('us.anthropic.claude-fable-5-1'),
+    m('openai.gpt-5.5'),
+    m('anthropic.claude-3-5-sonnet-20241022-v2:0'),
+  ];
+
+  it('picks Fable 5.1 (US profile) over every Claude 4.x and over Fable 5.0', () => {
+    process.env.AWS_REGION = 'us-east-1';
+    expect(pickNewestClaudeModel(registry)?.id).toBe('us.anthropic.claude-fable-5-1');
+    expect(pickJudgeModel(registry)?.id).not.toBe('us.anthropic.claude-fable-5-1'); // and the judge did NOT move
+  });
+
+  it('any Claude 5 family (mythos / opus-5 / sonnet-5) beats every 4.x; higher minor wins; fable is preferred within a tie', () => {
+    const s = scoreNewestClaudeModel;
+    expect(s('us.anthropic.claude-mythos-5')).toBeGreaterThan(s('us.anthropic.claude-opus-4-8'));
+    expect(s('us.anthropic.claude-opus-5')).toBeGreaterThan(s('us.anthropic.claude-sonnet-4-6'));
+    expect(s('us.anthropic.claude-sonnet-5')).toBeGreaterThan(s('us.anthropic.claude-sonnet-4-6'));
+    expect(s('us.anthropic.claude-fable-5-1')).toBeGreaterThan(s('us.anthropic.claude-fable-5'));
+    expect(s('us.anthropic.claude-fable-5')).toBeGreaterThan(s('us.anthropic.claude-mythos-5'));
+    expect(s('us.anthropic.claude-opus-5-1')).toBeGreaterThan(s('us.anthropic.claude-fable-5'));
+  });
+
+  it('still prefers the region/global inference profile over a bare id and penalizes wrong-region profiles', () => {
+    process.env.AWS_REGION = 'us-east-1';
+    expect(scoreNewestClaudeModel('us.anthropic.claude-fable-5')).toBeGreaterThan(scoreNewestClaudeModel('anthropic.claude-fable-5'));
+    expect(scoreNewestClaudeModel('anthropic.claude-fable-5')).toBeGreaterThan(scoreNewestClaudeModel('eu.anthropic.claude-fable-5'));
+    process.env.AWS_REGION = 'eu-west-1';
+    expect(pickNewestClaudeModel([m('us.anthropic.claude-fable-5'), m('eu.anthropic.claude-fable-5')])?.id).toBe('eu.anthropic.claude-fable-5');
+  });
+
+  it('falls back to the best 4.x when no Claude 5 exists, and to undefined for an empty list', () => {
+    process.env.AWS_REGION = 'us-east-1';
+    const only4 = registry.filter((x) => !/-5(?!-\d*\d{4})/.test(x.id) || x.id.includes('4-5'));
+    expect(pickNewestClaudeModel(only4)?.id).toMatch(/claude-(sonnet|opus)-4/);
+    expect(pickNewestClaudeModel([])).toBeUndefined();
   });
 });
 

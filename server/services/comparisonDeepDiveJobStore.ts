@@ -202,10 +202,17 @@ export class DeepDiveJobStore<T> {
  * still hash identically rather than triggering a needless duplicate
  * generation.
  */
-export function computeDeepDiveDedupeKey(reportIds: string[], systemPrompt?: string, rows?: unknown): string {
+export function computeDeepDiveDedupeKey(
+  reportIds: string[],
+  systemPrompt?: string,
+  rows?: unknown,
+  modelId?: string
+): string {
   const sortedIds = [...reportIds].sort();
   const rowsHash = crypto.createHash('sha256').update(canonicalizeRowsForHash(rows)).digest('hex');
-  const payload = JSON.stringify({ ids: sortedIds, systemPrompt: systemPrompt || null, rowsHash });
+  // `modelId` participates so a different model is a different job (a
+  // request without one hashes identically to the pre-selector payload).
+  const payload = JSON.stringify({ ids: sortedIds, systemPrompt: systemPrompt || null, rowsHash, ...(modelId ? { modelId } : {}) });
   return crypto.createHash('sha256').update(payload).digest('hex');
 }
 

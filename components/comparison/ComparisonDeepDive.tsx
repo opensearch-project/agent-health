@@ -70,20 +70,26 @@ interface DeepDiveJobPollResponse {
   error?: string;
 }
 
-// Client-side backstop budget for the WHOLE POST-then-poll cycle (see the
-// generate() usage below) -- slightly above the server's own
-// DEEP_DIVE_DEADLINE_MS (180s, comparisonDeepDiveService.ts) so the server's
-// clearer timeout message wins the race under normal conditions. Iteration 5:
-// this used to bound a single long-lived fetch via AbortController; the
-// async-job conversion means no single request is ever held open for the
-// full generation any more (that's the whole point -- it's what fixes the
-// tunnel proxy's 524), so this now just bounds total wall-clock time across
-// the POST + all the polls.
-const DEEP_DIVE_FETCH_TIMEOUT_MS = 200_000;
+// There is deliberately NO client-side wall-clock cap on a generation any
+// more. Owner: "My comparison times out after 180 seconds, remove this
+// limit." A reasoning model (Fable 5.1, the default) over a large results
+// table legitimately runs for many minutes, so the client keeps polling for
+// as long as the server says the job is `running`. The server owns the only
+// backstop (DEEP_DIVE_DEADLINE_MS, 25 min, a hang guard tied to the job TTL)
+// and reports it as a normal `error` poll result; a job that vanished (404)
+// is terminal too. Every poll is a fast, cheap round trip -- never a
+// long-lived connection a proxy could time out on -- so polling for 10
+// minutes costs nothing but a few hundred tiny requests.
 // How often to poll GET /api/comparison/deep-dive/jobs/:jobId while a
-// generation is running. Each poll is a fast, cheap round trip -- never a
-// long-lived connection a proxy could time out on.
+// generation is running.
 const DEEP_DIVE_POLL_INTERVAL_MS = 2500;
+
+/** `95` -> "1m 35s", `42` -> "42s" — the spinner's elapsed-time label. Exported for tests. */
+export function formatElapsedSec(totalSec: number): string {
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
 
 interface CacheEntry { markdown: string; meta: DeepDiveResponse; }
 
@@ -98,14 +104,46 @@ interface CacheEntry { markdown: string; meta: DeepDiveResponse; }
 // blob is served as-is until the user clicks "Regenerate" (or the cache key
 // changes, which never happens for a stable report-id pair).
 //
-// v3 (this round): comparison-wide TRACING — the agent can now pull real
+// v3: comparison-wide TRACING — the agent can now pull real
 // spans/logs for ANY case in the results table (not just one pre-resolved
 // representative pair), and span citations carry the caseId
 // (span:<caseId>:<runId>:<spanId>). Bump the prefix again so pre-existing
 // v2-cached narratives (generated under the single-representative-case
 // tracing model) are never served as if they came from the new one.
-const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:v3:';
+//
+// v4: the cache key now also carries the MODEL the narrative was generated
+// with (`<a>|<b>|<modelId>`), so switching the selector never serves a
+// narrative produced by a different model, and v3 entries (all generated on
+// the old implicit Sonnet 4.x default) are never mistaken for Fable output.
+const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:v4:';
 const deepDiveMemCache = new Map<string, CacheEntry>();
+
+// Model selector (browser-cache-only, same pattern as the system prompt):
+// the chosen deep-dive model id lives under this single global localStorage
+// key. Absent → the server's default (newest Claude, i.e. Fable 5.1 when the
+// registry has it — see GET /api/comparison/deep-dive/models `defaultId`).
+export const MODEL_CACHE_KEY = 'agent-health:deepdive:model';
+// The models list gates the FIRST auto-run (so it carries the right modelId);
+// bound that wait so a hung/slow request degrades to "server default" instead
+// of blocking the panel.
+const MODELS_FETCH_TIMEOUT_MS = 10_000;
+
+export interface DeepDiveModelOption { provider: string; id: string; name: string; }
+
+/**
+ * Resolve the model the panel should run with: the user's persisted choice
+ * when it's still offered by this server, else the server default (Fable
+ * 5.1 when available), else undefined (let the server pick). Pure — unit
+ * tested directly.
+ */
+export function resolveDeepDiveModelId(
+  stored: string | null | undefined,
+  models: DeepDiveModelOption[],
+  defaultId: string | null | undefined
+): string | undefined {
+  if (stored && models.some((m) => m.id === stored)) return stored;
+  return defaultId || undefined;
+}
 
 // Change 4 — editable deep-dive system prompt (browser-cache ONLY, per owner
 // request: no server-side persistence). A custom prompt is stored under this
@@ -177,6 +215,48 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   const [markdown, setMarkdown] = useState<string>('');
   const [meta, setMeta] = useState<DeepDiveResponse | null>(null);
   const [error, setError] = useState<string>('');
+
+  // ── Model selector (browser-cache-only) ──────────────────────────────────
+  // Owner ask: "What model is run for What's actually different? I want it
+  // to be Fable 5.1." The list comes from the server's live pi registry so it
+  // only ever offers models THIS server can invoke; the default is the
+  // server's own pick (newest Claude). The auto-run below waits for this
+  // resolution so the very first generation already targets the right model
+  // (and so a late-arriving default doesn't re-key the cache and trigger a
+  // second, redundant generation).
+  const [modelOptions, setModelOptions] = useState<DeepDiveModelOption[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelId, setModelId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    let stored: string | null = null;
+    try { stored = localStorage.getItem(MODEL_CACHE_KEY); } catch { /* ignore */ }
+    // Bounded: a hung models request must never block the panel — after the
+    // timeout we simply generate with the server default (modelId omitted).
+    fetch('/api/comparison/deep-dive/models', { signal: AbortSignal.timeout(MODELS_FETCH_TIMEOUT_MS) })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { models?: DeepDiveModelOption[]; defaultId?: string | null } | null) => {
+        if (cancelled) return;
+        const models = Array.isArray(data?.models) ? data!.models! : [];
+        setModelOptions(models);
+        setModelId(resolveDeepDiveModelId(stored, models, data?.defaultId));
+      })
+      .catch(() => { /* best-effort: fall through to the server default */ })
+      .finally(() => { if (!cancelled) setModelsLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleModelChange = useCallback((value: string) => {
+    setModelId(value);
+    try { localStorage.setItem(MODEL_CACHE_KEY, value); } catch { /* quota/unavailable */ }
+  }, []);
+
+  // The cache key carries the model so switching models invalidates the
+  // cached narrative for this pair (a different model = a different result).
+  const cacheKey = pair ? `${pair.cacheKey}|${modelId ?? 'default'}` : null;
+  // Human label for the spinner ("Model: Claude Fable 5.1 (US)") so a
+  // several-minute wait is legible — the user can see WHAT is taking time.
+  const loadingModelLabel = modelId ? (modelOptions.find((m) => m.id === modelId)?.name ?? modelId) : '';
 
   // Compact A-vs-B summary of EVERY compared row (not just the traced pair) —
   // owner request: the default prompt analyzes the comparison as a whole,
@@ -250,9 +330,9 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
 
   const generate = useCallback(
     async (force = false) => {
-      if (!pair) return;
-      if (!force && deepDiveCache.has(pair.cacheKey)) {
-        const c = deepDiveCache.get(pair.cacheKey)!;
+      if (!pair || !cacheKey) return;
+      if (!force && deepDiveCache.has(cacheKey)) {
+        const c = deepDiveCache.get(cacheKey)!;
         setMarkdown(c.markdown);
         setMeta(c.meta);
         setStatus('done');
@@ -287,6 +367,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             reportIds: [pair.reportIdA, pair.reportIdB],
+            ...(modelId ? { modelId } : {}),
             ...(rowsSummary.length > 0 ? { rows: rowsSummary } : {}),
             ...(customSystemPrompt ? { systemPrompt: customSystemPrompt } : {}),
           }),
@@ -298,16 +379,13 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
         const { jobId } = (await postRes.json()) as { jobId: string };
         if (token.cancelled) return;
 
-        // 2. Poll every few seconds until the job is done/error, or our own
-        // client-side budget elapses (mirrors the pre-async-job behavior --
-        // a genuinely stuck generation still surfaces a clear, retryable
-        // error instead of polling forever).
+        // 2. Poll every few seconds until the job is done/error (or gone —
+        // a 404 is terminal). No client-side wall-clock cap: the server's
+        // safety deadline is the single backstop and arrives as a normal
+        // 'error' poll result with an honest message.
         // eslint-disable-next-line no-constant-condition
         while (true) {
           if (token.cancelled) return;
-          if (Date.now() - startedAt > DEEP_DIVE_FETCH_TIMEOUT_MS) {
-            throw new Error(`Timed out after ${Math.round(DEEP_DIVE_FETCH_TIMEOUT_MS / 1000)}s waiting for a response.`);
-          }
           await new Promise((resolve) => setTimeout(resolve, DEEP_DIVE_POLL_INTERVAL_MS));
           if (token.cancelled) return;
 
@@ -324,7 +402,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
 
           // done — result mirrors the pre-async-job POST response exactly.
           const data = poll.result as DeepDiveResponse;
-          deepDiveCache.set(pair.cacheKey, { markdown: data.markdown, meta: data });
+          deepDiveCache.set(cacheKey, { markdown: data.markdown, meta: data });
           setMarkdown(data.markdown);
           setMeta(data);
           setStatus('done');
@@ -337,7 +415,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
         setStatus('error');
       }
     },
-    [pair, onWindowAgents, systemPromptText, defaultSystemPrompt, rowsSummary]
+    [pair, cacheKey, modelId, onWindowAgents, systemPromptText, defaultSystemPrompt, rowsSummary]
   );
 
   // Elapsed-time indicator while generating — owner bug report: the panel
@@ -358,11 +436,14 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
     return () => clearInterval(id);
   }, [status, loadingStartedAt]);
 
-  // Auto-run once per report-pair.
+  // Auto-run once per (report-pair, model) — but only after the model list
+  // has resolved, so the first request already carries the right modelId.
+  // A model change re-keys the cache: a previously generated narrative for
+  // that model is served instantly, otherwise a fresh generation starts.
   useEffect(() => {
-    if (pair) generate(false);
+    if (pair && modelsLoaded) generate(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pair?.cacheKey]);
+  }, [cacheKey, modelsLoaded]);
 
   // Map a cited runId → which agent label (for nicer pill titles). Each
   // meta.runs entry now carries `key` ('A'|'B') directly — comparison-wide
@@ -448,11 +529,28 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
             </p>
           </div>
         </div>
-        {status === 'done' && (
-          <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs flex-shrink-0" onClick={() => generate(true)}>
-            <RefreshCw size={12} /> Regenerate
-          </Button>
-        )}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {modelOptions.length > 0 && (
+            <select
+              value={modelId ?? ''}
+              onChange={(e) => handleModelChange(e.target.value)}
+              disabled={status === 'loading'}
+              aria-label="Deep-dive model"
+              title="Model used to generate this deep-dive (saved in this browser only)"
+              data-testid="deep-dive-model-select"
+              className="h-7 max-w-[13rem] truncate rounded border border-border bg-background px-1.5 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-opensearch-blue disabled:opacity-60"
+            >
+              {modelOptions.map((m) => (
+                <option key={`${m.provider}/${m.id}`} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          )}
+          {status === 'done' && (
+            <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs flex-shrink-0" onClick={() => generate(true)}>
+              <RefreshCw size={12} /> Regenerate
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Change 4 — editable system prompt (browser-cache only, nothing
@@ -503,13 +601,12 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
           <div className="flex items-center gap-2">
             <Loader2 size={15} className="animate-spin" />
             Inspecting both runs' spans &amp; logs…
-            <span className="tabular-nums" data-testid="deep-dive-loading-elapsed">({elapsedSec}s)</span>
+            <span className="tabular-nums" data-testid="deep-dive-loading-elapsed">({formatElapsedSec(elapsedSec)})</span>
           </div>
-          {elapsedSec >= 30 && (
-            <p className="text-[11px] text-muted-foreground/70">
-              A comparison-wide analysis over many cases can take a minute or two — still working.
-            </p>
-          )}
+          <p className="text-[11px] text-muted-foreground/70" data-testid="deep-dive-loading-model">
+            {loadingModelLabel ? `Model: ${loadingModelLabel}` : 'Model: server default'}
+            {elapsedSec >= 30 && ' · a reasoning model over many cases can take several minutes — still working, no time limit.'}
+          </p>
         </div>
       )}
 

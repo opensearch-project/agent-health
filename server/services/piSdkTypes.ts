@@ -50,6 +50,8 @@ export type PiExtensionFactory = (pi: PiExtensionAPI) => void;
 /** The subset of a pi agent session the judge drives. */
 export interface PiSession {
   prompt(text: string): Promise<unknown>;
+  /** Abort the in-flight agent loop (used by the deep-dive's safety deadline). */
+  abort?(): Promise<void>;
   messages: any[];
 }
 
