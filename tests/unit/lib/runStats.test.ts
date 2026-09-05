@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { calculateRunStats, getReportIdsFromRun, bucketRunResults, computeRunStats, getEffectiveRunStatus, isRunInProgress } from '@/lib/runStats';
+import { calculateRunStats, getReportIdsFromRun, bucketRunResults, computeRunStats, getEffectiveRunStatus, isRunInProgress, isTerminalRunStatus, passRateOverJudged } from '@/lib/runStats';
 import type { BenchmarkRun, EvaluationReport } from '@/types';
 
 describe('runStats', () => {
@@ -108,7 +108,7 @@ describe('runStats', () => {
       expect(stats.passRate).toBe(33); // 1/3 total test cases passed
     });
 
-    it('should treat failed and cancelled results as failed', () => {
+    it('treats failed results as failed and cancelled (never-started) results as notRun', () => {
       const run: BenchmarkRun = {
         id: 'run-1',
         name: 'Test Run',
@@ -140,10 +140,13 @@ describe('runStats', () => {
       const stats = calculateRunStats(run, reports);
 
       expect(stats.passed).toBe(1);
-      expect(stats.failed).toBe(2);
+      expect(stats.failed).toBe(1);
+      expect(stats.notRun).toBe(1);
       expect(stats.pending).toBe(0);
       expect(stats.total).toBe(3);
-      expect(stats.passRate).toBe(33); // 1/3 = 33.33% rounded
+      // Pass rate over the evaluable set: the cancelled case never ran, so
+      // it is excluded from the denominator (1 of 2 executed = 50%).
+      expect(stats.passRate).toBe(50);
     });
 
     it('should treat missing reports as pending', () => {
@@ -367,10 +370,10 @@ describe('runStats', () => {
         b: { status: 'completed', passFailStatus: 'passed' },
         c: { status: 'completed' }, // judge errored — no verdict persisted
       });
-      expect(b).toEqual({ passed: 2, failed: 0, errored: 1, pending: 0, total: 3 });
+      expect(b).toEqual({ passed: 2, failed: 0, errored: 1, notRun: 0, pending: 0, total: 3 });
     });
 
-    it('buckets failed/cancelled as failed and pending/running as pending', () => {
+    it('buckets failed as failed, cancelled (never started) as notRun, and pending/running as pending', () => {
       const b = bucketRunResults({
         a: { status: 'completed', passFailStatus: 'passed' },
         b: { status: 'failed', passFailStatus: 'failed' },
@@ -378,12 +381,12 @@ describe('runStats', () => {
         d: { status: 'running' },
         e: { status: 'pending' },
       });
-      expect(b).toEqual({ passed: 1, failed: 2, errored: 0, pending: 2, total: 5 });
+      expect(b).toEqual({ passed: 1, failed: 1, errored: 0, notRun: 1, pending: 2, total: 5 });
     });
 
     it('handles empty/undefined results', () => {
-      expect(bucketRunResults({})).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 0 });
-      expect(bucketRunResults(undefined)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 0 });
+      expect(bucketRunResults({})).toEqual({ passed: 0, failed: 0, errored: 0, notRun: 0, pending: 0, total: 0 });
+      expect(bucketRunResults(undefined)).toEqual({ passed: 0, failed: 0, errored: 0, notRun: 0, pending: 0, total: 0 });
     });
 
     // Bug (2026-09-01): the runs list showed no in-flight indication for a
@@ -397,7 +400,7 @@ describe('runStats', () => {
           { a: { status: 'failed' }, b: { status: 'failed' } },
           62
         );
-        expect(b).toEqual({ passed: 0, failed: 2, errored: 0, pending: 60, total: 62 });
+        expect(b).toEqual({ passed: 0, failed: 2, errored: 0, notRun: 0, pending: 60, total: 62 });
       });
 
       it('is a no-op when plannedTotal equals the observed count (a genuinely completed run)', () => {
@@ -405,7 +408,7 @@ describe('runStats', () => {
           { a: { status: 'completed', passFailStatus: 'passed' }, b: { status: 'completed', passFailStatus: 'failed' } },
           2
         );
-        expect(b).toEqual({ passed: 1, failed: 1, errored: 0, pending: 0, total: 2 });
+        expect(b).toEqual({ passed: 1, failed: 1, errored: 0, notRun: 0, pending: 0, total: 2 });
       });
 
       it('is a no-op when plannedTotal is smaller than the observed count (never shrinks total)', () => {
@@ -418,7 +421,7 @@ describe('runStats', () => {
 
       it('is a no-op when plannedTotal is omitted (back-compat, existing callers unaffected)', () => {
         const b = bucketRunResults({ a: { status: 'failed' } });
-        expect(b).toEqual({ passed: 0, failed: 1, errored: 0, pending: 0, total: 1 });
+        expect(b).toEqual({ passed: 0, failed: 1, errored: 0, notRun: 0, pending: 0, total: 1 });
       });
     });
   });
@@ -441,7 +444,7 @@ describe('runStats', () => {
         stats: { passed: 4, failed: 0, pending: 0, errored: 0, total: 4 },
       };
 
-      expect(computeRunStats(run)).toEqual({ passed: 2, failed: 2, errored: 0, pending: 0, total: 4 });
+      expect(computeRunStats(run)).toEqual({ passed: 2, failed: 2, errored: 0, notRun: 0, pending: 0, total: 4 });
     });
 
     it('falls back to run.stats when results is empty (run has not started / legacy data)', () => {
@@ -450,31 +453,31 @@ describe('runStats', () => {
         stats: { passed: 3, failed: 1, pending: 0, errored: 0, total: 4 },
       };
 
-      expect(computeRunStats(run)).toEqual({ passed: 3, failed: 1, errored: 0, pending: 0, total: 4 });
+      expect(computeRunStats(run)).toEqual({ passed: 3, failed: 1, errored: 0, notRun: 0, pending: 0, total: 4 });
     });
 
     it('returns all-zero stats when neither results nor stats are present', () => {
-      expect(computeRunStats({})).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 0 });
+      expect(computeRunStats({})).toEqual({ passed: 0, failed: 0, errored: 0, notRun: 0, pending: 0, total: 0 });
     });
 
     it('treats an explicit empty results object the same as absent results (falls back to stats)', () => {
       const run = { results: {}, stats: { passed: 2, failed: 0, pending: 0, errored: 0, total: 2 } };
-      expect(computeRunStats(run)).toEqual({ passed: 2, failed: 0, errored: 0, pending: 0, total: 2 });
+      expect(computeRunStats(run)).toEqual({ passed: 2, failed: 0, errored: 0, notRun: 0, pending: 0, total: 2 });
     });
 
     it('falls through to all-zero when results is empty and stats.total is 0 (run not started)', () => {
       const run = { results: {}, stats: { passed: 0, failed: 0, pending: 0, errored: 0, total: 0 } };
-      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 0 });
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, notRun: 0, pending: 0, total: 0 });
     });
 
     it('falls through to all-zero when results is empty and stats is entirely absent', () => {
       const run = { results: {} };
-      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 0 });
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, notRun: 0, pending: 0, total: 0 });
     });
 
     it('defaults missing individual stats fields to 0 (partial/legacy stats blob)', () => {
       const run = { results: {}, stats: { total: 5 } as any };
-      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 5 });
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, notRun: 0, pending: 0, total: 5 });
     });
 
     // Regression for the benchmark-runs-list "every row shows 0 passed / 0
@@ -508,9 +511,9 @@ describe('runStats', () => {
       // bucketRunResults(run.results) alone would say { passed: 0, failed: 0,
       // errored: 7, pending: 0, total: 7 } -- every case wrongly marked
       // "errored: no judge verdict" despite 7/7 having real verdicts.
-      expect(bucketRunResults(run.results)).toEqual({ passed: 0, failed: 0, errored: 7, pending: 0, total: 7 });
+      expect(bucketRunResults(run.results)).toEqual({ passed: 0, failed: 0, errored: 7, notRun: 0, pending: 0, total: 7 });
 
-      expect(computeRunStats(run)).toEqual({ passed: 4, failed: 3, errored: 0, pending: 0, total: 7 });
+      expect(computeRunStats(run)).toEqual({ passed: 4, failed: 3, errored: 0, notRun: 0, pending: 0, total: 7 });
     });
 
     it('does NOT fall back to run.stats when a run is genuinely all-errored (no verdict evidence anywhere)', () => {
@@ -523,7 +526,7 @@ describe('runStats', () => {
         stats: { total: 2, pending: 0, passed: 0, failed: 0, errored: 2 },
       };
 
-      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 2, pending: 0, total: 2 });
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 2, notRun: 0, pending: 0, total: 2 });
     });
 
     it('does not use the legacy fallback when results already carry a mix of real verdicts and errors (not all-errored)', () => {
@@ -537,7 +540,7 @@ describe('runStats', () => {
         stats: { total: 2, pending: 0, passed: 0, failed: 0, errored: 0 },
       };
 
-      expect(computeRunStats(run)).toEqual({ passed: 1, failed: 0, errored: 1, pending: 0, total: 2 });
+      expect(computeRunStats(run)).toEqual({ passed: 1, failed: 0, errored: 1, notRun: 0, pending: 0, total: 2 });
     });
 
     it('threads run.testCaseSnapshots.length through as plannedTotal for an in-progress run', () => {
@@ -545,7 +548,7 @@ describe('runStats', () => {
         results: { 'tc-1': { status: 'failed' }, 'tc-2': { status: 'failed' } },
         testCaseSnapshots: new Array(62).fill({ id: 'x', version: 1, name: 'x' }),
       };
-      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 2, errored: 0, pending: 60, total: 62 });
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 2, errored: 0, notRun: 0, pending: 60, total: 62 });
     });
 
     it('does not affect a completed run whose testCaseSnapshots length already matches results', () => {
@@ -553,12 +556,128 @@ describe('runStats', () => {
         results: { 'tc-1': { status: 'completed', passFailStatus: 'passed' }, 'tc-2': { status: 'completed', passFailStatus: 'failed' } },
         testCaseSnapshots: [{}, {}],
       };
-      expect(computeRunStats(run)).toEqual({ passed: 1, failed: 1, errored: 0, pending: 0, total: 2 });
+      expect(computeRunStats(run)).toEqual({ passed: 1, failed: 1, errored: 0, notRun: 0, pending: 0, total: 2 });
     });
 
     it('reports the planned total (not 0) when a run has testCaseSnapshots but no results yet at all', () => {
       const run = { results: {}, testCaseSnapshots: new Array(10).fill({}) };
-      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, total: 10 });
+      // No explicit status → not known to be terminal → the planned cases are
+      // still to come (pending), not "not run".
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, notRun: 0, pending: 10, total: 10 });
+    });
+  });
+
+  // ─── Terminal-aware bucketing (phantom-pending on cancelled/failed runs) ──
+  //
+  // Bug (2026-09-04, live runs list): a run cancelled at 34/62 showed a
+  // "Cancelled" badge AND "28 pending ⟳" — the planned-but-never-started
+  // remainder was folded into `pending` regardless of the run's TERMINAL
+  // status. Same for a `failed` run (executor crash) at 37/62. Nothing will
+  // ever start those cases; they are `notRun`, never a spinner.
+  describe('bucketRunResults / computeRunStats — terminal-aware (no phantom pending)', () => {
+    const partial = {
+      'tc-1': { status: 'completed', passFailStatus: 'passed' },
+      'tc-2': { status: 'completed', passFailStatus: 'failed' },
+      'tc-3': { status: 'completed' }, // errored (no verdict)
+      'tc-4': { status: 'failed' },
+    } as Record<string, { status?: string; passFailStatus?: string }>;
+    const PLANNED = 10;
+
+    it.each([
+      ['running',   { pending: 6, notRun: 0 }],
+      ['pending',   { pending: 6, notRun: 0 }],
+      [undefined,   { pending: 6, notRun: 0 }],
+      ['cancelled', { pending: 0, notRun: 6 }],
+      ['failed',    { pending: 0, notRun: 6 }],
+      ['completed', { pending: 0, notRun: 6 }],
+    ] as const)('status=%s: planned-but-absent remainder buckets as %o', (status, expected) => {
+      const b = bucketRunResults(partial, PLANNED, status as any);
+      expect(b).toEqual({ passed: 1, failed: 2, errored: 1, total: PLANNED, ...expected });
+      // Invariant holds in every row of the matrix.
+      expect(b.passed + b.failed + b.errored + b.pending + b.notRun).toBe(b.total);
+    });
+
+    it('on a terminal run, entries left in pending/running by a dead executor are notRun, not pending', () => {
+      const results = { a: { status: 'running' }, b: { status: 'pending' }, c: { status: 'completed', passFailStatus: 'passed' } };
+      expect(bucketRunResults(results, 3, 'cancelled')).toEqual({ passed: 1, failed: 0, errored: 0, pending: 0, notRun: 2, total: 3 });
+      expect(bucketRunResults(results, 3, 'failed')).toEqual({ passed: 1, failed: 0, errored: 0, pending: 0, notRun: 2, total: 3 });
+      // …but while the run is genuinely running they ARE pending.
+      expect(bucketRunResults(results, 3, 'running')).toEqual({ passed: 1, failed: 0, errored: 0, pending: 2, notRun: 0, total: 3 });
+    });
+
+    it('explicit `status: cancelled` result markers (written for never-started cases at finalization) bucket as notRun in every run status', () => {
+      const results = { a: { status: 'cancelled' }, b: { status: 'completed', passFailStatus: 'passed' } };
+      for (const status of ['running', 'cancelled', 'completed', undefined] as const) {
+        expect(bucketRunResults(results, 2, status as any).notRun).toBe(1);
+        expect(bucketRunResults(results, 2, status as any).failed).toBe(0);
+      }
+    });
+
+    it('computeRunStats threads run.status: the live S1 shape (cancelled, 34/62) has zero pending and 28 notRun', () => {
+      const results: Record<string, { status: string; passFailStatus?: string }> = {};
+      for (let i = 0; i < 34; i++) results[`tc-${i}`] = { status: 'completed', passFailStatus: i % 3 === 0 ? 'failed' : 'passed' };
+      const run = {
+        status: 'cancelled' as const,
+        completedAt: '2026-09-04T00:00:00Z',
+        results,
+        testCaseSnapshots: new Array(62).fill({ id: 'x', version: 1, name: 'x' }),
+      };
+      const stats = computeRunStats(run);
+      expect(stats.pending).toBe(0);
+      expect(stats.notRun).toBe(28);
+      expect(stats.total).toBe(62);
+      expect(stats.passed + stats.failed).toBe(34);
+      // A cancelled run's pass rate is over the EXECUTED cases only.
+      expect(passRateOverJudged(stats)).toBe(Math.round((stats.passed / 34) * 100));
+      expect(isRunInProgress(run)).toBe(false);
+      expect(getEffectiveRunStatus(run)).toBe('cancelled');
+    });
+
+    it('computeRunStats: the live S2 shape (failed run, 37/62 with 5 execution failures) has zero pending', () => {
+      const results: Record<string, { status: string; passFailStatus?: string }> = {};
+      for (let i = 0; i < 32; i++) results[`tc-${i}`] = { status: 'completed' }; // no verdict → errored
+      for (let i = 32; i < 37; i++) results[`tc-${i}`] = { status: 'failed' };
+      const run = { status: 'failed' as const, results, testCaseSnapshots: new Array(62).fill({}) };
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 5, errored: 32, pending: 0, notRun: 25, total: 62 });
+      expect(isRunInProgress(run)).toBe(false);
+    });
+
+    it('computeRunStats: the SAME partial results on a running run are still pending (regression guard for the in-flight fix)', () => {
+      const run = { status: 'running' as const, results: { 'tc-1': { status: 'failed' } }, testCaseSnapshots: new Array(5).fill({}) };
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 1, errored: 0, pending: 4, notRun: 0, total: 5 });
+      expect(isRunInProgress(run)).toBe(true);
+    });
+
+    it('computeRunStats re-homes stale `pending` in a legacy denormalized stats blob when the run is terminal', () => {
+      const run = { status: 'cancelled' as const, results: {}, stats: { passed: 3, failed: 1, pending: 6, total: 10 } };
+      expect(computeRunStats(run)).toEqual({ passed: 3, failed: 1, errored: 0, pending: 0, notRun: 6, total: 10 });
+      const running = { status: 'running' as const, results: {}, stats: { passed: 3, failed: 1, pending: 6, total: 10 } };
+      expect(computeRunStats(running)).toEqual({ passed: 3, failed: 1, errored: 0, pending: 6, notRun: 0, total: 10 });
+    });
+
+    it('computeRunStats: a cancelled run that never started a single case is all notRun', () => {
+      const run = { status: 'cancelled' as const, results: {}, testCaseSnapshots: new Array(7).fill({}) };
+      expect(computeRunStats(run)).toEqual({ passed: 0, failed: 0, errored: 0, pending: 0, notRun: 7, total: 7 });
+    });
+
+    it('an entry with an unrecognised status is pending on a live run but surfaces as errored (not hidden in notRun) on a terminal run', () => {
+      const results = { a: { status: 'bogus' }, b: { status: 'completed', passFailStatus: 'passed' } };
+      expect(bucketRunResults(results, 2, 'running')).toEqual({ passed: 1, failed: 0, errored: 0, pending: 1, notRun: 0, total: 2 });
+      expect(bucketRunResults(results, 2, 'completed')).toEqual({ passed: 1, failed: 0, errored: 1, pending: 0, notRun: 0, total: 2 });
+    });
+
+    it('isTerminalRunStatus', () => {
+      expect(isTerminalRunStatus('completed')).toBe(true);
+      expect(isTerminalRunStatus('cancelled')).toBe(true);
+      expect(isTerminalRunStatus('failed')).toBe(true);
+      expect(isTerminalRunStatus('running')).toBe(false);
+      expect(isTerminalRunStatus('pending')).toBe(false);
+      expect(isTerminalRunStatus(undefined)).toBe(false);
+    });
+
+    it('passRateOverJudged: judged-only denominator, null when nothing judged', () => {
+      expect(passRateOverJudged({ passed: 3, failed: 1 })).toBe(75);
+      expect(passRateOverJudged({ passed: 0, failed: 0 })).toBeNull();
     });
   });
 
@@ -617,16 +736,16 @@ describe('runStats', () => {
         passed: producerStats.passed,
         failed: producerStats.failed,
         errored: producerStats.errored,
-        pending: producerStats.pending,
+        notRun: 0, pending: producerStats.pending,
         total: producerStats.total,
       });
       // Pin the actual numbers so a change in bucketing semantics is caught
       // even if both sides regressed identically.
-      expect(consumerStats).toEqual({ passed: 2, failed: 2, errored: 1, pending: 1, total: 6 });
+      expect(consumerStats).toEqual({ passed: 2, failed: 2, errored: 1, notRun: 0, pending: 1, total: 6 });
     });
 
     it('agrees even when computeRunStats falls back to the producer-written run.stats (no results persisted)', () => {
-      const producerStats = { passed: 5, failed: 1, errored: 1, pending: 0, total: 7 };
+      const producerStats = { passed: 5, failed: 1, errored: 1, pending: 0, notRun: 0, total: 7 };
       const run = { results: {}, stats: producerStats };
       expect(computeRunStats(run)).toEqual(producerStats);
     });

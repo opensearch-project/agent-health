@@ -1744,4 +1744,107 @@ describe('OpenSearchStorageModule', () => {
       });
     });
   });
+  // ==========================================================================
+  // evaluationRuns — race-free run-doc writes (data-integrity fix 2026-09-04)
+  // ==========================================================================
+  //
+  // Root cause of the live "Evaluation error: version_conflict_engine_exception
+  // … [eval-run-…]" per-case failures on a concurrency=3 run: updateResult()
+  // was a scripted _update with NO retry_on_conflict, and update() was a
+  // read-modify-write FULL overwrite (getById → spread → index()) with no
+  // optimistic concurrency at all. These tests pin the new contract.
+  describe('evaluationRuns — race-free writes', () => {
+    function conflictError() {
+      const err: any = new Error('version_conflict_engine_exception');
+      err.meta = { statusCode: 409, body: { error: { type: 'version_conflict_engine_exception' } } };
+      return err;
+    }
+    const runDoc = { id: 'eval-run-1', docType: 'evaluation-run', status: 'running', results: {} };
+
+    it('updateResult() sets retry_on_conflict and never uses index()', async () => {
+      mockClient.update.mockResolvedValue({ body: { result: 'updated' } });
+      const ok = await mod.evaluationRuns.updateResult('eval-run-1', 'tc-1', { reportId: 'r1', status: 'completed' });
+      expect(ok).toBe(true);
+      expect(mockClient.index).not.toHaveBeenCalled();
+      const call = mockClient.update.mock.calls[0][0];
+      expect(call.id).toBe('eval-run-1');
+      expect(call.retry_on_conflict).toBeGreaterThanOrEqual(10);
+      expect(call.body.script.params).toEqual({ testCaseId: 'tc-1', result: { reportId: 'r1', status: 'completed' } });
+      expect(call.body.script.source).toContain('results.put(params.testCaseId, params.result)');
+    });
+
+    it('updateResult() retries once more on a 409 that escaped retry_on_conflict, then succeeds', async () => {
+      mockClient.update.mockRejectedValueOnce(conflictError()).mockResolvedValueOnce({ body: { result: 'updated' } });
+      await expect(mod.evaluationRuns.updateResult('eval-run-1', 'tc-1', { reportId: 'r1', status: 'completed' })).resolves.toBe(true);
+      expect(mockClient.update).toHaveBeenCalledTimes(2);
+    });
+
+    it('updateResult() gives up after the outer retry budget and surfaces the conflict', async () => {
+      mockClient.update.mockRejectedValue(conflictError());
+      await expect(mod.evaluationRuns.updateResult('eval-run-1', 'tc-1', { reportId: 'r1', status: 'completed' }))
+        .rejects.toThrow('version_conflict_engine_exception');
+      expect(mockClient.update).toHaveBeenCalledTimes(3);
+    });
+
+    it('updateResult() returns false on 404 (run deleted mid-flight)', async () => {
+      const err: any = new Error('not found'); err.meta = { statusCode: 404 };
+      mockClient.update.mockRejectedValue(err);
+      await expect(mod.evaluationRuns.updateResult('gone', 'tc-1', { reportId: '', status: 'failed' })).resolves.toBe(false);
+    });
+
+    it('update() is a scripted PARTIAL update of the provided top-level fields — no getById-then-index() overwrite', async () => {
+      mockClient.update.mockResolvedValue({ body: { result: 'updated' } });
+      mockClient.get.mockResolvedValue({ body: { found: true, _source: { ...runDoc, status: 'cancelled', completedAt: 't' } } });
+
+      const updated = await mod.evaluationRuns.update('eval-run-1', { status: 'cancelled', completedAt: 't', id: 'HACK', docType: 'benchmark', name: undefined } as any);
+
+      expect(mockClient.index).not.toHaveBeenCalled();
+      const call = mockClient.update.mock.calls[0][0];
+      expect(call.id).toBe('eval-run-1');
+      expect(call.retry_on_conflict).toBeGreaterThanOrEqual(10);
+      // Only the caller's fields — `results` is NOT touched unless explicitly passed;
+      // id/docType/undefined are stripped so the script can't re-key the doc.
+      expect(call.body.script.params.fields).toEqual({ status: 'cancelled', completedAt: 't' });
+      expect(call.body.script.source).toContain("ctx._source.docType != 'evaluation-run'");
+      expect(updated.status).toBe('cancelled');
+    });
+
+    it('update() passes `results` through only when a caller explicitly provides it (retry-judgement / PUT import)', async () => {
+      mockClient.update.mockResolvedValue({ body: { result: 'updated' } });
+      mockClient.get.mockResolvedValue({ body: { found: true, _source: runDoc } });
+      await mod.evaluationRuns.update('eval-run-1', { results: { 'tc-1': { reportId: 'r', status: 'completed' } } } as any);
+      expect(mockClient.update.mock.calls[0][0].body.script.params.fields).toEqual({ results: { 'tc-1': { reportId: 'r', status: 'completed' } } });
+    });
+
+    it('update() throws "not found" on 404 and when the doc is not an evaluation-run', async () => {
+      const err: any = new Error('nf'); err.meta = { statusCode: 404 };
+      mockClient.update.mockRejectedValueOnce(err);
+      await expect(mod.evaluationRuns.update('missing', { status: 'cancelled' } as any)).rejects.toThrow('Evaluation run missing not found');
+
+      mockClient.update.mockResolvedValue({ body: { result: 'noop' } });
+      mockClient.get.mockResolvedValue({ body: { found: true, _source: { id: 'bench-1', docType: 'benchmark' } } });
+      await expect(mod.evaluationRuns.update('bench-1', { status: 'cancelled' } as any)).rejects.toThrow('Evaluation run bench-1 not found');
+    });
+
+    it('mergeMissingResults() adds only absent keys server-side (containsKey guard) and is a no-op for an empty map', async () => {
+      await mod.evaluationRuns.mergeMissingResults('eval-run-1', {});
+      expect(mockClient.update).not.toHaveBeenCalled();
+
+      mockClient.update.mockResolvedValue({ body: { result: 'updated' } });
+      const entries = { 'tc-2': { reportId: '', status: 'cancelled' }, 'tc-3': { reportId: 'r3', status: 'completed' } };
+      await expect(mod.evaluationRuns.mergeMissingResults('eval-run-1', entries)).resolves.toBe(true);
+      const call = mockClient.update.mock.calls[0][0];
+      expect(call.retry_on_conflict).toBeGreaterThanOrEqual(10);
+      expect(call.body.script.params).toEqual({ results: entries });
+      expect(call.body.script.source).toContain('containsKey(entry.getKey())');
+      expect(call.body.script.source).not.toContain('ctx._source.results = params');
+      expect(mockClient.index).not.toHaveBeenCalled();
+    });
+
+    it('mergeMissingResults() retries on 409 like updateResult()', async () => {
+      mockClient.update.mockRejectedValueOnce(conflictError()).mockResolvedValueOnce({ body: { result: 'updated' } });
+      await expect(mod.evaluationRuns.mergeMissingResults('eval-run-1', { a: { reportId: '', status: 'cancelled' } })).resolves.toBe(true);
+      expect(mockClient.update).toHaveBeenCalledTimes(2);
+    });
+  });
 });

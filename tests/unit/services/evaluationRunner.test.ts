@@ -168,7 +168,7 @@ describe('evaluationRunner', () => {
       expect(result.stats).toEqual({
         passed: 2,
         failed: 0,
-        pending: 0,
+        notRun: 0, pending: 0,
         errored: 0,
         total: 2,
       });
@@ -411,7 +411,7 @@ describe('evaluationRunner', () => {
       expect(result.stats).toEqual({
         passed: 1,
         failed: 1,
-        pending: 0,
+        notRun: 0, pending: 0,
         errored: 0,
         total: 2,
       });
@@ -526,7 +526,7 @@ describe('evaluationRunner', () => {
       });
 
       expect(result.status).toBe('completed');
-      expect(result.stats).toEqual({ passed: 0, failed: 0, pending: 0, errored: 0, total: 0 });
+      expect(result.stats).toEqual({ passed: 0, failed: 0, notRun: 0, pending: 0, errored: 0, total: 0 });
       expect(mockRunEvaluation).not.toHaveBeenCalled();
     });
 

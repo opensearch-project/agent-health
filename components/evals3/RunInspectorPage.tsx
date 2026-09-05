@@ -22,6 +22,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Loader2, Clock, XCircle, Calendar, GitCompare, AlertTriangle, RotateCcw, RotateCw, Link2 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
+// Not-run marker for cases a cancelled run never started.
+import { Ban } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
@@ -378,6 +380,9 @@ export const RunInspectorPage: React.FC = () => {
   // as their own bucket. Excluded from the pass-rate denominator below so a
   // misconfigured evaluator can't drag the score to 0%.
   const erroredCount = results.filter(r => r.status === 'errored').length;
+  // Cancelled-before-start cases (explicit `status: 'cancelled'` markers on a
+  // cancelled run) are neither judged nor pending — shown as "n not run".
+  const notRunCount = results.filter(r => r.status === 'cancelled').length;
   const totalCount = results.length;
   const judgedCount = passCount + failCount;
   const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
@@ -533,6 +538,15 @@ export const RunInspectorPage: React.FC = () => {
                 </span>
               )}
               <span>/ {totalCount}</span>
+              {notRunCount > 0 && (
+                <span
+                  data-testid="run-inspector-not-run"
+                  className="ml-1 text-muted-foreground"
+                  title="Planned test cases that never ran because the run was cancelled first. Not failures; excluded from the pass rate."
+                >
+                  · {notRunCount} not run
+                </span>
+              )}
             </span>
             <span className={`font-semibold ${passRate >= 80 ? 'text-green-500' : passRate >= 50 ? 'text-amber-500' : 'text-red-500'}`}>
               {passRate}%
@@ -734,6 +748,8 @@ export const RunInspectorPage: React.FC = () => {
                     <><Loader2 size={32} className="mx-auto mb-3 text-purple-500 animate-spin" /><p className="text-sm">Running LLM judge...</p></>
                   ) : selectedResult.status === 'pending' ? (
                     <><Clock size={32} className="mx-auto mb-3 text-muted-foreground" /><p className="text-sm">Pending</p></>
+                  ) : selectedResult.status === 'cancelled' ? (
+                    <><Ban size={32} className="mx-auto mb-3 text-muted-foreground" /><p className="text-sm">Not run — the run was cancelled before this case started</p></>
                   ) : (
                     <><XCircle size={32} className="mx-auto mb-3 opacity-20" /><p className="text-sm">No report available</p></>
                   )}

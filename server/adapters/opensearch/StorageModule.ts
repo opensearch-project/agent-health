@@ -28,7 +28,6 @@ import type {
   RunAnnotation,
   HealthStatus,
   Evaluator,
-  RunResultStatus,
 } from '../../../types/index.js';
 import type {
   IStorageModule,
@@ -36,6 +35,7 @@ import type {
   IBenchmarkOperations,
   IBenchmarkImageOperations,
   IEvaluationRunOperations,
+  EvaluationRunResultEntry,
   IRunOperations,
   IAnalyticsOperations,
   IEvaluatorOperations,
@@ -1323,6 +1323,15 @@ class OpenSearchEvaluatorOperations implements IEvaluatorOperations {
 // Evaluation Run Operations (same index as benchmarks, filtered by docType)
 // ============================================================================
 
+/**
+ * OpenSearch-side retry budget for every scripted write against an
+ * evaluation-run document. A concurrency-N run has N cases finishing and
+ * writing `results` in overlapping windows plus cancel/rename/finalize
+ * writes; 10 (same as `linkTestCaseIds`) was empirically enough for 20
+ * fully-simultaneous writers against one doc.
+ */
+const RUN_DOC_RETRY_ON_CONFLICT = 10;
+
 class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
   constructor(private client: Client) {}
 
@@ -1369,20 +1378,56 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
     }
   }
 
+  /**
+   * Partial update of the run doc's TOP-LEVEL fields via a painless script
+   * (data-integrity fix, 2026-09-04). The previous implementation was a
+   * read-modify-write full overwrite (`getById` → `{...existing, ...updates}`
+   * → `index()`) with no optimistic concurrency: while `updateResult()` was
+   * atomically putting per-case verdicts into `results` from N concurrent
+   * test cases, any `update()` (cancel, rename, the runner's own terminal
+   * status write) re-indexed a stale snapshot of the whole document and
+   * silently resurrected/lost per-case entries. Scripted `_update` runs
+   * against the live doc under OpenSearch's own version check and only
+   * touches the keys actually provided — `results` included ONLY when a
+   * caller explicitly passes it (retry-judgement, PUT import), never as a
+   * side effect. `retry_on_conflict` absorbs the version_conflict a
+   * simultaneous `updateResult` would otherwise raise.
+   */
   async update(id: string, updates: Partial<EvaluationRun>): Promise<EvaluationRun> {
     assertNotMigrating(this.index);
-    const existing = await this.getById(id);
-    if (!existing) throw new Error(`Evaluation run ${id} not found`);
-
-    const updated = { ...existing, ...updates };
-    await this.client.index({
-      index: this.index,
-      id,
-      body: updated,
-      refresh: 'wait_for',
-    });
-
-    return updated as EvaluationRun;
+    // Drop `id`/`docType`/undefined so the script can't rename the doc or
+    // flip its discriminator; JSON transport would drop undefined anyway.
+    const fields: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(updates)) {
+      if (k === 'id' || k === 'docType' || v === undefined) continue;
+      fields[k] = v;
+    }
+    try {
+      await this.client.update({
+        index: this.index,
+        id,
+        retry_on_conflict: RUN_DOC_RETRY_ON_CONFLICT,
+        body: {
+          script: {
+            source: `
+              if (ctx._source.docType != 'evaluation-run') { ctx.op = 'none'; return; }
+              for (def entry : params.fields.entrySet()) {
+                ctx._source[entry.getKey()] = entry.getValue();
+              }
+            `,
+            lang: 'painless',
+            params: { fields },
+          },
+        },
+        refresh: 'wait_for',
+      });
+    } catch (error: any) {
+      if (error.meta?.statusCode === 404) throw new Error(`Evaluation run ${id} not found`);
+      throw error;
+    }
+    const updated = await this.getById(id);
+    if (!updated) throw new Error(`Evaluation run ${id} not found`);
+    return updated;
   }
 
   async delete(id: string): Promise<{ deleted: boolean }> {
@@ -1458,30 +1503,73 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
     }
   }
 
-  async updateResult(runId: string, testCaseId: string, result: {
-    reportId: string;
-    status: RunResultStatus;
-    error?: string;
-  }): Promise<boolean> {
+  /**
+   * THE version_conflict source behind the "Evaluation error:
+   * version_conflict_engine_exception … [eval-run-…]" per-case failures seen
+   * on concurrency>1 runs (2026-09-04): this scripted update had NO
+   * `retry_on_conflict`, so when two sibling test cases finished within the
+   * same refresh window the second script's internal get→apply→index lost
+   * the version race and threw. The runner caught that as if the *agent*
+   * had failed — flipping an already-judged report to `metricsStatus:
+   * 'error'` — and when the retry inside its catch block conflicted again
+   * the whole run went `failed`. `retry_on_conflict` + an outer 409 retry
+   * (same pattern as `linkTestCaseIds`) make the write converge.
+   */
+  async updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry): Promise<boolean> {
     assertNotMigrating(this.index);
-    try {
-      await this.client.update({
-        index: this.index,
-        id: runId,
-        body: {
-          script: {
-            source: `ctx._source.results.put(params.testCaseId, params.result)`,
-            lang: 'painless',
-            params: { testCaseId, result },
-          },
-        },
-        refresh: 'wait_for',
-      });
-      return true;
-    } catch (error: any) {
-      if (error.meta?.statusCode === 404) return false;
-      throw error;
+    return this.scriptedResultsWrite(runId, {
+      source: `
+        if (ctx._source.results == null) { ctx._source.results = new HashMap(); }
+        ctx._source.results.put(params.testCaseId, params.result);
+      `,
+      params: { testCaseId, result },
+    });
+  }
+
+  async mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>): Promise<boolean> {
+    assertNotMigrating(this.index);
+    if (Object.keys(results).length === 0) return true;
+    return this.scriptedResultsWrite(runId, {
+      source: `
+        if (ctx._source.results == null) { ctx._source.results = new HashMap(); }
+        boolean changed = false;
+        for (def entry : params.results.entrySet()) {
+          if (!ctx._source.results.containsKey(entry.getKey())) {
+            ctx._source.results.put(entry.getKey(), entry.getValue());
+            changed = true;
+          }
+        }
+        if (!changed) { ctx.op = 'none'; }
+      `,
+      params: { results },
+    });
+  }
+
+  private async scriptedResultsWrite(
+    runId: string,
+    script: { source: string; params: Record<string, unknown> },
+  ): Promise<boolean> {
+    const MAX_OUTER_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_OUTER_ATTEMPTS; attempt++) {
+      try {
+        await this.client.update({
+          index: this.index,
+          id: runId,
+          retry_on_conflict: RUN_DOC_RETRY_ON_CONFLICT,
+          body: { script: { ...script, lang: 'painless' } },
+          refresh: 'wait_for',
+        });
+        return true;
+      } catch (error: any) {
+        if (error.meta?.statusCode === 404) return false;
+        const isConflict = error.meta?.statusCode === 409;
+        if (!isConflict || attempt === MAX_OUTER_ATTEMPTS) throw error;
+        // Short jittered backoff so N writers that all exhausted the
+        // server-side retry budget together don't immediately collide again.
+        await new Promise(r => setTimeout(r, 25 * attempt + Math.floor(Math.random() * 50)));
+      }
     }
+    return false; // unreachable — loop either returns or throws
   }
 }
 

@@ -31,7 +31,6 @@ import type {
   SessionMetadata,
   HealthStatus,
   Evaluator,
-  RunResultStatus,
 } from '../../../types/index.js';
 import type {
   IStorageModule,
@@ -39,6 +38,7 @@ import type {
   IBenchmarkOperations,
   IBenchmarkImageOperations,
   IEvaluationRunOperations,
+  EvaluationRunResultEntry,
   IRunOperations,
   IAnalyticsOperations,
   IEvaluatorOperations,
@@ -968,15 +968,31 @@ class FileEvaluationRunOperations implements IEvaluationRunOperations {
   }
 
   async getById(id: string): Promise<EvaluationRun | null> {
+    return this.readSync(id);
+  }
+
+  /**
+   * Synchronous read used by every mutation below so the read→modify→write
+   * happens within ONE event-loop tick. With an `await` between the read and
+   * the write, two concurrent per-case `updateResult` calls (concurrency>1)
+   * interleave as read-A, read-B, write-A, write-B and A's entry is lost —
+   * the file-backend twin of the OpenSearch version-conflict bug.
+   *
+   * Scope: this only serialises writers within THIS process (the file
+   * backend is the single-process dev/CI default — see server/adapters/index.ts).
+   * It is not a cross-process lock or a compare-and-swap.
+   */
+  private readSync(id: string): EvaluationRun | null {
     const doc = readJsonFile<any>(path.join(this.dir, `${id}.json`));
     if (!doc || doc.docType !== 'evaluation-run') return null;
     return doc as EvaluationRun;
   }
 
   async update(id: string, updates: Partial<EvaluationRun>): Promise<EvaluationRun> {
-    const existing = await this.getById(id);
+    const existing = this.readSync(id);
     if (!existing) throw new Error(`Evaluation run ${id} not found`);
-    const updated = { ...existing, ...updates } as EvaluationRun;
+    const { id: _id, docType: _docType, ...fields } = updates as any;
+    const updated = { ...existing, ...fields } as EvaluationRun;
     writeJsonFile(path.join(this.dir, `${id}.json`), updated);
     return updated;
   }
@@ -1026,15 +1042,27 @@ class FileEvaluationRunOperations implements IEvaluationRunOperations {
     return paginate(filtered, options);
   }
 
-  async updateResult(runId: string, testCaseId: string, result: {
-    reportId: string;
-    status: RunResultStatus;
-    error?: string;
-  }): Promise<boolean> {
-    const existing = await this.getById(runId);
+  async updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry): Promise<boolean> {
+    const existing = this.readSync(runId);
     if (!existing) return false;
+    existing.results = existing.results || {};
     existing.results[testCaseId] = result;
     writeJsonFile(path.join(this.dir, `${runId}.json`), existing);
+    return true;
+  }
+
+  async mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>): Promise<boolean> {
+    const existing = this.readSync(runId);
+    if (!existing) return false;
+    existing.results = existing.results || {};
+    let changed = false;
+    for (const [testCaseId, entry] of Object.entries(results)) {
+      if (existing.results[testCaseId] === undefined) {
+        existing.results[testCaseId] = entry;
+        changed = true;
+      }
+    }
+    if (changed) writeJsonFile(path.join(this.dir, `${runId}.json`), existing);
     return true;
   }
 }

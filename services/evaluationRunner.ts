@@ -54,6 +54,7 @@ import type { TrajectoryStep } from '@/types';
 import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
 import { bucketRunResults } from '@/lib/runStats';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
+import { buildCancelledMarkers } from '@/services/evaluationRunFinalize';
 import { loadConfigSync } from '@/lib/config/index';
 import { getBackendUrl } from '@/lib/portConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -228,6 +229,26 @@ export async function executeEvaluationRun(
   const judgeFailureReasons: Array<string | undefined> = [];
 
   try {
+    // Per-case result persistence is BOOKKEEPING, not evaluation. It used to
+    // be awaited inside the evaluation try/catch, so a storage hiccup while
+    // writing an already-judged verdict (the exact case: a
+    // version_conflict_engine_exception on the run doc when two concurrent
+    // cases finished together) was caught as if the AGENT had failed — the
+    // report was rewritten to `metricsStatus: 'error'` / "Evaluation error:
+    // version_conflict…" and the in-memory result flipped to `failed`. Keep
+    // the verdict; log the persistence failure; finalization
+    // (`services/evaluationRunFinalize.ts`) merges any missing entries from
+    // the in-memory map into the doc at the end, so nothing is lost.
+    const persistResult = async (testCaseId: string): Promise<void> => {
+      if (!onTestCaseComplete) return;
+      try {
+        await onTestCaseComplete(testCaseId, run.results[testCaseId]);
+      } catch (persistErr) {
+        const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+        console.warn(`[EvaluationRunner] [${testCaseId}] Failed to persist result (verdict kept in memory; finalization will reconcile): ${msg}`);
+      }
+    };
+
     await runWithConcurrencyLimit(
       testCases,
       concurrency,
@@ -785,9 +806,7 @@ export async function executeEvaluationRun(
             status: 'running',
           });
 
-          if (onTestCaseComplete) {
-            await onTestCaseComplete(testCaseId, run.results[testCaseId]);
-          }
+          await persistResult(testCaseId);
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
           debug('EvaluationRunner', `[${testCaseId}] Failed: ${errorMsg}`);
@@ -833,9 +852,7 @@ export async function executeEvaluationRun(
             status: 'running',
           });
 
-          if (onTestCaseComplete) {
-            await onTestCaseComplete(testCaseId, run.results[testCaseId]);
-          }
+          await persistResult(testCaseId);
         }
       },
       () => cancellationToken?.isCancelled ?? false
@@ -852,7 +869,20 @@ export async function executeEvaluationRun(
     // above landed, or a judge/evaluator error) is bucketed `errored` — it
     // must NOT silently inflate `passed`. See run.results[testCaseId]
     // assignment above for how passFailStatus/metricsStatus land here.
-    const bucketed = bucketRunResults(run.results as Record<string, { status?: string; passFailStatus?: string }>);
+    //
+    // Cancelled runs: stamp every planned case that never started as
+    // `{ reportId: '', status: 'cancelled' }` (see the `results` contract in
+    // types/index.ts) so consumers can tell "never ran" from "still to come"
+    // without inference. `bucketRunResults` puts those in `notRun`, never
+    // `pending` — a cancelled 34/62 run must not render 28 phantom spinners.
+    if (wasCancelled) {
+      Object.assign(run.results, buildCancelledMarkers(testCases.map(tc => tc.id), run.results));
+    }
+    const bucketed = bucketRunResults(
+      run.results as Record<string, { status?: string; passFailStatus?: string }>,
+      totalTestCases,
+      finalStatus,
+    );
     run.stats = { ...bucketed, total: totalTestCases };
 
     // Run-level judge-failure surfacing (see lib/judgeFailureSummary.ts):

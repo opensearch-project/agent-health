@@ -488,9 +488,16 @@ describe('Evaluation Runs API Integration', () => {
       const cancelData = await cancelRes.json();
       expect(cancelData.success).toBe(true);
 
-      // Verify status is cancelled
-      const getRes = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${runId}`);
-      const run = await getRes.json();
+      // Cancel is a request: the doc carries cancelRequestedAt right away and
+      // reaches the terminal `cancelled` status once in-flight cases drain.
+      let run: any;
+      const deadline = Date.now() + 25_000;
+      for (;;) {
+        run = await (await fetch(`${BASE_URL}/api/storage/evaluation-runs/${runId}`)).json();
+        if (run.status === 'cancelled' || run.status === 'completed' || run.status === 'failed' || Date.now() > deadline) break;
+        expect(run.cancelRequestedAt).toBeTruthy();
+        await new Promise(r => setTimeout(r, 500));
+      }
       expect(run.status).toBe('cancelled');
 
       reader.cancel();

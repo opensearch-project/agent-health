@@ -37,14 +37,30 @@ export interface RunStats {
    * pass rates. Issue #242.
    */
   errored: number;
+  /**
+   * Number of planned test cases that never executed (or never finished)
+   * because the run reached a TERMINAL status first — cancelled mid-way, or
+   * the executor crashed. Neither a pass, a fail, nor "pending": nothing is
+   * ever going to happen to them. Excluded from the pass-rate denominator
+   * and rendered as "n not run" (never with an in-progress spinner).
+   */
+  notRun: number;
   /** Total number of test cases in the run */
   total: number;
   /**
-   * Pass rate as a percentage (0-100). Computed over `total - errored`
-   * (the *evaluable* set), not over `total`, so a non-retryable judge
-   * failure can't masquerade as the agent scoring 0%.
+   * Pass rate as a percentage (0-100). Computed over `total - errored -
+   * notRun` (the *evaluable* set), not over `total`, so a non-retryable
+   * judge failure — or a cancellation — can't masquerade as the agent
+   * scoring 0%.
    */
   passRate: number;
+}
+
+/** Run statuses after which no further per-case progress can happen. */
+export const TERMINAL_RUN_STATUSES: ReadonlySet<BenchmarkRunStatus> = new Set(['completed', 'failed', 'cancelled']);
+
+export function isTerminalRunStatus(status: BenchmarkRunStatus | undefined): boolean {
+  return status !== undefined && TERMINAL_RUN_STATUSES.has(status);
 }
 
 /**
@@ -70,32 +86,72 @@ export interface RunStats {
  * `results` map of length 9, so `total` here would report 9, not 62. Pass
  * the run's snapshotted test-case count (`testCaseSnapshots.length`) as
  * `plannedTotal` and the shortfall (planned - observed) is folded into
- * `pending` so the invariant `total === passed+failed+errored+pending` still
- * holds and callers see the true "53 more to go" total instead of a
+ * `pending` so the invariant `total === passed+failed+errored+pending+notRun`
+ * still holds and callers see the true "53 more to go" total instead of a
  * misleadingly small, already-100%-accounted-for total that looks finished.
+ *
+ * `runStatus` (bug: cancelled/failed runs rendered a phantom "n pending ⟳"
+ * forever, 2026-09-04): the shortfall above is only *pending* while the run
+ * can still make progress. Once the run is TERMINAL (cancelled / failed /
+ * completed) nothing will ever start those cases, so they are bucketed as
+ * `notRun` instead — a cancelled 34/62 run reads "34 executed · 28 not run",
+ * not "28 pending" with a spinner. The same applies to per-case entries a
+ * terminal run left behind in `pending`/`running` (an executor that died
+ * mid-case) and to entries explicitly marked `status: 'cancelled'` (written
+ * for never-started cases when a run is cancelled — see
+ * `EvaluationRun.results` in types/index.ts). Without `runStatus` the legacy
+ * behaviour (shortfall = pending) is preserved.
  */
 export function bucketRunResults(
   results: Record<string, { status?: string; passFailStatus?: string }> | undefined,
-  plannedTotal?: number
-): Pick<RunStats, 'passed' | 'failed' | 'errored' | 'pending' | 'total'> {
-  let passed = 0, failed = 0, errored = 0, pending = 0, total = 0;
+  plannedTotal?: number,
+  runStatus?: BenchmarkRunStatus
+): Pick<RunStats, 'passed' | 'failed' | 'errored' | 'pending' | 'notRun' | 'total'> {
+  const terminal = isTerminalRunStatus(runStatus);
+  let passed = 0, failed = 0, errored = 0, pending = 0, notRun = 0, total = 0;
   for (const r of Object.values(results || {})) {
     total++;
-    if (r.status === 'pending' || r.status === 'running') { pending++; continue; }
-    if (r.status === 'failed' || r.status === 'cancelled') { failed++; continue; }
+    if (r.status === 'cancelled') { notRun++; continue; }
+    if (r.status === 'pending' || r.status === 'running') {
+      if (terminal) notRun++; else pending++;
+      continue;
+    }
+    if (r.status === 'failed') { failed++; continue; }
     if (r.status === 'completed') {
       if (r.passFailStatus === 'passed') passed++;
       else if (r.passFailStatus === 'failed') failed++;
       else errored++; // completed without a verdict = judge errored (#242)
       continue;
     }
-    pending++; // unknown / no status
+    // Unknown / missing status: while the run is live this is "not settled
+    // yet" (pending). On a TERMINAL run an entry with no recognised status is
+    // schema drift or a bad writer — surface it as `errored` (amber ⚠) rather
+    // than hide it in the neutral notRun bucket (codex review).
+    if (terminal) errored++; else pending++;
   }
   if (plannedTotal !== undefined && plannedTotal > total) {
-    pending += plannedTotal - total;
+    if (terminal) notRun += plannedTotal - total;
+    else pending += plannedTotal - total;
     total = plannedTotal;
   }
-  return { passed, failed, errored, pending, total };
+  return { passed, failed, errored, pending, notRun, total };
+}
+
+/**
+ * Pass rate (0-100) over the JUDGED set only: `passed / (passed + failed)`.
+ * Excluded: errored (executed, but the evaluator produced no verdict — the
+ * repo-wide #242 convention, same as the benchmark runs table and the run
+ * inspector), pending (not finished) and notRun (never started). So a run
+ * cancelled at 34/62 reports the pass rate of the cases that were actually
+ * judged, and an in-flight run doesn't read as "12%" because 50 cases
+ * haven't happened yet. Named for what it is — callers that surface it
+ * should footnote the excluded errored/notRun counts (the detail page does).
+ * Returns `null` when nothing has been judged so callers can render "—"
+ * rather than a fabricated 0%.
+ */
+export function passRateOverJudged(stats: { passed: number; failed: number }): number | null {
+  const judged = stats.passed + stats.failed;
+  return judged > 0 ? Math.round((stats.passed / judged) * 100) : null;
 }
 
 /**
@@ -118,6 +174,7 @@ export function calculateRunStats(
   let failed = 0;
   let pending = 0;
   let errored = 0;
+  let notRun = 0;
   let total = 0;
 
   Object.entries(run.results || {}).forEach(([testCaseId, result]) => {
@@ -129,7 +186,13 @@ export function calculateRunStats(
       return;
     }
 
-    if (result.status === 'failed' || result.status === 'cancelled') {
+    // Never started (run cancelled before reaching it) — not a failure.
+    if (result.status === 'cancelled') {
+      notRun++;
+      return;
+    }
+
+    if (result.status === 'failed') {
       failed++;
       return;
     }
@@ -171,9 +234,9 @@ export function calculateRunStats(
     }
   });
 
-  // Pass rate is computed over the evaluable set (total minus errored).
-  // If every run errored, expose 0% rather than dividing by zero.
-  const evaluable = Math.max(0, total - errored);
+  // Pass rate is computed over the evaluable set (total minus errored minus
+  // never-run). If every run errored, expose 0% rather than dividing by zero.
+  const evaluable = Math.max(0, total - errored - notRun);
   const passRate = evaluable > 0 ? Math.round((passed / evaluable) * 100) : 0;
 
   return {
@@ -181,6 +244,7 @@ export function calculateRunStats(
     failed,
     pending,
     errored,
+    notRun,
     total,
     passRate,
   };
@@ -231,14 +295,22 @@ export function getReportIdsFromRun(run: BenchmarkRun): string[] {
  */
 export function computeRunStats(
   run: {
+    status?: BenchmarkRunStatus;
     results?: Record<string, { status?: string; passFailStatus?: string }>;
     stats?: Partial<RunStatsType> | null;
     testCaseSnapshots?: unknown[];
   }
-): Pick<RunStatsType, 'passed' | 'failed' | 'errored' | 'pending' | 'total'> {
+): Pick<RunStatsType, 'passed' | 'failed' | 'errored' | 'pending' | 'total'> & { notRun: number } {
   const plannedTotal = run.testCaseSnapshots?.length;
+  // Terminal-aware bucketing (see bucketRunResults): the planned-but-absent
+  // remainder is `pending` only while the run is still running. Only the
+  // EXPLICIT persisted status is trusted here — the results-derived legacy
+  // fallback in getEffectiveRunStatus reports 'completed' for any status-less
+  // run whose observed results happen to all be settled, which is exactly
+  // what an in-flight legacy run looks like between two cases.
+  const effectiveStatus = run.status;
   if (run.results && Object.keys(run.results).length > 0) {
-    const bucketed = bucketRunResults(run.results, plannedTotal);
+    const bucketed = bucketRunResults(run.results, plannedTotal, effectiveStatus);
 
     // Legacy-shape fallback (goyamegh/pr-run-report-v2, run-list all-errored bug):
     // runs created before per-result passFailStatus denormalization landed
@@ -259,27 +331,44 @@ export function computeRunStats(
     const allBucketedAsErrored = bucketed.errored > 0 && bucketed.passed === 0 && bucketed.failed === 0;
     const statsHaveRealVerdicts = !!run.stats && ((run.stats.passed ?? 0) > 0 || (run.stats.failed ?? 0) > 0);
     if (allBucketedAsErrored && statsHaveRealVerdicts && run.stats) {
-      return {
-        passed: run.stats.passed ?? 0,
-        failed: run.stats.failed ?? 0,
-        errored: run.stats.errored ?? 0,
-        pending: run.stats.pending ?? 0,
-        total: run.stats.total ?? bucketed.total,
-      };
+      return statsFallback(run.stats, run.stats.total ?? bucketed.total, effectiveStatus);
     }
 
     return bucketed;
   }
   if (run.stats && (run.stats.total ?? 0) > 0) {
-    return {
-      passed: run.stats.passed ?? 0,
-      failed: run.stats.failed ?? 0,
-      errored: run.stats.errored ?? 0,
-      pending: run.stats.pending ?? 0,
-      total: run.stats.total ?? 0,
-    };
+    return statsFallback(run.stats, run.stats.total ?? 0, effectiveStatus);
   }
-  return { passed: 0, failed: 0, errored: 0, pending: 0, total: plannedTotal || 0 };
+  // No results and no stats: a run that never started a case. Terminal →
+  // every planned case is "not run"; otherwise they're all still pending.
+  const planned = plannedTotal || 0;
+  return isTerminalRunStatus(effectiveStatus)
+    ? { passed: 0, failed: 0, errored: 0, pending: 0, notRun: planned, total: planned }
+    : { passed: 0, failed: 0, errored: 0, pending: planned, notRun: 0, total: planned };
+}
+
+/**
+ * Denormalized `run.stats` fallback, made terminal-aware: stats persisted
+ * before `notRun` existed carry the never-started remainder in `pending`
+ * even for a cancelled run. Re-home that remainder so a legacy cancelled
+ * run can't render a phantom spinner either.
+ */
+function statsFallback(
+  stats: Partial<RunStatsType>,
+  total: number,
+  effectiveStatus: BenchmarkRunStatus | undefined
+): Pick<RunStatsType, 'passed' | 'failed' | 'errored' | 'pending' | 'total'> & { notRun: number } {
+  const pending = stats.pending ?? 0;
+  const notRun = stats.notRun ?? 0;
+  const terminal = isTerminalRunStatus(effectiveStatus);
+  return {
+    passed: stats.passed ?? 0,
+    failed: stats.failed ?? 0,
+    errored: stats.errored ?? 0,
+    pending: terminal ? 0 : pending,
+    notRun: terminal ? notRun + pending : notRun,
+    total,
+  };
 }
 
 export function computeRunStatsFromReports(
@@ -298,6 +387,7 @@ export function computeRunStatsFromReports(
     failed: fullStats.failed,
     pending: fullStats.pending,
     errored: fullStats.errored,
+    notRun: fullStats.notRun,
     total: fullStats.total,
   };
 }

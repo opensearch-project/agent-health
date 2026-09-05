@@ -29,6 +29,9 @@ import { EvaluationRun, TestCaseSnapshot } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { computeRunStats } from '@/lib/runStats';
 import { formatRelativeTime, getModelName } from '@/lib/utils';
+// Terminal-aware stats (notRun bucket + pass rate over judged cases only).
+import { passRateOverJudged } from '@/lib/runStats';
+import { Ban } from 'lucide-react';
 import {
   getEvaluationRun,
   cancelEvaluationRun,
@@ -188,10 +191,12 @@ export const EvalRunDetailPage: React.FC = () => {
   // passed judgment).
   const stats = computeRunStats(run);
   const errored = stats.errored ?? 0;
-  // Pass rate ignores errored runs entirely (issue #242): they had no
-  // verdict, so neither numerator nor denominator should include them.
-  const evaluable = Math.max(0, stats.total - errored);
-  const passRate = evaluable > 0 ? Math.round((stats.passed / evaluable) * 100) : 0;
+  const notRun = stats.notRun ?? 0;
+  // Pass rate is over EXECUTED, judged cases only: errored (no verdict,
+  // issue #242), pending (not finished) and notRun (cancelled before it
+  // started) are all excluded — a run cancelled at 34/62 reports the score
+  // of the 34 that ran, not 34 divided by 62.
+  const passRate = passRateOverJudged(stats) ?? 0;
 
   const results = Object.entries(run.results || {}).map(([testCaseId, result]) => {
     const snapshot = run.testCaseSnapshots?.find(s => s.id === testCaseId);
@@ -331,6 +336,16 @@ export const EvalRunDetailPage: React.FC = () => {
                 <div className="text-xs text-muted-foreground">Errored</div>
               </div>
             )}
+            {notRun > 0 && (
+              <div
+                className="text-center"
+                data-testid="run-detail-not-run"
+                title="Planned test cases that never ran because the run was cancelled or failed first. Not failures; excluded from the pass rate."
+              >
+                <div className="text-2xl font-bold text-muted-foreground">{notRun}</div>
+                <div className="text-xs text-muted-foreground">Not run</div>
+              </div>
+            )}
             <div className="text-center">
               <div className="text-2xl font-bold">{stats.total}</div>
               <div className="text-xs text-muted-foreground">Total</div>
@@ -338,13 +353,15 @@ export const EvalRunDetailPage: React.FC = () => {
             <div className="text-center">
               <div className="text-2xl font-bold">{passRate}%</div>
               <div className="text-xs text-muted-foreground">
-                Pass Rate{errored > 0 ? ' †' : ''}
+                Pass Rate{errored > 0 || notRun > 0 ? ' †' : ''}
               </div>
             </div>
           </div>
-          {errored > 0 && (
+          {(errored > 0 || notRun > 0) && (
             <div className="text-[11px] text-muted-foreground -mt-2">
-              † Pass rate excludes {errored} errored run{errored === 1 ? '' : 's'} (evaluator could not produce a verdict).
+              † Pass rate is over executed cases only
+              {errored > 0 ? ` — excludes ${errored} errored (evaluator could not produce a verdict)` : ''}
+              {notRun > 0 ? `${errored > 0 ? ',' : ' —'} excludes ${notRun} not run (run ${run.status === 'cancelled' ? 'cancelled' : 'ended'} before they started)` : ''}.
             </div>
           )}
 
@@ -402,7 +419,8 @@ export const EvalRunDetailPage: React.FC = () => {
                         {r.status === 'failed' && <XCircle size={14} className="text-red-600" />}
                         {r.status === 'running' && <Loader2 size={14} className="text-blue-600 animate-spin" />}
                         {r.status === 'pending' && <Clock size={14} className="text-gray-400" />}
-                        <span className="text-xs">{r.status}</span>
+                        {r.status === 'cancelled' && <Ban size={14} className="text-gray-400" />}
+                        <span className="text-xs">{r.status === 'cancelled' ? 'not run' : r.status}</span>
                       </span>
                     </td>
                     <td className="p-2">

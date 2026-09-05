@@ -306,7 +306,7 @@ describe('retryJudgementForRun', () => {
     const updateCall = (storage.evaluationRuns.update as jest.Mock).mock.calls[0];
     expect(updateCall[0]).toBe('eval-run-1');
     expect(updateCall[1].results['tc-errored'].passFailStatus).toBe('passed');
-    expect(updateCall[1].stats).toEqual({ passed: 2, failed: 0, errored: 0, pending: 0, total: 2 });
+    expect(updateCall[1].stats).toEqual({ passed: 2, failed: 0, errored: 0, pending: 0, notRun: 0, total: 2 });
   });
 
   it('re-persists the canonical evaluator-error patch when the judge call fails again', async () => {
