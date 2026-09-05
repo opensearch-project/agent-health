@@ -42,6 +42,12 @@ test.describe('Run inspector — lazy report loading + infinite scroll', () => {
   let runId: string | null = null;
 
   test.beforeAll(async ({ request }) => {
+    // Reset: under fullyParallel a worker can leave this file and come back to
+    // it, re-running beforeAll while module-level state persists — a `const []`
+    // that is only ever push()ed accumulates the PREVIOUS invocation's ids
+    // (already deleted by its afterAll), so `reportIds[i]` below would point at
+    // 404s and rows render as PENDING. testCaseIds is reassigned, so it's fine.
+    reportIds.length = 0;
     // Seeding 120 test cases + 120 reports is fast on CI's file backend but
     // can take minutes against a remote OpenSearch cluster — don't let the
     // default 60s hook timeout kill the seed halfway through.

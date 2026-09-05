@@ -59,8 +59,11 @@ test.describe('Evaluation Runs list — no left-side status icon', () => {
     const secondCell = row.locator('td').nth(1);
     await expect(secondCell).toContainText(RUN_NAME);
     // No lucide status icon (CheckCircle2/XCircle/Clock) rendered inside
-    // that second cell.
-    await expect(secondCell.locator('svg')).toHaveCount(0);
+    // that second cell. The seeded run is `completed`, so the only icon the
+    // name cell may legitimately host is the inline-rename pencil
+    // (`lucide-pencil`, PR #460) — anything else is the redundant status
+    // icon this spec guards against.
+    await expect(secondCell.locator('svg:not(.lucide-pencil)')).toHaveCount(0);
 
     // Right-side pass/fail counts are still present somewhere in the row.
     await expect(row).toContainText('1'); // passed count

@@ -8,22 +8,42 @@ import { test, expect } from './fixtures/test-fixtures';
 test.describe('Dashboard Page', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    // Wait for either dashboard content or first-run experience (no data)
-    const pageReady = page.locator('[data-testid="dashboard-page"]').or(page.locator('[data-testid="first-run-experience"]'));
-    await expect(pageReady).toBeVisible({ timeout: 30000 });
+    // Wait for dashboard content, the ready-to-run state (definitions but no
+    // runs yet), or the first-run experience (empty workspace).
+    const pageReady = page.locator('[data-testid="dashboard-page"]')
+      .or(page.locator('[data-testid="ready-to-run"]'))
+      .or(page.locator('[data-testid="first-run-experience"]'));
+    await expect(pageReady.first()).toBeVisible({ timeout: 30000 });
   });
 
-  test('should display dashboard or first-run experience', async ({ page }) => {
-    const hasDashboard = await page.locator('[data-testid="dashboard-title"]').isVisible().catch(() => false);
+  test('should display dashboard, ready-to-run, or first-run experience', async ({ page }) => {
+    // The `dashboard-page`/`dashboard-title` testids are ALSO rendered by the
+    // loading skeleton (isCheckingData branch of Dashboard.tsx), so sampling
+    // which branch rendered must wait for a SETTLED state first — otherwise
+    // this test races the data check: it sees the skeleton's title, decides
+    // "dashboard mode", and then the page settles to ready-to-run/first-run
+    // and the title vanishes. Settled markers: the loaded dashboard's stats
+    // bar, the ready-to-run screen, or the first-run experience.
+    const settled = page.locator('[data-testid="stats-summary-bar"]')
+      .or(page.locator('[data-testid="ready-to-run"]'))
+      .or(page.locator('[data-testid="first-run-experience"]'));
+    await expect(settled.first()).toBeVisible({ timeout: 30000 });
+
+    const hasDashboard = await page.locator('[data-testid="stats-summary-bar"]').isVisible().catch(() => false);
     const hasFirstRun = await page.locator('[data-testid="first-run-experience"]').isVisible().catch(() => false);
+    const hasReadyToRun = await page.locator('[data-testid="ready-to-run"]').isVisible().catch(() => false);
 
     if (hasDashboard) {
       await expect(page.locator('[data-testid="dashboard-title"]')).toHaveText('Leaderboard Overview');
-      await expect(page.locator('text=Surface failing runs and regressions to improve your agent fast')).toBeVisible();
-    } else {
-      expect(hasFirstRun).toBeTruthy();
+      await expect(page.locator('text=See where each agent is failing or regressing, and improve them fast')).toBeVisible();
+    } else if (hasFirstRun) {
       await expect(page.locator('[data-testid="first-run-experience"]')).toBeVisible();
       await expect(page.locator('text=Know if your agent is actually working')).toBeVisible();
+    } else {
+      // Definitions exist but nothing has run yet (PR #399): a focused
+      // "Ready to run" state, not the full leaderboard and not onboarding.
+      expect(hasReadyToRun).toBeTruthy();
+      await expect(page.locator('[data-testid="ready-to-run"]')).toContainText('Ready to run');
     }
   });
 

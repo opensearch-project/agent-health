@@ -142,6 +142,51 @@ describe('Skills API Integration Tests', () => {
     );
 
     it(
+      'should validate a user-scope skill via a ~/ path (as returned by discover)',
+      async () => {
+        if (!backendAvailable) return;
+
+        // GET /api/skills/discover returns user-scope skills with a `~/`
+        // display path. Regression: validate resolved that literally against
+        // cwd ("Directory does not exist: <cwd>/~/..."), so every user-scope
+        // skill failed validation when selected in the Skills page.
+        //
+        // The backend under test runs as the same user, so its homedir
+        // matches ours. Seed a uniquely-named skill there and delete exactly
+        // that directory afterwards (never anything we didn't create).
+        const { mkdirSync, writeFileSync, rmSync } = await import('fs');
+        const { join } = await import('path');
+        const { homedir } = await import('os');
+
+        const skillDirName = `ahtest-tilde-skill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const absSkillDir = join(homedir(), '.claude', 'skills', skillDirName);
+        mkdirSync(absSkillDir, { recursive: true });
+        writeFileSync(
+          join(absSkillDir, 'SKILL.md'),
+          ['---', `name: ${skillDirName}`, 'description: Tilde-expansion regression seed for skills.integration.test', '---', '', 'Do the thing.', ''].join('\n'),
+          'utf-8'
+        );
+
+        try {
+          const response = await fetch(`${BASE_URL}/api/skills/validate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: `~/.claude/skills/${skillDirName}` }),
+          });
+
+          expect(response.ok).toBe(true);
+          const data = await response.json();
+          expect(data.errors ?? []).toEqual([]);
+          expect(data.valid).toBe(true);
+          expect(data.skill.metadata.name).toBe(skillDirName);
+        } finally {
+          rmSync(absSkillDir, { recursive: true, force: true });
+        }
+      },
+      TEST_TIMEOUT
+    );
+
+    it(
       'should return invalid for non-existent path',
       async () => {
         if (!backendAvailable) return;

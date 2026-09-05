@@ -176,8 +176,13 @@ test.describe('Benchmark-free comparison (test-level primitive)', () => {
     await expect(rowA.locator(`[data-testid="run-accuracy-${RUN_A}"]`)).toBeVisible();
 
     // Inline "Open run" link (Change 3) — no drawer, no click-to-expand.
-    const openRunLink = rowA.locator(`a[href="/evaluations/runs/${RUN_A}"]`);
+    // Since #469 the run NAME is also a link to the same report path (owner:
+    // "what are we comparing here?"), so match the dedicated icon link by its
+    // testid and assert its href — `a[href=…]` alone now resolves to both.
+    const openRunLink = rowA.locator(`[data-testid="open-run-${RUN_A}"]`);
     await expect(openRunLink).toBeVisible();
+    await expect(openRunLink).toHaveAttribute('href', `/evaluations/runs/${RUN_A}`);
+    await expect(rowA.locator(`[data-testid="run-name-link-${RUN_A}"]`)).toHaveAttribute('href', `/evaluations/runs/${RUN_A}`);
 
     // Judge info renders exactly once for the whole scoreboard, not per row.
     await expect(page.locator('[data-testid="scoreboard-judge-line"]')).toHaveCount(1);

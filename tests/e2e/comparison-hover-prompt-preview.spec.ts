@@ -181,6 +181,21 @@ test.describe('Comparison page — hover preview of a test case\'s input prompt'
     const caseLink = page.locator('a', { hasText: 'Checkout 500s case' }).first();
     await expect(caseLink).toBeVisible({ timeout: 20000 });
 
+    // Radix Tooltip dismisses on ANY scroll of an ancestor of its trigger
+    // (TooltipContent's capture-phase scroll listener). In the default
+    // 1280x720 viewport the case table is the last content in the page's
+    // `overflow-y-auto` container and this link's bottom edge (y=723) pokes
+    // 3px past the container's (y=720); focus() auto-scrolls those 3px to
+    // reveal the focused element, so open-on-focus fires and the induced
+    // scroll closes the tooltip ~30ms later (measured: tooltip.open →
+    // scroll(scrollTop=3) → data-state="closed"). Pre-scrolling doesn't
+    // help: scrolling past the scoreboard sentinel condenses the band,
+    // the content shrinks to fit, and scrollTop snaps back to 0. Give the
+    // page enough height that the table fits without scrolling — the
+    // assertion (focus opens the preview with the RUN's prompt) is
+    // unchanged.
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await expect(caseLink).toBeVisible();
     await caseLink.focus();
     const preview = page.locator('[data-testid="compare-hover-prompt"]');
     await expect(preview).toBeVisible({ timeout: 5000 });
