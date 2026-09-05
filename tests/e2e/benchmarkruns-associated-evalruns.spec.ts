@@ -60,10 +60,12 @@ test.describe('Benchmark-scoped Runs page — associated (non-embedded) eval-run
   test('renders the associated running eval-run (not embedded in benchmark.runs) with a Running badge, and its planned total', async ({ page }) => {
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs`);
 
-    const runCard = page.locator('.rounded-xl', { hasText: RUNNING_RUN_NAME });
+    // Runs render as compact table rows (chart + table layout).
+    const runCard = page.locator('[data-testid="run-row"]', { hasText: RUNNING_RUN_NAME });
     await expect(runCard).toBeVisible({ timeout: 15000 });
-    await expect(runCard).toContainText('Running');
-    await expect(runCard).toContainText('10');
+    await expect(runCard.getByTestId('run-status-running')).toBeVisible();
+    // Planned size (10 snapshots), not the 1 case that has started.
+    await expect(runCard.getByTestId('run-size-cell')).toHaveText('10');
 
     // Delete is NOT offered for a merged-in (non-embedded) row — it would
     // call the benchmark-embedded-run-specific delete API, which doesn't
