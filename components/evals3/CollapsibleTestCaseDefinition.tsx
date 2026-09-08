@@ -31,7 +31,7 @@
  */
 
 import React, { useState } from 'react';
-import { ChevronRight, ChevronDown, FileCode2, Braces, Copy, Check } from 'lucide-react';
+import { ChevronRight, ChevronDown, FileCode2, Braces, Copy, Check, Loader2, AlertCircle } from 'lucide-react';
 import { TestCase } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { SdkTestDefinitionView } from '@/components/evals3/SdkTestDefinitionView';
@@ -41,12 +41,24 @@ interface CollapsibleTestCaseDefinitionProps {
   testCase: TestCase | null;
   /** Whether the section starts open. Default: false (collapsed). */
   defaultOpen?: boolean;
+  /**
+   * `testCase` is a SUMMARY projection (list-view payload: no sourceCode /
+   * definition / context / expectedOutcomes, prompt truncated) and the full
+   * record is still loading. Callers that bulk-load summaries and fetch the
+   * full record lazily (RunInspectorPage) set this so the body shows a
+   * loading row instead of rendering the summary as if it were complete.
+   */
+  loading?: boolean;
+  /** The full-record fetch failed; `testCase` is still the summary. */
+  loadError?: boolean;
   className?: string;
 }
 
 export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefinitionProps> = ({
   testCase,
   defaultOpen = false,
+  loading = false,
+  loadError = false,
   className,
 }) => {
   const [open, setOpen] = useState(defaultOpen);
@@ -109,7 +121,26 @@ export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefiniti
             // header shows the source path + language badge, so the old
             // standalone "Source File" row and sha256 line stay gone
             // (owner feedback). Pretty view of THIS test by default.
-            <SdkTestDefinitionView testCase={testCase} maxHeight="360px" />
+            <SdkTestDefinitionView testCase={testCase} maxHeight="360px" loading={loading} loadError={loadError} />
+          ) : loading ? (
+            // Summary projection: prompt truncated, rubric stripped. Don't
+            // paint that as the definition — the full record is coming.
+            <div
+              className="flex items-center gap-2 py-2 text-[11px] text-muted-foreground"
+              data-testid="test-case-definition-loading"
+              role="status"
+            >
+              <Loader2 size={12} className="animate-spin shrink-0" /> Loading full definition…
+            </div>
+          ) : loadError ? (
+            <div
+              className="flex items-start gap-2 py-2 text-[11px] text-muted-foreground"
+              data-testid="test-case-definition-load-error"
+              role="alert"
+            >
+              <AlertCircle size={12} className="shrink-0 mt-px text-amber-500" />
+              Couldn't load the full test case definition. Select the case again to retry.
+            </div>
           ) : (
             <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
               <TestCaseDefinition testCase={testCase} compact />

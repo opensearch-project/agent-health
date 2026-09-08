@@ -98,7 +98,15 @@ jest.mock('@/components/ui/resizable', () => ({
   ResizableHandle: () => null,
 }));
 jest.mock('@/components/evals3/TestCaseInspectorPanel', () => ({
-  TestCaseInspectorPanel: () => React.createElement('div', { 'data-testid': 'inspector-panel' }),
+  // Expose the test-case props the page hands the panel so the lazy full-record
+  // plumbing (summary → loading → full) can be asserted from the outside.
+  TestCaseInspectorPanel: ({ testCase, testCaseLoading, testCaseLoadError }: any) => React.createElement('div', {
+    'data-testid': 'inspector-panel',
+    'data-tc-id': testCase?.id ?? '',
+    'data-tc-has-source': testCase?.sourceCode ? 'true' : 'false',
+    'data-tc-loading': testCaseLoading ? 'true' : 'false',
+    'data-tc-load-error': testCaseLoadError ? 'true' : 'false',
+  }),
 }));
 jest.mock('@/components/evals3/Breadcrumbs', () => ({
   Breadcrumbs: () => React.createElement('nav', { 'data-testid': 'breadcrumbs' }),
@@ -442,6 +450,72 @@ describe('RunInspectorPage — eval-source lazy fetch (summary bulk load + full 
     fireEvent.click(screen.getAllByTestId('test-case-row')[1]);
 
     await waitFor(() => expect(mockTestCaseGetById).toHaveBeenCalledWith('tc-1'));
+  });
+
+  // Owner report (2026-09-08): the SDK "Test Case Definition" dropdown looked
+  // empty / claimed "not captured at import" on the run inspector. Part of
+  // the cause: the panel received the SUMMARY (no sourceCode/definition) with
+  // no way to tell it apart from a legacy record. The page now flags the
+  // in-flight window, and drops the previous row's full record on re-select.
+  it('flags the panel as loading while the full test case is in flight, then hands over the full record', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2).map(tc => ({ ...tc, sourceFile: 'evals/foo.eval.ts' })));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+    let resolveFull: (tc: unknown) => void = () => {};
+    mockTestCaseGetById.mockImplementation((id: string) => new Promise(res => {
+      resolveFull = (tc) => res(tc ?? { id, name: id, sourceFile: 'evals/foo.eval.ts', sourceCode: "test('a', () => {});" });
+    }));
+
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId('test-case-row')[1]);
+
+    // In flight: summary for THIS row + loading flag.
+    const panel = await screen.findByTestId('inspector-panel');
+    await waitFor(() => expect(panel.getAttribute('data-tc-loading')).toBe('true'));
+    expect(panel.getAttribute('data-tc-id')).toBe('tc-1');
+    expect(panel.getAttribute('data-tc-has-source')).toBe('false');
+    expect(panel.getAttribute('data-tc-load-error')).toBe('false');
+
+    // Landed: full record, no loading flag.
+    resolveFull(undefined);
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-loading')).toBe('false'));
+    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-has-source')).toBe('true');
+  });
+
+  it('re-selecting another row drops the previous full record immediately (no stale definition) and flags loading again', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+    const pendingByid = new Map<string, (tc: unknown) => void>();
+    mockTestCaseGetById.mockImplementation((id: string) => new Promise(res => { pendingByid.set(id, res); }));
+
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId('test-case-row')[0]);
+    await waitFor(() => expect(pendingByid.has('tc-0')).toBe(true));
+    pendingByid.get('tc-0')!({ id: 'tc-0', name: 'Case 0', sourceCode: 'FULL-0' });
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-has-source')).toBe('true'));
+
+    fireEvent.click(screen.getAllByTestId('test-case-row')[1]);
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-id')).toBe('tc-1'));
+    // The previous row's full record must not leak into this row's panel.
+    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-has-source')).toBe('false');
+    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-loading')).toBe('true');
+  });
+
+  it('flags loadError (not loading, not legacy) when the full fetch rejects or resolves to null', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+    mockTestCaseGetById.mockRejectedValue(new Error('boom'));
+
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
+    fireEvent.click(screen.getAllByTestId('test-case-row')[1]);
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-load-error')).toBe('true'));
+    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-loading')).toBe('false');
+    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-id')).toBe('tc-1');
   });
 
   it('does not fetch a full test case when nothing is selected', async () => {

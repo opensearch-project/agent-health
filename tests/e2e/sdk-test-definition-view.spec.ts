@@ -173,10 +173,63 @@ test.describe('Run report — per-test SDK definition view', () => {
     await expect(view).toHaveAttribute('data-mode', 'legacy');
     await expect(page.getByTestId('sdk-definition-legacy-hint')).toContainText(/re-import/i);
     await expect(page.getByTestId('sdk-definition-segments')).toHaveCount(0);
-    // The whole-file view is present (collapsed header, expandable).
+    // The whole-file view is present AND EXPANDED (owner report 2026-09-08:
+    // a second nested collapsed disclosure made the definition look empty).
     await expect(page.getByTestId('eval-source-code-view')).toBeVisible();
-    await page.getByTestId('eval-source-toggle').click();
+    await expect(page.getByTestId('eval-source-toggle')).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByTestId('eval-source-code-body')).toContainText('synthetic-case-one');
+    // Still collapsible on request.
+    await page.getByTestId('eval-source-toggle').click();
+    await expect(page.getByTestId('eval-source-code-body')).toHaveCount(0);
+  });
+
+  // The run INSPECTOR (benchmark run → case) is where the owner hit it: that
+  // page bulk-loads test cases as summaries (no sourceCode / definition) and
+  // fetches the full record lazily per selected row — so the dropdown must
+  // never show the summary as a legacy record, and once the full record
+  // lands a pre-capture SDK case must show the eval-file header AND its code.
+  test('run inspector: SDK case without captured definition shows the eval-file header + expanded code (never an empty dropdown)', async ({ page, request, testData }) => {
+    const { testCaseId, reportId } = await seedSdkCase(request, testData, false);
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const runId = `eval-run-e2e-sdk-def-${stamp}`;
+    const bmRes = await request.post('/api/storage/benchmarks', {
+      data: { name: `e2e-sdk-def-benchmark-${stamp}`, testCaseIds: [testCaseId], runs: [], currentVersion: 1,
+        versions: [{ version: 1, createdAt: new Date().toISOString(), testCaseIds: [testCaseId] }] },
+    });
+    expect(bmRes.ok(), 'creating benchmark').toBe(true);
+    const benchmarkId: string = (await bmRes.json()).id;
+    testData.benchmark(benchmarkId);
+    const runRes = await request.put(`/api/storage/evaluation-runs/${runId}`, {
+      data: {
+        id: runId, docType: 'evaluation-run', name: `e2e-sdk-def-run-${stamp}`, benchmarkId,
+        createdAt: new Date().toISOString(), completedAt: new Date().toISOString(), status: 'completed',
+        agentKey: 'demo', modelId: 'demo-model', sources: [{ type: 'benchmark', benchmarkId }], trigger: 'api',
+        testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'synthetic-case-two' }],
+        results: { [testCaseId]: { reportId, status: 'completed', passFailStatus: 'passed' } },
+      },
+    });
+    expect(runRes.ok(), 'creating evaluation run').toBe(true);
+    testData.evaluationRun(runId);
+
+    await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect?reportId=${reportId}`);
+    const header = page.getByRole('button', { name: /test case definition/i });
+    await expect(header).toBeVisible({ timeout: 20_000 });
+    await expect(header).toContainText('SDK');
+    await header.click();
+
+    const view = page.getByTestId('sdk-test-definition-view');
+    await expect(view).toBeVisible();
+    // Whatever the timing of the lazy full fetch, the header names the file…
+    await expect(view).toContainText('evals/synthetic-suite.eval.js');
+    // …and the summary is never painted as a legacy record: either the
+    // loading row or (once the full record lands) the real code.
+    await expect(view).toHaveAttribute('data-mode', 'legacy', { timeout: 15_000 });
+    await expect(page.getByTestId('eval-source-toggle')).toHaveAttribute('aria-expanded', 'true');
+    const body = page.getByTestId('eval-source-code-body');
+    await expect(body).toBeVisible();
+    await expect(body).toContainText('synthetic-case-one');
+    await expect(body).toContainText('shared-loop-body-marker');
+    await expect(page.getByText(/Source not captured at import/)).toHaveCount(0);
   });
 
   test('Test Case detail page uses the same per-test view (Pretty by default)', async ({ page, request, testData }) => {

@@ -165,6 +165,65 @@ describe('SdkTestDefinitionView — legacy record (no definition)', () => {
     expect(screen.getByTestId('eval-source-code-view')).toBeTruthy();
     expect(screen.queryByTestId('sdk-definition-segments')).toBeNull();
   });
+
+  // Owner report (2026-09-08): "test case definition of SDK evals doesn't
+  // show up when I click the Test Case Definition dropdown". The legacy
+  // branch rendered EvalSourceCodeView COLLAPSED — a second nested disclosure
+  // inside a section the user had just opened — so the dropdown showed only
+  // the hint and a one-line file row.
+  it('shows the whole file EXPANDED — the user already opened the section this view lives in', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase({ definition: undefined }) }));
+    const body = screen.getByTestId('eval-source-code-body');
+    expect(body.textContent).toContain('first-case');
+    expect(body.textContent).toContain('second-case');
+    expect(screen.getByTestId('eval-source-toggle').getAttribute('aria-expanded')).toBe('true');
+    // Still collapsible on request.
+    fireEvent.click(screen.getByTestId('eval-source-toggle'));
+    expect(screen.queryByTestId('eval-source-code-body')).toBeNull();
+  });
+
+  it('legacy record with no sourceCode either shows the "source not captured" placeholder (expanded), not a blank panel', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase({ definition: undefined, sourceCode: undefined }) }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('legacy');
+    expect(screen.getByText(/Source not captured at import/)).toBeTruthy();
+    expect(screen.getAllByText('evals/suite.eval.js').length).toBeGreaterThan(0);
+  });
+});
+
+// The run inspector bulk-loads SUMMARY projections (no sourceCode, no
+// definition) and fetches the full record lazily. A summary SDK case is
+// indistinguishable from a legacy one — so the caller passes `loading` /
+// `loadError` and the view must not guess "legacy".
+describe('SdkTestDefinitionView — summary projection while the full record loads', () => {
+  const summary = () => sdkTestCase({ definition: undefined, sourceCode: undefined });
+
+  it('loading: filename header + language badge + "Loading full definition…", NO legacy hint, NO code view, NO segments', () => {
+    render(h(SdkTestDefinitionView, { testCase: summary(), loading: true }));
+    const view = screen.getByTestId('sdk-test-definition-view');
+    expect(view.getAttribute('data-mode')).toBe('loading');
+    expect(view.textContent).toContain('evals/suite.eval.js');
+    expect(view.textContent).toContain('JavaScript');
+    expect(screen.getByTestId('sdk-definition-loading').textContent).toMatch(/Loading full definition/);
+    expect(screen.queryByTestId('sdk-definition-legacy-hint')).toBeNull();
+    expect(screen.queryByTestId('eval-source-code-view')).toBeNull();
+    expect(screen.queryByTestId('sdk-definition-segments')).toBeNull();
+    expect(screen.queryByText(/Source not captured at import/)).toBeNull();
+  });
+
+  it('loadError: filename header + an error row, never the false "re-import" advice', () => {
+    render(h(SdkTestDefinitionView, { testCase: summary(), loadError: true }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('error');
+    expect(screen.getByTestId('sdk-definition-load-error').textContent).toMatch(/Couldn't load/);
+    expect(screen.queryByTestId('sdk-definition-legacy-hint')).toBeNull();
+    expect(screen.queryByText(/re-import/i)).toBeNull();
+  });
+
+  it('a captured definition wins over a stale loading flag', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase(), loading: true }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('captured');
+    expect(screen.getByTestId('sdk-definition-pretty')).toBeTruthy();
+    expect(screen.queryByTestId('sdk-definition-loading')).toBeNull();
+  });
 });
 
 describe('SdkTestDefinitionView — non-SDK', () => {

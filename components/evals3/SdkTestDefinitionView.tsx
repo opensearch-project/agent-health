@@ -28,11 +28,24 @@
  * Backward compat: SDK test cases persisted before `definition` existed
  * fall back to the whole-file view with a one-line "re-import to capture"
  * hint — the Pretty / Evaluate function segments are not offered because
- * there is nothing per-test to show.
+ * there is nothing per-test to show. The code is EXPANDED in that mode:
+ * this view only ever renders inside a section the user has already opened
+ * ("Test Case Definition"), so a second, nested collapsed disclosure read as
+ * "the definition doesn't show up" (owner report, 2026-09-08 — every
+ * pre-capture SDK case on the run inspector).
+ *
+ * `loading`: the run inspector bulk-loads its test cases as a SUMMARY
+ * projection (no `sourceCode`, no `definition`) and fetches the full record
+ * only for the selected row. Until that lands, the record it has is
+ * indistinguishable from a legacy one — so the caller says so, and this view
+ * renders the filename header with a "Loading full definition…" row instead
+ * of a false "not captured at import" hint. `loadError` covers the fetch
+ * failing outright (the summary would otherwise masquerade as a legacy
+ * record with the same false hint).
  */
 
 import React, { useMemo, useState } from 'react';
-import { FileCode2, AlertCircle } from 'lucide-react';
+import { FileCode2, AlertCircle, Loader2 } from 'lucide-react';
 import { TestCase } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { detectSourceLanguage } from '@/lib/utils';
@@ -48,6 +61,14 @@ interface SdkTestDefinitionViewProps {
   maxHeight?: string;
   /** Tighter typography for narrow split-pane layouts (passed to TestCaseDefinition). */
   compact?: boolean;
+  /**
+   * The caller only has a summary projection of `testCase` (no sourceCode /
+   * definition) and the full record is still in flight. Render a loading
+   * row under the filename header rather than the legacy fallback.
+   */
+  loading?: boolean;
+  /** The full-record fetch failed; the caller still only has the summary. */
+  loadError?: boolean;
   className?: string;
 }
 
@@ -88,6 +109,8 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
   testCase,
   maxHeight = '360px',
   compact = true,
+  loading = false,
+  loadError = false,
   className,
 }) => {
   const [segment, setSegment] = useState<SdkDefinitionSegment>('pretty');
@@ -105,8 +128,58 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
 
   const definition = testCase.definition;
   const timeout = typeof definition?.options?.timeout === 'number' ? (definition.options.timeout as number) : undefined;
+  const fileName = testCase.sourceFile || testCase.sourceFileName || 'source file';
+  const languageBadge = (
+    <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0">
+      {language === 'typescript' ? 'TypeScript' : 'JavaScript'}
+    </Badge>
+  );
+
+  // Summary projection with the full record still in flight (or failed):
+  // the filename header is all we know for sure — say so, don't guess
+  // "legacy" and tell the user to re-import a file that may well have been
+  // captured.
+  if (!definition && (loading || loadError)) {
+    return (
+      <div
+        className={`border border-border rounded overflow-hidden ${className || ''}`}
+        data-testid="sdk-test-definition-view"
+        data-mode={loading ? 'loading' : 'error'}
+      >
+        <div className="flex items-center gap-2 bg-card px-3 py-1.5 border-b border-border">
+          <FileCode2 size={12} className="text-muted-foreground shrink-0" />
+          <span className="text-[11px] font-mono font-medium truncate flex-1" title={testCase.sourceFile}>
+            {fileName}
+          </span>
+          {languageBadge}
+        </div>
+        {loading ? (
+          <div
+            className="flex items-center gap-2 px-3 py-3 text-[11px] text-muted-foreground"
+            data-testid="sdk-definition-loading"
+            role="status"
+          >
+            <Loader2 size={12} className="animate-spin shrink-0" />
+            Loading full definition…
+          </div>
+        ) : (
+          <div
+            className="flex items-start gap-2 px-3 py-3 text-[11px] text-muted-foreground"
+            data-testid="sdk-definition-load-error"
+            role="alert"
+          >
+            <AlertCircle size={12} className="shrink-0 mt-px text-amber-500" />
+            Couldn't load the full test case definition. Select the case again to retry.
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // Legacy record: no per-test capture. Whole-file view + hint, nothing else.
+  // The code panel starts EXPANDED — the user already opened the section
+  // this view lives in, and a second nested collapsed disclosure is what
+  // made SDK definitions look empty on the run inspector.
   if (!definition) {
     return (
       <div className={`space-y-2 ${className || ''}`} data-testid="sdk-test-definition-view" data-mode="legacy">
@@ -121,12 +194,10 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
             function; the record is backfilled in place, no new version.
           </span>
         </div>
-        <EvalSourceCodeView testCase={testCase} maxHeight={maxHeight} />
+        <EvalSourceCodeView testCase={testCase} maxHeight={maxHeight} defaultOpen />
       </div>
     );
   }
-
-  const fileName = testCase.sourceFile || testCase.sourceFileName || 'source file';
 
   return (
     <div className={`border border-border rounded overflow-hidden ${className || ''}`} data-testid="sdk-test-definition-view" data-mode="captured">
@@ -136,9 +207,7 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
         <span className="text-[11px] font-mono font-medium truncate flex-1" title={testCase.sourceFile}>
           {fileName}
         </span>
-        <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0">
-          {language === 'typescript' ? 'TypeScript' : 'JavaScript'}
-        </Badge>
+        {languageBadge}
         <div
           role="tablist"
           aria-label="Test definition view"
