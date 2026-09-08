@@ -132,6 +132,6 @@ test.describe('Judge Evaluation tab — improvement strategies (run inspector)',
     const notice = page.getByTestId('improvement-strategies-recovered-notice');
     await expect(notice).toBeVisible();
     await expect(notice).toContainText("Recovered from the judge's raw output");
-    await expect(notice).toContainText('backfill-improvement-strategies');
+    await expect(notice).toContainText('not yet stored on this report');
   });
 });

@@ -1138,6 +1138,15 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 so they still render here. */}
             {(() => {
               const judgeEntries = getJudgeMatcherResults(liveReport);
+              // Same read-side recovery as the Improvement Strategies section
+              // below, applied to the judge row's own "how to fix it" list so
+              // the two surfaces never disagree. Only when the report has a
+              // single judge row — see soleJudgeMatcherIndex().
+              const { strategies: resolvedStrategies, recovered: strategiesRecovered } =
+                resolveImprovementStrategies(liveReport);
+              if (strategiesRecovered && judgeEntries.length === 1 && !judgeEntries[0].improvementStrategies?.length) {
+                judgeEntries[0] = { ...judgeEntries[0], improvementStrategies: resolvedStrategies };
+              }
               const codeEntries = (liveReport.matcherResults ?? []).filter(
                 m => m.method !== 'llm-judge'
               );
@@ -1156,8 +1165,8 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 by the agentic trace judge before it kept strategies have
                 `improvementStrategies: []` while `rawResponse` still holds
                 the full list — showing that (with a notice) beats a blank
-                tab. `scripts/backfill-improvement-strategies.ts` persists
-                the same recovery so every other reader sees it too. */}
+                tab. scripts/backfill-improvement-strategies.ts persists the
+                same recovery so every other reader sees it too. */}
             {(() => {
               const { strategies, recovered } = resolveImprovementStrategies(liveReport);
               if (strategies.length === 0) return null;
@@ -1173,10 +1182,9 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                     data-testid="improvement-strategies-recovered-notice"
                     className="mb-3 text-xs text-muted-foreground border border-dashed rounded-md px-3 py-2"
                   >
-                    Recovered from the judge's raw output — this report was judged before the
-                    agentic trace judge persisted strategies. Run{' '}
-                    <code className="font-mono">npx tsx scripts/backfill-improvement-strategies.ts --apply</code>{' '}
-                    to store them so comparisons and exported reports include them.
+                    Recovered from the judge's raw output — these strategies are not yet stored on
+                    this report, so comparisons and exported reports won't include them until the
+                    report is backfilled.
                   </div>
                 )}
                 <div className="space-y-3">

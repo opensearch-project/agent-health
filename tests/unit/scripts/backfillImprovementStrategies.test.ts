@@ -13,6 +13,10 @@
  *     the llmJudgeResponse mirror and the llm-judge matcher row filled in;
  *   - a second --apply pass is a no-op (idempotent);
  *   - --run <id> reads only that evaluation run's reports via the batch path;
+ *   - the provider gate (default agent-trace-judge) and the in-flight skip
+ *     keep recoverable-but-unaffected reports out of the write set;
+ *   - --apply is refused when storage isn't healthy or the scan hit the
+ *     10k listing window (nothing is written in either case);
  *   - unknown flags are refused (non-zero exit, no requests).
  */
 
@@ -28,10 +32,11 @@ const STRATEGIES = [
 ];
 const RAW = '```json\n' + JSON.stringify({ pass_fail_status: 'passed', improvement_strategies: STRATEGIES }) + '\n```';
 
-function makeReport(id: string, opts: { stored?: any[]; raw?: string; judge?: string } = {}) {
+function makeReport(id: string, opts: { stored?: any[]; raw?: string; judge?: string; metricsStatus?: string } = {}) {
   return {
     id,
     judgeModelId: opts.judge ?? 'agent-trace-judge',
+    metricsStatus: opts.metricsStatus ?? 'ready',
     timestamp: '2026-09-04T17:46:19.614Z',
     trajectory: [{ type: 'assistant', content: 'never fetched by the script' }],
     improvementStrategies: opts.stored ?? [],
@@ -47,6 +52,9 @@ interface MockState {
   reports: Map<string, any>;
   evalRuns: Map<string, any>;
   requests: Array<{ method: string; url: string; body?: any }>;
+  storageHealthy?: boolean;
+  /** Pretend the index is huge: every listing page is full, forever. */
+  infinitePages?: boolean;
 }
 
 function startMock(state: MockState): Promise<{ server: Server; base: string }> {
@@ -70,6 +78,9 @@ function startMock(state: MockState): Promise<{ server: Server; base: string }> 
         };
         const fields = url.searchParams.get('fields');
 
+        if (req.method === 'GET' && url.pathname === '/api/storage/health') {
+          return send(200, { status: state.storageHealthy === false ? 'error' : 'ok', backend: 'file' });
+        }
         if (req.method === 'GET' && url.pathname === '/api/storage/runs') {
           const ids = url.searchParams.get('ids');
           if (ids) {
@@ -79,6 +90,10 @@ function startMock(state: MockState): Promise<{ server: Server; base: string }> 
           const size = Number(url.searchParams.get('size') ?? 100);
           const from = Number(url.searchParams.get('from') ?? 0);
           const all = [...state.reports.values()];
+          if (state.infinitePages) {
+            const page = Array.from({ length: size }, (_, i) => project(makeReport(`report-page-${from + i}`), fields));
+            return send(200, { runs: page, total: 999_999 });
+          }
           const page = all.slice(from, from + size).map((r) => project(r, fields));
           // Mirror the real route: bundled demo sample runs ride along.
           if (from === 0) page.push({ id: 'demo-report-001', improvementStrategies: [], llmJudgeResponse: { rawResponse: RAW } });
@@ -127,6 +142,10 @@ describe('scripts/backfill-improvement-strategies.ts', () => {
     state.reports.set('report-already-stored', makeReport('report-already-stored', { stored: STRATEGIES }));
     state.reports.set('report-raw-empty', makeReport('report-raw-empty', { raw: '{"improvement_strategies": []}' }));
     state.reports.set('report-other-run', makeReport('report-other-run'));
+    // Recoverable but NOT affected by the known provider bug — must be gated out by default.
+    state.reports.set('report-other-judge', makeReport('report-other-judge', { judge: 'some-bedrock-model' }));
+    // Recoverable but still being written by a poller — never race it.
+    state.reports.set('report-in-flight', makeReport('report-in-flight', { metricsStatus: 'pending' }));
     state.evalRuns.set('eval-run-A', {
       id: 'eval-run-A',
       results: { 'tc-1': { reportId: 'report-uncaptured' }, 'tc-2': { reportId: 'report-already-stored' } },
@@ -143,15 +162,50 @@ describe('scripts/backfill-improvement-strategies.ts', () => {
     expect(code).toBe(0);
     const summary = JSON.parse(stdout);
     expect(summary.mode).toBe('dry-run');
-    expect(summary.scanned).toBe(4); // demo sample run excluded
+    expect(summary.scanned).toBe(6); // demo sample run excluded
     expect(summary.candidates).toBe(2);
+    expect(summary.skippedByJudgeGate).toBe(1);
+    expect(summary.skippedInFlight).toBe(1);
     expect(summary.sampleIds.sort()).toEqual(['report-other-run', 'report-uncaptured']);
     expect(summary.byJudge).toEqual({ 'agent-trace-judge': 2 });
     expect(summary.byDay).toEqual({ '2026-09-04': 2 });
     expect(state.requests.filter((r) => r.method !== 'GET')).toEqual([]);
     // Listing is projected — trajectories are never requested.
-    for (const r of state.requests) expect(r.url).toMatch(/fields=id,judgeModelId,timestamp,improvementStrategies,llmJudgeResponse,matcherResults/);
+    for (const r of state.requests.filter((r) => r.url.includes('/api/storage/runs?'))) {
+      expect(r.url).toMatch(/fields=id,judgeModelId,metricsStatus,timestamp,improvementStrategies,llmJudgeResponse,matcherResults/);
+    }
   }, 90_000);
+
+  it('--judge any lifts the provider gate (in-flight reports are still skipped)', async () => {
+    const { summary } = await runScript(['--base', base, '--json', '--judge', 'any']).then((r) => ({ summary: JSON.parse(r.stdout) }));
+    expect(summary.candidates).toBe(3);
+    expect(summary.skippedByJudgeGate).toBe(0);
+    expect(summary.skippedInFlight).toBe(1);
+    expect(summary.byJudge).toEqual({ 'agent-trace-judge': 2, 'some-bedrock-model': 1 });
+  }, 90_000);
+
+  it('refuses to scan when storage is unhealthy (the listing would silently degrade to sample data)', async () => {
+    state.storageHealthy = false;
+    const { code, stderr } = await runScript(['--base', base, '--json', '--apply']);
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(/storage is not healthy/);
+    expect(state.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+    expect(state.requests.some((r) => r.url.startsWith('/api/storage/runs'))).toBe(false);
+  }, 90_000);
+
+  it('refuses --apply over a scan that hit the 10k listing window; dry-run just warns', async () => {
+    state.infinitePages = true;
+    const dry = await runScript(['--base', base, '--json']);
+    expect(dry.code).toBe(0);
+    expect(JSON.parse(dry.stdout).windowCapHit).toBe(true);
+    expect(JSON.parse(dry.stdout).scanned).toBe(10_000);
+
+    state.requests.length = 0;
+    const apply = await runScript(['--base', base, '--json', '--apply']);
+    expect(apply.code).not.toBe(0);
+    expect(apply.stderr).toMatch(/listing window/);
+    expect(state.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+  }, 120_000);
 
   it('--apply patches exactly the candidates with all three surfaces, and a second pass is a no-op', async () => {
     const first = await runScript(['--base', base, '--json', '--apply']);
@@ -173,9 +227,11 @@ describe('scripts/backfill-improvement-strategies.ts', () => {
         { description: 'judge', pass: true, method: 'llm-judge', improvementStrategies: STRATEGIES },
       ]);
     }
-    // Untouched reports stay untouched.
+    // Untouched reports stay untouched — including the gated and in-flight ones.
     expect(state.reports.get('report-already-stored').improvementStrategies).toEqual(STRATEGIES);
     expect(state.reports.get('report-raw-empty').improvementStrategies).toEqual([]);
+    expect(state.reports.get('report-other-judge').improvementStrategies).toEqual([]);
+    expect(state.reports.get('report-in-flight').improvementStrategies).toEqual([]);
 
     state.requests.length = 0;
     const second = await runScript(['--base', base, '--json', '--apply']);

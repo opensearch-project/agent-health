@@ -512,7 +512,11 @@ describe('RunDetailsContent', () => {
       expect(section.textContent).toContain('Bare ids only');
       const notice = screen.getByTestId('improvement-strategies-recovered-notice');
       expect(notice.textContent).toMatch(/Recovered from the judge's raw output/);
-      expect(notice.textContent).toContain('backfill-improvement-strategies');
+      expect(notice.textContent).toMatch(/not yet stored on this report/);
+      // The judge matcher row (the canonical judge surface) gets the same
+      // recovered list, so the two surfaces never disagree: "Too chatty"
+      // appears in the section AND in the row's how-to-fix list.
+      expect(screen.getAllByText(/Too chatty/).length).toBeGreaterThanOrEqual(2);
     });
 
     it('renders no section when neither the array nor the raw text has strategies', async () => {

@@ -8,6 +8,7 @@ import {
   normalizeImprovementStrategies,
   recoverImprovementStrategies,
   resolveImprovementStrategies,
+  soleJudgeMatcherIndex,
   buildImprovementStrategiesBackfillPatch,
 } from '@/lib/judgeStrategies';
 
@@ -104,6 +105,16 @@ describe('lib/judgeStrategies', () => {
       expect(resolveImprovementStrategies(uncapturedReport()))
         .toEqual({ strategies: STRATEGIES, recovered: true });
     });
+    it('normalizes a malformed persisted array instead of passing it through', () => {
+      const r = uncapturedReport({ improvementStrategies: [{ issue: 'no category' }, 'bare string', 42] as any });
+      expect(resolveImprovementStrategies(r)).toEqual({
+        strategies: [
+          { category: 'general', issue: 'no category', recommendation: '', priority: 'medium' },
+          { category: 'general', issue: 'bare string', recommendation: '', priority: 'medium' },
+        ],
+        recovered: false,
+      });
+    });
     it('is empty/not-recovered when neither surface has strategies', () => {
       const r = uncapturedReport({ llmJudgeResponse: { rawResponse: '{"improvement_strategies": []}' } });
       expect(resolveImprovementStrategies(r)).toEqual({ strategies: [], recovered: false });
@@ -111,8 +122,19 @@ describe('lib/judgeStrategies', () => {
     });
   });
 
+  describe('soleJudgeMatcherIndex', () => {
+    it('returns the index of the single llm-judge row', () => {
+      expect(soleJudgeMatcherIndex(uncapturedReport())).toBe(1);
+    });
+    it('is undefined with zero or several judge rows', () => {
+      expect(soleJudgeMatcherIndex({ matcherResults: [] })).toBeUndefined();
+      expect(soleJudgeMatcherIndex({})).toBeUndefined();
+      expect(soleJudgeMatcherIndex({ matcherResults: [{ method: 'llm-judge' }, { method: 'llm-judge' }] })).toBeUndefined();
+    });
+  });
+
   describe('buildImprovementStrategiesBackfillPatch', () => {
-    it('fills the top-level array, the llmJudgeResponse mirror and only empty llm-judge matcher rows', () => {
+    it('fills the top-level array, the llmJudgeResponse mirror and the single empty llm-judge matcher row', () => {
       const report = uncapturedReport();
       const patch = buildImprovementStrategiesBackfillPatch(report)!;
       expect(patch).not.toBeNull();
@@ -127,12 +149,14 @@ describe('lib/judgeStrategies', () => {
       expect(Object.keys(patch).sort()).toEqual(['improvementStrategies', 'llmJudgeResponse', 'matcherResults']);
     });
 
-    it('leaves an already-populated llm-judge matcher row alone', () => {
+    it('leaves an already-populated llm-judge matcher row alone (matcherResults omitted from the patch)', () => {
       const own = [STRATEGIES[1]];
       const report = uncapturedReport({
         matcherResults: [{ description: 'judge', pass: false, method: 'llm-judge', improvementStrategies: own }],
       });
-      expect(buildImprovementStrategiesBackfillPatch(report)!.matcherResults).toEqual(report.matcherResults);
+      const patch = buildImprovementStrategiesBackfillPatch(report)!;
+      expect(patch.improvementStrategies).toEqual(STRATEGIES);
+      expect('matcherResults' in patch).toBe(false);
     });
 
     it('omits matcherResults when the report has none', () => {
@@ -140,6 +164,18 @@ describe('lib/judgeStrategies', () => {
       const patch = buildImprovementStrategiesBackfillPatch(report)!;
       expect(patch.matcherResults).toBeUndefined();
       expect('matcherResults' in patch).toBe(false);
+    });
+
+    it('never stamps the report-level array onto several judge rows (per-claim rows are not a mirror of the last judge call)', () => {
+      const report = uncapturedReport({
+        matcherResults: [
+          { description: 'judge: claim A', pass: true, method: 'llm-judge', improvementStrategies: [] },
+          { description: 'judge: claim B', pass: false, method: 'llm-judge', improvementStrategies: [] },
+        ],
+      });
+      const patch = buildImprovementStrategiesBackfillPatch(report)!;
+      expect(patch.improvementStrategies).toEqual(STRATEGIES); // report level still recovered
+      expect('matcherResults' in patch).toBe(false);          // rows left alone
     });
 
     it('is idempotent: applying the patch makes the next call return null', () => {

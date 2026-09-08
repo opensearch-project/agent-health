@@ -129,10 +129,26 @@ export interface StrategyBearingReport {
 export function resolveImprovementStrategies(
   report: StrategyBearingReport
 ): { strategies: ImprovementStrategy[]; recovered: boolean } {
-  const stored = report.improvementStrategies ?? [];
+  // Persisted arrays are normalized too, so a malformed stored entry can't
+  // crash the renderer any more than a recovered one can.
+  const stored = normalizeImprovementStrategies(report.improvementStrategies);
   if (stored.length > 0) return { strategies: stored, recovered: false };
   const recovered = recoverImprovementStrategies(report.llmJudgeResponse?.rawResponse);
   return { strategies: recovered, recovered: recovered.length > 0 };
+}
+
+/**
+ * The single `[llm-judge]` matcher row that the report-level judge response
+ * belongs to, or `undefined` when there isn't exactly one. A report with
+ * several judge rows (SDK tests calling `judge()` more than once) has one
+ * `llmJudgeResponse` for the LAST call only, so stamping its strategies onto
+ * every row would attribute advice to the wrong claim — in that case the
+ * report-level array is still shown/persisted but no row is touched.
+ */
+export function soleJudgeMatcherIndex(report: StrategyBearingReport): number | undefined {
+  const rows = report.matcherResults ?? [];
+  const judgeIdx = rows.map((m, i) => (m.method === 'llm-judge' ? i : -1)).filter((i) => i >= 0);
+  return judgeIdx.length === 1 ? judgeIdx[0] : undefined;
 }
 
 /** The exact PATCH body the backfill sends for one report. */
@@ -150,9 +166,10 @@ export interface ImprovementStrategiesBackfillPatch<R extends StrategyBearingRep
  *
  * `PATCH /api/storage/runs/:id` shallow-merges top-level fields, so nested
  * objects (`llmJudgeResponse`, `matcherResults`) are sent whole with only the
- * strategies filled in. Only `[llm-judge]` matcher entries whose own array is
- * empty are touched; code matchers and already-populated judge entries are
- * passed through untouched.
+ * strategies filled in. `matcherResults` is included only when the report has
+ * exactly one `[llm-judge]` row (see {@link soleJudgeMatcherIndex}) and that
+ * row's own array is empty; code matchers and already-populated judge rows
+ * are passed through untouched.
  */
 export function buildImprovementStrategiesBackfillPatch<R extends StrategyBearingReport>(
   report: R
@@ -163,11 +180,10 @@ export function buildImprovementStrategiesBackfillPatch<R extends StrategyBearin
     improvementStrategies: strategies,
     llmJudgeResponse: { ...report.llmJudgeResponse, improvementStrategies: strategies } as NonNullable<R['llmJudgeResponse']>,
   };
-  if (Array.isArray(report.matcherResults)) {
-    patch.matcherResults = report.matcherResults.map((m) =>
-      m.method === 'llm-judge' && !(m.improvementStrategies?.length)
-        ? { ...m, improvementStrategies: strategies }
-        : m
+  const idx = soleJudgeMatcherIndex(report);
+  if (idx !== undefined && !(report.matcherResults![idx].improvementStrategies?.length)) {
+    patch.matcherResults = report.matcherResults!.map((m, i) =>
+      i === idx ? { ...m, improvementStrategies: strategies } : m
     ) as NonNullable<R['matcherResults']>;
   }
   return patch;
