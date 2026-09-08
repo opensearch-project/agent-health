@@ -291,18 +291,31 @@ export const RunInspectorPage: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Delete/Cancel/Retry-Judgement (RunActionsMenu). Dispatch based on
-  // `mode` — same benchmark-vs-evaluation-run split as EvalRunsPage/
-  // EvalRunDetailPage. Delete navigates away (there's nothing left to
-  // inspect); Cancel/Retry-Judgement just reload this page's data.
+  // Delete/Cancel/Retry-Judgement (RunActionsMenu). Delete navigates away
+  // (there's nothing left to inspect); Cancel/Retry-Judgement just reload
+  // this page's data.
+  //
+  // Delete dispatches on the RUN's kind, not the route's. On the
+  // benchmark-scoped route `run` is the first-class evaluation-run document
+  // whenever one exists (resolveCanonicalEvaluationRun above), and most runs
+  // of the dual-write era are NOT embedded in benchmark.runs[] — so the old
+  // route-based dispatch sent them to the benchmark nested-run DELETE, which
+  // 404ed, was swallowed (asyncBenchmarkStorage.deleteRun resolves false),
+  // and the page navigated away with the run still there (owner report:
+  // "the run doesn't get deleted when I go inside the run page"). The
+  // client's job is to pick the endpoint that can find the run, and to
+  // surface failure instead of swallowing it.
   const handleDelete = async () => {
-    if (mode === 'benchmark' && benchmarkId) {
-      await asyncBenchmarkStorage.deleteRun(benchmarkId, runId!);
-      navigate(`/evaluations/benchmarks/${benchmarkId}/runs`);
+    if (!runId) return;
+    if (isEvaluationRun(run)) {
+      await deleteEvaluationRun(runId);
+    } else if (benchmarkId) {
+      const ok = await asyncBenchmarkStorage.deleteRun(benchmarkId, runId);
+      if (!ok) throw new Error('Failed to delete run — it may already have been deleted.');
     } else {
-      await deleteEvaluationRun(runId!);
-      navigate('/evaluations/runs');
+      await deleteEvaluationRun(runId);
     }
+    navigate(mode === 'benchmark' && benchmarkId ? `/evaluations/benchmarks/${benchmarkId}/runs` : '/evaluations/runs');
   };
 
   const handleCancel = async () => {

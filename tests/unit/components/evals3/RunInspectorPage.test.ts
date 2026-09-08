@@ -44,13 +44,17 @@ jest.mock('react-router-dom', () => ({
 // ── Service mocks ────────────────────────────────────────────────────────────
 
 const mockBenchmarkGetById = jest.fn();
+const mockBenchmarkDeleteRun = jest.fn();
 const mockTestCasesGetByIds = jest.fn();
 const mockTestCaseGetById = jest.fn();
 const mockGetReportSummariesByIds = jest.fn();
 const mockGetReportById = jest.fn();
 
 jest.mock('@/services/storage', () => ({
-  asyncBenchmarkStorage: { getById: (...a: unknown[]) => mockBenchmarkGetById(...a) },
+  asyncBenchmarkStorage: {
+    getById: (...a: unknown[]) => mockBenchmarkGetById(...a),
+    deleteRun: (...a: unknown[]) => mockBenchmarkDeleteRun(...a),
+  },
   asyncTestCaseStorage: {
     getByIds: (...a: unknown[]) => mockTestCasesGetByIds(...a),
     getById: (...a: unknown[]) => mockTestCaseGetById(...a),
@@ -1237,5 +1241,84 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
     await waitFor(() => expect(screen.getByTestId('run-delete-confirm-eval-run-1')).toBeTruthy());
     const { deleteEvaluationRun } = require('@/services/client');
     expect(deleteEvaluationRun).not.toHaveBeenCalled();
+  });
+});
+
+// Owner report: "the run doesn't get deleted when I go inside the run page
+// and try it myself." On the benchmark-scoped inspector route the kebab's
+// Delete dispatched on the ROUTE (benchmark → nested-run DELETE), but the
+// run shown there is the first-class evaluation-run doc — usually NOT
+// embedded in benchmark.runs[] — so that call 404ed, asyncBenchmarkStorage
+// .deleteRun swallowed it as `false`, and the page navigated away with the
+// run intact. Delete must dispatch on the RUN's kind.
+describe('RunInspectorPage — kebab Delete dispatches on the run kind, not the route', () => {
+  const confirmDelete = async (runId: string) => {
+    await waitFor(() => expect(deleteItem()).toBeTruthy());
+    fireEvent.click(deleteItem());
+    await waitFor(() => expect(screen.getByTestId(`run-delete-confirm-btn-${runId}`)).toBeTruthy());
+    fireEvent.click(screen.getByTestId(`run-delete-confirm-btn-${runId}`));
+  };
+
+  it('benchmark route + first-class evaluation-run doc → DELETE via the evaluation-runs API, then back to the benchmark runs list', async () => {
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(1));
+    const { getEvaluationRun, deleteEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('run-1', 1));
+    deleteEvaluationRun.mockResolvedValue(true);
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+
+    renderPage();
+    await confirmDelete('run-1');
+
+    await waitFor(() => expect(deleteEvaluationRun).toHaveBeenCalledWith('run-1'));
+    expect(mockBenchmarkDeleteRun).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/evaluations/benchmarks/bench-1/runs'));
+  });
+
+  it('benchmark route + legacy embedded-only run (no doc) → the benchmark nested-run DELETE', async () => {
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(1));
+    // getEvaluationRun rejects by default (beforeEach): no first-class doc.
+    mockBenchmarkDeleteRun.mockResolvedValue(true);
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+
+    renderPage();
+    await confirmDelete('run-1');
+
+    await waitFor(() => expect(mockBenchmarkDeleteRun).toHaveBeenCalledWith('bench-1', 'run-1'));
+    const { deleteEvaluationRun } = require('@/services/client');
+    expect(deleteEvaluationRun).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/evaluations/benchmarks/bench-1/runs'));
+  });
+
+  it('a swallowed failure (benchmark deleteRun → false) surfaces an error and does NOT navigate away', async () => {
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(1));
+    mockBenchmarkDeleteRun.mockResolvedValue(false);
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+
+    renderPage();
+    await confirmDelete('run-1');
+
+    await waitFor(() => expect(screen.getByTestId('run-action-error-run-1')).toBeTruthy());
+    expect(mockNavigate).not.toHaveBeenCalledWith('/evaluations/benchmarks/bench-1/runs');
+  });
+
+  it('eval-run route → evaluation-runs API, then back to the runs list', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun, deleteEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 1));
+    deleteEvaluationRun.mockResolvedValue(true);
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+
+    renderPage();
+    await confirmDelete('eval-run-1');
+
+    await waitFor(() => expect(deleteEvaluationRun).toHaveBeenCalledWith('eval-run-1'));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/evaluations/runs'));
   });
 });

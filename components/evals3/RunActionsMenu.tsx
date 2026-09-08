@@ -191,8 +191,10 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
         <AlertDialogContent data-testid={`run-delete-confirm-${runId}`}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this run?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {runName ? `"${runName}"` : 'This run'} and its results will be permanently deleted. This cannot be undone.
+            <AlertDialogDescription data-testid={`run-delete-confirm-copy-${runId}`}>
+              {runName ? `"${runName}"` : 'This run'} will be permanently removed from every runs list
+              {isRunning ? ' — it is still running' : ''}.
+              Its per-test-case reports are kept and stay reachable from each test case. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
