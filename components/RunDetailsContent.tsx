@@ -42,6 +42,7 @@ import { TrajectoryView } from './TrajectoryView';
 import { RawEventsPanel } from './RawEventsPanel';
 import { MatcherResultsPanel } from './MatcherResultsPanel';
 import { getJudgeReasoningText, getJudgeMatcherResults } from '@/lib/matchers/judgeAccessor';
+import { resolveImprovementStrategies } from '@/lib/judgeStrategies';
 import TraceVisualization from './traces/TraceVisualization';
 import SimpleSpanAttributesTable from './traces/SimpleSpanAttributesTable';
 import ViewToggle, { ViewMode } from './traces/ViewToggle';
@@ -1150,15 +1151,36 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 dedicated card on top of that would be a duplicate surface,
                 exactly the architectural duplication that caused issue #230. */}
 
-            {/* Improvement Strategies */}
-            {liveReport.improvementStrategies && liveReport.improvementStrategies.length > 0 && (
-              <div>
+            {/* Improvement Strategies — persisted array first; otherwise
+                recovered on read from the judge's raw text. Reports judged
+                by the agentic trace judge before it kept strategies have
+                `improvementStrategies: []` while `rawResponse` still holds
+                the full list — showing that (with a notice) beats a blank
+                tab. `scripts/backfill-improvement-strategies.ts` persists
+                the same recovery so every other reader sees it too. */}
+            {(() => {
+              const { strategies, recovered } = resolveImprovementStrategies(liveReport);
+              if (strategies.length === 0) return null;
+              return (
+              <div data-testid="improvement-strategies-section">
                 <h3 className="text-lg font-semibold mb-3 flex items-center">
                   <Lightbulb size={18} className="mr-2" />
                   Improvement Strategies
+                  <Badge variant="secondary" className="ml-2 text-xs">{strategies.length}</Badge>
                 </h3>
+                {recovered && (
+                  <div
+                    data-testid="improvement-strategies-recovered-notice"
+                    className="mb-3 text-xs text-muted-foreground border border-dashed rounded-md px-3 py-2"
+                  >
+                    Recovered from the judge's raw output — this report was judged before the
+                    agentic trace judge persisted strategies. Run{' '}
+                    <code className="font-mono">npx tsx scripts/backfill-improvement-strategies.ts --apply</code>{' '}
+                    to store them so comparisons and exported reports include them.
+                  </div>
+                )}
                 <div className="space-y-3">
-                  {liveReport.improvementStrategies.map((strategy, index) => {
+                  {strategies.map((strategy, index) => {
                     const priorityColors = {
                       high: 'text-red-700 dark:text-red-400 border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/20',
                       medium: 'text-yellow-700 dark:text-yellow-400 border-yellow-300 dark:border-yellow-900 bg-yellow-50 dark:bg-yellow-950/20',
@@ -1202,7 +1224,8 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                   })}
                 </div>
               </div>
-            )}
+              );
+            })()}
 
             {/* Judge output — every field the judge emitted, rendered
                flat (no collapsibles) so users see the complete picture

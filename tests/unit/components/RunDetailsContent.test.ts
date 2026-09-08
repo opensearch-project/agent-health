@@ -450,6 +450,88 @@ describe('RunDetailsContent', () => {
     });
   });
 
+  // ── Judge Evaluation tab: Improvement Strategies ─────────────────────────
+  //
+  // Regression lock for "strategies don't show on the Judge Evaluation tab":
+  // the section must render for PASSED and FAILED reports alike when the
+  // array is persisted, and — for reports the agentic trace judge persisted
+  // with `improvementStrategies: []` while `rawResponse` still carries the
+  // full list — it must recover them on read (with a notice) rather than
+  // render nothing.
+  describe('judge tab — improvement strategies', () => {
+    const STRATEGIES = [
+      { category: 'payload_economy', issue: 'Too chatty', recommendation: 'Return compact records', priority: 'low' as const },
+      { category: 'provenance', issue: 'Bare ids only', recommendation: 'Inline doc id per fact', priority: 'high' as const },
+    ];
+    const RAW_WITH_STRATEGIES = '```json\n' + JSON.stringify({
+      pass_fail_status: 'passed', reasoning: 'ok', improvement_strategies: STRATEGIES,
+    }) + '\n```';
+
+    async function openJudgeTab() {
+      // Radix TabsTrigger activates on pointer-down, not click.
+      const tab = screen.getByRole('tab', { name: /Judge Evaluation/ });
+      await act(async () => { fireEvent.mouseDown(tab, { button: 0 }); });
+    }
+
+    it.each(['passed', 'failed'] as const)('renders the persisted strategies for a %s report', async (verdict) => {
+      const report = createReport({
+        passFailStatus: verdict,
+        improvementStrategies: STRATEGIES,
+        matcherResults: [{ description: 'judge: 2 expected outcomes', pass: verdict === 'passed', method: 'llm-judge', improvementStrategies: STRATEGIES }],
+      });
+      mockGetReportById.mockResolvedValue(report);
+      await renderAndWait(report);
+      await openJudgeTab();
+
+      const section = screen.getByTestId('improvement-strategies-section');
+      expect(section.textContent).toContain('Improvement Strategies');
+      expect(section.textContent).toContain('PAYLOAD ECONOMY');
+      expect(section.textContent).toContain('Return compact records');
+      expect(section.textContent).toContain('Inline doc id per fact');
+      expect(screen.queryByTestId('improvement-strategies-recovered-notice')).toBeNull();
+    });
+
+    it('recovers strategies from llmJudgeResponse.rawResponse when the persisted array is empty, with a notice', async () => {
+      const report = createReport({
+        passFailStatus: 'passed',
+        judgeModelId: 'agent-trace-judge',
+        improvementStrategies: [],
+        llmJudgeResponse: {
+          modelId: 'agent-trace-judge', timestamp: '2024-01-01T00:00:00Z',
+          promptTokens: 1, completionTokens: 1, latencyMs: 1,
+          rawResponse: RAW_WITH_STRATEGIES, improvementStrategies: [],
+        },
+        matcherResults: [{ description: 'judge: 2 expected outcomes', pass: true, method: 'llm-judge', improvementStrategies: [] }],
+      });
+      mockGetReportById.mockResolvedValue(report);
+      await renderAndWait(report);
+      await openJudgeTab();
+
+      const section = screen.getByTestId('improvement-strategies-section');
+      expect(section.textContent).toContain('Too chatty');
+      expect(section.textContent).toContain('Bare ids only');
+      const notice = screen.getByTestId('improvement-strategies-recovered-notice');
+      expect(notice.textContent).toMatch(/Recovered from the judge's raw output/);
+      expect(notice.textContent).toContain('backfill-improvement-strategies');
+    });
+
+    it('renders no section when neither the array nor the raw text has strategies', async () => {
+      const report = createReport({
+        improvementStrategies: [],
+        llmJudgeResponse: {
+          modelId: 'm', timestamp: '2024-01-01T00:00:00Z', promptTokens: 1, completionTokens: 1, latencyMs: 1,
+          rawResponse: '{"pass_fail_status":"passed","improvement_strategies":[]}', improvementStrategies: [],
+        },
+      });
+      mockGetReportById.mockResolvedValue(report);
+      await renderAndWait(report);
+      await openJudgeTab();
+
+      expect(screen.queryByTestId('improvement-strategies-section')).toBeNull();
+      expect(screen.queryByTestId('improvement-strategies-recovered-notice')).toBeNull();
+    });
+  });
+
   describe('per-test-case performance metrics', () => {
     it('should show Eval Duration and agent time in Duration card when performanceMetrics is present', async () => {
       const report = createReport({
