@@ -96,15 +96,17 @@ export const RunInspectorPage: React.FC = () => {
   const [reportLoading, setReportLoading] = useState(false);
   // Full TestCase for the selected row, fetched lazily on selection (the
   // bulk load above is summary-only -- no sourceCode / definition / context /
-  // expectedOutcomes, prompt truncated). null while loading or for a row
-  // whose full fetch hasn't resolved yet; the panel falls back to the summary
-  // TestCase from `results` in that case AND is told it is looking at a
-  // summary (`selectedTestCaseState`), so the definition section renders a
-  // loading row rather than the summary as if it were the full record — a
-  // summary SDK case is indistinguishable from a pre-capture legacy one and
-  // used to get the false "not captured at import — re-import" hint.
-  const [selectedTestCase, setSelectedTestCase] = useState<TestCase | null>(null);
-  const [selectedTestCaseState, setSelectedTestCaseState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  // expectedOutcomes, prompt truncated). Keyed by the test-case id it belongs
+  // to and read back through `selectedTestCaseFetch` below, so a change of
+  // selection can never show the PREVIOUS row's full record for a frame (an
+  // effect-time reset would still leave one committed render with the stale
+  // record). While the record for the selected id is absent/in flight the
+  // panel falls back to the summary TestCase from `results` AND is told it is
+  // looking at a summary, so the definition section renders a loading row
+  // rather than the summary as if it were the full record — a summary SDK
+  // case is indistinguishable from a pre-capture legacy one and used to get
+  // the false "not captured at import — re-import" hint.
+  const [fullTestCase, setFullTestCase] = useState<{ id: string; status: 'loading' | 'ready' | 'error' | 'missing'; testCase: TestCase | null } | null>(null);
   const [loadError, setLoadError] = useState(false);
   // Set only when a benchmark-mode run is missing from BOTH benchmark.runs[]
   // AND the standalone evaluation-run store (i.e. genuinely gone, not just
@@ -369,24 +371,31 @@ export const RunInspectorPage: React.FC = () => {
   // currently-open row needs the full document (CollapsibleTestCaseDefinition
   // renders EvalSourceCodeView, which needs sourceCode).
   useEffect(() => {
-    // Drop the previous row's full record immediately: until the new fetch
-    // lands the panel must show THIS row's summary (+ loading), not the
-    // previously selected case's definition.
-    setSelectedTestCase(null);
-    if (!selectedTcId) { setSelectedTestCaseState('idle'); return; }
+    if (!selectedTcId) { setFullTestCase(null); return; }
+    const id = selectedTcId;
     let cancelled = false;
-    setSelectedTestCaseState('loading');
-    asyncTestCaseStorage.getById(selectedTcId)
+    setFullTestCase({ id, status: 'loading', testCase: null });
+    asyncTestCaseStorage.getById(id)
       .then(tc => {
         if (cancelled) return;
-        setSelectedTestCase(tc);
-        // A null here means the id resolved to nothing (deleted case): the
+        // null = the id resolved to nothing (case deleted since the run): the
         // summary is all there is, and it is not "loading" anymore.
-        setSelectedTestCaseState(tc ? 'ready' : 'error');
+        setFullTestCase({ id, status: tc ? 'ready' : 'missing', testCase: tc });
       })
-      .catch(() => { if (!cancelled) { setSelectedTestCase(null); setSelectedTestCaseState('error'); } });
+      .catch(() => { if (!cancelled) setFullTestCase({ id, status: 'error', testCase: null }); });
     return () => { cancelled = true; };
   }, [selectedTcId]);
+
+  // Derived synchronously from the CURRENT selection: a record fetched for a
+  // different id is never used, and "no record for this id yet" reads as
+  // loading (the effect above is about to start it).
+  const selectedTestCaseFetch = fullTestCase && fullTestCase.id === selectedTcId ? fullTestCase : null;
+  const selectedTestCase = selectedTestCaseFetch?.testCase ?? null;
+  const selectedTestCaseFullRecord: 'loading' | 'error' | 'missing' | undefined =
+    !selectedTcId || selectedTestCase ? undefined
+      : selectedTestCaseFetch === null || selectedTestCaseFetch.status === 'loading' ? 'loading'
+        : selectedTestCaseFetch.status === 'missing' ? 'missing'
+          : 'error';
 
   const passCount = results.filter(r => r.status === 'passed').length;
   const failCount = results.filter(r => r.status === 'failed').length;
@@ -738,8 +747,7 @@ export const RunInspectorPage: React.FC = () => {
                 report={selectedReport}
                 testCase={selectedTestCase || selectedResult.testCase}
                 status={selectedResult.status}
-                testCaseLoading={!selectedTestCase && selectedTestCaseState === 'loading'}
-                testCaseLoadError={!selectedTestCase && selectedTestCaseState === 'error'}
+                testCaseFullRecord={selectedTestCaseFullRecord}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground">

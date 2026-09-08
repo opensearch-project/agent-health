@@ -98,7 +98,7 @@ describe('CollapsibleTestCaseDefinition — SDK branch (no redundant rows)', () 
   // the summary as a legacy record.
   it('loading: SDK summary renders the filename header + loading row, not the legacy hint', () => {
     const summary = { ...sdkTc(), sourceCode: undefined };
-    render(h(CollapsibleTestCaseDefinition, { testCase: summary, defaultOpen: true, loading: true }));
+    render(h(CollapsibleTestCaseDefinition, { testCase: summary, defaultOpen: true, fullRecord: 'loading' }));
     expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('loading');
     expect(screen.getByTestId('sdk-definition-loading')).toBeTruthy();
     expect(screen.getByText('dist/wixqa.eval.js')).toBeTruthy();
@@ -109,20 +109,20 @@ describe('CollapsibleTestCaseDefinition — SDK branch (no redundant rows)', () 
 
   it('loading: JSON summary renders a loading row instead of the truncated summary as the definition', () => {
     const summary = { ...baseTestCase(), initialPrompt: 'truncated…', expectedOutcomes: [], context: [] };
-    render(h(CollapsibleTestCaseDefinition, { testCase: summary, defaultOpen: true, loading: true }));
+    render(h(CollapsibleTestCaseDefinition, { testCase: summary, defaultOpen: true, fullRecord: 'loading' }));
     expect(screen.getByTestId('test-case-definition-loading').textContent).toMatch(/Loading full definition/);
     expect(screen.queryByText('truncated…')).toBeNull();
     expect(screen.queryByText(/View raw JSON/)).toBeNull();
   });
 
-  it('loadError: both branches render an error row rather than the summary', () => {
-    const { unmount } = render(h(CollapsibleTestCaseDefinition, { testCase: { ...sdkTc(), sourceCode: undefined }, defaultOpen: true, loadError: true }));
+  it('error: the SDK branch renders an error row (never the false re-import hint); the JSON branch keeps the summary (partial but real)', () => {
+    const { unmount } = render(h(CollapsibleTestCaseDefinition, { testCase: { ...sdkTc(), sourceCode: undefined }, defaultOpen: true, fullRecord: 'error' }));
     expect(screen.getByTestId('sdk-definition-load-error')).toBeTruthy();
     expect(screen.queryByTestId('sdk-definition-legacy-hint')).toBeNull();
     unmount();
-    render(h(CollapsibleTestCaseDefinition, { testCase: baseTestCase(), defaultOpen: true, loadError: true }));
-    expect(screen.getByTestId('test-case-definition-load-error')).toBeTruthy();
-    expect(screen.queryByText(/View raw JSON/)).toBeNull();
+    render(h(CollapsibleTestCaseDefinition, { testCase: baseTestCase(), defaultOpen: true, fullRecord: 'error' }));
+    expect(screen.getByText('What is 2+2?')).toBeTruthy();
+    expect(screen.getByText(/View raw JSON/)).toBeTruthy();
   });
 
   // Legacy SDK record (no per-test `definition`) → whole-file fallback with

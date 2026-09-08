@@ -31,10 +31,10 @@
  */
 
 import React, { useState } from 'react';
-import { ChevronRight, ChevronDown, FileCode2, Braces, Copy, Check, Loader2, AlertCircle } from 'lucide-react';
+import { ChevronRight, ChevronDown, FileCode2, Braces, Copy, Check, Loader2 } from 'lucide-react';
 import { TestCase } from '@/types';
 import { Badge } from '@/components/ui/badge';
-import { SdkTestDefinitionView } from '@/components/evals3/SdkTestDefinitionView';
+import { SdkTestDefinitionView, type FullRecordState } from '@/components/evals3/SdkTestDefinitionView';
 import { TestCaseDefinition } from '@/components/TestCaseDefinition';
 
 interface CollapsibleTestCaseDefinitionProps {
@@ -42,23 +42,22 @@ interface CollapsibleTestCaseDefinitionProps {
   /** Whether the section starts open. Default: false (collapsed). */
   defaultOpen?: boolean;
   /**
-   * `testCase` is a SUMMARY projection (list-view payload: no sourceCode /
-   * definition / context / expectedOutcomes, prompt truncated) and the full
-   * record is still loading. Callers that bulk-load summaries and fetch the
-   * full record lazily (RunInspectorPage) set this so the body shows a
-   * loading row instead of rendering the summary as if it were complete.
+   * Set when `testCase` is a SUMMARY projection (list-view payload: no
+   * sourceCode / definition / context / expectedOutcomes, prompt truncated):
+   * `'loading'` while the full record is in flight, `'error'` / `'missing'`
+   * if that fetch failed or found nothing. Callers that bulk-load summaries
+   * and fetch the full record lazily (RunInspectorPage) set this so the body
+   * never renders the summary as if it were the complete definition. Unset =
+   * `testCase` is authoritative.
    */
-  loading?: boolean;
-  /** The full-record fetch failed; `testCase` is still the summary. */
-  loadError?: boolean;
+  fullRecord?: FullRecordState;
   className?: string;
 }
 
 export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefinitionProps> = ({
   testCase,
   defaultOpen = false,
-  loading = false,
-  loadError = false,
+  fullRecord,
   className,
 }) => {
   const [open, setOpen] = useState(defaultOpen);
@@ -121,25 +120,18 @@ export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefiniti
             // header shows the source path + language badge, so the old
             // standalone "Source File" row and sha256 line stay gone
             // (owner feedback). Pretty view of THIS test by default.
-            <SdkTestDefinitionView testCase={testCase} maxHeight="360px" loading={loading} loadError={loadError} />
-          ) : loading ? (
+            <SdkTestDefinitionView testCase={testCase} maxHeight="360px" fullRecord={fullRecord} />
+          ) : fullRecord === 'loading' ? (
             // Summary projection: prompt truncated, rubric stripped. Don't
-            // paint that as the definition — the full record is coming.
+            // paint that as the definition — the full record is coming. (If
+            // the fetch fails, the summary's real-but-partial prompt is still
+            // better than nothing, so only the in-flight window is gated.)
             <div
               className="flex items-center gap-2 py-2 text-[11px] text-muted-foreground"
               data-testid="test-case-definition-loading"
               role="status"
             >
               <Loader2 size={12} className="animate-spin shrink-0" /> Loading full definition…
-            </div>
-          ) : loadError ? (
-            <div
-              className="flex items-start gap-2 py-2 text-[11px] text-muted-foreground"
-              data-testid="test-case-definition-load-error"
-              role="alert"
-            >
-              <AlertCircle size={12} className="shrink-0 mt-px text-amber-500" />
-              Couldn't load the full test case definition. Select the case again to retry.
             </div>
           ) : (
             <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">

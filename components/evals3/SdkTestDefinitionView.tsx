@@ -34,14 +34,15 @@
  * "the definition doesn't show up" (owner report, 2026-09-08 — every
  * pre-capture SDK case on the run inspector).
  *
- * `loading`: the run inspector bulk-loads its test cases as a SUMMARY
+ * `fullRecord`: the run inspector bulk-loads its test cases as a SUMMARY
  * projection (no `sourceCode`, no `definition`) and fetches the full record
  * only for the selected row. Until that lands, the record it has is
- * indistinguishable from a legacy one — so the caller says so, and this view
- * renders the filename header with a "Loading full definition…" row instead
- * of a false "not captured at import" hint. `loadError` covers the fetch
- * failing outright (the summary would otherwise masquerade as a legacy
- * record with the same false hint).
+ * indistinguishable from a legacy one — so the caller says so
+ * (`fullRecord="loading"`), and this view renders the filename header with a
+ * "Loading full definition…" row instead of a false "not captured at import"
+ * hint. `"error"` / `"missing"` cover the fetch failing or resolving to
+ * nothing (the summary would otherwise masquerade as a legacy record and
+ * hand out "re-import to backfill" advice for a file that IS captured).
  */
 
 import React, { useMemo, useState } from 'react';
@@ -62,15 +63,16 @@ interface SdkTestDefinitionViewProps {
   /** Tighter typography for narrow split-pane layouts (passed to TestCaseDefinition). */
   compact?: boolean;
   /**
-   * The caller only has a summary projection of `testCase` (no sourceCode /
-   * definition) and the full record is still in flight. Render a loading
-   * row under the filename header rather than the legacy fallback.
+   * Set when the caller only has a SUMMARY projection of `testCase` (no
+   * sourceCode / definition): `'loading'` while the full record is in flight,
+   * `'error'` if that fetch failed, `'missing'` if it resolved to nothing
+   * (the case was deleted since the run). Unset = `testCase` is authoritative.
    */
-  loading?: boolean;
-  /** The full-record fetch failed; the caller still only has the summary. */
-  loadError?: boolean;
+  fullRecord?: FullRecordState;
   className?: string;
 }
+
+export type FullRecordState = 'loading' | 'error' | 'missing';
 
 /**
  * Project `definition.options` onto the TestCase shape TestCaseDefinition
@@ -109,8 +111,7 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
   testCase,
   maxHeight = '360px',
   compact = true,
-  loading = false,
-  loadError = false,
+  fullRecord,
   className,
 }) => {
   const [segment, setSegment] = useState<SdkDefinitionSegment>('pretty');
@@ -135,16 +136,16 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
     </Badge>
   );
 
-  // Summary projection with the full record still in flight (or failed):
-  // the filename header is all we know for sure — say so, don't guess
+  // Summary projection with the full record still in flight (or failed /
+  // gone): the filename header is all we know for sure — say so, don't guess
   // "legacy" and tell the user to re-import a file that may well have been
-  // captured.
-  if (!definition && (loading || loadError)) {
+  // captured. A captured `definition` always wins (the record IS full).
+  if (!definition && fullRecord) {
     return (
       <div
         className={`border border-border rounded overflow-hidden ${className || ''}`}
         data-testid="sdk-test-definition-view"
-        data-mode={loading ? 'loading' : 'error'}
+        data-mode={fullRecord}
       >
         <div className="flex items-center gap-2 bg-card px-3 py-1.5 border-b border-border">
           <FileCode2 size={12} className="text-muted-foreground shrink-0" />
@@ -153,7 +154,7 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
           </span>
           {languageBadge}
         </div>
-        {loading ? (
+        {fullRecord === 'loading' ? (
           <div
             className="flex items-center gap-2 px-3 py-3 text-[11px] text-muted-foreground"
             data-testid="sdk-definition-loading"
@@ -169,7 +170,9 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
             role="alert"
           >
             <AlertCircle size={12} className="shrink-0 mt-px text-amber-500" />
-            Couldn't load the full test case definition. Select the case again to retry.
+            {fullRecord === 'missing'
+              ? 'The full test case record was not found — it may have been deleted since this run.'
+              : "Couldn't load the full test case definition."}
           </div>
         )}
       </div>
@@ -179,7 +182,9 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
   // Legacy record: no per-test capture. Whole-file view + hint, nothing else.
   // The code panel starts EXPANDED — the user already opened the section
   // this view lives in, and a second nested collapsed disclosure is what
-  // made SDK definitions look empty on the run inspector.
+  // made SDK definitions look empty on the run inspector. Keyed by test case
+  // so stepping to another legacy case remounts it expanded (`defaultOpen`
+  // is read on mount only).
   if (!definition) {
     return (
       <div className={`space-y-2 ${className || ''}`} data-testid="sdk-test-definition-view" data-mode="legacy">
@@ -194,7 +199,7 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
             function; the record is backfilled in place, no new version.
           </span>
         </div>
-        <EvalSourceCodeView testCase={testCase} maxHeight={maxHeight} defaultOpen />
+        <EvalSourceCodeView key={testCase.id} testCase={testCase} maxHeight={maxHeight} defaultOpen />
       </div>
     );
   }
@@ -281,7 +286,7 @@ export const SdkTestDefinitionView: React.FC<SdkTestDefinitionViewProps> = ({
 
       {segment === 'file' && (
         <div className="p-2" data-testid="sdk-definition-file">
-          <EvalSourceCodeView testCase={testCase} maxHeight={maxHeight} defaultOpen />
+          <EvalSourceCodeView key={testCase.id} testCase={testCase} maxHeight={maxHeight} defaultOpen />
         </div>
       )}
     </div>

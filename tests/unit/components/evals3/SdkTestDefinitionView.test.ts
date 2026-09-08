@@ -182,6 +182,14 @@ describe('SdkTestDefinitionView — legacy record (no definition)', () => {
     expect(screen.queryByTestId('eval-source-code-body')).toBeNull();
   });
 
+  it('stepping to another legacy case re-expands the code even if the previous one was collapsed', () => {
+    const { rerender } = render(h(SdkTestDefinitionView, { testCase: sdkTestCase({ definition: undefined }) }));
+    fireEvent.click(screen.getByTestId('eval-source-toggle'));
+    expect(screen.queryByTestId('eval-source-code-body')).toBeNull();
+    rerender(h(SdkTestDefinitionView, { testCase: sdkTestCase({ id: 'tc-sdk-3', name: 'third-case', definition: undefined }) }));
+    expect(screen.getByTestId('eval-source-code-body')).toBeTruthy();
+  });
+
   it('legacy record with no sourceCode either shows the "source not captured" placeholder (expanded), not a blank panel', () => {
     render(h(SdkTestDefinitionView, { testCase: sdkTestCase({ definition: undefined, sourceCode: undefined }) }));
     expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('legacy');
@@ -198,7 +206,7 @@ describe('SdkTestDefinitionView — summary projection while the full record loa
   const summary = () => sdkTestCase({ definition: undefined, sourceCode: undefined });
 
   it('loading: filename header + language badge + "Loading full definition…", NO legacy hint, NO code view, NO segments', () => {
-    render(h(SdkTestDefinitionView, { testCase: summary(), loading: true }));
+    render(h(SdkTestDefinitionView, { testCase: summary(), fullRecord: 'loading' }));
     const view = screen.getByTestId('sdk-test-definition-view');
     expect(view.getAttribute('data-mode')).toBe('loading');
     expect(view.textContent).toContain('evals/suite.eval.js');
@@ -210,16 +218,24 @@ describe('SdkTestDefinitionView — summary projection while the full record loa
     expect(screen.queryByText(/Source not captured at import/)).toBeNull();
   });
 
-  it('loadError: filename header + an error row, never the false "re-import" advice', () => {
-    render(h(SdkTestDefinitionView, { testCase: summary(), loadError: true }));
+  it('error: filename header + an error row, never the false "re-import" advice (and no fake retry promise)', () => {
+    render(h(SdkTestDefinitionView, { testCase: summary(), fullRecord: 'error' }));
     expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('error');
     expect(screen.getByTestId('sdk-definition-load-error').textContent).toMatch(/Couldn't load/);
+    expect(screen.getByTestId('sdk-definition-load-error').textContent).not.toMatch(/retry/i);
     expect(screen.queryByTestId('sdk-definition-legacy-hint')).toBeNull();
     expect(screen.queryByText(/re-import/i)).toBeNull();
   });
 
+  it('missing (case deleted since the run): says so, distinct from a transient error', () => {
+    render(h(SdkTestDefinitionView, { testCase: summary(), fullRecord: 'missing' }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('missing');
+    expect(screen.getByTestId('sdk-definition-load-error').textContent).toMatch(/not found/i);
+    expect(screen.queryByText(/re-import/i)).toBeNull();
+  });
+
   it('a captured definition wins over a stale loading flag', () => {
-    render(h(SdkTestDefinitionView, { testCase: sdkTestCase(), loading: true }));
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase(), fullRecord: 'loading' }));
     expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('captured');
     expect(screen.getByTestId('sdk-definition-pretty')).toBeTruthy();
     expect(screen.queryByTestId('sdk-definition-loading')).toBeNull();

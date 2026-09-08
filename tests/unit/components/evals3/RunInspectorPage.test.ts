@@ -100,12 +100,11 @@ jest.mock('@/components/ui/resizable', () => ({
 jest.mock('@/components/evals3/TestCaseInspectorPanel', () => ({
   // Expose the test-case props the page hands the panel so the lazy full-record
   // plumbing (summary → loading → full) can be asserted from the outside.
-  TestCaseInspectorPanel: ({ testCase, testCaseLoading, testCaseLoadError }: any) => React.createElement('div', {
+  TestCaseInspectorPanel: ({ testCase, testCaseFullRecord }: any) => React.createElement('div', {
     'data-testid': 'inspector-panel',
     'data-tc-id': testCase?.id ?? '',
     'data-tc-has-source': testCase?.sourceCode ? 'true' : 'false',
-    'data-tc-loading': testCaseLoading ? 'true' : 'false',
-    'data-tc-load-error': testCaseLoadError ? 'true' : 'false',
+    'data-tc-full-record': testCaseFullRecord ?? 'ready',
   }),
 }));
 jest.mock('@/components/evals3/Breadcrumbs', () => ({
@@ -472,14 +471,13 @@ describe('RunInspectorPage — eval-source lazy fetch (summary bulk load + full 
 
     // In flight: summary for THIS row + loading flag.
     const panel = await screen.findByTestId('inspector-panel');
-    await waitFor(() => expect(panel.getAttribute('data-tc-loading')).toBe('true'));
+    await waitFor(() => expect(panel.getAttribute('data-tc-full-record')).toBe('loading'));
     expect(panel.getAttribute('data-tc-id')).toBe('tc-1');
     expect(panel.getAttribute('data-tc-has-source')).toBe('false');
-    expect(panel.getAttribute('data-tc-load-error')).toBe('false');
 
-    // Landed: full record, no loading flag.
+    // Landed: full record, flag cleared.
     resolveFull(undefined);
-    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-loading')).toBe('false'));
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-full-record')).toBe('ready'));
     expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-has-source')).toBe('true');
   });
 
@@ -498,24 +496,36 @@ describe('RunInspectorPage — eval-source lazy fetch (summary bulk load + full 
     await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-has-source')).toBe('true'));
 
     fireEvent.click(screen.getAllByTestId('test-case-row')[1]);
+    // The panel remounts once tc-1's REPORT is in (existing report-loading
+    // gate); from its very first paint it must show tc-1's summary + loading
+    // — never tc-0's full record, which is still in state.
     await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-id')).toBe('tc-1'));
-    // The previous row's full record must not leak into this row's panel.
+    const panel = screen.getByTestId('inspector-panel');
+    expect(panel.getAttribute('data-tc-has-source')).toBe('false');
+    expect(panel.getAttribute('data-tc-full-record')).toBe('loading');
+    // A late (second) resolution for the OLD id is ignored, never applied to the new row.
+    pendingByid.get('tc-0')!({ id: 'tc-0', name: 'Case 0', sourceCode: 'FULL-0-again' });
+    await waitFor(() => expect(pendingByid.has('tc-1')).toBe(true));
+    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-id')).toBe('tc-1');
     expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-has-source')).toBe('false');
-    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-loading')).toBe('true');
+    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-full-record')).toBe('loading');
   });
 
-  it('flags loadError (not loading, not legacy) when the full fetch rejects or resolves to null', async () => {
+  it("flags 'error' when the full fetch rejects and 'missing' when it resolves to null (deleted case) — neither is 'loading'", async () => {
     mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
     mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
     mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
-    mockTestCaseGetById.mockRejectedValue(new Error('boom'));
+    mockTestCaseGetById.mockImplementation((id: string) => id === 'tc-1' ? Promise.reject(new Error('boom')) : Promise.resolve(null));
 
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
     fireEvent.click(screen.getAllByTestId('test-case-row')[1]);
-    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-load-error')).toBe('true'));
-    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-loading')).toBe('false');
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-full-record')).toBe('error'));
     expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-id')).toBe('tc-1');
+
+    fireEvent.click(screen.getAllByTestId('test-case-row')[0]);
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-full-record')).toBe('missing'));
+    expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-id')).toBe('tc-0');
   });
 
   it('does not fetch a full test case when nothing is selected', async () => {
