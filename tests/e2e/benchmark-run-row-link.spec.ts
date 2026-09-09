@@ -33,6 +33,12 @@
  * `RunInspectorPage.tsx` code path this fix changes, real browser
  * rendering included, independent of that separate (already fixed
  * elsewhere) list-union gap.
+ *
+ * Title locator: standalone evaluation-run docs render their name through
+ * the inline-rename field (`run-inspector-rename-text`, PR #460) rather than
+ * a plain <h2> — only legacy benchmark-embedded runs (no rename endpoint)
+ * still get the <h2>. This run IS a standalone doc, so the rename field is
+ * the correct "the inspector rendered THIS run" signal.
  */
 
 import { test, expect } from './fixtures/test-fixtures';
@@ -132,7 +138,7 @@ test.describe('Benchmark run row link — mid-run / not-yet-linked runs are clic
       timeout: 15_000,
     });
     await expect(page.locator('[data-testid="run-inspector-not-found"]')).toHaveCount(0);
-    await expect(page.locator(`h2:has-text("${RUN_NAME}")`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('run-inspector-rename-text')).toHaveText(RUN_NAME, { timeout: 15_000 });
   });
 
   test('run inspector for a genuinely nonexistent run renders an explicit not-found state, not a silent bounce', async ({ page }) => {
@@ -172,7 +178,7 @@ test.describe('Benchmark run row link — mid-run / not-yet-linked runs are clic
       timeout: 15_000,
     });
     await expect(page.locator('[data-testid="run-inspector-not-found"]')).toHaveCount(0);
-    await expect(page.locator(`h2:has-text("${RUN_NAME}")`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('run-inspector-rename-text')).toHaveText(RUN_NAME, { timeout: 15_000 });
   });
 });
 
