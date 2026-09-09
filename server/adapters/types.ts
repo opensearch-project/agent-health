@@ -27,7 +27,6 @@ import type {
   StorageClusterConfig,
   ObservabilityClusterConfig,
   Evaluator,
-  RunResultStatus,
 } from '../../types/index.js';
 
 // ============================================================================
@@ -166,12 +165,24 @@ export interface IEvaluationRunOperations {
     sort?: 'createdAt' | 'completedAt';
     order?: 'asc' | 'desc';
   }): Promise<{ items: EvaluationRun[]; total: number }>;
-  updateResult(runId: string, testCaseId: string, result: {
-    reportId: string;
-    status: RunResultStatus;
-    error?: string;
-  }): Promise<boolean>;
+  /**
+   * Atomically set ONE entry of `results` (server-side merge on the live doc;
+   * never a read-modify-write of the whole map). Safe to call concurrently
+   * for different test cases of the same run.
+   */
+  updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry): Promise<boolean>;
+  /**
+   * Atomically add every entry of `results` whose key is NOT already present
+   * on the persisted doc. Existing entries are never overwritten — this is
+   * the finalization write that (a) stamps `status: 'cancelled'` markers for
+   * never-started cases and (b) heals any per-case `updateResult` that was
+   * lost, without ever clobbering a concurrently persisted verdict.
+   */
+  mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>): Promise<boolean>;
 }
+
+/** One `EvaluationRun.results[testCaseId]` entry (see types/index.ts). */
+export type EvaluationRunResultEntry = EvaluationRun['results'][string];
 
 /**
  * Benchmark Image operations (stored in same index as benchmarks with

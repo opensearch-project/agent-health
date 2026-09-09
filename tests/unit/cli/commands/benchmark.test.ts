@@ -462,10 +462,11 @@ describe('Benchmark Command - Helper Functions', () => {
       const stats = calculateRunStats(run, reports);
 
       expect(stats.passed).toBe(1);  // tc-1
-      expect(stats.failed).toBe(2);  // tc-2 (failed evaluation) + tc-3 (cancelled)
+      expect(stats.failed).toBe(1);  // tc-2 (failed evaluation)
+      expect(stats.notRun).toBe(1);  // tc-3 (cancelled before it ran — not a failure)
       expect(stats.pending).toBe(1); // tc-4
       expect(stats.total).toBe(4);
-      expect(stats.passRate).toBe(25); // 1/4 total test cases = 25%
+      expect(stats.passRate).toBe(33); // 1/3 evaluable (total − notRun) = 33%
     });
   });
 

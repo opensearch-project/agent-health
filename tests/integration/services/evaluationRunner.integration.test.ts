@@ -625,7 +625,7 @@ describe('executeEvaluationRun', () => {
       // Regression: the resolved judge verdict must land on run.results AND
       // run.stats, not just leave the caller's stale savedReport untouched.
       expect((result.results['tc-1'] as any).passFailStatus).toBe('passed');
-      expect(result.stats).toEqual({ passed: 1, failed: 0, pending: 0, errored: 0, total: 1 });
+      expect(result.stats).toEqual({ passed: 1, failed: 0, notRun: 0, pending: 0, errored: 0, total: 1 });
     });
 
     it('REGRESSION (trace-judged stats inflation): run.stats reflects real mixed verdicts, not "every completed = passed"', async () => {
@@ -689,7 +689,7 @@ describe('executeEvaluationRun', () => {
       // The bug: pre-fix, ALL FOUR would be counted `passed` here because the
       // caller never saw the resolved judgment (savedReport stayed at its
       // pre-judge 'pending' state). Post-fix: real 2/2 split.
-      expect(result.stats).toEqual({ passed: 2, failed: 2, pending: 0, errored: 0, total: 4 });
+      expect(result.stats).toEqual({ passed: 2, failed: 2, notRun: 0, pending: 0, errored: 0, total: 4 });
     });
 
     it('judge failure during trace-judged polling is bucketed errored, not passed (does not crash the run)', async () => {
@@ -732,7 +732,7 @@ describe('executeEvaluationRun', () => {
 
       expect(result.results['tc-1'].status).toBe('completed');
       expect((result.results['tc-1'] as any).passFailStatus).toBeUndefined();
-      expect(result.stats).toEqual({ passed: 0, failed: 0, pending: 0, errored: 1, total: 1 });
+      expect(result.stats).toEqual({ passed: 0, failed: 0, notRun: 0, pending: 0, errored: 1, total: 1 });
     });
 
     it('trace polling failure (onError) is bucketed errored, not passed', async () => {
@@ -772,7 +772,7 @@ describe('executeEvaluationRun', () => {
 
       expect(result.results['tc-1'].status).toBe('completed');
       expect((result.results['tc-1'] as any).passFailStatus).toBeUndefined();
-      expect(result.stats).toEqual({ passed: 0, failed: 0, pending: 0, errored: 1, total: 1 });
+      expect(result.stats).toEqual({ passed: 0, failed: 0, notRun: 0, pending: 0, errored: 1, total: 1 });
       expect(mockCallBedrockJudge).not.toHaveBeenCalled();
     });
 

@@ -426,6 +426,56 @@ describe('FileStorageModule (extended)', () => {
       expect(updated.status).toBe('completed');
 
       expect(await mod.evaluationRuns.delete(run.id)).toEqual({ deleted: true });
+    });
+
+    // Data-integrity twin of the OpenSearch version-conflict fix (2026-09-04):
+    // the file adapter's read→modify→write must not interleave across an
+    // `await`, and mergeMissingResults must never overwrite an existing entry.
+    it('concurrent updateResult() calls for different cases all land (no lost update)', async () => {
+      const run = await mod.evaluationRuns.create({ id: 'evalrun-conc', agentKey: 'a1', sources: [], testCaseSnapshots: [] } as any);
+      await Promise.all(Array.from({ length: 12 }, (_, i) =>
+        mod.evaluationRuns.updateResult(run.id, `tc-${i}`, { reportId: `r-${i}`, status: 'completed' })));
+      const persisted = await mod.evaluationRuns.getById(run.id);
+      expect(Object.keys(persisted!.results)).toHaveLength(12);
+    });
+
+    it('update() concurrent with updateResult() does not clobber per-case results', async () => {
+      const run = await mod.evaluationRuns.create({ id: 'evalrun-conc2', agentKey: 'a1', sources: [], testCaseSnapshots: [] } as any);
+      await Promise.all([
+        mod.evaluationRuns.updateResult(run.id, 'tc-1', { reportId: 'r1', status: 'completed' }),
+        mod.evaluationRuns.update(run.id, { name: 'renamed', status: 'cancelled' } as any),
+        mod.evaluationRuns.updateResult(run.id, 'tc-2', { reportId: 'r2', status: 'failed' }),
+      ]);
+      const persisted = await mod.evaluationRuns.getById(run.id);
+      expect(persisted!.name).toBe('renamed');
+      expect(persisted!.status).toBe('cancelled');
+      expect(Object.keys(persisted!.results).sort()).toEqual(['tc-1', 'tc-2']);
+    });
+
+    it('update() ignores id/docType in the patch so a doc cannot be re-keyed', async () => {
+      const run = await mod.evaluationRuns.create({ id: 'evalrun-keys', agentKey: 'a1', sources: [], testCaseSnapshots: [] } as any);
+      const updated = await mod.evaluationRuns.update(run.id, { id: 'other', docType: 'benchmark', status: 'completed' } as any);
+      expect(updated.id).toBe('evalrun-keys');
+      expect(updated.docType).toBe('evaluation-run');
+      expect(await mod.evaluationRuns.getById('other')).toBeNull();
+    });
+
+    it('mergeMissingResults() adds absent keys, never overwrites existing ones, and returns false for a missing run', async () => {
+      const run = await mod.evaluationRuns.create({ id: 'evalrun-merge', agentKey: 'a1', sources: [], testCaseSnapshots: [] } as any);
+      await mod.evaluationRuns.updateResult(run.id, 'tc-1', { reportId: 'r1', status: 'completed', passFailStatus: 'passed' } as any);
+      await mod.evaluationRuns.mergeMissingResults(run.id, {
+        'tc-1': { reportId: '', status: 'cancelled' },   // must NOT overwrite the verdict
+        'tc-2': { reportId: '', status: 'cancelled' },   // absent → added
+      });
+      const persisted = await mod.evaluationRuns.getById(run.id);
+      expect(persisted!.results['tc-1']).toEqual({ reportId: 'r1', status: 'completed', passFailStatus: 'passed' });
+      expect(persisted!.results['tc-2']).toEqual({ reportId: '', status: 'cancelled' });
+      expect(await mod.evaluationRuns.mergeMissingResults('nope', { a: { reportId: '', status: 'cancelled' } })).toBe(false);
+    });
+
+    it('delete is idempotent (second delete reports deleted: false)', async () => {
+      const run = await mod.evaluationRuns.create({ id: 'evalrun-del', agentKey: 'a1', sources: [], testCaseSnapshots: [] } as any);
+      expect(await mod.evaluationRuns.delete(run.id)).toEqual({ deleted: true });
       expect(await mod.evaluationRuns.delete(run.id)).toEqual({ deleted: false });
     });
 

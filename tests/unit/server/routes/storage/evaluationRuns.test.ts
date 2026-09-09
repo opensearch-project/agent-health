@@ -20,6 +20,7 @@ const mockEvaluationRunsDelete = jest.fn();
 const mockBenchmarksGetById = jest.fn();
 const mockBenchmarksUpdate = jest.fn();
 const mockBenchmarksAddRun = jest.fn();
+const mockEvaluationRunsMergeMissingResults = jest.fn();
 
 jest.mock('@/server/adapters/index', () => ({
   getStorageModule: jest.fn().mockReturnValue({
@@ -29,6 +30,7 @@ jest.mock('@/server/adapters/index', () => ({
       create: (...args: any[]) => mockEvaluationRunsCreate(...args),
       update: (...args: any[]) => mockEvaluationRunsUpdate(...args),
       updateResult: (...args: any[]) => mockEvaluationRunsUpdateResult(...args),
+      mergeMissingResults: (...args: any[]) => mockEvaluationRunsMergeMissingResults(...args),
       delete: (...args: any[]) => mockEvaluationRunsDelete(...args),
     },
     benchmarks: {
@@ -101,6 +103,14 @@ describe('Evaluation Runs API', () => {
     mockExecuteEvaluationRun.mockResolvedValue({ results: {}, stats: { total: 1 } });
     mockEvaluationRunsCreate.mockResolvedValue(undefined);
     mockEvaluationRunsUpdate.mockResolvedValue({ id: 'eval-run-1', status: 'completed' });
+    // Finalization (services/evaluationRunFinalize.ts) merges results, reads
+    // the persisted doc back, then writes status/stats. Default: the doc
+    // exists and carries whatever `create` was given.
+    mockEvaluationRunsMergeMissingResults.mockResolvedValue(true);
+    mockEvaluationRunsGetById.mockImplementation(async (id: string) => {
+      const created = mockEvaluationRunsCreate.mock.calls.find((c: any[]) => c[0]?.id === id)?.[0];
+      return created ? { ...created, results: created.results || {} } : null;
+    });
   });
 
   afterEach(() => {
@@ -197,6 +207,38 @@ describe('Evaluation Runs API', () => {
       expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(createdRun.id, expect.objectContaining({ status: 'completed' }));
     });
 
+    // Data-integrity contract (2026-09-04): the terminal write must NOT
+    // re-send the in-memory `results` map — per-case verdicts were already
+    // persisted atomically via updateResult, and a wholesale rewrite could
+    // clobber a concurrently persisted entry. Results reach the doc only via
+    // the add-if-absent merge; stats are recomputed from the persisted doc.
+    it('finalizes via merge-if-absent + partial status/stats update — never a wholesale `results` overwrite', async () => {
+      mockExecuteEvaluationRun.mockResolvedValue({
+        results: { 'tc-1': { reportId: 'r1', status: 'completed', passFailStatus: 'passed' } },
+        stats: { passed: 99, failed: 0, pending: 0, total: 1 }, // deliberately wrong in-memory stats
+        testCaseSnapshots: [{ id: 'tc-1', version: 1, name: 'tc-1' }],
+      });
+      // Persisted doc already has the verdict (written by updateResult mid-run).
+      mockEvaluationRunsGetById.mockImplementation(async (id: string) => {
+        const created = mockEvaluationRunsCreate.mock.calls.find((c: any[]) => c[0]?.id === id)?.[0];
+        return created ? { ...created, results: { 'tc-1': { reportId: 'r1', status: 'completed', passFailStatus: 'passed' } } } : null;
+      });
+
+      const res = await request(app).post('/api/storage/evaluation-runs').send(body);
+      expect(res.status).toBe(200);
+
+      const createdRun = mockEvaluationRunsCreate.mock.calls[0][0];
+      expect(mockEvaluationRunsMergeMissingResults).toHaveBeenCalledWith(
+        createdRun.id,
+        { 'tc-1': { reportId: 'r1', status: 'completed', passFailStatus: 'passed' } },
+      );
+      const terminalUpdate = mockEvaluationRunsUpdate.mock.calls.find((c: any[]) => c[1]?.status === 'completed');
+      expect(terminalUpdate).toBeDefined();
+      expect(terminalUpdate![1]).not.toHaveProperty('results');
+      // Stats come from the PERSISTED results, not the runner's in-memory blob.
+      expect(terminalUpdate![1].stats).toEqual({ passed: 1, failed: 0, errored: 0, pending: 0, notRun: 0, total: 1 });
+    });
+
     it('links a completed run to its benchmark and updates testCaseIds when they changed', async () => {
       mockBenchmarksGetById.mockResolvedValue({ id: 'bench-1', testCaseIds: ['tc-old'] });
       mockBenchmarksAddRun.mockResolvedValue(true);
@@ -239,6 +281,44 @@ describe('Evaluation Runs API', () => {
       const res = await request(app).post('/api/storage/evaluation-runs').send(body);
       expect(res.status).toBe(200);
       expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'cancelled' }));
+    });
+
+    it('on cancel, stamps explicit `cancelled` markers for planned cases that never started and reports them as notRun (not pending)', async () => {
+      mockCreateCancellationToken.mockReturnValue({ isCancelled: true, cancel: jest.fn() });
+      mockResolveTestCaseSources.mockResolvedValue({
+        testCases: [
+          { id: 'tc-1', name: 'One', version: 1 },
+          { id: 'tc-2', name: 'Two', version: 1 },
+          { id: 'tc-3', name: 'Three', version: 1 },
+        ],
+        sources: [], evaluateFnMap: {}, hooksByFile: {}, testHookScopes: {},
+      });
+      // Runner returns only the one case that finished before cancel; the
+      // runner itself stamps markers in memory too, but the finalizer must
+      // not depend on that — simulate a runner that didn't.
+      mockExecuteEvaluationRun.mockResolvedValue({
+        results: { 'tc-1': { reportId: 'r1', status: 'completed', passFailStatus: 'passed' } },
+        testCaseSnapshots: [{ id: 'tc-1' }, { id: 'tc-2' }, { id: 'tc-3' }],
+      });
+      let persistedResults: any = { 'tc-1': { reportId: 'r1', status: 'completed', passFailStatus: 'passed' } };
+      mockEvaluationRunsMergeMissingResults.mockImplementation(async (_id: string, entries: any) => {
+        for (const [k, v] of Object.entries(entries)) if (!(k in persistedResults)) persistedResults[k] = v;
+        return true;
+      });
+      mockEvaluationRunsGetById.mockImplementation(async (id: string) => {
+        const created = mockEvaluationRunsCreate.mock.calls.find((c: any[]) => c[0]?.id === id)?.[0];
+        return created ? { ...created, results: persistedResults } : null;
+      });
+
+      const res = await request(app).post('/api/storage/evaluation-runs').send(body);
+      expect(res.status).toBe(200);
+
+      expect(mockEvaluationRunsMergeMissingResults).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        'tc-2': { reportId: '', status: 'cancelled' },
+        'tc-3': { reportId: '', status: 'cancelled' },
+      }));
+      const terminalUpdate = mockEvaluationRunsUpdate.mock.calls.find((c: any[]) => c[1]?.status === 'cancelled');
+      expect(terminalUpdate![1].stats).toEqual({ passed: 1, failed: 0, errored: 0, pending: 0, notRun: 2, total: 3 });
     });
 
     it('forwards onProgress and onTestCaseComplete callbacks that stream SSE and persist results', async () => {
@@ -319,9 +399,13 @@ describe('Evaluation Runs API', () => {
       const cancelRes = await request(app).post(`/api/storage/evaluation-runs/${runId}/cancel`);
 
       expect(cancelRes.status).toBe(200);
-      expect(cancelRes.body).toEqual({ success: true });
+      expect(cancelRes.body).toEqual({ success: true, draining: true });
       expect(cancelFn).toHaveBeenCalled();
-      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(runId, expect.objectContaining({ status: 'cancelled' }));
+      // Cancel is a REQUEST: it stamps cancelRequestedAt and must NOT publish a
+      // terminal status while in-flight cases are still draining — the
+      // executor's finalization writes `cancelled` once it has drained.
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(runId, expect.objectContaining({ cancelRequestedAt: expect.any(String) }));
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalledWith(runId, expect.objectContaining({ status: 'cancelled' }));
 
       resolveExec!({ results: {}, stats: {} });
       await postPromise;

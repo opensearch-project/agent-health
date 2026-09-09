@@ -22,7 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Search, RefreshCw,
   Activity, BarChart3, SlidersHorizontal, ChevronDown, ChevronRight,
-  Layers, List, GitCompare, AlertTriangle, TrendingDown, Target, X, RotateCcw,
+  Layers, List, GitCompare, AlertTriangle, TrendingDown, Target, X, RotateCcw, Ban, XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -88,6 +88,12 @@ interface RunRow {
   failed: number;
   /** Issue #242: evaluator-error runs counted separately from `failed`. */
   errored: number;
+  /**
+   * Planned cases that never ran because the run was cancelled / failed
+   * first (terminal-aware bucketing in lib/runStats). Rendered as "n not
+   * run" — NEVER as pending/spinner — and excluded from pass-rate math.
+   */
+  notRun: number;
   total: number;
   /**
    * Effective run status (bug: page showed no in-flight indication for
@@ -266,6 +272,7 @@ export const EvalRunsPage: React.FC = () => {
           agentName,
           ...stats,
           errored: stats.errored ?? 0,
+          notRun: stats.notRun ?? 0,
           status: getEffectiveRunStatus(run),
         });
       }
@@ -308,6 +315,7 @@ export const EvalRunsPage: React.FC = () => {
         agentName,
         ...stats,
         errored: stats.errored ?? 0,
+        notRun: stats.notRun ?? 0,
         status: getEffectiveRunStatus(run),
       });
     }
@@ -667,13 +675,40 @@ export const EvalRunsPage: React.FC = () => {
             ) : (
               <span className="text-xs font-medium">{rr.run.name}</span>
             )}
-            {rr.status === 'running' && (
+            {rr.status === 'running' && !(rr.run as { cancelRequestedAt?: string }).cancelRequestedAt && (
               <span
                 data-testid="run-row-status-running"
                 className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 animate-pulse"
                 title="This run is still in progress"
               >
                 <Loader2 size={9} className="animate-spin" /> Running
+              </span>
+            )}
+            {rr.status === 'running' && (rr.run as { cancelRequestedAt?: string }).cancelRequestedAt && (
+              <span
+                data-testid="run-row-status-cancelling"
+                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium bg-muted text-muted-foreground border border-border animate-pulse"
+                title="Cancel requested — waiting for in-flight test cases to finish; no new cases will start"
+              >
+                <Loader2 size={9} className="animate-spin" /> Cancelling…
+              </span>
+            )}
+            {rr.status === 'cancelled' && (
+              <span
+                data-testid="run-row-status-cancelled"
+                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium bg-muted text-muted-foreground border border-border"
+                title={rr.notRun > 0 ? `Cancelled — ${rr.notRun} planned case${rr.notRun === 1 ? '' : 's'} never ran` : 'This run was cancelled'}
+              >
+                <Ban size={9} /> Cancelled
+              </span>
+            )}
+            {rr.status === 'failed' && (
+              <span
+                data-testid="run-row-status-failed"
+                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30"
+                title={rr.run.error ? `Run failed: ${rr.run.error}` : 'This run failed before finishing'}
+              >
+                <XCircle size={9} /> Failed
               </span>
             )}
           </div>
@@ -746,6 +781,15 @@ export const EvalRunsPage: React.FC = () => {
             )}
             <span className="text-muted-foreground">/</span>
             <span className="text-muted-foreground">{rr.total}</span>
+            {rr.notRun > 0 && (
+              <span
+                data-testid="run-row-not-run"
+                className="ml-1 text-[10px] text-muted-foreground"
+                title="Planned test cases that never executed because the run was cancelled or failed first. Not counted as failures and excluded from the pass rate."
+              >
+                · {rr.notRun} not run
+              </span>
+            )}
           </div>
         </td>
         <td className="px-2 py-1.5 align-middle text-center w-10" onClick={e => e.stopPropagation()}>

@@ -454,4 +454,105 @@ describe('EvalRunsPage — in-flight (running) run indication (bug #5, 2026-09-0
       jest.useRealTimers();
     }
   });
+
+  // ─── Terminal runs with partial results (owner papercut, 2026-09-04) ──────
+  //
+  // Live shape S1: status 'cancelled' at 34/62. Before the fix the row's
+  // counts folded the 28 never-started cases into `pending` and (on the
+  // benchmark Runs tab) rendered a spinner next to a "Cancelled" badge. The
+  // row must now show a Cancelled badge, "28 not run", the planned total, no
+  // running indicator, and must not trigger polling.
+  function makeCancelledPartialRun(overrides: Record<string, unknown> = {}) {
+    const results: Record<string, unknown> = {};
+    for (let i = 0; i < 34; i++) results[`tc-${i}`] = { reportId: `r-${i}`, status: 'completed', passFailStatus: i % 2 === 0 ? 'passed' : 'failed' };
+    return makeRunningEvalRun({
+      id: 'eval-run-cancelled-1', name: 'Cancelled Partial Run', status: 'cancelled',
+      completedAt: new Date().toISOString(), results, ...overrides,
+    });
+  }
+
+  it('cancelled run at 34/62: Cancelled badge, "28 not run", planned total, NO running badge/spinner', async () => {
+    mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [makeCancelledPartialRun()] });
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Cancelled Partial Run')).toBeTruthy());
+    const row = screen.getByText('Cancelled Partial Run').closest('tr') as HTMLElement;
+    expect(row.querySelector('[data-testid="run-row-status-cancelled"]')).toBeTruthy();
+    expect(row.querySelector('[data-testid="run-row-status-running"]')).toBeNull();
+    expect(row.querySelector('.animate-spin')).toBeNull();
+    expect(row.querySelector('[data-testid="run-row-not-run"]')?.textContent).toContain('28 not run');
+    expect(row.querySelector('.text-green-500')?.textContent).toBe('17');
+    expect(row.querySelector('.text-red-500')?.textContent).toBe('17');
+    expect(row.textContent).toContain('62');
+  });
+
+  it('cancelled run whose never-started cases carry explicit `cancelled` markers renders the same "not run" count (no double counting)', async () => {
+    const run = makeCancelledPartialRun();
+    const results = run.results as Record<string, unknown>;
+    for (let i = 34; i < 62; i++) results[`tc-${i}`] = { reportId: '', status: 'cancelled' };
+    mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [run] });
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Cancelled Partial Run')).toBeTruthy());
+    const row = screen.getByText('Cancelled Partial Run').closest('tr') as HTMLElement;
+    expect(row.querySelector('[data-testid="run-row-not-run"]')?.textContent).toContain('28 not run');
+    // Cancelled markers are NOT failures.
+    expect(row.querySelector('.text-red-500')?.textContent).toBe('17');
+  });
+
+  it('failed run at 37/62 (S2: executor crash): Failed badge, "25 not run", no spinner', async () => {
+    const results: Record<string, unknown> = {};
+    for (let i = 0; i < 32; i++) results[`tc-${i}`] = { reportId: `r-${i}`, status: 'completed' }; // no verdict → errored
+    for (let i = 32; i < 37; i++) results[`tc-${i}`] = { reportId: `r-${i}`, status: 'failed', error: 'version_conflict_engine_exception' };
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [makeRunningEvalRun({ id: 'eval-run-failed-1', name: 'Failed Partial Run', status: 'failed', error: 'version_conflict_engine_exception', results })],
+    });
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Failed Partial Run')).toBeTruthy());
+    const row = screen.getByText('Failed Partial Run').closest('tr') as HTMLElement;
+    expect(row.querySelector('[data-testid="run-row-status-failed"]')).toBeTruthy();
+    expect(row.querySelector('[data-testid="run-row-status-running"]')).toBeNull();
+    expect(row.querySelector('.animate-spin')).toBeNull();
+    expect(row.querySelector('[data-testid="run-row-not-run"]')?.textContent).toContain('25 not run');
+  });
+
+  it('does NOT poll for a cancelled run with partial results (terminal status wins over incomplete-looking results)', async () => {
+    mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [makeCancelledPartialRun()] });
+    jest.useFakeTimers();
+    try {
+      await act(async () => { render(React.createElement(EvalRunsPage)); });
+      const callsAfterMount = mockListEvaluationRuns.mock.calls.length;
+      await act(async () => { jest.advanceTimersByTime(10000); });
+      expect(mockListEvaluationRuns.mock.calls.length).toBe(callsAfterMount);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('a run with cancelRequestedAt that is still draining shows "Cancelling…" (in progress, NOT "not run") — cancel is a request, not a terminal state', async () => {
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [makeRunningEvalRun({ id: 'eval-run-draining-1', name: 'Draining Run', status: 'running', cancelRequestedAt: new Date().toISOString() })],
+    });
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('Draining Run')).toBeTruthy());
+    const row = screen.getByText('Draining Run').closest('tr') as HTMLElement;
+    expect(row.querySelector('[data-testid="run-row-status-cancelling"]')).toBeTruthy();
+    expect(row.querySelector('[data-testid="run-row-status-running"]')).toBeNull();
+    expect(row.querySelector('[data-testid="run-row-status-cancelled"]')).toBeNull();
+    // Still in progress: the 53 unstarted/in-flight cases are pending, not "not run".
+    expect(row.querySelector('[data-testid="run-row-not-run"]')).toBeNull();
+  });
+
+  it('a completed run shows neither a Cancelled nor a Failed badge nor a "not run" annotation', async () => {
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [makeRunningEvalRun({ id: 'eval-run-done-3', name: 'Finished Run 3', status: 'completed', testCaseSnapshots: [{}], results: { 'tc-0': { reportId: 'r-0', status: 'completed', passFailStatus: 'passed' } } })],
+    });
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('Finished Run 3')).toBeTruthy());
+    const row = screen.getByText('Finished Run 3').closest('tr') as HTMLElement;
+    expect(row.querySelector('[data-testid="run-row-status-cancelled"]')).toBeNull();
+    expect(row.querySelector('[data-testid="run-row-status-failed"]')).toBeNull();
+    expect(row.querySelector('[data-testid="run-row-not-run"]')).toBeNull();
+  });
 });

@@ -13,10 +13,16 @@
  */
 
 import React from 'react';
-import { CheckCircle2, XCircle, Loader2, Clock, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Clock, AlertTriangle, Ban } from 'lucide-react';
 import type { EvaluationReport } from '@/types';
 
-export type ResultStatus = 'passed' | 'failed' | 'errored' | 'running' | 'pending' | 'pending_traces' | 'pending_judgment';
+/**
+ * `cancelled` = the run was cancelled before this case started (explicit
+ * `results[tc].status === 'cancelled'` marker, see the `results` contract in
+ * types/index.ts). Distinct from `failed`: the agent never ran, so it must
+ * not count against the pass rate.
+ */
+export type ResultStatus = 'passed' | 'failed' | 'errored' | 'cancelled' | 'running' | 'pending' | 'pending_traces' | 'pending_judgment';
 
 /**
  * Derive the display status from execution status + report state.
@@ -27,7 +33,8 @@ export function getResultStatus(
 ): ResultStatus {
   if (runResult.status === 'running') return 'running';
   if (runResult.status === 'pending') return 'pending';
-  if (runResult.status === 'failed' || runResult.status === 'cancelled') return 'failed';
+  if (runResult.status === 'cancelled') return 'cancelled';
+  if (runResult.status === 'failed') return 'failed';
 
   // Metrics still in progress — show granular pending state regardless of passFailStatus
   if (report?.metricsStatus === 'pending') return 'pending_traces';
@@ -57,6 +64,7 @@ export function StatusIcon({ status, size = 14 }: { status: ResultStatus; size?:
     case 'passed': return <CheckCircle2 size={size} className="text-green-500" />;
     case 'failed': return <XCircle size={size} className="text-red-500" />;
     case 'errored': return <AlertTriangle size={size} className="text-amber-500" />;
+    case 'cancelled': return <Ban size={size} className="text-muted-foreground" />;
     case 'running': return <Loader2 size={size} className="text-blue-500 animate-spin" />;
     case 'pending_traces': return <Loader2 size={size} className="text-amber-500 animate-spin" />;
     case 'pending_judgment': return <Loader2 size={size} className="text-purple-500 animate-spin" />;
@@ -72,6 +80,7 @@ export function StatusLabel({ status }: { status: ResultStatus }) {
     passed: { label: 'PASSED', cls: 'text-green-500' },
     failed: { label: 'FAILED', cls: 'text-red-500' },
     errored: { label: 'ERRORED', cls: 'text-amber-500' },
+    cancelled: { label: 'NOT RUN', cls: 'text-muted-foreground' },
     running: { label: 'RUNNING', cls: 'text-blue-500' },
     pending_traces: { label: 'PENDING', cls: 'text-amber-500' },
     pending_judgment: { label: 'JUDGING', cls: 'text-purple-500' },
@@ -93,5 +102,6 @@ export function getStatusDescription(status: ResultStatus): string {
     case 'passed': return 'Passed';
     case 'failed': return 'Failed';
     case 'errored': return 'Evaluator could not run';
+    case 'cancelled': return 'Not run \u2014 the run was cancelled before this case started';
   }
 }
