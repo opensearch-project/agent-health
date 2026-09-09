@@ -700,7 +700,7 @@ export const EvalRunsPage: React.FC = () => {
         <td className="px-2 py-1.5 align-middle text-[11px] max-w-[220px]" data-testid="run-judge-cell">
           {/* Judge kind · underlying LLM (falls back to the configured id for
               old runs; agentic judges without a recorded model say so). */}
-          <JudgeModelLabel run={rr.run} compact />
+          <JudgeModelLabel run={rr.run} />
         </td>
         <td className="px-2 py-1.5 align-middle text-[11px]" data-testid="run-evaluator-cell">
           {rr.run.evaluatorId ? (

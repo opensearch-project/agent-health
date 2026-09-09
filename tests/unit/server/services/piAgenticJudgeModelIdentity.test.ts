@@ -50,7 +50,9 @@ import {
   pickJudgeModel,
   extractResponseModel,
   qualifiedModelId,
+  qualifyModelId,
   describeDefaultAgentJudgeModel,
+  resetDescribeDefaultAgentJudgeModelCache,
   evaluateWithPiAgenticTrace,
   AGENT_JUDGE_MODEL_ENV,
 } from '@/server/services/piAgenticJudgeService';
@@ -100,8 +102,19 @@ describe('resolveAgentJudgeModel', () => {
     expect(r?.model.id).toBe('us.anthropic.claude-sonnet-4-6');
   });
 
-  it('accepts the env pin via an explicit env object (deterministic in tests)', () => {
-    const r = resolveAgentJudgeModel(LIVE_LIKE_REGISTRY, { env: { [AGENT_JUDGE_MODEL_ENV]: 'us.anthropic.claude-opus-4-6-v1' } as any });
+  it('an EXACT registry id pins that model and nothing else (a spelled-out profile is honoured, no region re-homing)', () => {
+    // Bare base id -> region-aware preference (us. profile wins in us-west-2)
+    process.env[AGENT_JUDGE_MODEL_ENV] = 'anthropic.claude-sonnet-4-5-20250929-v1:0';
+    expect(resolveAgentJudgeModel(LIVE_LIKE_REGISTRY)?.model.id).toBe('us.anthropic.claude-sonnet-4-5-20250929-v1:0');
+    // Exact global profile -> exactly that
+    process.env[AGENT_JUDGE_MODEL_ENV] = 'global.anthropic.claude-sonnet-4-5-20250929-v1:0';
+    expect(resolveAgentJudgeModel(LIVE_LIKE_REGISTRY)?.model.id).toBe('global.anthropic.claude-sonnet-4-5-20250929-v1:0');
+    // Exact JP profile (which the scorer would otherwise penalise) -> exactly that
+    process.env[AGENT_JUDGE_MODEL_ENV] = 'jp.anthropic.claude-sonnet-4-5-20250929-v1:0';
+    expect(resolveAgentJudgeModel(LIVE_LIKE_REGISTRY)?.model.id).toBe('jp.anthropic.claude-sonnet-4-5-20250929-v1:0');
+    // Provider-qualified exact id is accepted too
+    process.env[AGENT_JUDGE_MODEL_ENV] = 'amazon-bedrock/us.anthropic.claude-opus-4-6-v1';
+    const r = resolveAgentJudgeModel(LIVE_LIKE_REGISTRY);
     expect(r?.source).toBe('env-pin');
     expect(r?.model.id).toBe('us.anthropic.claude-opus-4-6-v1');
   });
@@ -144,26 +157,59 @@ describe('resolveAgentJudgeModel', () => {
 });
 
 describe('extractResponseModel', () => {
-  it('returns the model/provider of the LAST assistant message, preferring responseModel', () => {
+  it('reads the model off the VERDICT turn (last assistant message with text) -- a trailing tool-call-only turn is ignored', () => {
     const messages = [
-      { role: 'user', content: [] },
-      { role: 'assistant', provider: 'amazon-bedrock', model: 'us.anthropic.claude-sonnet-4-5', content: [] },
+      { role: 'user', content: [{ type: 'text', text: 'judge this' }] },
+      { role: 'assistant', provider: 'amazon-bedrock', model: 'us.anthropic.claude-sonnet-4-5', content: [{ type: 'toolCall', name: 'query_spans' }] },
       { role: 'toolResult', content: [] },
-      { role: 'assistant', provider: 'amazon-bedrock', model: 'us.anthropic.claude-sonnet-4-5', responseModel: 'claude-sonnet-4-5-20250929', content: [] },
+      { role: 'assistant', provider: 'amazon-bedrock', model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', responseModel: 'claude-sonnet-4-5-20250929', content: [{ type: 'text', text: '{"pass_fail_status":"passed"}' }] },
+      // a stray later assistant turn with NO text (e.g. an aborted tool call) must not win
+      { role: 'assistant', provider: 'openai', model: 'gpt-4o', content: [{ type: 'toolCall', name: 'query_logs' }] },
     ];
-    expect(extractResponseModel(messages)).toEqual({ provider: 'amazon-bedrock', model: 'claude-sonnet-4-5-20250929' });
+    // `model` (registry id) preferred over `responseModel` (provider alias)
+    expect(extractResponseModel(messages)).toEqual({ provider: 'amazon-bedrock', model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0' });
   });
-  it('returns undefined when no assistant message carries a model', () => {
-    expect(extractResponseModel([{ role: 'assistant', content: [] }])).toBeUndefined();
+  it('falls back to responseModel when the turn has no `model`, and returns undefined when no verdict turn carries one', () => {
+    expect(extractResponseModel([{ role: 'assistant', responseModel: 'claude-x', content: [{ type: 'text', text: 'v' }] }])).toEqual({ provider: undefined, model: 'claude-x' });
+    expect(extractResponseModel([{ role: 'assistant', content: [{ type: 'text', text: 'v' }] }])).toBeUndefined();
+    expect(extractResponseModel([{ role: 'assistant', model: 'x', content: [] }])).toBeUndefined();
     expect(extractResponseModel([])).toBeUndefined();
     expect(extractResponseModel(undefined as any)).toBeUndefined();
   });
 });
 
+describe('qualifyModelId', () => {
+  it('prefixes exactly once and never double-prefixes an already-qualified id', () => {
+    expect(qualifyModelId('amazon-bedrock', 'us.anthropic.claude-sonnet-4-6')).toBe('amazon-bedrock/us.anthropic.claude-sonnet-4-6');
+    expect(qualifyModelId('amazon-bedrock', 'amazon-bedrock/us.anthropic.claude-sonnet-4-6')).toBe('amazon-bedrock/us.anthropic.claude-sonnet-4-6');
+    expect(qualifyModelId(undefined, 'gpt-4o')).toBe('gpt-4o');
+  });
+});
+
 describe('describeDefaultAgentJudgeModel (GET /api/judge/models backing)', () => {
   const OLD_ENV = process.env[AGENT_JUDGE_MODEL_ENV];
+  beforeEach(() => { resetDescribeDefaultAgentJudgeModelCache(); mockGetAvailable.mockClear(); });
   afterEach(() => {
     if (OLD_ENV === undefined) delete process.env[AGENT_JUDGE_MODEL_ENV]; else process.env[AGENT_JUDGE_MODEL_ENV] = OLD_ENV;
+    resetDescribeDefaultAgentJudgeModelCache();
+  });
+
+  it('caches a successful resolution (one registry read for repeated calls) but never caches an error, and invalidates when the env pin changes', async () => {
+    delete process.env[AGENT_JUDGE_MODEL_ENV];
+    mockGetAvailable.mockResolvedValue(LIVE_LIKE_REGISTRY);
+    await describeDefaultAgentJudgeModel();
+    await describeDefaultAgentJudgeModel();
+    expect(mockGetAvailable).toHaveBeenCalledTimes(1);
+    // env pin change -> re-resolve
+    process.env[AGENT_JUDGE_MODEL_ENV] = 'anthropic.claude-sonnet-4-6';
+    expect(await describeDefaultAgentJudgeModel()).toMatchObject({ source: 'env-pin' });
+    expect(mockGetAvailable).toHaveBeenCalledTimes(2);
+    // errors are not cached
+    resetDescribeDefaultAgentJudgeModelCache();
+    mockGetAvailable.mockResolvedValue([]);
+    await describeDefaultAgentJudgeModel();
+    await describeDefaultAgentJudgeModel();
+    expect(mockGetAvailable).toHaveBeenCalledTimes(4);
   });
 
   it('reports the auto-picked model with its registry display name and source', async () => {
@@ -217,6 +263,9 @@ describe('evaluateWithPiAgenticTrace — records the underlying LLM on every ver
 
   it('judgeModel = provider-qualified model the transcript reports; judgeProvider = agent; judgeDebug stays off', async () => {
     mockSessionMessages = [
+      // a tool-call-only turn first (real trace-tools transcripts look like this)
+      { role: 'assistant', provider: 'amazon-bedrock', model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', content: [{ type: 'toolCall', name: 'query_spans' }] },
+      { role: 'toolResult', content: [] },
       { role: 'assistant', provider: 'amazon-bedrock', model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', content: [{ type: 'text', text: verdict }] },
     ];
     const res = await evaluateWithPiAgenticTrace(request as any, undefined, true);

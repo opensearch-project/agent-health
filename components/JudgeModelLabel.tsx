@@ -21,12 +21,10 @@ import { getJudgeModelDisplay } from '@/lib/utils';
 export interface JudgeModelLabelProps {
   run: { judgeModel?: string | null; judgeModelId?: string | null } | null | undefined;
   className?: string;
-  /** Hide the muted "model not recorded" hint (dense tables). Default: shown. */
-  compact?: boolean;
   'data-testid'?: string;
 }
 
-export const JudgeModelLabel: React.FC<JudgeModelLabelProps> = ({ run, className = '', compact = false, ...rest }) => {
+export const JudgeModelLabel: React.FC<JudgeModelLabelProps> = ({ run, className = '', ...rest }) => {
   const { label, detail, hint, title } = getJudgeModelDisplay(run);
   return (
     <span className={`inline-flex items-baseline gap-1 min-w-0 ${className}`} title={title} data-testid={rest['data-testid'] ?? 'judge-model-label'}>
@@ -36,7 +34,7 @@ export const JudgeModelLabel: React.FC<JudgeModelLabelProps> = ({ run, className
           · {detail}
         </span>
       )}
-      {hint && !compact && (
+      {hint && (
         <span className="text-muted-foreground/70 italic text-[0.85em] truncate" data-testid="judge-model-not-recorded">
           · {hint}
         </span>

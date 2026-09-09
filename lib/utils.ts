@@ -160,14 +160,17 @@ export const getJudgeModelDisplay = (
   if (!judgeModelId && !judgeModel) return { label: '—', title: 'No judge recorded for this run' };
   const isProvider = isJudgeProviderPseudoModelId(judgeModelId);
   if (judgeModel) {
-    // A plain provider's judgeModel equals its judgeModelId -- one label.
-    const detail = isProvider || (judgeModelId && judgeModel !== judgeModelId) ? shortJudgeModelLabel(judgeModel) : undefined;
+    // A plain provider's judgeModel IS its configured judge -- one label. The
+    // configured value may be the catalog KEY (`claude-sonnet-4.6`) while the
+    // resolved id is that entry's `model_id` (`us.anthropic.claude-sonnet-4-6`);
+    // treat those as the same model so an alias never masquerades as a
+    // different judge. Only a provider kind (agent-trace-judge) or a genuinely
+    // different model earns the "· <model>" detail.
+    const configuredModelId = judgeModelId ? (DEFAULT_CONFIG.models[judgeModelId]?.model_id ?? judgeModelId) : undefined;
+    const sameModel = !!judgeModelId && (judgeModel === judgeModelId || judgeModel === configuredModelId);
+    const detail = isProvider || (judgeModelId && !sameModel) ? shortJudgeModelLabel(judgeModel) : undefined;
     const label = kindLabel ?? shortJudgeModelLabel(judgeModel);
-    return {
-      label,
-      detail,
-      title: detail ? `${label} · ${judgeModel}` : `${label} · ${judgeModel}`,
-    };
+    return { label, detail, title: `${label} · ${judgeModel}` };
   }
   const hint = modelNotRecorded ? 'model not recorded — auto-picked at run time' : undefined;
   return { label: kindLabel!, hint, title: hint ? `${kindLabel} · ${hint}` : kindLabel! };

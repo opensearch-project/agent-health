@@ -59,10 +59,15 @@ describe('getJudgeModelDisplay', () => {
     // and with no judgeModel recorded at all (pre-fix bedrock run) — still no hint: it IS the model
     expect(getJudgeModelDisplay({ judgeModelId: 'claude-sonnet-4.6' }).hint).toBeUndefined();
   });
-  it('unknown-id bedrock run whose resolved model differs from the configured key shows both', () => {
+  it('bedrock configured by catalog KEY with judgeModel = that entry\'s model_id is the SAME model: one label, no detail', () => {
     const d = getJudgeModelDisplay({ judgeModelId: 'claude-sonnet-4.6', judgeModel: 'us.anthropic.claude-sonnet-4-6' });
     expect(d.label).toBe('Claude Sonnet 4.6');
-    expect(d.detail).toBe('claude-sonnet-4-6');
+    expect(d.detail).toBeUndefined();
+  });
+  it('a genuinely different resolved model DOES earn the detail', () => {
+    const d = getJudgeModelDisplay({ judgeModelId: 'claude-sonnet-4.6', judgeModel: 'us.anthropic.claude-opus-4-6-v1' });
+    expect(d.label).toBe('Claude Sonnet 4.6');
+    expect(d.detail).toBe('claude-opus-4-6');
   });
   it('no judge at all: em dash', () => {
     expect(getJudgeModelDisplay(undefined).label).toBe('—');
@@ -81,15 +86,11 @@ describe('<JudgeModelLabel />', () => {
     expect(screen.getByTestId('judge-model-label').getAttribute('title')).toContain(SONNET_45);
   });
 
-  it('falls back for old reports: kind + "model not recorded" hint (hidden in compact mode)', () => {
+  it('falls back for old reports: kind + "model not recorded" hint, also in the tooltip', () => {
     render(React.createElement(JudgeModelLabel, { run: { judgeModelId: 'agent-trace-judge' } }));
     expect(screen.getByTestId('judge-model-kind').textContent).toBe('Agent Trace Judge (pi SDK + query_spans)');
     expect(screen.queryByTestId('judge-model-resolved')).toBeNull();
     expect(screen.getByTestId('judge-model-not-recorded').textContent).toContain('model not recorded');
-    cleanup();
-    render(React.createElement(JudgeModelLabel, { run: { judgeModelId: 'agent-trace-judge' }, compact: true }));
-    expect(screen.queryByTestId('judge-model-not-recorded')).toBeNull();
-    // the hint still travels in the tooltip
     expect(screen.getByTestId('judge-model-label').getAttribute('title')).toContain('model not recorded');
   });
 

@@ -26,6 +26,7 @@ import { Evaluator } from '@/types';
 import { readEnv } from '@/lib/envCompat';
 import { debug } from '@/lib/debug';
 import { regionInferencePrefix } from '@/lib/bedrockCompat';
+import { isJudgeProviderPseudoModelId } from '@/lib/judgeIdentity';
 
 /**
  * Default base prompt used when no saved evaluator's `systemPrompt` is provided.
@@ -211,9 +212,6 @@ export function extractFinalAssistantText(messages: any[]): string {
  */
 export const AGENT_JUDGE_MODEL_ENV = 'AH_AGENT_JUDGE_MODEL_ID';
 
-/** Judge-kind ids that name a provider, not a model — never a valid pin target. */
-const PROVIDER_PSEUDO_MODEL_IDS = new Set(['agent-trace-judge', 'pi-judge', 'agentic-claude-code', 'agentic-custom', 'claude-code-judge']);
-
 /** How the agent judge's underlying model was chosen — surfaced by GET /api/judge/models. */
 export type AgentJudgeModelSource = 'evaluator-pin' | 'env-pin' | 'request' | 'auto';
 
@@ -240,18 +238,30 @@ export interface ResolvedAgentJudgeModel<T> {
  */
 export function resolveAgentJudgeModel<T extends { provider: string; id: string }>(
   available: T[],
-  opts: { requestedModelId?: string; evaluatorPin?: string; env?: NodeJS.ProcessEnv } = {}
+  opts: { requestedModelId?: string; evaluatorPin?: string } = {}
 ): ResolvedAgentJudgeModel<T> | undefined {
-  const env = opts.env ?? process.env;
   const tryPin = (id: string | undefined, source: AgentJudgeModelSource): ResolvedAgentJudgeModel<T> | undefined => {
     const trimmed = id?.trim();
-    if (!trimmed || PROVIDER_PSEUDO_MODEL_IDS.has(trimmed)) return undefined;
-    const model = findRequestedModel(available, trimmed);
+    if (!trimmed || isJudgeProviderPseudoModelId(trimmed)) return undefined;
+    // A pin that spells out an inference PROFILE (`us.`/`global.`/`eu.`/...,
+    // optionally provider-qualified: `amazon-bedrock/us.anthropic.claude-...`)
+    // pins exactly that registry entry -- the operator's intent is not
+    // second-guessed by the region heuristic. A BARE base id keeps
+    // findRequestedModel's region-aware profile preference on purpose: the
+    // bare Claude 4.x ids exist in the registry but can't run on-demand on
+    // Bedrock, so pinning them verbatim would pick an uninvocable model.
+    const bare = trimmed.includes('/') ? trimmed.slice(trimmed.indexOf('/') + 1) : trimmed;
+    const spellsOutProfile = /^(us|eu|global|au|jp|apac)\./.test(bare);
+    if (spellsOutProfile) {
+      const exact = available.find((m) => m.id === bare && (!trimmed.includes('/') || trimmed.startsWith(`${m.provider}/`)));
+      if (exact) return { model: exact, source };
+    }
+    const model = findRequestedModel(available, bare);
     return model ? { model, source } : undefined;
   };
   const pinned =
     tryPin(opts.evaluatorPin, 'evaluator-pin') ??
-    tryPin(env[AGENT_JUDGE_MODEL_ENV], 'env-pin') ??
+    tryPin(process.env[AGENT_JUDGE_MODEL_ENV], 'env-pin') ??
     tryPin(opts.requestedModelId, 'request');
   if (pinned) return pinned;
   const auto = pickJudgeModel(available);
@@ -265,20 +275,40 @@ export function resolveAgentJudgeModel<T extends { provider: string; id: string 
  * Never throws: returns `{ error }` when the SDK is missing or no model is
  * credentialed.
  */
-export async function describeDefaultAgentJudgeModel(): Promise<
+export type DefaultAgentJudgeModelDescription =
   | { id: string; name?: string; source: AgentJudgeModelSource }
-  | { error: string }
-> {
+  | { error: string };
+
+/** How long a successful registry resolution is reused by GET /api/judge/models before re-reading the registry. */
+export const AGENT_JUDGE_MODEL_DESCRIBE_TTL_MS = 60_000;
+let describeCache: { at: number; env: string | undefined; value: DefaultAgentJudgeModelDescription } | undefined;
+
+export async function describeDefaultAgentJudgeModel(): Promise<DefaultAgentJudgeModelDescription> {
+  // Several run dialogs call the endpoint on mount; the registry answer only
+  // changes when credentials or the env pin change, so a short server-side
+  // cache keeps this a label lookup, not a per-render registry scan. Errors
+  // are NOT cached (a transient credential blip must not stick for a minute).
+  const envPin = process.env[AGENT_JUDGE_MODEL_ENV];
+  if (describeCache && describeCache.env === envPin && Date.now() - describeCache.at < AGENT_JUDGE_MODEL_DESCRIBE_TTL_MS) {
+    return describeCache.value;
+  }
   try {
     const { AuthStorage, ModelRegistry } = await loadPiSdk();
     const registry = ModelRegistry.create(AuthStorage.create());
     const available = (await registry.getAvailable()) as Array<{ provider: string; id: string; name?: string }>;
     const pick = resolveAgentJudgeModel(available);
     if (!pick) return { error: 'no credentialed model in the pi registry' };
-    return { id: qualifiedModelId(pick.model), name: pick.model.name, source: pick.source };
+    const value = { id: qualifiedModelId(pick.model), name: pick.model.name, source: pick.source };
+    describeCache = { at: Date.now(), env: envPin, value };
+    return value;
   } catch (err: any) {
     return { error: err?.message ?? String(err) };
   }
+}
+
+/** Test hook: forget the cached registry resolution. @internal */
+export function resetDescribeDefaultAgentJudgeModelCache(): void {
+  describeCache = undefined;
 }
 
 /** Provider-qualified id (`amazon-bedrock/us.anthropic.claude-sonnet-4-5…`) — the persisted `judgeModel` shape for pi-registry models. */
@@ -287,21 +317,39 @@ export function qualifiedModelId(model: { provider: string; id: string }): strin
 }
 
 /**
- * The model id the pi SDK session REPORTED using (from the assistant
- * messages' `model` / `responseModel` fields), or undefined when the
- * transcript carries none. Preferred over the requested model when present
- * because it is what actually answered.
+ * The model id the pi SDK session REPORTED using for the VERDICT: read off
+ * the same assistant message {@link extractFinalAssistantText} takes the
+ * verdict text from (the last assistant turn with non-empty text) -- not
+ * merely the last assistant message, which for a tool-using judge can be a
+ * tool-call-only turn. Prefers `model` (the registry id the request was made
+ * with) over `responseModel` (the provider's echoed name, which may be an
+ * un-prefixed alias). Undefined when the transcript carries none.
  */
 export function extractResponseModel(messages: any[]): { provider?: string; model: string } | undefined {
-  let last: { provider?: string; model: string } | undefined;
+  let verdictTurn: any;
   for (const m of messages ?? []) {
-    if (m?.role !== 'assistant') continue;
-    const model = typeof m.responseModel === 'string' && m.responseModel.trim()
-      ? m.responseModel
-      : typeof m.model === 'string' && m.model.trim() ? m.model : undefined;
-    if (model) last = { provider: typeof m.provider === 'string' ? m.provider : undefined, model };
+    if (m?.role !== 'assistant' || !Array.isArray(m.content)) continue;
+    const hasText = m.content.some((c: any) => c?.type === 'text' && typeof c.text === 'string' && c.text.trim());
+    if (hasText) verdictTurn = m;
   }
-  return last;
+  if (!verdictTurn) return undefined;
+  const model = typeof verdictTurn.model === 'string' && verdictTurn.model.trim()
+    ? verdictTurn.model.trim()
+    : typeof verdictTurn.responseModel === 'string' && verdictTurn.responseModel.trim()
+      ? verdictTurn.responseModel.trim()
+      : undefined;
+  if (!model) return undefined;
+  return { provider: typeof verdictTurn.provider === 'string' ? verdictTurn.provider : undefined, model };
+}
+
+/**
+ * Provider-qualify a model id exactly once: `qualify('amazon-bedrock', 'x')`
+ * -> `amazon-bedrock/x`; an id that already carries a `provider/` prefix is
+ * returned unchanged (never double-prefixed).
+ */
+export function qualifyModelId(provider: string | undefined, id: string): string {
+  if (!provider) return id;
+  return id.startsWith(`${provider}/`) ? id : `${provider}/${id}`;
 }
 
 /**
@@ -440,7 +488,7 @@ export async function evaluateWithPiAgenticTrace(
   // to the model we asked for. Same provider-qualified shape either way.
   const answered = extractResponseModel(session.messages);
   const judgeModel = answered
-    ? `${answered.provider ?? model.provider}/${answered.model}`
+    ? qualifyModelId(answered.provider ?? model.provider, answered.model)
     : qualifiedModelId(model);
 
   const parsed = parseJudgeResponse(finalText, {

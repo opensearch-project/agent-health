@@ -49,12 +49,6 @@ export interface SpawnPiOptions {
    * agent-only tools the judge neither needs nor can resolve). @internal
    */
   omitBasePack?: boolean;
-  /**
-   * Receives the complete raw stdout once the child exits (before it is
-   * reduced to the verdict text). Used by {@link spawnPiWithModel} to read
-   * the model id off the NDJSON transcript. @internal
-   */
-  onStdout?: (stdout: string) => void;
 }
 
 /**
@@ -228,26 +222,38 @@ export interface SpawnPiResult {
 
 /**
  * Like {@link spawnPi} but also returns the model pi reported using, read
- * from the same NDJSON stdout before it is reduced to the verdict text.
+ * from the same NDJSON stdout the verdict text is reduced from.
  */
 export function spawnPiWithModel(
   prompt: string,
   systemPrompt: string,
   options: SpawnPiOptions = {}
 ): Promise<SpawnPiResult> {
-  let rawStdout = '';
-  return spawnPi(prompt, systemPrompt, { ...options, onStdout: (s) => { rawStdout = s; } }).then((text) => ({
+  return spawnPiRaw(prompt, systemPrompt, options).then(({ text, stdout }) => ({
     text,
-    model: extractModelFromNdjson(rawStdout),
+    model: extractModelFromNdjson(stdout),
   }));
 }
 
+/** Verdict text only (the historical contract). */
 export function spawnPi(
   prompt: string,
   systemPrompt: string,
   options: SpawnPiOptions = {}
 ): Promise<string> {
-  return new Promise((resolvePromise, reject) => {
+  return spawnPiRaw(prompt, systemPrompt, options).then((r) => r.text);
+}
+
+/** Spawn pi and resolve BOTH the extracted verdict text and the raw stdout it came from. */
+function spawnPiRaw(
+  prompt: string,
+  systemPrompt: string,
+  options: SpawnPiOptions = {}
+): Promise<{ text: string; stdout: string }> {
+  return new Promise((resolveRaw, reject) => {
+    let stdout = '';
+    let stderr = '';
+    const resolvePromise = (text: string) => resolveRaw({ text, stdout });
     const args = [
       '--print',
       '--mode', 'json',
@@ -282,9 +288,6 @@ export function spawnPi(
       cwd: getAgentPathForSpawn() || undefined,
     });
 
-    let stdout = '';
-    let stderr = '';
-
     child.stdout.on('data', (data: Buffer) => {
       stdout += data.toString();
     });
@@ -307,7 +310,6 @@ export function spawnPi(
         reject(new Error(errorMsg));
         return;
       }
-      options.onStdout?.(stdout);
 
       // Parse Pi's JSON output format
       try {
