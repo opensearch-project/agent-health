@@ -35,6 +35,11 @@ const router = Router();
 // Registry of active cancellation tokens for in-progress runs
 const activeCancellationTokens = new Map<string, CancellationToken>();
 
+/** Read-only active-run registry accessor used by boot recovery. */
+export function isEvaluationRunActiveInThisProcess(runId: string): boolean {
+  return activeCancellationTokens.has(runId);
+}
+
 // codex_review (retry-judgement): the 409-if-running gate on
 // /retry-judgement checks the run's PERSISTED status, which is not a lock —
 // two concurrent retry-judgement requests against the SAME terminal run
