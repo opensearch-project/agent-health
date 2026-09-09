@@ -194,6 +194,12 @@ export function calculateRunAggregates(
     createdAt: run.createdAt,
     modelId: run.modelId,
     agentKey: run.agentKey,
+    // Agent-configuration provenance (lib/agentFingerprint.ts) carried
+    // through so the scoreboard can warn when two runs of the SAME agent
+    // were measured against DIFFERENT config versions.
+    agentFingerprint: run.agentFingerprint,
+    agentFingerprintShort: run.agentFingerprintShort,
+    agentPromptHash: run.agentPromptHash,
     totalTestCases: testCaseIds.length,
     passedCount,
     failedCount,

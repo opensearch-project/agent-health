@@ -632,6 +632,83 @@ describe('RunInspectorPage — Re-run button (eval-run mode)', () => {
   });
 });
 
+describe('RunInspectorPage — agent-configuration provenance (lib/agentFingerprint.ts)', () => {
+  const FP_OLD = 'a'.repeat(64);
+  const FP_NEW = 'b'.repeat(64);
+  const PH_OLD = '1'.repeat(64);
+  const PH_NEW = '2'.repeat(64);
+
+  beforeEach(() => {
+    mockParams = { benchmarkId: undefined, runId: 'eval-run-1' };
+    mockTestCasesGetByIds.mockResolvedValue([]);
+    mockGetReportSummariesByIds.mockResolvedValue({});
+  });
+
+  const evalRun = (extra: Record<string, unknown>) => ({
+    id: 'eval-run-1', docType: 'evaluation-run', name: 'Run', agentKey: 'demo', modelId: 'model-1',
+    createdAt: '2024-01-01T00:00:00Z', status: 'completed', sources: [], trigger: 'ui', testCaseSnapshots: [], results: {},
+    ...extra,
+  });
+
+  it('header shows the mono fingerprint chip with full hash + prompt hash + config sha in the tooltip', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(evalRun({
+      agentFingerprint: FP_NEW, agentFingerprintShort: 'bbbbbbbbbbbb', agentPromptHash: PH_NEW,
+      agentConfigSource: { path: '/cfg/agent-health.config.ts', gitSha: 'cafe0000cafe0000' },
+    }));
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('inspector-fingerprint-chip')).toBeTruthy());
+    const chip = screen.getByTestId('inspector-fingerprint-chip');
+    expect(chip.textContent).toContain('bbbbbbbbbbbb');
+    expect(chip.getAttribute('title')).toContain(FP_NEW);
+    expect(chip.getAttribute('title')).toContain(PH_NEW);
+    expect(chip.getAttribute('title')).toContain('/cfg/agent-health.config.ts @ cafe0000cafe');
+  });
+
+  it('legacy run without a fingerprint renders no chip (no empty chip)', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(evalRun({}));
+    renderPage();
+    // Wait for the header to render (the agent name is always present) rather
+    // than on an action button whose testid other in-flight PRs rename.
+    await waitFor(() => expect(screen.getByText('demo')).toBeTruthy());
+    expect(screen.queryByTestId('inspector-fingerprint-chip')).toBeNull();
+  });
+
+  it('re-run whose fingerprint differs from the source run shows "config changed since source run" (prompt kind)', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun
+      .mockResolvedValueOnce(evalRun({ rerunOf: 'eval-run-0', agentFingerprint: FP_NEW, agentFingerprintShort: 'bbbbbbbbbbbb', agentPromptHash: PH_NEW }))
+      .mockResolvedValueOnce({ id: 'eval-run-0', name: 'Original', agentKey: 'demo', agentFingerprint: FP_OLD, agentPromptHash: PH_OLD });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('rerun-config-changed-badge')).toBeTruthy());
+    const badge = screen.getByTestId('rerun-config-changed-badge');
+    expect(badge.textContent).toContain('config changed since source run');
+    expect(badge.getAttribute('data-diff-kind')).toBe('prompt');
+    expect(badge.getAttribute('title')).toContain('system prompt changed');
+  });
+
+  it('re-run with the SAME fingerprint as its source shows the provenance chip but NO config-changed badge', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun
+      .mockResolvedValueOnce(evalRun({ rerunOf: 'eval-run-0', agentFingerprint: FP_OLD, agentFingerprintShort: 'aaaaaaaaaaaa', agentPromptHash: PH_OLD }))
+      .mockResolvedValueOnce({ id: 'eval-run-0', name: 'Original', agentKey: 'demo', agentFingerprint: FP_OLD, agentPromptHash: PH_OLD });
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/re-run of Original/)).toBeTruthy());
+    expect(screen.queryByTestId('rerun-config-changed-badge')).toBeNull();
+  });
+
+  it('re-run of a LEGACY source (no fingerprint) shows no badge — unknown is not a warning', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun
+      .mockResolvedValueOnce(evalRun({ rerunOf: 'eval-run-0', agentFingerprint: FP_NEW, agentFingerprintShort: 'bbbbbbbbbbbb' }))
+      .mockResolvedValueOnce({ id: 'eval-run-0', name: 'Original', agentKey: 'demo' });
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/re-run of Original/)).toBeTruthy());
+    expect(screen.queryByTestId('rerun-config-changed-badge')).toBeNull();
+  });
+});
+
 describe('RunInspectorPage — benchmark-mode fallback for not-yet-linked runs', () => {
   const originalFetch = (globalThis as any).fetch;
   afterEach(() => {

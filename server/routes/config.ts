@@ -19,6 +19,7 @@ import { addCustomAgent, removeCustomAgent, getCustomAgents } from '@/server/ser
 import { getRemoteServers } from '@/server/services/codingAgents/remoteConfig';
 import { getObservioPort, waitForObservioReady } from '@/server/services/observioAgent';
 import { readLayeredState, writeStateScope, isCodeFirstMode } from '@/lib/config/statePaths';
+import { resolveAgentProvenance, findAgentByKey } from '@/server/services/agentProvenance';
 
 const router = Router();
 
@@ -101,6 +102,42 @@ router.get('/api/agents', async (req: Request, res: Response) => {
 });
 
 // VALID_CONNECTOR_TYPES imported from @/lib/constants (single source of truth)
+
+/**
+ * GET /api/agents/:key/fingerprint - Current agent-configuration fingerprint
+ *
+ * Returns the provenance an evaluation run started RIGHT NOW against this
+ * agent would be stamped with (see lib/agentFingerprint.ts): the full
+ * sha256 fingerprint of the connector-relevant, secret-redacted config, its
+ * 12-char short form, the prompt-only hash (when the connector exposes a
+ * system prompt), and the config file path + git sha when resolvable. Lets
+ * external tooling (CI, a self-improvement loop) record which agent config
+ * it is about to measure, and compare it to `run.agentFingerprint` after.
+ *
+ * Optional `?agentEndpoint=` mirrors the run-level endpoint override so the
+ * value matches what a run created with that override would carry.
+ */
+router.get('/api/agents/:key/fingerprint', (req: Request, res: Response) => {
+  try {
+    const { key } = req.params;
+    if (!findAgentByKey(key)) {
+      res.status(404).json({ error: `Unknown agent: ${key}` });
+      return;
+    }
+    const agentEndpoint = typeof req.query.agentEndpoint === 'string' && req.query.agentEndpoint
+      ? req.query.agentEndpoint
+      : undefined;
+    const provenance = resolveAgentProvenance(key, { agentEndpoint });
+    if (!provenance) {
+      res.status(500).json({ error: `Could not compute fingerprint for agent: ${key}` });
+      return;
+    }
+    res.json({ agentKey: key, ...provenance, computedAt: new Date().toISOString() });
+  } catch (error: any) {
+    console.error('[ConfigAPI] Agent fingerprint failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 /**
  * POST /api/agents/custom - Add a custom agent endpoint

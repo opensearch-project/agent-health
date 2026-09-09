@@ -141,6 +141,12 @@ export function getIndexMappings(): IndexMappings {
               testCaseSnapshots: { type: 'object', enabled: false },
               stats: { type: 'object', enabled: false },
               performanceMetrics: { type: 'object', enabled: false },
+              // Agent-configuration provenance (lib/agentFingerprint.ts):
+              // exact-match hashes, keyword on purpose (never analyzed).
+              agentFingerprint: { type: 'keyword' },
+              agentFingerprintShort: { type: 'keyword' },
+              agentPromptHash: { type: 'keyword' },
+              agentConfigSource: { type: 'object', enabled: false },
             },
           },
         },
@@ -172,6 +178,10 @@ export function getIndexMappings(): IndexMappings {
           passFailStatus: { type: 'keyword' },
           traceId: { type: 'keyword' },
           sessionId: { type: 'keyword' },
+          // Agent-configuration provenance mirror (lib/agentFingerprint.ts).
+          agentFingerprint: { type: 'keyword' },
+          agentFingerprintShort: { type: 'keyword' },
+          agentPromptHash: { type: 'keyword' },
           tags: { type: 'keyword' },
           actualOutcomes: { type: 'object', enabled: false },
           llmJudgeReasoning: { type: 'text' },

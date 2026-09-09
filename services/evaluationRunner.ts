@@ -58,6 +58,7 @@ import { loadConfigSync } from '@/lib/config/index';
 import { getBackendUrl } from '@/lib/portConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getCustomAgents } from '@/server/services/customAgentStore';
+import { reportProvenanceFrom } from '@/server/services/agentProvenance';
 import { debug } from '@/lib/debug';
 import { tracePollingManager } from './traces/tracePoller';
 import { fetchSpansForRun, type TraceWindowAgent } from './traces/fetchSpansForRun';
@@ -182,6 +183,12 @@ export async function executeEvaluationRun(
   const modelConfig = config.models[effectiveModelId];
   const bedrockModelId = modelConfig?.model_id || effectiveModelId;
 
+  // Agent-configuration provenance mirrored from the run onto every report
+  // (case-level comparisons need it too). The run doc is the source of
+  // truth — stamped by the creation route BEFORE execution — so a mid-run
+  // config edit cannot make the reports disagree with their run.
+  const reportProvenance = reportProvenanceFrom(run);
+
   // Build the hook orchestrator once per run. The factory hands the
   // orchestrator a fresh `TestFixtures` skeleton on demand; it stamps
   // `testInfo` and `provisioned` and adds `provide` for `beforeEach`.
@@ -299,6 +306,7 @@ export async function executeEvaluationRun(
             // experimentContext lookup in RunDetailsPage works.
             experimentRunId: run.id,
             experimentId: run.benchmarkId,
+            ...reportProvenance,
             // Empty fixtures — will be populated when the agent + judge
             // complete and we update this same doc.
             trajectory: [],
@@ -690,6 +698,9 @@ export async function executeEvaluationRun(
           (report as any).judgeModelId = (report as any).judgeModelId ?? run.judgeModelId;
           (report as any).experimentRunId = (report as any).experimentRunId ?? run.id;
           (report as any).experimentId = (report as any).experimentId ?? run.benchmarkId;
+          // Provenance mirror (see `reportProvenance` above). Stamped on the
+          // report too so the create-fallback path (no placeholder) carries it.
+          Object.assign(report as any, reportProvenance);
           let savedReport: EvaluationReport;
           if (placeholderRunId) {
             // Mirror saveReportWithModule's update shape: pass the report

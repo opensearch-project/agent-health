@@ -574,6 +574,43 @@ describe('evaluationRunner', () => {
       expect(run.results['tc-1'].reportId).toBe(placeholderId);
     });
 
+    it('mirrors the run\'s agent-configuration provenance onto the placeholder AND the completed report', async () => {
+      // lib/agentFingerprint.ts: the run doc is stamped at creation by the
+      // create/rerun route; the runner copies the three hash fields onto
+      // each report (placeholder create + completion update) so case-level
+      // comparisons can tell "same agent, different prompt" apart. The
+      // config SOURCE (path + sha) is run-level only, never on reports.
+      const testCases = [makeTestCase('tc-1')];
+      const run = makeRun({
+        agentFingerprint: 'f'.repeat(64), agentFingerprintShort: 'ffffffffffff', agentPromptHash: 'p'.repeat(64),
+        agentConfigSource: { path: '/cfg/agent-health.config.ts', gitSha: 'a'.repeat(40) },
+      } as any);
+      const storage = makeStorageModule();
+      mockRunEvaluation.mockResolvedValue({ id: 'eval-report', trajectory: [], testCaseId: 'tc-1' } as any);
+
+      await executeEvaluationRun(run, testCases, { storageModule: storage, onProgress: jest.fn() });
+
+      const created = storage.runs.create.mock.calls[0][0];
+      expect(created).toEqual(expect.objectContaining({
+        agentFingerprint: 'f'.repeat(64), agentFingerprintShort: 'ffffffffffff', agentPromptHash: 'p'.repeat(64),
+      }));
+      expect(created.agentConfigSource).toBeUndefined();
+      const [, updated] = storage.runs.update.mock.calls[0];
+      expect(updated).toEqual(expect.objectContaining({
+        agentFingerprint: 'f'.repeat(64), agentFingerprintShort: 'ffffffffffff', agentPromptHash: 'p'.repeat(64),
+      }));
+      expect(updated.agentConfigSource).toBeUndefined();
+    });
+
+    it('a legacy run without provenance never stamps undefined provenance keys on reports', async () => {
+      const storage = makeStorageModule();
+      await executeEvaluationRun(makeRun(), [makeTestCase('tc-1')], { storageModule: storage, onProgress: jest.fn() });
+      const created = storage.runs.create.mock.calls[0][0];
+      expect('agentFingerprint' in created).toBe(false);
+      const [, updated] = storage.runs.update.mock.calls[0];
+      expect('agentFingerprint' in updated).toBe(false);
+    });
+
     it('should set completedAt timestamp on completion', async () => {
       const run = makeRun();
       const storage = makeStorageModule();

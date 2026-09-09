@@ -4,6 +4,23 @@
  */
 
 import type { Node, Edge } from '@xyflow/react';
+import type { AgentConfigSource } from '@/lib/agentFingerprintDiff';
+
+/**
+ * Agent-configuration provenance stamped on runs and reports at creation
+ * time (see `lib/agentFingerprint.ts`). All optional: documents created
+ * before the feature carry none of these. `agentFingerprint` is a sha256 over
+ * the connector-relevant, secret-redacted agent config; `agentPromptHash`
+ * covers the system/append prompt alone so "prompt changed" can be told
+ * apart from "other config changed"; `agentConfigSource` is informational
+ * (config file path + git sha).
+ */
+export interface AgentProvenanceFields {
+  agentFingerprint?: string;
+  agentFingerprintShort?: string;
+  agentPromptHash?: string;
+  agentConfigSource?: AgentConfigSource;
+}
 
 // Shared type for difficulty levels
 export type Difficulty = 'Easy' | 'Medium' | 'Hard';
@@ -454,6 +471,14 @@ export interface TestCaseRun {
   judgeModelId?: string;
   agentEndpoint?: string;
   evaluatorId?: string;              // Which evaluator was used (optional for backwards compatibility)
+  /**
+   * Agent-configuration provenance (see {@link AgentProvenanceFields}).
+   * Mirrored from the parent run onto every report so case-level
+   * comparisons can tell "same agent, different prompt" apart too.
+   */
+  agentFingerprint?: string;
+  agentFingerprintShort?: string;
+  agentPromptHash?: string;
 
   // Results
   status: 'running' | 'completed' | 'failed';
@@ -1095,6 +1120,12 @@ export interface BenchmarkRun {
    * path); runs with equal digests are directly comparable. See {@link BenchmarkImage}.
    */
   imageDigest?: string;
+
+  /** Agent-configuration provenance (see {@link AgentProvenanceFields}). */
+  agentFingerprint?: string;
+  agentFingerprintShort?: string;
+  agentPromptHash?: string;
+  agentConfigSource?: AgentConfigSource;
 }
 
 // Parent entity - persisted to localStorage['benchmarks']
@@ -1259,6 +1290,12 @@ export interface EvaluationRun {
    * it's a point-in-time provenance link, not a live reference.
    */
   rerunOf?: string;
+
+  /** Agent-configuration provenance (see {@link AgentProvenanceFields}). */
+  agentFingerprint?: string;
+  agentFingerprintShort?: string;
+  agentPromptHash?: string;
+  agentConfigSource?: AgentConfigSource;
 }
 
 /**
@@ -1303,6 +1340,10 @@ export interface RunAggregateMetrics {
   createdAt: string;
   modelId: string;
   agentKey: string;
+  /** Agent-configuration provenance carried through for the scoreboard's mismatch badge. */
+  agentFingerprint?: string;
+  agentFingerprintShort?: string;
+  agentPromptHash?: string;
   totalTestCases: number;
   passedCount: number;
   failedCount: number;
