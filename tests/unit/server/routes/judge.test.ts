@@ -52,6 +52,8 @@ jest.mock('@/server/services/agenticJudgeService', () => ({
 // Mock the pi agentic *trace* judge service (provider: 'agent')
 jest.mock('@/server/services/piAgenticJudgeService', () => ({
   evaluateWithPiAgenticTrace: jest.fn(),
+  describeDefaultAgentJudgeModel: jest.fn(),
+  AGENT_JUDGE_MODEL_ENV: 'AH_AGENT_JUDGE_MODEL_ID',
 }));
 
 // Mock the storage adapter so a custom evaluatorId can resolve to an

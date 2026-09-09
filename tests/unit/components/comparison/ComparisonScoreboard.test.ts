@@ -311,6 +311,57 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
     expect(screen.getByTestId('scoreboard-judge-line').textContent).toContain('Judge:');
   });
 
+  it('judge line shows the JUDGE identity (judgeModelId · judgeModel), not the agent model, when runs carry it', () => {
+    const runA = makeRun('run-a');
+    const runB = makeRun('run-b');
+    const SONNET_45 = 'amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0';
+    render(
+      React.createElement(ComparisonScoreboard, {
+        runs: [runA, runB],
+        selectedRuns: [
+          { ...makeSelectedRun('run-a'), judgeModelId: 'agent-trace-judge', judgeModel: SONNET_45 },
+          { ...makeSelectedRun('run-b'), judgeModelId: 'agent-trace-judge', judgeModel: SONNET_45 },
+        ] as any,
+        overlap,
+        runBenchmarkIdById: new Map(),
+        onRemoveRun: () => {},
+        onSwapRuns: () => {},
+        getAgentName: (k: string) => k,
+      })
+    );
+    const line = screen.getByTestId('scoreboard-judge-line');
+    // Same judge on both -> collapsed to ONE label: kind + underlying LLM.
+    expect(screen.getAllByTestId('judge-model-label')).toHaveLength(1);
+    expect(line.textContent).toContain('agent-trace-judge');
+    expect(line.textContent).toContain('claude-sonnet-4-5');
+    // and NOT the agent's model, which is what the line used to show under "Judge:"
+    expect(line.textContent).not.toContain('claude-sonnet ');
+  });
+
+  it('judge line labels differing judges A/B and flags an unrecorded agent-judge model on old runs', () => {
+    const runA = makeRun('run-a');
+    const runB = makeRun('run-b');
+    render(
+      React.createElement(ComparisonScoreboard, {
+        runs: [runA, runB],
+        selectedRuns: [
+          { ...makeSelectedRun('run-a'), judgeModelId: 'agent-trace-judge' },            // old run: model never recorded
+          { ...makeSelectedRun('run-b'), judgeModelId: 'us.anthropic.claude-sonnet-4-6', judgeModel: 'us.anthropic.claude-sonnet-4-6' },
+        ] as any,
+        overlap,
+        runBenchmarkIdById: new Map(),
+        onRemoveRun: () => {},
+        onSwapRuns: () => {},
+        getAgentName: (k: string) => k,
+      })
+    );
+    const line = screen.getByTestId('scoreboard-judge-line');
+    expect(screen.getAllByTestId('judge-model-label')).toHaveLength(2);
+    expect(line.textContent).toMatch(/A .*agent-trace-judge/);
+    expect(line.textContent).toContain('model not recorded');
+    expect(line.textContent).toMatch(/B .*claude-sonnet-4-6/);
+  });
+
   it('removing a run calls onRemoveRun with that run id', () => {
     const runA = makeRun('run-a');
     const runB = makeRun('run-b');

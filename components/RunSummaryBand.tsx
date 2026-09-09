@@ -17,6 +17,7 @@
 
 import React from 'react';
 import { Calendar, CheckCircle2, XCircle, AlertTriangle, Clock, Loader2, Timer, Coins } from 'lucide-react';
+import { JudgeModelLabel } from '@/components/JudgeModelLabel';
 import { formatDate } from '@/lib/utils';
 import { formatDuration, formatCost } from '@/services/metrics';
 
@@ -35,7 +36,14 @@ export interface RunSummaryBandProps {
   benchmarkName?: string;
   agentName: string;
   modelName: string;
-  judgeModelLabel: string;
+  /**
+   * @deprecated Pass `judgeRun` (the run's `judgeModel` + `judgeModelId`) so
+   * the band shows "judge kind · underlying LLM". Kept for callers that only
+   * have a pre-formatted string.
+   */
+  judgeModelLabel?: string;
+  /** The run's judge identity; rendered via JudgeModelLabel when provided. */
+  judgeRun?: { judgeModel?: string | null; judgeModelId?: string | null } | null;
   evaluatorLabel: string;
   startedAt?: string;
   durationMs?: number;
@@ -52,6 +60,7 @@ export const RunSummaryBand: React.FC<RunSummaryBandProps> = ({
   agentName,
   modelName,
   judgeModelLabel,
+  judgeRun,
   evaluatorLabel,
   startedAt,
   durationMs,
@@ -87,7 +96,12 @@ export const RunSummaryBand: React.FC<RunSummaryBandProps> = ({
             <span>Model: <span className="text-foreground font-medium">{modelName}</span></span>
             <span className="text-muted-foreground/50">·</span>
             <span data-testid="run-summary-band-judge">
-              Judge: <span className="text-foreground font-medium">{judgeModelLabel}</span>
+              Judge:{' '}
+              {judgeRun !== undefined ? (
+                <JudgeModelLabel run={judgeRun} className="text-foreground font-medium" />
+              ) : (
+                <span className="text-foreground font-medium">{judgeModelLabel ?? '—'}</span>
+              )}
             </span>
             <span className="text-muted-foreground/50">·</span>
             <span data-testid="run-summary-band-evaluator">

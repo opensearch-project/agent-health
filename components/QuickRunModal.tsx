@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useAgentJudgeResolvedModel, judgeModelOptionLabel } from '@/services/client/judgeModelsApi';
 import { TestCase, TrajectoryStep, Evaluator } from '@/types';
 import { DEFAULT_CONFIG, getPreferredDefaultAgentKey } from '@/lib/constants';
 import { PREFS_KEYS } from '@/lib/preferences';
@@ -124,6 +125,9 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   }, [selectedAgent, setSelectedAgentKey]);
 
   // Group models by provider for the dropdown (includes dynamically discovered OpenAI-compatible models)
+  // Agent-judge entries name a provider, not a model -- show the LLM the
+  // server would actually judge with (GET /api/judge/models).
+  const resolvedAgentJudgeModels = useAgentJudgeResolvedModel();
   const modelsByProvider = Object.entries(DEFAULT_CONFIG.models).reduce((acc, [key, model]) => {
     const provider = model.provider || 'bedrock';
     if (!acc[provider]) acc[provider] = [];
@@ -599,8 +603,12 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                       <SelectGroup key={provider}>
                         <SelectLabel>{providerLabels[provider] || provider}</SelectLabel>
                         {models.map(model => (
-                          <SelectItem key={model.key} value={model.key}>
-                            {model.display_name}
+                          <SelectItem
+                            key={model.key}
+                            value={model.key}
+                            data-resolved-judge-model={resolvedAgentJudgeModels[model.key]?.id}
+                          >
+                            {judgeModelOptionLabel(model.display_name, model.key, resolvedAgentJudgeModels)}
                           </SelectItem>
                         ))}
                       </SelectGroup>

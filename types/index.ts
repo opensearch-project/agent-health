@@ -285,6 +285,15 @@ export interface InferenceConfig {
   modelId?: string;          // Model ID override
   temperature?: number;      // Temperature for LLM
   maxTokens?: number;        // Max output tokens
+  /**
+   * For the agent (trace) judge provider only: pin the UNDERLYING LLM the
+   * in-process pi SDK session runs on (e.g. `us.anthropic.claude-sonnet-4-5`)
+   * instead of letting `pickJudgeModel()` auto-pick from the credentialed
+   * registry. Matched by base id (region prefix ignored). Precedence:
+   * this > `AH_AGENT_JUDGE_MODEL_ID` env > auto-pick. Ignored by every
+   * other provider (their `modelId` IS the model).
+   */
+  agentJudgeModelId?: string;
 }
 
 /**
@@ -334,7 +343,23 @@ export type PassFailStatus = 'passed' | 'failed';
 
 // Storage feature - LLM Judge Response tracking
 export interface LLMJudgeResponse {
+  /**
+   * The LLM that actually produced this verdict. For plain providers
+   * (bedrock / openai-compatible / litellm) this equals the run's
+   * `judgeModelId`. For the agent (trace) judge — whose `judgeModelId`
+   * (`agent-trace-judge`) names a PROVIDER, not a model — this is the
+   * provider-qualified id the pi SDK session actually ran on (e.g.
+   * `amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0`).
+   * Reports persisted before that resolution was recorded carry the
+   * judgeModelId here instead; see {@link TestCaseRun.judgeModel}.
+   */
   modelId: string;
+  /**
+   * Judge provider kind that executed the call ('bedrock' | 'agent' |
+   * 'pi' | ...). Set alongside the resolved {@link modelId} so a report
+   * whose `modelId` is a real LLM id never loses WHICH judge produced it.
+   */
+  judgeProvider?: string;
   timestamp: string;
   promptTokens: number;
   completionTokens: number;
@@ -452,6 +477,18 @@ export interface TestCaseRun {
    * "Judge debug" surface and audit trail show which judge model was used.
    */
   judgeModelId?: string;
+  /**
+   * The UNDERLYING LLM that actually judged this report, as resolved at
+   * judge time — distinct from {@link judgeModelId}, which for agentic
+   * providers names the judge KIND (`agent-trace-judge` is a provider that
+   * picks its model at runtime from the pi registry), not a model. For
+   * plain Bedrock/OpenAI-compatible judges this trivially equals the
+   * resolved `judgeModelId`. Undefined for reports persisted before this
+   * field existed — the UI falls back to `judgeModelId` and, for agentic
+   * providers, notes that the model was auto-picked and not recorded.
+   * See server/services/piAgenticJudgeService.ts and `JudgeResponse.judgeModel`.
+   */
+  judgeModel?: string;
   agentEndpoint?: string;
   evaluatorId?: string;              // Which evaluator was used (optional for backwards compatibility)
 
@@ -1050,6 +1087,14 @@ export interface BenchmarkRun {
    * (`pi`, `agent`, `agentic`, `claude-code`) which pick their own model.
    */
   judgeModelId?: string;
+  /**
+   * Run-level record of the UNDERLYING LLM that judged this run — taken
+   * from the first report that resolved one (all cases of a run share the
+   * same judge configuration). Distinct from {@link judgeModelId}, which
+   * for the agent (trace) judge names the provider, not the model. See
+   * {@link TestCaseRun.judgeModel}.
+   */
+  judgeModel?: string;
   evaluatorId?: string;            // Evaluator to use for judging (optional, defaults to RCA Default)
   headers?: Record<string, string>; // Custom headers
   concurrency?: number;              // Parallel test case execution limit (1 = sequential, default)
@@ -1207,6 +1252,11 @@ export interface EvaluationRun {
    * LLM). Same precedence rules as on {@link BenchmarkRun.judgeModelId}.
    */
   judgeModelId?: string;
+  /**
+   * Underlying LLM that judged this run (first resolved report wins) — see
+   * {@link BenchmarkRun.judgeModel} / {@link TestCaseRun.judgeModel}.
+   */
+  judgeModel?: string;
   evaluatorId?: string;
   headers?: Record<string, string>;
   concurrency?: number;

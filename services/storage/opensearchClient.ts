@@ -97,6 +97,8 @@ export interface StorageBenchmarkRunConfig {
    * `toBenchmarkRun`/`toStorageFormat` mapping boundary.
    */
   judgeModelId?: string;
+  /** Run-level underlying judge LLM (first resolved report); see BenchmarkRun.judgeModel. */
+  judgeModel?: string;
   evaluatorId?: string;
   headers?: Record<string, string>;
   iterationCount?: number;
@@ -166,6 +168,8 @@ export interface StorageRun {
   evaluatorId?: string;
   /** Which Bedrock judge model produced this run's verdict (see EvaluationReport/BenchmarkRun.judgeModelId). */
   judgeModelId?: string;
+  /** The UNDERLYING LLM that judged (see TestCaseRun.judgeModel) -- `judgeModelId` may name a provider. */
+  judgeModel?: string;
   improvementStrategies?: {
     category: string;
     issue: string;

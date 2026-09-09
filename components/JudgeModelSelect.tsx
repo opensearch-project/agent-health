@@ -29,6 +29,7 @@
 
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { useAgentJudgeResolvedModel, judgeModelOptionLabel } from '@/services/client/judgeModelsApi';
 
 const PROVIDER_LABELS: Record<string, string> = {
   demo: 'Demo',
@@ -96,6 +97,11 @@ export function JudgeModelSelect({
   allowDefault = false,
   defaultLabel = 'Use evaluator default',
 }: JudgeModelSelectProps) {
+  // For `provider: 'agent'` entries the model_id (`agent-trace-judge`) names
+  // a judge KIND whose LLM is picked at run time -- GET /api/judge/models
+  // tells us which one, so the option reads "Agent Trace Judge -- Claude
+  // Sonnet 4.5" instead of leaving the user to guess. Empty until fetched.
+  const resolvedAgentModels = useAgentJudgeResolvedModel();
   // Group static models by provider, applying the agent-LLM filter when
   // requested so judge-only pseudo-models are hidden from the agent role.
   const modelsByProvider = Object.entries(DEFAULT_CONFIG.models).reduce((acc, [key, model]) => {
@@ -147,8 +153,13 @@ export function JudgeModelSelect({
           <SelectGroup key={provider}>
             <SelectLabel>{PROVIDER_LABELS[provider] || provider}</SelectLabel>
             {modelsByProvider[provider].map(model => (
-              <SelectItem key={model.key} value={model.key}>
-                {model.display_name}
+              <SelectItem
+                key={model.key}
+                value={model.key}
+                title={resolvedAgentModels[model.key] ? `Underlying LLM (${resolvedAgentModels[model.key].source}): ${resolvedAgentModels[model.key].id}` : undefined}
+                data-resolved-judge-model={resolvedAgentModels[model.key]?.id}
+              >
+                {judgeModelOptionLabel(model.display_name, model.key, resolvedAgentModels)}
               </SelectItem>
             ))}
           </SelectGroup>

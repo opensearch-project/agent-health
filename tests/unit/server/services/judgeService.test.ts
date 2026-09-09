@@ -105,6 +105,21 @@ describe('evaluateWithOpenAICompatible', () => {
     expect(callBody.max_tokens).toBe(4096);
   });
 
+  it('records judgeModel (the model the gateway echoed, else the requested id) and judgeProvider=openai-compatible', async () => {
+    mockFetch.mockResolvedValue(makeFetchSuccess(mockJudgeResult));
+    const r1 = await evaluateWithOpenAICompatible(baseRequest, 'gpt-4o');
+    expect(r1.judgeProvider).toBe('openai-compatible');
+    expect(r1.judgeModel).toBe('gpt-4o');
+
+    // A gateway (LiteLLM, vLLM) that serves an alias reports the concrete model back.
+    mockFetch.mockResolvedValue({
+      ok: true, status: 200, text: jest.fn().mockResolvedValue(''),
+      json: jest.fn().mockResolvedValue({ model: 'gpt-4o-2024-11-20', choices: [{ message: { content: JSON.stringify(mockJudgeResult) } }] }),
+    });
+    const r2 = await evaluateWithOpenAICompatible(baseRequest, 'gpt-4o');
+    expect(r2.judgeModel).toBe('gpt-4o-2024-11-20');
+  });
+
   it('sets Authorization: Bearer header when API key is set', async () => {
     mockFetch.mockResolvedValue(makeFetchSuccess(mockJudgeResult));
 

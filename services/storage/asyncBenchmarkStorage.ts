@@ -96,6 +96,7 @@ function toBenchmarkRun(stored: StorageBenchmarkRunConfig): BenchmarkRun {
     // declared optional on StorageBenchmarkRunConfig, so `undefined` on
     // older docs is already correctly typed without a cast.
     judgeModelId: stored.judgeModelId,
+    judgeModel: stored.judgeModel,
     evaluatorId: stored.evaluatorId,
     headers: stored.headers,
     benchmarkVersion: (stored as any).benchmarkVersion ?? 1,
@@ -143,6 +144,7 @@ function toStorageFormat(benchmark: Partial<Benchmark>): Record<string, any> {
       agentKey: run.agentKey,
       modelId: run.modelId,
       judgeModelId: run.judgeModelId,
+      judgeModel: run.judgeModel,
       evaluatorId: run.evaluatorId,
       headers: run.headers,
       createdAt: run.createdAt,
@@ -299,6 +301,7 @@ class AsyncBenchmarkStorage {
       agentKey: r.agentKey,
       modelId: r.modelId,
       judgeModelId: r.judgeModelId,
+      judgeModel: r.judgeModel,
       evaluatorId: r.evaluatorId,
       headers: r.headers,
       createdAt: r.createdAt,

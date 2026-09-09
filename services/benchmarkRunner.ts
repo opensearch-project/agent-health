@@ -36,6 +36,7 @@ import { connectorRegistry } from '@/services/connectors/server';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
+import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity } from '@/lib/judgeIdentity';
 import {
   runInSession,
   recordVerdict,
@@ -848,6 +849,9 @@ async function saveReportWithModule(storage: IStorageModule, report: any): Promi
     // "agent: <m1> judge: <m2>" and the audit trail is intact. Inherits
     // from the run-level cx input (BenchmarkRun.judgeModelId).
     judgeModelId: report.judgeModelId,
+    // Underlying LLM that judged (see lib/judgeIdentity) -- distinct from
+    // judgeModelId, which for the agent trace judge is a provider name.
+    judgeModel: report.judgeModel,
     evaluatorId: report.evaluatorId,
     status: report.status,
     passFailStatus: report.passFailStatus,
@@ -972,6 +976,8 @@ export async function runSingleUseCase(
       // it from the run config in case the placeholder pre-creation skipped
       // the field (storage transient failures during /api/evaluate).
       judgeModelId: run.judgeModelId,
+      // Underlying LLM that judged this report (lib/judgeIdentity).
+      judgeModel: (report as any).judgeModel,
       // Re-stamp evaluatorId for the same reason. /api/evaluate sets it
       // on the placeholder, but if that step failed silently the doc has
       // no evaluatorId — and the trace-mode polled judge then reads it
@@ -1122,6 +1128,8 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
             // Set only by the agent (trace) judge provider -- see
             // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
             ...(judgment.judgeMode ? { judgeMode: judgment.judgeMode } : {}),
+            // Underlying LLM that judged (TestCaseRun.judgeModel) -- see lib/judgeIdentity.
+            ...buildJudgeIdentityPatch(judgment, judgeModelId),
             // Unified judge surface (issue #230 follow-up).
             matcherResults: [
               buildJudgeMatcherEntry(judgment, {
@@ -1137,7 +1145,7 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
             // dropped llmJudgeResponse, mirroring the placeholder-update
             // bug fixed earlier in this PR for the standard path.
             llmJudgeResponse: {
-              modelId: judgeModelId || '',
+              ...buildLlmJudgeResponseIdentity(judgment, judgeModelId),
               timestamp: new Date().toISOString(),
               promptTokens: 0,
               completionTokens: 0,
@@ -1248,6 +1256,8 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
             // Set only by the agent (trace) judge provider -- see
             // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
             ...(judgment.judgeMode ? { judgeMode: judgment.judgeMode } : {}),
+            // Underlying LLM that judged (TestCaseRun.judgeModel) -- see lib/judgeIdentity.
+            ...buildJudgeIdentityPatch(judgment, judgeModelId),
             // Unified judge surface (issue #230 follow-up).
             matcherResults: [
               buildJudgeMatcherEntry(judgment, {
@@ -1261,7 +1271,7 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
             // judgeDebug, ...) so the legacy OpenSearch-client path also
             // surfaces the complete judge output on the run document.
             llmJudgeResponse: {
-              modelId: judgeModelId || '',
+              ...buildLlmJudgeResponseIdentity(judgment, judgeModelId),
               timestamp: new Date().toISOString(),
               promptTokens: 0,
               completionTokens: 0,

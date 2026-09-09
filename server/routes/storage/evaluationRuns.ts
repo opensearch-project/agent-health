@@ -330,6 +330,7 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
           id: run.id, name: run.name, createdAt: run.createdAt, completedAt,
           status: finalStatus, agentKey: run.agentKey, modelId: run.modelId,
           judgeModelId: run.judgeModelId, results: completedRun.results, stats: completedRun.stats,
+          ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
           ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
           ...(run.description ? { description: run.description } : {}),
           ...(run.evaluatorId ? { evaluatorId: run.evaluatorId } : {}),
@@ -343,6 +344,8 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
 
       const updatedRun = await storage.evaluationRuns.update(runId, {
         status: finalStatus, stats: completedRun.stats, completedAt, results: completedRun.results,
+        // Underlying judge LLM resolved during the run (see BenchmarkRun.judgeModel).
+        ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
         ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
       });
       sendSSE(res, 'completed', updatedRun);

@@ -27,6 +27,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useAgentJudgeResolvedModel, judgeModelOptionLabel } from '@/services/client/judgeModelsApi';
 import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
 import { Benchmark, TestCase, TestCaseSource } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -80,6 +81,9 @@ export const NewRunPage: React.FC = () => {
   // pattern — same pref key so the choice is shared across run-config
   // surfaces.
   const [judgeModelId, setJudgeModelId] = usePersistedState<string | undefined>('quick-run:judgeModelId', undefined);
+  // Agent-judge entries name a provider, not a model -- label them with the
+  // LLM the server would actually judge with (GET /api/judge/models).
+  const resolvedAgentJudgeModels = useAgentJudgeResolvedModel();
   // Evaluator isn't user-selectable in the composer, but a Re-run preserves
   // the source run's evaluator silently so the re-run is faithful.
   const [evaluatorId, setEvaluatorId] = useState<string | undefined>(undefined);
@@ -464,7 +468,9 @@ export const NewRunPage: React.FC = () => {
                   <SelectContent>
                     <SelectItem value="__default__">Use evaluator default</SelectItem>
                     {Object.entries(DEFAULT_CONFIG.models).map(([key, m]) => (
-                      <SelectItem key={key} value={key}>{(m as any).display_name || key}</SelectItem>
+                      <SelectItem key={key} value={key} data-resolved-judge-model={resolvedAgentJudgeModels[key]?.id}>
+                        {judgeModelOptionLabel((m as any).display_name || key, key, resolvedAgentJudgeModels)}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
