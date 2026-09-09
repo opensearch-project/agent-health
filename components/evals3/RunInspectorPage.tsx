@@ -20,7 +20,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Loader2, Clock, XCircle, Calendar, GitCompare, AlertTriangle, RotateCcw, RotateCw, Link2 } from 'lucide-react';
+import { Loader2, Clock, XCircle, Calendar, GitCompare, AlertTriangle, RotateCcw, RotateCw, Link2, PlugZap } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -29,7 +29,7 @@ import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/
 import { getEvaluationRun, updateEvaluationRun } from '@/services/client';
 import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, EvaluationReport, isEvaluationRun } from '@/types';
 import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
-import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
+import { ResultStatus, getResultStatus, StatusIcon, StatusLabel, getErrorStage } from './ResultStatus';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
@@ -378,6 +378,13 @@ export const RunInspectorPage: React.FC = () => {
   // as their own bucket. Excluded from the pass-rate denominator below so a
   // misconfigured evaluator can't drag the score to 0%.
   const erroredCount = results.filter(r => r.status === 'errored').length;
+  // Split the errored bucket by stage. Agent-request failures (timeout /
+  // connection / non-2xx — the agent produced NO output) have nothing to
+  // re-judge, so Retry judgement must count only judge/trace-stage errors;
+  // offering to "retry judgement" on an agent timeout was a no-op that
+  // confused the owner. Re-run is the remedy for agent errors.
+  const agentErrorCount = results.filter(r => r.status === 'errored' && getErrorStage(r.status, r.report) === 'agent').length;
+  const rejudgeableErroredCount = erroredCount - agentErrorCount;
   const totalCount = results.length;
   const judgedCount = passCount + failCount;
   const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
@@ -523,13 +530,24 @@ export const RunInspectorPage: React.FC = () => {
             <span className="flex items-center gap-1">
               <span className="text-green-500 font-semibold">{passCount}✓</span>
               <span className="text-red-500 font-semibold">{failCount}✗</span>
-              {erroredCount > 0 && (
+              {rejudgeableErroredCount > 0 && (
                 <span
                   className="flex items-center gap-0.5 text-amber-500 font-semibold ml-1"
-                  title="Evaluator could not run (e.g. judge validation error). Excluded from pass-rate aggregation."
+                  title="Judge/evaluator could not produce a verdict (e.g. judge returned no parseable verdict, trace timeout). Excluded from pass-rate aggregation. Use Retry judgement."
+                  data-testid="inspector-judge-error-count"
                 >
                   <AlertTriangle size={11} className="shrink-0" />
-                  {erroredCount}
+                  {rejudgeableErroredCount}
+                </span>
+              )}
+              {agentErrorCount > 0 && (
+                <span
+                  className="flex items-center gap-0.5 text-orange-500 font-semibold ml-1"
+                  title="Agent request failed (timeout / connection error / non-2xx) — the agent produced no output, so nothing was judged. Excluded from pass-rate aggregation. Re-run to retry the agent."
+                  data-testid="inspector-agent-error-count"
+                >
+                  <PlugZap size={11} className="shrink-0" />
+                  {agentErrorCount}
                 </span>
               )}
               <span>/ {totalCount}</span>
@@ -586,12 +604,16 @@ export const RunInspectorPage: React.FC = () => {
                 reliable signal for "is this a first-class evaluation run". */}
             {run && isEvaluationRun(run) && (() => {
               const runTerminal = run.status !== 'running' && run.status !== 'pending';
-              const disabled = !runTerminal || erroredCount === 0;
+              const disabled = !runTerminal || rejudgeableErroredCount === 0;
               const title = !runTerminal
                 ? 'Retry judgement is only available once the run has finished'
-                : erroredCount === 0
-                  ? 'No judge-failed cases to retry'
-                  : undefined;
+                : rejudgeableErroredCount === 0
+                  ? (agentErrorCount > 0
+                      ? `No judge-failed cases to retry — ${agentErrorCount} case${agentErrorCount === 1 ? '' : 's'} failed at the agent request (nothing to judge); use Re-run`
+                      : 'No judge-failed cases to retry')
+                  : (agentErrorCount > 0
+                      ? `Re-judges ${rejudgeableErroredCount} judge-failed case${rejudgeableErroredCount === 1 ? '' : 's'}; ${agentErrorCount} agent-error case${agentErrorCount === 1 ? '' : 's'} excluded (nothing to judge)`
+                      : undefined);
               return (
                 <div title={title} className="inline-flex">
                   <Button
@@ -603,7 +625,7 @@ export const RunInspectorPage: React.FC = () => {
                     onClick={() => setRetryJudgementDialogOpen(true)}
                   >
                     <RotateCw size={12} />
-                    Retry judgement ({erroredCount})
+                    Retry judgement ({rejudgeableErroredCount})
                   </Button>
                 </div>
               );
@@ -657,7 +679,7 @@ export const RunInspectorPage: React.FC = () => {
       {run && isEvaluationRun(run) && (
         <RetryJudgementConfirmDialog
           run={run as EvaluationRun | null}
-          count={erroredCount}
+          count={rejudgeableErroredCount}
           open={retryJudgementDialogOpen}
           onOpenChange={setRetryJudgementDialogOpen}
           onComplete={(_summary: RetryJudgementSummary) => loadData()}
@@ -691,11 +713,11 @@ export const RunInspectorPage: React.FC = () => {
                     }`}
                     onClick={() => setSelectedTcId(r.testCaseId)}
                   >
-                    <StatusIcon status={r.status} size={14} />
+                    <StatusIcon status={r.status} size={14} stage={getErrorStage(r.status, r.report)} />
                     <span className={`text-xs flex-1 min-w-0 truncate ${isSelected ? 'font-semibold' : 'font-medium'}`}>
                       {tc?.name || r.testCaseId}
                     </span>
-                    <StatusLabel status={r.status} />
+                    <StatusLabel status={r.status} stage={getErrorStage(r.status, r.report)} />
                   </div>
                 );
               })}

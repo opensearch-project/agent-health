@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, Calendar, CheckCircle2, XCircle, Clock, Loader2, StopCircle, Timer, Download, GitCompare, AlertTriangle } from 'lucide-react';
-import { getResultStatus, StatusIcon, StatusLabel } from '@/components/evals3/ResultStatus';
+import { getResultStatus, StatusIcon, StatusLabel, getErrorStage } from '@/components/evals3/ResultStatus';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -172,7 +172,7 @@ const TestCaseList = ({ context, selectedItem, onSelectItem, scrollToSelected, f
                 <div className="flex items-start gap-3">
                   {/* Status Icon */}
                   <div className="mt-0.5">
-                    <StatusIcon status={resultStatus} size={18} />
+                    <StatusIcon status={resultStatus} size={18} stage={getErrorStage(resultStatus, report)} />
                   </div>
 
                   {/* Content */}
@@ -183,7 +183,7 @@ const TestCaseList = ({ context, selectedItem, onSelectItem, scrollToSelected, f
                       }`}>
                         {testCase?.name || testCaseId}
                       </p>
-                      <StatusLabel status={resultStatus} />
+                      <StatusLabel status={resultStatus} stage={getErrorStage(resultStatus, report)} />
                     </div>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       {testCase?.category && (

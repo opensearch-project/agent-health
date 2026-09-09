@@ -376,9 +376,15 @@ describe('RunDetailsContent', () => {
       await renderAndWait(report);
 
       await waitFor(() => {
-        expect(screen.getByText('Traces never arrived')).toBeTruthy();
-        expect(screen.getByText(/polling exhausted after 30 attempts/)).toBeTruthy();
+        // Stage-aware card (RunFailureCard): kind=trace_timeout → trace stage.
+        const cards = screen.getAllByTestId('run-failure-card');
+        expect(cards.length).toBeGreaterThanOrEqual(1);
+        expect(cards[0].getAttribute('data-stage')).toBe('trace');
+        expect(screen.getAllByText('Trace pipeline failed').length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByText(/polling exhausted after 30 attempts/).length).toBeGreaterThanOrEqual(1);
       });
+      // The old blanket title must be gone.
+      expect(screen.queryByText(/Failed to fetch traces/i)).toBeNull();
     });
 
     it('should show yellow pending banner in traces tab only when no spans are loaded', async () => {
@@ -427,10 +433,12 @@ describe('RunDetailsContent', () => {
       await renderAndWait(report);
 
       await waitFor(() => {
-        // No `(kind=...)` prefix in traceError → banner title falls back to the
-        // generic "Evaluation error", with the raw message beneath.
-        expect(screen.getByText('Evaluation error')).toBeTruthy();
-        expect(screen.getByText(/Traces not available after 30 attempts/)).toBeTruthy();
+        // No `(kind=...)` token in traceError → metricsStatus:'error' alone is
+        // treated as a judge/evaluator-stage failure (lib/reportFailure.ts),
+        // with the raw message shown as the cause.
+        const cards = screen.getAllByTestId('run-failure-card');
+        expect(cards[0].getAttribute('data-stage')).toBe('judge');
+        expect(screen.getAllByText(/Traces not available after 30 attempts/).length).toBeGreaterThanOrEqual(1);
       });
     });
   });
