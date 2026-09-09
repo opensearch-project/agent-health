@@ -35,6 +35,12 @@ test.describe('Run report page (legacy /benchmarks/:id/runs/:id) — large run',
   let runId: string | null = null;
 
   test.beforeAll(async ({ request }) => {
+    // Reset: under fullyParallel a worker can leave this file and come back to
+    // it, re-running beforeAll while module-level state persists — a `const []`
+    // that is only ever push()ed accumulates the PREVIOUS invocation's ids
+    // (already deleted by its afterAll), so `reportIds[i]` below would point at
+    // 404s and rows render as PENDING. testCaseIds is reassigned, so it's fine.
+    reportIds.length = 0;
     const stamp = Date.now();
 
     const tcRes = await request.post('/api/storage/test-cases/bulk', {

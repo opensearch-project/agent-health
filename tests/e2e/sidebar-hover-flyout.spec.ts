@@ -208,11 +208,21 @@ test.describe('Sidebar hover-open', () => {
     const sidebar = page.locator('[data-testid="sidebar"]');
 
     await page.getByLabel('Collapse sidebar').click();
+    // Let the collapse transition finish BEFORE hovering. The hover zone
+    // animates 180px -> 64px over 200ms; hovering mid-transition lets
+    // Playwright pick a center point that ends up OUTSIDE the settled 64px
+    // rail, so Chromium synthesizes a mouseleave once the zone finishes
+    // shrinking under the stationary cursor and the flyout collapses again
+    // 250ms later (observed in CI as 178px -> 80px -> 64px). Waiting for the
+    // settled rail width first, then hovering well inside it, removes the
+    // race — the same sequence the first test in this file already uses.
+    await expect(zone).toHaveCSS('width', '64px');
+    await expect(sidebar).toHaveCSS('width', '64px');
     const collapsedEvals = sidebar.locator('a[data-testid="nav-evals3"]');
     await expect(collapsedEvals).toBeVisible();
     await expect(collapsedEvals).toHaveAttribute('href', /\/evaluations\/runs$/);
 
-    await zone.hover();
+    await zone.hover({ position: { x: 32, y: 300 } });
     await expect(sidebar).toHaveCSS('width', '180px');
     const expandedEvals = sidebar.locator('a[data-testid="nav-evals3"]');
     await expect(expandedEvals).toBeVisible();
