@@ -81,16 +81,20 @@ test.describe('Test Case Detail — Eval source code view', () => {
       const codeView = page.getByTestId('eval-source-code-view');
       await expect(codeView).toBeVisible();
 
-      // Filename header + language badge are visible even while collapsed.
+      // Filename header + language badge.
       await expect(codeView).toContainText('rca-outage.eval.ts');
       await expect(codeView).toContainText('TypeScript');
 
-      // COLLAPSED BY DEFAULT: the code body must not render until the
-      // header toggle is clicked (matches the pre-existing collapsible
-      // Test Case Definition behavior).
-      await expect(page.getByTestId('eval-source-code-body')).toHaveCount(0);
+      // EXPANDED BY DEFAULT for a legacy (no per-test `definition`) record:
+      // the eval file IS the definition here, and hiding it behind a second
+      // click made SDK definitions look empty (owner report, 2026-09-08).
+      // Still collapsible: the toggle hides the body and shows it again.
       const toggle = page.getByTestId('eval-source-toggle');
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.getByTestId('eval-source-code-body')).toBeVisible();
+      await toggle.click();
       await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await expect(page.getByTestId('eval-source-code-body')).toHaveCount(0);
       await toggle.click();
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 
@@ -141,7 +145,8 @@ test.describe('Test Case Detail — Eval source code view', () => {
       await page.goto(`/evaluations/test-cases/${tc.id}`);
       const codeView = page.getByTestId('eval-source-code-view');
       await expect(codeView).toBeVisible();
-      await page.getByTestId('eval-source-toggle').click();
+      // Expanded by default → the placeholder is visible without a click.
+      await expect(page.getByTestId('eval-source-toggle')).toHaveAttribute('aria-expanded', 'true');
       await expect(codeView).toContainText(/source not captured at import/i);
       // No code body / line-number gutter when there's nothing to render.
       await expect(page.getByTestId('eval-source-code-body')).toHaveCount(0);

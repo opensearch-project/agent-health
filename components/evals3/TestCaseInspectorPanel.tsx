@@ -18,17 +18,27 @@ import { RunDetailsContent } from '../RunDetailsContent';
 import { type ResultStatus } from './ResultStatus';
 import { getRunDisplayName } from '@/lib/utils';
 import { CollapsibleTestCaseDefinition } from './CollapsibleTestCaseDefinition';
+import type { FullRecordState } from './SdkTestDefinitionView';
 
 interface TestCaseInspectorPanelProps {
   report: EvaluationReport;
   testCase: TestCase | null;
   status: ResultStatus;
+  /**
+   * Set when `testCase` is a summary projection and the full record
+   * (sourceCode, definition, context, expected outcomes) is loading / failed
+   * / missing — see CollapsibleTestCaseDefinition. Only RunInspectorPage
+   * bulk-loads summaries; the other callers pass complete records and leave
+   * this unset.
+   */
+  testCaseFullRecord?: FullRecordState;
 }
 
 export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
   report,
   testCase,
   status,
+  testCaseFullRecord,
 }) => {
   // Issue #242: an evaluator-error report has metricsStatus='error' and a
   // cleared (null) passFailStatus. The runner derives status='errored'
@@ -82,7 +92,7 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
           test-case run or a benchmark run. Defaults closed; clicking
           the header opens it to show file path (SDK) or full JSON
           (no truncation). */}
-      <CollapsibleTestCaseDefinition testCase={testCase} />
+      <CollapsibleTestCaseDefinition testCase={testCase} fullRecord={testCaseFullRecord} />
 
       {/* Tabs — directly into content, no extra chrome */}
       <div className="flex-1 overflow-hidden">

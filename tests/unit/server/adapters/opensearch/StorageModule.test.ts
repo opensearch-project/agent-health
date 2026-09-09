@@ -531,6 +531,61 @@ describe('OpenSearchStorageModule', () => {
         expect(result).toEqual(expect.objectContaining({ created: 0, errors: 0 }));
       });
     });
+
+    // Per-test SDK `definition` is additive and outside sourceHash, so an
+    // unchanged-file re-import lands on the equal-hash path. A stored record
+    // that predates the field must gain it IN PLACE (same version doc via
+    // client.update), and a record that already has one must never be
+    // rewritten from this path.
+    describe('bulkUpsert — definition backfill on the equal-hash path', () => {
+      const existing = {
+        id: 'tc-legacy', name: 'Legacy', version: 3, currentVersion: 3,
+        sourceFile: 'evals/s.eval.js', sourceHash: 'same', createdAt: '2024-01-01T00:00:00Z',
+      };
+      const definition = { registeredAs: 'sdk' as const, options: { prompt: 'p' }, bodySource: '() => {}' };
+
+      it('writes definition onto the current version doc without bumping the version', async () => {
+        mockClient.search.mockResolvedValue(makeSearchResponse([existing]));
+        mockClient.update.mockResolvedValue({ body: { result: 'updated' } });
+
+        const result = await mod.testCases.bulkUpsert([
+          { name: 'Legacy', sourceFile: 'evals/s.eval.js', sourceHash: 'same', definition },
+        ]);
+
+        expect(result).toEqual(expect.objectContaining({ created: 0, updated: 0, unchanged: 1 }));
+        expect(result.testCases[0].definition).toEqual(definition);
+        expect((result.testCases[0] as any).version).toBe(3);
+        // In-place partial update of tc-legacy-v3 — NOT a new tc-legacy-v4 index.
+        expect(mockClient.update).toHaveBeenCalledWith(expect.objectContaining({
+          id: 'tc-legacy-v3',
+          body: { doc: { definition } },
+        }));
+        expect(mockClient.index).not.toHaveBeenCalled();
+      });
+
+      it('does not touch a record that already has a definition', async () => {
+        mockClient.search.mockResolvedValue(makeSearchResponse([{ ...existing, definition }]));
+
+        const result = await mod.testCases.bulkUpsert([
+          { name: 'Legacy', sourceFile: 'evals/s.eval.js', sourceHash: 'same',
+            definition: { ...definition, bodySource: 'DIFFERENT' } },
+        ]);
+
+        expect(result.unchanged).toBe(1);
+        expect(result.testCases[0].definition).toEqual(definition);
+        expect(mockClient.update).not.toHaveBeenCalled();
+        expect(mockClient.index).not.toHaveBeenCalled();
+      });
+
+      it('does nothing when the incoming record carries no definition', async () => {
+        mockClient.search.mockResolvedValue(makeSearchResponse([existing]));
+        const result = await mod.testCases.bulkUpsert([
+          { name: 'Legacy', sourceFile: 'evals/s.eval.js', sourceHash: 'same' },
+        ]);
+        expect(result.unchanged).toBe(1);
+        expect(mockClient.update).not.toHaveBeenCalled();
+      });
+    });
   });
 
   // ==========================================================================

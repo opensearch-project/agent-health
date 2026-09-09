@@ -114,6 +114,7 @@ function toTestCase(stored: StorageTestCase): TestCase {
     sourceCode: stored.sourceCode,
     sourceFileName: stored.sourceFileName,
     sourceLanguage: stored.sourceLanguage,
+    definition: stored.definition,
     isPromoted: stored.tags?.includes('promoted') ?? false,
     createdAt: stored.createdAt,
     updatedAt: stored.updatedAt,
@@ -237,7 +238,7 @@ class AsyncTestCaseStorage {
    * lookup over many runs' worth of test cases stays bounded regardless of
    * how large the id list is.
    * @param options.summary - request the lightweight list-view payload
-   *   (strips sourceCode/context/expectedOutcomes) instead of full records.
+   *   (strips sourceCode/definition/context/expectedOutcomes) instead of full records.
    */
   async getByIds(ids: string[], options?: { summary?: boolean }): Promise<TestCase[]> {
     if (ids.length === 0) return [];

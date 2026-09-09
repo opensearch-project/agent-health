@@ -580,6 +580,29 @@ export interface TestCaseVersion {
   }[];
 }
 
+/**
+ * Per-test definition captured when a code-SDK eval file is imported.
+ * Everything here is derived from the single `test(name, options, body)`
+ * call that registered the test — not from the surrounding file.
+ */
+export interface TestCaseDefinitionCapture {
+  /** How the test was registered. Only `'sdk'` exists today. */
+  registeredAs: 'sdk';
+  /**
+   * The options object exactly as passed to `test()`, after the two-arg /
+   * three-arg overload is resolved, with non-JSON-serializable values
+   * (functions, symbols, undefined) dropped. Rendered as the "Pretty" view.
+   */
+  options: Record<string, unknown>;
+  /**
+   * `body.toString()` of the evaluate callback — the source text of THIS
+   * test's assertions, as it appeared in the executed file. Bounded to
+   * `DEFINITION_BODY_SOURCE_MAX_CHARS`; `bodyTruncated` is set when cut.
+   */
+  bodySource: string;
+  bodyTruncated?: boolean;
+}
+
 // TestCase is referred to as "Use Case" in the UI
 export interface TestCase {
   id: string;
@@ -616,6 +639,16 @@ export interface TestCase {
   sourceCode?: string;               // Full text of the eval file at import time
   sourceFileName?: string;           // Basename of sourceFile, e.g. "cybergym.eval.ts"
   sourceLanguage?: 'javascript' | 'typescript'; // For syntax highlighting
+  // Per-test definition captured at import for code-SDK test cases (see
+  // `TestCaseDefinitionCapture`). `sourceCode` is the WHOLE file; when a
+  // suite registers dozens of tests from a data table or a loop, the file
+  // alone doesn't show which test *this* record is. `definition` carries
+  // the resolved `test()` options and the evaluate callback for THIS test
+  // only. Additive: absent on JSON test cases and on code-imported test
+  // cases persisted before it existed (the UI falls back to the whole-file
+  // view with a re-import hint). Deliberately NOT part of `sourceHash`, so
+  // adding it never bumps versions on re-import of an unchanged file.
+  definition?: TestCaseDefinitionCapture;
 
   // Metadata
   isPromoted: boolean;              // Available for experiments

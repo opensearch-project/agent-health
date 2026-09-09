@@ -316,8 +316,19 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
 
       if (existing) {
         if (existing.sourceHash === tc.sourceHash) {
+          // Same source, same test. `definition` (per-test options + evaluate
+          // body, additive, display-only) is deliberately NOT in sourceHash,
+          // so a record persisted before it existed would otherwise never
+          // gain it — every re-import of an unchanged file lands here. Backfill
+          // it IN PLACE on the current version doc (no version bump: the test
+          // content is unchanged) when, and only when, the stored record has
+          // none. Never overwrite an existing definition on this path.
+          if (!existing.definition && tc.definition) {
+            results.push(await this.backfillDefinition(existing, tc.definition));
+          } else {
+            results.push(existing);
+          }
           unchanged++;
-          results.push(existing);
         } else {
           const updatedTc = await this.update(existing.id, {
             ...tc,
@@ -334,6 +345,24 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
     }
 
     return { created, updated, unchanged, testCases: results };
+  }
+
+  /**
+   * Write `definition` onto the CURRENT version doc of `existing` without
+   * creating a new version. Used only by bulkUpsert's equal-hash path to
+   * backfill records imported before per-test definition capture existed.
+   */
+  private async backfillDefinition(existing: TestCase, definition: NonNullable<TestCase['definition']>): Promise<TestCase> {
+    assertNotMigrating(this.index);
+    const ver = (existing as any).version ?? existing.currentVersion ?? 1;
+    const docId = `${existing.id}-v${ver}`;
+    await this.client.update({
+      index: this.index,
+      id: docId,
+      body: { doc: { definition } },
+      refresh: 'wait_for',
+    });
+    return { ...existing, definition };
   }
 }
 

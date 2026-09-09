@@ -9,6 +9,7 @@ import { resolve, dirname } from 'path';
 import { pathToFileURL } from 'url';
 import { createRequire, Module as NodeModule } from 'module';
 import type { CodeTestCase, RegisteredHook } from './types.js';
+import type { TestCaseDefinitionCapture } from '@/types';
 import {
   setActiveFile,
   getRegisteredTests,
@@ -61,6 +62,58 @@ export function computeTestCaseHash(tc: CodeTestCase, fileSource?: string): stri
 
 export interface LoadedTestCase extends CodeTestCase {
   hash: string;
+  /**
+   * Per-test definition (resolved options + evaluate body text) captured
+   * for the import path to persist as `TestCase.definition`. NOT folded
+   * into `hash` — both inputs are already covered (options fields
+   * explicitly, body text via `fileSource`), and keeping the hash inputs
+   * unchanged is what guarantees a re-import of an unchanged file after
+   * this field shipped is classified `unchanged`, not `updated`.
+   */
+  definition: TestCaseDefinitionCapture;
+}
+
+/** Upper bound on the persisted evaluate-body text (per test). */
+export const DEFINITION_BODY_SOURCE_MAX_CHARS = 32 * 1024;
+const BODY_TRUNCATION_MARKER = '\n/* … truncated — see whole file … */';
+
+/**
+ * Build the per-test `definition` capture from a registered test.
+ *
+ * `options` goes through a JSON round-trip so anything a user smuggled into
+ * the options object that isn't data (a function, a symbol, `undefined`) is
+ * dropped rather than serialized as `{}` or rejected by storage. `bodySource`
+ * is `Function.prototype.toString()` of the evaluate callback — for the
+ * synthetic-CJS `.js`/`.ts` paths that's the text as it appeared in the
+ * executed source (esbuild-transpiled for `.ts`), bounded so a pathological
+ * body can't bloat the document.
+ */
+export function captureTestDefinition(tc: CodeTestCase): TestCaseDefinitionCapture {
+  let options: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(JSON.stringify(tc.options ?? {}));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) options = parsed;
+  } catch {
+    // Circular or otherwise unserializable options: persist nothing rather
+    // than fail the import. The whole-file view is still available.
+  }
+  let bodySource = '';
+  try {
+    bodySource = typeof tc.evaluate === 'function' ? Function.prototype.toString.call(tc.evaluate) : '';
+  } catch {
+    bodySource = '';
+  }
+  let bodyTruncated = false;
+  if (bodySource.length > DEFINITION_BODY_SOURCE_MAX_CHARS) {
+    bodySource = bodySource.slice(0, DEFINITION_BODY_SOURCE_MAX_CHARS) + BODY_TRUNCATION_MARKER;
+    bodyTruncated = true;
+  }
+  return {
+    registeredAs: 'sdk',
+    options,
+    bodySource,
+    ...(bodyTruncated ? { bodyTruncated: true } : {}),
+  };
 }
 
 export interface LoadResult {
@@ -394,6 +447,7 @@ export async function loadTestCasesFromModule(filePath: string): Promise<LoadRes
   const loaded: LoadedTestCase[] = testCases.map(tc => ({
     ...tc,
     hash: computeTestCaseHash(tc, fileSource),
+    definition: captureTestDefinition(tc),
   }));
 
   // Derive describe-group → test names mapping. Tests outside any

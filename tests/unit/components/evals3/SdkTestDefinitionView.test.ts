@@ -1,0 +1,254 @@
+/**
+ * @jest-environment jsdom
+ */
+
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * Unit tests for SdkTestDefinitionView — the per-test definition surface for
+ * code-SDK test cases (run report "Test Case Definition" + Test Case page).
+ *
+ *  - Captured record: filename header + [Pretty | Evaluate function | Whole
+ *    file] segments, Pretty by default showing THIS test's options (prompt,
+ *    expected outcomes, labels, timeout) and NOT other tests from the file.
+ *  - Evaluate function segment shows `definition.bodySource`, highlighted.
+ *  - Whole file segment shows the pre-existing EvalSourceCodeView.
+ *  - Legacy record (no `definition`): whole-file view + re-import hint, no
+ *    segments.
+ *  - JSON test case (no sourceFile): renders nothing.
+ *
+ * Written with React.createElement (not JSX) — this repo's jest config only
+ * matches `*.test.ts`.
+ */
+
+import * as React from 'react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
+
+jest.mock('@/components/ui/markdown', () => ({
+  Markdown: ({ children }: { children: string }) =>
+    require('react').createElement('div', null, children),
+  hasRealMarkdown: () => false,
+}));
+
+import { SdkTestDefinitionView } from '@/components/evals3/SdkTestDefinitionView';
+import type { TestCase } from '@/types';
+
+const h = React.createElement;
+
+const WHOLE_FILE = [
+  "const { test } = require('@opensearch-project/agent-health');",
+  "test('first-case', { prompt: 'Prompt one' }, async ({ result }) => { check(result, 1); });",
+  "test('second-case', { prompt: 'Prompt two' }, async ({ result }) => { check(result, 2); });",
+  "test('third-case', { prompt: 'Prompt three' }, async ({ result }) => { check(result, 3); });",
+].join('\n');
+
+function sdkTestCase(overrides: Partial<TestCase> = {}): TestCase {
+  return {
+    id: 'tc-sdk-2',
+    name: 'second-case',
+    description: 'loader-derived description',
+    labels: ['category:Synthetic', 'difficulty:Easy'],
+    category: 'Synthetic',
+    difficulty: 'Easy',
+    currentVersion: 1,
+    versions: [],
+    isPromoted: false,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+    initialPrompt: 'Prompt two',
+    context: [],
+    expectedOutcomes: ['second passes'],
+    sourceFile: 'evals/suite.eval.js',
+    sourceFileName: 'suite.eval.js',
+    sourceLanguage: 'javascript',
+    sourceHash: 'abc',
+    sourceCode: WHOLE_FILE,
+    definition: {
+      registeredAs: 'sdk',
+      options: {
+        prompt: 'Prompt two',
+        description: 'Second case in the suite',
+        expectedOutcomes: ['second passes', 'second is fast'],
+        labels: ['category:Synthetic', 'difficulty:Easy', 'team:platform'],
+        timeout: 45000,
+      },
+      bodySource: 'async ({ result }) => { check(result, 2); }',
+    },
+    ...overrides,
+  } as TestCase;
+}
+
+describe('SdkTestDefinitionView — captured definition', () => {
+  it('renders the filename header, segments, and Pretty by default with ONLY this test\'s options', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase() }));
+    const view = screen.getByTestId('sdk-test-definition-view');
+    expect(view.getAttribute('data-mode')).toBe('captured');
+    expect(screen.getByText('evals/suite.eval.js')).toBeTruthy();
+    expect(screen.getByText('JavaScript')).toBeTruthy();
+
+    // Segments present, Pretty selected.
+    expect(screen.getByTestId('sdk-definition-segment-pretty').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('sdk-definition-segment-evaluate').getAttribute('aria-selected')).toBe('false');
+    expect(screen.getByTestId('sdk-definition-segment-file').getAttribute('aria-selected')).toBe('false');
+
+    const pretty = screen.getByTestId('sdk-definition-pretty');
+    expect(within(pretty).getByText('Prompt two')).toBeTruthy();
+    expect(within(pretty).getByText('Second case in the suite')).toBeTruthy();
+    expect(within(pretty).getByText('second passes')).toBeTruthy();
+    expect(within(pretty).getByText('second is fast')).toBeTruthy();
+    expect(within(pretty).getByText('team:platform')).toBeTruthy();
+    expect(screen.getByTestId('sdk-definition-timeout').textContent).toContain('45000');
+
+    // The OTHER tests in the file are not shown.
+    expect(screen.queryByText(/first-case/)).toBeNull();
+    expect(screen.queryByText(/third-case/)).toBeNull();
+    expect(screen.queryByText(/Prompt one/)).toBeNull();
+    // No "Source File" pointer row duplicating the header.
+    expect(screen.queryByTestId('test-case-source-pointer')).toBeNull();
+    // Whole-file / evaluate bodies are not mounted while on Pretty.
+    expect(screen.queryByTestId('sdk-definition-evaluate')).toBeNull();
+    expect(screen.queryByTestId('eval-source-code-view')).toBeNull();
+  });
+
+  it('Evaluate function segment shows the highlighted callback text, not the rest of the file', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase() }));
+    fireEvent.click(screen.getByTestId('sdk-definition-segment-evaluate'));
+    const body = screen.getByTestId('sdk-definition-evaluate-body');
+    expect(body.textContent).toContain('check(result, 2)');
+    expect(body.textContent).not.toContain('check(result, 1)');
+    expect(body.textContent).not.toContain('third-case');
+    // Prism emitted tokens (e.g. `async` keyword).
+    expect(body.querySelectorAll('.token').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('sdk-definition-pretty')).toBeNull();
+  });
+
+  it('flags a truncated evaluate body', () => {
+    render(h(SdkTestDefinitionView, {
+      testCase: sdkTestCase({
+        definition: { registeredAs: 'sdk', options: {}, bodySource: '() => {} /* … */', bodyTruncated: true },
+      }),
+    }));
+    fireEvent.click(screen.getByTestId('sdk-definition-segment-evaluate'));
+    expect(screen.getByText(/truncated at import/i)).toBeTruthy();
+  });
+
+  it('Whole file segment renders the pre-existing EvalSourceCodeView, expanded, with every test', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase() }));
+    fireEvent.click(screen.getByTestId('sdk-definition-segment-file'));
+    expect(screen.getByTestId('eval-source-code-view')).toBeTruthy();
+    const body = screen.getByTestId('eval-source-code-body');
+    expect(body.textContent).toContain('first-case');
+    expect(body.textContent).toContain('second-case');
+    expect(body.textContent).toContain('third-case');
+  });
+
+  it('Pretty view with no prompt in options shows the deterministic-test placeholder', () => {
+    render(h(SdkTestDefinitionView, {
+      testCase: sdkTestCase({
+        definition: { registeredAs: 'sdk', options: {}, bodySource: '() => {}' },
+      }),
+    }));
+    expect(screen.getByText(/No agent prompt \(deterministic test\)/)).toBeTruthy();
+    expect(screen.queryByTestId('sdk-definition-timeout')).toBeNull();
+  });
+});
+
+describe('SdkTestDefinitionView — legacy record (no definition)', () => {
+  it('falls back to the whole-file view with a re-import hint and no segments', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase({ definition: undefined }) }));
+    const view = screen.getByTestId('sdk-test-definition-view');
+    expect(view.getAttribute('data-mode')).toBe('legacy');
+    expect(screen.getByTestId('sdk-definition-legacy-hint').textContent).toMatch(/re-import/i);
+    expect(screen.getByTestId('eval-source-code-view')).toBeTruthy();
+    expect(screen.queryByTestId('sdk-definition-segments')).toBeNull();
+  });
+
+  // Owner report (2026-09-08): "test case definition of SDK evals doesn't
+  // show up when I click the Test Case Definition dropdown". The legacy
+  // branch rendered EvalSourceCodeView COLLAPSED — a second nested disclosure
+  // inside a section the user had just opened — so the dropdown showed only
+  // the hint and a one-line file row.
+  it('shows the whole file EXPANDED — the user already opened the section this view lives in', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase({ definition: undefined }) }));
+    const body = screen.getByTestId('eval-source-code-body');
+    expect(body.textContent).toContain('first-case');
+    expect(body.textContent).toContain('second-case');
+    expect(screen.getByTestId('eval-source-toggle').getAttribute('aria-expanded')).toBe('true');
+    // Still collapsible on request.
+    fireEvent.click(screen.getByTestId('eval-source-toggle'));
+    expect(screen.queryByTestId('eval-source-code-body')).toBeNull();
+  });
+
+  it('stepping to another legacy case re-expands the code even if the previous one was collapsed', () => {
+    const { rerender } = render(h(SdkTestDefinitionView, { testCase: sdkTestCase({ definition: undefined }) }));
+    fireEvent.click(screen.getByTestId('eval-source-toggle'));
+    expect(screen.queryByTestId('eval-source-code-body')).toBeNull();
+    rerender(h(SdkTestDefinitionView, { testCase: sdkTestCase({ id: 'tc-sdk-3', name: 'third-case', definition: undefined }) }));
+    expect(screen.getByTestId('eval-source-code-body')).toBeTruthy();
+  });
+
+  it('legacy record with no sourceCode either shows the "source not captured" placeholder (expanded), not a blank panel', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase({ definition: undefined, sourceCode: undefined }) }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('legacy');
+    expect(screen.getByText(/Source not captured at import/)).toBeTruthy();
+    expect(screen.getAllByText('evals/suite.eval.js').length).toBeGreaterThan(0);
+  });
+});
+
+// The run inspector bulk-loads SUMMARY projections (no sourceCode, no
+// definition) and fetches the full record lazily. A summary SDK case is
+// indistinguishable from a legacy one — so the caller passes `loading` /
+// `loadError` and the view must not guess "legacy".
+describe('SdkTestDefinitionView — summary projection while the full record loads', () => {
+  const summary = () => sdkTestCase({ definition: undefined, sourceCode: undefined });
+
+  it('loading: filename header + language badge + "Loading full definition…", NO legacy hint, NO code view, NO segments', () => {
+    render(h(SdkTestDefinitionView, { testCase: summary(), fullRecord: 'loading' }));
+    const view = screen.getByTestId('sdk-test-definition-view');
+    expect(view.getAttribute('data-mode')).toBe('loading');
+    expect(view.textContent).toContain('evals/suite.eval.js');
+    expect(view.textContent).toContain('JavaScript');
+    expect(screen.getByTestId('sdk-definition-loading').textContent).toMatch(/Loading full definition/);
+    expect(screen.queryByTestId('sdk-definition-legacy-hint')).toBeNull();
+    expect(screen.queryByTestId('eval-source-code-view')).toBeNull();
+    expect(screen.queryByTestId('sdk-definition-segments')).toBeNull();
+    expect(screen.queryByText(/Source not captured at import/)).toBeNull();
+  });
+
+  it('error: filename header + an error row, never the false "re-import" advice (and no fake retry promise)', () => {
+    render(h(SdkTestDefinitionView, { testCase: summary(), fullRecord: 'error' }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('error');
+    expect(screen.getByTestId('sdk-definition-load-error').textContent).toMatch(/Couldn't load/);
+    expect(screen.getByTestId('sdk-definition-load-error').textContent).not.toMatch(/retry/i);
+    expect(screen.queryByTestId('sdk-definition-legacy-hint')).toBeNull();
+    expect(screen.queryByText(/re-import/i)).toBeNull();
+  });
+
+  it('missing (case deleted since the run): says so, distinct from a transient error', () => {
+    render(h(SdkTestDefinitionView, { testCase: summary(), fullRecord: 'missing' }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('missing');
+    expect(screen.getByTestId('sdk-definition-load-error').textContent).toMatch(/not found/i);
+    expect(screen.queryByText(/re-import/i)).toBeNull();
+  });
+
+  it('a captured definition wins over a stale loading flag', () => {
+    render(h(SdkTestDefinitionView, { testCase: sdkTestCase(), fullRecord: 'loading' }));
+    expect(screen.getByTestId('sdk-test-definition-view').getAttribute('data-mode')).toBe('captured');
+    expect(screen.getByTestId('sdk-definition-pretty')).toBeTruthy();
+    expect(screen.queryByTestId('sdk-definition-loading')).toBeNull();
+  });
+});
+
+describe('SdkTestDefinitionView — non-SDK', () => {
+  it('renders nothing for a JSON test case or null', () => {
+    const { container } = render(h(SdkTestDefinitionView, {
+      testCase: sdkTestCase({ sourceFile: undefined, definition: undefined }),
+    }));
+    expect(container.innerHTML).toBe('');
+    const { container: c2 } = render(h(SdkTestDefinitionView, { testCase: null }));
+    expect(c2.innerHTML).toBe('');
+  });
+});

@@ -14,10 +14,11 @@
  * Two shapes depending on provenance:
  *
  *   • SDK / code-imported tests (`testCase.sourceFile` set) — show the
- *     file path plus the full eval-file source as an IDE-style code view
- *     (EvalSourceCodeView). We still can't render the `evaluate` function
- *     body in isolation (it's a JS closure at runtime), but the whole file
- *     that defines it is captured at import time and rendered here.
+ *     file path header with a [Pretty | Evaluate function | Whole file]
+ *     segmented view of THIS test (SdkTestDefinitionView): the resolved
+ *     `test()` options rendered like the JSON definition, the evaluate
+ *     callback text, or the whole eval file. Older records without the
+ *     per-test `definition` capture fall back to the whole-file view.
  *
  *   • JSON tests (no sourceFile) — lead with a reader-oriented definition
  *     (prompt, expected outcomes, context, and metadata). The complete
@@ -30,22 +31,33 @@
  */
 
 import React, { useState } from 'react';
-import { ChevronRight, ChevronDown, FileCode2, Braces, Copy, Check } from 'lucide-react';
+import { ChevronRight, ChevronDown, FileCode2, Braces, Copy, Check, Loader2 } from 'lucide-react';
 import { TestCase } from '@/types';
 import { Badge } from '@/components/ui/badge';
-import { EvalSourceCodeView } from '@/components/evals3/EvalSourceCodeView';
+import { SdkTestDefinitionView, type FullRecordState } from '@/components/evals3/SdkTestDefinitionView';
 import { TestCaseDefinition } from '@/components/TestCaseDefinition';
 
 interface CollapsibleTestCaseDefinitionProps {
   testCase: TestCase | null;
   /** Whether the section starts open. Default: false (collapsed). */
   defaultOpen?: boolean;
+  /**
+   * Set when `testCase` is a SUMMARY projection (list-view payload: no
+   * sourceCode / definition / context / expectedOutcomes, prompt truncated):
+   * `'loading'` while the full record is in flight, `'error'` / `'missing'`
+   * if that fetch failed or found nothing. Callers that bulk-load summaries
+   * and fetch the full record lazily (RunInspectorPage) set this so the body
+   * never renders the summary as if it were the complete definition. Unset =
+   * `testCase` is authoritative.
+   */
+  fullRecord?: FullRecordState;
   className?: string;
 }
 
 export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefinitionProps> = ({
   testCase,
   defaultOpen = false,
+  fullRecord,
   className,
 }) => {
   const [open, setOpen] = useState(defaultOpen);
@@ -60,7 +72,7 @@ export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefiniti
   const json = isSdk ? '' : JSON.stringify(testCase, null, 2);
 
   // JSON branch only — the SDK branch's copy affordance lives inside
-  // EvalSourceCodeView's header (copies the full source, not just the path).
+  // SdkTestDefinitionView (the whole-file segment's copy button copies the source).
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const text = json;
@@ -104,11 +116,23 @@ export const CollapsibleTestCaseDefinition: React.FC<CollapsibleTestCaseDefiniti
       {open && (
         <div className="px-4 pb-3">
           {isSdk ? (
-            // SDK test: EvalSourceCodeView IS the whole surface — its own
-            // header already shows the source path + language badge + line
-            // count + copy button, so the old standalone "Source File" row
-            // and sha256 line were redundant duplicates (owner feedback).
-            <EvalSourceCodeView testCase={testCase} maxHeight="360px" />
+            // SDK test: SdkTestDefinitionView IS the whole surface — its
+            // header shows the source path + language badge, so the old
+            // standalone "Source File" row and sha256 line stay gone
+            // (owner feedback). Pretty view of THIS test by default.
+            <SdkTestDefinitionView testCase={testCase} maxHeight="360px" fullRecord={fullRecord} />
+          ) : fullRecord === 'loading' ? (
+            // Summary projection: prompt truncated, rubric stripped. Don't
+            // paint that as the definition — the full record is coming. (If
+            // the fetch fails, the summary's real-but-partial prompt is still
+            // better than nothing, so only the in-flight window is gated.)
+            <div
+              className="flex items-center gap-2 py-2 text-[11px] text-muted-foreground"
+              data-testid="test-case-definition-loading"
+              role="status"
+            >
+              <Loader2 size={12} className="animate-spin shrink-0" /> Loading full definition…
+            </div>
           ) : (
             <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
               <TestCaseDefinition testCase={testCase} compact />

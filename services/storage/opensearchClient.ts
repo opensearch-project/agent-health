@@ -11,6 +11,7 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
+import type { TestCaseDefinitionCapture } from '@/types';
 
 const STORAGE_BASE_URL = ENV_CONFIG.storageApiUrl;
 
@@ -80,6 +81,8 @@ export interface StorageTestCase {
   sourceCode?: string;
   sourceFileName?: string;
   sourceLanguage?: 'javascript' | 'typescript';
+  /** Per-test SDK definition capture (see TestCase.definition). */
+  definition?: TestCaseDefinitionCapture;
 }
 
 export interface StorageBenchmarkRunConfig {
