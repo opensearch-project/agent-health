@@ -47,8 +47,8 @@ export type {
   BuildTrajectoryContext,
 } from '../types/index.js';
 
-// Trace types and SDK utilities (for custom judge hooks)
-export type { Span, TrajectoryStep } from '../types/index.js';
+// Trace and test-case types used by SDK consumers
+export type { Span, TestCaseFixture, TrajectoryStep } from '../types/index.js';
 export { fetchTracesByRunIds as fetchTraces } from '../services/traces/index.js';
 
 // Connector types (for custom connector implementations)

@@ -4,8 +4,9 @@
  */
 
 import { z } from 'zod';
-import type { AgentContextItem } from '@/types';
+import type { AgentContextItem, TestCaseFixture } from '@/types';
 import type { CreateTestCaseInput } from '@/services/storage';
+import { testCaseFixtureSchema } from '@/lib/testCaseFixture';
 
 // ============ Zod Schemas ============
 
@@ -31,6 +32,7 @@ export const testCaseSchema = z.object({
   difficulty: difficultySchema,
   initialPrompt: z.string().min(1, 'Initial prompt is required'),
   context: z.array(contextItemSchema).optional().default([]),
+  fixture: testCaseFixtureSchema.optional(),
   // expectedOutcomes is optional. SDK code-only tests (`test()` blocks
   // that drive pass/fail via deterministic body or inline `judge()`
   // calls) have no expectedOutcomes — so requiring "at least one
@@ -61,7 +63,7 @@ export const testCasesArraySchema = z.array(testCaseSchema).min(1, 'Array cannot
  */
 export type ValidatedTestCaseInput = Pick<
   CreateTestCaseInput,
-  'name' | 'description' | 'category' | 'subcategory' | 'difficulty' | 'initialPrompt' | 'context' | 'expectedOutcomes'
+  'name' | 'description' | 'category' | 'subcategory' | 'difficulty' | 'initialPrompt' | 'context' | 'fixture' | 'expectedOutcomes'
 >;
 
 // Form state for the TestCaseEditor component
@@ -73,6 +75,7 @@ export interface TestCaseFormState {
   difficulty: 'Easy' | 'Medium' | 'Hard';
   initialPrompt: string;
   context: AgentContextItem[];
+  fixture?: TestCaseFixture;
   expectedOutcomes: string[];
 }
 
@@ -185,6 +188,10 @@ export function serializeFormToJson(formState: TestCaseFormState): string {
     json.context = formState.context;
   }
 
+  if (formState.fixture) {
+    json.fixture = formState.fixture;
+  }
+
   return JSON.stringify(json, null, 2);
 }
 
@@ -222,6 +229,7 @@ export function parseJsonToFormState(jsonString: string): ValidationResult<TestC
       difficulty: data.difficulty,
       initialPrompt: data.initialPrompt,
       context: (data.context || []) as AgentContextItem[],
+      fixture: data.fixture,
       expectedOutcomes: data.expectedOutcomes.length > 0 ? data.expectedOutcomes : [''],
     },
   };

@@ -90,6 +90,25 @@ describe('computeTestCaseHash', () => {
   // on an existing eval file must invalidate the hash so the upsert path
   // picks up the change and re-persists. Without this, users would set
   // these fields and the test case would silently keep its old version.
+  it('changes when the fixture envelope is edited so code imports create a new version', () => {
+    const fixtureV1 = {
+      type: 'filesystem-workspace',
+      ref: 'workspace',
+      integrity: 'sha256:aaa111',
+      payload: { files: ['a.ts'] },
+    };
+    const fixtureV2 = {
+      ...fixtureV1,
+      integrity: 'sha256:bbb222',
+      payload: { files: ['a.ts', 'b.ts'] },
+    };
+    const first = { ...baseTc, options: { ...baseTc.options, fixture: fixtureV1 } };
+    const edited = { ...baseTc, options: { ...baseTc.options, fixture: fixtureV2 } };
+
+    expect(computeTestCaseHash(baseTc)).not.toBe(computeTestCaseHash(first));
+    expect(computeTestCaseHash(first)).not.toBe(computeTestCaseHash(edited));
+  });
+
   it('changes when expectedOutcomes is added', () => {
     const modified = { ...baseTc, options: { ...baseTc.options, expectedOutcomes: ['outcome A'] } };
     expect(computeTestCaseHash(baseTc)).not.toBe(computeTestCaseHash(modified));

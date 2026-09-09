@@ -47,6 +47,7 @@ import type {
 import { STORAGE_INDEXES } from '../../middleware/dataSourceConfig.js';
 import { assertNotMigrating } from '../../services/migrationLock.js';
 import { describeOpenSearchError } from '../../services/opensearchClientFactory.js';
+import { assertValidTestCaseFixture } from '../../../lib/testCaseFixture.js';
 
 // ============================================================================
 // Helpers
@@ -188,6 +189,7 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
 
   async create(testCase: Partial<TestCase>): Promise<TestCase> {
     assertNotMigrating(this.index);
+    assertValidTestCaseFixture(testCase);
     if (!testCase.name) throw new Error('Test case name is required');
     const now = new Date().toISOString();
     const id = testCase.id || generateId('tc');
@@ -215,6 +217,7 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
 
   async update(id: string, updates: Partial<TestCase>): Promise<TestCase> {
     assertNotMigrating(this.index);
+    assertValidTestCaseFixture(updates);
     const current = await this.getById(id);
     if (!current) throw new Error(`Test case ${id} not found`);
     const currentVer = (current as any).version ?? (current as any).currentVersion ?? 0;
@@ -310,6 +313,7 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
     const results: TestCase[] = [];
 
     for (const tc of testCases) {
+      assertValidTestCaseFixture(tc);
       const existing = all.find(
         e => e.name === tc.name && (tc.sourceFile ? e.sourceFile === tc.sourceFile : true)
       );

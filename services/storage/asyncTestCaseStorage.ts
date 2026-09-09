@@ -11,7 +11,7 @@
  */
 
 import { testCaseStorage as opensearchTestCases, StorageTestCase } from './opensearchClient';
-import type { TestCase, TestCaseVersion, AgentContextItem, AgentToolDefinition, Difficulty } from '@/types';
+import type { TestCase, TestCaseVersion, TestCaseFixture, AgentContextItem, AgentToolDefinition, Difficulty } from '@/types';
 import { buildLabels, parseLabels } from '@/lib/labels';
 import { fetchChunked, DEFAULT_CHUNK_SIZE } from '@/lib/chunkedFetch';
 
@@ -30,6 +30,7 @@ export interface CreateTestCaseInput {
   difficulty?: 'Easy' | 'Medium' | 'Hard';
   initialPrompt: string;
   context: AgentContextItem[];
+  fixture?: TestCaseFixture;
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
   expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
@@ -61,6 +62,7 @@ export interface UpdateTestCaseInput {
   difficulty?: 'Easy' | 'Medium' | 'Hard';
   initialPrompt?: string;
   context?: AgentContextItem[];
+  fixture?: TestCaseFixture;
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
   expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
@@ -120,6 +122,7 @@ function toTestCase(stored: StorageTestCase): TestCase {
     lastRunAt: stored.lastRunAt,
     initialPrompt: stored.initialPrompt,
     context: (stored.context || []) as AgentContextItem[],
+    fixture: stored.fixture,
     tools: stored.tools as AgentToolDefinition[] | undefined,
     expectedPPL: stored.expectedPPL,
     expectedOutcomes: stored.expectedOutcomes,
@@ -154,6 +157,7 @@ function toStorageFormat(testCase: CreateTestCaseInput | UpdateTestCaseInput): P
     tools: testCase.tools,
     messages: [],
     context: testCase.context,
+    fixture: testCase.fixture,
     forwardedProps: {},
     expectedPPL: testCase.expectedPPL,
     expectedOutcomes: testCase.expectedOutcomes,
@@ -336,6 +340,7 @@ class AsyncTestCaseStorage {
       createdAt: s.createdAt,
       initialPrompt: s.initialPrompt,
       context: (s.context || []) as AgentContextItem[],
+      fixture: s.fixture,
       tools: s.tools as AgentToolDefinition[] | undefined,
       expectedPPL: s.expectedPPL,
       expectedOutcomes: s.expectedOutcomes,  // NEW
@@ -355,6 +360,7 @@ class AsyncTestCaseStorage {
       createdAt: stored.createdAt,
       initialPrompt: stored.initialPrompt,
       context: (stored.context || []) as AgentContextItem[],
+      fixture: stored.fixture,
       tools: stored.tools as AgentToolDefinition[] | undefined,
       expectedPPL: stored.expectedPPL,
       expectedOutcomes: stored.expectedOutcomes,  // NEW

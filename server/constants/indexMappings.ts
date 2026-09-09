@@ -54,6 +54,17 @@ export function getIndexMappings(): IndexMappings {
           tools: { type: 'object', enabled: false },
           messages: { type: 'object', enabled: false },
           context: { type: 'object', enabled: false },
+          fixture: {
+            type: 'object',
+            properties: {
+              type: { type: 'keyword' },
+              ref: { type: 'keyword' },
+              integrity: { type: 'keyword' },
+              // Connector-owned and unbounded: preserve in `_source` without
+              // allowing payload keys to consume the index field budget.
+              payload: { type: 'object', enabled: false },
+            },
+          },
           forwardedProps: { type: 'object', enabled: false },
           expectedOutcome: { type: 'text' },
           expectedTrajectory: { type: 'object', enabled: false },

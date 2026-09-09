@@ -121,8 +121,8 @@ module.exports = {
     //   reason to take on that risk.
     // - TestCaseDefinition.tsx, ContextDispositionGroups.tsx, TestCaseDetailPanel.tsx,
     //   CollapsibleTestCaseDefinition.tsx (#420): readable test-case definitions —
-    //   each has a focused jsdom/RTL suite so the PR's new rendering lines count
-    //   toward codecov/patch.
+    //   including fixture rendering — each has a focused jsdom/RTL suite so the
+    //   PRs' new rendering lines count toward codecov/patch.
     'components/TestCaseDefinition.tsx',
     'components/ContextDispositionGroups.tsx',
     'components/TestCaseDetailPanel.tsx',

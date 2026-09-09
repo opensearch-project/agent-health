@@ -300,6 +300,20 @@ describe('AsyncTestCaseStorage', () => {
       expect(result?.name).toBe('Test Case 1');
     });
 
+    it('preserves a fixture envelope returned by the storage API', async () => {
+      const fixture = {
+        type: 'filesystem-workspace',
+        ref: 'workspace',
+        integrity: 'sha256:abc123',
+        payload: { files: ['a.ts'] },
+      };
+      mockOsTestCases.getById.mockResolvedValue({ ...createMockStorageTestCase(), fixture });
+
+      const result = await asyncTestCaseStorage.getById('tc-1');
+
+      expect(result?.fixture).toEqual(fixture);
+    });
+
     it('returns null when not found', async () => {
       mockOsTestCases.getById.mockResolvedValue(null);
 
@@ -318,6 +332,21 @@ describe('AsyncTestCaseStorage', () => {
 
       expect(mockOsTestCases.create).toHaveBeenCalledTimes(1);
       expect(result.id).toBe('new-tc');
+    });
+
+    it('sends a fixture envelope unchanged when creating a test case', async () => {
+      const fixture = {
+        type: 'filesystem-workspace',
+        ref: 'workspace',
+        integrity: 'sha256:abc123',
+        payload: { files: ['a.ts'] },
+      };
+      mockOsTestCases.create.mockResolvedValue({ ...createMockStorageTestCase('new-tc'), fixture });
+
+      const result = await asyncTestCaseStorage.create({ ...createMockCreateInput(), fixture });
+
+      expect(mockOsTestCases.create).toHaveBeenCalledWith(expect.objectContaining({ fixture }));
+      expect(result.fixture).toEqual(fixture);
     });
 
     it('adds promoted tag when isPromoted is true', async () => {
@@ -495,6 +524,7 @@ describe('AsyncTestCaseStorage', () => {
       expect(result[0]).toHaveProperty('createdAt');
       expect(result[0]).toHaveProperty('initialPrompt');
       expect(result[0]).toHaveProperty('context');
+      expect(result[0]).toHaveProperty('fixture');
       expect(result[0]).toHaveProperty('expectedOutcomes');
     });
   });
