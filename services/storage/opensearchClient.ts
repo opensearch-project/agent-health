@@ -444,6 +444,8 @@ export const experimentStorage = benchmarkStorage;
 
 // ==================== Runs API ====================
 
+export type RunReportInclude = 'core' | 'full' | 'trajectory' | 'rawEvents' | 'judgeRawResponse';
+
 export const runStorage = {
   /**
    * Get all runs with pagination
@@ -478,9 +480,9 @@ export const runStorage = {
   /**
    * Get run by ID
    */
-  async getById(id: string): Promise<StorageRun | null> {
+  async getById(id: string, include: RunReportInclude = 'full'): Promise<StorageRun | null> {
     try {
-      return await request<StorageRun>('GET', `/runs/${id}`);
+      return await request<StorageRun>('GET', `/runs/${encodeURIComponent(id)}?include=${include}`);
     } catch (error) {
       const msg = (error as Error).message.toLowerCase();
       if (msg.includes('404') || msg.includes('not found')) {

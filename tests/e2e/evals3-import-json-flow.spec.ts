@@ -52,9 +52,10 @@ test.describe('JSON import flow — created-ids-from-bulk-response regression', 
       if (msg.type() === 'error') consoleErrors.push(msg.text());
     });
 
-    // Capture and explicitly await the bulk-create response. Async response
-    // event handlers are not joined by Playwright, so navigation can otherwise
-    // win the race with response-body parsing.
+    // Capture the bulk-create response so the test can independently verify
+    // the ids it returns are the same ones the benchmark ends up with. Await
+    // it explicitly: async response event handlers are not joined by Playwright,
+    // so navigation can otherwise win the race with response-body parsing.
     await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
 

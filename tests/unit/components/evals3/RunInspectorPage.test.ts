@@ -329,7 +329,7 @@ describe('RunInspectorPage — lazy report loading', () => {
 
     // Row 110 is beyond the 100-row window; the deep link bumps the window.
     await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(120));
-    await waitFor(() => expect(mockGetReportById).toHaveBeenCalledWith('rep-110'));
+    await waitFor(() => expect(mockGetReportById).toHaveBeenCalledWith('rep-110', 'core'));
   });
 
   it('shows error + Retry instead of an infinite skeleton, and Retry recovers', async () => {

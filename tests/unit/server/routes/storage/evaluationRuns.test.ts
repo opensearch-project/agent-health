@@ -116,7 +116,10 @@ describe('Evaluation Runs API', () => {
     });
 
     it('applies benchmarkId/agentKey/status/testCaseId/trigger/sort/order/from/size', async () => {
-      mockEvaluationRunsList.mockResolvedValue({ items: [{ id: 'run-1' }], total: 1 });
+      mockEvaluationRunsList.mockResolvedValue({
+        items: [{ id: 'run-1', judgeFailureSummary: '2/2 cases failed at the judge step' }],
+        total: 1,
+      });
       const res = await request(app).get(
         '/api/storage/evaluation-runs?benchmarkId=b1&agentKey=a1&status=completed&testCaseId=tc-1&trigger=cli&sort=completedAt&order=asc&from=5&size=10'
       );
@@ -125,7 +128,10 @@ describe('Evaluation Runs API', () => {
         benchmarkId: 'b1', agentKey: 'a1', status: 'completed', testCaseId: 'tc-1', trigger: 'cli',
         from: 5, size: 10, sort: 'completedAt', order: 'asc',
       });
-      expect(res.body).toEqual({ evaluationRuns: [{ id: 'run-1' }], total: 1 });
+      expect(res.body).toEqual({
+        evaluationRuns: [{ id: 'run-1', judgeFailureSummary: '2/2 cases failed at the judge step' }],
+        total: 1,
+      });
     });
 
     it('500s when storage throws', async () => {
