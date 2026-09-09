@@ -17,6 +17,7 @@ import { evaluateWithClaudeCode, parseClaudeCodeError } from '@/server/services/
 import { evaluateWithPi, parsePiError } from '@/server/services/piJudgeService';
 import { evaluateWithPiAgenticTrace } from '@/server/services/piAgenticJudgeService';
 import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
+import { isJudgeParseError } from '@/server/services/judgeResponseParser';
 import { hasTraceCorrelation } from '@/services/traces/judgeAgentsHints';
 import { loadConfigSync } from '@/lib/config/index';
 import serverConfig from '@/server/config';
@@ -568,6 +569,24 @@ router.post('/api/judge', async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('[JudgeAPI] Error during evaluation:', error);
+
+    // A judge reply with no parseable verdict (empty final turn, malformed
+    // JSON) is NOT a transient provider error — retrying the same prompt ten
+    // times with exponential backoff just burns ~8 minutes per case (owner
+    // incident). Return a distinct 422 + code so the client caps retries and
+    // keeps the raw text for the report. Provider-agnostic: every provider
+    // funnels through parseJudgeResponse, so the wording can't misattribute
+    // the failure to the wrong CLI (pre-fix the `agent` provider's empty
+    // reply was reported as "Failed to parse Pi judge response. The CLI may
+    // have returned invalid JSON.").
+    if (isJudgeParseError(error)) {
+      return res.status(422).json({
+        error: `Judge evaluation failed: ${error.message}`,
+        code: error.code,
+        rawResponse: error.rawResponse,
+        details: error.message,
+      });
+    }
 
     const provider = (() => {
       try {
