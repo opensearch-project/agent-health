@@ -43,7 +43,7 @@ const FullScreenDialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed inset-0 z-50 flex flex-col bg-background",
+        "fixed inset-0 z-50 flex flex-col bg-background max-lg:!max-w-[calc(100vw-1rem)] max-lg:!max-h-[calc(100dvh-1rem)] max-lg:overflow-y-auto",
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
