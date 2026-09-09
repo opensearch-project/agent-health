@@ -252,12 +252,14 @@ export async function generateComparisonDeepDive(opts: {
     `http://localhost:${readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001'}`;
   const startTime = Date.now();
 
-  const { createAgentSession, SessionManager, AuthStorage, ModelRegistry, DefaultResourceLoader, getAgentDir } =
+  const { createAgentSession, SessionManager, ModelRuntime, DefaultResourceLoader, getAgentDir } =
     await loadPiSdk();
 
-  const authStorage = AuthStorage.create();
-  const modelRegistry = ModelRegistry.create(authStorage);
-  const available = await modelRegistry.getAvailable();
+  // pi >= 0.80.8 replaced the `AuthStorage` + `ModelRegistry` pair with the
+  // async `ModelRuntime` facade (~/.pi/agent/auth.json + models.json by
+  // default). `getAvailable()` still returns the credentialed models.
+  const modelRuntime = await ModelRuntime.create();
+  const available = await modelRuntime.getAvailable();
   const model = findRequestedModel(available, opts.modelId) ?? pickJudgeModel(available);
   if (!model) {
     throw new Error('Comparison deep-dive: no model available (configure a Bedrock/Anthropic model with valid credentials).');
@@ -286,8 +288,7 @@ export async function generateComparisonDeepDive(opts: {
 
   const { session } = await createAgentSession({
     model,
-    authStorage,
-    modelRegistry,
+    modelRuntime,
     resourceLoader,
     // Only the run-scoped trace tools + the structured-output recorder — no filesystem/bash access.
     tools: ['query_spans', 'query_logs', 'record_deepdive_extras'],

@@ -57,8 +57,8 @@ export interface PiSession {
 export interface PiSdk {
   createAgentSession(opts: any): Promise<{ session: PiSession }>;
   SessionManager: { inMemory(): unknown };
-  AuthStorage: { create(): unknown };
-  ModelRegistry: { create(authStorage: unknown): { getAvailable(): Promise<PiModel[]> } };
+  /** pi >= 0.80.8: canonical async model/auth facade (replaced AuthStorage + ModelRegistry). */
+  ModelRuntime: { create(opts?: unknown): Promise<{ getAvailable(): Promise<PiModel[]> }> };
   DefaultResourceLoader: new (opts: any) => { reload(): Promise<void> };
   getAgentDir(): string;
 }

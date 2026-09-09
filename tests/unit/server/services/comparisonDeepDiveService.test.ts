@@ -224,9 +224,8 @@ describe('comparisonDeepDiveService — optional systemPrompt override (browser-
           },
         })),
         SessionManager: { inMemory: jest.fn(() => ({})) },
-        AuthStorage: { create: jest.fn(() => ({})) },
-        ModelRegistry: {
-          create: jest.fn(() => ({
+        ModelRuntime: {
+          create: jest.fn(async () => ({
             getAvailable: jest.fn(async () => [mockModel]),
           })),
         },
@@ -319,9 +318,8 @@ describe('comparisonDeepDiveService — DEEP_DIVE_DEADLINE_MS (owner bug: "What\
           },
         })),
         SessionManager: { inMemory: jest.fn(() => ({})) },
-        AuthStorage: { create: jest.fn(() => ({})) },
-        ModelRegistry: {
-          create: jest.fn(() => ({
+        ModelRuntime: {
+          create: jest.fn(async () => ({
             getAvailable: jest.fn(async () => [mockModel]),
           })),
         },
