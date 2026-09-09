@@ -9,8 +9,9 @@
  *
  *   - same config → same hash (deterministic, key-order independent)
  *   - prompt change → fingerprint AND promptHash change
- *   - header / secret / env-VALUE change → fingerprint UNCHANGED (redacted)
- *   - hook BODY change → fingerprint changes (source text is hashed)
+ *   - header VALUE / secret / env-VALUE change → fingerprint UNCHANGED (redacted)
+ *   - header KEY added, auth TYPE change → fingerprint changes (shape is behavior)
+ *   - hook BODY change → fingerprint changes (exact source text is hashed)
  *   - non-behavioral fields (name, description, enabled) → unchanged
  *   - endpoint override → changes (it changes what the connector talks to)
  */
@@ -22,6 +23,7 @@ import {
   deriveAgentPromptText,
   resolveAgentConfigSource,
   canonicalStringify,
+  isSecretKey,
   AGENT_FINGERPRINT_SHORT_LENGTH,
 } from '@/lib/agentFingerprint';
 import { classifyFingerprintDiff, describeFingerprintDiff, formatFingerprintTooltip } from '@/lib/agentFingerprintDiff';
@@ -153,26 +155,44 @@ describe('computeAgentFingerprint — what changes it', () => {
     const none = computeAgentFingerprint(baseAgent());
     expect(a.agentFingerprint).not.toBe(b.agentFingerprint);
     expect(a.agentFingerprint).not.toBe(none.agentFingerprint);
-    // Same body, different formatting → same hash (whitespace-normalized).
+  });
+
+  it('hook source is hashed VERBATIM: whitespace inside a string literal is behavior, so it must change the hash', () => {
+    // codex_review: whitespace-normalizing the source would collapse
+    // `'a  b'` and `'a b'` (and regex/template literals) into one hash.
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const hookA2 = new Function('ctx', 'return   ctx') as any;
-    const hookA3 = new Function('ctx', 'return ctx') as any;
-    expect(computeAgentFingerprint(baseAgent({ hooks: { beforeRequest: hookA2 } })).agentFingerprint)
-      .toBe(computeAgentFingerprint(baseAgent({ hooks: { beforeRequest: hookA3 } })).agentFingerprint);
+    const twoSpaces = new Function('ctx', "return 'a  b'") as any;
+    const oneSpace = new Function('ctx', "return 'a b'") as any;
+    expect(computeAgentFingerprint(baseAgent({ hooks: { beforeRequest: twoSpaces } })).agentFingerprint)
+      .not.toBe(computeAgentFingerprint(baseAgent({ hooks: { beforeRequest: oneSpace } })).agentFingerprint);
   });
 });
 
 describe('computeAgentFingerprint — what does NOT change it (redaction)', () => {
-  it('header change → fingerprint UNCHANGED (headers are never hashed)', () => {
+  it('header VALUE change (credential rotation) → fingerprint UNCHANGED; header KEY added → changes', () => {
     const a = computeAgentFingerprint(baseAgent());
-    const b = computeAgentFingerprint(baseAgent({ headers: { Authorization: 'Bearer rotated-2', 'X-Extra': 'y' } }));
-    expect(b.agentFingerprint).toBe(a.agentFingerprint);
+    const rotated = computeAgentFingerprint(baseAgent({ headers: { Authorization: 'Bearer rotated-2' } }));
+    expect(rotated.agentFingerprint).toBe(a.agentFingerprint);
+    // codex_review: an added API-version / tenant header IS behavior.
+    const added = computeAgentFingerprint(baseAgent({ headers: { Authorization: 'Bearer secret-1', 'X-Api-Version': '2024-06' } }));
+    expect(added.agentFingerprint).not.toBe(a.agentFingerprint);
+    // Header values never reach the payload.
+    expect(canonicalStringify(buildFingerprintPayload(baseAgent({ headers: { 'X-Api-Version': '2024-06' } })))).not.toContain('2024-06');
   });
 
-  it('auth change → fingerprint UNCHANGED', () => {
+  it('auth SECRET change → UNCHANGED; auth TYPE / region change → changes; secrets never reach the payload', () => {
     const a = computeAgentFingerprint(baseAgent({ auth: { type: 'bearer', token: 't1' } }));
-    const b = computeAgentFingerprint(baseAgent({ auth: { type: 'basic', username: 'u', password: 'p' } }));
-    expect(b.agentFingerprint).toBe(a.agentFingerprint);
+    const rotated = computeAgentFingerprint(baseAgent({ auth: { type: 'bearer', token: 't2' } }));
+    expect(rotated.agentFingerprint).toBe(a.agentFingerprint);
+    const basic = computeAgentFingerprint(baseAgent({ auth: { type: 'basic', username: 'u', password: 'p' } }));
+    expect(basic.agentFingerprint).not.toBe(a.agentFingerprint);
+    const sigv4a = computeAgentFingerprint(baseAgent({ auth: { type: 'aws-sigv4', awsRegion: 'us-east-1' } }));
+    const sigv4b = computeAgentFingerprint(baseAgent({ auth: { type: 'aws-sigv4', awsRegion: 'us-west-2' } }));
+    expect(sigv4a.agentFingerprint).not.toBe(sigv4b.agentFingerprint);
+    const text = canonicalStringify(buildFingerprintPayload(baseAgent({ auth: { type: 'basic', username: 'alice', password: 'hunter2', token: 'tok' } })));
+    expect(text).not.toContain('alice');
+    expect(text).not.toContain('hunter2');
+    expect(text).not.toContain('tok"');
   });
 
   it('env VALUE change (secret rotation) → UNCHANGED; env KEY added → changes', () => {
@@ -198,10 +218,20 @@ describe('computeAgentFingerprint — what does NOT change it (redaction)', () =
     expect(b.agentFingerprint).toBe(a.agentFingerprint);
   });
 
-  it('secret-looking keys anywhere in connectorConfig are redacted by value', () => {
-    const a = computeAgentFingerprint(baseAgent({ connectorConfig: { apiKey: 'k1', nested: { authToken: 'x' } } }));
-    const b = computeAgentFingerprint(baseAgent({ connectorConfig: { apiKey: 'k2', nested: { authToken: 'y' } } }));
+  it('credential-carrier keys anywhere in connectorConfig are redacted by value', () => {
+    const a = computeAgentFingerprint(baseAgent({ connectorConfig: { apiKey: 'k1', nested: { authToken: 'x', 'api-key': 'z', cookie: 'c' } } }));
+    const b = computeAgentFingerprint(baseAgent({ connectorConfig: { apiKey: 'k2', nested: { authToken: 'y', 'api-key': 'w', cookie: 'd' } } }));
     expect(b.agentFingerprint).toBe(a.agentFingerprint);
+  });
+
+  it('behavior fields that merely CONTAIN a secret-ish word are NOT redacted (their drift must stay visible)', () => {
+    // codex_review: a substring match hid maxTokens / tokenBudget /
+    // authorizationMode / privateMode changes behind the redaction marker.
+    const a = computeAgentFingerprint(baseAgent({ connectorConfig: { maxTokens: 1000, tokenBudget: 5, authorizationMode: 'strict', privateMode: false, credentialSource: 'env' } }));
+    for (const patch of [{ maxTokens: 2000 }, { tokenBudget: 9 }, { authorizationMode: 'lax' }, { privateMode: true }, { credentialSource: 'file' }]) {
+      const b = computeAgentFingerprint(baseAgent({ connectorConfig: { maxTokens: 1000, tokenBudget: 5, authorizationMode: 'strict', privateMode: false, credentialSource: 'env', ...patch } }));
+      expect(b.agentFingerprint).not.toBe(a.agentFingerprint);
+    }
   });
 
   it('name / description / enabled / isCustom / builtIn → UNCHANGED', () => {
@@ -216,10 +246,68 @@ describe('computeAgentFingerprint — what does NOT change it (redaction)', () =
     expect(text).not.toContain('sk-live-aaa');
     expect(text).not.toContain('tok-1');
     expect(text).not.toContain('secret-1');
-    expect(text).not.toContain('Authorization');
-    // ...but env KEY names and the prompt do participate.
+    expect(text).not.toContain('Bearer');
+    // ...but header/env KEY names and the prompt do participate.
+    expect(text).toContain('"headerKeys":["Authorization"]');
     expect(text).toContain('ANTHROPIC_API_KEY');
     expect(text).toContain('You are a careful engineer.');
+  });
+});
+
+describe('isSecretKey', () => {
+  it('matches exact credential names in any casing / separator style', () => {
+    for (const k of ['token', 'apiKey', 'api_key', 'API-KEY', 'password', 'passwd', 'secret', 'authorization', 'credentials', 'cookie', 'jwt', 'privateKey', 'aws_secret_access_key', 'AWS_SESSION_TOKEN']) {
+      expect(isSecretKey(k)).toBe(true);
+    }
+  });
+  it('matches credential-style suffixes', () => {
+    for (const k of ['refreshToken', 'clientSecret', 'signingKey'.replace('Key', 'PrivateKey'), 'dbPassword', 'sessionCookie', 'proxyAuthorization', 'x-api-key']) {
+      expect(isSecretKey(k)).toBe(true);
+    }
+  });
+  it('does NOT match behavior fields that merely contain the word', () => {
+    for (const k of ['maxTokens', 'max_tokens', 'tokenBudget', 'authorizationMode', 'privateMode', 'credentialSource', 'tokenizer', 'model', 'secretsManagerRegion']) {
+      expect(isSecretKey(k)).toBe(false);
+    }
+  });
+});
+
+describe('canonicalStringify — non-plain values are deterministic, not silently lost', () => {
+  it('Map/Set are order-independent and distinct from an empty object', () => {
+    const m1 = canonicalStringify({ x: new Map([['b', 2], ['a', 1]]) });
+    const m2 = canonicalStringify({ x: new Map([['a', 1], ['b', 2]]) });
+    expect(m1).toBe(m2);
+    expect(m1).not.toBe(canonicalStringify({ x: {} }));
+    expect(canonicalStringify({ x: new Set([2, 1]) })).toBe(canonicalStringify({ x: new Set([1, 2]) }));
+    expect(canonicalStringify({ x: new Set([1]) })).not.toBe(canonicalStringify({ x: new Set([2]) }));
+  });
+  it('Date / RegExp / URL / BigInt / NaN / Infinity serialize explicitly', () => {
+    expect(canonicalStringify(new Date('2024-01-02T03:04:05Z'))).toContain('2024-01-02T03:04:05.000Z');
+    expect(canonicalStringify(/a+b/gi)).toContain('/a+b/gi');
+    expect(canonicalStringify(new URL('https://x.example/p?q=1'))).toContain('https://x.example/p?q=1');
+    expect(canonicalStringify({ n: BigInt(42) })).toContain('"42"');
+    expect(canonicalStringify({ n: NaN })).toContain('NaN');
+    expect(canonicalStringify({ n: Infinity })).not.toBe(canonicalStringify({ n: -Infinity }));
+  });
+  it('class instances carry their constructor name so two different classes with equal props differ', () => {
+    class A { v = 1; }
+    class B { v = 1; }
+    expect(canonicalStringify(new A())).not.toBe(canonicalStringify(new B()));
+    expect(canonicalStringify(new A())).toBe(canonicalStringify(new A()));
+  });
+  it('a circular reference throws (caller logs + stamps nothing) instead of hanging or hashing garbage', () => {
+    const o: any = { a: 1 };
+    o.self = o;
+    expect(() => canonicalStringify(o)).toThrow(/circular/);
+    // Shared (non-cyclic) references are fine.
+    const shared = { k: 1 };
+    expect(() => canonicalStringify({ x: shared, y: shared })).not.toThrow();
+  });
+  it('a BigInt / Map inside connectorConfig hashes deterministically end-to-end', () => {
+    const agent = baseAgent({ connectorConfig: { limit: BigInt(10), routes: new Map([['a', 1]]) } });
+    expect(computeAgentFingerprint(agent)).toEqual(computeAgentFingerprint(agent));
+    const other = baseAgent({ connectorConfig: { limit: BigInt(11), routes: new Map([['a', 1]]) } });
+    expect(computeAgentFingerprint(other).agentFingerprint).not.toBe(computeAgentFingerprint(agent).agentFingerprint);
   });
 });
 
@@ -248,6 +336,12 @@ describe('redactConnectorConfig', () => {
     const out = redactConnectorConfig({ fn: (x: number) => x + 1 }) as Record<string, unknown>;
     expect(typeof out.fn).toBe('string');
     expect(out.fn as string).toContain('x + 1');
+  });
+  it('passes Date/Map through for canonicalStringify to normalize (not flattened to {})', () => {
+    const d = new Date('2024-01-01T00:00:00Z');
+    const out = redactConnectorConfig({ since: d, routes: new Map([['a', 1]]) }) as Record<string, unknown>;
+    expect(out.since).toBe(d);
+    expect(out.routes).toBeInstanceOf(Map);
   });
 });
 
@@ -280,13 +374,13 @@ describe('resolveAgentConfigSource', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('returns undefined for missing / empty paths', () => {
-    expect(resolveAgentConfigSource(undefined)).toBeUndefined();
-    expect(resolveAgentConfigSource(null)).toBeUndefined();
-    expect(resolveAgentConfigSource(path.join(tmp, 'nope.ts'))).toBeUndefined();
+  it('returns undefined for missing / empty paths', async () => {
+    expect(await resolveAgentConfigSource(undefined)).toBeUndefined();
+    expect(await resolveAgentConfigSource(null)).toBeUndefined();
+    expect(await resolveAgentConfigSource(path.join(tmp, 'nope.ts'))).toBeUndefined();
   });
 
-  it('resolves a symlink to its real path and reads the git sha of the containing repo', () => {
+  it('resolves a symlink to its real path and reads the git sha of the containing repo', async () => {
     const repo = path.join(tmp, 'repo');
     fs.mkdirSync(repo);
     const cfg = path.join(repo, 'agent-health.config.ts');
@@ -302,21 +396,21 @@ describe('resolveAgentConfigSource', () => {
     const link = path.join(linkDir, 'agent-health.config.ts');
     fs.symlinkSync(cfg, link);
 
-    const src = resolveAgentConfigSource(link)!;
+    const src = (await resolveAgentConfigSource(link))!;
     expect(src.path).toBe(fs.realpathSync(cfg));
     expect(src.gitSha).toBe(sha);
     expect(src.dirty).toBe(false);
 
     fs.appendFileSync(cfg, '// edit\n');
-    expect(resolveAgentConfigSource(link)!.dirty).toBe(true);
+    expect((await resolveAgentConfigSource(link))!.dirty).toBe(true);
   });
 
-  it('returns the path alone (no sha) outside a git checkout', () => {
+  it('returns the path alone (no sha) outside a git checkout', async () => {
     const dir = path.join(tmp, 'nogit');
     fs.mkdirSync(dir);
     const cfg = path.join(dir, 'agent-health.config.ts');
     fs.writeFileSync(cfg, 'export default {}\n');
-    const src = resolveAgentConfigSource(cfg);
+    const src = await resolveAgentConfigSource(cfg);
     // The tmp dir might itself live under a git repo on some machines; only
     // assert the path when it does — the sha is then legitimately present.
     expect(src?.path).toBe(fs.realpathSync(cfg));
@@ -336,8 +430,9 @@ describe('classifyFingerprintDiff / describe / tooltip', () => {
     expect(classifyFingerprintDiff(null, A)).toBe('unknown');
     expect(classifyFingerprintDiff(undefined, undefined)).toBe('unknown');
   });
-  it('describe wording', () => {
+  it('describe wording (prompt kind admits other fields may have changed too)', () => {
     expect(describeFingerprintDiff('prompt')).toMatch(/prompt changed/);
+    expect(describeFingerprintDiff('prompt')).toMatch(/may have changed too/);
     expect(describeFingerprintDiff('other')).toMatch(/prompt unchanged/);
     expect(describeFingerprintDiff('same')).toMatch(/identical/);
     expect(describeFingerprintDiff('unknown')).toMatch(/not recorded/);

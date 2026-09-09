@@ -99,7 +99,7 @@ export const AgentConfigChangedBadge: React.FC<AgentConfigChangedBadgeProps> = (
     >
       <AlertTriangle size={10} className="shrink-0" aria-hidden="true" />
       <span>{label}</span>
-      <span className="opacity-80">· {kind === 'prompt' ? 'prompt' : 'other fields'}</span>
+      <span className="opacity-80">· {kind === 'prompt' ? 'incl. prompt' : 'other fields'}</span>
     </span>
   );
 };

@@ -19,11 +19,7 @@
 import type { AgentConfig, AgentProvenanceFields } from '@/types';
 import { loadConfigSync, getConfigFileInfo } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
-import {
-  computeAgentFingerprint,
-  resolveAgentConfigSource,
-  type AgentConfigSource,
-} from '@/lib/agentFingerprint';
+import { computeAgentFingerprint, resolveAgentConfigSource } from '@/lib/agentFingerprint';
 
 /** Find an agent by key across the code config and the UI-added custom agents. */
 export function findAgentByKey(agentKey: string): AgentConfig | undefined {
@@ -40,47 +36,32 @@ export function findAgentByKey(agentKey: string): AgentConfig | undefined {
 }
 
 /**
- * Config-source lookup is per config FILE, not per agent, and `git
- * rev-parse` + `git status` cost two subprocess spawns. Cache by path with a
- * short TTL so a 62-case benchmark started via the legacy path (which
- * creates one run) and a burst of CLI runs don't fork git on every call,
- * while an edit-then-rerun within a session still sees the new sha promptly.
- */
-const CONFIG_SOURCE_TTL_MS = 5_000;
-let cachedSource: { path: string; at: number; value: AgentConfigSource | undefined } | null = null;
-
-export function resolveConfigSourceCached(now = Date.now()): AgentConfigSource | undefined {
-  const info = getConfigFileInfo();
-  const path = info?.path;
-  if (!path) return undefined;
-  if (cachedSource && cachedSource.path === path && now - cachedSource.at < CONFIG_SOURCE_TTL_MS) {
-    return cachedSource.value;
-  }
-  const value = resolveAgentConfigSource(path);
-  cachedSource = { path, at: now, value };
-  return value;
-}
-
-/** Test hook. */
-export function clearConfigSourceCache(): void {
-  cachedSource = null;
-}
-
-/**
  * Compute the provenance fields for `agentKey` as configured RIGHT NOW,
  * honouring a run-level endpoint override. Returns `undefined` when the
  * agent cannot be resolved (the run-creation routes already 400 on unknown
- * agents, so this is a defensive fallback, not the validation path).
+ * agents, so this is a defensive fallback, not the validation path) or
+ * when the config cannot be serialized (e.g. a circular reference) — in
+ * which case a warning names the agent and the reason, so a run without
+ * provenance is never a silent mystery in the logs.
+ *
+ * Async because the config-source lookup shells out to git (bounded, no
+ * shell); the hashing itself is pure and synchronous. No cache: two short
+ * `git` spawns per run creation are negligible next to the storage writes
+ * the same request performs, and a cache would make the `dirty` flag stale
+ * exactly when a user is iterating on the config fastest.
  */
-export function resolveAgentProvenance(
+export async function resolveAgentProvenance(
   agentKey: string,
   overrides: { agentEndpoint?: string } = {},
-): AgentProvenanceFields | undefined {
+): Promise<AgentProvenanceFields | undefined> {
   try {
     const agent = findAgentByKey(agentKey);
-    if (!agent) return undefined;
+    if (!agent) {
+      console.warn(`[agentProvenance] Agent "${agentKey}" not found in config; run proceeds without provenance`);
+      return undefined;
+    }
     const fp = computeAgentFingerprint(agent, { agentEndpoint: overrides.agentEndpoint });
-    const agentConfigSource = agent.isCustom ? undefined : resolveConfigSourceCached();
+    const agentConfigSource = agent.isCustom ? undefined : await resolveAgentConfigSource(getConfigFileInfo()?.path);
     return {
       agentFingerprint: fp.agentFingerprint,
       agentFingerprintShort: fp.agentFingerprintShort,

@@ -89,14 +89,14 @@ describe('AgentConfigChangedBadge', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('same agent, prompt changed → amber badge with "config changed between runs · prompt" and a diff-able tooltip', () => {
+  it('same agent, prompt changed → amber badge with "config changed between runs · incl. prompt" and a diff-able tooltip', () => {
     render(React.createElement(AgentConfigChangedBadge, {
       a: { agentKey: 'x', agentFingerprint: FP_A, agentPromptHash: PH_1 },
       b: { agentKey: 'x', agentFingerprint: FP_B, agentPromptHash: PH_2 },
     }));
     const badge = screen.getByTestId('agent-config-changed-badge');
     expect(badge.textContent).toContain('config changed between runs');
-    expect(badge.textContent).toContain('prompt');
+    expect(badge.textContent).toContain('incl. prompt');
     expect(badge.getAttribute('data-diff-kind')).toBe('prompt');
     const title = badge.getAttribute('title')!;
     expect(title).toContain('system prompt changed');

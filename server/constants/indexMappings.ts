@@ -121,6 +121,15 @@ export function getIndexMappings(): IndexMappings {
           // `results.put()` partial updates and `docType.keyword` term
           // queries both continued to work unchanged.
           results: { type: 'object', enabled: false },
+          // Agent-configuration provenance on top-level EvaluationRun docs
+          // (lib/agentFingerprint.ts): exact-match hashes as keyword; the
+          // config-source object is opaque (path/sha/dirty are never queried).
+          // Same best-effort putMapping caveat as `results` above for indexes
+          // that already dynamically mapped these fields.
+          agentFingerprint: { type: 'keyword' },
+          agentFingerprintShort: { type: 'keyword' },
+          agentPromptHash: { type: 'keyword' },
+          agentConfigSource: { type: 'object', enabled: false },
           runs: {
             type: 'nested',
             properties: {

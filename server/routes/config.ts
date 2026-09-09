@@ -117,7 +117,7 @@ router.get('/api/agents', async (req: Request, res: Response) => {
  * Optional `?agentEndpoint=` mirrors the run-level endpoint override so the
  * value matches what a run created with that override would carry.
  */
-router.get('/api/agents/:key/fingerprint', (req: Request, res: Response) => {
+router.get('/api/agents/:key/fingerprint', async (req: Request, res: Response) => {
   try {
     const { key } = req.params;
     if (!findAgentByKey(key)) {
@@ -127,7 +127,7 @@ router.get('/api/agents/:key/fingerprint', (req: Request, res: Response) => {
     const agentEndpoint = typeof req.query.agentEndpoint === 'string' && req.query.agentEndpoint
       ? req.query.agentEndpoint
       : undefined;
-    const provenance = resolveAgentProvenance(key, { agentEndpoint });
+    const provenance = await resolveAgentProvenance(key, { agentEndpoint });
     if (!provenance) {
       res.status(500).json({ error: `Could not compute fingerprint for agent: ${key}` });
       return;

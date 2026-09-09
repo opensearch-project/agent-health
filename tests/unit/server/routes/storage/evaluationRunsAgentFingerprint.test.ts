@@ -91,7 +91,7 @@ const request = require('supertest');
 import evaluationRunsRouter from '@/server/routes/storage/evaluationRuns';
 import configRouter from '@/server/routes/config';
 import { computeAgentFingerprint } from '@/lib/agentFingerprint';
-import { resolveAgentProvenance, reportProvenanceFrom, clearConfigSourceCache } from '@/server/services/agentProvenance';
+import { resolveAgentProvenance, reportProvenanceFrom } from '@/server/services/agentProvenance';
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 
@@ -120,7 +120,6 @@ describe('agent provenance stamp', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    clearConfigSourceCache();
     jest.spyOn(console, 'error').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     agents = [promptAgent(), plainAgent];
@@ -144,40 +143,42 @@ describe('agent provenance stamp', () => {
   afterEach(() => jest.restoreAllMocks());
 
   describe('resolveAgentProvenance()', () => {
-    it('returns fingerprint + short + promptHash for a configured agent', () => {
-      const p = resolveAgentProvenance('coding-agent')!;
+    it('returns fingerprint + short + promptHash for a configured agent', async () => {
+      const p = (await resolveAgentProvenance('coding-agent'))!;
       expect(p.agentFingerprint).toMatch(SHA256_HEX);
       expect(p.agentFingerprintShort).toBe(p.agentFingerprint!.slice(0, 12));
       expect(p.agentPromptHash).toMatch(SHA256_HEX);
       expect(p).toEqual(expect.objectContaining(computeAgentFingerprint(promptAgent())));
     });
-    it('omits promptHash for an agent without a system prompt', () => {
-      const p = resolveAgentProvenance('plain')!;
+    it('omits promptHash for an agent without a system prompt', async () => {
+      const p = (await resolveAgentProvenance('plain'))!;
       expect(p.agentFingerprint).toMatch(SHA256_HEX);
       expect(p.agentPromptHash).toBeUndefined();
     });
-    it('resolves UI-added custom agents too (no config source for them)', () => {
-      const p = resolveAgentProvenance('custom-1')!;
+    it('resolves UI-added custom agents too (no config source for them)', async () => {
+      const p = (await resolveAgentProvenance('custom-1'))!;
       expect(p.agentFingerprint).toMatch(SHA256_HEX);
       expect(p.agentConfigSource).toBeUndefined();
     });
-    it('returns undefined for an unknown agent and never throws', () => {
-      expect(resolveAgentProvenance('nope')).toBeUndefined();
+    it('returns undefined (with a warning) for an unknown agent, a throwing config loader, or an unserializable config — never throws', async () => {
+      expect(await resolveAgentProvenance('nope')).toBeUndefined();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"nope" not found'));
       mockLoadConfigSync.mockImplementationOnce(() => { throw new Error('boom'); });
-      expect(resolveAgentProvenance('plain')).toBeUndefined();
+      expect(await resolveAgentProvenance('plain')).toBeUndefined();
+      const cyclic: any = { a: 1 }; cyclic.self = cyclic;
+      agents = [{ ...plainAgent, connectorConfig: cyclic }];
+      expect(await resolveAgentProvenance('plain')).toBeUndefined();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('circular'));
     });
-    it('honours a run-level endpoint override', () => {
-      const a = resolveAgentProvenance('plain')!;
-      const b = resolveAgentProvenance('plain', { agentEndpoint: 'http://b:2' })!;
+    it('honours a run-level endpoint override', async () => {
+      const a = (await resolveAgentProvenance('plain'))!;
+      const b = (await resolveAgentProvenance('plain', { agentEndpoint: 'http://b:2' }))!;
       expect(b.agentFingerprint).not.toBe(a.agentFingerprint);
     });
-    it('attaches agentConfigSource when a config file is present (cached per path)', () => {
+    it('attaches agentConfigSource when a config file is present', async () => {
       mockGetConfigFileInfo.mockReturnValue({ path: __filename, format: 'typescript', exists: true } as any);
-      const p = resolveAgentProvenance('plain')!;
+      const p = (await resolveAgentProvenance('plain'))!;
       expect(p.agentConfigSource?.path).toBe(require('fs').realpathSync(__filename));
-      resolveAgentProvenance('plain');
-      // Second call within the TTL reuses the cached source: one lookup only.
-      expect(mockGetConfigFileInfo).toHaveBeenCalledTimes(2);
     });
     it('reportProvenanceFrom() mirrors only the three hash fields (never the config source)', () => {
       expect(reportProvenanceFrom(undefined)).toEqual({});

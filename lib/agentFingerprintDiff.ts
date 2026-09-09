@@ -41,8 +41,9 @@ export interface AgentConfigSource {
  * changed since source run").
  *
  *   - `same`       — identical fingerprint.
- *   - `prompt`     — fingerprint differs AND prompt hash differs → at least
- *                    the prompt changed (other fields may have too).
+ *   - `prompt`     — fingerprint differs AND prompt hash differs → the
+ *                    prompt changed. Other fields MAY have changed too; the
+ *                    hashes cannot tell, and the wording says so.
  *   - `other`      — fingerprint differs, prompt hash equal (or both absent)
  *                    → something other than the prompt changed.
  *   - `unknown`    — one side has no fingerprint (legacy run).
@@ -67,7 +68,7 @@ export function classifyFingerprintDiff(
 /** Human wording for a non-`same` diff, shared by the scoreboard badge and the re-run chip. */
 export function describeFingerprintDiff(kind: FingerprintDiffKind): string {
   switch (kind) {
-    case 'prompt': return 'system prompt changed';
+    case 'prompt': return 'system prompt changed (other connector fields may have changed too)';
     case 'other': return 'connector config changed (prompt unchanged)';
     case 'same': return 'identical agent configuration';
     default: return 'agent configuration not recorded on one of the runs';

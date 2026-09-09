@@ -275,7 +275,7 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
       // Agent-configuration provenance: WHICH version of this agent's config
       // produced the numbers (fingerprint + prompt hash + config file/sha).
       // See lib/agentFingerprint.ts. Spread of `undefined` is a no-op.
-      ...resolveAgentProvenance(agentKey, { agentEndpoint }),
+      ...(await resolveAgentProvenance(agentKey, { agentEndpoint })),
     };
 
     // Stamp the content digest of this run's evaluation conditions and
@@ -515,7 +515,7 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
       // The re-run naturally gets the CURRENT agent config's fingerprint; the
       // inspector compares it with the source run's to say "config changed
       // since source run". See lib/agentFingerprint.ts.
-      ...resolveAgentProvenance(config.agentKey, { agentEndpoint: config.agentEndpoint }),
+      ...(await resolveAgentProvenance(config.agentKey, { agentEndpoint: config.agentEndpoint })),
     };
 
     await storage.evaluationRuns.create(newRun);
