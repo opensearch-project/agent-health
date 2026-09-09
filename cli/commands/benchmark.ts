@@ -503,7 +503,8 @@ async function runUnifiedMode(
   config: ResolvedConfig,
   serverConfig: any,
   isCI: boolean,
-  fileArray: string[]
+  fileArray: string[],
+  unifiedOpts: { quickAllTestCases?: boolean; forceStopServer?: boolean } = {}
 ): Promise<void> {
   // Build sources from flags
   const sources: TestCaseSource[] = [];
@@ -523,12 +524,18 @@ async function runUnifiedMode(
   if (options.name && !isFilePath(options.name) && !hasExplicitSources) {
     // -n flag: will be resolved server-side
     const api = new ApiClient(`http://localhost:${serverConfig.port}`);
-    const benchmark = await api.findBenchmark(options.name);
-    if (!benchmark) {
+    const found = await api.findBenchmarkDetailed(options.name);
+    if (found.ambiguousMatches.length > 0) {
+      console.error(chalk.red(`  Error: Benchmark name "${options.name}" is ambiguous — it matches:`));
+      for (const m of found.ambiguousMatches) console.error(chalk.gray(`    - "${m.name}" (${m.id})`));
+      console.log(chalk.gray('  Use the exact name (case-sensitive) or the benchmark ID.'));
+      process.exit(1);
+    }
+    if (!found.benchmark) {
       console.error(chalk.red(`  Error: Benchmark not found: "${options.name}"`));
       process.exit(1);
     }
-    sources.push({ type: 'benchmark', benchmarkId: benchmark.id });
+    sources.push({ type: 'benchmark', benchmarkId: found.benchmark.id });
   }
 
   if (fileArray.length > 0) {
@@ -564,7 +571,7 @@ async function runUnifiedMode(
     sources.push({ type: 'label-filter', labels: options.label });
   }
 
-  if (sources.length === 0) {
+  if (sources.length === 0 && !unifiedOpts.quickAllTestCases) {
     console.error(chalk.red('  Error: No test case sources specified.'));
     console.log(chalk.gray('  Use -n, -f, -d, -t, or --label to specify sources.'));
     process.exit(1);
@@ -574,7 +581,7 @@ async function runUnifiedMode(
   const connectSpinner = ora('Connecting to server...').start();
   let serverResult: EnsureServerResult;
   let cleanup: () => void;
-  const shouldStopServer = isCI || options.stopServer;
+  const shouldStopServer = isCI || options.stopServer || !!unifiedOpts.forceStopServer;
 
   try {
     serverResult = await ensureServer(serverConfig);
@@ -588,6 +595,23 @@ async function runUnifiedMode(
   }
 
   const api = new ApiClient(serverResult.baseUrl);
+
+  // Quick mode (no name/file/flags, server not already running): run ALL stored
+  // test cases as an ad-hoc evaluation run. Previously this path minted a fresh
+  // `quick-<timestamp>` Benchmark doc on every invocation, growing the
+  // benchmarks list unbounded — runs are per-invocation, benchmarks are not.
+  if (unifiedOpts.quickAllTestCases) {
+    const testCasesSpinner = ora('Fetching test cases...').start();
+    const allTestCases = await api.listTestCases();
+    if (allTestCases.length === 0) {
+      testCasesSpinner.fail('No test cases found');
+      console.log(chalk.gray('  Add test cases via the UI or provide a file with -f option.'));
+      cleanup();
+      process.exit(1);
+    }
+    testCasesSpinner.succeed(`Found ${allTestCases.length} test cases`);
+    sources.push({ type: 'test-case-ids', ids: allTestCases.map((tc) => tc.id) });
+  }
 
   // Find agent
   let agentKey: string;
@@ -609,9 +633,19 @@ async function runUnifiedMode(
   // and the documented `benchmark -f foo.eval.js -n "My Benchmark"` behavior).
   let benchmarkId: string | undefined;
   if (options.name && !isFilePath(options.name)) {
-    const existing = await api.findBenchmark(options.name);
-    if (existing) {
-      benchmarkId = existing.id;
+    const found = await api.findBenchmarkDetailed(options.name);
+    if (found.ambiguousMatches.length > 0) {
+      // Refuse to guess AND refuse to create a third near-duplicate under a
+      // colliding name — either would silently attach runs to the wrong
+      // benchmark or make the duplication worse.
+      console.error(chalk.red(`  Error: Benchmark name "${options.name}" is ambiguous — it matches:`));
+      for (const m of found.ambiguousMatches) console.error(chalk.gray(`    - "${m.name}" (${m.id})`));
+      console.log(chalk.gray('  Use the exact name (case-sensitive) or the benchmark ID.'));
+      cleanup();
+      process.exit(1);
+    }
+    if (found.benchmark) {
+      benchmarkId = found.benchmark.id;
     } else if (hasExplicitSources) {
       const created = await api.createBenchmark({
         name: options.name,
@@ -880,15 +914,26 @@ export function createBenchmarkCommand(): Command {
       if (fileMode) {
         console.log(chalk.cyan(`  Running in file mode (importing test cases from ${filePath})`));
       } else if (quickMode) {
-        console.log(chalk.cyan('  Running in quick mode (auto-creating benchmark from test cases)'));
+        // Quick mode now runs as an ad-hoc evaluation run over ALL stored test
+        // cases via the unified API. It must NOT create a `quick-<timestamp>`
+        // Benchmark doc per invocation (the old behavior) — that grew the
+        // benchmarks list unbounded when the same command was re-run.
+        console.log(chalk.cyan('  Running in quick mode (ad-hoc run over all test cases)'));
+        await runUnifiedMode(options, config, serverConfig, isCI, fileArray, {
+          quickAllTestCases: true,
+          // Preserve legacy quick-mode behavior: it started the server itself
+          // (quickMode requires no server running) and stopped it afterwards.
+          forceStopServer: true,
+        });
+        return;
       }
 
       // Ensure server is running
       const connectSpinner = ora('Connecting to server...').start();
       let serverResult: EnsureServerResult;
       let cleanup: () => void;
-      // Clean up server: in CI, quick/file mode, or when --stop-server flag is used
-      const shouldStopServer = isCI || quickMode || fileMode || options.stopServer;
+      // Clean up server: in CI, file mode, or when --stop-server flag is used
+      const shouldStopServer = isCI || fileMode || options.stopServer;
 
       try {
         serverResult = await ensureServer(serverConfig);
@@ -1126,31 +1171,6 @@ export function createBenchmarkCommand(): Command {
             createSpinner.succeed(`Prepared ${benchmarksToRun.length} benchmark(s) for execution`);
           } catch (error) {
             importSpinner.fail(`File import failed: ${error instanceof Error ? error.message : error}`);
-            process.exit(1);
-          }
-        } else if (quickMode) {
-          // Quick mode: create benchmark from all test cases
-          const testCasesSpinner = ora('Fetching test cases...').start();
-          try {
-            const testCases = await api.listTestCases();
-            if (testCases.length === 0) {
-              testCasesSpinner.fail('No test cases found');
-              console.log(chalk.gray('  Add test cases via the UI or provide a file with -f option.'));
-              process.exit(1);
-            }
-            testCasesSpinner.succeed(`Found ${testCases.length} test cases`);
-
-            // Create temporary benchmark
-            const createSpinner = ora('Creating quick benchmark...').start();
-            const bm = await api.createBenchmark({
-              name: `quick-${Date.now()}`,
-              description: 'Auto-generated benchmark for quick mode',
-              testCaseIds: testCases.map((tc) => tc.id),
-            });
-            benchmarksToRun.push(bm);
-            createSpinner.succeed(`Created benchmark: ${bm.name}`);
-          } catch (error) {
-            testCasesSpinner.fail(`Failed to create benchmark: ${error instanceof Error ? error.message : error}`);
             process.exit(1);
           }
         } else {

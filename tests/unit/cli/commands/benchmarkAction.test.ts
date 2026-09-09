@@ -112,6 +112,8 @@ type MockApiClient = {
   createBenchmark: jest.Mock;
   executeBenchmark: jest.Mock;
   findBenchmark: jest.Mock;
+  findBenchmarkDetailed: jest.Mock;
+  getEvaluationRun: jest.Mock;
   getReportById: jest.Mock;
   listTestCases: jest.Mock;
 };
@@ -176,6 +178,8 @@ function makeApiClient(overrides: Partial<MockApiClient> = {}): MockApiClient {
     createBenchmark: jest.fn(),
     executeBenchmark: jest.fn(),
     findBenchmark: jest.fn(),
+    findBenchmarkDetailed: jest.fn().mockResolvedValue({ benchmark: null, ambiguousMatches: [] }),
+    getEvaluationRun: jest.fn(),
     getReportById: jest.fn(),
     listTestCases: jest.fn(),
     ...overrides,
@@ -465,68 +469,71 @@ describe('Benchmark Command - Real Module Coverage', () => {
       expect(exitSpy).not.toHaveBeenCalled();
     });
 
-    it('runs quick mode with the default agent and prints markdown summary output', async () => {
+    it('runs quick mode as an ad-hoc evaluation run — no benchmark doc is created', async () => {
       mockEnsureServer.mockResolvedValue({
         baseUrl: 'http://localhost:4001',
         wasStarted: false,
       } as any);
 
-      const benchmark = makeBenchmark({
-        id: 'bench-quick',
-        name: 'quick-123',
-        testCaseIds: ['tc-1', 'tc-2'],
-      });
-      const run = makeRun({
-        id: 'run-quick',
-        results: {
-          'tc-1': { reportId: 'report-1', status: 'completed' },
-          'tc-2': { reportId: '', status: 'failed', error: 'Judge failed' },
-        },
-      });
-
       currentApi.listTestCases.mockResolvedValue([
         { id: 'tc-1', name: 'Quick Case 1' },
         { id: 'tc-2', name: 'Quick Case 2' },
       ]);
-      currentApi.createBenchmark.mockResolvedValue(benchmark);
-      currentApi.executeBenchmark.mockImplementation(
-        async (_benchmarkId: string, _runConfig: any, onProgress?: (event: any) => void) => {
-          onProgress?.({
-            type: 'started',
-            runId: 'run-quick',
-            testCases: [
-              { id: 'tc-1', name: 'Quick Case 1', status: 'pending' },
-              { id: 'tc-2', name: 'Quick Case 2', status: 'pending' },
-            ],
-          });
-          onProgress?.({
-            type: 'progress',
-            currentTestCaseIndex: 1,
-            totalTestCases: 2,
-            currentTestCase: { id: 'tc-2', name: 'Quick Case 2' },
-            completedCount: 1,
-            result: { status: 'failed', error: 'Judge failed' },
-          });
 
-          return run;
-        }
-      );
-      currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
+      // Unified evaluation-runs API: SSE stream (started → progress → completed)
+      const encoder = new TextEncoder();
+      const sseChunks = [
+        `event: started\ndata: ${JSON.stringify({
+          runId: 'run-quick',
+          testCases: [
+            { id: 'tc-1', name: 'Quick Case 1', status: 'pending' },
+            { id: 'tc-2', name: 'Quick Case 2', status: 'pending' },
+          ],
+        })}\n\n`,
+        `event: progress\ndata: ${JSON.stringify({ completedCount: 2 })}\n\n`,
+        `event: completed\ndata: ${JSON.stringify({ status: 'completed' })}\n\n`,
+      ].map((c) => encoder.encode(c));
+      let chunkIdx = 0;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: jest.fn().mockImplementation(async () =>
+              chunkIdx < sseChunks.length
+                ? { done: false, value: sseChunks[chunkIdx++] }
+                : { done: true, value: undefined }
+            ),
+          }),
+        },
+      } as any);
 
-      await runBenchmarkCommand(['--output', 'markdown', '--verbose']);
+      currentApi.getEvaluationRun.mockResolvedValue({
+        id: 'run-quick',
+        status: 'completed',
+        results: {
+          'tc-1': { reportId: 'report-1', status: 'completed' },
+          'tc-2': { reportId: 'report-2', status: 'completed' },
+        },
+      });
+
+      await runBenchmarkCommand([]);
 
       const output = joinedConsoleOutput(logSpy);
-      expect(output).toContain('Running in quick mode');
-      expect(output).toContain('Agent: Demo Agent (default)');
-      expect(output).toContain('## Benchmark Summary');
-      expect(output).toContain('| Agent | Passed | Failed | Pass Rate | Run ID |');
+      // New contract: quick mode is an ad-hoc run over all stored test cases.
+      expect(output).toContain('Running in quick mode (ad-hoc run over all test cases)');
+      expect(output).toContain('This was an ad-hoc run (ID: run-quick)');
       expect(currentApi.listTestCases).toHaveBeenCalledTimes(1);
-      expect(currentApi.createBenchmark).toHaveBeenCalledWith(
-        expect.objectContaining({
-          description: 'Auto-generated benchmark for quick mode',
-          testCaseIds: ['tc-1', 'tc-2'],
-        })
+      // THE regression this pins: no `quick-<timestamp>` Benchmark doc, ever.
+      expect(currentApi.createBenchmark).not.toHaveBeenCalled();
+      expect(currentApi.executeBenchmark).not.toHaveBeenCalled();
+      // The run went through the unified evaluation-runs API instead.
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:4001/api/storage/evaluation-runs',
+        expect.objectContaining({ method: 'POST' })
       );
+      const postBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+      expect(postBody.sources).toEqual([{ type: 'test-case-ids', ids: ['tc-1', 'tc-2'] }]);
+      expect(postBody.benchmarkId).toBeUndefined();
       expect(cleanupSpy).toHaveBeenCalled();
     });
 
