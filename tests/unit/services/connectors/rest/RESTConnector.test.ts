@@ -79,13 +79,16 @@ describe('RESTConnector', () => {
 
       await connector.execute('http://localhost:8080/api', request, mockAuth);
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8080/api', {
+      // fetchWithTimeout adds an AbortSignal (and, under Node, a request-scoped
+      // dispatcher) for the explicit connectorConfig.timeoutMs ceiling.
+      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8080/api', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: expect.any(String),
-      });
+        signal: expect.any(AbortSignal),
+      }));
     });
 
     it('should include auth headers', async () => {

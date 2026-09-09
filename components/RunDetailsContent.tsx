@@ -55,7 +55,9 @@ import { RunScore } from '@/components/RunScore';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { tracePollingManager } from '@/services/traces/tracePoller';
 import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
-import { getResultStatus as getSharedResultStatus, StatusIcon as SharedStatusIcon, StatusLabel as SharedStatusLabel } from '@/components/evals3/ResultStatus';
+import { getResultStatus as getSharedResultStatus, StatusIcon as SharedStatusIcon, StatusLabel as SharedStatusLabel, getErrorStage } from '@/components/evals3/ResultStatus';
+import { RunFailureCard } from '@/components/evals3/RunFailureCard';
+import { getFailureStage } from '@/lib/reportFailure';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Card, CardContent } from '@/components/ui/card';
@@ -518,29 +520,18 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </Card>
         )}
 
-        {/* Trace Mode: Error state */}
-        {!hideMetrics && liveReport.metricsStatus === 'error' && (
-          <Card className="bg-red-50 dark:bg-red-500/10 border-red-300 dark:border-red-500/30 mt-4">
-            <CardContent className="p-3 flex items-center gap-3">
-              <AlertCircle className="text-red-700 dark:text-red-400" size={18} />
-              <div>
-                <div className="text-sm font-medium text-red-700 dark:text-red-400">
-                  {/* Derive the title from the error kind label (e.g. "Agent run
-                      did not complete", "Judge evaluation failed") instead of
-                      always saying "Failed to fetch traces" — which is wrong for
-                      agent timeouts / judge errors (#335). */}
-                  {(liveReport.traceError || '').match(/^(.*?) \(kind=/)?.[1] || 'Evaluation error'}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {liveReport.traceError || 'Unknown error'}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        {/* Failure state (agent / judge / trace stage). One stage-aware card
+            replaces the old generic "Failed to fetch traces"/"Evaluation
+            Failed" pair: it names the stage, shows the unwrapped cause
+            (e.g. undici HeadersTimeoutError), endpoint, elapsed and the
+            timeout in force, or the judge's raw reply. See RunFailureCard. */}
+        {!hideMetrics && getFailureStage(liveReport) && (
+          <RunFailureCard report={liveReport} className="mt-4" />
         )}
 
-        {/* Evaluation Error: Agent endpoint failed — hidden in inspector panel (status shown in compact bar) */}
-        {!hideMetrics && liveReport.status === 'failed' && getJudgeReasoningText(liveReport) && (
+        {/* Legacy fallback: status:'failed' with a reasoning string but no
+            derivable stage (very old reports). */}
+        {!hideMetrics && liveReport.status === 'failed' && !getFailureStage(liveReport) && getJudgeReasoningText(liveReport) && (
           <Card className="bg-red-500/10 border-red-500/30 mt-4">
             <CardContent className="p-3 flex items-start gap-3">
               <AlertCircle className="text-red-400 shrink-0 mt-0.5" size={18} />
@@ -587,8 +578,8 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                   ? 'pending_judgment' : derivedStatus;
                 return (
                   <div className="flex items-center gap-1 text-xs font-semibold">
-                    <SharedStatusIcon status={finalStatus} size={12} />
-                    <SharedStatusLabel status={finalStatus} />
+                    <SharedStatusIcon status={finalStatus} size={12} stage={getErrorStage(finalStatus, liveReport)} />
+                    <SharedStatusLabel status={finalStatus} stage={getErrorStage(finalStatus, liveReport)} />
                   </div>
                 );
               })()}
@@ -866,6 +857,14 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
             instead of relying on a shared scroll container. */}
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           <TabsContent value="trajectory" className="p-6 mt-0 overflow-y-auto">
+            {/* Stage-aware failure card FIRST: when the agent request failed
+                there is no trajectory to show, and pre-fix this tab was simply
+                empty (owner incident). Rendered in both the standalone page and
+                the inspector panel (hideMetrics) — the inspector hides the
+                metrics header, so this is the only place it can appear there. */}
+            {hideMetrics && getFailureStage(liveReport) && (
+              <RunFailureCard report={liveReport} className="mb-4" />
+            )}
             {/* Header with Toggle */}
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Test Case Output</h3>

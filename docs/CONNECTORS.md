@@ -518,6 +518,45 @@ The repository includes **Observio**, a reference ReAct agent in `observio-sampl
 
 See `services/connectors/rest/RESTConnector.ts` for a complete example of a non-streaming HTTP connector.
 
+#### Request timeout (`connectorConfig.timeoutMs`)
+
+The REST connector applies an explicit per-request timeout to the agent call
+(headers **and** body). Default: **300 000 ms (5 min)** — the same ceiling
+Node's built-in `fetch` (undici `headersTimeout`) applied silently before this
+was configurable, so existing agents see no behaviour change.
+
+```ts
+{
+  key: 'slow-rest-agent',
+  connectorType: 'rest',
+  endpoint: 'http://localhost:8000/ask',
+  connectorConfig: { timeoutMs: 900_000 },   // 15 min
+}
+```
+
+When it fires, the connector logs one line
+(`[rest] Agent request timed out after 300012ms (timeout 300000ms) — no
+response headers/body from POST http://…`) and the runner persists the
+failure as an **agent-stage** failure on the report:
+
+| field | value |
+|---|---|
+| `status` | `failed` |
+| `metricsStatus` | `error` |
+| `failureStage` | `agent` |
+| `error` | the unwrapped cause — e.g. `HeadersTimeoutError: Headers Timeout Error (UND_ERR_HEADERS_TIMEOUT) — no response within 300000ms (POST http://…)` — never the bare `fetch failed` |
+| `agentError` | `{ kind: 'timeout' \| 'connection' \| 'http_<status>' \| 'unknown', message, elapsedMs, endpoint, timeoutMs, httpStatus? }` |
+| `passFailStatus` | unset (no verdict) |
+
+The judge is **not** invoked for an agent-stage failure (there is no output to
+judge), the run-detail *Test Case Output* tab shows an "Agent request failed"
+card with the cause / endpoint / elapsed / timeout, the case row badge reads
+**AGENT ERROR** (distinct from a failed verdict and from **JUDGE ERROR**), and
+*Retry judgement* excludes it — re-run the case to retry the agent.
+
+The timeout is scoped to the one request (a request-local undici dispatcher
+override); it never raises the process-wide default.
+
 ### Subprocess Connector
 
 See `services/connectors/subprocess/SubprocessConnector.ts` for a complete example of a CLI tool connector.

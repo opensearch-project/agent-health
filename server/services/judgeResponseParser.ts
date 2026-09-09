@@ -235,11 +235,39 @@ export interface ParseOptions {
 }
 
 /**
+ * Thrown when the judge model's reply cannot be turned into a verdict (no
+ * JSON object at all — typically an EMPTY final turn — or malformed JSON).
+ * Carries the raw text so the route can return it and the report can keep
+ * it (`report.judgeError.rawResponse`), and is tagged `nonTransient` so the
+ * client does NOT retry it ten times with exponential backoff: an empty reply
+ * to the same prompt is not a Bedrock throttle, it's a prompt/model problem
+ * (owner incident: 5 cases × 10 attempts × ~8.5 min each, all for an agent
+ * that had produced no output in the first place).
+ */
+export class JudgeParseError extends Error {
+  readonly code = 'JUDGE_UNPARSEABLE' as const;
+  readonly rawResponse: string;
+  readonly nonTransient = true as const;
+
+  constructor(message: string, rawResponse: string) {
+    super(message);
+    this.name = 'JudgeParseError';
+    this.rawResponse = rawResponse;
+  }
+}
+
+export function isJudgeParseError(err: unknown): err is JudgeParseError {
+  return !!err && typeof err === 'object' && (err as any).code === 'JUDGE_UNPARSEABLE';
+}
+
+/**
  * Parse a raw judge text response into a typed {@link JudgeResponse}.
  *
  * Always sets `rawResponse` to the original text so downstream debug surfaces
  * (the run-detail "Judge debug" tab) can show exactly what the model emitted
  * — independent of whether we successfully coerced it into typed fields.
+ *
+ * @throws {JudgeParseError} when no JSON verdict can be extracted.
  */
 export function parseJudgeResponse(
   raw: string,
@@ -248,8 +276,12 @@ export function parseJudgeResponse(
   const source = options.source ?? 'JudgeParser';
   const jsonText = extractJsonFromResponse(raw);
   if (!jsonText) {
-    throw new Error(
-      `${source}: judge response did not contain a JSON object. First 200 chars: ${raw.slice(0, 200)}`
+    const trimmed = (raw ?? '').trim();
+    throw new JudgeParseError(
+      trimmed.length === 0
+        ? `${source}: judge returned no parseable verdict — the model returned an empty response.`
+        : `${source}: judge returned no parseable verdict — the response did not contain a JSON object. First 200 chars: ${raw.slice(0, 200)}`,
+      raw ?? '',
     );
   }
 
@@ -257,8 +289,9 @@ export function parseJudgeResponse(
   try {
     parsed = JSON.parse(jsonText);
   } catch (err: any) {
-    throw new Error(
-      `${source}: failed to parse judge JSON (${err.message}). First 200 chars: ${jsonText.slice(0, 200)}`
+    throw new JudgeParseError(
+      `${source}: judge returned no parseable verdict — failed to parse judge JSON (${err.message}). First 200 chars: ${jsonText.slice(0, 200)}`,
+      raw ?? '',
     );
   }
 

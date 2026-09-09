@@ -47,10 +47,18 @@ test.describe('#335 — agent failure renders as a labelled errored run', () => 
     await page.goto(`/runs/${reportId}`);
     await expect(page.locator('body')).toBeVisible();
 
-    // The error-card title is derived from the error-kind label.
-    await expect(page.locator('text=Agent run did not complete').first()).toBeVisible({ timeout: 15000 });
+    // The stage-aware failure card (RunFailureCard) derives the AGENT stage
+    // from the legacy `kind=agent_failed` token even though this pre-fix
+    // report carries no `failureStage` — and titles it as an agent-request
+    // failure (post agent-error-surfacing wording).
+    const card = page.getByTestId('run-failure-card').first();
+    await expect(card).toBeVisible({ timeout: 15000 });
+    await expect(card).toHaveAttribute('data-stage', 'agent');
+    await expect(card).toContainText('Agent request failed');
     // The underlying timeout message is surfaced (not hidden).
-    await expect(page.locator('text=Subprocess timed out after 600000ms').first()).toBeVisible();
+    await expect(card.getByTestId('run-failure-cause')).toContainText('Subprocess timed out after 600000ms');
+    // Row/summary badge says AGENT ERROR, not a failed verdict.
+    await expect(page.getByTestId('status-label').first()).toHaveText('AGENT ERROR');
     // It must NOT be mislabelled as a trace-fetch failure.
     await expect(page.locator('text=Failed to fetch traces')).toHaveCount(0);
   });

@@ -11,11 +11,12 @@
  */
 
 import React from 'react';
-import { CheckCircle2, XCircle, Loader2, Clock, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, Clock, AlertTriangle, PlugZap } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { EvaluationReport, TestCase } from '@/types';
 import { RunDetailsContent } from '../RunDetailsContent';
 import { type ResultStatus } from './ResultStatus';
+import { getFailureStage } from '@/lib/reportFailure';
 import { getRunDisplayName } from '@/lib/utils';
 import { CollapsibleTestCaseDefinition } from './CollapsibleTestCaseDefinition';
 
@@ -34,15 +35,23 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
   // cleared (null) passFailStatus. The runner derives status='errored'
   // for these via getResultStatus(); the badge below must light up the
   // amber ERRORED chip rather than falling through to PENDING.
-  const isErrored = status === 'errored' || report.metricsStatus === 'error';
+  const isErrored = status === 'errored' || report.metricsStatus === 'error' || report.failureStage === 'agent';
   const isPassed = !isErrored && (status === 'passed' || report.passFailStatus === 'passed');
   const isFailed = !isErrored && (status === 'failed' || report.passFailStatus === 'failed');
-  const displayStatus = isErrored ? 'errored' : isFailed ? 'failed' : isPassed ? 'passed' : status;
+  // Stage-specific errored badge: "AGENT ERROR" (the agent never answered —
+  // timeout / connection / non-2xx; nothing to judge) vs "JUDGE ERROR" (the
+  // agent completed but the evaluator couldn't score it) vs generic ERRORED.
+  const errorStage = isErrored ? getFailureStage(report) : undefined;
+  const displayStatus = isErrored
+    ? (errorStage === 'agent' ? 'agent_error' : errorStage === 'judge' ? 'judge_error' : 'errored')
+    : isFailed ? 'failed' : isPassed ? 'passed' : status;
 
   const badgeConfig: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
     passed: { icon: <CheckCircle2 size={16} className="text-green-500 shrink-0" />, label: 'PASSED', cls: 'bg-green-100 text-green-700 border-green-300 dark:bg-green-500/15 dark:text-green-400 dark:border-green-500/30' },
     failed: { icon: <XCircle size={16} className="text-red-500 shrink-0" />, label: 'FAILED', cls: 'bg-red-100 text-red-700 border-red-300 dark:bg-red-500/15 dark:text-red-400 dark:border-red-500/30' },
     errored: { icon: <AlertTriangle size={16} className="text-amber-500 shrink-0" />, label: 'ERRORED', cls: 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/15 dark:text-amber-400 dark:border-amber-500/30' },
+    agent_error: { icon: <PlugZap size={16} className="text-orange-500 shrink-0" />, label: 'AGENT ERROR', cls: 'bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-500/15 dark:text-orange-400 dark:border-orange-500/30' },
+    judge_error: { icon: <AlertTriangle size={16} className="text-amber-500 shrink-0" />, label: 'JUDGE ERROR', cls: 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/15 dark:text-amber-400 dark:border-amber-500/30' },
     pending_traces: { icon: <Loader2 size={16} className="text-amber-500 animate-spin shrink-0" />, label: 'AWAITING TRACES', cls: 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/15 dark:text-amber-400 dark:border-amber-500/30' },
     pending_judgment: { icon: <Loader2 size={16} className="text-purple-500 animate-spin shrink-0" />, label: 'JUDGING', cls: 'bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-500/15 dark:text-purple-400 dark:border-purple-500/30' },
     pending: { icon: <Clock size={16} className="text-muted-foreground shrink-0" />, label: 'PENDING', cls: 'bg-muted text-muted-foreground border-border' },
@@ -64,7 +73,7 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
           >
             {getRunDisplayName(report)}
           </span>
-          <Badge className={`text-[9px] px-1.5 py-0 shrink-0 ${badge.cls}`}>
+          <Badge className={`text-[9px] px-1.5 py-0 shrink-0 ${badge.cls}`} data-testid="inspector-status-badge" data-stage={errorStage}>
             {badge.label}
           </Badge>
         </div>
