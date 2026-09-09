@@ -12,7 +12,7 @@
 import { Client } from '@opensearch-project/opensearch';
 import { MetricsResult, AggregateMetrics, OpenSearchConfig, Span } from '@/types';
 import { getSampleSpansForRunIds } from '../../cli/demo/sampleTraces.js';
-import { transformSpan } from './tracesService.js';
+import { transformSpan, buildRunIdShouldClauses, buildSessionIdShouldClauses, buildAgentHintClause, type ServiceWindowHint } from './tracesService.js';
 
 // ============================================================================
 // Model Pricing
@@ -143,12 +143,19 @@ function isEvalOrJudgeSpan(attrs: Record<string, any>, spanName?: string): boole
 
 /**
  * Correlation `should` clauses for a single runId — Strategy B
- * (`agent_health.run.id` / the OTEL-standard `gen_ai.conversation.id`) OR'd
+ * (`agent_health.run.id` / the OTEL-standard `gen_ai.conversation.id`, under
+ * BOTH index schemas via the shared {@link buildRunIdShouldClauses}) OR'd
  * with Strategy A (`traceId`, the eval span's own OTel trace id, propagated
  * via W3C TRACEPARENT to subprocess/HTTP connectors — see AGENTS.md's trace
  * correlation conventions). `traceId` is a plain top-level span field in both
  * the plain-raw and legacy @-raw schemas, so no attribute-encoding tolerance
  * is needed for it.
+ *
+ * Pre-fix this file spelled out its own Strategy-B `term` clauses against the
+ * nested `attributes.*` path only — the same schema mismatch PR #469 fixed on
+ * the READ side of this file (via `readAttrs` → `transformSpan`) was still
+ * present on the QUERY side, so on the flat-@ `otel-v1-apm-span-*` index
+ * Strategy B never matched and metrics only ever correlated via A/D.
  *
  * Without Strategy A here, REST-connector runs (which never get a native
  * runId — `RESTConnector.execute()` returns none — so `report.runId` falls
@@ -169,75 +176,202 @@ function isEvalOrJudgeSpan(attrs: Record<string, any>, spanName?: string): boole
  * via {@link isEvalOrJudgeSpan} above so they can't inflate the agent's own
  * token/LLM-call count.
  */
-function buildRunIdShouldClauses(runId: string, sessionId?: string, traceId?: string): Record<string, unknown>[] {
-  const clauses: Record<string, unknown>[] = [
-    { term: { 'attributes.agent_health.run.id': runId } },
-    { term: { 'attributes.gen_ai.conversation.id': runId } },
-  ];
-  if (sessionId) {
-    // `.keyword` sub-field for exact match on a hyphenated UUID (a bare
-    // analyzed text field would tokenize on the hyphens and match nothing) —
-    // mirrors tracesService.ts's Strategy D handling. Also try the raw
-    // (non-keyword) field and the Data-Prepper plain-raw `@`-encoded key,
-    // since the attribute lands under a different literal key per schema.
-    clauses.push(
-      { term: { 'attributes.session.id.keyword': sessionId } },
-      { term: { 'attributes.session.id': sessionId } },
-      { term: { 'span.attributes.session@id': sessionId } }
-    );
-  }
-  if (traceId) clauses.push({ term: { traceId } });
-  return clauses;
+function buildCorrelationShouldClauses(runId: string, sessionId?: string, traceId?: string, agents?: ServiceWindowHint[]): Record<string, unknown>[] {
+  return buildBatchCorrelationShouldClauses([runId], sessionId ? [sessionId] : [], traceId ? [traceId] : [], agents ?? []);
 }
 
-/** Batch (terms) form of {@link buildRunIdShouldClauses} — Strategy B OR
+/** Batch (terms) form of {@link buildCorrelationShouldClauses} — Strategy B OR
  *  Strategy D (`session.id`, the precise per-run correlator real
- *  closed-source connectors like Claude Code actually stamp on every span)
- *  OR Strategy A (`traceId`). */
-function buildBatchRunIdShouldClauses(runIds: string[], sessionIds: string[], traceIds: string[]): Record<string, unknown>[] {
-  const clauses: Record<string, unknown>[] = [
-    { terms: { 'attributes.agent_health.run.id': runIds } },
-    { terms: { 'attributes.gen_ai.conversation.id': runIds } },
-  ];
+ *  closed-source connectors like Claude Code actually stamp on every span;
+ *  `.keyword` + raw + flat-@ paths via the shared
+ *  {@link buildSessionIdShouldClauses}, mirroring tracesService.ts)
+ *  OR Strategy A (`traceId`) OR Strategy C (one `service.name` + run-window
+ *  clause per hint, via the shared {@link buildAgentHintClause} — the exact
+ *  clause `/api/traces` / the trace judge use, so a run whose report carries
+ *  NO correlation id at all still gets metrics from the spans its agent
+ *  emitted in that window). The single-run path delegates here with
+ *  one-element arrays — a `terms` clause with one value is functionally a `term`. */
+function buildBatchCorrelationShouldClauses(
+  runIds: string[],
+  sessionIds: string[],
+  traceIds: string[],
+  agents: ServiceWindowHint[] = []
+): Record<string, unknown>[] {
+  const clauses: Record<string, unknown>[] = runIds.length > 0 ? buildRunIdShouldClauses(runIds) : [];
   if (sessionIds.length > 0) {
-    clauses.push(
-      { terms: { 'attributes.session.id.keyword': sessionIds } },
-      { terms: { 'attributes.session.id': sessionIds } },
-      { terms: { 'span.attributes.session@id': sessionIds } }
-    );
+    clauses.push(...buildSessionIdShouldClauses(sessionIds));
   }
   if (traceIds.length > 0) clauses.push({ terms: { traceId: traceIds } });
+  for (const hint of agents) clauses.push(buildAgentHintClause(hint));
   return clauses;
 }
 
 /**
- * Resolve which requested runId a span actually matched, for grouping spans
- * back to their runId in the batch path. Tries Strategy B by either
- * attribute, then Strategy A via the traceId -> runId reverse lookup.
+ * Read a span's `startTime` as epoch millis (both index schemas store it as an
+ * ISO-8601 string with nanosecond precision, which `Date.parse` truncates to
+ * millis — plenty for window membership).
+ */
+function spanStartMs(span: OpenSearchSpanSource): number {
+  const t = Date.parse(span.startTime || '');
+  return Number.isFinite(t) ? t : NaN;
+}
+
+/**
+ * Strategy-C attribution for the batch path: which requested key does a span
+ * belong to, given ONLY its service name + start time? A span is a candidate
+ * for every key whose hint has the same `serviceName` and whose window
+ * contains the span's start. When several keys' windows overlap (the same
+ * agent run concurrently against many test cases, or one hint's slack
+ * spilling into the neighbouring run's window), the span goes to the key
+ * whose window MIDPOINT is nearest — so a span is counted for exactly ONE key
+ * (never double-counted into a run's totals) and, since real windows are
+ * centred on the run they describe, almost always the right one. Returns
+ * `undefined` when no hint matches (the span came from another strategy or
+ * is noise the union pulled in).
+ */
+function resolveSpanKeyByServiceWindow(
+  span: OpenSearchSpanSource,
+  hintsByServiceName: Map<string, Array<{ key: string; hint: ServiceWindowHint }>>
+): string | undefined {
+  if (hintsByServiceName.size === 0) return undefined;
+  const attrs = readAttrs(span);
+  const serviceName = (span as any).serviceName ?? attrs['serviceName'] ?? attrs['gen_ai.agent.name'];
+  if (typeof serviceName !== 'string') return undefined;
+  const candidates = hintsByServiceName.get(serviceName);
+  if (!candidates || candidates.length === 0) return undefined;
+  const start = spanStartMs(span);
+  if (!Number.isFinite(start)) return undefined;
+  let best: { key: string; distance: number } | undefined;
+  for (const { key, hint } of candidates) {
+    if (start < hint.startedAt || start > hint.endedAt) continue;
+    const distance = Math.abs(start - (hint.startedAt + hint.endedAt) / 2);
+    if (!best || distance < best.distance) best = { key, distance };
+  }
+  return best?.key;
+}
+
+/**
+ * Resolve which requested key a span actually matched (and via which
+ * strategy), for grouping spans back to their key in the batch path. Tries Strategy B by either
+ * attribute, then Strategy D (session.id), then Strategy A via the traceId ->
+ * runId reverse lookup, and finally Strategy C (service.name + window) via
+ * {@link resolveSpanKeyByServiceWindow}. Precise strategies win over the
+ * window on purpose: a span that names its run can't be mis-attributed to a
+ * neighbouring run whose window happens to overlap.
  *
  * Pre-fix this only ever checked `agent_health.run.id`, silently dropping any
  * span that matched the OR'd `gen_ai.conversation.id` clause from grouping
  * (it was still fetched, just never attributed to a runId).
  */
-function resolveSpanRunId(
+function resolveSpanAttribution(
   span: OpenSearchSpanSource,
   idSet: Set<string>,
   sessionIdToRunId: Map<string, string>,
-  traceIdToRunId: Map<string, string>
-): string | undefined {
+  traceIdToRunId: Map<string, string>,
+  hintsByServiceName: Map<string, Array<{ key: string; hint: ServiceWindowHint }>>
+): { key: string; via: 'ids' | 'window' } | undefined {
   const attrs = readAttrs(span);
   const byRunIdAttr = attrs['agent_health.run.id'] as string | undefined;
-  if (byRunIdAttr && idSet.has(byRunIdAttr)) return byRunIdAttr;
+  if (byRunIdAttr && idSet.has(byRunIdAttr)) return { key: byRunIdAttr, via: 'ids' };
   const byConversationId = attrs['gen_ai.conversation.id'] as string | undefined;
-  if (byConversationId && idSet.has(byConversationId)) return byConversationId;
+  if (byConversationId && idSet.has(byConversationId)) return { key: byConversationId, via: 'ids' };
   if (sessionIdToRunId.size > 0) {
     const sessionId = (attrs['session.id'] as string | undefined) ?? (attrs['session@id'] as string | undefined);
-    if (sessionId && sessionIdToRunId.has(sessionId)) return sessionIdToRunId.get(sessionId);
+    if (sessionId && sessionIdToRunId.has(sessionId)) return { key: sessionIdToRunId.get(sessionId)!, via: 'ids' };
   }
   if (traceIdToRunId.size > 0 && span.traceId && traceIdToRunId.has(span.traceId)) {
-    return traceIdToRunId.get(span.traceId);
+    return { key: traceIdToRunId.get(span.traceId)!, via: 'ids' };
   }
-  return undefined;
+  const byWindow = resolveSpanKeyByServiceWindow(span, hintsByServiceName);
+  return byWindow ? { key: byWindow, via: 'window' } : undefined;
+}
+
+/**
+ * Per-chunk correlation lookups for the batch path, derived from the
+ * optional per-key correlator maps. Shared by the SDK-client and legacy
+ * raw-fetch branches so they cannot drift.
+ *
+ * `runIdCorrelators` is the subset of the chunk's keys that are sent to
+ * OpenSearch as Strategy-B run ids. A key that only has a service-window hint
+ * and no id-based correlator (no traceId, no sessionId) is a SURROGATE key —
+ * the caller's own report id standing in for a run id the connector never
+ * produced — and must NOT be used as a run-id `terms` value: it is not a run
+ * id, and querying it as one would let an unrelated span that happened to
+ * carry the same string (or, for sloppy callers, a real run's id) be attributed
+ * to this key. Keys are still always returned in the result set.
+ */
+function buildChunkLookups(
+  chunk: string[],
+  sessionIdByRunId?: Record<string, string>,
+  traceIdByRunId?: Record<string, string>,
+  agentsByRunId?: Record<string, ServiceWindowHint[]>
+) {
+  const sessionIdToRunId = new Map<string, string>();
+  const traceIdToRunId = new Map<string, string>();
+  const hintsByServiceName = new Map<string, Array<{ key: string; hint: ServiceWindowHint }>>();
+  const agentHints: ServiceWindowHint[] = [];
+  const runIdCorrelators: string[] = [];
+  for (const rid of chunk) {
+    const sid = sessionIdByRunId?.[rid];
+    if (sid) sessionIdToRunId.set(sid, rid);
+    const tid = traceIdByRunId?.[rid];
+    if (tid) traceIdToRunId.set(tid, rid);
+    const hints = agentsByRunId?.[rid] ?? [];
+    for (const hint of hints) {
+      agentHints.push(hint);
+      const list = hintsByServiceName.get(hint.serviceName) ?? [];
+      list.push({ key: rid, hint });
+      hintsByServiceName.set(hint.serviceName, list);
+      // A hint's session id is a precise correlator for that key too
+      // (Strategy D) — register it so attribution prefers it over the window.
+      if (hint.sessionId && !sessionIdToRunId.has(hint.sessionId)) sessionIdToRunId.set(hint.sessionId, rid);
+    }
+    const hasIdCorrelator = !!sid || !!tid || hints.some((h) => !!h.sessionId);
+    // Window-only key => surrogate; everything else is (or may be) a real run id.
+    if (hints.length === 0 || hasIdCorrelator) runIdCorrelators.push(rid);
+  }
+  return { sessionIdToRunId, traceIdToRunId, hintsByServiceName, agentHints, runIdCorrelators };
+}
+
+/**
+ * Group a chunk's returned spans back to their keys and compute one
+ * MetricsResult per key, stamping `correlatedBy` (ids / window / mixed) and
+ * `partial` (the query hit its size cap, so every key's counts are a lower
+ * bound — we cannot know which keys lost spans). Shared by both transport
+ * branches.
+ */
+function groupAndCompute(
+  chunk: string[],
+  allSpans: OpenSearchSpanSource[],
+  lookups: ReturnType<typeof buildChunkLookups>,
+  truncated: boolean
+): MetricsResult[] {
+  const idSet = new Set(lookups.runIdCorrelators);
+  const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
+  const viaByRunId = new Map<string, Set<'ids' | 'window'>>();
+  for (const rid of chunk) { spansByRunId.set(rid, []); viaByRunId.set(rid, new Set()); }
+  for (const span of allSpans) {
+    const hit = resolveSpanAttribution(span, idSet, lookups.sessionIdToRunId, lookups.traceIdToRunId, lookups.hintsByServiceName);
+    if (hit && spansByRunId.has(hit.key)) {
+      spansByRunId.get(hit.key)!.push(span);
+      viaByRunId.get(hit.key)!.add(hit.via);
+    }
+  }
+  return chunk.map((runId) => {
+    const m = computeMetricsFromSpans(runId, spansByRunId.get(runId) || []);
+    const via = viaByRunId.get(runId)!;
+    if (via.size > 0) m.correlatedBy = via.size === 2 ? 'mixed' : (via.has('window') ? 'window' : 'ids');
+    if (truncated) m.partial = true;
+    return m;
+  });
+}
+
+/** The `size` cap of the batch query; results are flagged `partial` when hit. */
+const BATCH_QUERY_SIZE = 10000;
+
+function totalHitsOf(hits: any, fallback: number): number {
+  const total = hits?.total;
+  return (typeof total === 'object' ? total?.value : total) ?? fallback;
 }
 
 interface OpenSearchResponse {
@@ -346,6 +480,13 @@ const METRICS_SOURCE_FIELDS = [
   'resource.attributes.*',
   'name',
   'traceId',
+  // Top-level OTel resource service name (both schemas). Needed to attribute
+  // a span back to its Strategy-C hint (service.name + window) in the batch
+  // path — without it in the projection the query MATCHES the span but the
+  // grouping step can't see which service it came from and drops it (the
+  // same projection-strips-what-we-need failure mode #469 fixed for the
+  // token attributes above).
+  'serviceName',
   'startTime',
   'endTime',
   'durationInNanos',
@@ -460,68 +601,69 @@ export function computeMetricsFromSpans(
  *   `session.id`) to OR into the query alongside Strategy B, for agents that
  *   never stamp our own `agent_health.run.id` / `gen_ai.conversation.id`.
  * @param traceId - Optional Strategy-A correlator (the eval span's own OTel
- *   trace id) — see {@link buildRunIdShouldClauses}.
+ *   trace id) — see {@link buildCorrelationShouldClauses}.
+ * @param agents - Optional Strategy-C/D hints (`service.name` + run window,
+ *   optional `session.id`) — the same `agents[]` the Traces tab / trace judge
+ *   send to `/api/traces`, so a report with NO correlation id still gets
+ *   metrics from the spans its agent emitted in that window.
  */
 export async function computeMetrics(
   runId: string,
   osConfig: OpenSearchConfig | { client: Client; indexPattern?: string },
   sessionId?: string,
-  traceId?: string
+  traceId?: string,
+  agents?: ServiceWindowHint[]
 ): Promise<MetricsResult> {
-  if ('client' in osConfig) {
-    const indexPattern = osConfig.indexPattern || 'otel-v1-apm-span-*';
-    const response = await osConfig.client.search({
-      index: indexPattern,
-      body: {
-        size: 500,
-        sort: [{ startTime: { order: 'asc' } }],
-        query: {
-          bool: {
-            must: [
-              { bool: { should: buildRunIdShouldClauses(runId, sessionId, traceId), minimum_should_match: 1 } }
-            ]
-          }
-        }
-      }
-    });
-    const spans = response.body.hits?.hits?.map((h: any) => h._source) || [];
-    return computeMetricsFromSpans(runId, spans);
-  }
-
-  // Legacy: raw fetch with Basic auth
-  const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
-
-  const query = {
-    size: 500,
-    sort: [{ startTime: { order: 'asc' } }],
-    query: {
-      bool: {
-        must: [
-          { bool: { should: buildRunIdShouldClauses(runId, sessionId, traceId), minimum_should_match: 1 } }
-        ]
-      }
-    }
+  // Same surrogate-key rule as the batch path (see buildChunkLookups): a key
+  // that has ONLY a window hint is not a run id and must not be queried as one.
+  const hints = agents ?? [];
+  const isSurrogate = hints.length > 0 && !sessionId && !traceId && !hints.some((h) => !!h.sessionId);
+  const should = isSurrogate
+    ? buildBatchCorrelationShouldClauses([], [], [], hints)
+    : buildCorrelationShouldClauses(runId, sessionId, traceId, hints);
+  const body = {
+    size: SINGLE_QUERY_SIZE,
+    sort: [{ startTime: { order: 'asc' as const } }],
+    query: { bool: { must: [{ bool: { should, minimum_should_match: 1 } }] } },
   };
 
-  const response = await fetch(`${endpoint}/${indexPattern}/_search`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
-    },
-    body: JSON.stringify(query)
-  });
+  let spans: OpenSearchSpanSource[];
+  let totalHits: number;
+  if ('client' in osConfig) {
+    const indexPattern = osConfig.indexPattern || 'otel-v1-apm-span-*';
+    const response = await osConfig.client.search({ index: indexPattern, body });
+    spans = response.body.hits?.hits?.map((h: any) => h._source) || [];
+    totalHits = totalHitsOf(response.body.hits, spans.length);
+  } else {
+    // Legacy: raw fetch with Basic auth
+    const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
+    const response = await fetch(`${endpoint}/${indexPattern}/_search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+      },
+      body: JSON.stringify(body)
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenSearch query failed: ${response.status} - ${errorText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenSearch query failed: ${response.status} - ${errorText}`);
+    }
+
+    const data: OpenSearchResponse = await response.json();
+    spans = data.hits?.hits?.map(h => h._source) || [];
+    totalHits = totalHitsOf(data.hits, spans.length);
   }
 
-  const data: OpenSearchResponse = await response.json();
-  const spans = data.hits?.hits?.map(h => h._source) || [];
-
-  return computeMetricsFromSpans(runId, spans);
+  const m = computeMetricsFromSpans(runId, spans);
+  if (spans.length > 0) m.correlatedBy = isSurrogate ? 'window' : (hints.length > 0 ? 'mixed' : 'ids');
+  if (totalHits > SINGLE_QUERY_SIZE || spans.length >= SINGLE_QUERY_SIZE) m.partial = true;
+  return m;
 }
+
+/** The `size` cap of the single-run query; results are flagged `partial` when hit. */
+const SINGLE_QUERY_SIZE = 500;
 
 /**
  * Compute metrics for multiple runs using bulk OpenSearch terms query.
@@ -529,13 +671,19 @@ export async function computeMetrics(
  *
  * @param sessionIdByRunId - Optional Strategy-D correlator map (runId ->
  *   agent-emitted session.id), OR'd into each chunk's query alongside
- *   Strategy B — see {@link buildRunIdShouldClauses}.
+ *   Strategy B — see {@link buildCorrelationShouldClauses}.
+ * @param agentsByRunId - Optional Strategy-C/D hints per key (runId ->
+ *   `[{serviceName, startedAt, endedAt, sessionId?}]`). Keys here need not be
+ *   real run ids: a caller whose report carries no correlation id at all may
+ *   key by its own report id and rely on the window alone; the result comes
+ *   back under that same key.
  */
 export async function computeBatchMetrics(
   runIds: string[],
   osConfig: OpenSearchConfig | { client: Client; indexPattern?: string },
   sessionIdByRunId?: Record<string, string>,
-  traceIdByRunId?: Record<string, string>
+  traceIdByRunId?: Record<string, string>,
+  agentsByRunId?: Record<string, ServiceWindowHint[]>
 ): Promise<MetricsResult[]> {
   if (runIds.length === 0) return [];
 
@@ -550,33 +698,24 @@ export async function computeBatchMetrics(
   if ('client' in osConfig) {
     const indexPattern = osConfig.indexPattern || 'otel-v1-apm-span-*';
     const chunkResults = await Promise.all(chunks.map(async (chunk) => {
-      const idSet = new Set(chunk);
-      const sessionIdToRunId = new Map<string, string>();
-      if (sessionIdByRunId) {
-        for (const rid of chunk) {
-          const sid = sessionIdByRunId[rid];
-          if (sid) sessionIdToRunId.set(sid, rid);
-        }
-      }
-      const traceIdToRunId = new Map<string, string>();
-      if (traceIdByRunId) {
-        for (const rid of chunk) {
-          const tid = traceIdByRunId[rid];
-          if (tid) traceIdToRunId.set(tid, rid);
-        }
-      }
+      const lookups = buildChunkLookups(chunk, sessionIdByRunId, traceIdByRunId, agentsByRunId);
       try {
         const response = await osConfig.client.search({
           index: indexPattern,
           body: {
-            size: 10000,
+            size: BATCH_QUERY_SIZE,
             sort: [{ startTime: { order: 'asc' } }],
             _source: METRICS_SOURCE_FIELDS,
             query: {
               bool: {
                 must: [
                   { bool: {
-                    should: buildBatchRunIdShouldClauses(chunk, Array.from(sessionIdToRunId.keys()), Array.from(traceIdToRunId.keys())),
+                    should: buildBatchCorrelationShouldClauses(
+                      lookups.runIdCorrelators,
+                      Array.from(lookups.sessionIdToRunId.keys()),
+                      Array.from(lookups.traceIdToRunId.keys()),
+                      lookups.agentHints,
+                    ),
                     minimum_should_match: 1,
                   } }
                 ]
@@ -586,25 +725,15 @@ export async function computeBatchMetrics(
         });
 
         const allSpans = response.body.hits?.hits?.map((h: any) => h._source) || [];
-        const total = response.body.hits?.total;
-        const totalHits = (typeof total === 'object' ? total?.value : total) ?? allSpans.length;
-        if (totalHits > 10000) {
+        const totalHits = totalHitsOf(response.body.hits, allSpans.length);
+        const truncated = totalHits > BATCH_QUERY_SIZE || allSpans.length >= BATCH_QUERY_SIZE;
+        if (truncated) {
           console.warn(
             `OpenSearch batch metrics query returned ${allSpans.length} of ${totalHits} spans ` +
-            `for chunk of ${chunk.length} run IDs. Metrics may be incomplete.`
+            `for chunk of ${chunk.length} run IDs. Metrics are flagged partial (lower bound).`
           );
         }
-
-        const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
-        for (const rid of chunk) spansByRunId.set(rid, []);
-        for (const span of allSpans) {
-          const rid = resolveSpanRunId(span, idSet, sessionIdToRunId, traceIdToRunId);
-          if (rid && spansByRunId.has(rid)) {
-            spansByRunId.get(rid)!.push(span);
-          }
-        }
-
-        return chunk.map(runId => computeMetricsFromSpans(runId, spansByRunId.get(runId) || []));
+        return groupAndCompute(chunk, allSpans, lookups, truncated);
       } catch (e: any) {
         console.warn(
           `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ${e.message}`
@@ -623,30 +752,21 @@ export async function computeBatchMetrics(
   const { endpoint, username, password, indexPattern = 'otel-v1-apm-span-*' } = osConfig;
 
   const chunkResults = await Promise.all(chunks.map(async (chunk) => {
-    const idSet = new Set(chunk);
-    const sessionIdToRunId = new Map<string, string>();
-    if (sessionIdByRunId) {
-      for (const rid of chunk) {
-        const sid = sessionIdByRunId[rid];
-        if (sid) sessionIdToRunId.set(sid, rid);
-      }
-    }
-    const traceIdToRunId = new Map<string, string>();
-    if (traceIdByRunId) {
-      for (const rid of chunk) {
-        const tid = traceIdByRunId[rid];
-        if (tid) traceIdToRunId.set(tid, rid);
-      }
-    }
+    const lookups = buildChunkLookups(chunk, sessionIdByRunId, traceIdByRunId, agentsByRunId);
     const query = {
-      size: 10000,
+      size: BATCH_QUERY_SIZE,
       sort: [{ startTime: { order: 'asc' } }],
       _source: METRICS_SOURCE_FIELDS,
       query: {
         bool: {
           must: [
             { bool: {
-              should: buildBatchRunIdShouldClauses(chunk, Array.from(sessionIdToRunId.keys()), Array.from(traceIdToRunId.keys())),
+              should: buildBatchCorrelationShouldClauses(
+                lookups.runIdCorrelators,
+                Array.from(lookups.sessionIdToRunId.keys()),
+                Array.from(lookups.traceIdToRunId.keys()),
+                lookups.agentHints,
+              ),
               minimum_should_match: 1,
             } }
           ]
@@ -674,25 +794,15 @@ export async function computeBatchMetrics(
 
     const data: OpenSearchResponse = await response.json();
     const allSpans = data.hits?.hits?.map(h => h._source) || [];
-
-    const totalHits = (data.hits as any)?.total?.value ?? allSpans.length;
-    if (totalHits > 10000) {
+    const totalHits = totalHitsOf(data.hits, allSpans.length);
+    const truncated = totalHits > BATCH_QUERY_SIZE || allSpans.length >= BATCH_QUERY_SIZE;
+    if (truncated) {
       console.warn(
         `OpenSearch batch metrics query returned ${allSpans.length} of ${totalHits} spans ` +
-        `for chunk of ${chunk.length} run IDs. Metrics may be incomplete.`
+        `for chunk of ${chunk.length} run IDs. Metrics are flagged partial (lower bound).`
       );
     }
-
-    const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
-    for (const rid of chunk) spansByRunId.set(rid, []);
-    for (const span of allSpans) {
-      const rid = resolveSpanRunId(span, idSet, sessionIdToRunId, traceIdToRunId);
-      if (rid && spansByRunId.has(rid)) {
-        spansByRunId.get(rid)!.push(span);
-      }
-    }
-
-    return chunk.map(runId => computeMetricsFromSpans(runId, spansByRunId.get(runId) || []));
+    return groupAndCompute(chunk, allSpans, lookups, truncated);
   }));
 
   for (const results of chunkResults) {

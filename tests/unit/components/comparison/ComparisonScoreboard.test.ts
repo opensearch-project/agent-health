@@ -447,3 +447,48 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
     expect(banner.textContent).toBe('5 in both, fully comparable');
   });
 });
+
+describe('ComparisonScoreboard trace-cell honesty markers (rendered)', () => {
+  // A run whose trace query hit its size cap is a LOWER bound (`≥` prefix);
+  // a run correlated via service.name + window says so in the tooltip. Both
+  // stay real numbers — never `--` — so the compare page is populated but not
+  // misleading.
+  const { ComparisonScoreboard } = require('@/components/comparison/ComparisonScoreboard');
+  const overlap = { runCount: 2, totalTestCases: 5, sharedTestCases: 5, partialTestCases: 0, perRun: [], fullyOverlapping: true };
+  const base = (runId: string) => ({
+    runId, runName: runId, createdAt: new Date().toISOString(), modelId: 'm', agentKey: 'mock',
+    totalTestCases: 5, passedCount: 5, failedCount: 0, avgAccuracy: 100, passRatePercent: 100,
+    totalCostUsd: 1.5, totalTokens: 250_100, totalLlmCalls: 6, totalToolCalls: 2, avgDurationMs: 1000,
+  });
+  const selected = (id: string) => ({ id, name: id, createdAt: new Date().toISOString(), agentKey: 'mock', modelId: 'm', results: {} });
+
+  it('renders `≥` before Cost/Tokens/LLM/Tool cells of a partial run and a window-correlation tooltip; exact runs get neither', () => {
+    render(
+      React.createElement(ComparisonScoreboard, {
+        runs: [
+          { ...base('run-partial'), traceMetricsPartial: true, traceMetricsWindowCorrelated: true },
+          base('run-exact'),
+        ],
+        selectedRuns: [selected('run-partial'), selected('run-exact')],
+        overlap,
+        runBenchmarkIdById: new Map(),
+        onRemoveRun: () => {},
+        onSwapRuns: () => {},
+        getAgentName: (k: string) => k,
+      })
+    );
+    const tokensP = screen.getByTestId('run-tokens-run-partial');
+    expect(tokensP.textContent).toBe('≥250.1K');
+    expect(screen.getByTestId('run-cost-run-partial').textContent).toBe('≥$1.50');
+    expect(screen.getByTestId('run-llmcalls-run-partial').textContent).toBe('≥6');
+    expect(tokensP.getAttribute('title')).toMatch(/Lower bound/);
+    expect(tokensP.getAttribute('title')).toMatch(/service name \+ run time window/);
+    // Duration is not a trace TOTAL (it's an average) — no prefix.
+    expect(screen.getByTestId('run-duration-run-partial').textContent).not.toContain('≥');
+
+    const tokensE = screen.getByTestId('run-tokens-run-exact');
+    expect(tokensE.textContent).toBe('250.1K');
+    expect(tokensE.getAttribute('title')).toBeNull();
+    expect(screen.getByTestId('run-cost-run-exact').textContent).toBe('$1.50');
+  });
+});

@@ -6,9 +6,12 @@
 import {
   calculateRunAggregates,
   mergeTraceMetrics,
+  metricsKeyForReport,
   collectRunIdsFromReports,
   collectSessionIdsFromReports,
   collectTraceIdsFromReports,
+  collectAgentHintsFromReports,
+  collectMetricsCorrelationFromReports,
   buildTestCaseComparisonRows,
   findBestRunForMetric,
   calculateDelta,
@@ -423,7 +426,7 @@ describe('comparisonService', () => {
       });
     });
 
-    it('omits entries whose report has no runId or no sessionId (nothing to correlate on)', () => {
+    it('omits entries whose report has no sessionId; a report with no runId is keyed by its own id (Strategy-C fallback key)', () => {
       const runs: BenchmarkRun[] = [
         {
           id: 'exp-run-1',
@@ -448,7 +451,10 @@ describe('comparisonService', () => {
 
       const sessionIdByRunId = collectSessionIdsFromReports(runs, reports);
 
-      expect(sessionIdByRunId).toEqual({ 'agent-run-3': 'session-ccc' });
+      // Pre-fix report-2 was silently dropped (no runId => nothing to key on);
+      // its session id is a perfectly good Strategy-D correlator, so it is now
+      // keyed by the report's own id.
+      expect(sessionIdByRunId).toEqual({ 'agent-run-3': 'session-ccc', 'report-2': 'session-orphan' });
     });
   });
 
@@ -1344,6 +1350,149 @@ describe('comparisonService', () => {
   // metrics are available at all, the display fell straight to "0ms" instead
   // of falling back to the per-result performanceMetrics the benchmark
   // runner already persists.
+  describe('metricsKeyForReport / collectAgentHintsFromReports / collectMetricsCorrelationFromReports (Strategy C on the compare page)', () => {
+    // Two reports from a REST-connector agent whose response carried NO
+    // correlation id (runId/sessionId/traceId all absent) — exactly the shape
+    // that rendered a blank Cost/Tokens/LLM-calls row — plus one Claude-Code-
+    // style report with a native runId + sessionId, and one from a generic
+    // `rest` agent with no traceServiceName configured (service.name unknowable).
+    const runs: BenchmarkRun[] = [
+      {
+        id: 'exp-run-rest',
+        name: 'REST arm',
+        createdAt: '2026-03-01T10:00:00Z',
+        agentKey: 'rest-arm',
+        modelId: 'm',
+        status: 'completed',
+        results: {
+          'tc-1': { reportId: 'report-r1', status: 'completed' },
+          'tc-2': { reportId: 'report-r2', status: 'completed' },
+          'tc-3': { reportId: 'report-unknowable', status: 'completed' },
+        },
+      } as unknown as BenchmarkRun,
+      {
+        id: 'exp-run-cc',
+        name: 'Subprocess arm',
+        createdAt: '2026-03-01T10:00:00Z',
+        agentKey: 'cc-arm',
+        modelId: 'm',
+        status: 'completed',
+        results: { 'tc-1': { reportId: 'report-cc', status: 'completed' } },
+      } as unknown as BenchmarkRun,
+    ];
+    const reports: Record<string, EvaluationReport> = {
+      'report-r1': {
+        id: 'report-r1', testCaseId: 'tc-1', agentKey: 'rest-arm', connectorProtocol: 'rest',
+        timestamp: '2026-03-01T10:00:30.000Z', performanceMetrics: { durationMs: 30_000 },
+      } as unknown as EvaluationReport,
+      'report-r2': {
+        id: 'report-r2', testCaseId: 'tc-2', agentKey: 'rest-arm', connectorProtocol: 'rest',
+        timestamp: '2026-03-01T10:05:00.000Z', // no durationMs -> 30-min fallback window
+      } as unknown as EvaluationReport,
+      'report-unknowable': {
+        id: 'report-unknowable', testCaseId: 'tc-3', agentKey: 'other-rest', connectorProtocol: 'rest',
+        timestamp: '2026-03-01T10:06:00.000Z',
+      } as unknown as EvaluationReport,
+      'report-cc': {
+        id: 'report-cc', testCaseId: 'tc-1', agentKey: 'cc-arm', connectorProtocol: 'claude-code',
+        runId: 'subprocess-1', sessionId: 'sess-cc', traceId: 'trace-cc',
+        timestamp: '2026-03-01T10:00:10.000Z', performanceMetrics: { durationMs: 10_000 },
+      } as unknown as EvaluationReport,
+    };
+    // Per-agent traceServiceName lookup (what ComparisonPage reads from the
+    // agent config); the second REST agent has none configured.
+    const resolveTraceServiceName = (agentKey: string | undefined) =>
+      agentKey === 'rest-arm' ? 'rest-arm-service' : undefined;
+
+    beforeEach(() => { jest.spyOn(console, 'warn').mockImplementation(() => {}); });
+    afterEach(() => { (console.warn as jest.Mock).mockRestore?.(); });
+
+    it('metricsKeyForReport prefers runId and falls back to the report id', () => {
+      expect(metricsKeyForReport({ id: 'report-x', runId: 'run-x' })).toBe('run-x');
+      expect(metricsKeyForReport({ id: 'report-x' })).toBe('report-x');
+      expect(metricsKeyForReport({ id: 'report-x', runId: '' })).toBe('report-x');
+      expect(metricsKeyForReport({ id: '' } as any)).toBeUndefined();
+    });
+
+    it('collectRunIdsFromReports keys no-runId reports by report id (they are no longer dropped)', () => {
+      expect(collectRunIdsFromReports(runs, reports)).toEqual(['report-r1', 'report-r2', 'report-unknowable', 'subprocess-1']);
+    });
+
+    it('derives one service.name + window hint per report through the judge\'s buildJudgeAgentsHints (same window math)', () => {
+      const hints = collectAgentHintsFromReports(runs, reports, resolveTraceServiceName);
+
+      // durationMs known: symmetric ±(duration + 60s slack) around the timestamp.
+      const r1 = Date.parse('2026-03-01T10:00:30.000Z');
+      expect(hints['report-r1']).toEqual([{ serviceName: 'rest-arm-service', startedAt: r1 - 90_000, endedAt: r1 + 90_000 }]);
+      // durationMs missing: 30-minute symmetric fallback.
+      const r2 = Date.parse('2026-03-01T10:05:00.000Z');
+      expect(hints['report-r2']).toEqual([{ serviceName: 'rest-arm-service', startedAt: r2 - 1_800_000, endedAt: r2 + 1_800_000 }]);
+      // Subprocess connector: protocol-default service name + sessionId (Strategy D) on the hint.
+      expect(hints['subprocess-1']).toEqual([expect.objectContaining({ serviceName: 'claude-code-agent', sessionId: 'sess-cc' })]);
+      // Generic transport protocol with no traceServiceName: NO hint (never a fabricated name).
+      expect(hints['report-unknowable']).toBeUndefined();
+    });
+
+    it('without a traceServiceName resolver, REST reports get no hint and subprocess reports still get the protocol default', () => {
+      const hints = collectAgentHintsFromReports(runs, reports);
+      expect(hints['report-r1']).toBeUndefined();
+      expect(hints['subprocess-1']?.[0]?.serviceName).toBe('claude-code-agent');
+    });
+
+    it('collectMetricsCorrelationFromReports bundles keys + A/C/D maps under the same keys', () => {
+      const c = collectMetricsCorrelationFromReports(runs, reports, resolveTraceServiceName);
+      expect(c.keys).toEqual(['report-r1', 'report-r2', 'report-unknowable', 'subprocess-1']);
+      expect(c.sessionIdByKey).toEqual({ 'subprocess-1': 'sess-cc' });
+      expect(c.traceIdByKey).toEqual({ 'subprocess-1': 'trace-cc' });
+      expect(Object.keys(c.agentsByKey).sort()).toEqual(['report-r1', 'report-r2', 'subprocess-1']);
+    });
+
+    it('mergeTraceMetrics sums metrics returned under a report-id key for a report with no runId', () => {
+      const base = calculateRunAggregates(runs[0], reports);
+      const traceMetricsMap = new Map<string, TraceMetrics>([
+        ['report-r1', { runId: 'report-r1', inputTokens: 100, outputTokens: 10, totalTokens: 110, costUsd: 0.5, durationMs: 1000, llmCalls: 2, toolCalls: 1, toolsUsed: ['t'], status: 'success' }],
+        ['report-r2', { runId: 'report-r2', inputTokens: 200, outputTokens: 20, totalTokens: 220, costUsd: 1.0, durationMs: 3000, llmCalls: 3, toolCalls: 0, toolsUsed: [], status: 'success' }],
+        // pending placeholder (no spans) is skipped, as before
+        ['report-unknowable', { runId: 'report-unknowable', inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0, llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'pending' }],
+      ]);
+
+      const merged = mergeTraceMetrics(base, runs[0], reports, traceMetricsMap);
+
+      expect(merged.totalTokens).toBe(330);
+      expect(merged.totalCostUsd).toBe(1.5);
+      expect(merged.totalLlmCalls).toBe(5);
+      expect(merged.avgDurationMs).toBe(2000);
+      // Neither honesty flag when every contributing result was precise and complete.
+      expect(merged.traceMetricsPartial).toBeUndefined();
+      expect(merged.traceMetricsWindowCorrelated).toBeUndefined();
+    });
+
+    it('mergeTraceMetrics propagates `partial` (lower bound) and window-correlation honesty flags from any contributing result', () => {
+      const base = calculateRunAggregates(runs[0], reports);
+      const tm = (runId: string, extra: Partial<TraceMetrics>): TraceMetrics => ({
+        runId, inputTokens: 10, outputTokens: 1, totalTokens: 11, costUsd: 0.1, durationMs: 100, llmCalls: 1, toolCalls: 0, toolsUsed: [], status: 'success', ...extra,
+      });
+      const partialMap = new Map<string, TraceMetrics>([
+        ['report-r1', tm('report-r1', { correlatedBy: 'ids' })],
+        ['report-r2', tm('report-r2', { correlatedBy: 'ids', partial: true })],
+      ]);
+      expect(mergeTraceMetrics(base, runs[0], reports, partialMap)).toEqual(expect.objectContaining({ totalTokens: 22, traceMetricsPartial: true }));
+      expect(mergeTraceMetrics(base, runs[0], reports, partialMap).traceMetricsWindowCorrelated).toBeUndefined();
+
+      const windowMap = new Map<string, TraceMetrics>([
+        ['report-r1', tm('report-r1', { correlatedBy: 'window' })],
+      ]);
+      const w = mergeTraceMetrics(base, runs[0], reports, windowMap);
+      expect(w.traceMetricsWindowCorrelated).toBe(true);
+      expect(w.traceMetricsPartial).toBeUndefined();
+      // A pending placeholder flagged partial contributes nothing (still skipped).
+      const pendingPartial = new Map<string, TraceMetrics>([
+        ['report-r1', tm('report-r1', { status: 'pending', partial: true })],
+      ]);
+      expect(mergeTraceMetrics(base, runs[0], reports, pendingPartial).traceMetricsPartial).toBeUndefined();
+    });
+  });
+
   describe('mergeTraceMetrics', () => {
     const baseAgg = calculateRunAggregates(
       {

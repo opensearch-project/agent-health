@@ -216,6 +216,176 @@ export function transformSpan(source: OpenSearchSpanSource): NormalizedSpan {
 }
 
 // ============================================================================
+// Query helpers — span-attribute field paths
+// ============================================================================
+
+/**
+ * The OpenSearch field paths a single OTel span attribute may be exactly
+ * matchable under, depending on which ingestion pipeline wrote the document
+ * and how the index mapped it:
+ *
+ *   - **nested / plain-raw** (stock Data Prepper `trace-analytics-plain-raw`,
+ *     our own `lib/telemetry/opensearchExporter.ts`, OTLP-file mode):
+ *     `attributes.<literal.dotted.key>` — e.g. `attributes.agent_health.run.id`.
+ *     With an explicit template this is a `keyword`; with plain DYNAMIC mapping
+ *     (verified on a stock OpenSearch node) a string attribute becomes analyzed
+ *     `text` plus a `.keyword` multi-field — a hyphenated id like
+ *     `run-1788552723776-j9o0h2p4` is tokenized on `-`, so `terms` on the base
+ *     path matches nothing and ONLY `attributes.<key>.keyword` correlates.
+ *   - **flat @-encoded** (OpenSearch Ingestion / Data Prepper
+ *     `otel-v1-apm-span-*` template — the live observability cluster this was
+ *     measured against, and the index pattern this service defaults to):
+ *     `span.attributes.<key with '.' → '@'>` — e.g.
+ *     `span.attributes.agent_health@run@id`, dynamically mapped as `keyword`.
+ *
+ * {@link transformSpan} has always tolerated both shapes on the READ side, so
+ * any span that was found rendered correctly — but a `term`/`terms` clause
+ * that names only ONE path silently matches nothing on a cluster using
+ * another. Measured live (`_count` on `otel-v1-apm-span-*`): the nested path
+ * returned 0 hits for every run id on the cluster; the flat path returned the
+ * run's spans. Every attribute-path QUERY must therefore fan out over all
+ * three paths via this helper; never hard-code one.
+ *
+ * Safety of the fan-out (verified against a real OpenSearch node, including a
+ * multi-index search spanning a text-mapped and a keyword-mapped index): a
+ * `terms` clause on an unmapped path — `.keyword` under a field that is
+ * already `keyword`, or `span.attributes.*` on a nested-schema index — simply
+ * matches nothing; it does not error.
+ */
+export function attributeFieldPaths(attributeName: string): string[] {
+  return [
+    `attributes.${attributeName}`,
+    `attributes.${attributeName}.keyword`,
+    `span.attributes.${attributeName.replace(/\./g, '@')}`,
+  ];
+}
+
+/**
+ * Span attributes that carry Agent Health's run id (Strategy B correlation):
+ * our own `agent_health.run.id` and the OTEL-standard `gen_ai.conversation.id`
+ * (both stamped `= runId` by our producers; see AGENTS.md → Trace correlation
+ * conventions and `lib/telemetry/constants.ts`).
+ */
+export const RUN_ID_ATTRIBUTES = ['agent_health.run.id', 'gen_ai.conversation.id'] as const;
+
+/**
+ * Strategy B `should` clauses for a set of run ids — one `terms` clause per
+ * (run-id attribute × attribute field path), so a span correlates if ANY of
+ * the six paths holds one of `runIds`. Callers MUST wrap the result in
+ * `{ bool: { should, minimum_should_match: 1 } }` — a `bool` that also has
+ * `must`/`filter` defaults `minimum_should_match` to 0, which would turn the
+ * group into a no-op instead of a filter.
+ *
+ * This is the SINGLE place the run-id query paths are spelled out — both
+ * `fetchTraces` (Traces tab, `/api/traces`, judge/comparison trace tools) and
+ * `metricsService` (`/api/metrics`, `/api/metrics/batch`) build their
+ * Strategy-B clause through it, so a schema-tolerance fix can't land in one
+ * reader and miss the other again (PR #469 fixed the read side of exactly this
+ * mismatch for metrics; this helper closes the query side for everyone).
+ *
+ * Callers must pass non-empty string ids: a `terms` clause with `[null]` makes
+ * OpenSearch reject the whole request (`x_content_parse_exception`). Sizing:
+ * the batch path chunks at 50 ids, far below `index.max_terms_count` (65,536).
+ */
+export function buildRunIdShouldClauses(runIds: readonly string[]): Record<string, unknown>[] {
+  return RUN_ID_ATTRIBUTES.flatMap((attr) =>
+    attributeFieldPaths(attr).map((field) => ({ terms: { [field]: runIds } }))
+  );
+}
+
+/**
+ * `should` clauses matching a span whose OTel `session.id` attribute equals
+ * one of `sessionIds` (Strategy D) — the same three paths as any other
+ * attribute (see {@link attributeFieldPaths}; here the `.keyword` case is the
+ * common one: Claude Code's hyphenated UUID session ids on a dynamically
+ * mapped nested index).
+ */
+export function buildSessionIdShouldClauses(sessionIds: readonly string[]): Record<string, unknown>[] {
+  return attributeFieldPaths('session.id').map((field) => ({ terms: { [field]: sessionIds } }));
+}
+
+/**
+ * One Strategy C/D correlation hint: the OTel `service.name` an agent emits
+ * under plus the wall-clock window of ONE run (Strategy C), optionally with
+ * the agent-emitted `session.id` for that run (Strategy D). This is the
+ * `agents[]` element shape `/api/traces` has always accepted (see
+ * `TracesQueryOptions.agents` in types/index.ts); `/api/metrics/batch` now
+ * accepts the same shape so every reader of the trace cluster correlates
+ * with ONE vocabulary.
+ */
+export interface ServiceWindowHint {
+  serviceName: string;
+  startedAt: number;
+  endedAt: number;
+  sessionId?: string;
+}
+
+/**
+ * Strategy C clause for one hint: `service.name` (or the nested
+ * `gen_ai.agent.name` alternate) AND `startTime` within `[startedAt, endedAt]`.
+ *
+ * NOTE (schema audit): `attributes.gen_ai.agent.name` is the nested path
+ * only — on a flat-@ index the attribute lives at
+ * `span.attributes.gen_ai@agent@name` and this alternate never matches;
+ * `serviceName` (top-level in both schemas) is what carries Strategy C
+ * there. Deliberately NOT widened here: doing so changes Strategy C's
+ * false-positive surface (agents sharing one gen_ai.agent.name across
+ * several service names), which is a separate decision from any
+ * correlation fix. Tracked as a follow-up.
+ */
+export function buildServiceWindowClause(hint: Pick<ServiceWindowHint, 'serviceName' | 'startedAt' | 'endedAt'>): Record<string, unknown> {
+  return {
+    bool: {
+      must: [
+        {
+          bool: {
+            should: [
+              { term: { 'serviceName': hint.serviceName } },
+              { term: { 'attributes.gen_ai.agent.name': hint.serviceName } },
+            ],
+            minimum_should_match: 1,
+          },
+        },
+        {
+          range: {
+            'startTime': {
+              gte: new Date(hint.startedAt).toISOString(),
+              lte: new Date(hint.endedAt).toISOString(),
+            },
+          },
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * The full clause for one `agents[]` hint: Strategy C alone when the hint has
+ * no session id; otherwise `(session.id == hint.sessionId) OR (Strategy C)`
+ * so the precise Strategy-D correlator is preferred and the service window
+ * only fills in spans it doesn't cover. This is the SINGLE place that shape
+ * is spelled out — `fetchTraces` (Traces tab, judge / comparison trace
+ * tools) and `metricsService` (`/api/metrics`, `/api/metrics/batch`) both
+ * build their per-hint clause through it, so the two readers can't drift
+ * apart again (the comparison page's Cost/Tokens/LLM-calls went blank for
+ * every REST-connector run that carried no correlation id even though the
+ * Traces tab and the trace judge found the same spans through this clause).
+ */
+export function buildAgentHintClause(hint: ServiceWindowHint): Record<string, unknown> {
+  const strategyC = buildServiceWindowClause(hint);
+  if (!hint.sessionId) return strategyC;
+  return {
+    bool: {
+      should: [
+        ...buildSessionIdShouldClauses([hint.sessionId]),
+        strategyC,
+      ],
+      minimum_should_match: 1,
+    },
+  };
+}
+
+// ============================================================================
 // Query Functions
 // ============================================================================
 
@@ -288,13 +458,13 @@ export async function fetchTraces(
       // Strategy B: match either Agent Health's own correlation attribute or
       // the OTEL-standard gen_ai.conversation.id — our producers (eval +
       // sample-agent spans) stamp both = runId, so a span matching EITHER
-      // correlates. Nested should keeps it as one OR-group within `sink`.
+      // correlates — under EITHER index schema (nested `attributes.*` or flat
+      // `span.attributes.*@*`; see buildRunIdShouldClauses — pre-fix this
+      // named only the nested path and never matched on the live
+      // OSI-ingested index). Nested should keeps it as one OR-group within `sink`.
       sink.push({
         bool: {
-          should: [
-            { terms: { 'attributes.agent_health.run.id': validRunIds } },
-            { terms: { 'attributes.gen_ai.conversation.id': validRunIds } },
-          ],
+          should: buildRunIdShouldClauses(validRunIds),
           minimum_should_match: 1,
         },
       });
@@ -303,53 +473,13 @@ export async function fetchTraces(
 
   if (agents && agents.length > 0) {
     for (const a of agents) {
-      // Strategy C: service.name (or gen_ai.agent.name) within the run window.
-      const strategyC = {
-        bool: {
-          must: [
-            {
-              bool: {
-                should: [
-                  { term: { 'serviceName': a.serviceName } },
-                  { term: { 'attributes.gen_ai.agent.name': a.serviceName } },
-                ],
-                minimum_should_match: 1,
-              },
-            },
-            {
-              range: {
-                'startTime': {
-                  gte: new Date(a.startedAt).toISOString(),
-                  lte: new Date(a.endedAt).toISOString(),
-                },
-              },
-            },
-          ],
-        },
-      };
-      if (a.sessionId) {
-        // Strategy D: the agent's emitted session.id is a precise per-run
-        // correlator (Claude Code stamps session.id on every span). Prefer it,
-        // unioned with Strategy C as a fallback for spans it doesn't cover.
-        // Match BOTH `attributes.session.id` and its `.keyword` sub-field: a
-        // UUID like `faee44ca-...` is text-analyzed (split on `-`), so a plain
-        // `term` on the analyzed field never matches — the `.keyword` exact field
-        // is what actually correlates.
-        sink.push({
-          bool: {
-            should: [
-              { term: { 'attributes.session.id': a.sessionId } },
-              { term: { 'attributes.session.id.keyword': a.sessionId } },
-              // Data Prepper `otel-v1-apm-span-*` schema stores it here (@ = dot).
-              { term: { 'span.attributes.session@id': a.sessionId } },
-              strategyC,
-            ],
-            minimum_should_match: 1,
-          },
-        });
-      } else {
-        sink.push(strategyC);
-      }
+      // Strategy C: service.name (or gen_ai.agent.name) within the run window,
+      // optionally unioned with Strategy D (the agent's emitted session.id —
+      // a precise per-run correlator, e.g. Claude Code stamps it on every
+      // span — preferred, with the window as fallback for spans it doesn't
+      // cover). Built through the shared helper so /api/metrics uses the
+      // identical clause; see buildAgentHintClause for the schema notes.
+      sink.push(buildAgentHintClause(a));
     }
   }
 
@@ -363,12 +493,7 @@ export async function fetchTraces(
     // can't zero out spans that traceId/runId already matched.
     sink.push({
       bool: {
-        should: [
-          { term: { 'attributes.session.id': sessionId } },
-          { term: { 'attributes.session.id.keyword': sessionId } },
-          // Data Prepper `otel-v1-apm-span-*` schema stores it here (@ = dot).
-          { term: { 'span.attributes.session@id': sessionId } },
-        ],
+        should: buildSessionIdShouldClauses([sessionId]),
         minimum_should_match: 1,
       },
     });

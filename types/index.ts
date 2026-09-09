@@ -683,6 +683,20 @@ export interface TraceMetrics {
    * Optional for backwards compatibility with older callers.
    */
   hasSpans?: boolean;
+  /**
+   * True when the OpenSearch query that produced this result hit its `size`
+   * cap, so the spans attributed to this key MAY be incomplete and every
+   * count/sum here is a LOWER bound. Consumers rendering these as run totals
+   * must not present a partial result as authoritative.
+   */
+  partial?: boolean;
+  /**
+   * Which correlation strategy attributed this key's spans: precise ids
+   * (`traceId` / run-id attributes / `session.id`) or the service.name +
+   * time-window fallback (`window`), which can pick up unrelated traffic of
+   * the same service. `mixed` when spans came in through more than one.
+   */
+  correlatedBy?: 'ids' | 'window' | 'mixed';
 }
 
 // ============ Trace Types ============
@@ -1334,6 +1348,20 @@ export interface RunAggregateMetrics {
   avgDurationMs?: number;
   totalLlmCalls?: number;
   totalToolCalls?: number;
+  /**
+   * True when at least one contributing per-case trace-metrics result was
+   * flagged `partial` (its OpenSearch query hit the size cap), so the trace
+   * totals above are a LOWER bound. Surfaces on the scoreboard as a `≥`
+   * prefix + tooltip rather than being presented as exact.
+   */
+  traceMetricsPartial?: boolean;
+  /**
+   * True when at least one contributing per-case result was attributed via
+   * the service.name + time-window fallback (Strategy C) rather than a precise
+   * id — a weaker correlation that can pick up unrelated traffic of the same
+   * service. Surfaces as a tooltip note on the trace-derived cells.
+   */
+  traceMetricsWindowCorrelated?: boolean;
 }
 
 // Result for a single test case within a run
@@ -1516,6 +1544,10 @@ export interface MetricsResult {
   status: 'pending' | 'success' | 'error';
   /** See TraceMetrics.hasSpans -- same semantics. */
   hasSpans?: boolean;
+  /** See TraceMetrics.partial -- query hit its size cap; counts are a lower bound. */
+  partial?: boolean;
+  /** See TraceMetrics.correlatedBy. */
+  correlatedBy?: 'ids' | 'window' | 'mixed';
 }
 
 // ============ Data Source Configuration Types ============

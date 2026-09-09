@@ -95,7 +95,7 @@ describe('Metrics Routes', () => {
       expect(mockComputeMetrics).toHaveBeenCalledWith('test-run-123', expect.objectContaining({
         client: mockClient,
         indexPattern: 'otel-traces-*',
-      }), undefined, undefined);
+      }), undefined, undefined, undefined);
       expect(res.json).toHaveBeenCalledWith(mockMetrics);
     });
 
@@ -110,7 +110,7 @@ describe('Metrics Routes', () => {
 
       await handler(req, res);
 
-      expect(mockComputeMetrics).toHaveBeenCalledWith('test-run-123', expect.any(Object), 'session-aaa', undefined);
+      expect(mockComputeMetrics).toHaveBeenCalledWith('test-run-123', expect.any(Object), 'session-aaa', undefined, undefined);
     });
 
     it('should forward a traceId query param to computeMetrics (Strategy A)', async () => {
@@ -137,7 +137,8 @@ describe('Metrics Routes', () => {
         'test-run-123',
         expect.objectContaining({ client: mockClient, indexPattern: 'otel-traces-*' }),
         undefined,
-        'trace-abc'
+        'trace-abc',
+        undefined
       );
     });
 
@@ -226,6 +227,7 @@ describe('Metrics Routes', () => {
         ['run-1', 'run-2'],
         expect.objectContaining({ client: mockClient, indexPattern: 'otel-traces-*' }),
         undefined,
+        undefined,
         undefined
       );
       expect(mockComputeAggregateMetrics).toHaveBeenCalledWith([mockMetrics1, mockMetrics2]);
@@ -252,7 +254,8 @@ describe('Metrics Routes', () => {
         ['run-1'],
         expect.objectContaining({ client: mockClient, indexPattern: 'otel-traces-*' }),
         undefined,
-        { 'run-1': 'trace-1' }
+        { 'run-1': 'trace-1' },
+        undefined
       );
     });
 
@@ -285,7 +288,8 @@ describe('Metrics Routes', () => {
         ['run-1'],
         expect.objectContaining({ client: mockClient, indexPattern: 'otel-traces-*' }),
         undefined,
-        { 'run-2': 'trace-2' }
+        { 'run-2': 'trace-2' },
+        undefined
       );
     });
 
@@ -301,6 +305,19 @@ describe('Metrics Routes', () => {
       });
     });
 
+    it.each([
+      ['a null element', ['run-1', null]],
+      ['a numeric element', [42]],
+      ['an empty-string element', ['']],
+    ])('returns 400 (not 500) when runIds contains %s', async (_label, runIds) => {
+      const { req, res } = createMocks({}, { runIds });
+      const handler = getRouteHandler(metricsRoutes, 'post', '/api/metrics/batch');
+      await handler(req, res);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringMatching(/runIds must contain only non-empty strings/) }));
+      expect(mockComputeBatchMetrics).not.toHaveBeenCalled();
+    });
+
     it('should return 400 when sessionIds is not a plain object (array/string/null)', async () => {
       const handler = getRouteHandler(metricsRoutes, 'post', '/api/metrics/batch');
       for (const badSessionIds of ['not-an-object', ['a', 'b'], null]) {
@@ -309,6 +326,92 @@ describe('Metrics Routes', () => {
         expect(res.status).toHaveBeenCalledWith(400);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringMatching(/sessionIds/) }));
       }
+    });
+
+    // Strategy C (service.name + run window) parity with /api/traces: the
+    // batch route accepts a runId -> hint[] map and forwards it, so a report
+    // with NO correlation id at all can still be matched by its agent's spans.
+    describe('agents (Strategy-C/D hints, same element shape as /api/traces agents[])', () => {
+      const emptyAggregate = {
+        totalRuns: 0, successRate: 0, totalCostUsd: 0, avgCostUsd: 0,
+        avgDurationMs: 0, p50DurationMs: 0, p95DurationMs: 0, avgTokens: 0,
+        totalInputTokens: 0, totalOutputTokens: 0, avgLlmCalls: 0, avgToolCalls: 0,
+      };
+
+      it('threads a well-formed agents map through to computeBatchMetrics (keys may be report ids, not run ids)', async () => {
+        mockComputeBatchMetrics.mockResolvedValue([]);
+        mockComputeAggregateMetrics.mockReturnValue(emptyAggregate);
+        const hint = { serviceName: 'example-agent', startedAt: 1_000, endedAt: 2_000 };
+        const hintWithSession = { serviceName: 'other-agent', startedAt: 3_000, endedAt: 4_000, sessionId: 'sess-1' };
+        const { req, res } = createMocks({}, {
+          runIds: ['report-no-runid', 'run-2', 'run-3'],
+          agents: { 'report-no-runid': [hint], 'run-2': [hintWithSession], 'run-3': [] },
+        });
+        const handler = getRouteHandler(metricsRoutes, 'post', '/api/metrics/batch');
+
+        await handler(req, res);
+
+        expect(mockComputeBatchMetrics).toHaveBeenCalledWith(
+          ['report-no-runid', 'run-2', 'run-3'],
+          expect.any(Object),
+          undefined,
+          undefined,
+          // Empty hint arrays are dropped; everything else forwarded verbatim.
+          { 'report-no-runid': [hint], 'run-2': [hintWithSession] }
+        );
+        expect(res.status).not.toHaveBeenCalledWith(400);
+      });
+
+      it('rejects a non-object agents field (array/string/null) with 400', async () => {
+        const handler = getRouteHandler(metricsRoutes, 'post', '/api/metrics/batch');
+        for (const bad of ['not-an-object', [{ serviceName: 'x', startedAt: 1, endedAt: 2 }], null]) {
+          const { req, res } = createMocks({}, { runIds: ['run-1'], agents: bad });
+          await handler(req, res);
+          expect(res.status).toHaveBeenCalledWith(400);
+          expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringMatching(/agents/) }));
+        }
+        expect(mockComputeBatchMetrics).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['a hint that is not an object', ['nope']],
+        ['a hint missing serviceName', [{ startedAt: 1, endedAt: 2 }]],
+        ['a hint with an empty serviceName', [{ serviceName: '', startedAt: 1, endedAt: 2 }]],
+        ['a hint with a non-numeric startedAt', [{ serviceName: 'x', startedAt: '1', endedAt: 2 }]],
+        ['a hint with a NaN endedAt', [{ serviceName: 'x', startedAt: 1, endedAt: NaN }]],
+        ['a hint with a non-string sessionId', [{ serviceName: 'x', startedAt: 1, endedAt: 2, sessionId: 7 }]],
+        ['a hint whose window is inverted (endedAt < startedAt)', [{ serviceName: 'x', startedAt: 2000, endedAt: 1000 }]],
+        ['a value that is not an array of hints', { serviceName: 'x', startedAt: 1, endedAt: 2 }],
+      ])('rejects %s with 400 and never queries the cluster', async (_label, hints) => {
+        const { req, res } = createMocks({}, { runIds: ['run-1'], agents: { 'run-1': hints } });
+        const handler = getRouteHandler(metricsRoutes, 'post', '/api/metrics/batch');
+
+        await handler(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(mockComputeBatchMetrics).not.toHaveBeenCalled();
+      });
+    });
+
+    it('GET /api/metrics/:runId forwards a ?serviceName=&startedAt=&endedAt= window hint (Strategy C) and rejects a malformed one', async () => {
+      mockComputeMetrics.mockResolvedValue({ runId: 'r', status: 'pending' } as any);
+      const handler = getRouteHandler(metricsRoutes, 'get', '/api/metrics/:runId');
+
+      const ok = createMocks({ runId: 'r' }, {}, {}, { serviceName: 'example-agent', startedAt: '1000', endedAt: '2000', sessionId: 'sess-9' });
+      await handler(ok.req, ok.res);
+      expect(mockComputeMetrics).toHaveBeenCalledWith(
+        'r',
+        expect.any(Object),
+        'sess-9',
+        undefined,
+        [{ serviceName: 'example-agent', startedAt: 1000, endedAt: 2000, sessionId: 'sess-9' }]
+      );
+
+      mockComputeMetrics.mockClear();
+      const bad = createMocks({ runId: 'r' }, {}, {}, { serviceName: 'example-agent', startedAt: 'yesterday' });
+      await handler(bad.req, bad.res);
+      expect(bad.res.status).toHaveBeenCalledWith(400);
+      expect(mockComputeMetrics).not.toHaveBeenCalled();
     });
 
     it('threads a well-formed sessionIds map through to computeBatchMetrics, dropping non-string values', async () => {
@@ -331,6 +434,7 @@ describe('Metrics Routes', () => {
         ['run-1', 'run-2'],
         expect.any(Object),
         { 'run-1': 'session-aaa' },
+        undefined,
         undefined
       );
     });

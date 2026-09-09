@@ -347,7 +347,7 @@ describe('metricsService', () => {
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should).toEqual(expect.arrayContaining([{ term: { traceId: 'trace-abc-123' } }]));
+      expect(should).toEqual(expect.arrayContaining([{ terms: { traceId: ['trace-abc-123'] } }]));
     });
 
     it('omits the traceId should-clause when no traceId correlator is passed', async () => {
@@ -630,14 +630,22 @@ describe('metricsService', () => {
       );
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      // Strategy B now matches agent_health.run.id OR the OTEL-standard
-      // gen_ai.conversation.id (both stamped = runId by our producers). The
-      // single-run path uses `term` (scalar) clauses; the batch path uses the
-      // `terms` (array) form via buildBatchRunIdShouldClauses — functionally
-      // identical for one id.
+      // Strategy B matches agent_health.run.id OR the OTEL-standard
+      // gen_ai.conversation.id (both stamped = runId by our producers), under
+      // every index schema — nested `attributes.*` (+ its `.keyword` multi-field
+      // for dynamically mapped text) AND the flat `@`-encoded
+      // `span.attributes.*` the live `otel-v1-apm-span-*` index uses. The
+      // single-run path delegates to the shared `terms` builder with a
+      // one-element array (functionally a `term`).
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should[0].term['attributes.agent_health.run.id']).toEqual('test-run-123');
-      expect(should[1].term['attributes.gen_ai.conversation.id']).toEqual('test-run-123');
+      expect(should).toEqual([
+        { terms: { 'attributes.agent_health.run.id': ['test-run-123'] } },
+        { terms: { 'attributes.agent_health.run.id.keyword': ['test-run-123'] } },
+        { terms: { 'span.attributes.agent_health@run@id': ['test-run-123'] } },
+        { terms: { 'attributes.gen_ai.conversation.id': ['test-run-123'] } },
+        { terms: { 'attributes.gen_ai.conversation.id.keyword': ['test-run-123'] } },
+        { terms: { 'span.attributes.gen_ai@conversation@id': ['test-run-123'] } },
+      ]);
     });
 
     it('should use default index pattern when not provided', async () => {
@@ -671,10 +679,18 @@ describe('metricsService', () => {
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should[0].term['attributes.agent_health.run.id']).toEqual('test-run-123');
-      expect(should[1].term['attributes.gen_ai.conversation.id']).toEqual('test-run-123');
-      const sessionClause = should.find((c: any) => c.term?.['attributes.session.id.keyword']);
-      expect(sessionClause.term['attributes.session.id.keyword']).toEqual('e84af53e-6920-44a5-bd75-5ee6cebf58c6');
+      expect(should).toEqual(expect.arrayContaining([
+        { terms: { 'attributes.agent_health.run.id': ['test-run-123'] } },
+        { terms: { 'attributes.agent_health.run.id.keyword': ['test-run-123'] } },
+        { terms: { 'span.attributes.agent_health@run@id': ['test-run-123'] } },
+        { terms: { 'attributes.gen_ai.conversation.id': ['test-run-123'] } },
+        { terms: { 'attributes.gen_ai.conversation.id.keyword': ['test-run-123'] } },
+        { terms: { 'span.attributes.gen_ai@conversation@id': ['test-run-123'] } },
+      ]));
+      const sessionClause = should.find((c: any) => c.terms?.['attributes.session.id.keyword']);
+      expect(sessionClause.terms['attributes.session.id.keyword']).toEqual(['e84af53e-6920-44a5-bd75-5ee6cebf58c6']);
+      // Flat-@ schema path is queried too.
+      expect(should.find((c: any) => c.terms?.['span.attributes.session@id'])).toBeTruthy();
     });
 
     it('does not add session.id clauses when no sessionId is supplied (unchanged query shape)', async () => {
@@ -687,7 +703,11 @@ describe('metricsService', () => {
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should).toHaveLength(2);
+      // Exactly the six Strategy-B clauses (2 run-id attributes x 3 field
+      // paths: nested, nested .keyword, flat-@), no session.id / traceId clauses.
+      expect(should).toHaveLength(6);
+      expect(JSON.stringify(should)).not.toContain('session');
+      expect(JSON.stringify(should)).not.toContain('traceId');
     });
   });
 
@@ -897,8 +917,14 @@ describe('metricsService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should[0].terms['attributes.agent_health.run.id']).toEqual(['run-1', 'run-2']);
-      expect(should[1].terms['attributes.gen_ai.conversation.id']).toEqual(['run-1', 'run-2']);
+      expect(should).toEqual([
+        { terms: { 'attributes.agent_health.run.id': ['run-1', 'run-2'] } },
+        { terms: { 'attributes.agent_health.run.id.keyword': ['run-1', 'run-2'] } },
+        { terms: { 'span.attributes.agent_health@run@id': ['run-1', 'run-2'] } },
+        { terms: { 'attributes.gen_ai.conversation.id': ['run-1', 'run-2'] } },
+        { terms: { 'attributes.gen_ai.conversation.id.keyword': ['run-1', 'run-2'] } },
+        { terms: { 'span.attributes.gen_ai@conversation@id': ['run-1', 'run-2'] } },
+      ]);
     });
 
     it('should return pending metrics for run IDs with no matching spans', async () => {
@@ -1089,6 +1115,301 @@ describe('metricsService', () => {
       expect(result[0].runId).toBe('run-conv-1');
       expect(result[0].inputTokens).toBe(111);
       expect(result[0].status).toBe('success');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Strategy C (service.name + run window) — parity with /api/traces and the
+  // trace judge. A report that carries NO correlation id (no runId /
+  // sessionId / traceId — the shape a REST-connector agent produces when its
+  // response echoes nothing agent-health recognizes) must still get metrics
+  // from the spans its agent emitted in the run window.
+  // -------------------------------------------------------------------------
+  describe('Strategy C service-window hints (agents)', () => {
+    const defaultConfig: OpenSearchConfig = {
+      endpoint: 'http://localhost:9200',
+      username: 'admin',
+      password: 'admin',
+      indexPattern: 'otel-v1-apm-span-*',
+    };
+    const emptyHits = () => ({ ok: true, json: () => Promise.resolve({ hits: { hits: [] } }) });
+    const T0 = Date.parse('2026-03-01T10:00:00.000Z');
+    const hint = { serviceName: 'example-agent', startedAt: T0, endedAt: T0 + 60_000 };
+
+    it('computeMetrics ORs a service.name + startTime-window clause into the union (exact DSL, same as /api/traces)', async () => {
+      mockFetch.mockResolvedValue(emptyHits());
+
+      // A real run id + a traceId (so the key is NOT a surrogate) + one hint.
+      await computeMetrics('run-1', defaultConfig, undefined, 'trace-1', [hint]);
+
+      const should = JSON.parse(mockFetch.mock.calls[0][1].body).query.bool.must[0].bool.should;
+      // 6 Strategy-B clauses + 1 Strategy-A traceId clause + exactly one Strategy-C clause.
+      expect(should).toHaveLength(8);
+      expect(should[7]).toEqual({
+        bool: {
+          must: [
+            {
+              bool: {
+                should: [
+                  { term: { serviceName: 'example-agent' } },
+                  { term: { 'attributes.gen_ai.agent.name': 'example-agent' } },
+                ],
+                minimum_should_match: 1,
+              },
+            },
+            {
+              range: {
+                startTime: {
+                  gte: new Date(T0).toISOString(),
+                  lte: new Date(T0 + 60_000).toISOString(),
+                },
+              },
+            },
+          ],
+        },
+      });
+    });
+
+    it('a hint carrying a sessionId becomes (session.id) OR (service window), unioned with A/B/D clauses', async () => {
+      mockFetch.mockResolvedValue(emptyHits());
+
+      await computeMetrics('run-1', defaultConfig, 'sess-report', 'trace-1', [{ ...hint, sessionId: 'sess-hint' }]);
+
+      const should = JSON.parse(mockFetch.mock.calls[0][1].body).query.bool.must[0].bool.should;
+      const text = JSON.stringify(should);
+      // Strategy D from the report-level sessionId, Strategy A traceId, and the hint clause all present.
+      expect(text).toContain('sess-report');
+      expect(text).toContain('"traceId":["trace-1"]');
+      const hintClause = should[should.length - 1];
+      expect(hintClause.bool.minimum_should_match).toBe(1);
+      expect(hintClause.bool.should).toEqual([
+        { terms: { 'attributes.session.id': ['sess-hint'] } },
+        { terms: { 'attributes.session.id.keyword': ['sess-hint'] } },
+        { terms: { 'span.attributes.session@id': ['sess-hint'] } },
+        expect.objectContaining({ bool: expect.objectContaining({ must: expect.any(Array) }) }),
+      ]);
+    });
+
+    it('no hints => query shape unchanged (no serviceName / range clause)', async () => {
+      mockFetch.mockResolvedValue(emptyHits());
+      await computeMetrics('run-1', defaultConfig, undefined, undefined, []);
+      const text = JSON.stringify(JSON.parse(mockFetch.mock.calls[0][1].body).query);
+      expect(text).not.toContain('serviceName');
+      expect(text).not.toContain('range');
+    });
+
+    it('the batch _source projection keeps the top-level serviceName (window attribution needs it; regression caught by the fake-OpenSearch integration test)', async () => {
+      mockFetch.mockResolvedValue(emptyHits());
+      await computeBatchMetrics(['k'], defaultConfig, undefined, undefined, { k: [hint] });
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body._source).toEqual(expect.arrayContaining(['serviceName', 'startTime', 'span.attributes.*', 'attributes']));
+    });
+
+    it('computeBatchMetrics attributes window-matched spans to the key whose hint they fall in (no ids on the spans at all)', async () => {
+      const span = (serviceName: string, startIso: string, inTok: number) => ({
+        _source: {
+          name: 'chat',
+          traceId: 'trace-' + Math.random().toString(36).slice(2, 8),
+          serviceName,
+          startTime: startIso,
+          endTime: startIso,
+          durationInNanos: 1_000_000,
+          status: { code: 1 },
+          attributes: { 'gen_ai.request.model': 'anthropic.claude-sonnet-4', 'gen_ai.usage.input_tokens': inTok, 'gen_ai.usage.output_tokens': 1 },
+        },
+      });
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          hits: {
+            hits: [
+              span('example-agent', '2026-03-01T10:00:10.000Z', 100), // inside report-a's window
+              span('example-agent', '2026-03-01T10:00:20.000Z', 200), // inside report-a's window
+              span('example-agent', '2026-03-01T10:05:10.000Z', 400), // inside report-b's window
+              span('other-agent',   '2026-03-01T10:00:15.000Z', 999), // right time, wrong service -> unattributed
+              span('example-agent', '2026-03-01T11:00:00.000Z', 999), // right service, outside every window -> unattributed
+            ],
+          },
+        }),
+      });
+      const A = Date.parse('2026-03-01T10:00:00.000Z');
+      const B = Date.parse('2026-03-01T10:05:00.000Z');
+
+      const results = await computeBatchMetrics(
+        ['report-a', 'report-b'],
+        defaultConfig,
+        undefined,
+        undefined,
+        {
+          'report-a': [{ serviceName: 'example-agent', startedAt: A, endedAt: A + 60_000 }],
+          'report-b': [{ serviceName: 'example-agent', startedAt: B, endedAt: B + 60_000 }],
+        }
+      );
+
+      const byKey = new Map(results.map(r => [r.runId, r]));
+      expect(byKey.get('report-a')).toEqual(expect.objectContaining({ inputTokens: 300, llmCalls: 2, status: 'success', hasSpans: true }));
+      expect(byKey.get('report-b')).toEqual(expect.objectContaining({ inputTokens: 400, llmCalls: 1, status: 'success', hasSpans: true }));
+      // The request carried one Strategy-C clause per key.
+      const should = JSON.parse(mockFetch.mock.calls[0][1].body).query.bool.must[0].bool.should;
+      expect(should.filter((c: any) => c.bool?.must?.[0]?.bool?.should?.[0]?.term?.serviceName === 'example-agent')).toHaveLength(2);
+    });
+
+    it('overlapping windows for the same service: each span is counted for exactly ONE key (nearest window midpoint)', async () => {
+      const mk = (startIso: string, inTok: number) => ({
+        _source: {
+          name: 'chat', traceId: 't', serviceName: 'example-agent', startTime: startIso, endTime: startIso,
+          durationInNanos: 1, status: { code: 1 },
+          attributes: { 'gen_ai.request.model': 'anthropic.claude-sonnet-4', 'gen_ai.usage.input_tokens': inTok, 'gen_ai.usage.output_tokens': 0 },
+        },
+      });
+      // Windows: a = [0, 100s] (mid 50s), b = [60s, 160s] (mid 110s). Overlap = [60s, 100s].
+      const base = Date.parse('2026-03-01T10:00:00.000Z');
+      const iso = (s: number) => new Date(base + s * 1000).toISOString();
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ hits: { hits: [mk(iso(30), 1), mk(iso(70), 10), mk(iso(95), 100), mk(iso(150), 1000)] } }),
+      });
+
+      const results = await computeBatchMetrics(['a', 'b'], defaultConfig, undefined, undefined, {
+        a: [{ serviceName: 'example-agent', startedAt: base, endedAt: base + 100_000 }],
+        b: [{ serviceName: 'example-agent', startedAt: base + 60_000, endedAt: base + 160_000 }],
+      });
+
+      const byKey = new Map(results.map(r => [r.runId, r]));
+      // 30s -> a only; 70s -> overlap, |70-50|=20 < |70-110|=40 -> a; 95s -> overlap, |95-50|=45 > |95-110|=15 -> b; 150s -> b only.
+      expect(byKey.get('a')!.inputTokens).toBe(11);
+      expect(byKey.get('b')!.inputTokens).toBe(1100);
+      expect(byKey.get('a')!.inputTokens + byKey.get('b')!.inputTokens).toBe(1111); // nothing double-counted
+    });
+
+    it('precise strategies win over the window: a span naming its run id is never re-attributed to an overlapping window', async () => {
+      const base = Date.parse('2026-03-01T10:00:00.000Z');
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          hits: {
+            hits: [{
+              _source: {
+                name: 'chat', traceId: 't', serviceName: 'example-agent',
+                startTime: new Date(base + 10_000).toISOString(), durationInNanos: 1, status: { code: 1 },
+                attributes: { 'agent_health.run.id': 'run-precise', 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 5, 'gen_ai.usage.output_tokens': 0 },
+              },
+            }],
+          },
+        }),
+      });
+
+      const results = await computeBatchMetrics(['run-precise', 'report-windowed'], defaultConfig, undefined, undefined, {
+        'report-windowed': [{ serviceName: 'example-agent', startedAt: base, endedAt: base + 60_000 }],
+      });
+
+      const byKey = new Map(results.map(r => [r.runId, r]));
+      expect(byKey.get('run-precise')!.inputTokens).toBe(5);
+      expect(byKey.get('report-windowed')!.hasSpans).toBe(false);
+    });
+
+    it('a window-only key is a SURROGATE (e.g. a report id): it is NOT sent as a Strategy-B run-id terms value, only its window clause is', async () => {
+      mockFetch.mockResolvedValue(emptyHits());
+      await computeBatchMetrics(['report-surrogate', 'run-real'], defaultConfig, undefined, undefined, {
+        'report-surrogate': [hint],
+      });
+      const should = JSON.parse(mockFetch.mock.calls[0][1].body).query.bool.must[0].bool.should;
+      const runIdTerms = should.filter((c: any) => c.terms?.['attributes.agent_health.run.id']);
+      expect(runIdTerms).toHaveLength(1);
+      expect(runIdTerms[0].terms['attributes.agent_health.run.id']).toEqual(['run-real']);
+      expect(JSON.stringify(should)).not.toContain('report-surrogate');
+      // ...and a span that happens to carry the surrogate string as its run id is NOT attributed to it.
+    });
+
+    it('a span carrying the surrogate key string as agent_health.run.id is not attributed to the surrogate (only the window can)', async () => {
+      const base = Date.parse('2026-03-01T10:00:00.000Z');
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ hits: { hits: [{
+          _source: { name: 'chat', traceId: 't', serviceName: 'other-service', startTime: new Date(base + 5000).toISOString(), durationInNanos: 1, status: { code: 1 },
+            attributes: { 'agent_health.run.id': 'report-surrogate', 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 9, 'gen_ai.usage.output_tokens': 0 } },
+        }] } }),
+      });
+      const [m] = await computeBatchMetrics(['report-surrogate'], defaultConfig, undefined, undefined, {
+        'report-surrogate': [{ serviceName: 'example-agent', startedAt: base, endedAt: base + 60_000 }],
+      });
+      expect(m.hasSpans).toBe(false);
+    });
+
+    it('computeMetrics (single) applies the same surrogate rule and stamps correlatedBy', async () => {
+      mockFetch.mockResolvedValue(emptyHits());
+      await computeMetrics('report-surrogate', defaultConfig, undefined, undefined, [hint]);
+      const should = JSON.parse(mockFetch.mock.calls[0][1].body).query.bool.must[0].bool.should;
+      expect(JSON.stringify(should)).not.toContain('report-surrogate');
+      expect(should).toHaveLength(1); // the window clause only
+    });
+
+    it('stamps correlatedBy = ids / window / mixed per key', async () => {
+      const base = Date.parse('2026-03-01T10:00:00.000Z');
+      const mk = (attrs: Record<string, unknown>, offsetS: number, serviceName = 'example-agent') => ({
+        _source: { name: 'chat', traceId: 't', serviceName, startTime: new Date(base + offsetS * 1000).toISOString(), durationInNanos: 1, status: { code: 1 },
+          attributes: { 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 1, 'gen_ai.usage.output_tokens': 0, ...attrs } },
+      });
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ hits: { hits: [
+          mk({ 'agent_health.run.id': 'run-ids' }, 5, 'svc-ids'),          // ids only
+          mk({}, 5),                                                        // window only -> report-w
+          mk({ 'agent_health.run.id': 'run-mixed' }, 100, 'svc-mixed'),     // ids
+          mk({}, 105, 'svc-mixed'),                                         // + window for the same key -> mixed
+        ] } }),
+      });
+      const results = await computeBatchMetrics(['run-ids', 'report-w', 'run-mixed'], defaultConfig, undefined, undefined, {
+        'report-w': [{ serviceName: 'example-agent', startedAt: base, endedAt: base + 60_000 }],
+        'run-mixed': [{ serviceName: 'svc-mixed', startedAt: base + 90_000, endedAt: base + 120_000, sessionId: 'sess-mixed' }],
+      });
+      const byKey = new Map(results.map(r => [r.runId, r]));
+      expect(byKey.get('run-ids')!.correlatedBy).toBe('ids');
+      expect(byKey.get('report-w')!.correlatedBy).toBe('window');
+      expect(byKey.get('run-mixed')!.correlatedBy).toBe('mixed');
+      expect(byKey.get('run-ids')!.partial).toBeUndefined();
+    });
+
+    it('flags every key in a chunk `partial` when the query hit its size cap (counts are a lower bound)', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ hits: { total: { value: 25_000 }, hits: [{
+          _source: { name: 'chat', traceId: 't', attributes: { 'agent_health.run.id': 'run-1', 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 1, 'gen_ai.usage.output_tokens': 0 } },
+        }] } }),
+      });
+      const results = await computeBatchMetrics(['run-1', 'run-2'], defaultConfig);
+      expect(results.every(r => r.partial === true)).toBe(true);
+      // Single-run path: same flag at its own cap.
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ hits: { total: { value: 600 }, hits: [] } }) });
+      const single = await computeMetrics('run-1', defaultConfig);
+      expect(single.partial).toBe(true);
+    });
+
+    it('a hint sessionId is registered as a Strategy-D correlator for its key (attribution by session.id beats the window)', async () => {
+      const base = Date.parse('2026-03-01T10:00:00.000Z');
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          hits: {
+            hits: [{
+              _source: {
+                name: 'chat', traceId: 't', serviceName: 'example-agent',
+                // OUTSIDE the window, but carries the hint's session id.
+                startTime: new Date(base + 600_000).toISOString(), durationInNanos: 1, status: { code: 1 },
+                attributes: { 'session.id': 'sess-k', 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 7, 'gen_ai.usage.output_tokens': 0 },
+              },
+            }],
+          },
+        }),
+      });
+
+      const results = await computeBatchMetrics(['k'], defaultConfig, undefined, undefined, {
+        k: [{ serviceName: 'example-agent', startedAt: base, endedAt: base + 60_000, sessionId: 'sess-k' }],
+      });
+
+      expect(results[0].inputTokens).toBe(7);
+      // And the query carried the session.id clauses for it.
+      expect(JSON.stringify(JSON.parse(mockFetch.mock.calls[0][1].body).query)).toContain('sess-k');
     });
   });
 });

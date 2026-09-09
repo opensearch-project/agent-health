@@ -80,6 +80,27 @@ const formatCountSafe = (v: number | undefined): string => {
   return v.toLocaleString();
 };
 
+/**
+ * Honesty markers for the trace-derived cells (Cost / Tokens / LLM Calls /
+ * Tool Calls). A run whose trace query hit its size cap is a LOWER bound, so
+ * it renders with a `≥` prefix; a run correlated (at least partly) by the
+ * service.name + time-window fallback rather than precise ids says so in the
+ * tooltip — both are real data, neither should read as exact truth.
+ */
+const traceCellPrefix = (
+  run: Pick<RunAggregateMetrics, 'traceMetricsPartial'>,
+  value: number | undefined
+): string => (value !== undefined && run.traceMetricsPartial ? '≥' : '');
+
+const traceCellTitle = (
+  run: Pick<RunAggregateMetrics, 'traceMetricsPartial' | 'traceMetricsWindowCorrelated'>
+): string | undefined => {
+  const notes: string[] = [];
+  if (run.traceMetricsPartial) notes.push('Lower bound: the trace query hit its size cap, so some spans may be missing.');
+  if (run.traceMetricsWindowCorrelated) notes.push('Correlated by the agent\'s service name + run time window (no precise run id on some reports); may include unrelated traffic of the same service.');
+  return notes.length > 0 ? notes.join(' ') : undefined;
+};
+
 const formatDelta = (a: number | undefined, b: number | undefined, suffix = ''): string => {
   if (a === undefined || b === undefined) return '';
   const diff = a - b;
@@ -379,20 +400,20 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                         <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-avgscore-${run.runId}`}>
                           {formatPercent(run.avgScore)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {formatCostSafe(run.totalCostUsd)}
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-cost-${run.runId}`} title={traceCellTitle(run)}>
+                          {traceCellPrefix(run, run.totalCostUsd)}{formatCostSafe(run.totalCostUsd)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-duration-${run.runId}`}>
                           {formatDurationSafe(run.avgDurationMs)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {formatTokensSafe(run.totalTokens)}
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-tokens-${run.runId}`} title={traceCellTitle(run)}>
+                          {traceCellPrefix(run, run.totalTokens)}{formatTokensSafe(run.totalTokens)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {formatCountSafe(run.totalLlmCalls)}
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-llmcalls-${run.runId}`} title={traceCellTitle(run)}>
+                          {traceCellPrefix(run, run.totalLlmCalls)}{formatCountSafe(run.totalLlmCalls)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {formatCountSafe(run.totalToolCalls)}
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-toolcalls-${run.runId}`} title={traceCellTitle(run)}>
+                          {traceCellPrefix(run, run.totalToolCalls)}{formatCountSafe(run.totalToolCalls)}
                         </td>
                         <td className="px-3 py-2 text-right">
                           {idx === 0 && (

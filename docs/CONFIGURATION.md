@@ -207,6 +207,43 @@ View agent traces and logs. Only needed for ML-Commons agent.
 
 SigV4 authentication is also configurable via the Settings UI (select "AWS SigV4" from the Authentication Type dropdown) or the `agent-health.config.json` file.
 
+#### Verify telemetry after every restart: the smoke gate
+
+Trace-based surfaces (the run-report Traces tab, the agent trace judge, the
+comparison page's Cost / Tokens / LLM Calls) only work when each persisted
+report can be **correlated** with the spans its agent emitted. Two things
+break that silently: a server booted without the `telemetry` block (no eval
+span → no `report.traceId`), and a REST agent whose echoed request id isn't
+recognized (no `report.runId`). Reports still save, judges still run — the gap
+only shows up hours later as blank metrics.
+
+Run the smoke gate after every server restart or agent relaunch, before any
+real benchmark:
+
+```bash
+npm run smoke:telemetry -- --base http://127.0.0.1:4001 --agent-key <your-agent-key>
+```
+
+It runs ONE ad-hoc case and asserts, exiting non-zero on any failure:
+
+| Check | Meaning when it fails |
+|-------|-----------------------|
+| `report.traceId` set | The eval `test_case` span is off — add/restore the `telemetry` block (or `OTEL_EVAL_ENABLED=true`) and restart; the server must log `[Telemetry] Evaluation telemetry enabled`. |
+| `report.runId` set (REST connectors) | The agent's response carried no `runId`/`id` and no `afterResponse` hook mapped the echoed field (session/conversation id) onto `runId`. Add the hook; recover existing reports with `npm run backfill:report-run-ids -- --run <evaluationRunId> --apply`. |
+| spans found via `/api/traces` (Strategy A or B) | The observability backend never received the run's spans — check the agent's OTLP exporter endpoint and the cluster's index pattern. |
+| `/api/metrics/batch` `hasSpans` | Spans exist but the metrics reader doesn't correlate them (SKIP when no observability cluster is configured). |
+
+Options: `--model-id` (judge model, default: first configured), `--prompt`,
+`--spans-wait-ms` (how long to wait for ingestion, default 60s),
+`--allow-no-run-id` (downgrade the REST run-id check to a warning for agents
+that genuinely cannot echo an id), `--keep` (don't delete the ad-hoc report),
+`--json`.
+
+For a fully self-contained check with no observability cluster, point the eval
+span exporter at the server's own OTLP receiver:
+`OTEL_EVAL_ENABLED=true OTEL_EVAL_EXPORTER_ENDPOINT=http://127.0.0.1:<port>/v1/traces`
+(spans land in the file trace store; the metrics check reports SKIP).
+
 ### Agent Endpoints (Optional)
 
 Override default agent endpoints.

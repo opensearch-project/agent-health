@@ -20,6 +20,7 @@ import {
   getMockTestCaseMeta,
   getMockTestCaseVersion,
 } from '@/data/mockComparisonData';
+import { buildJudgeAgentsHints, type JudgeAgentsHint } from '@/services/traces/judgeAgentsHints';
 
 /**
  * The single evaluator metric a per-case cell falls back to showing when a
@@ -238,11 +239,15 @@ export function mergeTraceMetrics(
   traceMetricsMap: Map<string, TraceMetrics>
 ): RunAggregateMetrics {
   let totalTokens = 0, totalInputTokens = 0, totalOutputTokens = 0, totalCostUsd = 0, totalDurationMs = 0, totalLlmCalls = 0, totalToolCalls = 0, mc = 0;
+  let anyPartial = false, anyWindow = false;
   for (const result of Object.values(run.results)) {
     const report = reports[result.reportId];
-    if (report?.runId) {
-      const tm = traceMetricsMap.get(report.runId);
+    const key = report ? metricsKeyForReport(report) : undefined;
+    if (key) {
+      const tm = traceMetricsMap.get(key);
       if (tm && tm.status !== 'pending') {
+        if (tm.partial) anyPartial = true;
+        if (tm.correlatedBy === 'window' || tm.correlatedBy === 'mixed') anyWindow = true;
         totalTokens += tm.totalTokens || 0;
         totalInputTokens += tm.inputTokens || 0;
         totalOutputTokens += tm.outputTokens || 0;
@@ -304,7 +309,28 @@ export function mergeTraceMetrics(
     // in a tool-calling loop). Stays a dash without real trace data.
     totalLlmCalls: mc > 0 ? totalLlmCalls : undefined,
     totalToolCalls: mc > 0 ? totalToolCalls : (toolCallFallbackKnown ? fallbackToolCalls : undefined),
+    ...(mc > 0 && anyPartial ? { traceMetricsPartial: true } : {}),
+    ...(mc > 0 && anyWindow ? { traceMetricsWindowCorrelated: true } : {}),
   };
+}
+
+/**
+ * The key a report's trace metrics are requested and returned under.
+ *
+ * `report.runId` when the connector produced (or the `afterResponse` hook
+ * extracted) a correlation id; otherwise the report's own storage id. The
+ * batch metrics API returns results under whatever key was sent, so a report
+ * with NO runId can still be correlated purely by its Strategy-C hint
+ * (service.name + window, see {@link collectMetricsCorrelationFromReports})
+ * and its metrics land back on the right report. Pre-fix such reports were
+ * silently skipped by every collector below, which is exactly why the
+ * comparison scoreboard's Cost / Tokens / LLM Calls stayed blank for whole
+ * REST-connector runs even though the Traces tab showed their spans.
+ */
+export function metricsKeyForReport(
+  report: Pick<EvaluationReport, 'id' | 'runId'>
+): string | undefined {
+  return report.runId || report.id || undefined;
 }
 
 /**
@@ -318,8 +344,9 @@ export function collectRunIdsFromReports(
   for (const run of runs) {
     for (const result of Object.values(run.results)) {
       const report = reports[result.reportId];
-      if (report?.runId && !runIds.includes(report.runId)) {
-        runIds.push(report.runId);
+      const key = report ? metricsKeyForReport(report) : undefined;
+      if (key && !runIds.includes(key)) {
+        runIds.push(key);
       }
     }
   }
@@ -343,8 +370,9 @@ export function collectSessionIdsFromReports(
     for (const result of Object.values(run.results)) {
       const report = reports[result.reportId];
       const sessionId = report?.sessionId;
-      if (report?.runId && sessionId && !sessionIdByRunId[report.runId]) {
-        sessionIdByRunId[report.runId] = sessionId;
+      const key = report ? metricsKeyForReport(report) : undefined;
+      if (key && sessionId && !sessionIdByRunId[key]) {
+        sessionIdByRunId[key] = sessionId;
       }
     }
   }
@@ -370,12 +398,72 @@ export function collectTraceIdsFromReports(
   for (const run of runs) {
     for (const result of Object.values(run.results)) {
       const report = reports[result.reportId];
-      if (report?.runId && report?.traceId && !traceIdByRunId[report.runId]) {
-        traceIdByRunId[report.runId] = report.traceId;
+      const key = report ? metricsKeyForReport(report) : undefined;
+      if (key && report?.traceId && !traceIdByRunId[key]) {
+        traceIdByRunId[key] = report.traceId;
       }
     }
   }
   return traceIdByRunId;
+}
+
+/**
+ * Build a `metrics key -> Strategy-C/D hints` map for every report reachable
+ * from `runs`, so `fetchBatchMetrics` can correlate a report's spans by the
+ * agent's OTel `service.name` + the run's wall-clock window even when the
+ * report carries NO runId / sessionId / traceId at all.
+ *
+ * The hint is derived by {@link buildJudgeAgentsHints} — the SAME function
+ * the agent (trace) judge and the run-report Traces tab use — from the
+ * report's `connectorProtocol` / `agentKey` / `timestamp` /
+ * `performanceMetrics.durationMs` / `sessionId`, plus the agent's configured
+ * `traceServiceName` looked up through `resolveTraceServiceName(agentKey)`.
+ * Nothing here is specific to any agent: a protocol whose service.name
+ * isn't knowable (generic `rest` / `openai-compatible` / ... transports with
+ * no `traceServiceName` configured) yields no hint, and that report simply
+ * relies on A/B/D as before.
+ */
+export function collectAgentHintsFromReports(
+  runs: ExperimentRun[],
+  reports: Record<string, EvaluationReport>,
+  resolveTraceServiceName: (agentKey: string | undefined) => string | undefined = () => undefined
+): Record<string, JudgeAgentsHint[]> {
+  const hintsByKey: Record<string, JudgeAgentsHint[]> = {};
+  for (const run of runs) {
+    for (const result of Object.values(run.results)) {
+      const report = reports[result.reportId];
+      const key = report ? metricsKeyForReport(report) : undefined;
+      if (!key || hintsByKey[key]) continue;
+      const hints = buildJudgeAgentsHints(report, resolveTraceServiceName(report.agentKey));
+      if (hints.length > 0) hintsByKey[key] = hints;
+    }
+  }
+  return hintsByKey;
+}
+
+/**
+ * Everything `fetchBatchMetrics` needs for the runs on screen, derived in one
+ * pass: the metrics keys (see {@link metricsKeyForReport}) plus the per-key
+ * Strategy A (traceId), D (sessionId) and C (service.name + window) hints.
+ */
+export interface MetricsCorrelation {
+  keys: string[];
+  sessionIdByKey: Record<string, string>;
+  traceIdByKey: Record<string, string>;
+  agentsByKey: Record<string, JudgeAgentsHint[]>;
+}
+
+export function collectMetricsCorrelationFromReports(
+  runs: ExperimentRun[],
+  reports: Record<string, EvaluationReport>,
+  resolveTraceServiceName?: (agentKey: string | undefined) => string | undefined
+): MetricsCorrelation {
+  return {
+    keys: collectRunIdsFromReports(runs, reports),
+    sessionIdByKey: collectSessionIdsFromReports(runs, reports),
+    traceIdByKey: collectTraceIdsFromReports(runs, reports),
+    agentsByKey: collectAgentHintsFromReports(runs, reports, resolveTraceServiceName),
+  };
 }
 
 /**
