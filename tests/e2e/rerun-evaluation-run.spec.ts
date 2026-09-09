@@ -58,7 +58,7 @@ test.describe('Re-run an evaluation run', () => {
         agentKey: 'demo',
         modelId: 'claude-sonnet',
         judgeModelId: 'claude-sonnet-4.6',
-        evaluatorId: 'rca-default',
+        evaluatorId: 'system-rca-default',
         sources: [{ type: 'test-case-ids', ids: [testCaseId] }],
         trigger: 'api',
         testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'e2e rerun tc' }],
@@ -232,6 +232,89 @@ test.describe('Re-run an evaluation run', () => {
 
     // There is NO agent-model picker in the composer (agent owns its model).
     await expect(page.getByText('Agent Model', { exact: true })).toHaveCount(0);
+  });
+});
+
+test.describe('Re-run dialog — source-run evaluator no longer in config (real Radix Select)', () => {
+  // Regression coverage for the bug that made this file's own
+  // "confirming Re-run POSTs..." test flaky in CI: a source run seeded with
+  // an evaluatorId that isn't a real evaluator must render the missing-
+  // evaluator hint and block submit (RunConfigDialog's evaluatorMissing /
+  // canSubmit), not silently allow a POST with a dead evaluatorId.
+  let testCaseId: string | null = null;
+  let sourceRunId: string | null = null;
+  let seeded = false;
+
+  const SOURCE_NAME = 'E2E Missing Evaluator Source Run';
+
+  test.beforeAll(async ({ request }) => {
+    const tcRes = await request.post('/api/storage/test-cases', {
+      data: {
+        name: `e2e-rerun-missing-evaluator-tc-${Date.now()}`,
+        category: 'Test',
+        difficulty: 'Easy',
+        initialPrompt: 'What is causing the outage?',
+        expectedOutcomes: ['Identifies the root cause'],
+      },
+    });
+    if (!tcRes.ok()) return;
+    const tc = await tcRes.json();
+    testCaseId = tc.id || tc.testCase?.id;
+    if (!testCaseId) return;
+
+    sourceRunId = `eval-run-e2e-missing-evaluator-${Date.now()}`;
+    const srcRes = await request.put(`/api/storage/evaluation-runs/${sourceRunId}`, {
+      data: {
+        id: sourceRunId,
+        name: SOURCE_NAME,
+        status: 'completed',
+        agentKey: 'demo',
+        modelId: 'claude-sonnet',
+        evaluatorId: 'e2e-missing-evaluator',
+        sources: [{ type: 'test-case-ids', ids: [testCaseId] }],
+        trigger: 'api',
+        testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'e2e tc' }],
+        results: {},
+        createdAt: new Date().toISOString(),
+      },
+    });
+    seeded = srcRes.ok();
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (sourceRunId) await request.delete(`/api/storage/evaluation-runs/${sourceRunId}`).catch(() => {});
+    if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
+  });
+
+  test('shows the missing-evaluator hint, blocks submit, and re-enables after picking a configured evaluator', async ({ page }) => {
+    test.skip(!seeded, 'Could not seed source run (storage not configured?)');
+
+    await page.goto(`/evaluations/runs/${sourceRunId}`);
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
+
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+
+    // Never silently swapped: the trigger shows the missing id, the amber
+    // hint explains why, and submit is blocked.
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toContainText('e2e-missing-evaluator');
+    await expect(page.locator('[data-testid="run-config-evaluator-missing-hint"]')).toBeVisible();
+    await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeDisabled();
+
+    // The missing entry is present but disabled in the (real Radix) list;
+    // picking a configured evaluator clears the hint and re-enables submit.
+    await page.locator('[data-testid="run-config-evaluator-trigger"]').click();
+    await page.waitForSelector('[role="listbox"]', { timeout: 5000 });
+    await expect(page.locator('[data-testid="run-config-evaluator-missing-item"]')).toHaveAttribute('data-disabled', '');
+    await page.locator('[role="option"]:has-text("RCA Default (System)")').click();
+    await expect(page.locator('[data-testid="run-config-evaluator-missing-hint"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toContainText('RCA Default');
+    await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeEnabled();
+
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible();
   });
 });
 
