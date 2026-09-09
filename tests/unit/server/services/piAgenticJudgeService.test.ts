@@ -12,6 +12,7 @@
  */
 
 import { pickJudgeModel, extractFinalAssistantText, findRequestedModel, buildAgentTraceJudgeSystemPrompt } from '@/server/services/piAgenticJudgeService';
+import type { JudgeRequest } from '@/server/services/bedrockService';
 
 describe('pickJudgeModel', () => {
   const m = (provider: string, id: string) => ({ provider, id });
@@ -91,6 +92,93 @@ describe('extractFinalAssistantText', () => {
     expect(extractFinalAssistantText([{ role: 'user', content: [{ type: 'text', text: 'x' }] }])).toBe('');
     expect(extractFinalAssistantText([])).toBe('');
     expect(extractFinalAssistantText(undefined as any)).toBe('');
+  });
+});
+
+describe('evaluateWithPiAgenticTrace (regression: keeps improvement strategies + custom fields)', () => {
+  // Drives the real evaluateWithPiAgenticTrace() end-to-end with the optional
+  // `@earendil-works/pi-coding-agent` SDK mocked out, so we exercise the exact
+  // post-processing line that used to force `improvementStrategies: []`
+  // (see server/services/piAgenticJudgeService.ts) rather than re-testing
+  // parseJudgeResponse in isolation.
+  const baseRequest: JudgeRequest = {
+    trajectory: [{ type: 'assistant', content: 'did the thing' } as any],
+    expectedOutcomes: ['thing done'],
+    runId: 'run-1',
+  } as any;
+
+  function mockSdk(finalAssistantText: string) {
+    jest.doMock(
+      '@earendil-works/pi-coding-agent',
+      () => ({
+        createAgentSession: jest.fn().mockResolvedValue({
+          session: {
+            prompt: jest.fn().mockResolvedValue(undefined),
+            messages: [{ role: 'assistant', content: [{ type: 'text', text: finalAssistantText }] }],
+          },
+        }),
+        SessionManager: { inMemory: () => ({}) },
+        AuthStorage: { create: () => ({}) },
+        ModelRegistry: {
+          create: () => ({
+            getAvailable: jest.fn().mockResolvedValue([{ provider: 'anthropic', id: 'claude-sonnet-4-5' }]),
+          }),
+        },
+        DefaultResourceLoader: class {
+          reload() {
+            return Promise.resolve();
+          }
+        },
+        getAgentDir: () => '/tmp/agent-dir',
+      }),
+      { virtual: true }
+    );
+  }
+
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
+  it('keeps improvement_strategies the model emitted, shaped as ImprovementStrategy[]', async () => {
+    mockSdk(JSON.stringify({
+      pass_fail_status: 'passed',
+      reasoning: 'Verified against real spans.',
+      metrics: { accuracy: 90 },
+      improvement_strategies: [
+        { category: 'reliability', issue: 'retry storm', recommendation: 'add backoff', priority: 'high' },
+      ],
+    }));
+    const { evaluateWithPiAgenticTrace } = await import('@/server/services/piAgenticJudgeService');
+    const result = await evaluateWithPiAgenticTrace(baseRequest);
+    expect(result.passFailStatus).toBe('passed');
+    expect(result.improvementStrategies).toEqual([
+      { category: 'reliability', issue: 'retry storm', recommendation: 'add backoff', priority: 'high' },
+    ]);
+  });
+
+  it('returns an empty array when the model emits none (not undefined)', async () => {
+    mockSdk(JSON.stringify({
+      pass_fail_status: 'passed',
+      reasoning: 'ok',
+      metrics: { accuracy: 100 },
+      improvement_strategies: [],
+    }));
+    const { evaluateWithPiAgenticTrace } = await import('@/server/services/piAgenticJudgeService');
+    const result = await evaluateWithPiAgenticTrace(baseRequest);
+    expect(result.improvementStrategies).toEqual([]);
+  });
+
+  it('keeps a custom output key (e.g. failure_tags) in extraFields', async () => {
+    mockSdk(JSON.stringify({
+      pass_fail_status: 'failed',
+      reasoning: 'missed the root cause',
+      metrics: { accuracy: 40 },
+      improvement_strategies: [],
+      failure_tags: ['wrong-root-cause', 'missing-evidence'],
+    }));
+    const { evaluateWithPiAgenticTrace } = await import('@/server/services/piAgenticJudgeService');
+    const result = await evaluateWithPiAgenticTrace(baseRequest);
+    expect(result.extraFields).toEqual({ failure_tags: ['wrong-root-cause', 'missing-evidence'] });
   });
 });
 

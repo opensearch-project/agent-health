@@ -67,6 +67,69 @@ describe('judgeResponseParser', () => {
       expect(out.improvementStrategies).toHaveLength(1);
     });
 
+    it('sanitizes malformed improvement_strategies entries instead of passing raw model JSON through (defense against strategy.category.replace()-style UI crashes)', () => {
+      const raw = JSON.stringify({
+        pass_fail_status: 'failed',
+        reasoning: 'bad output',
+        improvement_strategies: [
+          // Fully valid entry — passed through untouched.
+          { category: 'reliability', issue: 'flaky retries', recommendation: 'add backoff', priority: 'high' },
+          // Missing every field.
+          {},
+          // Wrong types / unknown priority.
+          { category: 42, issue: null, recommendation: {}, priority: 'urgent' },
+          // Legacy bare-string shape — coerced into a valid entry (issue = the string), not dropped.
+          'a bare string',
+          // Genuinely useless / non-object, non-string junk — dropped entirely.
+          '',
+          '   ',
+          null,
+          123,
+        ],
+      });
+      const out = parseJudgeResponse(raw);
+      // The empty-string/null/number entries are dropped; the object
+      // entries and the bare string survive, coerced to safe defaults.
+      expect(out.improvementStrategies).toHaveLength(4);
+      expect(out.improvementStrategies[0]).toEqual({
+        category: 'reliability',
+        issue: 'flaky retries',
+        recommendation: 'add backoff',
+        priority: 'high',
+      });
+      expect(out.improvementStrategies[1]).toEqual({
+        category: 'general',
+        issue: '',
+        recommendation: '',
+        priority: 'medium',
+      });
+      expect(out.improvementStrategies[2]).toEqual({
+        category: 'general',
+        issue: '',
+        recommendation: '',
+        priority: 'medium',
+      });
+      expect(out.improvementStrategies[3]).toEqual({
+        category: 'general',
+        issue: 'a bare string',
+        recommendation: '',
+        priority: 'medium',
+      });
+      // No entry has a priority outside the typed union — the UI keys
+      // (priorityColors[strategy.priority] etc.) can never miss.
+      for (const s of out.improvementStrategies) {
+        expect(['high', 'medium', 'low']).toContain(s.priority);
+        expect(typeof s.category).toBe('string');
+      }
+    });
+
+    it('returns [] (not undefined, not a crash) when improvement_strategies is missing or not an array', () => {
+      for (const value of [undefined, null, 'not-an-array', 42, {}]) {
+        const raw = JSON.stringify({ pass_fail_status: 'passed', reasoning: 'ok', improvement_strategies: value });
+        expect(parseJudgeResponse(raw).improvementStrategies).toEqual([]);
+      }
+    });
+
     it('treats anything other than literal "passed" as failed', () => {
       // Defensive: model occasionally emits "FAIL" / "fail" / "false". The
       // typed wire shape is binary, so anything not exactly "passed" must

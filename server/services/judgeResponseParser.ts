@@ -89,6 +89,54 @@ function coerceNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+const VALID_STRATEGY_PRIORITIES = new Set(['high', 'medium', 'low']);
+
+/**
+ * Coerce whatever the model emitted for `improvement_strategies` into a
+ * well-typed `ImprovementStrategy[]`. Non-object, non-string junk is
+ * dropped; a legacy bare string (some older prompts/models emit an array of
+ * plain strings instead of the structured object) is coerced into a valid
+ * entry rather than dropped, so real content the model emitted isn't lost.
+ *
+ * Every judge provider funnels through this parser, and the run-detail UI
+ * (RunDetailsContent's "Improvement Strategies" card, MatcherResultsPanel's
+ * enriched row) indexes straight into `strategy.category` /
+ * `strategy.priority` (e.g. `strategy.category.replace(...)`,
+ * `priorityColors[strategy.priority]`) with no defensive checks — a
+ * non-object entry, a missing `category`, or a `priority` outside
+ * high/medium/low would throw or silently render `undefined` styling.
+ * Rather than trust every judge model to emit a perfectly-shaped array on
+ * every call, normalize here once so a malformed entry degrades gracefully
+ * (string fields default to '', unknown priority defaults to 'medium')
+ * instead of crashing the run-detail page.
+ */
+function normalizeImprovementStrategies(value: unknown): ImprovementStrategy[] {
+  if (!Array.isArray(value)) return [];
+  const out: ImprovementStrategy[] = [];
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry.trim()) {
+      // Legacy shape some older prompts/models still emit: a bare string
+      // per strategy instead of the structured object. Coerce rather than
+      // drop so the model's actual content survives — the string is by far
+      // most naturally the `issue` being flagged.
+      out.push({ category: 'general', issue: entry, recommendation: '', priority: 'medium' });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    const raw = entry as Record<string, unknown>;
+    const priority = typeof raw.priority === 'string' && VALID_STRATEGY_PRIORITIES.has(raw.priority)
+      ? (raw.priority as ImprovementStrategy['priority'])
+      : 'medium';
+    out.push({
+      category: typeof raw.category === 'string' ? raw.category : 'general',
+      issue: typeof raw.issue === 'string' ? raw.issue : '',
+      recommendation: typeof raw.recommendation === 'string' ? raw.recommendation : '',
+      priority,
+    });
+  }
+  return out;
+}
+
 /**
  * Pull metric values out of the parsed JSON, driven by the evaluator's
  * `scoringConfig.metrics`.
@@ -276,9 +324,9 @@ export function parseJudgeResponse(
         ? JSON.stringify(parsed.reasoning)
         : '';
 
-  const improvementStrategies: ImprovementStrategy[] = Array.isArray(parsed.improvement_strategies)
-    ? parsed.improvement_strategies
-    : [];
+  const improvementStrategies: ImprovementStrategy[] = normalizeImprovementStrategies(
+    parsed.improvement_strategies
+  );
 
   const response: JudgeResponse = {
     passFailStatus,

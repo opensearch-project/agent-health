@@ -510,7 +510,15 @@ describe('BedrockService', () => {
       expect(result.passFailStatus).toBe('passed');
       expect(result.metrics.accuracy).toBe(0.95);
       expect(result.llmJudgeReasoning).toBe('Excellent work');
-      expect(result.improvementStrategies).toContain('Try X');
+      // improvement_strategies is a legacy bare-string array here; the
+      // shared parser now coerces each string into a valid ImprovementStrategy
+      // object (issue = the string) rather than passing raw strings through —
+      // the run-detail UI indexes strategy.category/.priority unconditionally
+      // and a bare string would crash it. See judgeResponseParser.test.ts for
+      // the dedicated coverage of this normalization.
+      expect(result.improvementStrategies).toEqual([
+        { category: 'general', issue: 'Try X', recommendation: '', priority: 'medium' },
+      ]);
       expect(result.duration).toBeGreaterThanOrEqual(0);
     });
 

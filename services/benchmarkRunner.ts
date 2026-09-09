@@ -865,6 +865,15 @@ async function saveReportWithModule(storage: IStorageModule, report: any): Promi
     rawEvents: report.rawEvents || [],
     logs: report.logs || report.openSearchLogs,
     improvementStrategies: report.improvementStrategies,
+    // Unified judge surface (issue #230 follow-up): the SDK judge()
+    // matcher verdict / buildJudgeMatcherEntry() output built by
+    // runEvaluationWithConnector. Pre-fix this helper (and the
+    // placeholder-update path below) silently dropped `matcherResults` —
+    // the trace-mode polled paths elsewhere in this file already forward
+    // it, but standard-mode single-test-case runs (/api/evaluate) never
+    // did, so a run's MatcherResultsPanel (and its improvementStrategies /
+    // judgeExtraFields) was empty for every judge provider on this path.
+    matcherResults: report.matcherResults,
     // Same fix as the placeholder-update path: pass through the full
     // judge sidecar (rawResponse, extraFields, judgeDebug, parsedMetrics).
     llmJudgeResponse: report.llmJudgeResponse,
@@ -983,6 +992,9 @@ export async function runSingleUseCase(
       rawEvents: report.rawEvents || [],
       logs: report.logs || report.openSearchLogs,
       improvementStrategies: report.improvementStrategies,
+      // Unified judge surface (issue #230 follow-up) — see the matching fix
+      // in saveReportWithModule above for why this was missing.
+      matcherResults: report.matcherResults,
       // The full judge response (rawResponse, parsedMetrics, extraFields,
       // judgeDebug, ...) lives on `llmJudgeResponse` and was previously
       // dropped by the placeholder-update path — callers using

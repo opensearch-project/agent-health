@@ -339,13 +339,20 @@ export async function evaluateWithPiAgenticTrace(
     userPrompt,
   });
   if (judgeDebug) parsed.judgeDebug = judgeDebug;
-  // Per RFC 004: individual judge verdicts never carry recommendations
-  // (those belong to the insights synthesis layer). Forcing an empty array
-  // also keeps the persisted matcherResults.improvementStrategies shape stable
-  // regardless of what the model emitted.
+  // RFC 004 originally argued individual judge verdicts shouldn't carry
+  // recommendations (those belonged to a separate insights synthesis
+  // layer) and forced this to `[]` unconditionally. That stance is stale:
+  // the shipped UI (RunDetailsContent's "Improvement Strategies" section,
+  // MatcherResultsPanel's enriched row) renders per-verdict strategies for
+  // every other judge provider (bedrock, openai-compatible, litellm,
+  // claude-code, pi, agentic), and evaluator prompts explicitly ask the
+  // model for `improvement_strategies`. Silently discarding what the model
+  // emitted here made the agentic trace judge behave differently from every
+  // other provider on the same evaluator. Keep whatever parseJudgeResponse
+  // extracted (already shaped as ImprovementStrategy[], `[]` when the model
+  // emitted none).
   return {
     ...parsed,
-    improvementStrategies: [],
     // Persisted downstream (services/evaluation/*, evaluationRunner.ts,
     // benchmarkRunner.ts) onto TestCaseRun.judgeMode so reports/comparisons
     // can show which cases had real trace evidence vs. trajectory-only
