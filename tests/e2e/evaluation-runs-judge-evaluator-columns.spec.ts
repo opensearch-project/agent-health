@@ -43,6 +43,26 @@ const runWithJudgeAndEvaluator = {
   stats: { passed: 1, failed: 0, errored: 0, total: 1 },
 };
 
+// An agent-trace-judge run that recorded the underlying LLM it was judged
+// by (`judgeModel`) -- the column must show BOTH the judge kind and the model.
+const agentJudgeRunWithRecordedModel = {
+  id: 'eval-run-agent-judge',
+  docType: 'evaluation-run',
+  name: 'Run Judged By Agent Trace Judge',
+  createdAt: now,
+  status: 'completed',
+  agentKey: 'demo',
+  modelId: 'claude-sonnet-4.5',
+  judgeModelId: 'agent-trace-judge',
+  judgeModel: 'amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  evaluatorId: 'system-factuality',
+  sources: [],
+  trigger: 'ui',
+  testCaseSnapshots: [{ id: 'tc-3', version: 1, name: 'tc-3' }],
+  results: { 'tc-3': { reportId: 'report-3', status: 'completed', passFailStatus: 'passed' } },
+  stats: { passed: 1, failed: 0, errored: 0, total: 1 },
+};
+
 const legacyRunWithoutJudgeOrEvaluator = {
   id: 'eval-run-legacy',
   docType: 'evaluation-run',
@@ -73,7 +93,7 @@ test.describe('Evaluation Runs page — Judge + Evaluator columns', () => {
     await page.route('**/api/storage/evaluation-runs**', (route) => {
       const url = new URL(route.request().url());
       if (url.pathname === '/api/storage/evaluation-runs') {
-        return json(route, { evaluationRuns: [runWithJudgeAndEvaluator, legacyRunWithoutJudgeOrEvaluator], total: 2 });
+        return json(route, { evaluationRuns: [runWithJudgeAndEvaluator, agentJudgeRunWithRecordedModel, legacyRunWithoutJudgeOrEvaluator], total: 3 });
       }
       return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
     });
@@ -97,19 +117,28 @@ test.describe('Evaluation Runs page — Judge + Evaluator columns', () => {
     const flat = page.locator('[data-testid="viewmode-flat"]');
     if (await flat.count()) { await flat.click(); await page.waitForTimeout(600); }
 
-    // Column headers present.
-    await expect(page.getByRole('columnheader', { name: /^Judge$/ })).toBeVisible();
+    // Column headers present. The judge column is "Judge model" (owner ask:
+    // call out the underlying LLM, not just the judge kind) with a tooltip.
+    const judgeHeader = page.getByRole('columnheader', { name: /^Judge model$/ });
+    await expect(judgeHeader).toBeVisible();
+    await expect(judgeHeader).toHaveAttribute('title', 'judge kind · underlying LLM');
     await expect(page.getByRole('columnheader', { name: /^Evaluator$/ })).toBeVisible();
 
     const rows = page.locator('[data-testid="run-row"]');
-    await expect(rows).toHaveCount(2, { timeout: 10000 });
+    await expect(rows).toHaveCount(3, { timeout: 10000 });
 
     const withJudgeRow = rows.filter({ hasText: 'Run With Judge And Evaluator' });
+    const agentJudgeRow = rows.filter({ hasText: 'Run Judged By Agent Trace Judge' });
     const legacyRow = rows.filter({ hasText: 'Legacy Run No Judge Or Evaluator' });
 
     // Judge model id is shortened via the same display-name registry as the
     // Model column (getModelName) — 'claude-opus-4.8' → 'Claude Opus 4.8'.
     await expect(withJudgeRow.locator('[data-testid="run-judge-cell"]')).toHaveText('Claude Opus 4.8');
+    // agent-trace-judge is a PROVIDER; the cell shows the judge kind AND the
+    // recorded underlying LLM ("· claude-sonnet-4-5"), never the provider alone.
+    const agentCell = agentJudgeRow.locator('[data-testid="run-judge-cell"]');
+    await expect(agentCell.locator('[data-testid="judge-model-kind"]')).toContainText(/agent-trace-judge|Agent Trace Judge/);
+    await expect(agentCell.locator('[data-testid="judge-model-resolved"]')).toContainText('claude-sonnet-4-5');
     // Evaluator id resolves to its name via the id→name lookup.
     await expect(withJudgeRow.locator('[data-testid="run-evaluator-cell"]')).toContainText('Factuality');
 

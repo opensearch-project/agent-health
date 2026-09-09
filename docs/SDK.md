@@ -479,6 +479,37 @@ run-detail page — use them to confirm in one round whether your prompt
 edit reached the model. Disabled by default in prod because system prompts
 can be 10–20 KB and shipping them on every run bloats persisted run docs.
 
+### Which LLM actually judged? (`judgeModel` vs `judgeModelId`)
+
+Two fields describe the judge on every persisted report and run:
+
+| Field | Meaning | Example |
+|-------|---------|---------|
+| `judgeModelId` | The **configured** judge — what you picked in the run dialog / `--judge-model`. For the agent (trace) judge this is a **provider name**, not a model. | `agent-trace-judge`, `us.anthropic.claude-sonnet-4-6` |
+| `judgeModel` | The **underlying LLM** that produced the verdict, as the provider resolved it at judge time. Always recorded (not gated by `AH_JUDGE_DEBUG`). | `amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+
+For plain Bedrock/OpenAI-compatible judges the two are the same model. For
+`agent-trace-judge` (and `pi-judge`) the LLM is picked at run time from the
+pi model registry — `judgeModel` is the only place that choice is recorded,
+and `llmJudgeResponse.modelId` now carries it too (with
+`llmJudgeResponse.judgeProvider` keeping the judge kind). Reports persisted
+before this field existed have no `judgeModel`; the UI shows
+"model not recorded — auto-picked at run time" for them rather than guessing.
+
+**Pinning the agent judge's model** (the default is an auto-pick preferring
+a recent Claude Sonnet on an inference profile; the pick order is fixed for
+cross-run comparability):
+
+- Server-wide: `AH_AGENT_JUDGE_MODEL_ID=us.anthropic.claude-sonnet-4-5` (matched
+  by base id, so any `us.`/`global.` profile of it satisfies the pin).
+- Per evaluator: `inferenceConfig.agentJudgeModelId` (Evaluator page → Inference
+  Configuration → provider "Agent Trace Judge" → Underlying LLM).
+
+`GET /api/judge/models` returns the catalog with `resolvedModel` /
+`resolvedSource` on the agent-judge entries so you can see what a run
+started now would be judged by; the run dialogs show it inline as
+"Agent Trace Judge (…) — Claude Sonnet 4.5".
+
 ### Custom evaluators — `defineEvaluator()` / `evaluate()`
 
 Not every check is an LLM judge or a chai assertion — sometimes ground truth

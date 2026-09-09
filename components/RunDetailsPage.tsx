@@ -24,7 +24,7 @@ import { asyncExperimentStorage, asyncRunStorage, asyncTestCaseStorage } from '@
 import { cancelExperimentRun } from '@/services/client';
 import { Experiment, ExperimentRun, EvaluationReport, TestCase } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { getDifficultyColor, formatDate, getModelName, getJudgeModelLabel, getEvaluatorLabel } from '@/lib/utils';
+import { getDifficultyColor, formatDate, getModelName, getEvaluatorLabel } from '@/lib/utils';
 import { formatDuration, formatCost, fetchBatchMetrics } from '@/services/metrics';
 import { ENV_CONFIG } from '@/lib/config';
 import { RunDetailsContent } from './RunDetailsContent';
@@ -807,7 +807,7 @@ export const RunDetailsPage: React.FC = () => {
         benchmarkName={experimentContext.experiment.name}
         agentName={agentDisplayName}
         modelName={getModelName(experimentContext.experimentRun.modelId)}
-        judgeModelLabel={getJudgeModelLabel(experimentContext.experimentRun.judgeModelId)}
+        judgeRun={experimentContext.experimentRun}
         evaluatorLabel={getEvaluatorLabel(experimentContext.experimentRun.evaluatorId, evaluatorNames)}
         startedAt={experimentContext.experimentRun.createdAt}
         durationMs={experimentContext.experimentRun.performanceMetrics?.durationMs}

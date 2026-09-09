@@ -121,6 +121,8 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     // mapping, browser-side trace-recovery judging silently fell back to the
     // agent's modelId even when a distinct judge model was configured.
     judgeModelId: stored.judgeModelId,
+    // Underlying LLM that judged (lib/judgeIdentity) -- optional, old docs lack it.
+    judgeModel: stored.judgeModel,
     status: stored.status,
     passFailStatus: stored.passFailStatus as 'passed' | 'failed' | undefined,
     evaluatorId: stored.evaluatorId,
@@ -236,6 +238,7 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
   // so this is a plain typed assignment now — no `as any` needed.
   if (report.evaluatorId !== undefined) base.evaluatorId = report.evaluatorId;
   if (report.judgeModelId !== undefined) base.judgeModelId = report.judgeModelId;
+  if (report.judgeModel !== undefined) base.judgeModel = report.judgeModel;
   if (report.traceFetchAttempts !== undefined) base.traceFetchAttempts = report.traceFetchAttempts;
   if (report.lastTraceFetchAt !== undefined) base.lastTraceFetchAt = report.lastTraceFetchAt;
   if (report.traceError !== undefined) base.traceError = report.traceError;
@@ -375,7 +378,7 @@ class AsyncRunStorage {
     // trajectory/messages bloat #429 fixed - safe to include in the summary.
     const fields = [
       'status', 'passFailStatus', 'metricsStatus', 'traceId', 'sessionId',
-      'judgeModelId', 'modelId', 'agentId', 'testCaseId', 'createdAt', 'annotations', 'metrics',
+      'judgeModelId', 'judgeModel', 'modelId', 'agentId', 'testCaseId', 'createdAt', 'annotations', 'metrics',
     ];
     // Chunk to keep the URL well under practical limits for large benchmarks.
     const stored = await fetchChunked(reportIds, REPORT_ID_CHUNK_SIZE, chunk => opensearchRuns.getByIds(chunk, { fields }));
@@ -455,6 +458,8 @@ class AsyncRunStorage {
     if (updates.lastTraceFetchAt !== undefined) storageUpdates.lastTraceFetchAt = updates.lastTraceFetchAt;
     if (updates.traceError !== undefined) storageUpdates.traceError = updates.traceError;
     if ((updates as any).judgeMode !== undefined) storageUpdates.judgeMode = (updates as any).judgeMode;
+    if (updates.judgeModel !== undefined) storageUpdates.judgeModel = updates.judgeModel;
+    if (updates.llmJudgeResponse !== undefined) storageUpdates.llmJudgeResponse = updates.llmJudgeResponse;
     if (updates.spans !== undefined) storageUpdates.spans = updates.spans;
 
     const updated = await opensearchRuns.partialUpdate(reportId, storageUpdates);

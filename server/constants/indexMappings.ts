@@ -165,6 +165,16 @@ export function getIndexMappings(): IndexMappings {
           testCaseVersionId: { type: 'keyword' },
           agentId: { type: 'keyword' },
           modelId: { type: 'keyword' },
+          // The UNDERLYING LLM the verdict actually came from
+          // (`amazon-bedrock/global.anthropic.claude-sonnet-4-5-...`), as
+          // opposed to `judgeModelId`, which for the agent trace judge is a
+          // provider name (`agent-trace-judge`). Keyword so runs can be
+          // filtered/aggregated by the real judge. `judgeModelId` /
+          // `evaluatorId` are deliberately NOT listed here: existing indexes
+          // already have them dynamically mapped as text+keyword, and
+          // ensureIndexes()'s putMapping rejects a text->keyword change for
+          // the whole request (which would then also skip this new field).
+          judgeModel: { type: 'keyword' },
           iteration: { type: 'integer' },
           author: { type: 'keyword' },
           createdAt: { type: 'date' },

@@ -202,6 +202,109 @@ export function extractFinalAssistantText(messages: any[]): string {
 }
 
 /**
+ * Env var that PINS the agent (trace) judge's underlying LLM (mirrors the
+ * deep-dive's `AH_DEEP_DIVE_MODEL_ID`). Matched by base id, so
+ * `anthropic.claude-sonnet-4-5` satisfies any `us.`/`global.` profile of it.
+ * Unset (the default) keeps today's auto-pick — the pick ORDER is deliberately
+ * unchanged so existing runs stay comparable; this only makes the choice
+ * explicit and deterministic for operators who want it.
+ */
+export const AGENT_JUDGE_MODEL_ENV = 'AH_AGENT_JUDGE_MODEL_ID';
+
+/** Judge-kind ids that name a provider, not a model — never a valid pin target. */
+const PROVIDER_PSEUDO_MODEL_IDS = new Set(['agent-trace-judge', 'pi-judge', 'agentic-claude-code', 'agentic-custom', 'claude-code-judge']);
+
+/** How the agent judge's underlying model was chosen — surfaced by GET /api/judge/models. */
+export type AgentJudgeModelSource = 'evaluator-pin' | 'env-pin' | 'request' | 'auto';
+
+export interface ResolvedAgentJudgeModel<T> {
+  model: T;
+  /** Which rule selected it (for the UI hint and the debug log). */
+  source: AgentJudgeModelSource;
+}
+
+/**
+ * Resolve the UNDERLYING LLM the agent (trace) judge runs on. Precedence:
+ *   1. `evaluator.inferenceConfig.agentJudgeModelId` (saved-evaluator pin)
+ *   2. `AH_AGENT_JUDGE_MODEL_ID` env (server-wide pin)
+ *   3. the request's `modelId` when it is a REAL model id (a caller that
+ *      routed to this provider via evaluator.inferenceConfig.provider while
+ *      passing a concrete Bedrock id) — pre-existing behaviour, kept
+ *   4. {@link pickJudgeModel} auto-pick over the credentialed registry
+ *
+ * Pseudo-model ids such as `agent-trace-judge` name the PROVIDER and are
+ * skipped at every level (they never match a registry model anyway).
+ *
+ * Exported so `GET /api/judge/models` can report exactly what a run without
+ * a pin would be judged by, and for unit tests.
+ */
+export function resolveAgentJudgeModel<T extends { provider: string; id: string }>(
+  available: T[],
+  opts: { requestedModelId?: string; evaluatorPin?: string; env?: NodeJS.ProcessEnv } = {}
+): ResolvedAgentJudgeModel<T> | undefined {
+  const env = opts.env ?? process.env;
+  const tryPin = (id: string | undefined, source: AgentJudgeModelSource): ResolvedAgentJudgeModel<T> | undefined => {
+    const trimmed = id?.trim();
+    if (!trimmed || PROVIDER_PSEUDO_MODEL_IDS.has(trimmed)) return undefined;
+    const model = findRequestedModel(available, trimmed);
+    return model ? { model, source } : undefined;
+  };
+  const pinned =
+    tryPin(opts.evaluatorPin, 'evaluator-pin') ??
+    tryPin(env[AGENT_JUDGE_MODEL_ENV], 'env-pin') ??
+    tryPin(opts.requestedModelId, 'request');
+  if (pinned) return pinned;
+  const auto = pickJudgeModel(available);
+  return auto ? { model: auto, source: 'auto' } : undefined;
+}
+
+/**
+ * What the agent (trace) judge would run on RIGHT NOW for a run with no
+ * pin — read live from the credentialed pi registry. Used by
+ * `GET /api/judge/models` to label the "Agent Trace Judge" dropdown entry.
+ * Never throws: returns `{ error }` when the SDK is missing or no model is
+ * credentialed.
+ */
+export async function describeDefaultAgentJudgeModel(): Promise<
+  | { id: string; name?: string; source: AgentJudgeModelSource }
+  | { error: string }
+> {
+  try {
+    const { AuthStorage, ModelRegistry } = await loadPiSdk();
+    const registry = ModelRegistry.create(AuthStorage.create());
+    const available = (await registry.getAvailable()) as Array<{ provider: string; id: string; name?: string }>;
+    const pick = resolveAgentJudgeModel(available);
+    if (!pick) return { error: 'no credentialed model in the pi registry' };
+    return { id: qualifiedModelId(pick.model), name: pick.model.name, source: pick.source };
+  } catch (err: any) {
+    return { error: err?.message ?? String(err) };
+  }
+}
+
+/** Provider-qualified id (`amazon-bedrock/us.anthropic.claude-sonnet-4-5…`) — the persisted `judgeModel` shape for pi-registry models. */
+export function qualifiedModelId(model: { provider: string; id: string }): string {
+  return `${model.provider}/${model.id}`;
+}
+
+/**
+ * The model id the pi SDK session REPORTED using (from the assistant
+ * messages' `model` / `responseModel` fields), or undefined when the
+ * transcript carries none. Preferred over the requested model when present
+ * because it is what actually answered.
+ */
+export function extractResponseModel(messages: any[]): { provider?: string; model: string } | undefined {
+  let last: { provider?: string; model: string } | undefined;
+  for (const m of messages ?? []) {
+    if (m?.role !== 'assistant') continue;
+    const model = typeof m.responseModel === 'string' && m.responseModel.trim()
+      ? m.responseModel
+      : typeof m.model === 'string' && m.model.trim() ? m.model : undefined;
+    if (model) last = { provider: typeof m.provider === 'string' ? m.provider : undefined, model };
+  }
+  return last;
+}
+
+/**
  * Evaluate a trajectory with the agent trace judge (in-process pi SDK).
  *
  * Two modes, selected by `traceToolsAvailable` (the caller —
@@ -262,15 +365,22 @@ export async function evaluateWithPiAgenticTrace(
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create(authStorage);
   const available = await modelRegistry.getAvailable();
-  // Prefer the exact model the run is configured to judge with; fall back to a
-  // recent Claude from the credentialed models.
-  const model = findRequestedModel(available, request.modelId) ?? pickJudgeModel(available);
-  if (!model) {
+  // Resolve the underlying LLM: saved-evaluator pin > AH_AGENT_JUDGE_MODEL_ID
+  // env pin > the run's configured judge model when it's a real model id >
+  // auto-pick a recent Claude from the credentialed registry. The auto-pick
+  // ORDER is unchanged from before pins existed (comparability); pins only
+  // make the choice explicit.
+  const resolved = resolveAgentJudgeModel(available, {
+    requestedModelId: request.modelId,
+    evaluatorPin: evaluator?.inferenceConfig?.agentJudgeModelId,
+  });
+  if (!resolved) {
     throw new Error(
       'Agent judge: no model available. Configure a default pi model (e.g. a Bedrock or Anthropic model with valid credentials).'
     );
   }
-  debug('AgentJudge', 'model:', `${model.provider}/${model.id}`);
+  const { model } = resolved;
+  debug('AgentJudge', 'model:', qualifiedModelId(model), `(${resolved.source})`);
 
   // Compose the system prompt: saved evaluator's prompt (if any) replaces
   // the default base, then the trace-tool (or trajectory-only) addendum is
@@ -325,15 +435,29 @@ export async function evaluateWithPiAgenticTrace(
   const finalText = extractFinalAssistantText(session.messages);
   const duration = Date.now() - startTime;
 
+  // What ACTUALLY answered: prefer the model the transcript reports (pi
+  // stamps `model`/`responseModel` on every assistant message), fall back
+  // to the model we asked for. Same provider-qualified shape either way.
+  const answered = extractResponseModel(session.messages);
+  const judgeModel = answered
+    ? `${answered.provider ?? model.provider}/${answered.model}`
+    : qualifiedModelId(model);
+
   const parsed = parseJudgeResponse(finalText, {
     evaluator,
     duration,
     source: 'AgentJudge',
   });
-  debug('AgentJudge', 'Pass/Fail:', parsed.passFailStatus, 'in', duration, 'ms');
+  // The underlying LLM — ALWAYS recorded (judgeDebug below is env-gated,
+  // which is why no persisted agent-trace-judge report said which model
+  // judged it). Persisted onto TestCaseRun.judgeModel + LLMJudgeResponse.modelId
+  // via the `...parsed` spread in the return below.
+  parsed.judgeModel = judgeModel;
+  parsed.judgeProvider = 'agent';
+  debug('AgentJudge', 'Pass/Fail:', parsed.passFailStatus, 'in', duration, 'ms', 'judged by', judgeModel);
   const judgeDebug = buildJudgeDebug({
     provider: 'agent',
-    modelId: `${model.provider}/${model.id}`,
+    modelId: judgeModel,
     evaluatorId: evaluator?.id,
     systemPrompt,
     userPrompt,

@@ -224,6 +224,8 @@ export async function saveReportWithClient(
     // run-detail UI can't show "agent: <m1> judge: <m2>" and the trace-mode
     // polled judge loses its inputs (same fields saveReportWithModule keeps).
     judgeModelId: report.judgeModelId,
+    // Underlying LLM that judged (lib/judgeIdentity) -- `judgeModelId` may be a provider name.
+    judgeModel: report.judgeModel,
     evaluatorId: report.evaluatorId,
     // SDK matcher verdicts: persist alongside the report so the inspect
     // page can render the per-matcher breakdown.

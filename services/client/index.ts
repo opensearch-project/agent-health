@@ -61,3 +61,11 @@ export {
   type RetryJudgementCaseResult,
   type RetryJudgementJobStatus,
 } from './evaluationRunsApi';
+
+export {
+  fetchJudgeModelCatalog,
+  useAgentJudgeResolvedModel,
+  judgeModelOptionLabel,
+  type JudgeModelCatalogEntry,
+  type AgentJudgeResolvedModel,
+} from './judgeModelsApi';

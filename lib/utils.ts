@@ -7,6 +7,7 @@ import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 import { Difficulty, DateFormatVariant } from "@/types"
 import { DEFAULT_CONFIG } from "@/lib/constants"
+import { describeJudgeModel, isJudgeProviderPseudoModelId, shortJudgeModelLabel } from '@/lib/judgeIdentity';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -136,6 +137,40 @@ export const getModelName = (modelId: string): string => {
 export const getJudgeModelLabel = (judgeModelId?: string | null): string => {
   if (!judgeModelId) return '—';
   return getModelName(judgeModelId);
+};
+
+/**
+ * Full judge-identity display for a run/report: "judge kind · underlying
+ * LLM". Prefers the recorded `judgeModel` (the LLM that actually judged;
+ * see lib/judgeIdentity) and falls back to `judgeModelId` for reports
+ * persisted before it existed. For an agentic provider whose model was
+ * never recorded, `hint` says so explicitly instead of letting the provider
+ * name (`agent-trace-judge`) masquerade as a model.
+ *
+ *   - Bedrock run:            label 'Claude Sonnet 4.6',            detail undefined
+ *   - agent judge, recorded:  label 'Agent Trace Judge (…)',        detail 'claude-sonnet-4-5'
+ *   - agent judge, old run:   label 'Agent Trace Judge (…)',        hint 'model not recorded — auto-picked at run time'
+ *   - no judge on the run:    label '—'
+ */
+export const getJudgeModelDisplay = (
+  run: { judgeModel?: string | null; judgeModelId?: string | null } | null | undefined
+): { label: string; detail?: string; hint?: string; title: string } => {
+  const { judgeModelId, judgeModel, modelNotRecorded } = describeJudgeModel(run);
+  const kindLabel = judgeModelId ? getModelName(judgeModelId) : undefined;
+  if (!judgeModelId && !judgeModel) return { label: '—', title: 'No judge recorded for this run' };
+  const isProvider = isJudgeProviderPseudoModelId(judgeModelId);
+  if (judgeModel) {
+    // A plain provider's judgeModel equals its judgeModelId -- one label.
+    const detail = isProvider || (judgeModelId && judgeModel !== judgeModelId) ? shortJudgeModelLabel(judgeModel) : undefined;
+    const label = kindLabel ?? shortJudgeModelLabel(judgeModel);
+    return {
+      label,
+      detail,
+      title: detail ? `${label} · ${judgeModel}` : `${label} · ${judgeModel}`,
+    };
+  }
+  const hint = modelNotRecorded ? 'model not recorded — auto-picked at run time' : undefined;
+  return { label: kindLabel!, hint, title: hint ? `${kindLabel} · ${hint}` : kindLabel! };
 };
 
 /**

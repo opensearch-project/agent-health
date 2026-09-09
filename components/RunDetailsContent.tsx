@@ -59,6 +59,7 @@ import { getResultStatus as getSharedResultStatus, StatusIcon as SharedStatusIco
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Card, CardContent } from '@/components/ui/card';
+import { JudgeModelLabel } from '@/components/JudgeModelLabel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
@@ -1238,11 +1239,24 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                   <CardContent className="p-4 space-y-5">
                     {/* Identity / metadata strip — always visible. */}
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground border-b pb-3">
-                      {liveReport.llmJudgeResponse?.judgeDebug?.provider && (
-                        <span><strong>Provider:</strong> {liveReport.llmJudgeResponse.judgeDebug.provider}</span>
+                      {(liveReport.llmJudgeResponse?.judgeProvider || liveReport.llmJudgeResponse?.judgeDebug?.provider) && (
+                        <span><strong>Provider:</strong> {liveReport.llmJudgeResponse?.judgeProvider || liveReport.llmJudgeResponse?.judgeDebug?.provider}</span>
                       )}
-                      {(liveReport.llmJudgeResponse?.judgeDebug?.modelId || liveReport.llmJudgeResponse?.modelId) && (
-                        <span><strong>Judge model:</strong> {liveReport.llmJudgeResponse?.judgeDebug?.modelId || liveReport.llmJudgeResponse?.modelId}</span>
+                      {/* Judge identity: the configured judge kind and the LLM that
+                          actually produced the verdict (`judgeModel`, always
+                          recorded now -- pre-fix only `judgeDebug.modelId` had it,
+                          and only under AH_JUDGE_DEBUG=1). Old agent-trace-judge
+                          reports fall back to "model not recorded". */}
+                      {(liveReport.judgeModel || liveReport.judgeModelId || liveReport.llmJudgeResponse?.judgeDebug?.modelId || liveReport.llmJudgeResponse?.modelId) && (
+                        <span data-testid="judge-output-model">
+                          <strong>Judge model:</strong>{' '}
+                          <JudgeModelLabel
+                            run={{
+                              judgeModel: liveReport.judgeModel || liveReport.llmJudgeResponse?.judgeDebug?.modelId || undefined,
+                              judgeModelId: liveReport.judgeModelId || liveReport.llmJudgeResponse?.modelId || undefined,
+                            }}
+                          />
+                        </span>
                       )}
                       {liveReport.llmJudgeResponse?.judgeDebug?.evaluatorId && (
                         <span><strong>Evaluator:</strong> {liveReport.llmJudgeResponse.judgeDebug.evaluatorId}</span>

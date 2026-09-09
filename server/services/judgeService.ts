@@ -118,6 +118,10 @@ export async function evaluateWithOpenAICompatible(
     userPrompt,
   });
   if (judgeDebug) parsed.judgeDebug = judgeDebug;
+  // Always record which LLM judged (the response's `model` echoes what the
+  // gateway actually served; fall back to what we asked for).
+  parsed.judgeModel = typeof data.model === 'string' && data.model ? data.model : modelId;
+  parsed.judgeProvider = 'openai-compatible';
   return parsed;
 }
 

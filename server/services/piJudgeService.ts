@@ -49,6 +49,12 @@ export interface SpawnPiOptions {
    * agent-only tools the judge neither needs nor can resolve). @internal
    */
   omitBasePack?: boolean;
+  /**
+   * Receives the complete raw stdout once the child exits (before it is
+   * reduced to the verdict text). Used by {@link spawnPiWithModel} to read
+   * the model id off the NDJSON transcript. @internal
+   */
+  onStdout?: (stdout: string) => void;
 }
 
 /**
@@ -115,7 +121,7 @@ export async function evaluateWithPi(
 
   const startTime = Date.now();
 
-  const result = await spawnPi(userPrompt, systemPrompt);
+  const { text: result, model: usedModel } = await spawnPiWithModel(userPrompt, systemPrompt);
   const duration = Date.now() - startTime;
 
   debug('PiJudge', 'Response received in', duration, 'ms');
@@ -131,11 +137,16 @@ export async function evaluateWithPi(
   debug('PiJudge', 'Pass/Fail Status:', parsed.passFailStatus?.toUpperCase() || 'MISSING');
   const judgeDebug = buildJudgeDebug({
     provider: 'pi',
+    modelId: usedModel,
     evaluatorId: evaluator?.id,
     systemPrompt,
     userPrompt,
   });
   if (judgeDebug) parsed.judgeDebug = judgeDebug;
+  // Always record which LLM judged: `pi-judge` is a provider, the pi CLI
+  // picks its default model at runtime — read it off the transcript.
+  if (usedModel) parsed.judgeModel = usedModel;
+  parsed.judgeProvider = 'pi';
   return parsed;
 }
 
@@ -180,6 +191,55 @@ export function extractFromNdjson(stdout: string): string | undefined {
     }
   }
   return resultText ?? lastAssistantText;
+}
+
+/**
+ * The model id pi's NDJSON transcript says answered (the `model` /
+ * `responseModel` on the last assistant `message`, plus its `provider` when
+ * present). Undefined when the output carries no assistant message. @internal
+ */
+export function extractModelFromNdjson(stdout: string): string | undefined {
+  let last: string | undefined;
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const msg = ev?.message;
+    if (msg?.role !== 'assistant') continue;
+    const model = typeof msg.responseModel === 'string' && msg.responseModel
+      ? msg.responseModel
+      : typeof msg.model === 'string' && msg.model ? msg.model : undefined;
+    if (!model) continue;
+    last = typeof msg.provider === 'string' && msg.provider ? `${msg.provider}/${model}` : model;
+  }
+  return last;
+}
+
+/** Verdict text + the model that produced it (when the transcript reports one). */
+export interface SpawnPiResult {
+  text: string;
+  model?: string;
+}
+
+/**
+ * Like {@link spawnPi} but also returns the model pi reported using, read
+ * from the same NDJSON stdout before it is reduced to the verdict text.
+ */
+export function spawnPiWithModel(
+  prompt: string,
+  systemPrompt: string,
+  options: SpawnPiOptions = {}
+): Promise<SpawnPiResult> {
+  let rawStdout = '';
+  return spawnPi(prompt, systemPrompt, { ...options, onStdout: (s) => { rawStdout = s; } }).then((text) => ({
+    text,
+    model: extractModelFromNdjson(rawStdout),
+  }));
 }
 
 export function spawnPi(
@@ -247,6 +307,7 @@ export function spawnPi(
         reject(new Error(errorMsg));
         return;
       }
+      options.onStdout?.(stdout);
 
       // Parse Pi's JSON output format
       try {

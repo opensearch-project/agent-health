@@ -15,7 +15,11 @@ import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/serv
 import { evaluateWithLiteLLM, parseLiteLLMError } from '@/server/services/litellmJudgeService';
 import { evaluateWithClaudeCode, parseClaudeCodeError } from '@/server/services/claudeCodeJudgeService';
 import { evaluateWithPi, parsePiError } from '@/server/services/piJudgeService';
-import { evaluateWithPiAgenticTrace } from '@/server/services/piAgenticJudgeService';
+import {
+  evaluateWithPiAgenticTrace,
+  describeDefaultAgentJudgeModel,
+  AGENT_JUDGE_MODEL_ENV,
+} from '@/server/services/piAgenticJudgeService';
 import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
 import { hasTraceCorrelation } from '@/services/traces/judgeAgentsHints';
 import { loadConfigSync } from '@/lib/config/index';
@@ -343,6 +347,48 @@ router.get('/api/judge/github-models', async (_req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/judge/models
+ *
+ * The judge-model catalog (same entries as GET /api/models) annotated with
+ * what each entry ACTUALLY judges with. For plain providers the entry's
+ * `model_id` is the model. For the agent (trace) judge provider the
+ * `model_id` (`agent-trace-judge`) names a judge KIND whose underlying LLM
+ * is chosen at runtime from the pi registry — so the entry carries
+ * `resolvedModel`: the provider-qualified id a run started now would be
+ * judged by, plus how it was chosen (`auto` | `env-pin` | `evaluator-pin`)
+ * and the env var that pins it. The run dialog shows this next to the label
+ * ("Agent Trace Judge — Claude Sonnet 4.5") so users know which LLM is
+ * behind the judge before they start a run.
+ *
+ * Resolution is best-effort: when the pi SDK is not installed or no model
+ * is credentialed, `resolvedModel` is omitted and `resolveError` says why —
+ * the catalog itself always returns 200.
+ *
+ * Returns { models: Array<ModelConfig & { key, resolvedModel?, resolvedModelName?, resolvedSource?, pinEnv? }>, total }
+ */
+router.get('/api/judge/models', async (_req: Request, res: Response) => {
+  try {
+    const config = loadConfigSync();
+    const entries = Object.entries(config.models).map(([key, m]) => ({ key, ...m }));
+    const needsResolution = entries.some((m) => m.provider === 'agent');
+    const described = needsResolution ? await describeDefaultAgentJudgeModel() : undefined;
+    const models = entries.map((m) => {
+      if (m.provider !== 'agent') return m;
+      return {
+        ...m,
+        pinEnv: AGENT_JUDGE_MODEL_ENV,
+        ...(described && 'id' in described
+          ? { resolvedModel: described.id, resolvedModelName: described.name, resolvedSource: described.source }
+          : { resolveError: described && 'error' in described ? described.error : undefined }),
+      };
+    });
+    return res.json({ models, total: models.length });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /api/judge - Evaluate agent trajectory
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
@@ -418,7 +464,9 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       );
       debug('JudgeAPI', 'Demo provider - returning mock evaluation');
       const mockResult = generateMockEvaluation(trajectory, expectedOutcomes);
-      return res.json(mockResult);
+      // Same identity contract as the real providers: the report says what
+      // judged it. Here that is honestly "the demo mock", never an LLM id.
+      return res.json({ ...mockResult, judgeModel: resolvedModelId, judgeProvider: 'demo' });
     }
 
     if (provider === 'claude-code') {

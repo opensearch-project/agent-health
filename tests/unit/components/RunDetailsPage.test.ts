@@ -80,8 +80,14 @@ jest.mock('@/lib/utils', () => ({
   getDifficultyColor: jest.fn().mockReturnValue(''),
   getModelName: jest.fn((id: string) => id),
   cn: jest.fn((...args: any[]) => args.filter(Boolean).join(' ')),
-  // Judge/evaluator label helpers (lib/utils.ts) reused by RunSummaryBand.
+  // Judge/evaluator label helpers (lib/utils.ts) reused by RunSummaryBand /
+  // JudgeModelLabel. getJudgeModelDisplay renders "judge kind · underlying LLM".
   getJudgeModelLabel: jest.fn((id?: string | null) => (id ? `judge:${id}` : '—')),
+  getJudgeModelDisplay: jest.fn((run?: { judgeModel?: string | null; judgeModelId?: string | null } | null) => {
+    const id = run?.judgeModelId;
+    if (!id && !run?.judgeModel) return { label: '—', title: 'none' };
+    return { label: `judge:${id}`, detail: run?.judgeModel || undefined, title: `judge:${id}` };
+  }),
   getEvaluatorLabel: jest.fn((id?: string | null) => (id ? `evaluator:${id}` : '—')),
   // Used by RunInsightsPane's "Avg Score" detail (run-report-insights).
   getRunOverallScore: jest.fn().mockReturnValue(null),
@@ -600,7 +606,7 @@ describe('RunDetailsPage', () => {
         expect(screen.getByTestId('run-summary-band')).toBeTruthy();
       });
 
-      // Judge/evaluator labels come from lib/utils' getJudgeModelLabel /
+      // Judge/evaluator labels come from lib/utils' getJudgeModelDisplay /
       // getEvaluatorLabel helpers (mocked above) - assert they were fed the
       // run's judgeModelId/evaluatorId, and rendered.
       expect(screen.getByTestId('run-summary-band-judge').textContent).toContain('judge:judge-model-x');

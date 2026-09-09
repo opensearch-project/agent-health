@@ -38,6 +38,7 @@ import type { IStorageModule } from '@/server/adapters/types';
 import { callBedrockJudge } from '@/services/evaluation';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/index';
+import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity } from '@/lib/judgeIdentity';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { spansToTrajectory } from '@/services/traces/spansToTrajectory';
 import { fetchSpansForRun } from '@/services/traces/fetchSpansForRun';
@@ -229,6 +230,21 @@ export async function retryJudgementForCase(
       // Set only by the agent (trace) judge provider -- see
       // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
       ...(judgment.judgeMode ? { judgeMode: judgment.judgeMode } : {}),
+      // Underlying LLM that judged (TestCaseRun.judgeModel) -- see lib/judgeIdentity.
+      ...buildJudgeIdentityPatch(judgment, judgeModelId),
+      // Keep the judge sidecar's identity in step with the re-judged verdict.
+      llmJudgeResponse: {
+        ...buildLlmJudgeResponseIdentity(judgment, judgeModelId),
+        timestamp: new Date().toISOString(),
+        promptTokens: 0,
+        completionTokens: 0,
+        latencyMs: judgment.judgeDurationMs ?? 0,
+        rawResponse: judgment.rawResponse ?? judgment.llmJudgeReasoning,
+        parsedMetrics: judgment.metrics as any,
+        improvementStrategies: judgment.improvementStrategies,
+        ...(judgment.extraFields ? { extraFields: judgment.extraFields } : {}),
+        ...(judgment.judgeDebug ? { judgeDebug: judgment.judgeDebug } : {}),
+      },
       matcherResults: [
         buildJudgeMatcherEntry(judgment, {
           claim: formatExpectedOutcomesAsClaim(testCase.expectedOutcomes),

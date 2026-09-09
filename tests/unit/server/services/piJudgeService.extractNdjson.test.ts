@@ -10,7 +10,7 @@
  * explicit `result` event or in the last assistant message's text content.
  */
 
-import { extractFromNdjson } from '@/server/services/piJudgeService';
+import { extractFromNdjson, extractModelFromNdjson } from '@/server/services/piJudgeService';
 
 describe('extractFromNdjson', () => {
   it('returns the explicit result event when present', () => {
@@ -60,5 +60,23 @@ describe('extractFromNdjson', () => {
       JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'prompt' }] } }),
     ].join('\n');
     expect(extractFromNdjson(stdout)).toBeUndefined();
+  });
+});
+
+describe('extractModelFromNdjson (pi-judge identity)', () => {
+  it('returns provider/model of the last assistant message (responseModel preferred over model)', () => {
+    const stdout = [
+      JSON.stringify({ type: 'session', id: 'x' }),
+      JSON.stringify({ message: { role: 'assistant', provider: 'amazon-bedrock', model: 'us.anthropic.claude-sonnet-4-5', content: [] } }),
+      JSON.stringify({ type: 'message_end', message: { role: 'assistant', provider: 'amazon-bedrock', model: 'us.anthropic.claude-sonnet-4-5', responseModel: 'claude-sonnet-4-5-20250929', content: [{ type: 'text', text: '{}' }] } }),
+    ].join('\n');
+    expect(extractModelFromNdjson(stdout)).toBe('amazon-bedrock/claude-sonnet-4-5-20250929');
+  });
+
+  it('returns the bare model when no provider is present, and undefined when no assistant message carries one', () => {
+    expect(extractModelFromNdjson(JSON.stringify({ message: { role: 'assistant', model: 'gpt-4o', content: [] } }))).toBe('gpt-4o');
+    expect(extractModelFromNdjson(JSON.stringify({ message: { role: 'assistant', content: [] } }))).toBeUndefined();
+    expect(extractModelFromNdjson('not json\n{"type":"result","result":"x"}')).toBeUndefined();
+    expect(extractModelFromNdjson('')).toBeUndefined();
   });
 });
