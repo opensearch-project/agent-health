@@ -21,19 +21,23 @@
  * These tests cover:
  *  - associated (non-embedded) eval-runs are merged into the rendered list
  *  - a running associated eval-run shows the "Running" badge
- *  - Delete/Cancel are NOT offered on merged-in rows (they'd call
- *    benchmark-embedded-run-specific APIs that don't apply)
+ *  - Delete is offered on EVERY row (owner ask, 2026-09-08) and dispatches
+ *    on the run's kind: evaluation-run docs → the evaluation-runs API,
+ *    legacy embedded-only runs → the benchmark nested-run API (the wrong
+ *    endpoint 404s — which is why the button used to be hidden instead)
  */
 
 import * as React from 'react';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent, within } from '@testing-library/react';
 import type { Benchmark, BenchmarkRun } from '@/types';
 
 const mockNavigate = jest.fn();
+// The page derives the active tab from the URL; render it on the Runs tab.
 jest.mock('react-router-dom', () => ({
   useParams: () => ({ benchmarkId: 'bench-1' }),
   useNavigate: () => mockNavigate,
-  useLocation: () => ({ pathname: '/evaluations/benchmarks/bench-1/runs' }),
+  useLocation: () => ({ pathname: '/evaluations/benchmarks/bench-1/runs', search: '', hash: '', state: null, key: 'k' }),
+  Link: ({ children, to, ...rest }: any) => React.createElement('a', { href: typeof to === 'string' ? to : '#', ...rest }, children),
 }));
 
 const mockGetById = jest.fn();
@@ -48,15 +52,20 @@ jest.mock('@/services/storage', () => ({
 }));
 
 const mockListEvaluationRuns = jest.fn();
+const mockDeleteEvaluationRun = jest.fn(async () => true);
+const mockCancelEvaluationRun = jest.fn(async () => true);
 jest.mock('@/services/client', () => ({
   executeBenchmarkRun: jest.fn(),
   listEvaluationRuns: (...a: unknown[]) => mockListEvaluationRuns(...a),
+  deleteEvaluationRun: (...a: unknown[]) => mockDeleteEvaluationRun(...a),
+  cancelEvaluationRun: (...a: unknown[]) => mockCancelEvaluationRun(...a),
 }));
 
+const mockHandleCancelRun = jest.fn();
 jest.mock('@/hooks/useBenchmarkCancellation', () => ({
   useBenchmarkCancellation: () => ({
     isCancelling: () => false,
-    handleCancelRun: jest.fn(),
+    handleCancelRun: (...a: unknown[]) => mockHandleCancelRun(...a),
   }),
 }));
 
@@ -73,6 +82,19 @@ jest.mock('@/lib/utils', () => ({
   cn: jest.fn((...args: unknown[]) => args.filter(Boolean).join(' ')),
 }));
 
+// recharts' ResponsiveContainer measures the DOM (0×0 in jsdom → renders
+// nothing and warns). The chart's own logic is covered by
+// tests/unit/lib/benchmarkRunsTable.test.ts; here we only need the legend,
+// so stub the SVG primitives.
+jest.mock('recharts', () => {
+  const R = require('react');
+  const Passthrough = ({ children }: { children?: React.ReactNode }) => R.createElement('div', null, children);
+  return {
+    ResponsiveContainer: Passthrough, LineChart: Passthrough,
+    Line: () => null, XAxis: () => null, YAxis: () => null, Tooltip: () => null, CartesianGrid: () => null,
+  };
+});
+
 jest.mock('@/components/evals3/Breadcrumbs', () => ({
   Breadcrumbs: ({ actions }: { actions?: React.ReactNode }) =>
     React.createElement('nav', { 'data-testid': 'breadcrumbs' }, actions),
@@ -82,19 +104,15 @@ jest.mock('@/components/BenchmarkEditor', () => ({
   BenchmarkEditor: () => null,
 }));
 
-// BenchmarkCasesTab/CaseHeatStrip pull in a deep chain (BenchmarkCaseDefinition
-// -> TestCaseDetailPanel -> ContextDispositionGroups -> components/ui/markdown.tsx
-// -> react-markdown, which is ESM-only and not in this suite's ts-jest
-// transformIgnorePatterns allow-list). This test suite doesn't exercise the
-// Cases tab UI at all, so stub both out rather than pull that chain in for
-// every test in this file.
-jest.mock('@/components/evals3/BenchmarkCasesTab', () => ({
-  BenchmarkCasesTab: () => null,
-  CaseHeatStrip: () => null,
-}));
-
 jest.mock('@/components/JudgeModelSelect', () => ({
   JudgeModelSelect: () => null,
+}));
+
+// react-markdown is ESM-only; BenchmarkCasesTab → BenchmarkCaseDefinition →
+// TestCaseDetailPanel pulls it in transitively. Stub the wrapper like
+// TestCaseDetailPanel.test.ts does.
+jest.mock('@/components/ui/markdown', () => ({
+  Markdown: ({ children }: { children?: React.ReactNode }) => React.createElement('div', null, children),
 }));
 
 jest.mock('@/components/ui/resizable', () => ({
@@ -193,10 +211,10 @@ describe('BenchmarkRunsPage2 — associated (non-embedded) eval-runs merge (bug 
     await renderPage();
 
     await waitFor(() => expect(screen.getByText('Claude-code with traces')).toBeTruthy());
-    const card = screen.getByText('Claude-code with traces').closest('.p-4') as HTMLElement;
-    expect(card.textContent).toContain('Running');
-    // Planned total (62), not just the 9 cases that have started.
-    expect(card.textContent).toContain('62');
+    const row = screen.getByText('Claude-code with traces').closest('[data-testid="run-row"]') as HTMLElement;
+    expect(row.querySelector('[data-testid="run-status-running"]')).toBeTruthy();
+    // Planned total (62) in the Size column, not just the 9 cases that have started.
+    expect(row.querySelector('[data-testid="run-size-cell"]')!.textContent).toBe('62');
   });
 
   it('does not double-count an eval-run that has already been embedded into benchmark.runs', async () => {
@@ -211,24 +229,81 @@ describe('BenchmarkRunsPage2 — associated (non-embedded) eval-runs merge (bug 
     expect(screen.getAllByText('Migrated Run')).toHaveLength(1);
   });
 
-  it('does not render Delete/Cancel for a merged-in (non-embedded) associated run — those APIs are benchmark-embedded-run-specific', async () => {
+  // Owner report (2026-09-08): "Delete button should be present for all runs
+  // on the benchmark details page." Merged-in (non-embedded) rows used to get
+  // no Delete/Cancel at all because the row actions only knew the
+  // benchmark-embedded API; they now dispatch on the run's kind.
+  it('renders Delete AND Cancel on a merged-in (non-embedded) running eval-run row; Delete → evaluation-runs API, Cancel → evaluation-run cancel', async () => {
     mockGetById.mockResolvedValue(makeBenchmark());
     mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [makeAssociatedEvalRun()] });
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { asyncBenchmarkStorage } = require('@/services/storage');
     await renderPage();
 
     await waitFor(() => expect(screen.getByText('Claude-code with traces')).toBeTruthy());
-    const card = screen.getByText('Claude-code with traces').closest('.p-4') as HTMLElement;
-    expect(card.querySelector('[title="Delete run"]')).toBeNull();
-    expect(card.textContent).not.toContain('Cancel');
+    const row = screen.getByText('Claude-code with traces').closest('[data-testid="run-row"]') as HTMLElement;
+    const cancelBtn = row.querySelector('[aria-label="Cancel run"]') as HTMLButtonElement;
+    const deleteBtn = row.querySelector('[aria-label="Delete run"]') as HTMLButtonElement;
+    expect(cancelBtn).toBeTruthy();
+    expect(deleteBtn).toBeTruthy();
+
+    fireEvent.click(cancelBtn);
+    await waitFor(() => expect(mockCancelEvaluationRun).toHaveBeenCalledWith('eval-run-running-1'));
+    expect(mockHandleCancelRun).not.toHaveBeenCalled();
+
+    fireEvent.click(deleteBtn);
+    // The confirm names the run, flags it is running, and states reports are kept.
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringMatching(/Claude-code with traces.*still running.*reports are kept/s));
+    await waitFor(() => expect(mockDeleteEvaluationRun).toHaveBeenCalledWith('eval-run-running-1'));
+    expect(asyncBenchmarkStorage.deleteRun).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
-  it('still renders Delete for a genuinely embedded run', async () => {
+  it('a dual-written row (embedded AND an evaluation-run doc) deletes via the evaluation-runs API (the server removes both forms)', async () => {
     mockGetById.mockResolvedValue(makeBenchmark());
+    // Same id as the embedded run — the doc form takes precedence for dispatch.
+    mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [makeAssociatedEvalRun({ id: 'run-embedded-1', name: 'Embedded Run', status: 'completed' })] });
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { asyncBenchmarkStorage } = require('@/services/storage');
     await renderPage();
 
     await waitFor(() => expect(screen.getByText('Embedded Run')).toBeTruthy());
-    const card = screen.getByText('Embedded Run').closest('.p-4') as HTMLElement;
-    expect(card.querySelector('[title="Delete run"]')).toBeTruthy();
+    const row = screen.getByText('Embedded Run').closest('[data-testid="run-row"]') as HTMLElement;
+    fireEvent.click(row.querySelector('[aria-label="Delete run"]') as HTMLButtonElement);
+    await waitFor(() => expect(mockDeleteEvaluationRun).toHaveBeenCalledWith('run-embedded-1'));
+    expect(asyncBenchmarkStorage.deleteRun).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('a legacy embedded-only run (no evaluation-run doc) deletes via the benchmark nested-run API', async () => {
+    mockGetById.mockResolvedValue(makeBenchmark());
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { asyncBenchmarkStorage } = require('@/services/storage');
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Embedded Run')).toBeTruthy());
+    const row = screen.getByText('Embedded Run').closest('[data-testid="run-row"]') as HTMLElement;
+    expect(row.querySelector('[title="Delete run"]')).toBeTruthy();
+    fireEvent.click(row.querySelector('[aria-label="Delete run"]') as HTMLButtonElement);
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringMatching(/Embedded Run.*reports are kept/s));
+    expect(confirmSpy.mock.calls[0][0]).not.toMatch(/still running/);
+    await waitFor(() => expect(asyncBenchmarkStorage.deleteRun).toHaveBeenCalledWith('bench-1', 'run-embedded-1'));
+    expect(mockDeleteEvaluationRun).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('declining the confirm deletes nothing', async () => {
+    mockGetById.mockResolvedValue(makeBenchmark());
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { asyncBenchmarkStorage } = require('@/services/storage');
+    await renderPage();
+
+    await waitFor(() => expect(screen.getByText('Embedded Run')).toBeTruthy());
+    const row = screen.getByText('Embedded Run').closest('[data-testid="run-row"]') as HTMLElement;
+    fireEvent.click(row.querySelector('[aria-label="Delete run"]') as HTMLButtonElement);
+    expect(asyncBenchmarkStorage.deleteRun).not.toHaveBeenCalled();
+    expect(mockDeleteEvaluationRun).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it('is resilient to the evaluation-runs fetch failing (embedded runs still render)', async () => {
@@ -237,5 +312,178 @@ describe('BenchmarkRunsPage2 — associated (non-embedded) eval-runs merge (bug 
     await renderPage();
 
     await waitFor(() => expect(screen.getByText('Embedded Run')).toBeTruthy());
+  });
+});
+
+// ─── Runs tab: table + chart + click-to-filter pills ─────────────────────────
+
+describe('BenchmarkRunsPage2 — Runs tab table, chart and click-to-filter', () => {
+  const ccRun = makeEmbeddedRun({
+    id: 'run-cc', name: 'CC Run', agentKey: 'agent-a', modelId: 'model-x', judgeModelId: 'judge-m', evaluatorId: 'ev-1',
+    createdAt: '2026-09-02T00:00:00.000Z',
+    results: {
+      'tc-1': { reportId: 'r-1', status: 'completed', passFailStatus: 'passed' } as any,
+      'tc-2': { reportId: 'r-2', status: 'completed', passFailStatus: 'failed' } as any,
+      'tc-3': { reportId: 'r-3', status: 'completed', passFailStatus: 'passed' } as any,
+      'tc-4': { reportId: 'r-4', status: 'completed', passFailStatus: 'passed' } as any,
+    },
+  });
+  const aisRun = makeEmbeddedRun({
+    id: 'run-ais', name: 'AIS Run', agentKey: 'agent-b', modelId: 'model-y', judgeModelId: 'judge-m', evaluatorId: 'ev-2',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    results: {
+      'tc-1': { reportId: 'r-5', status: 'completed', passFailStatus: 'failed' } as any,
+      'tc-2': { reportId: 'r-6', status: 'completed', passFailStatus: 'passed' } as any,
+    },
+  });
+
+  beforeEach(() => {
+    mockGetById.mockResolvedValue(makeBenchmark({ runs: [ccRun, aisRun], totalRuns: 2 }));
+    (global.fetch as jest.Mock).mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({ evaluators: [{ id: 'ev-1', name: 'Agent Persona' }, { id: 'ev-2', name: 'Human Persona' }] }),
+    }));
+  });
+
+  it('renders one table row per run with the sketch columns: Run link, Agent, Model, Size, Pass %, Judge, J. Model, Date', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+
+    const headers = Array.from(document.querySelectorAll('[data-testid="benchmark-runs-table"] thead th'))
+      .map(th => th.textContent?.trim()).filter(Boolean);
+    expect(headers).toEqual(['Run', 'Agent', 'Model', 'Size', 'Pass %', 'Judge', 'J. Model', 'Date']);
+
+    const cc = screen.getByText('CC Run').closest('[data-testid="run-row"]') as HTMLElement;
+    const link = within(cc).getByTestId('run-name-link');
+    expect(link.getAttribute('href')).toBe('/evaluations/benchmarks/bench-1/runs/run-cc/inspect');
+    expect(within(cc).getByTestId('run-cell-agent').textContent).toBe('Agent A');
+    expect(within(cc).getByTestId('run-cell-model').textContent).toBe('model-x');
+    expect(within(cc).getByTestId('run-size-cell').textContent).toBe('4');
+    expect(within(cc).getByTestId('run-passrate-cell').textContent).toContain('75%');
+    expect(within(cc).getByTestId('run-cell-evaluator').textContent).toBe('Agent Persona');
+    expect(within(cc).getByTestId('run-cell-judge').textContent).toBe('judge-m');
+    expect(within(cc).getByTestId('run-date-cell')).toBeTruthy();
+  });
+
+  it('sorts newest first by default and marks the newest run Latest', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    const names = screen.getAllByTestId('run-name-link').map(a => a.textContent);
+    expect(names).toEqual(['CC Run', 'AIS Run']);
+    const cc = screen.getByText('CC Run').closest('[data-testid="run-row"]') as HTMLElement;
+    expect(within(cc).queryByTestId('run-latest-badge')).toBeTruthy();
+  });
+
+  it('Latest follows createdAt, not array position — a newer associated eval-run (appended after embedded runs) gets the badge', async () => {
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [makeAssociatedEvalRun({ id: 'eval-newest', name: 'Newest Eval Run', status: 'completed', createdAt: '2026-09-05T00:00:00.000Z', results: { 'tc-1': { reportId: 'r', status: 'completed', passFailStatus: 'passed' } } })],
+    });
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(3));
+    expect(screen.getAllByTestId('run-latest-badge')).toHaveLength(1);
+    const newest = screen.getByText('Newest Eval Run').closest('[data-testid="run-row"]') as HTMLElement;
+    expect(within(newest).queryByTestId('run-latest-badge')).toBeTruthy();
+    // Default sort is newest-first too.
+    expect(screen.getAllByTestId('run-name-link')[0].textContent).toBe('Newest Eval Run');
+  });
+
+  it('clicking the run name navigates to the inspector (and does not follow the href)', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    const cc = screen.getByText('CC Run').closest('[data-testid="run-row"]') as HTMLElement;
+    fireEvent.click(within(cc).getByTestId('run-name-link'));
+    expect(mockNavigate).toHaveBeenCalledWith('/evaluations/benchmarks/bench-1/runs/run-cc/inspect');
+  });
+
+  it('clicking an Agent cell filters the table and shows a removable pill; clicking the pill removes it', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    expect(screen.queryByTestId('run-filter-pills')).toBeNull();
+
+    const cc = screen.getByText('CC Run').closest('[data-testid="run-row"]') as HTMLElement;
+    fireEvent.click(within(cc).getByTestId('run-cell-agent'));
+
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(1));
+    expect(screen.getByText('CC Run')).toBeTruthy();
+    expect(screen.queryByText('AIS Run')).toBeNull();
+
+    const pills = screen.getAllByTestId('run-filter-pill');
+    expect(pills).toHaveLength(1);
+    expect(pills[0].getAttribute('data-filter-field')).toBe('agent');
+    expect(pills[0].getAttribute('data-filter-value')).toBe('agent-a');
+    expect(pills[0].textContent).toContain('Agent A');
+    expect(screen.getByTestId('run-filter-count').textContent).toBe('1 of 2 runs');
+    // The agent cell that is the active filter is marked pressed.
+    expect(within(cc).getByTestId('run-cell-agent').getAttribute('aria-pressed')).toBe('true');
+    // Row-click navigation must NOT fire when clicking a filter cell.
+    expect(mockNavigate).not.toHaveBeenCalled();
+
+    fireEvent.click(pills[0]);
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    expect(screen.queryByTestId('run-filter-pills')).toBeNull();
+  });
+
+  it('filters on different fields AND together; Clear removes them all', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    const cc = screen.getByText('CC Run').closest('[data-testid="run-row"]') as HTMLElement;
+    // Judge model is shared by both runs → still 2 rows.
+    fireEvent.click(within(cc).getByTestId('run-cell-judge'));
+    await waitFor(() => expect(screen.getAllByTestId('run-filter-pill')).toHaveLength(1));
+    expect(screen.getAllByTestId('run-row')).toHaveLength(2);
+    expect(screen.getAllByTestId('run-filter-pill')[0].textContent).toContain('J. Model:');
+    // Evaluator (the "Judge" column) narrows to CC only.
+    fireEvent.click(within(cc).getByTestId('run-cell-evaluator'));
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(1));
+    expect(screen.getAllByTestId('run-filter-pill')).toHaveLength(2);
+    expect(screen.getAllByTestId('run-filter-pill')[1].textContent).toContain('Judge:');
+    expect(screen.getAllByTestId('run-filter-pill')[1].textContent).toContain('Agent Persona');
+
+    fireEvent.click(screen.getByTestId('run-filter-clear'));
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    expect(screen.queryByTestId('run-filter-pills')).toBeNull();
+  });
+
+  it('renders the pass-rate chart with one legend entry per agent; the legend toggles the agent filter', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getByTestId('benchmark-passrate-chart')).toBeTruthy());
+    const legendA = screen.getByTestId('chart-legend-agent-a');
+    const legendB = screen.getByTestId('chart-legend-agent-b');
+    expect(legendA.textContent).toContain('Agent A');
+    expect(legendB.textContent).toContain('agent-b'); // unknown agent key falls back to the key
+
+    fireEvent.click(legendA);
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(1));
+    expect(legendA.getAttribute('aria-pressed')).toBe('true');
+    // Agent filters DIM other lines but keep the legend intact so a second
+    // agent can be toggled back in.
+    expect(screen.getByTestId('chart-legend-agent-b')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('chart-legend-agent-b'));
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    expect(screen.getAllByTestId('run-filter-pill')).toHaveLength(2);
+  });
+
+  it('expands a row to reveal the per-case verdict heat strip on demand', async () => {
+    mockGetByIds.mockResolvedValue([
+      { id: 'tc-1', name: 'Case 1' }, { id: 'tc-2', name: 'Case 2' },
+    ]);
+    mockGetById.mockResolvedValue(makeBenchmark({ runs: [ccRun, aisRun], totalRuns: 2, testCaseIds: ['tc-1', 'tc-2'] }));
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    expect(screen.queryByTestId('run-row-cases')).toBeNull();
+    const cc = screen.getByText('CC Run').closest('[data-testid="run-row"]') as HTMLElement;
+    fireEvent.click(within(cc).getByTestId('run-expand-cases'));
+    await waitFor(() => expect(screen.getAllByTestId('run-row-cases')).toHaveLength(1));
+    expect(screen.getByLabelText('CC Run case verdicts')).toBeTruthy();
+    fireEvent.click(within(cc).getByTestId('run-expand-cases'));
+    await waitFor(() => expect(screen.queryByTestId('run-row-cases')).toBeNull());
+  });
+
+  it('the inactive Cases panel is hidden (regression: it used to stay display:flex and push the runs list ~400px down)', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
+    const casesPanel = document.querySelector('[role="tabpanel"][data-state="inactive"]') as HTMLElement | null;
+    expect(casesPanel).toBeTruthy();
+    expect(casesPanel!.className).toContain('data-[state=inactive]:hidden');
   });
 });

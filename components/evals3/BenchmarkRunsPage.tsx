@@ -6,9 +6,13 @@
 /*
  * Benchmark detail — Evals 3
  *
- * Cases is the default master-detail review surface; Runs retains the existing
- * execution/comparison actions and adds an aligned case-verdict heat strip.
- * Route state keeps both tabs and selected cases deep-linkable.
+ * Cases is the default master-detail review surface; Runs is a compact table
+ * (Run · Agent · Model · Size · Pass % · Judge · J. Model · Date) with a
+ * pass-rate-over-time chart (one line per agent) above it. Clicking any
+ * categorical cell or chart legend entry filters the table; active filters
+ * render as removable pills. Per-run case-verdict heat strips are available
+ * as an expandable row. Route state keeps both tabs and selected cases
+ * deep-linkable.
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -16,9 +20,9 @@ import { usePersistedState } from '@/hooks/usePersistedState';
 import { PREFS_KEYS } from '@/lib/preferences';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
-  GitCompare, Calendar, CheckCircle2, XCircle, Play,
-  Trash2, Plus, X, Loader2, Circle, Check, Clock,
-  StopCircle, Ban, Pencil, AlertTriangle,
+  GitCompare, CheckCircle2, XCircle, Play,
+  Plus, X, Loader2, Circle, Check,
+  Ban, Pencil,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -29,14 +33,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { JudgeModelSelect } from '@/components/JudgeModelSelect';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
-import { computeRunStats, getEffectiveRunStatus, isRunInProgress } from '@/lib/runStats';
-import { executeBenchmarkRun, listEvaluationRuns } from '@/services/client';
+import { isRunInProgress, getEffectiveRunStatus } from '@/lib/runStats';
+import { executeBenchmarkRun, listEvaluationRuns, deleteEvaluationRun, cancelEvaluationRun } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
-import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, RunStats, Evaluator, EvaluationRun } from '@/types';
+import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, Evaluator, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { formatDate, getModelName } from '@/lib/utils';
@@ -49,7 +52,14 @@ import {
 } from '@/lib/benchmarkVersionUtils';
 import { RunConfigForExecution } from '@/components/BenchmarkEditor';
 import { BenchmarkEditor } from '@/components/BenchmarkEditor';
-import { BenchmarkCasesTab, CaseHeatStrip } from '@/components/evals3/BenchmarkCasesTab';
+import { BenchmarkCasesTab } from '@/components/evals3/BenchmarkCasesTab';
+import { BenchmarkRunsTable, RunFilterPills } from '@/components/evals3/BenchmarkRunsTable';
+import { BenchmarkPassRateChart } from '@/components/evals3/BenchmarkPassRateChart';
+import {
+  buildRunTableRow, applyRunFilters, toggleRunFilter, removeRunFilter,
+  sortRunRows, toggleRunSort, buildPassRateSeries, latestRunId, DEFAULT_RUN_SORT,
+  RunFilter, RunSort, RunSortField, RunTableRow,
+} from '@/lib/benchmarkRunsTable';
 import { getRecentCompletedRuns } from '@/lib/benchmarkCaseReview';
 import type { EvaluationReport } from '@/types';
 
@@ -128,6 +138,18 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
   // Selection for comparison
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
+
+  // Runs-table click-to-filter state (pills), sort, and expanded heat strips.
+  // Session-scoped on purpose: a filter is an exploration gesture, not a
+  // preference — persisting it caused the same "why is my list empty?"
+  // confusion the version filter had (see rawRunVersionFilter below).
+  const [runFilters, setRunFilters] = useState<RunFilter[]>([]);
+  const [runSort, setRunSort] = useState<RunSort>(DEFAULT_RUN_SORT);
+  const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(new Set());
+
+  // Cancel-in-flight marker for rows backed by an evaluation-run doc (the
+  // benchmark-scoped hook below tracks legacy embedded rows).
+  const [cancellingEvalRunId, setCancellingEvalRunId] = useState<string | null>(null);
 
   // Delete state
   const [deleteState, setDeleteState] = useState<{
@@ -327,33 +349,65 @@ export const BenchmarkRunsPage2: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportIdsKey]);
 
-  // Ids of merged-in rows that are standalone evaluation-run docs, not
-  // embedded in benchmark.runs[]. Row-level Delete/Cancel call
-  // benchmark-embedded-run-specific APIs (asyncBenchmarkStorage.deleteRun /
-  // cancelBenchmarkRun scoped by benchmarkId+runId) that don't apply to
-  // these — gate those actions off for this set rather than risk a wrong-API
-  // 404 or silent no-op.
-  const evalRunOnlyIds = useMemo(() => {
-    const embeddedIds = new Set((benchmark?.runs || []).map(r => r.id));
-    return new Set(associatedEvalRuns.filter(er => !embeddedIds.has(er.id)).map(er => er.id));
-  }, [benchmark?.runs, associatedEvalRuns]);
+  // Ids of merged-in rows that exist as first-class evaluation-run documents
+  // (whether or not a projection is ALSO embedded in benchmark.runs[]). Used
+  // to dispatch row-level Delete/Cancel to the right API — evaluation-run docs
+  // to /api/storage/evaluation-runs/:id, legacy embedded-only runs to the
+  // benchmark nested-run endpoints. This set used to HIDE Delete/Cancel for
+  // non-embedded rows instead (owner report: "Delete button should be present
+  // for all runs on the benchmark details page") — and since the #399
+  // dual-write most runs are not embedded, so most rows had no Delete at all.
+  const evalRunDocIds = useMemo(
+    () => new Set(associatedEvalRuns.map(er => er.id)),
+    [associatedEvalRuns]
+  );
 
   const hasMultipleVersions = versionData.length > 1;
 
-  // ─── Run Stats ───────────────────────────────────────────────────────────
+  // ─── Table rows / filters / chart ────────────────────────────────────────
 
-  const getRunStats = useCallback((run: BenchmarkRun): RunStats & { running: number; errored: number } => {
-    let running = 0;
-    Object.values(run.results || {}).forEach(r => { if (r.status === 'running') running++; });
+  const evaluatorNames = useMemo(
+    () => new Map(evaluators.map(e => [e.id, e.name])), [evaluators]
+  );
 
-    // Recompute from run.results (single source of truth, issue #242) rather
-    // than trusting the denormalized run.stats, which historically counted
-    // errored cases as passed. Falls back to run.stats only when per-case
-    // results aren't present (e.g. very old runs).
-    const { passed, failed, errored, total } = computeRunStats(run);
-    const pending = Math.max(0, total - passed - failed - errored - running);
-    return { passed, failed, pending, running, errored, total };
-  }, []);
+  // One row per version-filtered run, with pass/fail/errored recomputed from
+  // run.results (single source of truth, issue #242) rather than the
+  // denormalized run.stats.
+  const allRows = useMemo<RunTableRow[]>(() => filteredRuns.map(run => buildRunTableRow(run, {
+    agentName: key => DEFAULT_CONFIG.agents.find(a => a.key === key)?.name || key || 'Unknown',
+    modelName: id => getModelName(id),
+    // Judge model ids share DEFAULT_CONFIG.models with agent model ids; an
+    // evaluator that was deleted since the run falls back to its raw id.
+    judgeLabel: id => (id ? getModelName(id) : '—'),
+    evaluatorLabel: id => (id ? evaluatorNames.get(id) || id : '—'),
+  })), [filteredRuns, evaluatorNames]);
+
+  const visibleRows = useMemo(
+    () => sortRunRows(applyRunFilters(allRows, runFilters), runSort),
+    [allRows, runFilters, runSort]
+  );
+
+  // Chart follows every NON-agent filter (so it never disagrees with the table
+  // about model/judge/status), but agent filters only dim the other lines —
+  // dropping them would make the legend useless as a toggle (you couldn't
+  // click a second agent back in once the first was selected).
+  const nonAgentFilters = useMemo(() => runFilters.filter(f => f.field !== 'agent'), [runFilters]);
+  const passRateSeries = useMemo(
+    () => buildPassRateSeries(applyRunFilters(allRows, nonAgentFilters)),
+    [allRows, nonAgentFilters]
+  );
+  const activeAgentKeys = useMemo(
+    () => new Set(runFilters.filter(f => f.field === 'agent').map(f => f.value)),
+    [runFilters]
+  );
+
+  const handleToggleFilter = useCallback((f: RunFilter) => setRunFilters(prev => toggleRunFilter(prev, f)), []);
+  const handleSort = useCallback((field: RunSortField) => setRunSort(prev => toggleRunSort(prev, field)), []);
+  const handleToggleExpand = useCallback((runId: string) => setExpandedRunIds(prev => {
+    const next = new Set(prev);
+    if (next.has(runId)) next.delete(runId); else next.add(runId);
+    return next;
+  }), []);
 
   const hasPendingEvaluations = useMemo(() => {
     return filteredRuns.some(run => run.stats?.pending && run.stats.pending > 0);
@@ -462,12 +516,27 @@ export const BenchmarkRunsPage2: React.FC = () => {
     }
   };
 
+  // Delete is offered on EVERY row. Dispatch on the run's kind: a row backed
+  // by a first-class evaluation-run doc goes to the evaluation-runs API
+  // (the benchmark nested-run endpoint 404s for a run that isn't embedded —
+  // the silent no-op the old gate was avoiding by hiding the button); a
+  // legacy embedded-only run goes to the benchmark nested-run endpoint.
+  // Removing BOTH persisted forms of a dual-written run is the server's job
+  // (either endpoint), not something to reconstruct client-side from a
+  // best-effort listing. Reports are intentionally NOT deleted (AGENTS.md
+  // policy) and the confirm says so.
   const handleDeleteRun = async (run: BenchmarkRun) => {
     if (!benchmarkId) return;
-    if (!window.confirm(`Delete run "${run.name}"? This cannot be undone.`)) return;
+    const running = getEffectiveRunStatus(run) === 'running';
+    const confirmText = `Delete run "${run.name}"?` +
+      (running ? ' It is still running.' : '') +
+      ' Its per-test-case reports are kept and stay reachable from each test case. This cannot be undone.';
+    if (!window.confirm(confirmText)) return;
     setDeleteState({ isDeleting: true, deletingId: run.id, status: 'idle', message: '' });
     try {
-      const success = await asyncBenchmarkStorage.deleteRun(benchmarkId, run.id);
+      const success = evalRunDocIds.has(run.id)
+        ? await deleteEvaluationRun(run.id)
+        : await asyncBenchmarkStorage.deleteRun(benchmarkId, run.id);
       if (success) {
         setDeleteState({ isDeleting: false, deletingId: null, status: 'success', message: `"${run.name}" deleted` });
         setTimeout(() => setDeleteState(s => ({ ...s, status: 'idle', message: '' })), 3000);
@@ -481,12 +550,33 @@ export const BenchmarkRunsPage2: React.FC = () => {
     }
   };
 
+  // Cancel dispatches the same way: evaluation-run docs have their own cancel
+  // endpoint (with the zombie fallback); legacy embedded runs keep the
+  // benchmark-scoped hook.
+  const handleCancelRow = async (run: BenchmarkRun) => {
+    if (!benchmarkId) return;
+    if (evalRunDocIds.has(run.id)) {
+      setCancellingEvalRunId(run.id);
+      try {
+        await cancelEvaluationRun(run.id);
+        await loadBenchmark();
+      } catch (error) {
+        setDeleteState({ isDeleting: false, deletingId: null, status: 'error',
+          message: `Failed to cancel "${run.name}": ${error instanceof Error ? error.message : 'Unknown error'}` });
+      } finally {
+        setCancellingEvalRunId(null);
+      }
+    } else {
+      await handleCancelRun(benchmarkId, run.id, loadBenchmark);
+    }
+  };
+
   const toggleRunSelection = (runId: string) => {
     setSelectedRunIds(prev => prev.includes(runId) ? prev.filter(id => id !== runId) : [...prev, runId]);
   };
 
   const handleToggleSelectAll = () => {
-    const allRunIds = filteredRuns.map(r => r.id);
+    const allRunIds = visibleRows.map(r => r.run.id);
     const allSelected = allRunIds.every(id => selectedRunIds.includes(id));
     setSelectedRunIds(allSelected ? [] : allRunIds);
   };
@@ -510,7 +600,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
   const hasMultipleRuns = runs.length >= 2;
 
   return (
-    <div className="p-4 sm:p-6 h-full max-md:h-auto max-md:min-h-full flex flex-col">
+    <div className="p-3 sm:p-4 h-full max-md:h-auto max-md:min-h-full flex flex-col" data-testid="benchmark-runs-page">
       <Breadcrumbs
         items={[
           { label: 'Evaluations', href: '/evaluations/runs' },
@@ -521,7 +611,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
           {activeTab === 'runs' && hasMultipleRuns && (
             <>
               <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleToggleSelectAll}>
-                {selectedRunIds.length === runs.length
+                {visibleRows.length > 0 && visibleRows.every(r => selectedRunIds.includes(r.run.id))
                   ? <><X size={12} className="mr-1" />Deselect All</>
                   : <><Check size={12} className="mr-1" />Select All</>}
               </Button>
@@ -549,14 +639,14 @@ export const BenchmarkRunsPage2: React.FC = () => {
         </>}
       />
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="mb-4">
+      <div className="mb-2">
         <div className="flex items-center gap-2">
-          <h2 className="text-2xl font-bold">{benchmark.name}</h2>
+          <h2 className="text-xl font-bold leading-tight">{benchmark.name}</h2>
           {hasMultipleVersions && (
             <Badge variant="outline" className="text-xs">v{benchmark.currentVersion}</Badge>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground line-clamp-2" title={benchmark.description || undefined}>
           {runs.length} run{runs.length !== 1 ? 's' : ''}
           {hasMultipleVersions && ` · ${versionData.length} versions`}
           {runs.length > 0 && ` · Latest: ${formatDate(filteredRuns[0]?.createdAt || runs[0]?.createdAt)}`}
@@ -571,8 +661,8 @@ export const BenchmarkRunsPage2: React.FC = () => {
           <>
           {/* Running Progress */}
           {isRunning && useCaseStatuses.length > 0 && (
-            <Card className="mb-4 border-blue-500/50">
-              <CardContent className="p-4">
+            <Card className="mb-3 border-blue-500/50">
+              <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium flex items-center gap-2">
                     <Loader2 size={14} className="animate-spin" /> Running...
@@ -605,7 +695,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
           {/* Delete Feedback */}
           {deleteState.message && (
-            <div className={`flex items-center gap-2 text-sm mb-4 p-3 rounded-lg ${
+            <div className={`flex items-center gap-2 text-sm mb-3 p-2 rounded-lg ${
               deleteState.status === 'success'
                 ? 'bg-green-100 text-green-700 border border-green-300 dark:bg-green-500/10 dark:text-green-400 dark:border-green-500/20'
                 : 'bg-red-100 text-red-700 border border-red-300 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20'
@@ -620,182 +710,76 @@ export const BenchmarkRunsPage2: React.FC = () => {
             </div>
           )}
 
-          {/* Runs List — full width */}
-          <div className="space-y-3">
-            {filteredRuns.length === 0 ? (
-              <Card className="border-dashed">
-                <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                  <Play size={48} className="mb-4 opacity-20" />
-                  <p className="text-lg font-medium">
-                    {runVersionFilter === 'all' || runs.length === 0
-                      ? 'No runs yet'
-                      : `0 of ${runs.length} run${runs.length !== 1 ? 's' : ''} match v${runVersionFilter}`}
-                  </p>
-                  <p className="text-sm">
-                    {runVersionFilter === 'all' || runs.length === 0
-                      ? 'Run this benchmark to see results here'
-                      : 'Runs exist on other versions of this benchmark'}
-                  </p>
-                  {runVersionFilter !== 'all' && runs.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-4"
-                      data-testid="show-all-versions-btn"
-                      onClick={() => setRunVersionFilter('all')}
-                    >
-                      Show all versions ({runs.length})
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
-            ) : (
-              filteredRuns.map((run, index) => {
-                const stats = getRunStats(run);
-                const isLatestRun = index === 0 && runVersionFilter === 'all';
-                const isSelected = selectedRunIds.includes(run.id);
-
-                return (
-                  <Card
-                    key={run.id}
-                    className={`transition-colors cursor-pointer ${
-                      isSelected ? 'border-primary bg-primary/5' : 'hover:border-primary/50'
-                    }`}
-                    onClick={() => {
-                      const runDetailPath = `/evaluations/benchmarks/${benchmarkId}/runs/${run.id}/inspect`;
-                      navigate(runDetailPath);
-                    }}
+          {/* Runs — chart + filter pills + compact table */}
+          {filteredRuns.length === 0 ? (
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+                <Play size={40} className="mb-3 opacity-20" />
+                <p className="text-base font-medium">
+                  {runVersionFilter === 'all' || runs.length === 0
+                    ? 'No runs yet'
+                    : `0 of ${runs.length} run${runs.length !== 1 ? 's' : ''} match v${runVersionFilter}`}
+                </p>
+                <p className="text-sm">
+                  {runVersionFilter === 'all' || runs.length === 0
+                    ? 'Run this benchmark to see results here'
+                    : 'Runs exist on other versions of this benchmark'}
+                </p>
+                {runVersionFilter !== 'all' && runs.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-4"
+                    data-testid="show-all-versions-btn"
+                    onClick={() => setRunVersionFilter('all')}
                   >
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between max-md:flex-col max-md:items-stretch max-md:gap-3">
-                        <div className="flex items-center gap-3 flex-1 min-w-0">
-                          {hasMultipleRuns && (
-                            <Checkbox
-                              checked={isSelected}
-                              onCheckedChange={() => toggleRunSelection(run.id)}
-                              onClick={e => e.stopPropagation()}
-                              className="h-5 w-5"
-                            />
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              <h3 className="font-semibold">{run.name}</h3>
-                              {getEffectiveRunStatus(run) === 'running' && (
-                                <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/20 dark:text-blue-400 dark:border-blue-500/30 animate-pulse">
-                                  <Loader2 size={12} className="mr-1 animate-spin" /> Running
-                                </Badge>
-                              )}
-                              {getEffectiveRunStatus(run) === 'cancelled' && (
-                                <Badge className="text-xs bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-500/20 dark:text-gray-400 dark:border-gray-500/30">
-                                  <XCircle size={12} className="mr-1" /> Cancelled
-                                </Badge>
-                              )}
-                              {isLatestRun && (
-                                <Badge variant="outline" className="text-xs bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/30">
-                                  Latest
-                                </Badge>
-                              )}
-                              {run.benchmarkVersion && benchmark && (
-                                <Badge
-                                  variant="outline"
-                                  className={`text-xs ${
-                                    run.benchmarkVersion < benchmark.currentVersion
-                                      ? 'bg-yellow-100 text-yellow-700 border-yellow-300 dark:bg-yellow-500/10 dark:text-yellow-400 dark:border-yellow-500/30'
-                                      : 'text-muted-foreground'
-                                  }`}
-                                  title={run.benchmarkVersion < (benchmark.currentVersion || 1)
-                                    ? `Run used v${run.benchmarkVersion}, current is v${benchmark.currentVersion}`
-                                    : `Run used v${run.benchmarkVersion}`}
-                                >
-                                  v{run.benchmarkVersion}
-                                  {run.benchmarkVersion < (benchmark.currentVersion || 1) && ' (outdated)'}
-                                </Badge>
-                              )}
-                            </div>
-                            {run.description && (
-                              <p className="text-sm text-muted-foreground mb-2">{run.description}</p>
-                            )}
-                            <div className="flex items-center gap-x-4 gap-y-1 text-xs text-muted-foreground flex-wrap">
-                              <span className="flex items-center gap-1"><Calendar size={12} />{formatDate(run.createdAt)}</span>
-                              <span>Agent: {DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey)?.name || run.agentKey}</span>
-                              <span>Model: {getModelName(run.modelId)}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Stats and Actions */}
-                        <div className="flex items-center gap-4 max-md:justify-between max-md:pl-8 max-md:flex-wrap">
-                          {(stats.total > 0 || getEffectiveRunStatus(run) === 'running') && (
-                            <div className="flex items-center gap-4 text-sm flex-wrap">
-                              {stats.running > 0 && (
-                                <span className="flex items-center gap-1 text-blue-700 dark:text-blue-400" title="Running">
-                                  <Loader2 size={14} className="animate-spin" /> {stats.running}
-                                </span>
-                              )}
-                              {stats.pending > 0 && (
-                                <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400" title="Pending">
-                                  <Clock size={14} /> {stats.pending}
-                                </span>
-                              )}
-                              <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
-                                <CheckCircle2 size={14} /> {stats.passed}
-                              </span>
-                              <span className="flex items-center gap-1 text-red-700 dark:text-red-400">
-                                <XCircle size={14} /> {stats.failed}
-                              </span>
-                              {stats.errored > 0 && (
-                                <span
-                                  className="flex items-center gap-1 text-amber-600 dark:text-amber-500"
-                                  title="Evaluator could not run (e.g. judge validation error). Excluded from pass-rate aggregation."
-                                >
-                                  <AlertTriangle size={14} /> {stats.errored}
-                                </span>
-                              )}
-                              <span className="text-muted-foreground">/ {stats.total}</span>
-                            </div>
-                          )}
-                          {getEffectiveRunStatus(run) === 'running' && !evalRunOnlyIds.has(run.id) && (
-                            <Button
-                              variant="outline" size="sm"
-                              disabled={isCancelling(run.id)}
-                              onClick={e => { e.stopPropagation(); if (benchmarkId) handleCancelRun(benchmarkId, run.id, loadBenchmark); }}
-                              className="text-red-700 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 hover:bg-red-500/10 border-red-500/30 disabled:opacity-50"
-                            >
-                              {isCancelling(run.id) ? <Loader2 size={14} className="mr-1 animate-spin" /> : <StopCircle size={14} className="mr-1" />}
-                              {isCancelling(run.id) ? 'Cancelling...' : 'Cancel'}
-                            </Button>
-                          )}
-                          {!evalRunOnlyIds.has(run.id) && (
-                          <Button
-                            variant="ghost" size="icon"
-                            onClick={e => { e.stopPropagation(); handleDeleteRun(run); }}
-                            disabled={deleteState.isDeleting && deleteState.deletingId === run.id}
-                            className="text-red-700 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 hover:bg-red-500/10"
-                            title="Delete run"
-                          >
-                            {deleteState.isDeleting && deleteState.deletingId === run.id
-                              ? <Loader2 size={14} className="animate-spin" />
-                              : <Trash2 size={14} />}
-                          </Button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="mt-3 pt-3 border-t">
-                        <div className="text-[10px] text-muted-foreground mb-1.5">Case verdicts · click a cell to review</div>
-                        <CaseHeatStrip
-                          benchmarkId={benchmark.id}
-                          run={run}
-                          testCases={benchmarkTestCases}
-                          reportsById={reportSummaries}
-                          onSelectCase={testCaseId => navigate(`/evaluations/benchmarks/${benchmark.id}/cases/${testCaseId}`)}
-                        />
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })
-            )}
-          </div>
+                    Show all versions ({runs.length})
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <div className="mb-2">
+                <BenchmarkPassRateChart
+                  series={passRateSeries}
+                  activeAgentKeys={activeAgentKeys}
+                  onToggleAgent={(agentKey, label) => handleToggleFilter({ field: 'agent', value: agentKey, label })}
+                />
+              </div>
+              <RunFilterPills
+                filters={runFilters}
+                onRemove={f => setRunFilters(prev => removeRunFilter(prev, f))}
+                onClear={() => setRunFilters([])}
+                shown={visibleRows.length}
+                total={allRows.length}
+              />
+              <BenchmarkRunsTable
+                rows={visibleRows}
+                filters={runFilters}
+                onToggleFilter={handleToggleFilter}
+                sort={runSort}
+                onSort={handleSort}
+                benchmarkId={benchmark.id}
+                currentVersion={benchmark.currentVersion}
+                latestRunId={runVersionFilter === 'all' ? latestRunId(filteredRuns) : null}
+                selectable={hasMultipleRuns}
+                selectedRunIds={selectedRunIds}
+                onToggleSelect={toggleRunSelection}
+                onOpenRun={runId => navigate(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect`)}
+                onOpenEvaluator={evaluatorId => navigate(`/evaluators/${evaluatorId}`)}
+                onDelete={row => handleDeleteRun(row.run)}
+                deletingId={deleteState.isDeleting ? deleteState.deletingId : null}
+                onCancel={row => handleCancelRow(row.run)}
+                isCancelling={runId => isCancelling(runId) || cancellingEvalRunId === runId}
+                testCases={benchmarkTestCases}
+                reportsById={reportSummaries}
+                onSelectCase={testCaseId => navigate(`/evaluations/benchmarks/${benchmark.id}/cases/${testCaseId}`)}
+                expandedRunIds={expandedRunIds}
+                onToggleExpand={handleToggleExpand}
+              />
+            </>
+          )}
 
           {/* Load More — auto-triggers via infinite scroll; button kept as a
               no-JS/observer fallback */}
@@ -810,7 +794,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
             </div>
           )}
           {runs.length === 1 && (
-            <p className="text-xs text-muted-foreground text-center mt-4">Add more runs to enable comparison</p>
+            <p className="text-xs text-muted-foreground text-center mt-2">Add more runs to enable comparison</p>
           )}
           </>
         );
@@ -860,7 +844,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
             )}
             className="flex-1 min-h-0 flex flex-col overflow-hidden max-md:overflow-visible"
           >
-            <div className="flex items-center justify-between mb-3 shrink-0">
+            <div className="flex items-center justify-between mb-2 shrink-0">
               <TabsList>
                 <TabsTrigger value="cases" className="text-xs">
                   Cases {benchmarkTestCases.length > 0 && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0">{benchmarkTestCases.length}</Badge>}
@@ -881,7 +865,15 @@ export const BenchmarkRunsPage2: React.FC = () => {
               box to scroll within, so nothing below the fold is reachable on
               large benchmarks. See PR #447 review: "scrolling doesn't work".
             */}
-            <TabsContent value="cases" className="flex-1 min-h-0 mt-0 flex flex-col overflow-hidden max-md:overflow-visible">{testCasesBody}</TabsContent>
+            {/*
+              data-[state=inactive]:hidden is load-bearing too: Radix hides the
+              inactive panel with the `hidden` attribute, but the `flex` class
+              above has higher specificity than the UA `[hidden]{display:none}`
+              rule, so without it the inactive Cases panel stayed display:flex
+              and its flex-1 pushed the Runs panel ~400px down the page (the
+              big blank band above the runs list).
+            */}
+            <TabsContent value="cases" className="flex-1 min-h-0 mt-0 flex flex-col overflow-hidden max-md:overflow-visible data-[state=inactive]:hidden">{testCasesBody}</TabsContent>
             <TabsContent value="runs" className="flex-1 min-h-0 overflow-y-auto mt-0">{runsBody}</TabsContent>
           </Tabs>
         );
