@@ -281,6 +281,21 @@ describe('AsyncRunStorage', () => {
       expect(result?.judgeModelId).toBe('claude-sonnet-4-6');
     });
 
+    it('maps llmJudgeResponse from storage so the Judge Evaluation tab can read rawResponse', async () => {
+      const llmJudgeResponse = {
+        modelId: 'agent-trace-judge', timestamp: '2024-01-01T00:00:00Z',
+        promptTokens: 10, completionTokens: 5, latencyMs: 100,
+        rawResponse: '```json\n{"pass_fail_status":"passed","improvement_strategies":[{"category":"c","issue":"i","recommendation":"r","priority":"low"}]}\n```',
+        improvementStrategies: [],
+      };
+      const mockRun = { ...createMockStorageRun('run-1'), llmJudgeResponse } as any;
+      mockOsRuns.getById.mockResolvedValue(mockRun);
+
+      const result = await asyncRunStorage.getReportById('run-1');
+
+      expect(result?.llmJudgeResponse).toEqual(llmJudgeResponse);
+    });
+
     it('returns null when not found', async () => {
       mockOsRuns.getById.mockResolvedValue(null);
 

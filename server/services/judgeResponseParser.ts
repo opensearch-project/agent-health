@@ -35,6 +35,7 @@
 import { Evaluator, EvaluationMetrics, ImprovementStrategy } from '@/types';
 import type { JudgeResponse } from '@/server/services/bedrockService';
 import { debug } from '@/lib/debug';
+import { extractJsonFromResponse } from '@/lib/judgeStrategies';
 
 /**
  * Wire-level fields every judge response is allowed to populate as typed
@@ -59,28 +60,10 @@ const TYPED_RESPONSE_KEYS = new Set([
   'trajectory_alignment_score',
 ]);
 
-/**
- * Extract the JSON object from a raw judge response.
- *
- * Handles three observed shapes from the wild:
- *   - markdown ```json fenced blocks
- *   - bare `{...}` JSON
- *   - JSON with leading/trailing prose that some models still emit despite
- *     being told not to
- *
- * Returns `undefined` when no `{...}` substring is present at all.
- */
-export function extractJsonFromResponse(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  const fenceMatch = trimmed.match(/```json\s*([\s\S]*?)\s*```/);
-  if (fenceMatch) return fenceMatch[1];
-  const startIdx = trimmed.indexOf('{');
-  const endIdx = trimmed.lastIndexOf('}');
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    return trimmed.slice(startIdx, endIdx + 1);
-  }
-  return undefined;
-}
+// The JSON extractor is shared with the browser (RunDetailsContent recovers
+// strategies from `rawResponse` on read) and the backfill script, so it lives
+// in lib/. Re-exported here to keep this module's public surface stable.
+export { extractJsonFromResponse };
 
 /** Coerce a value the model emitted into a finite number, or `undefined`. */
 function coerceNumber(value: unknown): number | undefined {

@@ -177,6 +177,15 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     rawEvents: stored.rawEvents as any[] | undefined,
     logs: (stored.logs || []) as OpenSearchLog[],
     improvementStrategies: stored.improvementStrategies as any[] | undefined,
+    // The judge's full persisted response (raw model text, token counts,
+    // parsed metrics, extraFields, judgeDebug). The server writes it on every
+    // judged report and RunDetailsContent's Judge Evaluation tab reads it —
+    // for the "Judge output" block (#265) and to recover improvement
+    // strategies from `rawResponse` when the stored array is empty. This
+    // mapper silently dropped it, so every browser-side reader saw
+    // `report.llmJudgeResponse === undefined` and both surfaces were dead on
+    // the live page.
+    llmJudgeResponse: (stored as any).llmJudgeResponse,
     // Per-matcher verdicts captured by the SDK during the test body
     matcherResults: (stored as any).matcherResults as any[] | undefined,
     // Trace-mode fields
