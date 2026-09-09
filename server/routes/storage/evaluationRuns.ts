@@ -6,6 +6,8 @@
 import { Router, Request, Response } from 'express';
 import { BenchmarkRun, EvaluationRun, TestCaseSource, TestCaseSnapshot } from '../../../types/index.js';
 import { getStorageModule } from '../../adapters/index.js';
+import { deleteRunEverywhere, isSampleRunOrBenchmarkId } from '../../services/runDelete.js';
+import { registerRunCanceller, cancelActiveRun } from '../../services/runCancellation.js';
 import { resolveTestCaseSources } from '../../../services/sourceResolver.js';
 import {
   executeEvaluationRun,
@@ -34,6 +36,20 @@ const router = Router();
 
 // Registry of active cancellation tokens for in-progress runs
 const activeCancellationTokens = new Map<string, CancellationToken>();
+
+/**
+ * Signal the executor of an evaluation run started by THIS process to stop.
+ * Returns false when no live token is registered for `runId` (finished, or
+ * started elsewhere). Used by the delete paths so a run that is removed
+ * while running stops consuming agent/judge calls.
+ */
+export function cancelActiveEvaluationRun(runId: string): boolean {
+  const token = activeCancellationTokens.get(runId);
+  if (!token) return false;
+  token.cancel();
+  return true;
+}
+registerRunCanceller(cancelActiveEvaluationRun);
 
 // codex_review (retry-judgement): the 409-if-running gate on
 // /retry-judgement checks the run's PERSISTED status, which is not a lock —
@@ -687,18 +703,37 @@ router.put('/api/storage/evaluation-runs/:id', async (req: Request, res: Respons
 });
 
 // DELETE /api/storage/evaluation-runs/:id - Delete an evaluation run
+//
+// Removes the evaluation-run document AND the legacy projection embedded in
+// the associated benchmark's `runs[]` (see server/services/runDelete.ts —
+// deleting only the doc left a ghost row on the benchmark page). A run that
+// is still executing in this process is cancelled first. Per-test-case
+// report documents are deliberately NOT deleted.
 router.delete('/api/storage/evaluation-runs/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const storage = getStorageModule();
+
+    // Sample/demo data is read-only, same as every other storage route.
+    if (isSampleRunOrBenchmarkId(id)) {
+      return res.status(400).json({ error: 'Cannot modify sample data. Sample runs are read-only.' });
+    }
 
     const existing = await storage.evaluationRuns.getById(id);
     if (!existing) {
       return res.status(404).json({ error: 'Evaluation run not found' });
     }
 
-    await storage.evaluationRuns.delete(id);
-    res.json({ success: true });
+    const result = await deleteRunEverywhere(storage, id, {
+      doc: existing,
+      cancelActive: cancelActiveRun,
+    });
+    res.json({
+      success: true,
+      cancelled: result.cancelled,
+      projectionDeleted: result.projectionDeleted,
+      ...(result.benchmarkId ? { benchmarkId: result.benchmarkId } : {}),
+    });
   } catch (error: any) {
     if (error.meta?.statusCode === 404) {
       return res.status(404).json({ error: 'Evaluation run not found' });

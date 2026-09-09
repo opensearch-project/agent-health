@@ -36,6 +36,8 @@ const mockBenchmarksUpdateRun = jest.fn();
 const mockTestCasesGetAll = jest.fn();
 const mockTestCasesGetById = jest.fn();
 const mockRunsGetById = jest.fn();
+const mockEvaluationRunsGetById = jest.fn();
+const mockEvaluationRunsDelete = jest.fn();
 const mockIsConfigured = jest.fn();
 const mockImagesCreate = jest.fn();
 const mockImagesUpdate = jest.fn();
@@ -57,6 +59,10 @@ const mockStorage = {
   },
   runs: {
     getById: mockRunsGetById,
+  },
+  evaluationRuns: {
+    getById: mockEvaluationRunsGetById,
+    delete: mockEvaluationRunsDelete,
   },
   images: {
     create: mockImagesCreate,
@@ -852,6 +858,83 @@ describe('Experiments Storage Routes', () => {
 
       expect(res.status).toHaveBeenCalledWith(404);
       expect(res.json).not.toHaveBeenCalledWith({ deleted: true });
+    });
+  });
+
+  describe('DELETE /api/storage/benchmarks/:id/runs/:runId — removes BOTH persisted forms of the run', () => {
+    const handler = () => getRouteHandler(benchmarksRoutes, 'delete', '/api/storage/benchmarks/:id/runs/:runId');
+
+    it('rejects sample data', async () => {
+      const { req, res } = createMocks({ id: 'demo-bench-1', runId: 'run-1' });
+      await handler()(req, res);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('legacy embedded-only run (no evaluation-run doc): removes the projection', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue(null);
+      mockBenchmarksDeleteRun.mockResolvedValue(true);
+      const { req, res } = createMocks({ id: 'bench-1', runId: 'legacy-run' });
+      await handler()(req, res);
+      expect(mockBenchmarksDeleteRun).toHaveBeenCalledWith('bench-1', 'legacy-run');
+      expect(mockEvaluationRunsDelete).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith({ deleted: true, runId: 'legacy-run', projectionDeleted: true, docDeleted: false, cancelled: false });
+    });
+
+    // The run inspector's benchmark-scoped route hits this endpoint for a run
+    // that was never embedded (every in-flight run, most dual-write-era
+    // runs) and got a 404 back — silently swallowed by the client, so the
+    // run "didn't get deleted".
+    it('standalone evaluation-run doc of THIS benchmark, not embedded: deletes the doc and returns 200 (was 404)', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'eval-run-1', status: 'completed', benchmarkId: 'bench-1' });
+      mockEvaluationRunsDelete.mockResolvedValue({ deleted: true });
+      mockBenchmarksDeleteRun.mockResolvedValue(false);
+      const { req, res } = createMocks({ id: 'bench-1', runId: 'eval-run-1' });
+      await handler()(req, res);
+      expect(mockEvaluationRunsDelete).toHaveBeenCalledWith('eval-run-1');
+      expect(res.status).not.toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ deleted: true, runId: 'eval-run-1', projectionDeleted: false, docDeleted: true, cancelled: false });
+    });
+
+    it('dual-written run: removes the doc AND the embedded projection', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'eval-run-1', status: 'completed', sources: [{ type: 'benchmark', benchmarkId: 'bench-1' }] });
+      mockEvaluationRunsDelete.mockResolvedValue({ deleted: true });
+      mockBenchmarksDeleteRun.mockResolvedValue(true);
+      const { req, res } = createMocks({ id: 'bench-1', runId: 'eval-run-1' });
+      await handler()(req, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ deleted: true, projectionDeleted: true, docDeleted: true }));
+    });
+
+    it('an evaluation-run doc that belongs to a DIFFERENT benchmark is left alone (only this benchmark\'s projection is touched)', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'eval-run-1', status: 'completed', benchmarkId: 'bench-OTHER' });
+      mockBenchmarksDeleteRun.mockResolvedValue(true);
+      const { req, res } = createMocks({ id: 'bench-1', runId: 'eval-run-1' });
+      await handler()(req, res);
+      expect(mockEvaluationRunsDelete).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ deleted: true, docDeleted: false, docSkippedNotOwned: true, projectionDeleted: true }));
+    });
+
+    it('an UNLINKED evaluation-run doc (no benchmark) is never deletable through a benchmark URL → 404 when no projection either', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'eval-run-1', status: 'completed', sources: [{ type: 'test-case-ids', ids: [] }] });
+      mockBenchmarksDeleteRun.mockResolvedValue(false);
+      const { req, res } = createMocks({ id: 'bench-1', runId: 'eval-run-1' });
+      await handler()(req, res);
+      expect(mockEvaluationRunsDelete).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('nothing found in either form → 404', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue(null);
+      mockBenchmarksDeleteRun.mockResolvedValue(false);
+      const { req, res } = createMocks({ id: 'bench-1', runId: 'ghost' });
+      await handler()(req, res);
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('500s on a storage error', async () => {
+      mockEvaluationRunsGetById.mockRejectedValue(new Error('cluster down'));
+      const { req, res } = createMocks({ id: 'bench-1', runId: 'run-1' });
+      await handler()(req, res);
+      expect(res.status).toHaveBeenCalledWith(500);
     });
   });
 

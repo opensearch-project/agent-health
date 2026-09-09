@@ -29,6 +29,8 @@ import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.j
 import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '../../../lib/judgeFailureSummary.js';
+import { deleteRunEverywhere } from '../../services/runDelete.js';
+import { registerRunCanceller, cancelActiveRun } from '../../services/runCancellation.js';
 
 /**
  * Normalize benchmark data for legacy documents without version fields.
@@ -303,6 +305,20 @@ const activeRuns = new Map<string, CancellationToken>();
 export function isRunActiveInThisProcess(runId: string): boolean {
   return activeRuns.has(runId);
 }
+
+/**
+ * Signal the executor of a legacy benchmark run (`POST .../execute`) started
+ * by THIS process to stop. Returns false when no live token is registered.
+ * Used by the delete paths (this file's nested-run DELETE and the
+ * evaluation-runs DELETE) so a run removed while running stops executing.
+ */
+export function cancelActiveBenchmarkRun(runId: string): boolean {
+  const token = activeRuns.get(runId);
+  if (!token) return false;
+  token.cancel();
+  return true;
+}
+registerRunCanceller(cancelActiveBenchmarkRun);
 
 function generateId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -1389,6 +1405,14 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
 });
 
 // DELETE /api/storage/benchmarks/:id/runs/:runId - Delete a specific run
+//
+// Removes the projection embedded in `benchmark.runs[]` AND the first-class
+// evaluation-run document of the same id when that document belongs to this
+// benchmark (see server/services/runDelete.ts). Before this, a run that had
+// not (yet) been embedded — every in-flight run, and every run that finished
+// while linking failed — 404ed here even though it plainly existed, and a
+// run that HAD been embedded left its document behind to be merged back into
+// the benchmark page as a ghost row.
 router.delete('/api/storage/benchmarks/:id/runs/:runId', async (req: Request, res: Response) => {
   const { id, runId } = req.params;
 
@@ -1399,13 +1423,27 @@ router.delete('/api/storage/benchmarks/:id/runs/:runId', async (req: Request, re
 
   try {
     const storage = getStorageModule();
-    const deleted = await storage.benchmarks.deleteRun(id, runId);
 
-    if (!deleted) {
+    // `benchmarkId: id` scopes the delete to THIS benchmark: the projection is
+    // removed from it, and the run document is only deleted when it is
+    // actually associated with it (a colliding or unlinked doc is left
+    // alone — see runDelete.ts).
+    const result = await deleteRunEverywhere(storage, runId, {
+      benchmarkId: id,
+      cancelActive: cancelActiveRun,
+    });
+    if (!result.deleted) {
       return res.status(404).json({ error: 'Run not found' });
     }
 
-    res.json({ deleted: true, runId });
+    res.json({
+      deleted: true,
+      runId,
+      projectionDeleted: result.projectionDeleted,
+      docDeleted: result.docDeleted,
+      ...(result.docSkippedNotOwned ? { docSkippedNotOwned: true } : {}),
+      cancelled: result.cancelled,
+    });
   } catch (error: any) {
     if (error.meta?.statusCode === 404) {
       return res.status(404).json({ error: 'Benchmark not found' });

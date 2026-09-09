@@ -17,6 +17,7 @@ const mockEvaluationRunsCreate = jest.fn();
 const mockEvaluationRunsUpdate = jest.fn();
 const mockEvaluationRunsUpdateResult = jest.fn();
 const mockEvaluationRunsDelete = jest.fn();
+const mockBenchmarksDeleteRun = jest.fn();
 const mockBenchmarksGetById = jest.fn();
 const mockBenchmarksUpdate = jest.fn();
 const mockBenchmarksAddRun = jest.fn();
@@ -35,6 +36,7 @@ jest.mock('@/server/adapters/index', () => ({
       getById: (...args: any[]) => mockBenchmarksGetById(...args),
       update: (...args: any[]) => mockBenchmarksUpdate(...args),
       addRun: (...args: any[]) => mockBenchmarksAddRun(...args),
+      deleteRun: (...args: any[]) => mockBenchmarksDeleteRun(...args),
     },
   }),
 }));
@@ -381,16 +383,89 @@ describe('Evaluation Runs API', () => {
       expect(res.status).toBe(404);
     });
 
-    it('deletes an existing run', async () => {
-      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+    it('rejects sample/demo run ids with 400 (read-only), like every other storage route', async () => {
+      const res = await request(app).delete('/api/storage/evaluation-runs/demo-run-1');
+      expect(res.status).toBe(400);
+      expect(mockEvaluationRunsGetById).not.toHaveBeenCalled();
+      expect(mockEvaluationRunsDelete).not.toHaveBeenCalled();
+    });
+
+    it('deletes an existing ad-hoc run (no benchmark → no projection lookup)', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1', status: 'completed', sources: [{ type: 'test-case-ids', ids: [] }] });
+      mockEvaluationRunsDelete.mockResolvedValue({ deleted: true });
       const res = await request(app).delete('/api/storage/evaluation-runs/run-1');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ success: true });
+      expect(res.body).toEqual({ success: true, cancelled: false, projectionDeleted: false });
       expect(mockEvaluationRunsDelete).toHaveBeenCalledWith('run-1');
+      expect(mockBenchmarksDeleteRun).not.toHaveBeenCalled();
+      // The pre-flight read is reused; no second getById.
+      expect(mockEvaluationRunsGetById).toHaveBeenCalledTimes(1);
+    });
+
+    // Owner report: deleting a run from its page left a ghost row on the
+    // benchmark page — the doc went away but the projection embedded in
+    // benchmark.runs[] (dual-write, #399) did not.
+    it('ALSO removes the projection embedded in the associated benchmark.runs[] (projection first, then doc)', async () => {
+      const order: string[] = [];
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1', status: 'completed', benchmarkId: 'bench-1' });
+      mockEvaluationRunsDelete.mockImplementation(async () => { order.push('doc'); return { deleted: true }; });
+      mockBenchmarksDeleteRun.mockImplementation(async () => { order.push('projection'); return true; });
+      const res = await request(app).delete('/api/storage/evaluation-runs/run-1');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, cancelled: false, projectionDeleted: true, benchmarkId: 'bench-1' });
+      expect(mockBenchmarksDeleteRun).toHaveBeenCalledWith('bench-1', 'run-1');
+      expect(order).toEqual(['projection', 'doc']);
+    });
+
+    it('resolves the benchmark from a `benchmark` source when benchmarkId is absent; a missing projection is fine', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1', status: 'completed', sources: [{ type: 'benchmark', benchmarkId: 'bench-2' }] });
+      mockEvaluationRunsDelete.mockResolvedValue({ deleted: true });
+      mockBenchmarksDeleteRun.mockResolvedValue(false);
+      const res = await request(app).delete('/api/storage/evaluation-runs/run-1');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, cancelled: false, projectionDeleted: false, benchmarkId: 'bench-2' });
+    });
+
+    it('a RUNNING run executing in this process is cancelled before the delete', async () => {
+      // Same deterministic pattern as the cancel tests: prime a live token by
+      // starting (and not finishing) a run.
+      let resolveExec: (v: any) => void;
+      let signalStarted: () => void;
+      const executionStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+      mockExecuteEvaluationRun.mockImplementation(() => {
+        signalStarted();
+        return new Promise((resolve) => { resolveExec = resolve; });
+      });
+      const cancelFn = jest.fn();
+      mockCreateCancellationToken.mockReturnValue({ isCancelled: false, cancel: cancelFn });
+
+      const postPromise = request(app).post('/api/storage/evaluation-runs').send({ sources: [{ testCaseId: 'tc-1' }], agentKey: 'a1' });
+      postPromise.catch(() => {});
+      await executionStarted;
+      const runId = mockEvaluationRunsCreate.mock.calls[0][0].id;
+
+      mockEvaluationRunsGetById.mockResolvedValue({ id: runId, status: 'running' });
+      mockEvaluationRunsDelete.mockResolvedValue({ deleted: true });
+      const res = await request(app).delete(`/api/storage/evaluation-runs/${runId}`);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ success: true, cancelled: true });
+      expect(cancelFn).toHaveBeenCalled();
+      expect(mockEvaluationRunsDelete).toHaveBeenCalledWith(runId);
+
+      resolveExec!({ results: {}, stats: {} });
+      await postPromise;
+    });
+
+    it('a RUNNING run with no live executor here is deleted with cancelled:false (nothing to stop)', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'zombie-run', status: 'running' });
+      mockEvaluationRunsDelete.mockResolvedValue({ deleted: true });
+      const res = await request(app).delete('/api/storage/evaluation-runs/zombie-run');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ success: true, cancelled: false });
     });
 
     it('maps a meta.statusCode 404 error to a 404 response', async () => {
-      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1', status: 'completed' });
       const err: any = new Error('not found');
       err.meta = { statusCode: 404 };
       mockEvaluationRunsDelete.mockRejectedValue(err);
@@ -399,7 +474,7 @@ describe('Evaluation Runs API', () => {
     });
 
     it('500s on other errors', async () => {
-      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1' });
+      mockEvaluationRunsGetById.mockResolvedValue({ id: 'run-1', status: 'completed' });
       mockEvaluationRunsDelete.mockRejectedValue(new Error('cluster down'));
       const res = await request(app).delete('/api/storage/evaluation-runs/run-1');
       expect(res.status).toBe(500);
