@@ -433,11 +433,11 @@ describe('RunDetailsContent', () => {
       await renderAndWait(report);
 
       await waitFor(() => {
-        // No `(kind=...)` token in traceError → metricsStatus:'error' alone is
-        // treated as a judge/evaluator-stage failure (lib/reportFailure.ts),
-        // with the raw message shown as the cause.
+        // No `(kind=...)` token in traceError → metricsStatus:'error' with
+        // trace-pipeline wording is derived as a TRACE-stage failure
+        // (lib/reportFailure.ts), with the raw message shown as the cause.
         const cards = screen.getAllByTestId('run-failure-card');
-        expect(cards[0].getAttribute('data-stage')).toBe('judge');
+        expect(cards[0].getAttribute('data-stage')).toBe('trace');
         expect(screen.getAllByText(/Traces not available after 30 attempts/).length).toBeGreaterThanOrEqual(1);
       });
     });

@@ -223,10 +223,14 @@ describe('lib/reportFailure — stage derivation for new and legacy reports', ()
     expect(getFailureStage({ metricsStatus: 'error', traceError: 'Judge evaluation failed (kind=judge_failed): x' } as any)).toBe('judge');
     expect(getFailureStage({ metricsStatus: 'error', traceError: 'Traces never arrived (kind=trace_timeout): x' } as any)).toBe('trace');
     expect(getFailureStage({ metricsStatus: 'error', traceError: 'no token' } as any)).toBe('judge');
+    // Pre-kind-token trace-pipeline wording → trace, not judge.
+    expect(getFailureStage({ metricsStatus: 'error', traceError: 'Traces not available after 30 attempts' } as any)).toBe('trace');
   });
-  it('derives from the legacy outer-catch shape', () => {
+  it('derives from the legacy outer-catch shape — checked BEFORE the metricsStatus fallback (codex review)', () => {
     expect(getFailureStage({ status: 'failed', llmJudgeReasoning: 'Evaluation failed: fetch failed' } as any)).toBe('agent');
     expect(getFailureStage({ status: 'failed', llmJudgeReasoning: 'Evaluation failed: Bedrock Judge validation error' } as any)).toBe('judge');
+    // Executor crash path (evaluationRunner catch): status 'failed' + metricsStatus 'error' + "Evaluation error: …" → agent/execution, not judge.
+    expect(getFailureStage({ status: 'failed', metricsStatus: 'error', llmJudgeReasoning: 'Evaluation error: version_conflict_engine_exception' } as any)).toBe('agent');
   });
   it('is undefined for healthy reports', () => {
     expect(getFailureStage({ status: 'completed', passFailStatus: 'passed' } as any)).toBeUndefined();

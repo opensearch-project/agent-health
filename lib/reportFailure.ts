@@ -32,11 +32,19 @@ export function getFailureStage(report: Pick<EvaluationReport, 'status' | 'metri
     if (kind.startsWith('trace_')) return 'trace';
     return 'judge';
   }
-  if (report.metricsStatus === 'error') return 'judge';
-  // Legacy pre-#481 shape: the connector threw, the outer catch wrote
-  // status:'failed' with "Evaluation failed: <msg>" and no verdict.
+  // Legacy outer-catch shapes (pre-#481 connector failure: `Evaluation failed:
+  // <msg>`; executor crash: `Evaluation error: <msg>`): status 'failed', no
+  // verdict. These are AGENT/execution failures unless the message itself
+  // names the judge — checked BEFORE the generic metricsStatus fallback so a
+  // crash that also carries metricsStatus:'error' isn't mislabelled as a
+  // judge failure (codex review).
   if (report.status === 'failed' && !report.passFailStatus && /^Evaluation (failed|error):/.test(report.llmJudgeReasoning || '')) {
     return /\bjudge\b/i.test(report.llmJudgeReasoning || '') ? 'judge' : 'agent';
+  }
+  // Pre-kind-token #242 evaluator-error patches (metricsStatus 'error', free-
+  // text traceError): trace-pipeline wording → trace, otherwise judge.
+  if (report.metricsStatus === 'error') {
+    return /\b(trace|traces|span|spans|poll|polling)\b/i.test(report.traceError || '') ? 'trace' : 'judge';
   }
   return undefined;
 }

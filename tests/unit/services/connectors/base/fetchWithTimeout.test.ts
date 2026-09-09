@@ -114,6 +114,37 @@ describe('fetchWithTimeout (real http server)', () => {
     expect(describeAgentError(caught).kind).toBe('connection');
   });
 
+  it('cleans up its timer and caller-abort listener on every settle path (codex review: no handle/listener leaks under retry loops)', async () => {
+    const clearSpy = jest.spyOn(global, 'clearTimeout');
+    const removeSpy = jest.spyOn(AbortSignal.prototype, 'removeEventListener');
+    const addSpy = jest.spyOn(AbortSignal.prototype, 'addEventListener');
+    // success path
+    mode = 'slow-ok';
+    const ac1 = new AbortController();
+    await fetchWithTimeout(`${baseUrl}/ok`, { method: 'POST', body: '{}', timeoutMs: 5_000, signal: ac1.signal });
+    // timeout path
+    mode = 'hang';
+    const ac2 = new AbortController();
+    await fetchWithTimeout(`${baseUrl}/hang`, { method: 'POST', body: '{}', timeoutMs: 200, signal: ac2.signal }).catch(() => {});
+    // connection-failure path (no caller signal)
+    const probe = http.createServer();
+    await new Promise<void>(r => probe.listen(0, '127.0.0.1', r));
+    const closedPort = (probe.address() as AddressInfo).port;
+    await new Promise<void>(r => probe.close(() => r()));
+    await fetchWithTimeout(`http://127.0.0.1:${closedPort}/x`, { method: 'POST', body: '{}', timeoutMs: 5_000 }).catch(() => {});
+
+    // One clearTimeout per call (3 calls), and every listener registered on
+    // the CALLER's signals was removed again (undici registers its own
+    // listeners on the internal controller's signal — count only ours).
+    expect(clearSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+    const callerSignals = new Set<any>([ac1.signal, ac2.signal]);
+    const added = addSpy.mock.contexts.filter((ctx, i) => callerSignals.has(ctx) && addSpy.mock.calls[i][0] === 'abort').length;
+    const removed = removeSpy.mock.contexts.filter((ctx, i) => callerSignals.has(ctx) && removeSpy.mock.calls[i][0] === 'abort').length;
+    expect(added).toBe(2);
+    expect(removed).toBe(added);
+    clearSpy.mockRestore(); removeSpy.mockRestore(); addSpy.mockRestore();
+  }, 15_000);
+
   it('honours a caller-supplied AbortSignal', async () => {
     mode = 'hang';
     const ac = new AbortController();

@@ -72,6 +72,9 @@ const RELABEL_CAUSE = 'agent request produced no output (likely timeout; cause n
 export function isMislabeledAgentFailure(report) {
   if (!report) return false;
   if (report.failureStage === 'agent') return false;
+  // Only the canonical evaluator-error shape (metricsStatus 'error'); a report
+  // with a real verdict is never touched even if its traceError is stale.
+  if (report.metricsStatus !== 'error' || report.passFailStatus) return false;
   const traj = Array.isArray(report.trajectory) ? report.trajectory.length : 0;
   const raw = Array.isArray(report.rawEvents) ? report.rawEvents.length : 0;
   if (traj !== 0 || raw !== 0) return false;

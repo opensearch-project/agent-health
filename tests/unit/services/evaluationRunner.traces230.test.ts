@@ -502,4 +502,53 @@ describe('executeEvaluationRun — issue #230 traces fixture pre-loading', () =>
     expect(saved.llmJudgeReasoning).toMatch(/Subprocess timed out after 600000ms/);
     expect(saved.assertionError).toMatch(/Subprocess timed out after 600000ms/);
   });
+
+  it('agent-error surfacing: a connector failure on a useTraces agent (classic path) is persisted as an agent-stage failure and NEVER enters trace polling or the judge (codex review: no stale-state scheduling)', async () => {
+    // Owner incident: the REST agent's fetch failed (undici HeadersTimeoutError),
+    // the outer catch wrote status:'failed' with NO metricsStatus, the
+    // placeholder's 'pending' survived the update-merge, and the runner then
+    // trace-polled + judged the EMPTY case. Drive the REAL
+    // runEvaluationWithConnector (not the suite's mock) with a throwing
+    // connector and assert the persisted doc is terminal from the outset.
+    const { runEvaluationWithConnector: realRunEval } = jest.requireActual('@/services/evaluation');
+    const { connectorRegistry } = jest.requireMock('@/services/connectors/server');
+    const undiciCause = Object.assign(new Error('Headers Timeout Error'), { name: 'HeadersTimeoutError', code: 'UND_ERR_HEADERS_TIMEOUT' });
+    (connectorRegistry.getForAgent as jest.Mock).mockReturnValue({
+      type: 'rest', name: 'REST', supportsStreaming: false, buildPayload: () => ({}), parseResponse: () => [],
+      execute: async () => { throw Object.assign(new TypeError('fetch failed'), { cause: undiciCause }); },
+    });
+    mockRunEval.mockImplementation((...args: any[]) => realRunEval(...args));
+    const { tracePollingManager } = jest.requireMock('@/services/traces/tracePoller');
+    (tracePollingManager.startPolling as jest.Mock).mockClear();
+    const { callBedrockJudge } = jest.requireMock('@/services/evaluation');
+
+    const run = makeRun('traced-agent');
+    await executeEvaluationRun(run, [TC], {
+      storageModule: storage,
+      evaluateFnMap: new Map(), // classic path (no code body)
+      onProgress: jest.fn(),
+    });
+
+    const saved = captureLastReport(storage);
+    // Terminal from the outset — never 'pending', so the runner's
+    // `savedReport.metricsStatus === 'pending'` gate is deterministically false.
+    expect(saved.metricsStatus).toBe('error');
+    expect(saved.failureStage).toBe('agent');
+    expect(saved.status).toBe('failed');
+    expect(saved.passFailStatus).toBeNull();
+    expect(saved.agentError.kind).toBe('timeout');
+    expect(saved.error).toMatch(/HeadersTimeoutError/);
+    expect(saved.error).toMatch(/UND_ERR_HEADERS_TIMEOUT/);
+    expect(saved.error).not.toBe('fetch failed');
+    expect(saved.trajectory).toEqual([]);
+    // Neither the trace poller nor the judge ever ran.
+    expect(tracePollingManager.startPolling).not.toHaveBeenCalled();
+    expect(callBedrockJudge).not.toHaveBeenCalled();
+    // Run-level bookkeeping: completed-without-verdict → errored (excluded from pass-rate).
+    expect(run.results[TC.id].status).toBe('completed');
+    expect(run.results[TC.id].passFailStatus).toBeUndefined();
+    expect(run.stats?.errored).toBe(1);
+    expect(run.stats?.failed).toBe(0);
+    mockRunEval.mockReset();
+  });
 });
