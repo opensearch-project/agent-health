@@ -7,7 +7,8 @@
  * Embedded OTLP/HTTP (JSON) trace receiver.
  *
  * `POST /v1/traces` accepts an OTLP/JSON ExportTraceServiceRequest and persists
- * the spans to the file trace store (`.agent-health/data/traces/`). This lets
+ * one lightly-flattened span per NDJSON line in the canonical file trace store
+ * (`.agent-health/data/traces/<run|conversation|session|trace>-*.ndjson`). This lets
  * agent-health act as its own mini-collector for **local** runs — point an
  * agent's `OTEL_EXPORTER_OTLP_ENDPOINT` here (with `http/json`) and its traces
  * land on disk, viewable in the Traces UI with no OpenSearch or collector.

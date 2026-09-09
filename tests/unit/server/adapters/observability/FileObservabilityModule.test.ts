@@ -99,6 +99,11 @@ describe('FileObservabilityModule', () => {
       expect(r.spans.map((s) => s.spanId)).toEqual(['d1']);
     });
 
+    it('matches runIds directly against session.id for run-scoped local evidence', async () => {
+      const r = await mod.traces.query({ runIds: ['sess-9'] });
+      expect(r.spans.map((s) => s.spanId)).toEqual(['d1']);
+    });
+
     it("B': matches by OTEL-standard gen_ai.conversation.id == runId (#313)", async () => {
       const r = await mod.traces.query({ runIds: ['run-conv'] });
       expect(r.spans.map((s) => s.spanId)).toEqual(['e1']);

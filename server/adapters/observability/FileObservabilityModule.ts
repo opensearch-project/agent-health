@@ -83,8 +83,15 @@ export function matchesQuery(s: Span, options: TracesQueryOptions, useUnion: boo
   if (traceId) clauses.push(s.traceId === traceId);
   if (runIds && runIds.length > 0) {
     const valid = runIds.filter((id): id is string => typeof id === 'string' && id.length > 0);
-    // Strategy B: agent_health.run.id OR the OTEL-standard gen_ai.conversation.id.
-    clauses.push(valid.includes(a['agent_health.run.id']) || valid.includes(a['gen_ai.conversation.id']));
+    // Strategy B plus the precise direct convention used by local profilers:
+    // runId may be carried as agent_health.run.id, gen_ai.conversation.id, or
+    // session.id. The latter also makes a run-scoped canonical NDJSON mount
+    // discoverable without widening to service-name/time-window correlation.
+    clauses.push(
+      valid.includes(a['agent_health.run.id']) ||
+      valid.includes(a['gen_ai.conversation.id']) ||
+      valid.includes(a['session.id'])
+    );
   }
   if (agents && agents.length > 0) {
     for (const ag of agents) {

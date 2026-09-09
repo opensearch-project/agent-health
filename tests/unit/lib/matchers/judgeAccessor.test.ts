@@ -6,6 +6,7 @@
 import {
   getJudgeMatcherResults,
   getJudgeReasoningText,
+  buildJudgeMatcherEntries,
   recordJudgeMatcherResult,
 } from '@/lib/matchers/judgeAccessor';
 import type { MatcherResult } from '@/lib/matchers/types';
@@ -141,6 +142,74 @@ describe('getJudgeReasoningText — flat-string convenience', () => {
         passFailStatus: 'passed' as any,
       } as any)
     ).toBe('old verbatim reasoning');
+  });
+});
+
+describe('buildJudgeMatcherEntries — structured outcome mapping', () => {
+  const baseResult = {
+    passFailStatus: 'failed' as const,
+    metrics: { accuracy: 50 },
+    llmJudgeReasoning: 'One of two outcomes was achieved.',
+  };
+
+  it('maps every structured outcome to its own llm-judge matcher', () => {
+    const entries = buildJudgeMatcherEntries({
+      ...baseResult,
+      outcomeResults: [
+        { outcome: 'Find the root cause', pass: true, evidence: 'The final answer names the failed cache.' },
+        { outcome: 'Do not edit files', pass: false, evidence: 'The trajectory contains a write call.' },
+      ],
+    }, { expectedOutcomes: ['Find the root cause', 'Do not edit files'] });
+
+    expect(entries).toEqual([
+      {
+        description: 'Find the root cause',
+        pass: true,
+        reasoning: 'The final answer names the failed cache.',
+        method: 'llm-judge',
+      },
+      {
+        description: 'Do not edit files',
+        pass: false,
+        reasoning: 'The trajectory contains a write call.',
+        method: 'llm-judge',
+      },
+    ]);
+  });
+
+  it('falls back to the aggregate matcher when the outcomes array is absent', () => {
+    expect(buildJudgeMatcherEntries(baseResult)).toEqual([
+      expect.objectContaining({
+        description: 'judge: expected outcomes',
+        pass: false,
+        reasoning: baseResult.llmJudgeReasoning,
+        method: 'llm-judge',
+        score: 0.5,
+      }),
+    ]);
+  });
+
+  it('falls back when the array does not cover the expected outcomes verbatim', () => {
+    const entries = buildJudgeMatcherEntries({
+      ...baseResult,
+      outcomeResults: [
+        { outcome: 'Only one outcome', pass: true, evidence: 'Grounded.' },
+      ],
+    }, { expectedOutcomes: ['First outcome', 'Second outcome'] });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].description).toBe('judge: expected outcomes');
+  });
+
+  it('falls back instead of persisting a partially malformed outcomes array', () => {
+    const entries = buildJudgeMatcherEntries({
+      ...baseResult,
+      outcomeResults: [
+        { outcome: 'Valid', pass: true, evidence: 'Grounded.' },
+        { outcome: '', pass: false, evidence: '' },
+      ],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].description).toBe('judge: expected outcomes');
   });
 });
 

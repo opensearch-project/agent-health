@@ -67,6 +67,38 @@ describe('judgeResponseParser', () => {
       expect(out.improvementStrategies).toHaveLength(1);
     });
 
+    it('parses the per-outcome verdict array', () => {
+      const out = parseJudgeResponse(JSON.stringify({
+        pass_fail_status: 'passed',
+        accuracy: 100,
+        reasoning: 'all good',
+        outcomes: [
+          { outcome: 'Find the cause', pass: true, evidence: 'The answer identifies the failed cache.' },
+          { outcome: 'Stay read-only', pass: true, evidence: 'Only read commands were used.' },
+        ],
+      }));
+      expect(out.outcomeResults).toEqual([
+        { outcome: 'Find the cause', pass: true, evidence: 'The answer identifies the failed cache.' },
+        { outcome: 'Stay read-only', pass: true, evidence: 'Only read commands were used.' },
+      ]);
+      expect(out.extraFields).toBeUndefined();
+    });
+
+    it('omits outcomeResults for a missing or malformed array so callers can use the aggregate fallback', () => {
+      const missing = parseJudgeResponse(JSON.stringify({
+        pass_fail_status: 'failed', accuracy: 0, reasoning: 'legacy',
+      }));
+      expect(missing.outcomeResults).toBeUndefined();
+
+      const malformed = parseJudgeResponse(JSON.stringify({
+        pass_fail_status: 'failed',
+        accuracy: 0,
+        reasoning: 'bad shape',
+        outcomes: [{ outcome: 'A', pass: 'no', evidence: 'Missing.' }],
+      }));
+      expect(malformed.outcomeResults).toBeUndefined();
+    });
+
     it('treats anything other than literal "passed" as failed', () => {
       // Defensive: model occasionally emits "FAIL" / "fail" / "false". The
       // typed wire shape is binary, so anything not exactly "passed" must

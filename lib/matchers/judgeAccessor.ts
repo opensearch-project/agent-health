@@ -113,7 +113,7 @@ export function getJudgeReasoningText(report: JudgeAccessReport): string {
  */
 export function buildJudgeMatcherEntry(
   judgeResult: JudgeResultLike,
-  options?: { claim?: string; model?: string }
+  options?: { claim?: string; model?: string; expectedOutcomes?: string[] }
 ): MatcherResult {
   const claim = options?.claim?.trim() || 'expected outcomes';
   const accuracy = judgeResult.metrics?.accuracy;
@@ -152,6 +152,50 @@ export function buildJudgeMatcherEntry(
       ? { judgeExtraFields: judgeResult.extraFields }
       : {}),
   };
+}
+
+/**
+ * Convert a structured judge response into one matcher result per expected
+ * outcome. The report-level metrics remain the source of the overall score;
+ * these entries carry only each outcome's binary verdict and evidence.
+ *
+ * Older/custom judges may omit or malform the `outcomes` array. In that case
+ * return today's single aggregate matcher so a prompt-contract regression can
+ * never fail or erase an otherwise valid run.
+ */
+export function buildJudgeMatcherEntries(
+  judgeResult: JudgeResultLike,
+  options?: { claim?: string; model?: string; expectedOutcomes?: string[] }
+): MatcherResult[] {
+  const outcomes = judgeResult.outcomeResults;
+  if (!Array.isArray(outcomes) || outcomes.length === 0) {
+    return [buildJudgeMatcherEntry(judgeResult, options)];
+  }
+
+  const structurallyValid = outcomes.every(outcome =>
+    outcome &&
+    typeof outcome.outcome === 'string' && Boolean(outcome.outcome.trim()) &&
+    typeof outcome.pass === 'boolean' &&
+    typeof outcome.evidence === 'string' && Boolean(outcome.evidence.trim())
+  );
+  const expectedOutcomes = options?.expectedOutcomes
+    ?.filter(outcome => typeof outcome === 'string' && Boolean(outcome.trim()))
+    .map(outcome => outcome.trim());
+  const matchesExpectedOutcomes = structurallyValid && (!expectedOutcomes || (
+    outcomes.length === expectedOutcomes.length &&
+    outcomes.every((outcome, index) => outcome.outcome.trim() === expectedOutcomes[index])
+  ));
+  const valid = structurallyValid && matchesExpectedOutcomes;
+  if (!valid) {
+    return [buildJudgeMatcherEntry(judgeResult, options)];
+  }
+
+  return outcomes.map(outcome => ({
+    description: outcome.outcome.trim(),
+    pass: outcome.pass,
+    reasoning: outcome.evidence.trim(),
+    method: 'llm-judge',
+  }));
 }
 
 /**
@@ -198,7 +242,7 @@ export function formatExpectedOutcomesAsClaim(outcomes?: unknown): string {
 export function recordJudgeMatcherResult(
   report: JudgeAccessReport & { matcherResults?: MatcherResult[]; llmJudgeReasoning?: string },
   judgeResult: JudgeResultLike,
-  options?: { claim?: string; model?: string }
+  options?: { claim?: string; model?: string; expectedOutcomes?: string[] }
 ): MatcherResult {
   const entry = buildJudgeMatcherEntry(judgeResult, options);
 
@@ -220,6 +264,7 @@ export interface JudgeResultLike {
   passFailStatus: 'passed' | 'failed';
   metrics: { accuracy?: number; [k: string]: number | undefined };
   llmJudgeReasoning: string;
+  outcomeResults?: Array<{ outcome: string; pass: boolean; evidence: string }>;
   judgeDurationMs?: number;
   improvementStrategies?: Array<{
     category: string;

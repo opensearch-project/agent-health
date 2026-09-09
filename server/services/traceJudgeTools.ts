@@ -200,3 +200,19 @@ export function createTraceJudgeExtension(
     });
   };
 }
+
+/** Shared run-scoped fetch used for canonical evidence discovery. */
+export async function fetchTraceJudgeSpans(runId: string, serverUrl: string, agents?: any[]): Promise<any> {
+  const body: Record<string, unknown> = { runIds: [runId], size: 500 };
+  if (agents?.length) body.agents = agents;
+  const res = await fetch(`${serverUrl}/api/traces`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`traces query failed: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Shared run-scoped log fetch used for canonical evidence discovery. */
+export async function fetchTraceJudgeLogs(runId: string, serverUrl: string, query?: string): Promise<any> {
+  const res = await fetch(`${serverUrl}/api/logs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId, query, size: 200 }) });
+  if (!res.ok) throw new Error(`logs query failed: HTTP ${res.status}`);
+  return res.json();
+}

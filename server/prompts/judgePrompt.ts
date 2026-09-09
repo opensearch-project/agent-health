@@ -10,6 +10,20 @@
  * The judge outputs accuracy (0-100) and pass/fail status.
  */
 
+export const PER_OUTCOME_JUDGE_CONTRACT = `## Required Per-Outcome Verdicts
+
+The final JSON MUST include an \`outcomes\` array with exactly one item for each expected outcome, in the same order. Copy the expected-outcome text verbatim into \`outcome\`. Set \`pass\` to true only when that outcome was fully achieved; partial or missing outcomes are false. Keep \`evidence\` to one short sentence grounded in the trajectory or inspected evidence.
+
+\`\`\`json
+"outcomes": [
+  {
+    "outcome": "<expected outcome text>",
+    "pass": <true | false>,
+    "evidence": "<one short evidence sentence>"
+  }
+]
+\`\`\``;
+
 const JUDGE_SYSTEM_PROMPT = `You are an expert evaluator for observability and Root Cause Analysis (RCA) agents. Your task is to evaluate how well an agent performed against expected outcomes.
 
 ## Your Task
@@ -28,9 +42,11 @@ For each expected outcome, determine if the agent:
 
 ## Accuracy Calculation
 
-- Count outcomes achieved (partial = 0.5, full = 1.0)
-- accuracy = (achieved_score / total_outcomes) * 100
+- Count outcomes whose per-outcome \`pass\` value is true
+- accuracy = (passed_outcomes / total_outcomes) * 100
 - Round to nearest integer
+
+${PER_OUTCOME_JUDGE_CONTRACT}
 
 ## Pass/Fail Determination
 
@@ -50,7 +66,14 @@ You MUST respond with ONLY this JSON structure - no other fields:
 {
   "pass_fail_status": "passed" | "failed",
   "accuracy": <number 0-100>,
-  "reasoning": "<detailed explanation>",
+  "outcomes": [
+    {
+      "outcome": "<expected outcome text>",
+      "pass": <true | false>,
+      "evidence": "<one short evidence sentence>"
+    }
+  ],
+  "reasoning": "<brief overall explanation>",
   "improvement_strategies": [
     {
       "category": "<category like 'Tool Usage', 'Analysis Depth', 'Reasoning'>",
@@ -73,16 +96,11 @@ Categories include: Tool Usage, Analysis Depth, Reasoning, Data Correlation, Com
 
 IMPORTANT:
 - The accuracy field must be at the TOP LEVEL, not inside a metrics object
+- Always include the outcomes array with exactly one entry per expected outcome
 - Always include improvement_strategies array (can be empty for excellent performance)
 - Do NOT include metrics, faithfulness, latency_score, trajectory_alignment_score, or any other fields not listed above
 
-Be thorough in your reasoning - explain which outcomes were met and which were not.
-
-In your reasoning, evaluate EACH expected outcome individually:
-1. State the outcome
-2. Rate it: Fully achieved (1.0), Partially achieved (0.5), or Not achieved (0.0)
-3. Justify the rating with evidence from the trajectory
-Then show the accuracy calculation: (sum of scores / total outcomes) * 100`;
+Keep the top-level reasoning brief because the outcome-specific verdict and evidence belong in the outcomes array. Then show the accuracy calculation: (passed outcomes / total outcomes) * 100`;
 
 /**
  * Addendum appended to the evaluator's system prompt when the user has set

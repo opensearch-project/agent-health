@@ -658,7 +658,13 @@ export async function runEvaluationWithConnector(
             performanceMetrics: { durationMs: Date.now() - evalStartTime, agentDurationMs },
           },
           agent.traceServiceName
-        )
+        ),
+        {
+          workspaceDir: typeof invocation.metadata?.workspaceDir === 'string'
+            ? invocation.metadata.workspaceDir
+            : typeof agent.connectorConfig?.cwd === 'string' ? agent.connectorConfig.cwd : undefined,
+          metadata: invocation.metadata,
+        }
       );
     } catch (judgeError) {
       console.error('[Eval] Judge call failed:', judgeError instanceof Error ? judgeError.message : judgeError);

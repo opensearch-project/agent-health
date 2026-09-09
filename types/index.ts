@@ -98,6 +98,8 @@ export interface JudgeResult {
     trajectory_alignment_score?: number;
     [key: string]: number | undefined;
   };
+  /** Per-expected-outcome verdicts when the judge returned the structured contract. */
+  outcomeResults?: Array<{ outcome: string; pass: boolean; evidence: string }>;
   llmJudgeReasoning: string;
   improvementStrategies?: string[];
 }
@@ -388,6 +390,10 @@ export interface LLMJudgeResponse {
     systemPrompt?: string;
     /** The user-message prompt the model received. */
     userPrompt?: string;
+    /** Restricted evidence bash commands issued by the judging agent. */
+    toolCalls?: Array<{ tool: string; command: string }>;
+    /** Retained evidence tmpdir when local debugging explicitly enables it. */
+    evidenceDir?: string;
   };
 }
 
@@ -698,6 +704,8 @@ export interface Span {
   spanId: string;
   parentSpanId?: string;
   name: string;
+  /** OTLP SpanKind (numeric JSON enum or normalized string from OpenSearch). */
+  kind?: number | string;
   startTime: string;
   endTime: string;
   duration?: number;

@@ -15,6 +15,7 @@ import { getBackendUrl } from '@/lib/portConfig';
 interface JudgeResult {
   passFailStatus: PassFailStatus;
   metrics: EvaluationMetrics;
+  outcomeResults?: Array<{ outcome: string; pass: boolean; evidence: string }>;
   llmJudgeReasoning: string;
   improvementStrategies: ImprovementStrategy[];
   judgeDurationMs?: number;
@@ -39,6 +40,8 @@ interface JudgeResult {
     evaluatorId?: string;
     systemPrompt?: string;
     userPrompt?: string;
+    toolCalls?: Array<{ tool: string; command: string }>;
+    evidenceDir?: string;
   };
   /**
    * Forwarded from `/api/judge`'s agent (trace) judge provider (see
@@ -61,6 +64,14 @@ function sleep(ms: number): Promise<void> {
 interface ExpectedBehavior {
   expectedOutcomes?: string[];  // NEW: Simple text descriptions
   expectedTrajectory?: any[];   // Legacy: step-by-step trajectory
+}
+
+export interface JudgeEvidenceContext {
+  prompt?: string;
+  agentKey?: string;
+  timings?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  workspaceDir?: string;
 }
 
 /**
@@ -93,7 +104,8 @@ export async function callBedrockJudge(
   modelId?: string,
   evaluatorId?: string,
   runId?: string,
-  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>
+  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>,
+  evidenceContext?: JudgeEvidenceContext
 ): Promise<JudgeResult> {
   const maxRetries = 10;
   const baseDelay = 1000; // 1 second
@@ -135,6 +147,9 @@ export async function callBedrockJudge(
           // correlation (claude-code's session id, etc.), not just spans
           // that share agent-health's runId via gen_ai.request.id.
           ...(agents && agents.length > 0 ? { agents } : {}),
+          // Complete runner metadata for the immutable evidence bundle. The
+          // trajectory above is already the original, untruncated array.
+          ...(evidenceContext ? { evidenceContext } : {}),
         }),
       });
 
@@ -164,6 +179,7 @@ export async function callBedrockJudge(
       return {
         passFailStatus: result.passFailStatus || 'failed', // Default to failed if missing
         metrics: result.metrics,
+        outcomeResults: result.outcomeResults,
         llmJudgeReasoning: result.llmJudgeReasoning,
         improvementStrategies: result.improvementStrategies || [],
         judgeDurationMs: Date.now() - judgeStartTime,

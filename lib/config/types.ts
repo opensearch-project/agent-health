@@ -77,6 +77,8 @@ export interface JudgeConfig {
   endpoint?: string;
   /** Connector type for agentic judge (reuses agent connector infrastructure) */
   connectorType?: 'rest' | 'openai-compatible' | 'subprocess' | 'claude-code';
+  /** Keep restricted-judge evidence tmpdirs after verdicts for local debugging. */
+  keepEvidence?: boolean;
 }
 
 /**

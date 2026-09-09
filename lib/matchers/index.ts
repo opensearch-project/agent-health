@@ -12,6 +12,7 @@ export {
   getJudgeReasoningText,
   recordJudgeMatcherResult,
   buildJudgeMatcherEntry,
+  buildJudgeMatcherEntries,
   formatExpectedOutcomesAsClaim,
 } from './judgeAccessor.js';
 export type { JudgeAccessReport, JudgeResultLike } from './judgeAccessor.js';

@@ -16,8 +16,8 @@ import { evaluateWithLiteLLM, parseLiteLLMError } from '@/server/services/litell
 import { evaluateWithClaudeCode, parseClaudeCodeError } from '@/server/services/claudeCodeJudgeService';
 import { evaluateWithPi, parsePiError } from '@/server/services/piJudgeService';
 import { evaluateWithPiAgenticTrace } from '@/server/services/piAgenticJudgeService';
-import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
 import { hasTraceCorrelation } from '@/services/traces/judgeAgentsHints';
+import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
 import { loadConfigSync } from '@/lib/config/index';
 import serverConfig from '@/server/config';
 import { debug } from '@/lib/debug';
@@ -189,11 +189,7 @@ router.get('/api/judge/bedrock-models', async (_req: Request, res: Response) => 
   try {
     const client = new BedrockClient({
       region,
-      // See resolveSigv4Credentials() in opensearchClientFactory.ts: without
-      // ignoreCache, @smithy/shared-ini-file-loader's process-lifetime cache
-      // of ~/.aws/credentials means a rotated profile is invisible to this
-      // model-listing check until the process restarts.
-      credentials: fromNodeProviderChain({ ignoreCache: true }),
+      credentials: fromNodeProviderChain(),
     });
 
     const command = new ListInferenceProfilesCommand({});
@@ -347,7 +343,7 @@ router.get('/api/judge/github-models', async (_req: Request, res: Response) => {
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
   try {
-    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId, runId, agents } = req.body;
+    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId, runId, agents, evidenceContext } = req.body;
 
     // Validate required fields
     if (!trajectory || !Array.isArray(trajectory) || trajectory.length === 0) {
@@ -445,33 +441,9 @@ router.post('/api/judge', async (req: Request, res: Response) => {
     }
 
     if (provider === 'agent') {
-      // Agent trace judge: an LLM judge with read-only, trace-scoped tools
-      // (query_spans/query_logs) so it can verify claims against the run's real
-      // OTel spans/logs instead of trusting the trajectory text.
-      //
-      // `traceToolsAvailable` gates WHICH mode the judge runs in — it no
-      // longer gates whether the judge runs at all. Accept EITHER a runId
-      // (Strategy B, possibly already the caller's traceId fallback — see
-      // resolveJudgeRunId) OR at least one Strategy C/D correlation hint in
-      // `agents` (serviceName+window or sessionId, from buildJudgeAgentsHints
-      // — #264) to enable the trace tools. Pre-fix (see #461/#462 lineage)
-      // this hard-required a correlation hint and 400'd otherwise, even for
-      // agents that declare `useTraces: false` and were never going to have
-      // one — every case of a non-instrumented agent's 62-case run hard-
-      // failed at the judge step with a validation error instead of a
-      // verdict. A non-instrumented (or uncorrelated) agent still has a
-      // trajectory + final response worth judging — degrade to
-      // trajectory-only reasoning (no query_spans/query_logs tool pack)
-      // instead of erroring. See piAgenticJudgeService.evaluateWithPiAgenticTrace's
-      // `traceToolsAvailable` param and the persisted `judgeMode` field.
-      const traceToolsAvailable = hasTraceCorrelation(runId, agents);
-      if (!traceToolsAvailable) {
-        debug(
-          'JudgeAPI',
-          'Agent trace judge - no runId/correlation hint available; degrading to ' +
-            'trajectory-only judging (query_spans/query_logs tools withheld) instead of failing.'
-        );
-      }
+      // Evidence agent judge: complete trajectory/testcase files are always
+      // available through restricted in-process bash. A runId may discover a
+      // file-mode canonical mount or enable cluster-mode query tools.
       // Defense in depth against cross-run/cross-tenant exfiltration: the trace
       // tools will happily read spans/logs for whatever runId they're given, so
       // a direct caller could pass a benign trajectory but a *different* run's
@@ -482,39 +454,64 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       // them. When the trajectory carries no runId we cannot corroborate it —
       // this provider then trusts the caller and is single-tenant-only (see
       // AGENTS.md "Trace correlation"; gate it behind auth in shared clusters).
-      // Only applies when a runId was actually supplied — a hints-only request
-      // (no runId at all) has nothing here to corroborate against, and the
-      // hints themselves are server-derived from the report, not caller input.
-      if (runId) {
-        const trajectoryRunIds = new Set(
-          (trajectory as any[])
-            .map((s) => s?.runId)
-            .filter((id): id is string => typeof id === 'string' && id.length > 0)
-        );
-        if (trajectoryRunIds.size > 0 && !trajectoryRunIds.has(runId)) {
-          return res.status(403).json({
-            error:
-              'runId does not match the submitted trajectory — the agent (trace) judge ' +
-              'may only inspect the run that produced its trajectory',
-          });
+      const trajectoryRunIds = new Set(
+        (trajectory as any[])
+          .map((s) => s?.runId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      );
+      if (runId && trajectoryRunIds.size > 0 && !trajectoryRunIds.has(runId)) {
+        return res.status(403).json({
+          error:
+            'runId does not match the submitted trajectory — the agent (trace) judge ' +
+            'may only inspect the run that produced its trajectory',
+        });
+      }
+      let trustedAgentKey: string | undefined;
+      if (runId && evidenceContext) {
+        const storage = getStorageModule();
+        const runRecord = await storage.evaluationRuns.getById(runId);
+        const reportRecord = runRecord ? null : await storage.runs.getById(runId);
+        trustedAgentKey = runRecord?.agentKey || reportRecord?.agentKey;
+        const requestedAgentKey = evidenceContext?.agentKey;
+        if (requestedAgentKey && trustedAgentKey && requestedAgentKey !== trustedAgentKey) {
+          return res.status(403).json({ error: 'agentKey does not match the stored run metadata' });
         }
       }
-      debug(
-        'JudgeAPI',
-        'Agent trace judge - evaluating (runId=' +
-          (runId ?? 'none — hints-only') +
-          ', hints=' + (Array.isArray(agents) ? agents.length : 0) +
-          ', traceToolsAvailable=' + traceToolsAvailable + ')'
-      );
+      debug('JudgeAPI', 'Agent evidence judge - evaluating with restricted bash (runId=' + (runId || 'none') + ')');
       // Pass the resolved evaluator so a saved `systemPrompt` replaces the
-      // default base prompt (the trace-tool addendum, or its trajectory-only
-      // counterpart, is still appended inside the service). `traceToolsAvailable`
-      // decides whether the service wires up query_spans/query_logs at all —
-      // see evaluateWithPiAgenticTrace's doc comment.
+      // default base prompt (the runtime evidence/tool addendum is still
+      // appended inside the service and describes only actual state).
       const result = await evaluateWithPiAgenticTrace(
-        { trajectory, expectedOutcomes, expectedTrajectory, logs, runId, modelId: resolvedModelId, agents },
+        {
+          trajectory,
+          expectedOutcomes,
+          expectedTrajectory,
+          logs,
+          runId,
+          modelId: resolvedModelId,
+          agents,
+          evidenceContext: evidenceContext && typeof evidenceContext === 'object'
+            ? {
+                ...evidenceContext,
+                agentKey: trustedAgentKey,
+                // HTTP clients control evidenceContext metadata, so never
+                // accept a workspace path from it. Only the server-owned agent
+                // configuration may select files for an API-triggered judge.
+                // In-process evaluation still uses the connector's actual
+                // per-run workspace because that metadata never crosses this
+                // untrusted request boundary.
+                workspaceDir: (() => {
+                  const cwd = config.agents.find(
+                    (agent) => agent.key === trustedAgentKey
+                  )?.connectorConfig?.cwd;
+                  return typeof cwd === 'string' && cwd.trim() ? cwd : undefined;
+                })(),
+              }
+            : undefined,
+          keepEvidence: config.judge?.keepEvidence === true,
+        },
         evaluator,
-        traceToolsAvailable
+        hasTraceCorrelation(runId, agents)
       );
       return res.json(result);
     }

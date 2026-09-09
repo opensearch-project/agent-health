@@ -49,11 +49,33 @@ export interface JudgeRequest {
    * time-window) so claude-code's emitted spans are findable. See #264.
    */
   agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>;
+  /** Complete evidence metadata supplied by the runner (never prompt-compacted). */
+  evidenceContext?: {
+    prompt?: string;
+    agentKey?: string;
+    timings?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    /** Working directory recorded for the run; copied symlink-free when present. */
+    workspaceDir?: string;
+  };
+  /** Retain the per-judgment tmpdir for local debugging. */
+  keepEvidence?: boolean;
+}
+
+export interface JudgeOutcomeResult {
+  /** Expected-outcome text returned by the judge. */
+  outcome: string;
+  /** Binary verdict for this expected outcome. */
+  pass: boolean;
+  /** Short, evidence-grounded explanation for the verdict. */
+  evidence: string;
 }
 
 export interface JudgeResponse {
   passFailStatus: 'passed' | 'failed';
   metrics: EvaluationMetrics;
+  /** One verdict per expected outcome when the judge honored the new contract. */
+  outcomeResults?: JudgeOutcomeResult[];
   llmJudgeReasoning: string;
   improvementStrategies: ImprovementStrategy[];
   duration: number;
@@ -97,6 +119,10 @@ export interface JudgeResponse {
     evaluatorId?: string;
     systemPrompt?: string;
     userPrompt?: string;
+    /** Restricted evidence-tool calls made by an agentic judge (debug mode). */
+    toolCalls?: Array<{ tool: string; command: string }>;
+    /** Retained tmpdir path when AH_JUDGE_KEEP_EVIDENCE is enabled. */
+    evidenceDir?: string;
   };
   /**
    * Set exclusively by the agent (trace) judge provider

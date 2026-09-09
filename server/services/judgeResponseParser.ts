@@ -51,6 +51,7 @@ const TYPED_RESPONSE_KEYS = new Set([
   'reasoning',
   'metrics',
   'scores',
+  'outcomes',
   'improvement_strategies',
   // Legacy: old prompts emit these at the top level instead of under `metrics`.
   'accuracy',
@@ -153,6 +154,34 @@ function extractMetrics(parsed: any, evaluator: Evaluator | undefined, source: s
  * didn't declare are also captured into `extraFields.metrics_unmapped` so
  * nothing the model wrote is silently dropped.
  */
+function extractOutcomeResults(parsed: any): JudgeResponse['outcomeResults'] {
+  if (!Array.isArray(parsed?.outcomes) || parsed.outcomes.length === 0) return undefined;
+
+  const outcomes = parsed.outcomes.map((value: unknown) => {
+    if (!value || typeof value !== 'object') return undefined;
+    const item = value as Record<string, unknown>;
+    if (
+      typeof item.outcome !== 'string' || !item.outcome.trim() ||
+      typeof item.pass !== 'boolean' ||
+      typeof item.evidence !== 'string' || !item.evidence.trim()
+    ) {
+      return undefined;
+    }
+    return {
+      outcome: item.outcome.trim(),
+      pass: item.pass,
+      evidence: item.evidence.trim(),
+    };
+  });
+
+  // Treat a partially malformed array exactly like a missing one. The caller
+  // will persist the legacy aggregate matcher rather than dropping expected
+  // outcomes or failing an otherwise usable judgment.
+  return outcomes.every((outcome): outcome is NonNullable<typeof outcome> => outcome !== undefined)
+    ? outcomes
+    : undefined;
+}
+
 function extractExtraFields(parsed: any, evaluator: Evaluator | undefined): Record<string, unknown> | undefined {
   if (!parsed || typeof parsed !== 'object') return undefined;
   const declaredMetricNames = new Set(
@@ -263,6 +292,7 @@ export function parseJudgeResponse(
   }
 
   const metrics = extractMetrics(parsed, options.evaluator, source);
+  const outcomeResults = extractOutcomeResults(parsed);
   const extraFields = extractExtraFields(parsed, options.evaluator);
 
   const passFailStatus = (parsed.pass_fail_status === 'passed' ? 'passed' : 'failed') as
@@ -283,6 +313,7 @@ export function parseJudgeResponse(
   const response: JudgeResponse = {
     passFailStatus,
     metrics,
+    ...(outcomeResults ? { outcomeResults } : {}),
     llmJudgeReasoning,
     improvementStrategies,
     duration: options.duration ?? 0,

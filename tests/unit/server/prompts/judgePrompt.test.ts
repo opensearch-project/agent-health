@@ -32,6 +32,8 @@ describe('judgePrompt', () => {
       expect(JUDGE_SYSTEM_PROMPT).toContain('pass_fail_status');
       expect(JUDGE_SYSTEM_PROMPT).toContain('accuracy');
       expect(JUDGE_SYSTEM_PROMPT).toContain('reasoning');
+      expect(JUDGE_SYSTEM_PROMPT).toContain('"outcomes"');
+      expect(JUDGE_SYSTEM_PROMPT).toContain('"evidence"');
     });
 
     it('should mention JSON output requirement', () => {
@@ -76,12 +78,12 @@ describe('judgePrompt', () => {
       expect(JUDGE_SYSTEM_PROMPT).toContain('Do NOT include metrics, faithfulness, latency_score, trajectory_alignment_score');
     });
 
-    it('should require per-outcome evaluation in reasoning', () => {
-      expect(JUDGE_SYSTEM_PROMPT).toContain('evaluate EACH expected outcome individually');
-      expect(JUDGE_SYSTEM_PROMPT).toContain('Fully achieved (1.0)');
-      expect(JUDGE_SYSTEM_PROMPT).toContain('Partially achieved (0.5)');
-      expect(JUDGE_SYSTEM_PROMPT).toContain('Not achieved (0.0)');
-      expect(JUDGE_SYSTEM_PROMPT).toContain('(sum of scores / total outcomes) * 100');
+    it('should require one binary, evidence-grounded result per expected outcome', () => {
+      expect(JUDGE_SYSTEM_PROMPT).toContain('exactly one item for each expected outcome');
+      expect(JUDGE_SYSTEM_PROMPT).toContain('same order');
+      expect(JUDGE_SYSTEM_PROMPT).toContain('Copy the expected-outcome text verbatim');
+      expect(JUDGE_SYSTEM_PROMPT).toContain('partial or missing outcomes are false');
+      expect(JUDGE_SYSTEM_PROMPT).toContain('(passed outcomes / total outcomes) * 100');
     });
   });
 });

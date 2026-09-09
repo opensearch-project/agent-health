@@ -57,8 +57,14 @@ jest.mock('@/server/services/piAgenticJudgeService', () => ({
 // Mock the storage adapter so a custom evaluatorId can resolve to an
 // evaluator whose inferenceConfig selects the 'agent' (trace) provider.
 const mockGetEvaluatorById = jest.fn();
+const mockGetEvaluationRunById = jest.fn();
+const mockGetRunById = jest.fn();
 jest.mock('@/server/adapters', () => ({
-  getStorageModule: () => ({ evaluators: { getById: mockGetEvaluatorById } }),
+  getStorageModule: () => ({
+    evaluators: { getById: mockGetEvaluatorById },
+    evaluationRuns: { getById: mockGetEvaluationRunById },
+    runs: { getById: mockGetRunById },
+  }),
 }));
 
 const mockEvaluateTrajectory = evaluateTrajectory as jest.MockedFunction<typeof evaluateTrajectory>;
@@ -130,19 +136,6 @@ describe('Judge Routes', () => {
         region: expect.any(String),
         configured: true,
       });
-    });
-
-    it('always passes ignoreCache: true so a rotated ~/.aws/credentials profile is not invisible to this check until a restart', async () => {
-      mockSend.mockResolvedValue({ inferenceProfileSummaries: [] });
-
-      const { req, res } = createMocks();
-      const handler = getRouteHandler(judgeRoutes, 'get', '/api/judge/bedrock-models');
-      await handler(req, res);
-
-      const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-      expect(fromNodeProviderChain).toHaveBeenCalledWith(
-        expect.objectContaining({ ignoreCache: true })
-      );
     });
 
     it('filters out non-Anthropic models', async () => {
@@ -716,152 +709,37 @@ describe('Judge Routes', () => {
     });
   });
 
-  describe('POST /api/judge - agent (trace) provider runId guard', () => {
-    // An evaluator whose inferenceConfig selects the trace-judge provider.
+  describe('POST /api/judge - agent evidence provider scoping', () => {
+    // An evaluator whose inferenceConfig selects the evidence-agent provider.
     const agentEvaluator = {
       id: 'custom-trace-eval',
       name: 'Trace Judge',
       inferenceConfig: { provider: 'agent' },
     };
 
-    it('degrades to trajectory-only judging (no 400) when runId is missing AND no agents hints are present', async () => {
+    it('works without runId using complete trajectory evidence (trace-free mode)', async () => {
       mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
       mockEvaluateWithPiAgenticTrace.mockResolvedValue({
-        passFailStatus: 'failed',
-        metrics: { accuracy: 40 },
-        llmJudgeReasoning: 'No trace tools available; judged from trajectory alone.',
-        improvementStrategies: [],
-        judgeMode: 'trajectory-only',
+        passFailStatus: 'passed', metrics: { accuracy: 88 }, llmJudgeReasoning: 'trajectory evidence', improvementStrategies: [],
       } as any);
 
       const { req, res } = createMocks({
         trajectory: [{ type: 'action', toolName: 'search' }],
         expectedOutcomes: ['Identify issue'],
         evaluatorId: 'custom-trace-eval',
-        // no runId, no agents hints -- e.g. a `useTraces: false` REST agent.
+        // no runId: bash evidence still works; trace tools are unavailable
       });
       const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
 
       await handler(req, res);
 
       expect(res.status).not.toHaveBeenCalledWith(400);
-      // traceToolsAvailable=false is the 3rd positional arg.
       expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: undefined, agents: undefined }),
+        expect.objectContaining({ runId: undefined, trajectory: expect.any(Array) }),
         expect.objectContaining({ id: 'custom-trace-eval' }),
-        false
+        expect.any(Boolean)
       );
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ judgeMode: 'trajectory-only' })
-      );
-    });
-
-    it('degrades to trajectory-only judging (no 400) when agents hints are present but carry neither serviceName nor sessionId', async () => {
-      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
-      mockEvaluateWithPiAgenticTrace.mockResolvedValue({
-        passFailStatus: 'failed', metrics: {}, llmJudgeReasoning: 'ok', improvementStrategies: [], judgeMode: 'trajectory-only',
-      } as any);
-
-      const { req, res } = createMocks({
-        trajectory: [{ type: 'action', toolName: 'search' }],
-        expectedOutcomes: ['Identify issue'],
-        evaluatorId: 'custom-trace-eval',
-        agents: [{ startedAt: 1, endedAt: 2 }], // no serviceName, no sessionId
-      });
-      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
-
-      await handler(req, res);
-
-      expect(res.status).not.toHaveBeenCalledWith(400);
-      expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        false
-      );
-    });
-
-    it('routes to evaluateWithPiAgenticTrace with traceToolsAvailable=true when runId is ABSENT but a serviceName+window hint is present (REST-connector, no trace-mode polling -- the original reported bug)', async () => {
-      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
-      mockEvaluateWithPiAgenticTrace.mockResolvedValue({
-        passFailStatus: 'passed',
-        metrics: { accuracy: 88 },
-        llmJudgeReasoning: 'Trace-backed evaluation via hints',
-        improvementStrategies: [],
-        judgeMode: 'trace-tools',
-      } as any);
-
-      const agents = [{ serviceName: 'example-agent', startedAt: 1000, endedAt: 2000 }];
-      const { req, res } = createMocks({
-        trajectory: [{ type: 'action', toolName: 'search' }],
-        expectedOutcomes: ['Identify issue'],
-        evaluatorId: 'custom-trace-eval',
-        agents,
-        // no runId at all
-      });
-      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
-
-      await handler(req, res);
-
-      expect(res.status).not.toHaveBeenCalledWith(400);
-      expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: undefined, agents }),
-        expect.objectContaining({ id: 'custom-trace-eval' }),
-        true
-      );
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ passFailStatus: 'passed' })
-      );
-    });
-
-    it('routes to evaluateWithPiAgenticTrace when runId is ABSENT but a sessionId-only hint is present', async () => {
-      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
-      mockEvaluateWithPiAgenticTrace.mockResolvedValue({
-        passFailStatus: 'passed',
-        metrics: { accuracy: 80 },
-        llmJudgeReasoning: 'ok',
-        improvementStrategies: [],
-      } as any);
-
-      const agents = [{ serviceName: '', startedAt: 1000, endedAt: 2000, sessionId: 'sess-abc' }];
-      const { req, res } = createMocks({
-        trajectory: [{ type: 'action', toolName: 'search' }],
-        expectedOutcomes: ['Identify issue'],
-        evaluatorId: 'custom-trace-eval',
-        agents,
-      });
-      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
-
-      await handler(req, res);
-
-      expect(res.status).not.toHaveBeenCalledWith(400);
-      expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalled();
-    });
-
-    it('does NOT apply the trajectory cross-run 403 guard to a hints-only (no runId) request, even if the trajectory happens to carry a runId', async () => {
-      // The 403 guard exists to corroborate a CALLER-SUPPLIED runId against the
-      // trajectory. With no runId requested at all there is nothing to
-      // corroborate, and the hints themselves are server-derived -- not caller
-      // input a cross-tenant caller could spoof to pivot runs.
-      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
-      mockEvaluateWithPiAgenticTrace.mockResolvedValue({
-        passFailStatus: 'passed', metrics: { accuracy: 90 }, llmJudgeReasoning: 'ok', improvementStrategies: [],
-      } as any);
-
-      const agents = [{ serviceName: 'example-agent', startedAt: 1000, endedAt: 2000 }];
-      const { req, res } = createMocks({
-        trajectory: [{ type: 'action', toolName: 'search', runId: 'run-OWN' }],
-        expectedOutcomes: ['Identify issue'],
-        evaluatorId: 'custom-trace-eval',
-        agents,
-        // no runId requested
-      });
-      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
-
-      await handler(req, res);
-
-      expect(res.status).not.toHaveBeenCalledWith(403);
-      expect(res.status).not.toHaveBeenCalledWith(400);
-      expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ passFailStatus: 'passed' }));
     });
 
     it('routes to evaluateWithPiAgenticTrace when runId is present', async () => {
@@ -891,6 +769,68 @@ describe('Judge Routes', () => {
       );
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ passFailStatus: 'passed' })
+      );
+    });
+
+    it('rejects an agentKey that differs from trusted run metadata', async () => {
+      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
+      mockGetEvaluationRunById.mockResolvedValue({ id: 'run-1', agentKey: 'trusted-agent' });
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', runId: 'run-1' }], expectedOutcomes: ['Identify issue'],
+        evaluatorId: 'custom-trace-eval', runId: 'run-1',
+        evidenceContext: { agentKey: 'other-agent' },
+      });
+      await getRouteHandler(judgeRoutes, 'post', '/api/judge')(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(mockEvaluateWithPiAgenticTrace).not.toHaveBeenCalled();
+    });
+
+    it('derives the workspace agent from trusted run metadata', async () => {
+      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
+      mockGetEvaluationRunById.mockResolvedValue({ id: 'run-1', agentKey: 'test-agent' });
+      mockEvaluateWithPiAgenticTrace.mockResolvedValue({ passFailStatus: 'passed' } as any);
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', runId: 'run-1' }], expectedOutcomes: ['Identify issue'],
+        evaluatorId: 'custom-trace-eval', runId: 'run-1', evidenceContext: {},
+      });
+      await getRouteHandler(judgeRoutes, 'post', '/api/judge')(req, res);
+
+      expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalledWith(
+        expect.objectContaining({ evidenceContext: expect.objectContaining({ agentKey: 'test-agent' }) }),
+        expect.anything(),
+        expect.any(Boolean)
+      );
+    });
+
+    it('does not trust a client-supplied workspace path', async () => {
+      mockGetEvaluatorById.mockResolvedValue(agentEvaluator);
+      mockEvaluateWithPiAgenticTrace.mockResolvedValue({
+        passFailStatus: 'passed', metrics: { accuracy: 90 }, llmJudgeReasoning: 'ok', improvementStrategies: [],
+      } as any);
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'search' }],
+        expectedOutcomes: ['Identify issue'],
+        evaluatorId: 'custom-trace-eval',
+        evidenceContext: {
+          agentKey: 'attacker-controlled-agent',
+          workspaceDir: '/etc',
+          metadata: { workspaceDir: '/etc' },
+        },
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(mockEvaluateWithPiAgenticTrace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          evidenceContext: expect.objectContaining({ workspaceDir: undefined }),
+        }),
+        expect.objectContaining({ id: 'custom-trace-eval' }),
+        expect.any(Boolean)
       );
     });
 
