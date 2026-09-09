@@ -68,6 +68,13 @@ jest.mock('@/lib/resolveAgentModel', () => ({
   resolveAgentModel: jest.fn().mockReturnValue('resolved-model'),
 }));
 
+const mockRetryJudgementForRun = jest.fn();
+const mockCountRetryableCases = jest.fn();
+jest.mock('@/services/evaluation/retryJudgement', () => ({
+  retryJudgementForRun: (...args: any[]) => mockRetryJudgementForRun(...args),
+  countRetryableCases: (...args: any[]) => mockCountRetryableCases(...args),
+}));
+
 import express, { Application } from 'express';
 const request = require('supertest');
 import evaluationRunsRouter from '@/server/routes/storage/evaluationRuns';
@@ -290,9 +297,51 @@ describe('Evaluation Runs API', () => {
   });
 
   describe('POST /api/storage/evaluation-runs/:id/cancel', () => {
-    it('404s when there is no active cancellation token for the id', async () => {
+    it('404s when the run does not exist and there is no active cancellation token', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce(null);
       const res = await request(app).post('/api/storage/evaluation-runs/nope/cancel');
       expect(res.status).toBe(404);
+    });
+
+    it('400s when the run exists but is not running and there is no active cancellation token', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'run-1', status: 'completed' });
+      const res = await request(app).post('/api/storage/evaluation-runs/run-1/cancel');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/not currently running/i);
+    });
+
+    it('zombie fallback: marks a running run cancelled with an audit note when no executor is found', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'zombie-1', status: 'running', createdAt: new Date(Date.now() - 10000).toISOString() });
+      mockEvaluationRunsUpdate.mockResolvedValueOnce({ id: 'zombie-1', status: 'cancelled' });
+
+      const res = await request(app).post('/api/storage/evaluation-runs/zombie-1/cancel');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.viaFallback).toBe(true);
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(
+        'zombie-1',
+        expect.objectContaining({ status: 'cancelled', cancelNote: expect.stringContaining('no active executor') })
+      );
+    });
+
+    it('409s (retryable) instead of taking the zombie fallback when the run was created moments ago', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'brand-new-1', status: 'running', createdAt: new Date().toISOString() });
+
+      const res = await request(app).post('/api/storage/evaluation-runs/brand-new-1/cancel');
+
+      expect(res.status).toBe(409);
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not block the zombie fallback on legacy docs with no createdAt', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ id: 'legacy-1', status: 'running' });
+      mockEvaluationRunsUpdate.mockResolvedValueOnce({ id: 'legacy-1', status: 'cancelled' });
+
+      const res = await request(app).post('/api/storage/evaluation-runs/legacy-1/cancel');
+
+      expect(res.status).toBe(200);
+      expect(res.body.viaFallback).toBe(true);
     });
 
     it('cancels an active run and marks it cancelled', async () => {
@@ -348,6 +397,185 @@ describe('Evaluation Runs API', () => {
 
       resolveExec!({ results: {}, stats: {} });
       await postPromise;
+    });
+  });
+
+  describe('POST /api/storage/evaluation-runs/:id/rerun', () => {
+    const sourceRun: any = {
+      id: 'eval-run-src', docType: 'evaluation-run', name: 'Source Run', status: 'completed',
+      agentKey: 'agent-a', modelId: 'model-a', judgeModelId: 'judge-a', evaluatorId: 'ev-a', concurrency: 2,
+      sources: [{ type: 'test-case-ids', ids: ['tc-1'] }],
+      testCaseSnapshots: [{ id: 'tc-1', version: 1, name: 'TC 1' }],
+      results: {}, createdAt: '2026-01-01T00:00:00Z',
+    };
+
+    beforeEach(() => {
+      mockEvaluationRunsGetById.mockResolvedValue(sourceRun);
+      mockEvaluationRunsCreate.mockResolvedValue(undefined);
+      mockExecuteEvaluationRun.mockResolvedValue({ results: {}, stats: { total: 1 } });
+    });
+
+    it('404s when the source run does not exist', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce(null);
+      const res = await request(app).post('/api/storage/evaluation-runs/nope/rerun');
+      expect(res.status).toBe(404);
+    });
+
+    it('duplicates the source config verbatim and reports modified:false when no overrides are sent', async () => {
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({});
+      expect(res.status).toBe(201);
+      expect(res.body.modified).toBe(false);
+      expect(res.body.run.modified).toBeUndefined();
+      expect(res.body.run.rerunOf).toBe('eval-run-src');
+      expect(res.body.run.agentKey).toBe('agent-a');
+      expect(res.body.run.evaluatorId).toBe('ev-a');
+      expect(res.body.run.concurrency).toBe(2);
+    });
+
+    it('applies overrides, flags modified:true, and still records rerunOf', async () => {
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({
+        agentKey: 'agent-b', concurrency: 5, name: 'Custom Name',
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.modified).toBe(true);
+      expect(res.body.run.modified).toBe(true);
+      expect(res.body.run.rerunOf).toBe('eval-run-src');
+      expect(res.body.run.agentKey).toBe('agent-b');
+      expect(res.body.run.concurrency).toBe(5);
+      expect(res.body.run.name).toBe('Custom Name');
+      // Unmentioned fields still carried over from the source.
+      expect(res.body.run.evaluatorId).toBe('ev-a');
+    });
+
+    it('clears judgeModelId/evaluatorId via null overrides and flags modified:true', async () => {
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({
+        judgeModelId: null, evaluatorId: null,
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.modified).toBe(true);
+      expect(res.body.run.judgeModelId).toBeUndefined();
+      expect(res.body.run.evaluatorId).toBeUndefined();
+    });
+
+    it('400s when the source run has no agentKey and no override supplies one', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({ ...sourceRun, agentKey: undefined });
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('409s when source resolution fails for the (possibly overridden) sources', async () => {
+      mockResolveTestCaseSources.mockRejectedValueOnce(new Error('benchmark gone'));
+      const res = await request(app).post('/api/storage/evaluation-runs/eval-run-src/rerun').send({});
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/benchmark gone/);
+    });
+  });
+
+  describe('POST /api/storage/evaluation-runs/:id/retry-judgement (kebab entry point → shared 202+poll job)', () => {
+    const summary = { retried: 1, succeeded: 1, failed: 0, results: [{ testCaseId: 'tc1', reportId: 'r1', outcome: 'succeeded', passFailStatus: 'passed' }] };
+
+    beforeEach(() => {
+      mockRetryJudgementForRun.mockReset();
+      mockCountRetryableCases.mockReset();
+      mockCountRetryableCases.mockResolvedValue(1);
+    });
+
+    /** Drive the background job to a terminal state via the status endpoint. */
+    async function pollStatus(id: string, attempts = 50) {
+      for (let i = 0; i < attempts; i++) {
+        const res = await request(app).get(`/api/storage/evaluation-runs/${id}/retry-judgement/status`);
+        if (res.status === 200 && res.body.status !== 'running') return res.body;
+        await new Promise(r => setTimeout(r, 5));
+      }
+      throw new Error('retry-judgement job did not settle');
+    }
+
+    it('404s when the run does not exist', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce(null);
+      const res = await request(app).post('/api/storage/evaluation-runs/nope/retry-judgement');
+      expect(res.status).toBe(404);
+    });
+
+    it('409s when the run is still running, even with a judge-failed-shaped result', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'run-1', docType: 'evaluation-run', status: 'running',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
+      });
+      const res = await request(app).post('/api/storage/evaluation-runs/run-1/retry-judgement');
+      expect(res.status).toBe(409);
+      expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
+    });
+
+    it('202s immediately with the pre-flight total, then exposes the summary via the status poll', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'run-202', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
+      });
+      mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+
+      const res = await request(app).post('/api/storage/evaluation-runs/run-202/retry-judgement');
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual(expect.objectContaining({ jobId: 'run-202', status: 'running', total: 1 }));
+      expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'run-202' }),
+        expect.anything(),
+        expect.objectContaining({ scope: 'errored' })
+      );
+
+      const job = await pollStatus('run-202');
+      expect(job.status).toBe('completed');
+      expect(job.summary).toEqual(summary);
+    });
+
+    it('surfaces a pipeline failure through the status poll (not a 500 on the POST)', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'run-fail', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
+      });
+      mockRetryJudgementForRun.mockRejectedValueOnce(new Error('judge down'));
+      const res = await request(app).post('/api/storage/evaluation-runs/run-fail/retry-judgement');
+      expect(res.status).toBe(202);
+      const job = await pollStatus('run-fail');
+      expect(job.status).toBe('failed');
+      expect(job.error).toMatch(/judge down/);
+    });
+
+    it('409s a second concurrent retry-judgement request for the SAME run while the first is still in flight', async () => {
+      const runDoc = {
+        id: 'run-409', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
+      };
+      mockEvaluationRunsGetById.mockResolvedValue(runDoc);
+
+      let resolveFirst: (v: any) => void;
+      mockRetryJudgementForRun.mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }));
+
+      const firstRes = await request(app).post('/api/storage/evaluation-runs/run-409/retry-judgement');
+      expect(firstRes.status).toBe(202);
+
+      const secondRes = await request(app).post('/api/storage/evaluation-runs/run-409/retry-judgement');
+      expect(secondRes.status).toBe(409);
+      expect(secondRes.body.error).toMatch(/already in progress/i);
+
+      resolveFirst!(summary);
+      const job = await pollStatus('run-409');
+      expect(job.status).toBe('completed');
+    });
+
+    it('releases the in-progress guard after a failure, so a later request is not blocked forever', async () => {
+      mockEvaluationRunsGetById.mockResolvedValue({
+        id: 'run-release', docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
+      });
+      mockRetryJudgementForRun.mockRejectedValueOnce(new Error('judge down'));
+      const failedRes = await request(app).post('/api/storage/evaluation-runs/run-release/retry-judgement');
+      expect(failedRes.status).toBe(202);
+      await pollStatus('run-release');
+
+      mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+      const retryRes = await request(app).post('/api/storage/evaluation-runs/run-release/retry-judgement');
+      expect(retryRes.status).toBe(202);
+      await pollStatus('run-release');
     });
   });
 

@@ -86,6 +86,94 @@ export interface BuildRerunConfigError {
 }
 
 /**
+ * User-supplied tweaks to a rerun's config, applied on top of the source
+ * run's duplicated config (see {@link applyRerunOverrides}). Every field is
+ * optional — an omitted field keeps the source run's value untouched.
+ * `null` explicitly clears an optional field back to "use default"
+ * (distinct from `undefined`, which means "no change").
+ */
+export interface RerunOverrides {
+  agentKey?: string;
+  judgeModelId?: string | null;
+  evaluatorId?: string | null;
+  concurrency?: number;
+  /**
+   * Swap the test-case source to a different benchmark's current test case
+   * list. `null` clears the benchmark association (falls back to the
+   * source run's original `sources`). Setting this REPLACES `sources` with
+   * a single `{type:'benchmark'}` source — the rerun dialog's "tweak test
+   * cases" affordance is scoped to swapping benchmarks, not the full
+   * multi-source composer (see NewRunPage for that).
+   */
+  benchmarkId?: string | null;
+}
+
+export interface ApplyRerunOverridesResult {
+  config: RerunConfig;
+  /** True when at least one override changed the effective config. */
+  modified: boolean;
+}
+
+/**
+ * Apply user-supplied overrides on top of a duplicated rerun config. Pure
+ * function — returns a new config object plus whether anything actually
+ * changed (used to decide whether the new run should be flagged
+ * `modified: true` in addition to recording `rerunOf`).
+ *
+ * Only compares fields that are actually present in `overrides` (`in`
+ * check, not just truthiness) so "no overrides object at all" and "an
+ * overrides object whose fields happen to equal the source" both correctly
+ * report `modified: false`.
+ */
+export function applyRerunOverrides(
+  config: RerunConfig,
+  overrides?: RerunOverrides | null
+): ApplyRerunOverridesResult {
+  if (!overrides) return { config, modified: false };
+
+  let modified = false;
+  const next: RerunConfig = { ...config };
+
+  if (overrides.agentKey !== undefined && overrides.agentKey !== config.agentKey) {
+    next.agentKey = overrides.agentKey;
+    modified = true;
+  }
+
+  if ('judgeModelId' in overrides) {
+    const val = overrides.judgeModelId === null ? undefined : overrides.judgeModelId;
+    if (val !== config.judgeModelId) {
+      next.judgeModelId = val;
+      modified = true;
+    }
+  }
+
+  if ('evaluatorId' in overrides) {
+    const val = overrides.evaluatorId === null ? undefined : overrides.evaluatorId;
+    if (val !== config.evaluatorId) {
+      next.evaluatorId = val;
+      modified = true;
+    }
+  }
+
+  if (overrides.concurrency !== undefined && overrides.concurrency !== config.concurrency) {
+    next.concurrency = overrides.concurrency;
+    modified = true;
+  }
+
+  if ('benchmarkId' in overrides) {
+    const val = overrides.benchmarkId === null ? undefined : overrides.benchmarkId;
+    if (val !== config.benchmarkId) {
+      next.benchmarkId = val;
+      next.benchmarkVersion = undefined; // pinned version no longer applies once the benchmark itself changes
+      next.sources = val ? [{ type: 'benchmark', benchmarkId: val }] : config.sources;
+      modified = true;
+    }
+  }
+
+  return { config: next, modified };
+}
+
+/**
  * Duplicate a source run's execution config for a re-run, applying explicit,
  * reported defaults for fields missing on legacy run documents. Pure
  * function — no storage access (benchmark-existence checks live in

@@ -58,7 +58,7 @@ test.describe('Re-run an evaluation run', () => {
         agentKey: 'demo',
         modelId: 'claude-sonnet',
         judgeModelId: 'claude-sonnet-4.6',
-        evaluatorId: 'rca-default',
+        evaluatorId: 'system-rca-default',
         sources: [{ type: 'test-case-ids', ids: [testCaseId] }],
         trigger: 'api',
         testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'e2e rerun tc' }],
@@ -98,12 +98,17 @@ test.describe('Re-run an evaluation run', () => {
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('Re-run button is visible on the run report page header', async ({ page }) => {
+  test('Re-run lives in the report page header kebab (no standalone Re-run button)', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${sourceRunId}`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await expect(page.locator('[data-testid="rerun-run-btn"]')).toBeVisible({ timeout: 15000 });
+    // Owner papercut: standalone lifecycle buttons removed; kebab is the only home.
+    await expect(page.locator('[data-testid="rerun-run-btn"]')).toHaveCount(0);
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await expect(page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`)).toBeVisible({ timeout: 15000 });
+    await expect(page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`)).toBeEnabled();
+    await page.keyboard.press('Escape');
   });
 
   test('clicking Re-run opens a confirm dialog with name preview + agent/judge summary', async ({ page }) => {
@@ -111,17 +116,21 @@ test.describe('Re-run an evaluation run', () => {
 
     await page.goto(`/evaluations/runs/${sourceRunId}`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await page.locator('[data-testid="rerun-run-btn"]').click();
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
 
-    const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
 
-    // Name preview reflects the "(re-run)" suffix computed client-side.
-    await expect(page.locator('[data-testid="rerun-name-preview"]')).toHaveText(`${SOURCE_NAME} (re-run)`);
+    // Name preview reflects the "(re-run)" suffix computed client-side, and
+    // is editable.
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
-    // Agent/judge summary present.
-    await expect(dialog).toContainText('Agent:');
-    await expect(dialog).toContainText('Judge:');
+    // Prefilled Agent / Evaluator / Judge Model fields present — the owner
+    // explicitly wants the evaluator visible on the rerun path, not just
+    // carried silently.
+    await expect(page.locator('[data-testid="run-config-agent-trigger"]')).toBeVisible();
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toBeVisible();
     // judgeModelId is displayed via getModelName() (human-readable), not the raw id.
     await expect(dialog).toContainText('Claude Sonnet 4.6');
 
@@ -149,10 +158,11 @@ test.describe('Re-run an evaluation run', () => {
 
     await page.goto(`/evaluations/runs/${sourceRunId}`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await page.locator('[data-testid="rerun-run-btn"]').click();
-    await expect(page.locator('[data-testid="rerun-confirm-dialog"]')).toBeVisible({ timeout: 10000 });
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
+    await expect(page.locator('[data-testid="run-config-dialog"]')).toBeVisible({ timeout: 10000 });
 
-    await page.locator('[data-testid="rerun-confirm-btn"]').click();
+    await page.locator('[data-testid="run-config-submit-btn"]').click();
 
     await expect(page).toHaveURL(/\/evaluations\/runs\/mocked-rerun-target$/, { timeout: 10000 });
     expect(rerunRequested).toBe(true);
@@ -180,7 +190,7 @@ test.describe('Re-run an evaluation run', () => {
 
     await page.goto(`/evaluations/runs/${sourceRunId}`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    await expect(page.locator('[data-testid="rerun-run-btn"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`)).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="rerun-provenance-chip"]')).toHaveCount(0);
   });
 
@@ -198,9 +208,9 @@ test.describe('Re-run an evaluation run', () => {
     await expect(rowBtn).toBeVisible({ timeout: 15000 });
     await rowBtn.click();
 
-    const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('[data-testid="rerun-name-preview"]')).toHaveText(`${SOURCE_NAME} (re-run)`);
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible();
@@ -222,6 +232,89 @@ test.describe('Re-run an evaluation run', () => {
 
     // There is NO agent-model picker in the composer (agent owns its model).
     await expect(page.getByText('Agent Model', { exact: true })).toHaveCount(0);
+  });
+});
+
+test.describe('Re-run dialog — source-run evaluator no longer in config (real Radix Select)', () => {
+  // Regression coverage for the bug that made this file's own
+  // "confirming Re-run POSTs..." test flaky in CI: a source run seeded with
+  // an evaluatorId that isn't a real evaluator must render the missing-
+  // evaluator hint and block submit (RunConfigDialog's evaluatorMissing /
+  // canSubmit), not silently allow a POST with a dead evaluatorId.
+  let testCaseId: string | null = null;
+  let sourceRunId: string | null = null;
+  let seeded = false;
+
+  const SOURCE_NAME = 'E2E Missing Evaluator Source Run';
+
+  test.beforeAll(async ({ request }) => {
+    const tcRes = await request.post('/api/storage/test-cases', {
+      data: {
+        name: `e2e-rerun-missing-evaluator-tc-${Date.now()}`,
+        category: 'Test',
+        difficulty: 'Easy',
+        initialPrompt: 'What is causing the outage?',
+        expectedOutcomes: ['Identifies the root cause'],
+      },
+    });
+    if (!tcRes.ok()) return;
+    const tc = await tcRes.json();
+    testCaseId = tc.id || tc.testCase?.id;
+    if (!testCaseId) return;
+
+    sourceRunId = `eval-run-e2e-missing-evaluator-${Date.now()}`;
+    const srcRes = await request.put(`/api/storage/evaluation-runs/${sourceRunId}`, {
+      data: {
+        id: sourceRunId,
+        name: SOURCE_NAME,
+        status: 'completed',
+        agentKey: 'demo',
+        modelId: 'claude-sonnet',
+        evaluatorId: 'e2e-missing-evaluator',
+        sources: [{ type: 'test-case-ids', ids: [testCaseId] }],
+        trigger: 'api',
+        testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'e2e tc' }],
+        results: {},
+        createdAt: new Date().toISOString(),
+      },
+    });
+    seeded = srcRes.ok();
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (sourceRunId) await request.delete(`/api/storage/evaluation-runs/${sourceRunId}`).catch(() => {});
+    if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
+  });
+
+  test('shows the missing-evaluator hint, blocks submit, and re-enables after picking a configured evaluator', async ({ page }) => {
+    test.skip(!seeded, 'Could not seed source run (storage not configured?)');
+
+    await page.goto(`/evaluations/runs/${sourceRunId}`);
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
+
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+
+    // Never silently swapped: the trigger shows the missing id, the amber
+    // hint explains why, and submit is blocked.
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toContainText('e2e-missing-evaluator');
+    await expect(page.locator('[data-testid="run-config-evaluator-missing-hint"]')).toBeVisible();
+    await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeDisabled();
+
+    // The missing entry is present but disabled in the (real Radix) list;
+    // picking a configured evaluator clears the hint and re-enables submit.
+    await page.locator('[data-testid="run-config-evaluator-trigger"]').click();
+    await page.waitForSelector('[role="listbox"]', { timeout: 5000 });
+    await expect(page.locator('[data-testid="run-config-evaluator-missing-item"]')).toHaveAttribute('data-disabled', '');
+    await page.locator('[role="option"]:has-text("RCA Default (System)")').click();
+    await expect(page.locator('[data-testid="run-config-evaluator-missing-hint"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="run-config-evaluator-trigger"]')).toContainText('RCA Default');
+    await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeEnabled();
+
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible();
   });
 });
 
@@ -290,28 +383,37 @@ test.describe('Run inspector — Re-run button (eval-run mode)', () => {
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('Re-run button is visible in the inspector page header (eval-run mode)', async ({ page }) => {
+  test('Re-run is an enabled kebab item in the inspector header (eval-run mode); no standalone buttons', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    
-    const rerunBtn = page.locator('[data-testid="inspector-rerun-btn"]');
-    await expect(rerunBtn).toBeVisible({ timeout: 15000 });
-    await expect(rerunBtn).not.toBeDisabled();
+
+    // Owner papercut: no standalone Re-run / Retry judgement / Compare buttons.
+    await expect(page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`)).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="inspector-rerun-btn"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="inspector-retry-judgement-btn"]')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Compare' })).toHaveCount(0);
+
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    const rerunItem = page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`);
+    await expect(rerunItem).toBeVisible({ timeout: 10000 });
+    await expect(rerunItem).toBeEnabled();
+    await page.keyboard.press('Escape');
   });
 
-  test('inspector Re-run button opens confirm dialog', async ({ page }) => {
+  test('inspector kebab Re-run opens confirm dialog', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
-    
-    await page.locator('[data-testid="inspector-rerun-btn"]').click();
 
-    const dialog = page.locator('[data-testid="rerun-confirm-dialog"]');
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
+    await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
+
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('[data-testid="rerun-name-preview"]')).toHaveText(`${SOURCE_NAME} (re-run)`);
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue(`${SOURCE_NAME} (re-run)`);
 
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible();
@@ -356,7 +458,11 @@ test.describe('Run inspector — Re-run button hidden for benchmark-embedded run
 
     benchmarkId = `e2e-inspect-bm-${Date.now()}`;
     runId = `e2e-inspect-bm-run-${Date.now()}`;
-    
+
+    // POST create (not PUT) — PUT /api/storage/benchmarks/:id requires the
+    // doc to already exist and 404s otherwise (verified against the real
+    // route); this beforeAll previously always 404'd here and silently
+    // skipped every test in this describe block.
     const bmRes = await request.post('/api/storage/benchmarks', {
       data: {
         id: benchmarkId,
@@ -381,15 +487,20 @@ test.describe('Run inspector — Re-run button hidden for benchmark-embedded run
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('Re-run button is disabled for benchmark-embedded runs', async ({ page }) => {
+  test('kebab Re-run item is disabled for benchmark-embedded runs', async ({ page }) => {
     test.skip(!seeded, 'Could not seed benchmark run (storage not configured?)');
 
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    const rerunBtn = page.locator('[data-testid="inspector-rerun-btn"]');
-    await expect(rerunBtn).toBeVisible({ timeout: 15000 });
-    await expect(rerunBtn).toBeDisabled();
+    await expect(page.locator('[data-testid="inspector-rerun-btn"]')).toHaveCount(0);
+    await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
+    const rerunItem = page.locator(`[data-testid="run-action-rerun-${runId}"]`);
+    await expect(rerunItem).toBeVisible({ timeout: 15000 });
+    // Radix marks disabled items via aria-disabled / data-disabled (not the
+    // native `disabled` attribute), so assert the accessible state.
+    await expect(rerunItem).toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
   });
 });
 
@@ -496,15 +607,17 @@ test.describe('Run inspector — Re-run enabled on the benchmark-scoped route fo
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('Re-run button is enabled on the benchmark-scoped inspector route', async ({ page }) => {
+  test('kebab Re-run item is enabled on the benchmark-scoped inspector route', async ({ page }) => {
     test.skip(!seeded, 'Could not seed dual-written run (storage not configured?)');
 
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
-    const rerunBtn = page.locator('[data-testid="inspector-rerun-btn"]');
-    await expect(rerunBtn).toBeVisible({ timeout: 15000 });
-    await expect(rerunBtn).not.toBeDisabled();
+    await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
+    const rerunItem = page.locator(`[data-testid="run-action-rerun-${runId}"]`);
+    await expect(rerunItem).toBeVisible({ timeout: 15000 });
+    await expect(rerunItem).not.toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
   });
 
   test('provenance chip renders on the benchmark-scoped inspector route', async ({ page }) => {

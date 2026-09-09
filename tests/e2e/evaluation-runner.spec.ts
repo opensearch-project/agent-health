@@ -297,9 +297,10 @@ test.describe('Evaluation Runner - Run Cancellation UI', () => {
       await page.goto(`/evaluations/runs/${runningRun.id}`);
       await page.waitForTimeout(3000);
 
-      // Should have a cancel button
-      const cancelButton = page.locator('button:has-text("Cancel"), button:has-text("Stop")');
-      await expect(cancelButton).toBeVisible({ timeout: 10000 });
+      // Cancel lives in the header "…" run-actions kebab (only while running).
+      await page.locator(`[data-testid="run-actions-menu-trigger-${runningRun.id}"]`).click();
+      await expect(page.locator(`[data-testid="run-action-cancel-${runningRun.id}"]`)).toBeVisible({ timeout: 10000 });
+      await page.keyboard.press('Escape');
     }
   });
 
