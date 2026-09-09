@@ -10,6 +10,7 @@
 
 import type { TrajectoryStep, ToolCallStatus } from '@/types';
 import { BaseConnector } from '@/services/connectors/base/BaseConnector';
+import { agentPromptContext } from '@/services/connectors/types';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -33,7 +34,7 @@ export class MockConnector extends BaseConnector {
   buildPayload(request: ConnectorRequest): any {
     return {
       question: request.testCase.initialPrompt,
-      context: request.testCase.context,
+      context: agentPromptContext(request.testCase.context),
     };
   }
 
