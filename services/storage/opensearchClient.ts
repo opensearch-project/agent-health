@@ -101,6 +101,11 @@ export interface StorageBenchmarkRunConfig {
   headers?: Record<string, string>;
   iterationCount?: number;
   createdAt: string;
+  /** Agent-configuration provenance (lib/agentFingerprint.ts); absent on older runs. */
+  agentFingerprint?: string;
+  agentFingerprintShort?: string;
+  agentPromptHash?: string;
+  agentConfigSource?: { path: string; gitSha?: string; dirty?: boolean };
   results?: Record<string, { reportId: string; status: string; error?: string }>;
   status?: string;
   error?: string;
@@ -166,6 +171,10 @@ export interface StorageRun {
   evaluatorId?: string;
   /** Which Bedrock judge model produced this run's verdict (see EvaluationReport/BenchmarkRun.judgeModelId). */
   judgeModelId?: string;
+  /** Agent-configuration provenance mirror (lib/agentFingerprint.ts); absent on older docs. */
+  agentFingerprint?: string;
+  agentFingerprintShort?: string;
+  agentPromptHash?: string;
   improvementStrategies?: {
     category: string;
     issue: string;

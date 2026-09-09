@@ -36,6 +36,7 @@ import {
 } from '@/services/client/evaluationRunsApi';
 import { RerunConfirmDialog } from './RerunConfirmDialog';
 import { Breadcrumbs } from './Breadcrumbs';
+import { AgentFingerprintChip, AgentConfigChangedBadge } from './AgentFingerprintChip';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -119,12 +120,23 @@ export const EvalRunDetailPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [run?.status, loadRun]);
 
+  // Source run's agent-config provenance (lib/agentFingerprint.ts) so the
+  // chip row can say "config changed since source run" for a re-run measured
+  // against a different version of the same agent's configuration.
+  const [sourceRunProvenance, setSourceRunProvenance] = useState<Pick<EvaluationRun, 'agentKey' | 'agentFingerprint' | 'agentPromptHash'> | null>(null);
+
   useEffect(() => {
-    if (!run?.rerunOf) { setSourceRunName(null); setSourceRunMissing(false); return; }
+    if (!run?.rerunOf) { setSourceRunName(null); setSourceRunMissing(false); setSourceRunProvenance(null); return; }
     let cancelled = false;
     getEvaluationRun(run.rerunOf)
-      .then(src => { if (!cancelled) { setSourceRunName(src.name || src.id); setSourceRunMissing(false); } })
-      .catch(() => { if (!cancelled) { setSourceRunName(null); setSourceRunMissing(true); } });
+      .then(src => {
+        if (!cancelled) {
+          setSourceRunName(src.name || src.id);
+          setSourceRunMissing(false);
+          setSourceRunProvenance({ agentKey: src.agentKey, agentFingerprint: src.agentFingerprint, agentPromptHash: src.agentPromptHash });
+        }
+      })
+      .catch(() => { if (!cancelled) { setSourceRunName(null); setSourceRunMissing(true); setSourceRunProvenance(null); } });
     return () => { cancelled = true; };
   }, [run?.rerunOf]);
 
@@ -234,10 +246,23 @@ export const EvalRunDetailPage: React.FC = () => {
                     <span className="min-w-0 truncate">re-run of {sourceRunName || run.rerunOf.slice(0, 8)}</span>
                   </button>
                 )}
+                {run.rerunOf && (
+                  <AgentConfigChangedBadge
+                    a={sourceRunProvenance}
+                    b={run}
+                    wording="since-source"
+                    data-testid="rerun-config-changed-badge"
+                  />
+                )}
               </div>
               <h1 className="text-xl font-semibold" title={run.name || `Run ${run.id.slice(0, 8)}`}>{run.name || `Run ${run.id.slice(0, 8)}`}</h1>
               <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                <span>{agentName}</span>
+                <span className="inline-flex items-center gap-1.5">
+                  {agentName}
+                  {/* Agent-configuration provenance: WHICH version of this
+                      agent's config produced these numbers (lib/agentFingerprint.ts). */}
+                  <AgentFingerprintChip run={run} compact data-testid="inspector-fingerprint-chip" />
+                </span>
                 <span>{modelName}</span>
                 <span>{formatRelativeTime(run.createdAt)}</span>
                 {run.completedAt && (
@@ -369,6 +394,18 @@ export const EvalRunDetailPage: React.FC = () => {
           {configOpen && (
             <div className="p-3 border-t text-sm space-y-1">
               <div><span className="text-muted-foreground">Agent:</span> {agentName} ({run.agentKey})</div>
+              {run.agentFingerprint && (
+                <div data-testid="run-config-fingerprint-row">
+                  <span className="text-muted-foreground">Agent config:</span>{' '}
+                  <span className="font-mono text-xs" title={run.agentFingerprint}>{run.agentFingerprintShort || run.agentFingerprint.slice(0, 12)}</span>
+                  {run.agentPromptHash && (
+                    <span className="text-muted-foreground"> · prompt <span className="font-mono text-xs" title={run.agentPromptHash}>{run.agentPromptHash.slice(0, 12)}</span></span>
+                  )}
+                  {run.agentConfigSource?.path && (
+                    <span className="text-muted-foreground"> · {run.agentConfigSource.path}{run.agentConfigSource.gitSha ? ` @ ${run.agentConfigSource.gitSha.slice(0, 12)}` : ''}{run.agentConfigSource.dirty ? ' (uncommitted edits)' : ''}</span>
+                  )}
+                </div>
+              )}
               <div><span className="text-muted-foreground">Model:</span> {modelName} ({run.modelId})</div>
               {run.evaluatorId && <div><span className="text-muted-foreground">Evaluator:</span> {run.evaluatorId}</div>}
               <div><span className="text-muted-foreground">Concurrency:</span> {run.concurrency || 1}</div>

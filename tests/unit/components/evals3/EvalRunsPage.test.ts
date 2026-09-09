@@ -455,3 +455,47 @@ describe('EvalRunsPage — in-flight (running) run indication (bug #5, 2026-09-0
     }
   });
 });
+
+describe('EvalRunsPage — agent-configuration provenance chip (lib/agentFingerprint.ts)', () => {
+  const FP = 'c'.repeat(64);
+  const PH = '3'.repeat(64);
+
+  beforeEach(() => {
+    mockGetAllBenchmarks.mockResolvedValue([]);
+  });
+
+  it('shows the mono 12-hex chip under the agent name for a fingerprinted run, with full hash + prompt hash in the tooltip', async () => {
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [{
+        id: 'eval-run-fp-1', docType: 'evaluation-run', name: 'Fingerprinted Run', createdAt: new Date().toISOString(),
+        status: 'completed', agentKey: 'agent-a', modelId: 'claude-3', sources: [], trigger: 'ui', testCaseSnapshots: [{}],
+        results: { 'tc-0': { reportId: 'r-0', status: 'completed', passFailStatus: 'passed' } },
+        agentFingerprint: FP, agentFingerprintShort: 'cccccccccccc', agentPromptHash: PH,
+        agentConfigSource: { path: '/cfg/agent-health.config.ts', gitSha: 'feedface00000000' },
+      }],
+    });
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('Fingerprinted Run')).toBeTruthy());
+    const chip = screen.getByTestId('run-row-fingerprint-eval-run-fp-1');
+    expect(chip.textContent).toContain('cccccccccccc');
+    expect(chip.className).toContain('font-mono');
+    expect(chip.getAttribute('title')).toContain(FP);
+    expect(chip.getAttribute('title')).toContain(PH);
+    expect(chip.getAttribute('title')).toContain('/cfg/agent-health.config.ts @ feedface0000');
+    // Lives in the agent cell.
+    expect(chip.closest('[data-testid="run-agent-cell"]')).toBeTruthy();
+  });
+
+  it('renders no chip for a legacy run without a fingerprint', async () => {
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [{
+        id: 'eval-run-legacy-1', docType: 'evaluation-run', name: 'Legacy Run', createdAt: new Date().toISOString(),
+        status: 'completed', agentKey: 'agent-a', modelId: 'claude-3', sources: [], trigger: 'ui', testCaseSnapshots: [{}],
+        results: { 'tc-0': { reportId: 'r-0', status: 'completed', passFailStatus: 'passed' } },
+      }],
+    });
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('Legacy Run')).toBeTruthy());
+    expect(screen.queryByTestId('run-row-fingerprint-eval-run-legacy-1')).toBeNull();
+  });
+});

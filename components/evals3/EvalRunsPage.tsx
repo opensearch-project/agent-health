@@ -41,6 +41,7 @@ import { formatRelativeTime, getModelName, getJudgeModelLabel, getEvaluatorLabel
 import { Breadcrumbs } from './Breadcrumbs';
 import { InlineRenameField } from './InlineRenameField';
 import { RerunConfirmDialog } from './RerunConfirmDialog';
+import { AgentFingerprintChip } from './AgentFingerprintChip';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────
 
@@ -693,7 +694,12 @@ export const EvalRunsPage: React.FC = () => {
             )}
           </td>
         )}
-        <td className="px-2 py-1.5 align-middle text-[11px]">{rr.agentName}</td>
+        <td className="px-2 py-1.5 align-middle text-[11px]" data-testid="run-agent-cell">
+          <div>{rr.agentName}</div>
+          {/* Agent-configuration provenance: WHICH version of this agent's
+              config produced these numbers. Renders nothing for legacy runs. */}
+          <AgentFingerprintChip run={rr.run} compact className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
+        </td>
         <td className="px-2 py-1.5 align-middle text-[11px]">{getModelName(rr.run.modelId)}</td>
         <td className="px-2 py-1.5 align-middle text-[11px]" data-testid="run-judge-cell">{getJudgeModelLabel(rr.run.judgeModelId)}</td>
         <td className="px-2 py-1.5 align-middle text-[11px]" data-testid="run-evaluator-cell">

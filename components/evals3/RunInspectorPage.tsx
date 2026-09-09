@@ -28,6 +28,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/componen
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { getEvaluationRun, updateEvaluationRun } from '@/services/client';
 import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, EvaluationReport, isEvaluationRun } from '@/types';
+import { AgentFingerprintChip, AgentConfigChangedBadge } from './AgentFingerprintChip';
 import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -119,6 +120,10 @@ export const RunInspectorPage: React.FC = () => {
   // source run was since deleted).
   const [sourceRunName, setSourceRunName] = useState<string | null>(null);
   const [sourceRunMissing, setSourceRunMissing] = useState(false);
+  // The source run's agent-config provenance, so the chip can say "config
+  // changed since source run" when the re-run was measured against a
+  // different version of the same agent's configuration.
+  const [sourceRunProvenance, setSourceRunProvenance] = useState<Pick<EvaluationRun, 'agentKey' | 'agentFingerprint' | 'agentPromptHash'> | null>(null);
 
   // Load data — fetch reports to get real pass/fail status
   const loadData = useCallback(async () => {
@@ -293,6 +298,7 @@ export const RunInspectorPage: React.FC = () => {
     if (!run || !isEvaluationRun(run) || !run.rerunOf) {
       setSourceRunName(null);
       setSourceRunMissing(false);
+      setSourceRunProvenance(null);
       return;
     }
     let cancelled = false;
@@ -302,12 +308,14 @@ export const RunInspectorPage: React.FC = () => {
         if (!cancelled) {
           setSourceRunName(src.name || src.id);
           setSourceRunMissing(false);
+          setSourceRunProvenance({ agentKey: src.agentKey, agentFingerprint: src.agentFingerprint, agentPromptHash: src.agentPromptHash });
         }
       })
       .catch(() => {
         if (!cancelled) {
           setSourceRunName(null);
           setSourceRunMissing(true);
+          setSourceRunProvenance(null);
         }
       });
     return () => { cancelled = true; };
@@ -513,12 +521,26 @@ export const RunInspectorPage: React.FC = () => {
                   <Link2 size={11} className="shrink-0" />
                   <span className="min-w-0 truncate">re-run of {sourceRunName || evalRun.rerunOf?.slice(0, 8)}</span>
                 </button>
+                {/* Same agent, different config version than the source run
+                    (prompt edit landed in between, etc.) — the pass-rate delta
+                    is NOT a pure re-run signal then. Nothing rendered when the
+                    fingerprints match or the source run predates them. */}
+                <AgentConfigChangedBadge
+                  a={sourceRunProvenance}
+                  b={evalRun}
+                  wording="since-source"
+                  className="ml-1.5"
+                  data-testid="rerun-config-changed-badge"
+                />
               </div>
             )}
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
             <span className="flex items-center gap-1"><Calendar size={11} /> {formatDate(run.createdAt)}</span>
-            <span>{agentName}</span>
+            <span className="flex items-center gap-1.5">
+              {agentName}
+              <AgentFingerprintChip run={run} compact data-testid="inspector-fingerprint-chip" />
+            </span>
             <span>{modelName}</span>
             <span className="flex items-center gap-1">
               <span className="text-green-500 font-semibold">{passCount}✓</span>
