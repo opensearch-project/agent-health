@@ -105,24 +105,50 @@ test.describe('Benchmark page test-case panel renders CLI-created (run-linked) c
     expect(currentEntry?.testCaseIds).toContain(testCaseId);
   });
 
-  test('renders the linked test case in the panel instead of "No test cases in this version"', async ({ page }) => {
+  test('renders the linked test case in the Cases tab instead of an empty case list', async ({ page }) => {
     test.skip(!benchmarkId, 'Seed data unavailable');
 
-    // Force the default split layout regardless of any persisted preference
-    // from a previous run/test, matching the established pattern for this page.
-    await page.addInitScript(() => { try { localStorage.clear(); } catch { /* ignore */ } });
-
-    await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs`);
+    // The benchmark page is now a fixed two-tab layout (Cases | Runs, PR #447);
+    // the old split "test-case panel" (and its "No test cases in this version"
+    // / "N test cases" copy) no longer exists. The Cases tab is the surface
+    // that renders the benchmark's current-version test cases, so a
+    // version-level link that is dropped shows up as a Cases tab with no
+    // rows (and no "Cases N" count badge).
+    await page.goto(`/evaluations/benchmarks/${benchmarkId}`);
     await page.waitForSelector('h2', { timeout: 30000 });
     await expect(page.locator(`h2:has-text("${benchmarkName}")`)).toBeVisible();
+
+    // THE FIX: the Cases tab count reflects the linked test case, and the
+    // case row for it actually renders in the case list.
+    const casesTab = page.locator('[role="tab"]:has-text("Cases")');
+    await expect(casesTab).toBeVisible();
+    await expect(casesTab).toContainText('1');
+    await page.waitForSelector('[data-testid="benchmark-cases-tab"]', { timeout: 30000 });
+    const caseList = page.locator('[role="listbox"][aria-label="Benchmark cases"]');
+    await expect(caseList.locator('[role="option"]')).toHaveCount(1);
+    await expect(caseList.getByText(testCaseName)).toBeVisible();
+  });
+
+  test('the version-aware benchmark runs page renders the linked case, not "No test cases in this version"', async ({ page }) => {
+    test.skip(!benchmarkId, 'Seed data unavailable');
+
+    // The Cases tab above derives its rows from the TOP-LEVEL `testCaseIds`,
+    // so it cannot distinguish the original bug (top-level populated,
+    // `versions[current].testCaseIds` still empty). This page —
+    // components/BenchmarkRunsPage.tsx, routed at /benchmarks/:id/runs and
+    // reached from the Overview's "Run a benchmark" CTA — is the surface that
+    // reads the CURRENT VERSION's array (getVersionTestCases), and is where
+    // the bug originally rendered as "No test cases in this version".
+    await page.goto(`/benchmarks/${benchmarkId}/runs`);
+    await expect(page.locator('[data-testid="benchmark-name"]')).toHaveText(benchmarkName, { timeout: 30000 });
 
     // THE BUG: this text renders when the current version's testCaseIds is
     // empty, even though the benchmark's top-level testCaseIds is correct.
     await expect(page.locator('text=No test cases in this version')).toHaveCount(0);
 
-    // THE FIX: the panel's count reflects the linked test case, and the card
-    // for it actually renders.
+    // THE FIX: the version panel's count reflects the linked test case, and
+    // the card for it actually renders.
     await expect(page.locator('text=/^1 test case$/')).toBeVisible();
-    await expect(page.locator(`text=${testCaseName}`)).toBeVisible();
+    await expect(page.locator(`text=${testCaseName}`).first()).toBeVisible();
   });
 });

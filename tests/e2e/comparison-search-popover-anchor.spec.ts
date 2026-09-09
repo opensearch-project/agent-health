@@ -71,20 +71,25 @@ test.describe('Comparison run-selector popover — anchoring', () => {
       await expect(panel).toBeVisible();
 
       const triggerBox = await trigger.boundingBox();
-      const panelBox = await panel.boundingBox();
       expect(triggerBox).not.toBeNull();
-      expect(panelBox).not.toBeNull();
-
       const triggerBottom = triggerBox!.y + triggerBox!.height;
-      const gap = panelBox!.y - triggerBottom;
 
-      // Panel must not extend above the trigger (would mean it's floating
-      // somewhere else on the page, e.g. detached over the scoreboard).
-      expect(panelBox!.y).toBeGreaterThanOrEqual(triggerBox!.y);
-      // Panel's top must sit close beneath the trigger's bottom — not a
-      // large, page-spanning gap.
+      // PopoverContent animates in (zoom-in-95 from the panel center, see
+      // components/ui/popover.tsx), so a single boundingBox() sample taken
+      // right after toBeVisible() can land mid-transition — the top edge is
+      // still translated ~8px down and the "gap" reads ~12.35px instead of
+      // the settled sideOffset. Poll until the geometry settles instead of
+      // asserting a single frame.
+      const measureGap = async () => {
+        const panelBox = await panel.boundingBox();
+        return panelBox ? panelBox.y - triggerBottom : Number.NaN;
+      };
+      // Panel's top must sit close beneath the trigger's bottom — not above
+      // it (would mean it's floating somewhere else on the page, e.g.
+      // detached over the scoreboard) and not a large, page-spanning gap.
+      await expect.poll(measureGap, { timeout: 5000 }).toBeLessThanOrEqual(12);
+      const gap = await measureGap();
       expect(gap).toBeGreaterThanOrEqual(0);
-      expect(gap).toBeLessThanOrEqual(12);
 
       // Interacting inside the panel (switching tabs) must not close it.
       const runTab = page.locator('[data-testid="comparison-search-scope-run"]');
