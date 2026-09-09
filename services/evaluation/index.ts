@@ -20,6 +20,7 @@ import type { MatcherResult } from '@/lib/matchers/types';
 import type { TracesAccessor } from '@/lib/matchers/traces';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
+import { judgedExpectedOutcomeTexts } from '@/lib/testCases/declarativeOutcomes';
 
 // Re-export for use by experimentRunner when calling judge after trace polling
 export { callBedrockJudge };
@@ -636,7 +637,7 @@ export async function runEvaluationWithConnector(
       judgment = await callBedrockJudge(
         fullTrajectory,
         {
-          expectedOutcomes: testCase.expectedOutcomes,
+          expectedOutcomes: judgedExpectedOutcomeTexts(testCase.expectedOutcomes),
           expectedTrajectory: testCase.expectedTrajectory,
         },
         undefined, // No logs in direct connector mode
@@ -944,7 +945,7 @@ export async function runEvaluation(
     const judgment = await callBedrockJudge(
       fullTrajectory,
       {
-        expectedOutcomes: testCase.expectedOutcomes,
+        expectedOutcomes: judgedExpectedOutcomeTexts(testCase.expectedOutcomes),
         expectedTrajectory: testCase.expectedTrajectory,
       },
       logs,

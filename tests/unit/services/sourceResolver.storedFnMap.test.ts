@@ -36,12 +36,14 @@ function stored(id: string, name: string, sourceFile?: string): TestCase {
 describe('resolveCodeFnMapForStoredTestCases', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('returns empty maps when no stored test case has a code sourceFile', async () => {
+  it('compiles stored non-code cases without loading a code module', async () => {
     const r = await resolveCodeFnMapForStoredTestCases([
       stored('tc-1', 'A'),                       // no sourceFile
       stored('tc-2', 'B', 'cases/data.json'),    // json provenance, not code
     ]);
-    expect(r.evaluateFnMap.size).toBe(0);
+    expect(r.evaluateFnMap.size).toBe(2);
+    expect(r.evaluateFnMap.has('tc-1')).toBe(true);
+    expect(r.evaluateFnMap.has('tc-2')).toBe(true);
     expect(r.hooksByFile.size).toBe(0);
     expect(r.testHookScopes.size).toBe(0);
     expect(mockLoad).not.toHaveBeenCalled();

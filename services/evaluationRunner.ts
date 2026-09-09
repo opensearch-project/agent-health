@@ -30,6 +30,7 @@ import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { connectorRegistry } from '@/services/connectors/server';
+import { resolveConnectorWorkspaceDir } from '@/services/connectors/types';
 import { startTestCaseSpan, finalizeTestCaseSpan, addEvaluationResultEvents } from '@/lib/telemetry';
 import { ATTR_AGENT_HEALTH_AGENT_RUN_ID } from '@/lib/telemetry/constants';
 import { SpanStatusCode, context } from '@opentelemetry/api';
@@ -62,6 +63,8 @@ import { debug } from '@/lib/debug';
 import { tracePollingManager } from './traces/tracePoller';
 import { fetchSpansForRun, type TraceWindowAgent } from './traces/fetchSpansForRun';
 import { CancellationToken, createCancellationToken } from './benchmarkRunner';
+import { deriveMatcherSessionVerdict } from './declarativeCaseCompiler';
+import { judgedExpectedOutcomeTexts } from '@/lib/testCases/declarativeOutcomes';
 
 export type { CancellationToken } from './benchmarkRunner';
 export { createCancellationToken } from './benchmarkRunner';
@@ -428,6 +431,10 @@ export async function executeEvaluationRun(
                 rawEvents: inv.rawEvents,
                 runId: inv.runId ?? undefined,
                 durationMs: inv.agentDurationMs,
+                workspaceDir: resolveConnectorWorkspaceDir(
+                  inv.metadata,
+                  agentConfig.connectorConfig as Record<string, any> | undefined,
+                ),
               });
               // Fold the invocation into the report shell, then load traces
               // for the body (see #230 loud-failure semantics).
@@ -537,10 +544,9 @@ export async function executeEvaluationRun(
             // observe-role signals never gate; errored signals are bucketed
             // separately as `errored` (excluded from pass-rate), not `failed`.
             const erroredMatchers = matcherResults.filter(m => m.errored);
-            const anyErrored = erroredMatchers.length > 0;
-            const anyGateFailed = matcherResults.some(
-              m => !m.pass && m.role !== 'observe' && !m.errored,
-            );
+            const sessionVerdict = deriveMatcherSessionVerdict(matcherResults);
+            const anyErrored = sessionVerdict === 'errored';
+            const anyGateFailed = sessionVerdict === 'failed';
             // #335: distinguish an *agent* failure (subprocess timeout / crash —
             // `capturedResult` was never set because `agent.run()` rejected) from
             // a deliberate gate failure. The former must surface as a clearly
@@ -952,7 +958,7 @@ async function waitForTracesAndJudge(
             const judgment = await callBedrockJudge(
               finalTrajectory,
               {
-                expectedOutcomes: testCase.expectedOutcomes,
+                expectedOutcomes: judgedExpectedOutcomeTexts(testCase.expectedOutcomes),
                 expectedTrajectory: testCase.expectedTrajectory,
               },
               [],
@@ -1139,6 +1145,7 @@ function buildEvalResult(input: {
   runId?: string;
   durationMs: number;
   tokenUsage?: { prompt: number; completion: number; total: number };
+  workspaceDir?: string;
 }): EvalResult {
   const trajectory = makeTrajectoryAccessor(input.trajectory);
   return {
@@ -1152,6 +1159,7 @@ function buildEvalResult(input: {
     rawEvents: input.rawEvents,
     runId: input.runId,
     durationMs: input.durationMs,
+    workspaceDir: input.workspaceDir,
     tokenUsage: input.tokenUsage,
   };
 }

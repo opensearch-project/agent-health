@@ -15,6 +15,7 @@ export type {
   ConnectorAuth,
   ConnectorRequest,
   ConnectorResponse,
+  ConnectorResponseMetadata,
   ConnectorProgressCallback,
   ConnectorRawEventCallback,
   AgentConnector,
@@ -25,6 +26,7 @@ export type {
   ConnectorRegistry,
   ConnectorExecuteOptions,
 } from './types';
+export { resolveConnectorWorkspaceDir } from './types';
 
 // ============ Registry Exports ============
 export {

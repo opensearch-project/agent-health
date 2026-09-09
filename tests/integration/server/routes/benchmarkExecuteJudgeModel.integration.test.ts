@@ -185,7 +185,13 @@ describe('POST /api/storage/benchmarks/:id/execute — judgeModelId plumbing', (
       expect(doc.judgeModelId).toBe('demo-model');
 
       // 4. …and the verdict provably came from the demo judge, not a fallback.
-      expect(doc.llmJudgeReasoning || '').toMatch(/mock|simulated|demo/i);
+      // Declarative cases now compile to SDK matcher sessions, whose canonical
+      // judge evidence lives per outcome rather than in the legacy aggregate.
+      const judgeEvidence = (doc.matcherResults ?? [])
+        .filter((matcher: any) => matcher.method === 'llm-judge')
+        .map((matcher: any) => matcher.reasoning ?? matcher.errorMessage ?? '')
+        .join('\n');
+      expect(judgeEvidence).toMatch(/mock|simulated|demo/i);
     },
     TEST_TIMEOUT
   );

@@ -26,6 +26,9 @@ export function convertTestCasesToExportFormat(testCases: TestCase[]): Validated
     if (tc.subcategory) {
       exported.subcategory = tc.subcategory;
     }
+    if (tc.fixture) {
+      exported.fixture = tc.fixture;
+    }
 
     return exported;
   });

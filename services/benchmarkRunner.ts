@@ -33,6 +33,7 @@ import {
 } from './evaluation';
 import { buildEvaluatorErrorPatch } from './evaluation/evaluatorError';
 import { connectorRegistry } from '@/services/connectors/server';
+import { resolveConnectorWorkspaceDir } from '@/services/connectors/types';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
@@ -73,6 +74,8 @@ import {
 } from '@/lib/telemetry';
 import { SpanStatusCode, context, trace } from '@opentelemetry/api';
 import { ATTR_AGENT_HEALTH_AGENT_RUN_ID } from '@/lib/telemetry/constants';
+import { deriveMatcherSessionVerdict } from './declarativeCaseCompiler';
+import { judgedExpectedOutcomeTexts } from '@/lib/testCases/declarativeOutcomes';
 
 /**
  * Safely load config with fallback to defaults.
@@ -426,6 +429,10 @@ export async function executeRun(
                 rawEvents: inv.rawEvents,
                 runId: inv.runId ?? undefined,
                 durationMs: inv.agentDurationMs,
+                workspaceDir: resolveConnectorWorkspaceDir(
+                  inv.metadata,
+                  agentConfig.connectorConfig as Record<string, any> | undefined,
+                ),
               });
               (report as any).trajectory = inv.trajectory;
               (report as any).rawEvents = inv.rawEvents;
@@ -515,10 +522,9 @@ export async function executeRun(
             // observe-role signals never gate; errored signals are bucketed
             // separately as `errored` (excluded from pass-rate), not `failed`.
             const erroredMatchers = matcherResults.filter(m => m.errored);
-            const anyErrored = erroredMatchers.length > 0;
-            const anyGateFailed = matcherResults.some(
-              m => !m.pass && m.role !== 'observe' && !m.errored,
-            );
+            const sessionVerdict = deriveMatcherSessionVerdict(matcherResults);
+            const anyErrored = sessionVerdict === 'errored';
+            const anyGateFailed = sessionVerdict === 'failed';
             // #335: an *agent* failure (subprocess timeout / crash — `agent.run()`
             // rejected so `capturedResult` was never set) must surface as a clearly
             // labelled `errored` run, not a silent `failed` with an empty card.
@@ -1096,7 +1102,7 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
           const judgment = await callBedrockJudge(
             finalTrajectory,
             {
-              expectedOutcomes: testCase.expectedOutcomes,
+              expectedOutcomes: judgedExpectedOutcomeTexts(testCase.expectedOutcomes),
               expectedTrajectory: testCase.expectedTrajectory,
             },
             [], // No logs for trace-mode - traces are the source of truth
@@ -1229,7 +1235,7 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
             (report.modelId ? getBedrockModelId(report.modelId) : undefined);
           const judgment = await callBedrockJudge(
             finalTrajectory,
-            { expectedOutcomes: testCase.expectedOutcomes, expectedTrajectory: testCase.expectedTrajectory },
+            { expectedOutcomes: judgedExpectedOutcomeTexts(testCase.expectedOutcomes), expectedTrajectory: testCase.expectedTrajectory },
             [],
             () => {},
             judgeModelId,
@@ -1435,6 +1441,7 @@ function buildEvalResult(input: {
   runId?: string;
   durationMs: number;
   tokenUsage?: { prompt: number; completion: number; total: number };
+  workspaceDir?: string;
 }): EvalResult {
   const trajectory = makeTrajectoryAccessor(input.trajectory);
   return {
@@ -1447,6 +1454,7 @@ function buildEvalResult(input: {
     rawEvents: input.rawEvents,
     runId: input.runId,
     durationMs: input.durationMs,
+    workspaceDir: input.workspaceDir,
     tokenUsage: input.tokenUsage,
   };
 }

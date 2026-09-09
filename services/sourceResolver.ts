@@ -12,6 +12,7 @@ import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 import { getCategoryFromLabels, getDifficultyFromLabels } from '@/lib/testCaseLabels';
 import { debug } from '@/lib/debug';
 import type { EvalResult, RegisteredHook } from '@/lib/testCases/types';
+import { compileDeclarativeTestCase, isDeclarativeTestCase } from '@/services/declarativeCaseCompiler';
 
 /**
  * The signature of a test body. Accepts both legacy `(result)` form and
@@ -51,6 +52,7 @@ export async function resolveTestCaseSources(
   const evaluateFnMap = new Map<string, EvaluateFn>();
   const hooksByFile = new Map<string, RegisteredHook[]>();
   const testHookScopes = new Map<string, { sourceFile?: string; describePath?: string }>();
+  const codeImportedIds = new Set<string>();
 
   for (const source of sources) {
     switch (source.type) {
@@ -86,6 +88,7 @@ export async function resolveTestCaseSources(
       case 'code-import': {
         const { testCases, fnMap, hooksByFile: codeHooks, testScopes } = await resolveCodeImport(source.filenames, storage);
         const testCaseIds = testCases.map((tc) => tc.id);
+        testCaseIds.forEach((id) => codeImportedIds.add(id));
         allTestCases.push(...testCases);
         for (const [id, fn] of fnMap) {
           evaluateFnMap.set(id, fn);
@@ -129,10 +132,23 @@ export async function resolveTestCaseSources(
   }
 
   const deduplicatedCount = allTestCases.length - seen.size;
+  const resolvedTestCases = Array.from(seen.values());
+  // Declarative JSON/UI cases compile into ordinary SDK bodies. From here on
+  // the runners intentionally cannot distinguish JSON from JavaScript tests:
+  // both execute inside runInSession and persist matcherResults[].
+  for (const testCase of resolvedTestCases) {
+    if (
+      !codeImportedIds.has(testCase.id) &&
+      !evaluateFnMap.has(testCase.id) &&
+      isDeclarativeTestCase(testCase)
+    ) {
+      evaluateFnMap.set(testCase.id, compileDeclarativeTestCase(testCase));
+    }
+  }
   debug('SourceResolver', `Deduplicated ${deduplicatedCount} test cases, ${seen.size} unique remaining`);
 
   return {
-    testCases: Array.from(seen.values()),
+    testCases: resolvedTestCases,
     sources: updatedSources,
     deduplicatedCount,
     evaluateFnMap,
@@ -184,6 +200,11 @@ export async function resolveCodeFnMapForStoredTestCases(
     }
   }
   if (codeFilesToLoad.size === 0) {
+    for (const testCase of storedTestCases) {
+      if (isDeclarativeTestCase(testCase)) {
+        evaluateFnMap.set(testCase.id, compileDeclarativeTestCase(testCase));
+      }
+    }
     return { evaluateFnMap, hooksByFile, testHookScopes };
   }
 
@@ -210,6 +231,14 @@ export async function resolveCodeFnMapForStoredTestCases(
       // Non-fatal: a missing/!broken file just means those test cases run
       // without a code body (classic judge path). Mirrors prior behavior.
       debug('SourceResolver', `Failed to re-resolve code file ${filePath}: ${loadErr?.message ?? loadErr}`);
+    }
+  }
+
+  // Stored non-code cases are declarative even when they entered through a
+  // benchmark/test-case-id source rather than a fresh JSON file import.
+  for (const testCase of storedTestCases) {
+    if (!evaluateFnMap.has(testCase.id) && isDeclarativeTestCase(testCase)) {
+      evaluateFnMap.set(testCase.id, compileDeclarativeTestCase(testCase));
     }
   }
 
@@ -312,7 +341,10 @@ async function resolveFileImport(filenames: string[], storage: IStorageModule): 
       throw new Error(`Validation failed for ${filename}: ${errorMessages}`);
     }
 
-    const testCases = await reuseOrCreateImportedTestCases(validation.data!, storage);
+    const testCases = await reuseOrCreateImportedTestCases(
+      validation.data! as unknown as Partial<TestCase>[],
+      storage,
+    );
     allCreated.push(...testCases);
   }
 

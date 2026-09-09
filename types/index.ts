@@ -556,6 +556,19 @@ export interface AgentToolDefinition {
 export type Category = 'Baseline' | 'Smart Contextual Menu' | 'RCA' | 'Conversational Queries' | 'Top 10 Browsed Products' | 'Errors by Service' | 'Group by Error Type' | string;
 
 // Version snapshot - immutable record of test case content at a point in time
+
+/**
+ * Declarative JSON expected-outcome definition. Plain strings retain the
+ * historical authoring form; objects opt into matcher role/check controls.
+ */
+export interface DeclarativeExpectedOutcome {
+  outcome: string;
+  role?: 'gate' | 'observe';
+  check?: 'workspace-diff' | 'traces';
+}
+
+export type ExpectedOutcome = string | DeclarativeExpectedOutcome;
+
 export interface TestCaseVersion {
   version: number;
   createdAt: string;
@@ -567,7 +580,7 @@ export interface TestCaseVersion {
   context: AgentContextItem[];
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
-  expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
+  expectedOutcomes?: ExpectedOutcome[];  // Plain strings or declarative matcher definitions
   expectedTrajectory?: {  // Keep for backwards compat
     step: number;
     description: string;
@@ -628,9 +641,21 @@ export interface TestCase {
   // (deterministic-only tests where the runner skips agent invocation).
   initialPrompt?: string;
   context: AgentContextItem[]; // AG-UI format context passed to agent
+  /**
+   * Optional pinned setup state. PR #450 owns the full fixture-envelope
+   * contract; the declarative compiler only consumes payload.manifest.tree
+   * for `check: 'workspace-diff'`.
+   */
+  fixture?: {
+    type?: string;
+    ref?: string;
+    integrity?: string;
+    payload?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
   tools?: AgentToolDefinition[]; // Tools available to the agent (client-provided)
   expectedPPL?: string; // Expected PPL query for validation
-  expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
+  expectedOutcomes?: ExpectedOutcome[];  // Plain strings or declarative matcher definitions
   expectedTrajectory?: {  // Keep for backwards compat
     step: number;
     description: string;

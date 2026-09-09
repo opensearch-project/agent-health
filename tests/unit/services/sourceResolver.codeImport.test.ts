@@ -312,7 +312,7 @@ describe('resolveTestCaseSources - code-import', () => {
     expect(result.evaluateFnMap.size).toBe(2);
   });
 
-  it('returns empty evaluateFnMap for non-code sources', async () => {
+  it('compiles non-code sources into SDK matcher-session bodies', async () => {
     const tc1 = makeTestCase('tc-1');
     (storage.testCases.getById as jest.Mock).mockResolvedValue(tc1);
 
@@ -321,6 +321,7 @@ describe('resolveTestCaseSources - code-import', () => {
     ];
     const result = await resolveTestCaseSources(sources, storage);
 
-    expect(result.evaluateFnMap.size).toBe(0);
+    expect(result.evaluateFnMap.size).toBe(1);
+    expect(result.evaluateFnMap.has('tc-1')).toBe(true);
   });
 });

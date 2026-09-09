@@ -20,6 +20,7 @@ export type MatcherMethod =
   | 'code-assertion'   // expect(...).to.X(...) — chai-driven, fast, free
   | 'llm-judge'        // judge(result, claim) — Bedrock call, costs money
   | 'traces'           // traces.X — derived from OTel data
+  | 'workspace-diff'   // final workspace vs pinned fixture manifest
   | 'evaluator';       // defineEvaluator() — user-supplied programmatic check
 
 export interface MatcherResult {

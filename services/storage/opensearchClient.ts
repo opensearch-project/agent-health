@@ -11,6 +11,7 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
+import type { ExpectedOutcome, TestCase } from '@/types';
 
 const STORAGE_BASE_URL = ENV_CONFIG.storageApiUrl;
 
@@ -57,9 +58,10 @@ export interface StorageTestCase {
   tools?: unknown[];
   messages?: unknown[];
   context?: unknown[];
+  fixture?: TestCase['fixture'];
   forwardedProps?: Record<string, unknown>;
   expectedPPL?: string;  // Expected PPL query
-  expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
+  expectedOutcomes?: ExpectedOutcome[];
   expectedTrajectory?: unknown[];  // Legacy: step-by-step trajectory
   labels?: string[];  // Unified labels system (replaces category/subcategory/difficulty)
   category?: string;  // Legacy - kept for backward compatibility

@@ -109,6 +109,84 @@ describe('testCaseValidation', () => {
       expect(result2.success).toBe(true);
     });
 
+    it('accepts declarative outcome objects while preserving plain strings', () => {
+      const result = testCaseSchema.safeParse({
+        name: 'Declarative matchers',
+        category: 'RCA',
+        difficulty: 'Easy',
+        initialPrompt: 'Run the case',
+        expectedOutcomes: [
+          'plain gate',
+          { outcome: 'score only', role: 'observe' },
+          { outcome: 'workspace unchanged', check: 'workspace-diff' },
+        ],
+        fixture: {
+          payload: {
+            manifest: {
+              tree: [{ path: 'README.md', size: 3, sha256: 'abc' }],
+            },
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.expectedOutcomes).toEqual([
+          'plain gate',
+          { outcome: 'score only', role: 'observe' },
+          { outcome: 'workspace unchanged', check: 'workspace-diff' },
+        ]);
+      }
+    });
+
+    it('rejects reserved trace checks with an actionable import error', () => {
+      const result = validateTestCaseJson({
+        name: 'Future trace check',
+        category: 'RCA',
+        difficulty: 'Easy',
+        initialPrompt: 'Run the case',
+        expectedOutcomes: [{ outcome: 'uses traces', check: 'traces' }],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: 'expectedOutcomes.0.check',
+          message: expect.stringContaining('reserved but not supported'),
+        }),
+      ]));
+    });
+
+    it('requires a pinned fixture manifest for workspace-diff checks', () => {
+      const result = validateTestCaseJson({
+        name: 'Missing manifest',
+        category: 'RCA',
+        difficulty: 'Easy',
+        initialPrompt: 'Run the case',
+        expectedOutcomes: [{ outcome: 'workspace unchanged', check: 'workspace-diff' }],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]).toEqual(expect.objectContaining({
+        path: 'expectedOutcomes.0.check',
+        message: expect.stringContaining('fixture.payload.manifest.tree'),
+      }));
+    });
+
+    it('rejects unknown roles, checks, and object keys', () => {
+      for (const expectedOutcome of [
+        { outcome: 'x', role: 'advisory' },
+        { outcome: 'x', check: 'filesystem' },
+        { outcome: 'x', surprise: true },
+      ]) {
+        const result = testCaseSchema.safeParse({
+          name: 'Invalid outcome', category: 'RCA', difficulty: 'Easy',
+          initialPrompt: 'Run', expectedOutcomes: [expectedOutcome],
+        });
+        expect(result.success).toBe(false);
+      }
+    });
+
     it('should accept optional fields', () => {
       const testCaseWithOptionals = {
         name: 'Test',

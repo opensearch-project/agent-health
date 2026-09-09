@@ -112,6 +112,17 @@ describe('CollapsibleTestCaseDefinition — JSON branch (unchanged)', () => {
     expect(screen.queryByTestId('eval-source-code-view')).toBeNull();
   });
 
+  it('renders structured declarative outcomes as readable text', () => {
+    const tc = baseTestCase({
+      expectedOutcomes: [
+        { outcome: 'workspace remains unchanged', check: 'workspace-diff', role: 'gate' },
+      ],
+    });
+    render(h(CollapsibleTestCaseDefinition, { testCase: tc, defaultOpen: true }));
+
+    expect(screen.getByText('workspace remains unchanged')).toBeTruthy();
+  });
+
   it('copy button copies the pretty-printed JSON', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });

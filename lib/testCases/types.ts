@@ -223,6 +223,11 @@ export interface EvalResult {
   runId?: string;
   /** Wall-clock duration of the agent invocation in ms (0 when no prompt). */
   durationMs: number;
+  /**
+   * Final filesystem workspace for deterministic workspace-diff checks. The
+   * per-run connector response wins; static workingDir/cwd is a fallback.
+   */
+  workspaceDir?: string;
   /** Token usage when reported by the agent. */
   tokenUsage?: { prompt: number; completion: number; total: number };
   /**

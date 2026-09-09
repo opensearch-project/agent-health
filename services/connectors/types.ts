@@ -78,11 +78,32 @@ export interface ConnectorRequest {
 /**
  * Response from connector execution
  */
+export interface ConnectorResponseMetadata {
+  /** Actual per-run working directory, when the connector can report it. */
+  workspaceDir?: string;
+  [key: string]: any;
+}
+
+/** Resolve the final workspace used by deterministic declarative checks. */
+export function resolveConnectorWorkspaceDir(
+  metadata?: ConnectorResponseMetadata,
+  connectorConfig?: Record<string, any>,
+): string | undefined {
+  if (typeof metadata?.workspaceDir === 'string' && metadata.workspaceDir.trim()) {
+    return metadata.workspaceDir;
+  }
+  for (const key of ['workingDir', 'cwd']) {
+    const value = connectorConfig?.[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
 export interface ConnectorResponse {
   trajectory: TrajectoryStep[];
   runId: string | null;
   rawEvents?: any[]; // Protocol-specific raw events for debugging
-  metadata?: Record<string, any>; // Additional connector-specific data
+  metadata?: ConnectorResponseMetadata; // Additional connector-specific data
 }
 
 /**

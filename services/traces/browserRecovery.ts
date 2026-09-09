@@ -28,6 +28,7 @@ import {
 } from '@/lib/matchers/judgeAccessor';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { judgedExpectedOutcomeTexts } from '@/lib/testCases/declarativeOutcomes';
 
 /**
  * Ensure trace polling is running for a pending report. The provided
@@ -102,7 +103,7 @@ export function ensureTracePollingForReport(
           const judgment = await callBedrockJudge(
             updatedReport.trajectory,
             {
-              expectedOutcomes: testCase.expectedOutcomes,
+              expectedOutcomes: judgedExpectedOutcomeTexts(testCase.expectedOutcomes),
               expectedTrajectory: testCase.expectedTrajectory,
             },
             [], // No logs in trace mode \u2014 traces are the source of truth

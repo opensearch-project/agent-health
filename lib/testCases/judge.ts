@@ -84,6 +84,21 @@ export function __resetJudgePortWarning(): void {
  * Backward-compatible with the old `JudgeVerdict` (same
  * `passFailStatus`/`accuracy`/`reasoning` fields).
  */
+export interface JudgeBatchClaim {
+  outcome: string;
+  role?: JudgeRole;
+}
+
+export interface JudgeOutcomeVerdict {
+  outcome: string;
+  pass: boolean;
+  score: number;
+  reasoning: string;
+  role: JudgeRole;
+  skipped?: boolean;
+  errored?: boolean;
+}
+
 export interface Verdict {
   passFailStatus: 'passed' | 'failed';
   /** Headline accuracy on the [0, 100] interval. */
@@ -102,6 +117,8 @@ export interface Verdict {
   errored: boolean;
   /** Underlying error message when `errored` is true. */
   errorMessage?: string;
+  /** Per-outcome verdicts populated by the one-call `judge.batch()` form. */
+  outcomes?: JudgeOutcomeVerdict[];
   /**
    * Hard-stop: throw if the verdict did not pass. A no-op for passing,
    * skipped verdicts. Returns the verdict so it can be chained:
@@ -160,6 +177,8 @@ interface RawJudgeResponse {
   overallScore?: number;
   /** Non-metric structured judge output (facts, failure_causes, evidence, …). */
   extraFields?: Record<string, unknown>;
+  /** Structured contract emitted by the evidence judge in PR #392. */
+  outcomeResults?: Array<{ outcome: string; pass: boolean; evidence: string }>;
 }
 const verdictCache = new Map<string, RawJudgeResponse>();
 
@@ -270,6 +289,15 @@ export interface JudgeFn {
     claimOrClaims: string | string[],
     options?: JudgeOptions
   ): Promise<Verdict>;
+  /**
+   * Judge many claims in one provider invocation while recording one matcher
+   * result per claim. Mixed gate/observe roles are preserved per entry.
+   */
+  batch(
+    resultOrTrajectory: ResultLike | TrajectoryStep[],
+    claims: JudgeBatchClaim[],
+    options?: JudgeOptions
+  ): Promise<JudgeOutcomeVerdict[]>;
 }
 
 /**
@@ -280,7 +308,8 @@ async function runJudge(
   resultOrTrajectory: ResultLike | TrajectoryStep[],
   claimOrClaims: string | string[],
   options: JudgeOptions | undefined,
-  role: JudgeRole
+  role: JudgeRole,
+  batchClaims?: JudgeBatchClaim[],
 ): Promise<Verdict> {
   judgeCalledInCurrentEval = true;
 
@@ -302,7 +331,9 @@ async function runJudge(
   const judgeAgents = !isTrajectory(resultOrTrajectory) && isResultLike(resultOrTrajectory)
     ? (resultOrTrajectory as { judgeAgents?: unknown }).judgeAgents
     : undefined;
-  const claims = Array.isArray(claimOrClaims) ? claimOrClaims : [claimOrClaims];
+  const claims = batchClaims
+    ? batchClaims.map((claim) => claim.outcome)
+    : (Array.isArray(claimOrClaims) ? claimOrClaims : [claimOrClaims]);
 
   const serverUrl = resolveJudgeServerUrl(options?.serverUrl);
 
@@ -338,6 +369,60 @@ async function runJudge(
         : typeof raw.overallScore === 'number'
           ? raw.overallScore
           : undefined;
+    const accuracy = headline ?? 0;
+
+    if (batchClaims) {
+      const structured = Array.isArray(raw.outcomeResults) &&
+        raw.outcomeResults.length === batchClaims.length &&
+        raw.outcomeResults.every((item, index) =>
+          item && item.outcome?.trim() === batchClaims[index].outcome.trim() &&
+          typeof item.pass === 'boolean' && typeof item.evidence === 'string'
+        )
+        ? raw.outcomeResults
+        : undefined;
+
+      // Main's current providers may not yet expose the structured contract.
+      // Expand their aggregate verdict to preserve existing providers; when
+      // PR #392 is rebased, its outcomeResults automatically become the source
+      // of truth without changing this compiler-facing interface.
+      const outcomes: JudgeOutcomeVerdict[] = batchClaims.map((claim, index) => {
+        const item = structured?.[index];
+        return {
+          outcome: claim.outcome,
+          pass: item?.pass ?? raw.passFailStatus === 'passed',
+          score: item ? (item.pass ? 1 : 0) : accuracy / 100,
+          reasoning: item?.evidence ?? raw.llmJudgeReasoning ?? '',
+          role: claim.role ?? 'gate',
+        };
+      });
+      for (const outcome of outcomes) {
+        recordVerdict({
+          description: outcome.outcome,
+          pass: outcome.pass,
+          method: 'llm-judge',
+          role: outcome.role,
+          durationMs,
+          score: outcome.score,
+          reasoning: outcome.reasoning,
+          model: options?.model,
+          ...(!outcome.pass ? { errorMessage: outcome.reasoning } : {}),
+          ...(raw.metrics && typeof raw.metrics === 'object'
+            ? { judgeMetrics: { ...raw.metrics } }
+            : {}),
+        });
+      }
+      const gatesPass = outcomes.every((outcome) => outcome.role === 'observe' || outcome.pass);
+      return makeVerdict({
+        passFailStatus: gatesPass ? 'passed' : 'failed',
+        accuracy,
+        reasoning: raw.llmJudgeReasoning ?? '',
+        role,
+        skipped: false,
+        errored: false,
+        outcomes,
+      });
+    }
+
     const verdict = makeVerdict({
       passFailStatus: raw.passFailStatus ?? 'failed',
       accuracy: headline ?? 0,
@@ -387,14 +472,35 @@ async function runJudge(
   const shouldSkip =
     options?.skip === true || (options?.skip !== false && judgeSkippedByEnv());
   if (shouldSkip) {
-    recordVerdict({
-      description: `${description} (skipped)`,
+    const skippedOutcomes = batchClaims?.map((claim) => ({
+      outcome: claim.outcome,
       pass: true,
-      method: 'llm-judge',
-      role: 'observe',
-      durationMs: 0,
-      reasoning: 'Judge skipped (AH_SKIP_JUDGE / skip option).',
-    });
+      score: 0,
+      reasoning: 'Judge skipped.',
+      role: claim.role ?? 'gate',
+      skipped: true,
+    } satisfies JudgeOutcomeVerdict));
+    if (skippedOutcomes) {
+      for (const outcome of skippedOutcomes) {
+        recordVerdict({
+          description: `${outcome.outcome} (skipped)`,
+          pass: true,
+          method: 'llm-judge',
+          role: 'observe',
+          durationMs: 0,
+          reasoning: 'Judge skipped (AH_SKIP_JUDGE / skip option).',
+        });
+      }
+    } else {
+      recordVerdict({
+        description: `${description} (skipped)`,
+        pass: true,
+        method: 'llm-judge',
+        role: 'observe',
+        durationMs: 0,
+        reasoning: 'Judge skipped (AH_SKIP_JUDGE / skip option).',
+      });
+    }
     return makeVerdict({
       passFailStatus: 'passed',
       accuracy: 0,
@@ -402,6 +508,7 @@ async function runJudge(
       role,
       skipped: true,
       errored: false,
+      ...(skippedOutcomes ? { outcomes: skippedOutcomes } : {}),
     });
   }
 
@@ -526,6 +633,23 @@ export const judge: JudgeFn = Object.assign(
       claimOrClaims: string | string[],
       options?: JudgeOptions
     ): Promise<Verdict> => runJudge(resultOrTrajectory, claimOrClaims, options, 'observe'),
+    batch: async (
+      resultOrTrajectory: ResultLike | TrajectoryStep[],
+      claims: JudgeBatchClaim[],
+      options?: JudgeOptions,
+    ): Promise<JudgeOutcomeVerdict[]> => {
+      const parentRole: JudgeRole = claims.some((claim) => (claim.role ?? 'gate') === 'gate')
+        ? 'gate'
+        : 'observe';
+      const verdict = await runJudge(
+        resultOrTrajectory,
+        claims.map((claim) => claim.outcome),
+        options,
+        parentRole,
+        claims,
+      );
+      return verdict.outcomes ?? [];
+    },
   }
 );
 
@@ -578,6 +702,19 @@ export function bindJudge(defaults?: {
     {
       observe: (resultOrTrajectory: ResultLike | TrajectoryStep[], claimOrClaims: string | string[], options?: JudgeOptions) =>
         runJudge(resultOrTrajectory, claimOrClaims, mergeOptions(options), 'observe'),
+      batch: async (resultOrTrajectory: ResultLike | TrajectoryStep[], claims: JudgeBatchClaim[], options?: JudgeOptions) => {
+        const parentRole: JudgeRole = claims.some((claim) => (claim.role ?? 'gate') === 'gate')
+          ? 'gate'
+          : 'observe';
+        const verdict = await runJudge(
+          resultOrTrajectory,
+          claims.map((claim) => claim.outcome),
+          mergeOptions(options),
+          parentRole,
+          claims,
+        );
+        return verdict.outcomes ?? [];
+      },
     }
   );
   return bound;

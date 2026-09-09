@@ -4,7 +4,7 @@
  */
 
 import { z } from 'zod';
-import type { AgentContextItem } from '@/types';
+import type { AgentContextItem, ExpectedOutcome, TestCase } from '@/types';
 import type { CreateTestCaseInput } from '@/services/storage';
 
 // ============ Zod Schemas ============
@@ -18,12 +18,29 @@ const contextItemSchema = z
 
 const difficultySchema = z.enum(['Easy', 'Medium', 'Hard']);
 
+export const expectedOutcomeObjectSchema = z.object({
+  outcome: z.string().trim().min(1, 'Outcome is required'),
+  role: z.enum(['gate', 'observe']).optional(),
+  check: z.enum(['workspace-diff', 'traces']).optional(),
+}).strict('Expected outcome objects only support outcome, role, and check');
+
+export const expectedOutcomeSchema = z.union([z.string(), expectedOutcomeObjectSchema]);
+
+function hasWorkspaceManifest(value: unknown): boolean {
+  const tree = (value as any)?.payload?.manifest?.tree;
+  return Array.isArray(tree) && tree.every((entry: unknown) => {
+    const file = entry as any;
+    return file && typeof file.path === 'string' && file.path.length > 0 &&
+      Number.isFinite(file.size) && typeof file.sha256 === 'string' && file.sha256.length > 0;
+  });
+}
+
 /**
  * Zod schema for validating test case JSON input.
  * This validates a subset of CreateTestCaseInput fields that are relevant for the JSON editor.
  * The output is compatible with CreateTestCaseInput.
  */
-export const testCaseSchema = z.object({
+const baseTestCaseSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   description: z.string().optional().default(''),
   category: z.string().min(1, 'Category is required'),
@@ -47,7 +64,31 @@ export const testCaseSchema = z.object({
   // and adding it here without plumbing it through `ValidatedTestCaseInput`
   // / `TestCaseFormState` / the editor save path would silently drop it on
   // round-trip (PR #258 review feedback).
-  expectedOutcomes: z.array(z.string()).optional().default([]),
+  expectedOutcomes: z.array(expectedOutcomeSchema).optional().default([]),
+  // PR #450 owns the generic fixture-envelope schema. Keep the envelope opaque
+  // here while preserving it through import; workspace-diff validates only the
+  // manifest fragment it consumes.
+  fixture: z.unknown().optional(),
+});
+
+export const testCaseSchema = baseTestCaseSchema.superRefine((testCase, ctx) => {
+  testCase.expectedOutcomes.forEach((expected, index) => {
+    if (typeof expected === 'string') return;
+    if (expected.check === 'traces') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expectedOutcomes', index, 'check'],
+        message: 'check "traces" is reserved but not supported yet; remove check or use "workspace-diff"',
+      });
+    }
+    if (expected.check === 'workspace-diff' && !hasWorkspaceManifest(testCase.fixture)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expectedOutcomes', index, 'check'],
+        message: 'check "workspace-diff" requires fixture.payload.manifest.tree with path, size, and sha256 for every file',
+      });
+    }
+  });
 });
 
 export const testCasesArraySchema = z.array(testCaseSchema).min(1, 'Array cannot be empty');
@@ -59,10 +100,14 @@ export const testCasesArraySchema = z.array(testCaseSchema).min(1, 'Array cannot
  * This is a subset of CreateTestCaseInput with only the fields the JSON editor handles.
  * It's structurally compatible with CreateTestCaseInput for use with asyncTestCaseStorage.
  */
-export type ValidatedTestCaseInput = Pick<
+export type ValidatedTestCaseInput = Omit<Pick<
   CreateTestCaseInput,
-  'name' | 'description' | 'category' | 'subcategory' | 'difficulty' | 'initialPrompt' | 'context' | 'expectedOutcomes'
->;
+  'name' | 'description' | 'category' | 'subcategory' | 'difficulty' | 'initialPrompt' | 'context'
+>, 'context'> & {
+  context: AgentContextItem[];
+  expectedOutcomes: ExpectedOutcome[];
+  fixture?: TestCase['fixture'];
+};
 
 // Form state for the TestCaseEditor component
 export interface TestCaseFormState {
@@ -222,7 +267,9 @@ export function parseJsonToFormState(jsonString: string): ValidationResult<TestC
       difficulty: data.difficulty,
       initialPrompt: data.initialPrompt,
       context: (data.context || []) as AgentContextItem[],
-      expectedOutcomes: data.expectedOutcomes.length > 0 ? data.expectedOutcomes : [''],
+      expectedOutcomes: data.expectedOutcomes.length > 0
+        ? data.expectedOutcomes.map((outcome) => typeof outcome === 'string' ? outcome : outcome.outcome)
+        : [''],
     },
   };
 }

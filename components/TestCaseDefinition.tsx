@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { Markdown, hasRealMarkdown } from '@/components/ui/markdown';
 import { ContextDispositionGroups } from '@/components/ContextDispositionGroups';
 import { parseLabels } from '@/lib/labels';
+import { expectedOutcomeText } from '@/lib/testCases/declarativeOutcomes';
 
 interface TestCaseDefinitionProps {
   testCase: TestCase;
@@ -132,7 +133,7 @@ export const TestCaseDefinition: React.FC<TestCaseDefinitionProps> = ({
             {testCase.expectedOutcomes.map((outcome, index) => (
               <li key={index} className={`${textClass} text-muted-foreground flex items-start gap-1.5 leading-relaxed min-w-0`}>
                 <CheckCircle2 size={compact ? 10 : 12} className="text-green-500 mt-0.5 shrink-0" aria-hidden="true" />
-                <span className="break-words min-w-0">{outcome}</span>
+                <span className="break-words min-w-0">{expectedOutcomeText(outcome)}</span>
               </li>
             ))}
           </ul>

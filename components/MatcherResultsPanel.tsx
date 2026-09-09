@@ -62,6 +62,11 @@ const METHOD_META: Record<MatcherMethod, { label: string; icon: React.ReactNode;
     icon: <Activity size={11} className="text-blue-500" />,
     cls: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30',
   },
+  'workspace-diff': {
+    label: 'workspace',
+    icon: <Code2 size={11} className="text-emerald-500" />,
+    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30',
+  },
   evaluator: {
     label: 'evaluator',
     icon: <Wrench size={11} className="text-amber-500" />,

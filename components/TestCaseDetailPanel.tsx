@@ -8,6 +8,7 @@ import { Calendar, Play } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { TestCase } from '@/types';
+import { expectedOutcomeText } from '@/lib/testCases/declarativeOutcomes';
 import { getLabelColor, formatDate } from '@/lib/utils';
 import { ContextDispositionGroups } from '@/components/ContextDispositionGroups';
 
@@ -73,7 +74,7 @@ export const TestCaseDetailPanel: React.FC<TestCaseDetailPanelProps> = ({ testCa
             {testCase.expectedOutcomes.map((outcome, i) => (
               <li key={i} className="text-sm text-muted-foreground flex items-start gap-2">
                 <span className="text-opensearch-blue mt-0.5">•</span>
-                <span>{outcome}</span>
+                <span>{expectedOutcomeText(outcome)}</span>
               </li>
             ))}
           </ul>

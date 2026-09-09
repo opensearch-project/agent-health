@@ -38,6 +38,7 @@ import type { IStorageModule } from '@/server/adapters/types';
 import { callBedrockJudge } from '@/services/evaluation';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/index';
+import { judgedExpectedOutcomeTexts } from '@/lib/testCases/declarativeOutcomes';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { spansToTrajectory } from '@/services/traces/spansToTrajectory';
 import { fetchSpansForRun } from '@/services/traces/fetchSpansForRun';
@@ -210,7 +211,7 @@ export async function retryJudgementForCase(
     const judgment = await callBedrockJudge(
       trajectory,
       {
-        expectedOutcomes: testCase.expectedOutcomes,
+        expectedOutcomes: judgedExpectedOutcomeTexts(testCase.expectedOutcomes),
         expectedTrajectory: testCase.expectedTrajectory,
       },
       undefined,
