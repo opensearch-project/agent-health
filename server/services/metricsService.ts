@@ -12,7 +12,7 @@
 import { Client } from '@opensearch-project/opensearch';
 import { MetricsResult, AggregateMetrics, OpenSearchConfig, Span } from '@/types';
 import { getSampleSpansForRunIds } from '../../cli/demo/sampleTraces.js';
-import { transformSpan } from './tracesService.js';
+import { transformSpan, buildRunIdShouldClauses, buildSessionIdShouldClauses } from './tracesService.js';
 
 // ============================================================================
 // Model Pricing
@@ -143,12 +143,19 @@ function isEvalOrJudgeSpan(attrs: Record<string, any>, spanName?: string): boole
 
 /**
  * Correlation `should` clauses for a single runId — Strategy B
- * (`agent_health.run.id` / the OTEL-standard `gen_ai.conversation.id`) OR'd
+ * (`agent_health.run.id` / the OTEL-standard `gen_ai.conversation.id`, under
+ * BOTH index schemas via the shared {@link buildRunIdShouldClauses}) OR'd
  * with Strategy A (`traceId`, the eval span's own OTel trace id, propagated
  * via W3C TRACEPARENT to subprocess/HTTP connectors — see AGENTS.md's trace
  * correlation conventions). `traceId` is a plain top-level span field in both
  * the plain-raw and legacy @-raw schemas, so no attribute-encoding tolerance
  * is needed for it.
+ *
+ * Pre-fix this file spelled out its own Strategy-B `term` clauses against the
+ * nested `attributes.*` path only — the same schema mismatch PR #469 fixed on
+ * the READ side of this file (via `readAttrs` → `transformSpan`) was still
+ * present on the QUERY side, so on the flat-@ `otel-v1-apm-span-*` index
+ * Strategy B never matched and metrics only ever correlated via A/D.
  *
  * Without Strategy A here, REST-connector runs (which never get a native
  * runId — `RESTConnector.execute()` returns none — so `report.runId` falls
@@ -169,42 +176,21 @@ function isEvalOrJudgeSpan(attrs: Record<string, any>, spanName?: string): boole
  * via {@link isEvalOrJudgeSpan} above so they can't inflate the agent's own
  * token/LLM-call count.
  */
-function buildRunIdShouldClauses(runId: string, sessionId?: string, traceId?: string): Record<string, unknown>[] {
-  const clauses: Record<string, unknown>[] = [
-    { term: { 'attributes.agent_health.run.id': runId } },
-    { term: { 'attributes.gen_ai.conversation.id': runId } },
-  ];
-  if (sessionId) {
-    // `.keyword` sub-field for exact match on a hyphenated UUID (a bare
-    // analyzed text field would tokenize on the hyphens and match nothing) —
-    // mirrors tracesService.ts's Strategy D handling. Also try the raw
-    // (non-keyword) field and the Data-Prepper plain-raw `@`-encoded key,
-    // since the attribute lands under a different literal key per schema.
-    clauses.push(
-      { term: { 'attributes.session.id.keyword': sessionId } },
-      { term: { 'attributes.session.id': sessionId } },
-      { term: { 'span.attributes.session@id': sessionId } }
-    );
-  }
-  if (traceId) clauses.push({ term: { traceId } });
-  return clauses;
+function buildCorrelationShouldClauses(runId: string, sessionId?: string, traceId?: string): Record<string, unknown>[] {
+  return buildBatchCorrelationShouldClauses([runId], sessionId ? [sessionId] : [], traceId ? [traceId] : []);
 }
 
-/** Batch (terms) form of {@link buildRunIdShouldClauses} — Strategy B OR
+/** Batch (terms) form of {@link buildCorrelationShouldClauses} — Strategy B OR
  *  Strategy D (`session.id`, the precise per-run correlator real
- *  closed-source connectors like Claude Code actually stamp on every span)
- *  OR Strategy A (`traceId`). */
-function buildBatchRunIdShouldClauses(runIds: string[], sessionIds: string[], traceIds: string[]): Record<string, unknown>[] {
-  const clauses: Record<string, unknown>[] = [
-    { terms: { 'attributes.agent_health.run.id': runIds } },
-    { terms: { 'attributes.gen_ai.conversation.id': runIds } },
-  ];
+ *  closed-source connectors like Claude Code actually stamp on every span;
+ *  `.keyword` + raw + flat-@ paths via the shared
+ *  {@link buildSessionIdShouldClauses}, mirroring tracesService.ts)
+ *  OR Strategy A (`traceId`). The single-run path delegates here with
+ *  one-element arrays — a `terms` clause with one value is functionally a `term`. */
+function buildBatchCorrelationShouldClauses(runIds: string[], sessionIds: string[], traceIds: string[]): Record<string, unknown>[] {
+  const clauses: Record<string, unknown>[] = buildRunIdShouldClauses(runIds);
   if (sessionIds.length > 0) {
-    clauses.push(
-      { terms: { 'attributes.session.id.keyword': sessionIds } },
-      { terms: { 'attributes.session.id': sessionIds } },
-      { terms: { 'span.attributes.session@id': sessionIds } }
-    );
+    clauses.push(...buildSessionIdShouldClauses(sessionIds));
   }
   if (traceIds.length > 0) clauses.push({ terms: { traceId: traceIds } });
   return clauses;
@@ -460,7 +446,7 @@ export function computeMetricsFromSpans(
  *   `session.id`) to OR into the query alongside Strategy B, for agents that
  *   never stamp our own `agent_health.run.id` / `gen_ai.conversation.id`.
  * @param traceId - Optional Strategy-A correlator (the eval span's own OTel
- *   trace id) — see {@link buildRunIdShouldClauses}.
+ *   trace id) — see {@link buildCorrelationShouldClauses}.
  */
 export async function computeMetrics(
   runId: string,
@@ -478,7 +464,7 @@ export async function computeMetrics(
         query: {
           bool: {
             must: [
-              { bool: { should: buildRunIdShouldClauses(runId, sessionId, traceId), minimum_should_match: 1 } }
+              { bool: { should: buildCorrelationShouldClauses(runId, sessionId, traceId), minimum_should_match: 1 } }
             ]
           }
         }
@@ -497,7 +483,7 @@ export async function computeMetrics(
     query: {
       bool: {
         must: [
-          { bool: { should: buildRunIdShouldClauses(runId, sessionId, traceId), minimum_should_match: 1 } }
+          { bool: { should: buildCorrelationShouldClauses(runId, sessionId, traceId), minimum_should_match: 1 } }
         ]
       }
     }
@@ -529,7 +515,7 @@ export async function computeMetrics(
  *
  * @param sessionIdByRunId - Optional Strategy-D correlator map (runId ->
  *   agent-emitted session.id), OR'd into each chunk's query alongside
- *   Strategy B — see {@link buildRunIdShouldClauses}.
+ *   Strategy B — see {@link buildCorrelationShouldClauses}.
  */
 export async function computeBatchMetrics(
   runIds: string[],
@@ -576,7 +562,7 @@ export async function computeBatchMetrics(
               bool: {
                 must: [
                   { bool: {
-                    should: buildBatchRunIdShouldClauses(chunk, Array.from(sessionIdToRunId.keys()), Array.from(traceIdToRunId.keys())),
+                    should: buildBatchCorrelationShouldClauses(chunk, Array.from(sessionIdToRunId.keys()), Array.from(traceIdToRunId.keys())),
                     minimum_should_match: 1,
                   } }
                 ]
@@ -646,7 +632,7 @@ export async function computeBatchMetrics(
         bool: {
           must: [
             { bool: {
-              should: buildBatchRunIdShouldClauses(chunk, Array.from(sessionIdToRunId.keys()), Array.from(traceIdToRunId.keys())),
+              should: buildBatchCorrelationShouldClauses(chunk, Array.from(sessionIdToRunId.keys()), Array.from(traceIdToRunId.keys())),
               minimum_should_match: 1,
             } }
           ]

@@ -347,7 +347,7 @@ describe('metricsService', () => {
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should).toEqual(expect.arrayContaining([{ term: { traceId: 'trace-abc-123' } }]));
+      expect(should).toEqual(expect.arrayContaining([{ terms: { traceId: ['trace-abc-123'] } }]));
     });
 
     it('omits the traceId should-clause when no traceId correlator is passed', async () => {
@@ -630,14 +630,22 @@ describe('metricsService', () => {
       );
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      // Strategy B now matches agent_health.run.id OR the OTEL-standard
-      // gen_ai.conversation.id (both stamped = runId by our producers). The
-      // single-run path uses `term` (scalar) clauses; the batch path uses the
-      // `terms` (array) form via buildBatchRunIdShouldClauses — functionally
-      // identical for one id.
+      // Strategy B matches agent_health.run.id OR the OTEL-standard
+      // gen_ai.conversation.id (both stamped = runId by our producers), under
+      // every index schema — nested `attributes.*` (+ its `.keyword` multi-field
+      // for dynamically mapped text) AND the flat `@`-encoded
+      // `span.attributes.*` the live `otel-v1-apm-span-*` index uses. The
+      // single-run path delegates to the shared `terms` builder with a
+      // one-element array (functionally a `term`).
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should[0].term['attributes.agent_health.run.id']).toEqual('test-run-123');
-      expect(should[1].term['attributes.gen_ai.conversation.id']).toEqual('test-run-123');
+      expect(should).toEqual([
+        { terms: { 'attributes.agent_health.run.id': ['test-run-123'] } },
+        { terms: { 'attributes.agent_health.run.id.keyword': ['test-run-123'] } },
+        { terms: { 'span.attributes.agent_health@run@id': ['test-run-123'] } },
+        { terms: { 'attributes.gen_ai.conversation.id': ['test-run-123'] } },
+        { terms: { 'attributes.gen_ai.conversation.id.keyword': ['test-run-123'] } },
+        { terms: { 'span.attributes.gen_ai@conversation@id': ['test-run-123'] } },
+      ]);
     });
 
     it('should use default index pattern when not provided', async () => {
@@ -671,10 +679,18 @@ describe('metricsService', () => {
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should[0].term['attributes.agent_health.run.id']).toEqual('test-run-123');
-      expect(should[1].term['attributes.gen_ai.conversation.id']).toEqual('test-run-123');
-      const sessionClause = should.find((c: any) => c.term?.['attributes.session.id.keyword']);
-      expect(sessionClause.term['attributes.session.id.keyword']).toEqual('e84af53e-6920-44a5-bd75-5ee6cebf58c6');
+      expect(should).toEqual(expect.arrayContaining([
+        { terms: { 'attributes.agent_health.run.id': ['test-run-123'] } },
+        { terms: { 'attributes.agent_health.run.id.keyword': ['test-run-123'] } },
+        { terms: { 'span.attributes.agent_health@run@id': ['test-run-123'] } },
+        { terms: { 'attributes.gen_ai.conversation.id': ['test-run-123'] } },
+        { terms: { 'attributes.gen_ai.conversation.id.keyword': ['test-run-123'] } },
+        { terms: { 'span.attributes.gen_ai@conversation@id': ['test-run-123'] } },
+      ]));
+      const sessionClause = should.find((c: any) => c.terms?.['attributes.session.id.keyword']);
+      expect(sessionClause.terms['attributes.session.id.keyword']).toEqual(['e84af53e-6920-44a5-bd75-5ee6cebf58c6']);
+      // Flat-@ schema path is queried too.
+      expect(should.find((c: any) => c.terms?.['span.attributes.session@id'])).toBeTruthy();
     });
 
     it('does not add session.id clauses when no sessionId is supplied (unchanged query shape)', async () => {
@@ -687,7 +703,11 @@ describe('metricsService', () => {
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should).toHaveLength(2);
+      // Exactly the six Strategy-B clauses (2 run-id attributes x 3 field
+      // paths: nested, nested .keyword, flat-@), no session.id / traceId clauses.
+      expect(should).toHaveLength(6);
+      expect(JSON.stringify(should)).not.toContain('session');
+      expect(JSON.stringify(should)).not.toContain('traceId');
     });
   });
 
@@ -897,8 +917,14 @@ describe('metricsService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       const should = requestBody.query.bool.must[0].bool.should;
-      expect(should[0].terms['attributes.agent_health.run.id']).toEqual(['run-1', 'run-2']);
-      expect(should[1].terms['attributes.gen_ai.conversation.id']).toEqual(['run-1', 'run-2']);
+      expect(should).toEqual([
+        { terms: { 'attributes.agent_health.run.id': ['run-1', 'run-2'] } },
+        { terms: { 'attributes.agent_health.run.id.keyword': ['run-1', 'run-2'] } },
+        { terms: { 'span.attributes.agent_health@run@id': ['run-1', 'run-2'] } },
+        { terms: { 'attributes.gen_ai.conversation.id': ['run-1', 'run-2'] } },
+        { terms: { 'attributes.gen_ai.conversation.id.keyword': ['run-1', 'run-2'] } },
+        { terms: { 'span.attributes.gen_ai@conversation@id': ['run-1', 'run-2'] } },
+      ]);
     });
 
     it('should return pending metrics for run IDs with no matching spans', async () => {

@@ -7,6 +7,10 @@ import {
   transformSpan,
   fetchTraces,
   checkTracesHealth,
+  attributeFieldPaths,
+  buildRunIdShouldClauses,
+  buildSessionIdShouldClauses,
+  RUN_ID_ATTRIBUTES,
   OpenSearchSpanSource,
 } from '@/server/services/tracesService';
 
@@ -289,9 +293,51 @@ describe('tracesService', () => {
       // The agents clause is a should over (session.id) OR (serviceName+window),
       // so a span matching EITHER correlates.
       const agentClause = query.bool.should.find((c: any) => c?.bool?.should?.some(
-        (s: any) => s.term?.['attributes.session.id'] === 'sess-abc'));
+        (s: any) => s.terms?.['attributes.session.id']?.includes('sess-abc')));
       expect(agentClause).toBeTruthy();
       expect(agentClause.bool.minimum_should_match).toBe(1);
+      // All three session.id field paths are queried (analyzed, .keyword, flat-@).
+      expect(agentClause.bool.should).toEqual(expect.arrayContaining([
+        { terms: { 'attributes.session.id': ['sess-abc'] } },
+        { terms: { 'attributes.session.id.keyword': ['sess-abc'] } },
+        { terms: { 'span.attributes.session@id': ['sess-abc'] } },
+      ]));
+    });
+
+    // Regression: Strategy B (run-id) correlation never matched OSI-ingested
+    // `otel-v1-apm-span-*` documents, which store span attributes FLAT with
+    // `@` separators (`span.attributes.agent_health@run@id`) rather than under
+    // a nested `attributes.*` object. The query named only the nested path, so
+    // on that index it returned 0 hits for every run id (measured live) and
+    // correlation silently fell through to Strategy A/C only.
+    it('Strategy B queries every attribute path for both run-id attributes (nested, nested .keyword, OSI flat-@) — exact DSL', async () => {
+      const search = jest.fn().mockResolvedValue({
+        body: { hits: { hits: [], total: { value: 0 } } },
+      });
+      const client = createMockClient({ search });
+
+      await fetchTraces({ runIds: ['run-1', 'run-2'] }, client);
+
+      const query = search.mock.calls[0][0].body.query;
+      expect(query).toEqual({
+        bool: {
+          must: [
+            {
+              bool: {
+                should: [
+                  { terms: { 'attributes.agent_health.run.id': ['run-1', 'run-2'] } },
+                  { terms: { 'attributes.agent_health.run.id.keyword': ['run-1', 'run-2'] } },
+                  { terms: { 'span.attributes.agent_health@run@id': ['run-1', 'run-2'] } },
+                  { terms: { 'attributes.gen_ai.conversation.id': ['run-1', 'run-2'] } },
+                  { terms: { 'attributes.gen_ai.conversation.id.keyword': ['run-1', 'run-2'] } },
+                  { terms: { 'span.attributes.gen_ai@conversation@id': ['run-1', 'run-2'] } },
+                ],
+                minimum_should_match: 1,
+              },
+            },
+          ],
+        },
+      });
     });
 
     it('correlates sessionId via attributes.session.id (#296)', async () => {
@@ -459,6 +505,43 @@ describe('tracesService', () => {
       expect(result.spans[0].duration).toBe(500);
       expect(result.spans[0].status).toBe('OK');
       expect(result.spans[0].attributes['gen_ai.request.id']).toBe('run-123');
+    });
+  });
+
+  describe('attribute-path query helpers (schema tolerance)', () => {
+    it('attributeFieldPaths yields the nested path, its .keyword multi-field and the flat @-encoded path', () => {
+      expect(attributeFieldPaths('agent_health.run.id')).toEqual([
+        'attributes.agent_health.run.id',
+        'attributes.agent_health.run.id.keyword',
+        'span.attributes.agent_health@run@id',
+      ]);
+      expect(attributeFieldPaths('gen_ai.conversation.id')).toEqual([
+        'attributes.gen_ai.conversation.id',
+        'attributes.gen_ai.conversation.id.keyword',
+        'span.attributes.gen_ai@conversation@id',
+      ]);
+      // No dots -> the flat path differs only by prefix.
+      expect(attributeFieldPaths('foo')).toEqual(['attributes.foo', 'attributes.foo.keyword', 'span.attributes.foo']);
+    });
+
+    it('buildRunIdShouldClauses emits one terms clause per (run-id attribute x path)', () => {
+      expect(RUN_ID_ATTRIBUTES).toEqual(['agent_health.run.id', 'gen_ai.conversation.id']);
+      expect(buildRunIdShouldClauses(['r1'])).toEqual([
+        { terms: { 'attributes.agent_health.run.id': ['r1'] } },
+        { terms: { 'attributes.agent_health.run.id.keyword': ['r1'] } },
+        { terms: { 'span.attributes.agent_health@run@id': ['r1'] } },
+        { terms: { 'attributes.gen_ai.conversation.id': ['r1'] } },
+        { terms: { 'attributes.gen_ai.conversation.id.keyword': ['r1'] } },
+        { terms: { 'span.attributes.gen_ai@conversation@id': ['r1'] } },
+      ]);
+    });
+
+    it('buildSessionIdShouldClauses covers analyzed, .keyword and flat-@ session.id paths', () => {
+      expect(buildSessionIdShouldClauses(['s1', 's2'])).toEqual([
+        { terms: { 'attributes.session.id': ['s1', 's2'] } },
+        { terms: { 'attributes.session.id.keyword': ['s1', 's2'] } },
+        { terms: { 'span.attributes.session@id': ['s1', 's2'] } },
+      ]);
     });
   });
 
