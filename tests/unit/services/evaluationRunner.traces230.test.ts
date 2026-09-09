@@ -494,7 +494,11 @@ describe('executeEvaluationRun — issue #230 traces fixture pre-loading', () =>
     const saved = captureLastReport(storage);
     expect(saved.metricsStatus).toBe('error');
     expect(saved.passFailStatus).toBeNull();
-    expect(saved.llmJudgeReasoning).toMatch(/Agent run did not complete/);
+    expect(saved.llmJudgeReasoning).toMatch(/Agent request failed/);
+    // Explicit stage marker + structured cause (agent-error surfacing).
+    expect(saved.failureStage).toBe('agent');
+    expect(saved.agentError?.kind).toBe('timeout');
+    expect(saved.error).toMatch(/Subprocess timed out after 600000ms/);
     expect(saved.llmJudgeReasoning).toMatch(/Subprocess timed out after 600000ms/);
     expect(saved.assertionError).toMatch(/Subprocess timed out after 600000ms/);
   });

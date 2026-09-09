@@ -14,15 +14,16 @@ import { executeBeforeRequestHook, executeAfterResponseHook } from '@/lib/hooks'
 import { AGUIToTrajectoryConverter, consumeSSEStream, buildAgentPayload } from '@/services/agent';
 import { AGUIEvent } from '@/types/agui';
 import { generateMockTrajectory } from './mockTrajectory';
-import { callBedrockJudge } from './bedrockJudge';
+import { callBedrockJudge, judgeErrorDetailFrom } from './bedrockJudge';
 import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/judgeAccessor';
 import type { MatcherResult } from '@/lib/matchers/types';
 import type { TracesAccessor } from '@/lib/matchers/traces';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
+import { describeAgentError, agentErrorContextFrom } from '@/services/evaluation/agentFailure';
 
 // Re-export for use by experimentRunner when calling judge after trace polling
-export { callBedrockJudge };
+export { callBedrockJudge, judgeErrorDetailFrom };
 import { openSearchClient } from '@/services/opensearch';
 import { debug } from '@/lib/debug';
 import { ENV_CONFIG } from '@/lib/config';
@@ -673,7 +674,7 @@ export async function runEvaluationWithConnector(
         testCaseVersion: testCase.currentVersion ?? 1,
         status: 'completed',
         trajectory: fullTrajectory,
-        ...buildEvaluatorErrorPatch('judge_failed', judgeError),
+        ...buildEvaluatorErrorPatch('judge_failed', judgeError, { judgeError: judgeErrorDetailFrom(judgeError) }),
         improvementStrategies: [],
         runId: agentRunId || undefined,
         sessionId: agentSessionId || undefined,
@@ -743,7 +744,21 @@ export async function runEvaluationWithConnector(
       },
     };
   } catch (error) {
-    console.error('[Eval] Error:', error instanceof Error ? error.message : error);
+    // The AGENT step failed: the connector threw (undici `fetch failed` /
+    // HeadersTimeoutError, ECONNREFUSED, non-2xx, subprocess crash, or a
+    // hook exploded). Owner incident: this used to log the bare `fetch
+    // failed`, persist `llmJudgeReasoning: 'Evaluation failed: fetch
+    // failed'` with NO structured cause, and — on the trace-mode path — the
+    // caller then still ran the judge on the empty trajectory, producing a
+    // misleading "Evaluator could not run" 10-retry storm. Persist the REAL
+    // cause (unwrapped `error.cause`), classify it, and stamp
+    // `failureStage: 'agent'` so every consumer (UI card, badge,
+    // retry-judgement, trace poller) knows there is nothing to judge.
+    const agentError = describeAgentError(error, agentErrorContextFrom(error, {
+      endpoint: agent.endpoint,
+      elapsedMs: Date.now() - evalStartTime,
+    }));
+    console.error(`[Eval] Agent request failed (${agentError.kind}) for agent "${agent.key}": ${agentError.message}`);
 
     // Enhanced debug logging for connection failures
     if (error instanceof Error) {
@@ -773,6 +788,7 @@ export async function runEvaluationWithConnector(
       // Connector lookup failed, leave undefined
     }
 
+    const patch = buildEvaluatorErrorPatch('agent_failed', error, { agentError });
     return {
       id: reportId,
       timestamp: new Date().toISOString(),
@@ -782,19 +798,24 @@ export async function runEvaluationWithConnector(
       modelId,
       testCaseId: testCase.id,
       testCaseVersion: testCase.currentVersion ?? 1,
+      // `status: 'failed'` = the execution itself failed (stats bucket it as
+      // failed-to-run, never as a verdict). The evaluator-error patch adds
+      // metricsStatus:'error' + failureStage:'agent' + the structured cause.
+      // `passFailStatus` stays unset/null: there is no verdict.
       status: 'failed',
       trajectory: fullTrajectory,
-      metrics: {
-        accuracy: 0,
-        faithfulness: 0,
-        latency_score: 0,
-        trajectory_alignment_score: 0,
-      },
-      llmJudgeReasoning: `Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      ...patch,
       improvementStrategies: [],
       rawEvents,
       connectorProtocol: connectorType,
-    };
+      // Mark the report final: the trace poller / runner must NOT poll for
+      // traces or run the judge on an agent that produced nothing.
+      skipJudge: true,
+      performanceMetrics: {
+        durationMs: Date.now() - evalStartTime,
+        agentDurationMs: agentError.elapsedMs,
+      },
+    } as EvaluationReport;
   }
 }
 

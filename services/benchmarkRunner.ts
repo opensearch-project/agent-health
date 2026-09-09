@@ -26,12 +26,15 @@ import type { IStorageModule } from '@/server/adapters/types';
 import {
   runEvaluationWithConnector,
   callBedrockJudge,
+  judgeErrorDetailFrom,
   invokeAgent,
   computeSdkMatcherSessionMetrics,
   stampObjectiveActuals,
   appendNotReachedMarker,
 } from './evaluation';
 import { buildEvaluatorErrorPatch } from './evaluation/evaluatorError';
+import { pickReportFailureFields } from '@/lib/reportFailureFields';
+import { describeAgentError, agentErrorContextFrom } from './evaluation/agentFailure';
 import { connectorRegistry } from '@/services/connectors/server';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
@@ -551,10 +554,12 @@ export async function executeRun(
               (report as any).skipJudge = true;
             } else if (agentFailed) {
               // #335: agent never produced a trajectory (timeout/crash) — surface
-              // the underlying message instead of a silent empty `failed`.
+              // the underlying (unwrapped) cause instead of a silent empty `failed`.
               Object.assign(
                 report,
-                buildEvaluatorErrorPatch('agent_failed', (evalError as any)?.message ?? String(evalError)),
+                buildEvaluatorErrorPatch('agent_failed', evalError, {
+                  agentError: describeAgentError(evalError, agentErrorContextFrom(evalError, { endpoint: agentConfig.endpoint })),
+                }),
               );
               (report as any).skipJudge = true;
             } else {
@@ -996,6 +1001,10 @@ export async function runSingleUseCase(
       traceFetchAttempts: report.traceFetchAttempts,
       lastTraceFetchAt: report.lastTraceFetchAt,
       traceError: report.traceError,
+      // Failure detail (failureStage / error / agentError / judgeError) —
+      // without this the placeholder-update path dropped the real agent
+      // cause the runner recorded (lib/reportFailureFields.ts).
+      ...pickReportFailureFields(report as any),
       spans: report.spans,
       connectorProtocol: report.connectorProtocol,
       // Set only by the agent (trace) judge provider -- see
@@ -1178,6 +1187,7 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
           await storage.runs.update(report.id, buildEvaluatorErrorPatch(
             'judge_failed',
             error,
+            { judgeError: judgeErrorDetailFrom(error) },
           ) as any);
 
           // Update parent benchmark run stats (error counts as failed)
@@ -1293,6 +1303,7 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
           await updateRunWithClient(client, report.id, buildEvaluatorErrorPatch(
             'judge_failed',
             error,
+            { judgeError: judgeErrorDetailFrom(error) },
           ) as any);
           if (report.experimentId) {
             await updateBenchmarkRunStatsForReport(client, report.experimentId, report.id);
