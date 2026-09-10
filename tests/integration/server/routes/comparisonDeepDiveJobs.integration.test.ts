@@ -27,8 +27,10 @@ jest.mock('@/server/adapters', () => ({
 }));
 
 const mockGenerate = jest.fn();
+const mockListModels = jest.fn();
 jest.mock('@/server/services/comparisonDeepDiveService', () => ({
   generateComparisonDeepDive: (...a: any[]) => mockGenerate(...a),
+  listDeepDiveModels: (...a: any[]) => mockListModels(...a),
   SYSTEM_PROMPT: 'MOCK SYSTEM PROMPT',
 }));
 
@@ -69,6 +71,78 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: 
 beforeEach(() => {
   mockGetById.mockReset();
   mockGenerate.mockReset();
+  mockListModels.mockReset();
+});
+
+describe('deep-dive model selection over the real route (owner: "I want it to be Fable 5.1")', () => {
+  const FABLE = 'us.anthropic.claude-fable-5-1';
+
+  it('GET /api/comparison/deep-dive/models serves the selector list + server default from the service', async () => {
+    mockListModels.mockResolvedValue({
+      models: [{ provider: 'amazon-bedrock', id: FABLE, name: 'Claude Fable 5.1 (US)' }],
+      defaultId: FABLE,
+    });
+    const app = buildApp();
+    const res = await request(app).get('/api/comparison/deep-dive/models');
+    expect(res.status).toBe(200);
+    expect(res.body.defaultId).toBe(FABLE);
+    expect(res.body.models[0].name).toBe('Claude Fable 5.1 (US)');
+  });
+
+  it('POST with modelId threads it (trimmed) to the generator and the finished job echoes meta.modelId', async () => {
+    mockGetById.mockImplementation(async (id: string) => report(id, 'tc-1'));
+    const d = deferred<any>();
+    mockGenerate.mockImplementation(() => d.promise);
+
+    const app = buildApp();
+    const post = await request(app).post('/api/comparison/deep-dive').send({ reportIds: ['rep-a', 'rep-b'], modelId: `  ${FABLE} ` });
+    expect(post.status).toBe(202);
+    expect(mockGenerate).toHaveBeenCalledTimes(1);
+    expect(mockGenerate.mock.calls[0][0].modelId).toBe(FABLE);
+
+    d.resolve({ markdown: 'fable narrative', modelId: `amazon-bedrock/${FABLE}`, durationMs: 412_000, visitedCases: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    const poll = await request(app).get(`/api/comparison/deep-dive/jobs/${post.body.jobId}`);
+    expect(poll.body.status).toBe('done');
+    expect(poll.body.result.modelId).toBe(`amazon-bedrock/${FABLE}`);
+    expect(poll.body.result.durationMs).toBe(412_000); // a 6m52s generation is a normal result, not a timeout
+  });
+
+  it('POST without modelId leaves it undefined (server default = newest Claude)', async () => {
+    mockGetById.mockImplementation(async (id: string) => report(id, 'tc-1'));
+    mockGenerate.mockImplementation(() => deferred<any>().promise);
+    const app = buildApp();
+    await request(app).post('/api/comparison/deep-dive').send({ reportIds: ['rep-a', 'rep-b'] });
+    expect(mockGenerate.mock.calls[0][0].modelId).toBeUndefined();
+  });
+
+  it.each([
+    ['not a string', { reportIds: ['rep-a', 'rep-b'], modelId: 42 }],
+    ['empty', { reportIds: ['rep-a', 'rep-b'], modelId: '   ' }],
+    ['oversized', { reportIds: ['rep-a', 'rep-b'], modelId: 'x'.repeat(201) }],
+  ])('400s when modelId is %s — before any job is created', async (_label, body) => {
+    mockGetById.mockImplementation(async (id: string) => report(id, 'tc-1'));
+    const app = buildApp();
+    const res = await request(app).post('/api/comparison/deep-dive').send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/modelId/);
+    expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it('a DIFFERENT modelId for the same report pair starts its OWN job (switching to Fable never attaches to a running Sonnet job)', async () => {
+    mockGetById.mockImplementation(async (id: string) => report(id, 'tc-1'));
+    mockGenerate.mockImplementation(() => deferred<any>().promise);
+
+    const app = buildApp();
+    const first = await request(app).post('/api/comparison/deep-dive').send({ reportIds: ['rep-a', 'rep-b'], modelId: 'us.anthropic.claude-sonnet-4-6' });
+    const second = await request(app).post('/api/comparison/deep-dive').send({ reportIds: ['rep-a', 'rep-b'], modelId: FABLE });
+    const third = await request(app).post('/api/comparison/deep-dive').send({ reportIds: ['rep-a', 'rep-b'], modelId: FABLE });
+
+    expect(second.body.jobId).not.toBe(first.body.jobId);
+    expect(third.body.jobId).toBe(second.body.jobId); // same model → deduped
+    expect(mockGenerate).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('POST /api/comparison/deep-dive \u2014 async job pattern', () => {
@@ -172,14 +246,14 @@ describe('GET /api/comparison/deep-dive/jobs/:jobId', () => {
     const postRes = await request(app).post('/api/comparison/deep-dive').send({ reportIds: ['rep-a', 'rep-b'] });
     const { jobId } = postRes.body;
 
-    d.reject(new Error('Comparison deep-dive timed out after 180s'));
+    d.reject(new Error('Comparison deep-dive stopped by the safety deadline after 25m 0s'));
     await Promise.resolve();
     await Promise.resolve();
 
     const pollRes = await request(app).get(`/api/comparison/deep-dive/jobs/${jobId}`);
     expect(pollRes.status).toBe(200);
     expect(pollRes.body.status).toBe('error');
-    expect(pollRes.body.error).toBe('Comparison deep-dive timed out after 180s');
+    expect(pollRes.body.error).toBe('Comparison deep-dive stopped by the safety deadline after 25m 0s');
     expect(pollRes.body.result).toBeUndefined();
   });
 });

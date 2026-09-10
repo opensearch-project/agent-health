@@ -16,8 +16,9 @@
  * AS IT WAS when the run actually executed (report.testCaseVersion), not
  * whatever the test case's content looks like today.
  *
- * Deterministic: storage, deep-dive, and metrics are all mocked via
- * page.route() — no LLM/AWS creds required.
+ * Deterministic: storage, deep-dive (including its models list — see
+ * setupRoutes below), and metrics are all mocked via page.route() — no
+ * LLM/AWS creds required.
  */
 
 import { test, expect, mockDeepDiveJob } from './fixtures/test-fixtures';
@@ -136,6 +137,17 @@ async function setupRoutes(page: import('@playwright/test').Page, testCaseFetchC
     return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
   });
   await page.route('**/api/metrics/batch**', (route) => json(route, { metrics: [] }));
+  // GET /api/comparison/deep-dive/models — ComparisonDeepDive fetches this on
+  // mount and gates its first auto-generation on the response (see
+  // resolveDeepDiveModelId). Mock it deterministically to the empty list a
+  // credential-less CI server actually returns (matching
+  // comparison-deepdive-model-select.spec.ts's convention of mocking this
+  // endpoint) so the panel's loading→done transition — and the DOM reflow
+  // that comes with it — happens at a fixed, fast, predictable point instead
+  // of racing an un-mocked real network round trip. Left un-mocked, this hung
+  // just long enough in CI to land squarely inside the case-row link's Radix
+  // Tooltip open-intent window and silently swallow the hover.
+  await page.route('**/api/comparison/deep-dive/models', (route) => json(route, { models: [], defaultId: null }));
   await mockDeepDiveJob(page, { result: { markdown: 'stub deep-dive markdown', modelId: 'stub/model', durationMs: 1, runs: [] } });
 }
 

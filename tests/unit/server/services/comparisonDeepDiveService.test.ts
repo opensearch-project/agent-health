@@ -293,29 +293,171 @@ describe('comparisonDeepDiveService — optional systemPrompt override (browser-
   });
 });
 
-describe('comparisonDeepDiveService — DEEP_DIVE_DEADLINE_MS (owner bug: "What\'s actually different" appeared to hang forever)', () => {
-  // Same pi-SDK mock pattern as above, but `session.prompt()` never resolves
-  // — simulating a genuinely stuck agent loop (Bedrock throttling with no
-  // bounded retry, a runaway tool-call cycle, etc.). Without a server-side
-  // deadline this would hold the HTTP response open indefinitely.
+describe('comparisonDeepDiveService — model selection (owner: "I want it to be Fable 5.1")', () => {
   const runs: ComparisonRunInput[] = [
     { key: 'A', label: 'agent A', runId: 'run-a', reportId: 'rep-a' },
     { key: 'B', label: 'agent B', runId: 'run-b', reportId: 'rep-b' },
   ];
   const baseOpts = { defaultCaseId: 'tc-default', caseReports: new Map(), getReport: async () => null };
-  const mockModel = { provider: 'mock', id: 'mock.claude-sonnet-4' };
+  const OLD_REGION = process.env.AWS_REGION;
+  // Registry snapshot (subset) from the machine that motivated the change.
+  const registry = [
+    { provider: 'amazon-bedrock', id: 'anthropic.claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+    { provider: 'amazon-bedrock', id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0', name: 'Claude Sonnet 4.5 (Global)' },
+    { provider: 'amazon-bedrock', id: 'us.anthropic.claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (US)' },
+    { provider: 'amazon-bedrock', id: 'us.anthropic.claude-opus-4-8', name: 'Claude Opus 4.8 (US)' },
+    { provider: 'amazon-bedrock', id: 'eu.anthropic.claude-fable-5', name: 'Claude Fable 5 (EU)' },
+    { provider: 'amazon-bedrock', id: 'jp.anthropic.claude-opus-4-8', name: 'Claude Opus 4.8 (JP)' },
+    { provider: 'amazon-bedrock', id: 'us.anthropic.claude-fable-5', name: 'Claude Fable 5 (US)' },
+    { provider: 'amazon-bedrock', id: 'us.anthropic.claude-fable-5-1', name: 'Claude Fable 5.1 (US)' },
+    { provider: 'amazon-bedrock', id: 'openai.gpt-5.5', name: 'GPT-5.5' },
+  ];
+  let capturedSessionOpts: any;
 
   beforeEach(() => {
+    process.env.AWS_REGION = 'us-east-1';
     jest.resetModules();
-    jest.useFakeTimers();
+    capturedSessionOpts = undefined;
+    jest.doMock(
+      '@earendil-works/pi-coding-agent',
+      () => ({
+        createAgentSession: jest.fn(async (opts: any) => {
+          capturedSessionOpts = opts;
+          return {
+            session: {
+              prompt: jest.fn(async () => {}),
+              messages: [{ role: 'assistant', content: [{ type: 'text', text: 'ok' }] }],
+            },
+          };
+        }),
+        SessionManager: { inMemory: jest.fn(() => ({})) },
+        AuthStorage: { create: jest.fn(() => ({})) },
+        ModelRegistry: { create: jest.fn(() => ({ getAvailable: jest.fn(async () => registry) })) },
+        DefaultResourceLoader: jest.fn().mockImplementation(() => ({ reload: jest.fn(async () => {}) })),
+        getAgentDir: jest.fn(() => '/tmp/mock-agent-dir'),
+      }),
+      { virtual: true }
+    );
+  });
+  afterEach(() => {
+    jest.dontMock('@earendil-works/pi-coding-agent');
+    process.env.AWS_REGION = OLD_REGION;
+  });
+
+  it('DEFAULT (no modelId) runs on Fable 5.1 — not the 4.x Sonnet the judge fallback would pick', async () => {
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+    const result = await generate({ runs, ...baseOpts });
+    expect(capturedSessionOpts.model.id).toBe('us.anthropic.claude-fable-5-1');
+    expect(result.modelId).toBe('amazon-bedrock/us.anthropic.claude-fable-5-1');
+  });
+
+  it('the default is a PIN on Fable 5.1, not just "highest score": a hypothetical newer 5.x in the registry does not displace it', async () => {
+    const { resolveDefaultDeepDiveModel, DEEP_DIVE_PREFERRED_MODEL_ID } = require('@/server/services/comparisonDeepDiveService');
+    expect(DEEP_DIVE_PREFERRED_MODEL_ID).toBe('anthropic.claude-fable-5-1');
+    const withNewer = [...registry, { provider: 'amazon-bedrock', id: 'us.anthropic.claude-fable-5-2', name: 'Claude Fable 5.2 (US)' }];
+    expect(resolveDefaultDeepDiveModel(withNewer)?.id).toBe('us.anthropic.claude-fable-5-1');
+    // Only a global./other-region Fable 5.1 profile credentialed → still pinned to it.
+    const onlyGlobal = registry.filter((m) => m.id !== 'us.anthropic.claude-fable-5-1').concat({ provider: 'amazon-bedrock', id: 'global.anthropic.claude-fable-5-1', name: 'Claude Fable 5.1 (Global)' });
+    expect(resolveDefaultDeepDiveModel(onlyGlobal)?.id).toBe('global.anthropic.claude-fable-5-1');
+  });
+
+  it('falls back to the newest-Claude heuristic only when NO Fable 5.1 profile is credentialed', async () => {
+    const { resolveDefaultDeepDiveModel } = require('@/server/services/comparisonDeepDiveService');
+    const noFable51 = registry.filter((m) => !m.id.includes('fable-5-1'));
+    expect(resolveDefaultDeepDiveModel(noFable51)?.id).toBe('us.anthropic.claude-fable-5');
+    const only4x = noFable51.filter((m) => !m.id.includes('fable'));
+    expect(resolveDefaultDeepDiveModel(only4x)?.id).toMatch(/claude-(sonnet|opus)-4/);
+    expect(resolveDefaultDeepDiveModel([])).toBeUndefined();
+  });
+
+  it('AH_DEEP_DIVE_MODEL_ID overrides the pin per server', async () => {
+    const OLD = process.env.AH_DEEP_DIVE_MODEL_ID;
+    process.env.AH_DEEP_DIVE_MODEL_ID = 'anthropic.claude-opus-4-8';
+    try {
+      const { resolveDefaultDeepDiveModel, selectDeepDiveModelOptions } = require('@/server/services/comparisonDeepDiveService');
+      expect(resolveDefaultDeepDiveModel(registry)?.id).toBe('us.anthropic.claude-opus-4-8');
+      expect(selectDeepDiveModelOptions(registry).defaultId).toBe('us.anthropic.claude-opus-4-8');
+    } finally {
+      if (OLD === undefined) delete process.env.AH_DEEP_DIVE_MODEL_ID; else process.env.AH_DEEP_DIVE_MODEL_ID = OLD;
+    }
+  });
+
+  it('an explicit modelId wins over the default and is echoed in result.modelId', async () => {
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+    const result = await generate({ runs, modelId: 'us.anthropic.claude-sonnet-4-6', ...baseOpts });
+    expect(capturedSessionOpts.model.id).toBe('us.anthropic.claude-sonnet-4-6');
+    expect(result.modelId).toBe('amazon-bedrock/us.anthropic.claude-sonnet-4-6');
+  });
+
+  it('an explicit modelId this server cannot invoke fails loudly instead of silently running a different model', async () => {
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+    await expect(generate({ runs, modelId: 'us.anthropic.claude-mythos-9', ...baseOpts })).rejects.toThrow(
+      /requested model "us.anthropic.claude-mythos-9" is not available/
+    );
+    expect(capturedSessionOpts).toBeUndefined();
+  });
+
+  it('does not cap the session (no maxTokens / thinkingLevel override) — Fable 5.1 keeps its 128k output + registry-default reasoning', async () => {
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+    await generate({ runs, ...baseOpts });
+    expect(capturedSessionOpts).not.toHaveProperty('maxTokens');
+    expect(capturedSessionOpts).not.toHaveProperty('thinkingLevel');
+  });
+
+  describe('selectDeepDiveModelOptions (GET /api/comparison/deep-dive/models payload)', () => {
+    it('lists only Claude models on a usable (region or global) inference profile, best-first, with Fable 5.1 as defaultId', () => {
+      const { selectDeepDiveModelOptions } = require('@/server/services/comparisonDeepDiveService');
+      const { models, defaultId } = selectDeepDiveModelOptions(registry);
+      expect(defaultId).toBe('us.anthropic.claude-fable-5-1');
+      expect(models[0]).toEqual({ provider: 'amazon-bedrock', id: 'us.anthropic.claude-fable-5-1', name: 'Claude Fable 5.1 (US)' });
+      const ids = models.map((m: any) => m.id);
+      expect(ids).not.toContain('anthropic.claude-sonnet-4-6'); // bare id — fails on-demand
+      expect(ids).not.toContain('eu.anthropic.claude-fable-5'); // wrong region
+      expect(ids).not.toContain('jp.anthropic.claude-opus-4-8'); // wrong region
+      expect(ids).not.toContain('openai.gpt-5.5'); // not Claude
+      expect(ids).toContain('global.anthropic.claude-sonnet-4-5-20250929-v1:0');
+      expect(ids.indexOf('us.anthropic.claude-fable-5')).toBeLessThan(ids.indexOf('us.anthropic.claude-sonnet-4-6'));
+    });
+    it('returns an empty list / null default when nothing usable is available', () => {
+      const { selectDeepDiveModelOptions } = require('@/server/services/comparisonDeepDiveService');
+      expect(selectDeepDiveModelOptions([{ provider: 'x', id: 'openai.gpt-5.5' }])).toEqual({ models: [], defaultId: null });
+    });
+  });
+
+  it('listDeepDiveModels reads the live registry and never throws when the pi SDK is missing', async () => {
+    const { listDeepDiveModels } = require('@/server/services/comparisonDeepDiveService');
+    const live = await listDeepDiveModels();
+    expect(live.defaultId).toBe('us.anthropic.claude-fable-5-1');
+    jest.dontMock('@earendil-works/pi-coding-agent');
+    jest.resetModules();
+    jest.doMock('@earendil-works/pi-coding-agent', () => { throw new Error('Cannot find module'); }, { virtual: true });
+    const { listDeepDiveModels: listWithoutSdk } = require('@/server/services/comparisonDeepDiveService');
+    await expect(listWithoutSdk()).resolves.toEqual({ models: [], defaultId: null });
+  });
+});
+
+describe('comparisonDeepDiveService — DEEP_DIVE_DEADLINE_MS is a long safety backstop, NOT a 180s budget (owner: "My comparison times out after 180 seconds, remove this limit")', () => {
+  // Same pi-SDK mock pattern as above, but `session.prompt()` is controlled
+  // by the test: either settles after a long-but-legitimate wall-clock time
+  // (a reasoning model over a big results table) or never settles (a
+  // genuinely stuck agent loop).
+  const runs: ComparisonRunInput[] = [
+    { key: 'A', label: 'agent A', runId: 'run-a', reportId: 'rep-a' },
+    { key: 'B', label: 'agent B', runId: 'run-b', reportId: 'rep-b' },
+  ];
+  const baseOpts = { defaultCaseId: 'tc-default', caseReports: new Map(), getReport: async () => null };
+  const mockModel = { provider: 'mock', id: 'mock.claude-fable-5-1' };
+  const abortMock = jest.fn(async () => {});
+
+  function mockSdkWithPrompt(prompt: () => Promise<unknown>) {
     jest.doMock(
       '@earendil-works/pi-coding-agent',
       () => ({
         createAgentSession: jest.fn(async () => ({
           session: {
-            // Never resolves — the agent loop is stuck.
-            prompt: jest.fn(() => new Promise(() => {})),
-            messages: [],
+            prompt: jest.fn(prompt),
+            abort: abortMock,
+            messages: [{ role: 'assistant', content: [{ type: 'text', text: 'slow but fine' }] }],
           },
         })),
         SessionManager: { inMemory: jest.fn(() => ({})) },
@@ -330,6 +472,12 @@ describe('comparisonDeepDiveService — DEEP_DIVE_DEADLINE_MS (owner bug: "What\
       }),
       { virtual: true }
     );
+  }
+
+  beforeEach(() => {
+    jest.resetModules();
+    jest.useFakeTimers();
+    abortMock.mockClear();
   });
 
   afterEach(() => {
@@ -337,15 +485,54 @@ describe('comparisonDeepDiveService — DEEP_DIVE_DEADLINE_MS (owner bug: "What\
     jest.useRealTimers();
   });
 
-  it('rejects with a clear, retryable timeout error instead of hanging forever once the deadline elapses', async () => {
+  it('is derived from the job-store TTL (5 min before it) and is well past the old 180s cutoff', () => {
+    const { DEEP_DIVE_DEADLINE_MS } = require('@/server/services/comparisonDeepDiveService');
+    const { DEFAULT_JOB_TTL_MS } = require('@/server/services/comparisonDeepDiveJobStore');
+    expect(DEEP_DIVE_DEADLINE_MS).toBe(DEFAULT_JOB_TTL_MS - 5 * 60_000);
+    expect(DEEP_DIVE_DEADLINE_MS).toBe(25 * 60_000);
+    expect(DEEP_DIVE_DEADLINE_MS).toBeGreaterThan(180_000);
+  });
+
+  it('a generation that takes 10 minutes (far past the old 180s limit) completes normally — the deadline no longer fails legitimate long runs', async () => {
+    // prompt() resolves only after 10 simulated minutes.
+    mockSdkWithPrompt(() => new Promise((resolve) => setTimeout(resolve, 10 * 60_000)));
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+
+    const promise = generate({ runs, modelId: mockModel.id, ...baseOpts });
+    // Attach handlers BEFORE advancing so a rejection can never go unhandled.
+    const settled = promise.then((r: any) => ({ ok: true, r }), (e: any) => ({ ok: false, e }));
+    await jest.advanceTimersByTimeAsync(180_000 + 1);
+    // 3 minutes in: still running, nothing rejected.
+    await jest.advanceTimersByTimeAsync(10 * 60_000);
+    const outcome: any = await settled;
+    expect(outcome.ok).toBe(true);
+    expect(outcome.r.markdown).toBe('slow but fine');
+    expect(abortMock).not.toHaveBeenCalled();
+  });
+
+  it('a GENUINELY stuck loop is still stopped at the backstop, aborting the pi session, with an error that says how long it ran, which model, and that Regenerate may succeed', async () => {
+    mockSdkWithPrompt(() => new Promise(() => {})); // never settles
     const { generateComparisonDeepDive: generate, DEEP_DIVE_DEADLINE_MS } = require('@/server/services/comparisonDeepDiveService');
-    expect(DEEP_DIVE_DEADLINE_MS).toBeGreaterThan(0);
 
     const promise = generate({ runs, modelId: mockModel.id, ...baseOpts });
     const assertion = expect(promise).rejects.toThrow(
-      new RegExp(`timed out after ${Math.round(DEEP_DIVE_DEADLINE_MS / 1000)}s`)
+      /safety deadline after 25m 0s \(model mock\/mock\.claude-fable-5-1\)[\s\S]*Regenerate/
     );
-    await jest.advanceTimersByTimeAsync(DEEP_DIVE_DEADLINE_MS);
+    await jest.advanceTimersByTimeAsync(DEEP_DIVE_DEADLINE_MS - 1);
+    expect(abortMock).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
     await assertion;
+    expect(abortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never uses the old "timed out after 180s" wording', () => {
+    const { buildDeadlineErrorMessage, formatDurationMs } = require('@/server/services/comparisonDeepDiveService');
+    const msg = buildDeadlineErrorMessage(25 * 60_000, 'amazon-bedrock/us.anthropic.claude-fable-5-1');
+    expect(msg).not.toMatch(/180s/);
+    expect(msg).toContain('25m 0s');
+    expect(msg).toContain('us.anthropic.claude-fable-5-1');
+    expect(msg).toMatch(/Regenerate/);
+    expect(formatDurationMs(95_000)).toBe('1m 35s');
+    expect(formatDurationMs(42_000)).toBe('42s');
   });
 });

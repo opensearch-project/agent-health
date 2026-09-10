@@ -39,6 +39,7 @@ jest.mock('@/server/adapters', () => ({
 
 jest.mock('@/server/services/comparisonDeepDiveService', () => ({
   generateComparisonDeepDive: (...args: any[]) => mockGenerateComparisonDeepDive(...args),
+  listDeepDiveModels: async () => ({ models: [], defaultId: null }),
   SYSTEM_PROMPT: 'MOCK SYSTEM PROMPT',
 }));
 

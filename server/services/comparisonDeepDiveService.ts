@@ -44,13 +44,17 @@ import {
   type VisitedCaseRef,
 } from './comparisonTraceTools';
 import {
+  bedrockBaseId,
   findRequestedModel,
-  pickJudgeModel,
+  pickNewestClaudeModel,
+  scoreNewestClaudeModel,
   extractFinalAssistantText,
 } from './piAgenticJudgeService';
 import type { PiSdk } from './piSdkTypes';
 import { readEnv } from '@/lib/envCompat';
 import { debug } from '@/lib/debug';
+import { regionInferencePrefix } from '@/lib/bedrockCompat';
+import { DEFAULT_JOB_TTL_MS } from './comparisonDeepDiveJobStore';
 
 /** One run participating in the comparison (the DEFAULT/fallback case for that side). */
 export interface ComparisonRunInput {
@@ -100,24 +104,66 @@ export interface ComparisonDeepDiveResult {
 }
 
 /**
- * Hard ceiling on the agent loop's wall-clock time. Owner bug report: "What's
- * actually different" appeared to never load (waited minutes) on a 62-row
- * comparison with no trace data at all — in that specific repro the agent
- * loop DID complete (~50s), just with zero client-side feedback, but there is
- * no other guard against a genuinely stuck loop (e.g. Bedrock throttling with
- * no bounded retry, a runaway tool-call cycle). Without this, a real hang
- * would keep the HTTP request — and therefore the client's fetch — open
- * forever, since there is no server-side deadline anywhere in this path.
- * Generous enough for a large results table + a couple of trace-tool round
- * trips; bounded so a genuine hang always resolves to a clear, retryable error
- * instead of an indefinite spinner.
+ * SAFETY BACKSTOP (not a budget) on the agent loop's wall-clock time.
+ *
+ * History: this was a hard 180s deadline, added when the panel appeared to
+ * hang forever with no feedback. Owner follow-up: "My comparison times out
+ * after 180 seconds, remove this limit." A reasoning model (Fable 5.1 — now
+ * the default) over a 62-case results table with several trace-tool round
+ * trips legitimately runs for many minutes, so a 3-minute cutoff turned
+ * normal generations into failures.
+ *
+ * The only thing this guards against now is a GENUINELY stuck loop (a
+ * provider stream that never ends, a runaway tool-call cycle). It is derived
+ * from the job store's TTL so the two can't drift apart: a running job is
+ * TTL-swept `DEFAULT_JOB_TTL_MS` (30 min) after it started — after which the
+ * client's poll 404s and the result would be lost anyway — so the loop is
+ * aborted 5 minutes before that, while the job is still reachable, and the
+ * client receives an honest error (how long it ran, what to do) instead of
+ * a silent 404. 25 minutes is ~8x the longest real generation observed.
  */
-export const DEEP_DIVE_DEADLINE_MS = 180_000;
+export const DEEP_DIVE_DEADLINE_MS = DEFAULT_JOB_TTL_MS - 5 * 60_000;
 
-/** Race a promise against a deadline; rejects with `message` if it fires first. */
-function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+/** `1500000` -> "25m 0s", `95000` -> "1m 35s", `42000` -> "42s". */
+export function formatDurationMs(ms: number): string {
+  const totalSec = Math.round(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+/**
+ * Build the error surfaced when the backstop fires. Says how long the loop
+ * actually ran, which model, and that a retry may well succeed (the
+ * deadline is a hang guard, not a verdict on the comparison).
+ */
+export function buildDeadlineErrorMessage(elapsedMs: number, modelId: string): string {
+  return (
+    `Comparison deep-dive stopped by the safety deadline after ${formatDurationMs(elapsedMs)} ` +
+    `(model ${modelId}) — the agent loop was still running, which is far longer than a normal ` +
+    `generation and usually means a stuck provider stream or tool loop. Click Regenerate to try ` +
+    `again (a retry often completes normally), or pick a faster model.`
+  );
+}
+
+/**
+ * Race a promise against a deadline. If the deadline fires first, `onDeadline`
+ * runs (best-effort, errors swallowed — used to abort the pi session so a
+ * stuck loop stops burning tokens) and the returned promise rejects with the
+ * message built from the elapsed time.
+ */
+function withDeadline<T>(
+  promise: Promise<T>,
+  ms: number,
+  buildMessage: (elapsedMs: number) => string,
+  onDeadline?: () => unknown
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
+    const startedAt = Date.now();
+    const timer = setTimeout(() => {
+      try { void Promise.resolve(onDeadline?.()).catch(() => {}); } catch { /* best-effort */ }
+      reject(new Error(buildMessage(Date.now() - startedAt)));
+    }, ms);
     promise.then(
       (v) => { clearTimeout(timer); resolve(v); },
       (e) => { clearTimeout(timer); reject(e); }
@@ -135,6 +181,88 @@ async function loadPiSdk(): Promise<PiSdk> {
       'Comparison deep-dive requires the optional dependency "@earendil-works/pi-coding-agent". ' +
         `(${err?.message ?? String(err)})`
     );
+  }
+}
+
+/**
+ * The model the deep-dive PINS to when no `modelId` is requested — owner ask:
+ * "I want it to be Fable 5.1." Matched by base id (region prefix ignored, see
+ * findRequestedModel) so `us.`/`global.`/`eu.` profiles all satisfy it. Only
+ * when NO Fable 5.1 profile is credentialed does the default fall back to the
+ * newest-Claude heuristic ({@link pickNewestClaudeModel}). Override per
+ * server with AH_DEEP_DIVE_MODEL_ID.
+ */
+export const DEEP_DIVE_PREFERRED_MODEL_ID = 'anthropic.claude-fable-5-1';
+
+/**
+ * Resolve the default deep-dive model from the credentialed registry:
+ * explicit pin first, newest-Claude heuristic second. Shared by the generator
+ * and by the models endpoint so `defaultId` is exactly what a request without
+ * `modelId` runs on.
+ */
+export function resolveDefaultDeepDiveModel<T extends { provider: string; id: string }>(available: T[]): T | undefined {
+  const preferred = process.env.AH_DEEP_DIVE_MODEL_ID?.trim() || DEEP_DIVE_PREFERRED_MODEL_ID;
+  return findRequestedModel(available, preferred) ?? pickNewestClaudeModel(available);
+}
+
+/** One selectable deep-dive model, as served by GET /api/comparison/deep-dive/models. */
+export interface DeepDiveModelOption {
+  provider: string;
+  id: string;
+  /** Registry display name (e.g. "Claude Fable 5.1 (US)"); falls back to the id. */
+  name: string;
+}
+
+export interface DeepDiveModelList {
+  /** Selectable models, best-first (the first entry is what the server picks when no modelId is sent). */
+  models: DeepDiveModelOption[];
+  /** The id the server uses when the request carries no `modelId`; null when nothing is available. */
+  defaultId: string | null;
+}
+
+/**
+ * Reduce the pi registry's credentialed models to the ones worth offering in
+ * the deep-dive's model selector: Claude models on a usable inference profile
+ * (region-matching or `global.`). Excluded on purpose:
+ *   - bare (unprefixed) Claude 4.x+ ids — they fail on-demand on Bedrock;
+ *   - wrong-region profiles (`eu.`/`au.`/`jp.`/`apac.` when running in a US
+ *     region) — they either fail or add cross-region latency;
+ *   - non-Claude models (the prompt + tool contract is tuned for Claude).
+ * Sorted best-first by {@link scoreNewestClaudeModel}; `defaultId` is what
+ * {@link resolveDefaultDeepDiveModel} picks (the Fable 5.1 pin when present).
+ * Exported for tests; the route calls {@link listDeepDiveModels}.
+ */
+export function selectDeepDiveModelOptions<T extends { provider: string; id: string; name?: string }>(
+  available: T[]
+): DeepDiveModelList {
+  const rp = regionInferencePrefix();
+  const usable = available.filter((m) => {
+    const id = m.id.toLowerCase();
+    if (!id.includes('claude')) return false;
+    return id.startsWith(rp) || id.startsWith('global.');
+  });
+  const sorted = [...usable].sort((a, b) => scoreNewestClaudeModel(b.id) - scoreNewestClaudeModel(a.id));
+  const models = sorted.map((m) => ({ provider: m.provider, id: m.id, name: m.name || m.id }));
+  // defaultId = the SAME resolution the generator uses (pin, then heuristic),
+  // restricted to the offered list so the selector can always show it.
+  const resolved = resolveDefaultDeepDiveModel(usable);
+  return { models, defaultId: resolved?.id ?? models[0]?.id ?? null };
+}
+
+/**
+ * The models a user can pick for the deep-dive (see {@link selectDeepDiveModelOptions}),
+ * read live from the pi ModelRegistry so the list reflects what THIS server
+ * can actually invoke. Returns an empty list (never throws) when the optional
+ * pi SDK isn't installed — the selector simply doesn't render then.
+ */
+export async function listDeepDiveModels(): Promise<DeepDiveModelList> {
+  try {
+    const { AuthStorage, ModelRegistry } = await loadPiSdk();
+    const available = await ModelRegistry.create(AuthStorage.create()).getAvailable();
+    return selectDeepDiveModelOptions(available as Array<{ provider: string; id: string; name?: string }>);
+  } catch (err: any) {
+    debug('CompareDeepDive', 'listDeepDiveModels unavailable:', err?.message ?? String(err));
+    return { models: [], defaultId: null };
   }
 }
 
@@ -258,9 +386,23 @@ export async function generateComparisonDeepDive(opts: {
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create(authStorage);
   const available = await modelRegistry.getAvailable();
-  const model = findRequestedModel(available, opts.modelId) ?? pickJudgeModel(available);
+  // Explicit request wins (selector in the panel header). Otherwise the
+  // default is PINNED to Fable 5.1 (DEEP_DIVE_PREFERRED_MODEL_ID), falling
+  // back to the newest Claude the registry offers — unlike the agentic judge,
+  // whose fallback deliberately stays on Claude 4.x for verdict comparability
+  // (see scoreJudgeModel). Before this the panel silently ran a 4.x Sonnet
+  // profile even with Fable 5.1 configured.
+  const model = findRequestedModel(available, opts.modelId) ?? resolveDefaultDeepDiveModel(available);
   if (!model) {
     throw new Error('Comparison deep-dive: no model available (configure a Bedrock/Anthropic model with valid credentials).');
+  }
+  if (opts.modelId && bedrockBaseId(model.id) !== bedrockBaseId(opts.modelId)) {
+    // An explicitly selected model that this server can't invoke must NOT be
+    // silently swapped for another one — the panel shows which model the
+    // user picked, so quietly running a different model would be a lie.
+    throw new Error(
+      `Comparison deep-dive: requested model "${opts.modelId}" is not available on this server. Pick another model.`
+    );
   }
   debug('CompareDeepDive', 'model:', `${model.provider}/${model.id}`, 'runs:', runs.map((r) => r.key).join(','), 'cases:', caseReports.size);
 
@@ -297,7 +439,8 @@ export async function generateComparisonDeepDive(opts: {
   await withDeadline(
     session.prompt(buildUserPrompt(runs, opts.rows, defaultCaseId)),
     DEEP_DIVE_DEADLINE_MS,
-    `Comparison deep-dive timed out after ${Math.round(DEEP_DIVE_DEADLINE_MS / 1000)}s — the agent loop did not finish in time. Try Regenerate.`
+    (elapsedMs) => buildDeadlineErrorMessage(elapsedMs, `${model.provider}/${model.id}`),
+    () => session.abort?.()
   );
   const markdown = extractFinalAssistantText(session.messages).trim();
   const durationMs = Date.now() - startTime;
