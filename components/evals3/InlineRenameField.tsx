@@ -38,6 +38,8 @@ export interface InlineRenameFieldProps {
   maxLength?: number;
   /** Stable prefix for data-testid on the text/button/input/error nodes. */
   testId?: string;
+  /** Let long titles wrap on phones while retaining desktop truncation. */
+  wrapOnMobile?: boolean;
 }
 
 export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
@@ -47,6 +49,7 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
   textClassName,
   maxLength = 200,
   testId,
+  wrapOnMobile = false,
 }) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -134,8 +137,8 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
   }
 
   return (
-    <div className={`group/rename inline-flex items-center gap-1 min-w-0 ${className || ''}`}>
-      <span className={`truncate ${textClassName || ''}`} title={value} data-testid={testId ? `${testId}-text` : undefined}>
+    <div className={`group/rename min-w-0 gap-1 ${wrapOnMobile ? 'flex w-full items-start sm:inline-flex sm:w-auto sm:items-center' : 'inline-flex items-center'} ${className || ''}`}>
+      <span className={`${wrapOnMobile ? 'min-w-0 flex-1 whitespace-normal break-words sm:truncate' : 'truncate'} ${textClassName || ''}`} title={value} data-testid={testId ? `${testId}-text` : undefined}>
         {value}
       </span>
       <button

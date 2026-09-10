@@ -22,7 +22,7 @@ import { ReadyToRun } from './dashboard/ReadyToRun';
 import { useDataState } from '@/hooks/useDataState';
 import { isSampleDataActive } from '@/config/sampleData';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { formatRelativeTime, getModelName } from '@/lib/utils';
+import { cn, formatRelativeTime, getModelName } from '@/lib/utils';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -164,10 +164,10 @@ const StatusIcon: React.FC<{ row: Pick<RunRow, 'failed' | 'passed'> }> = ({ row 
 
 // ==================== Truncate-with-tooltip ====================
 
-const TruncText: React.FC<{ text: string; className?: string }> = ({ text, className }) => (
+const TruncText: React.FC<{ text: string; className?: string; testId?: string }> = ({ text, className, testId }) => (
   <Tooltip>
     <TooltipTrigger asChild>
-      <span className={`truncate inline-block max-w-full align-bottom ${className || ''}`}>
+      <span data-testid={testId} className={cn('inline-block max-w-full align-bottom', className)}>
         {text}
       </span>
     </TooltipTrigger>
@@ -265,26 +265,54 @@ interface RecentRowProps {
   onClick: () => void;
 }
 
-const RecentRow: React.FC<RecentRowProps> = ({ row, onClick }) => {
+export const RecentRow: React.FC<RecentRowProps> = ({ row, onClick }) => {
+  const verdict = row.failed === 0 && row.passed > 0
+    ? 'Passed'
+    : row.failed > 0
+      ? `${row.failed} failed`
+      : 'Pending';
+
   return (
     <button
       onClick={onClick}
-      className="group w-full min-w-[720px] grid items-center gap-3 px-3 h-6 text-left text-[11px] border-b last:border-b-0 hover:bg-muted/50 transition-colors"
-      style={{ gridTemplateColumns: '14px minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) 130px 80px 14px' }}
+      data-testid="recent-run-row"
+      data-run-id={row.run.id}
+      className="group mx-3 mb-2 grid w-[calc(100%-1.5rem)] min-w-0 grid-cols-[14px_minmax(0,1fr)_14px] items-start gap-x-2 gap-y-2 rounded-md border bg-muted/10 p-2.5 text-left text-[11px] transition-colors hover:bg-muted/50 sm:mx-0 sm:mb-0 sm:h-6 sm:w-full sm:min-w-[720px] sm:grid-cols-[14px_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_130px_80px_14px] sm:items-center sm:gap-3 sm:rounded-none sm:border-0 sm:border-b sm:bg-transparent sm:px-3 sm:py-0 sm:last:border-b-0"
     >
-      <StatusIcon row={row} />
-      <div className="min-w-0">
-        <TruncText text={row.run.name} className="text-[11px] font-medium" />
-        <span className="text-muted-foreground"> · </span>
-        <TruncText text={row.benchmarkName} className="text-[10px] text-muted-foreground" />
+      <span className="mt-0.5 sm:mt-0"><StatusIcon row={row} /></span>
+      <div className="min-w-0 sm:flex sm:items-center sm:overflow-hidden sm:whitespace-nowrap">
+        <TruncText testId="recent-run-name" text={row.run.name} className="block break-words text-xs font-medium leading-tight sm:min-w-0 sm:truncate sm:text-[11px]" />
+        <span className="hidden shrink-0 text-muted-foreground sm:inline"> · </span>
+        <TruncText testId="recent-run-benchmark" text={row.benchmarkName} className="mt-0.5 block break-words text-[10px] leading-tight text-muted-foreground sm:mt-0 sm:min-w-0 sm:truncate" />
       </div>
-      <TruncText text={row.agentName} className="text-[11px]" />
-      <TruncText text={getModelName(row.run.modelId)} className="text-[11px] text-muted-foreground" />
-      <RateBar rate={row.passRate} passed={row.passed} failed={row.failed} total={row.total} />
-      <span className="text-[10px] text-muted-foreground whitespace-nowrap text-right tabular-nums">
-        {formatRelativeTime(row.run.createdAt)}
-      </span>
-      <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-60 transition-opacity" />
+
+      <div className="col-start-2 row-start-2 grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-x-3 sm:contents">
+        <div className="min-w-0 sm:col-start-3 sm:row-start-1">
+          <span className="text-[9px] text-muted-foreground sm:hidden">Agent</span>
+          <TruncText testId="recent-run-agent" text={row.agentName} className="break-words sm:truncate" />
+        </div>
+        <div className="min-w-0 sm:col-start-4 sm:row-start-1">
+          <span className="text-[9px] text-muted-foreground sm:hidden">Model</span>
+          <TruncText testId="recent-run-model" text={getModelName(row.run.modelId)} className="break-words text-muted-foreground sm:truncate" />
+        </div>
+      </div>
+
+      <div className="col-start-2 row-start-3 flex min-w-0 items-center gap-2 sm:contents">
+        <Badge
+          variant="outline"
+          className={`h-5 shrink-0 px-1.5 text-[9px] sm:hidden ${row.failed > 0 ? 'border-red-500/40 text-red-600 dark:text-red-400' : row.passed > 0 ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}
+        >
+          {verdict}
+        </Badge>
+        <div data-testid="recent-run-pass-rate" className="min-w-0 flex-1 sm:col-start-5 sm:row-start-1">
+          <RateBar rate={row.passRate} passed={row.passed} failed={row.failed} total={row.total} />
+        </div>
+        <span data-testid="recent-run-time" className="shrink-0 whitespace-nowrap text-right text-[10px] tabular-nums text-muted-foreground sm:col-start-6 sm:row-start-1">
+          {formatRelativeTime(row.run.createdAt)}
+        </span>
+      </div>
+
+      <ArrowRight className="col-start-3 row-start-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 sm:col-start-7 sm:h-3 sm:w-3 sm:opacity-0 sm:transition-opacity sm:group-hover:translate-x-0 sm:group-hover:opacity-60" />
     </button>
   );
 };
@@ -292,7 +320,7 @@ const RecentRow: React.FC<RecentRowProps> = ({ row, onClick }) => {
 // Header row for the recent runs table
 const RecentHeader: React.FC = () => (
   <div
-    className="grid min-w-[720px] items-center gap-3 px-3 h-5 text-[10px] uppercase tracking-wider text-muted-foreground border-b bg-muted/20"
+    className="hidden h-5 min-w-[720px] items-center gap-3 border-b bg-muted/20 px-3 text-[10px] uppercase tracking-wider text-muted-foreground sm:grid"
     style={{ gridTemplateColumns: '14px minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) 130px 80px 14px' }}
   >
     <span />
@@ -306,6 +334,8 @@ const RecentHeader: React.FC = () => (
 );
 
 // ==================== Needs Improvement Widget (agent-centric) ====================
+
+export const IMPROVEMENT_ROW_BADGE_CLASS = 'h-4 shrink-0 whitespace-nowrap border-red-500/40 px-1.5 py-0 text-[9px] leading-none text-red-600 dark:text-red-400';
 
 interface NeedsImprovementWidgetProps {
   failingAgents: AgentImprovementRow[];
@@ -321,17 +351,16 @@ const AgentRow: React.FC<{
 }> = ({ row, onClick, trailing }) => (
   <button
     onClick={onClick}
-    className="group w-full grid items-center gap-2 px-3 h-8 text-left text-[11px] border-b last:border-b-0 hover:bg-muted/50 transition-colors"
-    style={{ gridTemplateColumns: '12px minmax(0,1fr) auto 56px' }}
+    className="group grid min-h-12 w-full grid-cols-[12px_minmax(0,1fr)] items-center gap-x-2 gap-y-1 border-b px-3 py-2 text-left text-[11px] transition-colors last:border-b-0 hover:bg-muted/50 sm:h-8 sm:min-h-0 sm:grid-cols-[12px_minmax(0,1fr)_auto_56px] sm:gap-2 sm:py-0"
   >
-    <Activity className="h-3 w-3 text-muted-foreground shrink-0" />
+    <Activity className="h-3 w-3 shrink-0 text-muted-foreground" />
     <div className="min-w-0">
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="truncate">
-            <span className="font-medium">{row.agentName}</span>
-            <span className="text-muted-foreground"> · </span>
-            <span className="text-muted-foreground">
+          <div className="flex flex-wrap items-baseline gap-x-1 leading-tight sm:block sm:truncate">
+            <span className="break-words font-medium">{row.agentName}</span>
+            <span className="hidden text-muted-foreground sm:inline"> · </span>
+            <span className="shrink-0 text-muted-foreground">
               {row.totalRuns} run{row.totalRuns === 1 ? '' : 's'} · {row.benchmarkCount} bench
             </span>
           </div>
@@ -349,8 +378,10 @@ const AgentRow: React.FC<{
         </TooltipContent>
       </Tooltip>
     </div>
-    {trailing}
-    <RateBarMini rate={row.passRate} />
+    <div className="col-start-2 flex min-w-0 items-center gap-2 sm:contents">
+      {trailing}
+      <RateBarMini rate={row.passRate} />
+    </div>
   </button>
 );
 
@@ -362,7 +393,7 @@ const NeedsImprovementWidget: React.FC<NeedsImprovementWidgetProps> = ({
   const empty = failingAgents.length === 0 && regressingAgents.length === 0;
 
   return (
-    <Card className="flex flex-col overflow-hidden" data-testid="needs-improvement-card">
+    <Card className="flex min-w-0 flex-col overflow-hidden" data-testid="needs-improvement-card">
       <CardHeader className="pb-2 px-4 pt-3 space-y-1">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm flex items-center gap-1.5">
@@ -423,7 +454,8 @@ const NeedsImprovementWidget: React.FC<NeedsImprovementWidgetProps> = ({
                       trailing={
                         <Badge
                           variant="outline"
-                          className="text-[9px] h-4 py-0 px-1.5 border-red-500/40 text-red-600 dark:text-red-400 leading-none"
+                          className={IMPROVEMENT_ROW_BADGE_CLASS}
+                          data-testid="improvement-row-badge"
                         >
                           {a.failedTestCases} failing
                         </Badge>
@@ -449,7 +481,8 @@ const NeedsImprovementWidget: React.FC<NeedsImprovementWidgetProps> = ({
                       trailing={
                         <Badge
                           variant="outline"
-                          className="text-[9px] h-4 py-0 px-1.5 border-red-500/40 text-red-600 dark:text-red-400 gap-0.5 leading-none"
+                          className={`${IMPROVEMENT_ROW_BADGE_CLASS} gap-0.5`}
+                          data-testid="improvement-row-badge"
                         >
                           <TrendingDown className="h-2.5 w-2.5" />
                           {Math.round(a.delta * 100)}pp
@@ -793,8 +826,8 @@ export const Dashboard: React.FC = () => {
                 (which is already `flex flex-col` + an internal `ScrollArea h-full`)
                 naturally matches AgentTrendsBand's height without a hard-coded
                 row height to keep in sync with the new, taller trends card. */}
-            <div className="grid gap-4 lg:grid-cols-3 lg:items-stretch" data-testid="agent-trends-and-needs-improvement-row">
-              <div className="lg:col-span-2">
+            <div className="grid min-w-0 gap-4 lg:grid-cols-3 lg:items-stretch" data-testid="agent-trends-and-needs-improvement-row">
+              <div className="min-w-0 lg:col-span-2">
                 <AgentTrendsBand
                   benchmarks={benchmarks}
                   reports={reports}
@@ -811,7 +844,7 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Recent Evaluation Runs — full width */}
-            <Card data-testid="recent-runs-card">
+            <Card className="min-w-0 overflow-hidden" data-testid="recent-runs-card">
               <CardHeader className="pb-2 px-4 pt-3 space-y-1">
                 <div className="flex items-center justify-between">
                   <div>
@@ -828,7 +861,7 @@ export const Dashboard: React.FC = () => {
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="px-0 pt-0 pb-0 overflow-x-auto overscroll-x-contain" tabIndex={0} aria-label="Recent evaluation runs table; scroll horizontally for all columns">
+              <CardContent className="overflow-hidden px-0 pb-0 pt-0 sm:overflow-x-auto sm:overscroll-x-contain" tabIndex={0} aria-label="Recent evaluation runs; table columns scroll horizontally on larger screens">
                 <RecentHeader />
                 {recentRows.map(r => (
                   <RecentRow

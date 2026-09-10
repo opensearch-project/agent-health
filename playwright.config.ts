@@ -46,11 +46,23 @@ export default defineConfig({
     video: 'on-first-retry',
   },
 
-  /* Configure projects for major browsers */
+  /* Configure projects for major browsers. The mobile project is part of the
+     same npm run test:e2e / e2e-tests CI gate, but runs only the focused
+     geometry suite so the full desktop suite is not doubled. */
   projects: [
     {
       name: 'chromium',
+      testIgnore: /mobile-gate\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'mobile-chromium',
+      testMatch: /mobile-gate\.spec\.ts/,
+      use: {
+        ...devices['iPhone 13'],
+        browserName: 'chromium',
+        viewport: { width: 375, height: 812 },
+      },
     },
   ],
 

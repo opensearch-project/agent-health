@@ -458,9 +458,9 @@ export const RunInspectorPage: React.FC = () => {
   };
 
   return (
-    <div className="h-full flex flex-col max-md:h-auto max-md:overflow-visible">
+    <div className="flex h-full min-w-0 flex-col max-md:h-auto max-md:overflow-visible">
       {/* ── Top Bar ──────────────────────────────────────────────── */}
-      <div className="px-4 py-3 border-b bg-card shrink-0">
+      <div className="min-w-0 shrink-0 border-b bg-card px-4 py-3">
         <Breadcrumbs
           items={
             mode === 'benchmark' && benchmark
@@ -478,14 +478,16 @@ export const RunInspectorPage: React.FC = () => {
                 ]
           }
         />
-        <div className="flex items-center justify-between mt-1">
-          <div className="flex-1 min-w-0">
+        <div className="mt-1 flex min-w-0 flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 flex-1">
             {evalRun ? (
               <InlineRenameField
                 value={run.name}
                 onSave={handleRenameRun}
+                className="max-w-full"
                 textClassName="text-lg font-bold"
                 testId="run-inspector-rename"
+                wrapOnMobile
               />
             ) : (
               <h2 className="text-lg font-bold truncate" title={run.name}>{run.name}</h2>
@@ -516,10 +518,10 @@ export const RunInspectorPage: React.FC = () => {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground sm:w-auto sm:shrink-0 sm:gap-3">
             <span className="flex items-center gap-1"><Calendar size={11} /> {formatDate(run.createdAt)}</span>
-            <span>{agentName}</span>
-            <span>{modelName}</span>
+            <span className="min-w-0 break-words">{agentName}</span>
+            <span className="min-w-0 break-words">{modelName}</span>
             <span className="flex items-center gap-1">
               <span className="text-green-500 font-semibold">{passCount}✓</span>
               <span className="text-red-500 font-semibold">{failCount}✗</span>

@@ -81,8 +81,24 @@ describe('AgentBenchmarkDotPlot', () => {
     ]);
     render(React.createElement(AgentBenchmarkDotPlot, { rows, metric: 'accuracy', onSelectPoint: jest.fn() }));
 
-    expect(screen.getByTestId('agent-dot-plot-latest-agent-a')).toBeTruthy();
-    expect(screen.getByTestId('agent-dot-plot-history-agent-a-0')).toBeTruthy();
+    expect(screen.getByTestId('agent-dot-plot-latest-agent-a').className).toContain('!min-h-0');
+    expect(screen.getByTestId('agent-dot-plot-history-agent-a-0').className).toContain('!min-h-0');
+  });
+
+  it('uses three mobile ticks with safe edge anchors and hides intermediate desktop-only ticks', () => {
+    const rows = rankedRows([
+      makeRun({ id: 'r1', stats: { passed: 8, failed: 2, pending: 0, total: 10 } }),
+    ]);
+    render(React.createElement(AgentBenchmarkDotPlot, { rows, metric: 'accuracy', onSelectPoint: jest.fn() }));
+
+    const ticks = screen.getByTestId('agent-dot-plot-ticks').querySelectorAll('span');
+    expect(ticks).toHaveLength(5);
+    expect(ticks[0].className).toEqual(expect.stringContaining('translate-x-0'));
+    expect(ticks[0].className).toEqual(expect.stringContaining('sm:-translate-x-1/2'));
+    expect(ticks[1].className).toEqual(expect.stringContaining('hidden sm:block'));
+    expect(ticks[3].className).toEqual(expect.stringContaining('hidden sm:block'));
+    expect(ticks[4].className).toEqual(expect.stringContaining('-translate-x-full'));
+    expect(ticks[4].className).toEqual(expect.stringContaining('sm:-translate-x-1/2'));
   });
 
   it('calls onSelectPoint with the run/benchmark id when the latest dot is clicked', () => {
