@@ -120,8 +120,23 @@ describe('aggregateRunTelemetry', () => {
     expect(t.medianDurationMs).toBe(44_000);   // median of 44k, 38k, 61k
     expect(t.spansCases).toBe(2);
     expect(t.totalCases).toBe(4);
+    expect(t.errorCases).toBe(1);        // k4 errored → counted, but a partial failure is NOT "unavailable"
+    expect(t.unavailable).toBe(false);
     expect(t.hasSpans).toBe(true);
     expect(t.partial).toBe(false);
+  });
+
+  it('unavailable only when EVERY report\'s metrics request failed; wall-clock median survives', () => {
+    const t = aggregateRunTelemetry(run('run-a', ['r1', 'r2']), reports, {
+      k1: { runId: 'k1', error: '500', status: 'error' },
+      k2: { runId: 'k2', error: '500', status: 'error' },
+    })!;
+    expect(t.unavailable).toBe(true);
+    expect(t.errorCases).toBe(2);
+    expect(t.hasSpans).toBe(false);
+    expect(t.medianDurationMs).toBe(41_000);
+    // one key not fetched yet + one errored → not (yet) unavailable
+    expect(aggregateRunTelemetry(run('run-a', ['r1', 'r2']), reports, { k1: { runId: 'k1', error: '500', status: 'error' } })!.unavailable).toBe(false);
   });
 
   it('hasSpans:false for every report → zero sums, hasSpans false, duration still populated', () => {

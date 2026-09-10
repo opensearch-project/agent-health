@@ -219,7 +219,7 @@ export const BenchmarkRunDetailPage: React.FC = () => {
                 <RunTelemetryStrip
                   telemetry={runTelemetry.byRunId[run.id]}
                   loading={runTelemetry.loadingRunIds.has(run.id)}
-                  unavailable={runTelemetry.error !== null}
+                  onRetry={runTelemetry.refetch}
                   className="mt-2"
                 />
               </div>

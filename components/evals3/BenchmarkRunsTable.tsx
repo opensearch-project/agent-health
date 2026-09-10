@@ -153,13 +153,18 @@ export const TELEMETRY_NO_REPORTS_TITLE = 'No reports to correlate yet';
 export interface TelemetryCellState {
   telemetry: RunTelemetry | undefined;
   loading: boolean;
-  unavailable: boolean;
 }
 
-/** Why a telemetry cell shows "—" (drives the tooltip). */
+/**
+ * Why a telemetry cell shows "—" (drives the tooltip). Unavailability is
+ * PER RUN (`telemetry.unavailable` — every one of its keys errored), so a
+ * failed chunk never blanks rows whose metrics did come back.
+ */
 export function telemetryDashTitle(state: TelemetryCellState, dependsOnSpans: boolean, value: string | null): string {
-  if (state.unavailable) return TELEMETRY_UNAVAILABLE_TITLE;
   if (!state.telemetry) return TELEMETRY_NO_REPORTS_TITLE;
+  // Both trace-derived reasons only apply to trace-derived columns: the
+  // wall-clock column comes from the reports and stays valid regardless.
+  if (dependsOnSpans && state.telemetry.unavailable) return TELEMETRY_UNAVAILABLE_TITLE;
   if (dependsOnSpans && !state.telemetry.hasSpans) return TELEMETRY_NO_SPANS_TITLE;
   if (value === null) return 'Not recorded for this run';
   return '';
@@ -235,12 +240,11 @@ export interface BenchmarkRunsTableProps {
   /**
    * Telemetry columns. Per-run roll-up from useRunTelemetry; a run absent
    * from the map with `telemetryLoadingRunIds` containing it renders a
-   * skeleton, otherwise "—". `telemetryUnavailable` flips every cell to "—"
-   * with a "Metrics unavailable" tooltip (batch endpoint failed).
+   * skeleton, otherwise "—" (reason in the tooltip — no reports / no spans /
+   * metrics unavailable for that run).
    */
   telemetryByRunId?: Record<string, RunTelemetry | undefined>;
   telemetryLoadingRunIds?: Set<string>;
-  telemetryUnavailable?: boolean;
 }
 
 export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => {
@@ -249,7 +253,7 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
     selectable, selectedRunIds, onToggleSelect, onOpenRun, onOpenEvaluator,
     onDelete, deletingId, onCancel, isCancelling,
     testCases, reportsById, onSelectCase, expandedRunIds, onToggleExpand, benchmarkId,
-    telemetryByRunId = {}, telemetryLoadingRunIds, telemetryUnavailable = false,
+    telemetryByRunId = {}, telemetryLoadingRunIds,
   } = props;
 
   const colCount = 14 + (selectable ? 1 : 0);
@@ -290,11 +294,7 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
             const outdated = run.benchmarkVersion !== undefined && currentVersion !== undefined && run.benchmarkVersion < currentVersion;
             const expanded = expandedRunIds.has(run.id);
             const telemetry = telemetryByRunId[run.id];
-            const telState: TelemetryCellState = {
-              telemetry,
-              loading: !!telemetryLoadingRunIds?.has(run.id),
-              unavailable: telemetryUnavailable,
-            };
+            const telState: TelemetryCellState = { telemetry, loading: !!telemetryLoadingRunIds?.has(run.id) };
             const spansNote = telemetry ? `spans found for ${telemetry.spansCases} of ${telemetry.totalCases} cases` : '';
             return (
               <React.Fragment key={run.id}>

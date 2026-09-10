@@ -14,14 +14,20 @@
  *     (`report.runId`, else `report.id`) with the Strategy A/C/D hints riding
  *     along (traceId, sessionId, service.name + window) so REST / subprocess
  *     arms that never propagated W3C context still populate.
- *   - Results are cached for the lifetime of the hook. A key is fetched when
- *     it is new, or when its run has since reached a TERMINAL status and the
- *     cached value was captured while the run was still live (a running run's
- *     spans keep growing until it finishes). A 5 s poll tick that changes
- *     nothing therefore issues no request; a run finishing does.
- *   - A failed batch call caches an `error` entry for every key it covered so
- *     the cells read "—" (tooltip: metrics unavailable) instead of a blank
- *     page or a retry storm; `refetch()` clears the cache.
+ *   - Results are cached per key for the lifetime of the hook. A key is
+ *     fetched when it is new, or when its run has since reached a TERMINAL
+ *     status and the cached value was captured while the run was still live
+ *     (a running run's spans keep growing until it finishes). A 5 s poll tick
+ *     that changes nothing therefore issues no request; a run finishing does;
+ *     a new case starting on a live run fetches only its new key (in-flight
+ *     requests are never cancelled — their results are keyed, so they stay
+ *     valid).
+ *   - Failures are isolated per chunk: a failed chunk caches an `error` entry
+ *     for each of ITS keys (cells read "—", tooltip "Metrics unavailable"),
+ *     while other chunks' results land normally, and a key that already
+ *     holds a good value is never overwritten by an error. Errors are cached
+ *     (no retry storm on every poll tick); `refetch()` clears the cache and
+ *     is wired to a Retry affordance by the consumers.
  *
  * Both benchmark surfaces (Runs table, run inspector) consume this; the
  * eval-runs list and the inspector's SDK mode can call it next with no change
@@ -60,18 +66,21 @@ export interface UseRunTelemetryOptions {
 export interface UseRunTelemetryResult {
   /** Roll-up per run id (`undefined` when the run has no reports to correlate). */
   byRunId: Record<string, RunTelemetry | undefined>;
-  /** True while at least one batch request is in flight. */
+  /** True while any on-screen run still has a key without a result. */
   loading: boolean;
   /**
    * Runs with at least one report whose metrics have not come back yet —
    * their cells render a skeleton rather than a premature "—".
    */
   loadingRunIds: Set<string>;
-  /** Set when the most recent batch request failed; cells read "—". */
+  /** Set when the most recent request had a failed chunk; per-run cells decide what to show. */
   error: string | null;
   /** Drop the cache and re-request everything currently on screen. */
   refetch: () => void;
 }
+
+/** One cached batch result; `final` = captured after the run went terminal. */
+interface CacheEntry { result: TelemetryMetricsResult; final: boolean }
 
 const defaultIsRunning = (run: TelemetryRun & { status?: string }) =>
   run.status === 'running' || run.status === 'pending';
@@ -83,6 +92,12 @@ const defaultIsRunning = (run: TelemetryRun & { status?: string }) =>
  */
 export const resolveAgentTraceServiceName = (agentKey: string | undefined): string | undefined =>
   agentKey ? DEFAULT_CONFIG.agents.find(a => a.key === agentKey)?.traceServiceName : undefined;
+
+const pick = <T>(m: Record<string, T>, keys: string[]): Record<string, T> => {
+  const out: Record<string, T> = {};
+  for (const k of keys) if (m[k] !== undefined) out[k] = m[k];
+  return out;
+};
 
 export function useRunTelemetry(
   runs: Array<TelemetryRun & { status?: string }>,
@@ -96,17 +111,14 @@ export function useRunTelemetry(
     fetchBatch = fetchBatchMetrics,
   } = options;
 
-  // Cache of fetched results by metrics key, plus the set of keys whose value
-  // was captured AFTER their run went terminal (i.e. final). Refs so the fetch
-  // plan below can read them synchronously during render; `version` bumps
-  // re-render consumers when the cache changes.
-  const cacheRef = useRef<Map<string, TelemetryMetricsResult>>(new Map());
-  const finalKeysRef = useRef<Set<string>>(new Set());
-  const [version, setVersion] = useState(0);
-  const [inflight, setInflight] = useState(0);
+  const [cache, setCache] = useState<ReadonlyMap<string, CacheEntry>>(() => new Map());
   const [error, setError] = useState<string | null>(null);
-  const isRunningRef = useRef(isRunning);
-  isRunningRef.current = isRunning;
+  // Keys with a request in flight. A ref (not state) so the effect can claim
+  // keys synchronously — React StrictMode runs effects twice in dev, and the
+  // second run must not fire a duplicate request for the same keys.
+  const inflightRef = useRef(new Set<string>());
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
   const fetchBatchRef = useRef(fetchBatch);
   fetchBatchRef.current = fetchBatch;
 
@@ -120,126 +132,102 @@ export function useRunTelemetry(
   );
   const runsRef = useRef(runs);
   runsRef.current = runs;
-  const correlation = useMemo(
-    () => buildRunTelemetryCorrelation(runsRef.current, reportsById, resolveTraceServiceName),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runsKey, reportsById, resolveTraceServiceName],
-  );
-
-  // Keys belonging to runs that are done (their spans won't change anymore).
-  const terminalKeys = useMemo(() => {
-    const out = new Set<string>();
+  const isRunningRef = useRef(isRunning);
+  isRunningRef.current = isRunning;
+  const { correlation, terminalKeys } = useMemo(() => {
+    const correlation = buildRunTelemetryCorrelation(runsRef.current, reportsById, resolveTraceServiceName);
+    // Keys belonging to runs that are done (their spans won't change anymore).
+    const terminalKeys = new Set<string>();
     for (const run of runsRef.current) {
       if (isRunningRef.current(run)) continue;
-      for (const k of correlation.keysByRun[run.id] || []) out.add(k);
+      for (const k of correlation.keysByRun[run.id] || []) terminalKeys.add(k);
     }
-    return out;
+    return { correlation, terminalKeys };
+    // runsKey stands in for `runs` (content, not identity) — see above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runsKey, correlation]);
+  }, [runsKey, reportsById, resolveTraceServiceName]);
 
-  // The fetch plan: keys not cached yet, or cached provisionally while their
-  // run was live and now terminal. Serialized so the effect below keys on
-  // CONTENT, not on array identity (the page rebuilds `runs` every poll).
-  // Reading refs during render is safe here: they only change inside the
-  // effect, which then bumps `version` to force this recomputation.
+  // The fetch plan: keys with no result yet, or whose result was captured
+  // while the run was live and the run is now terminal. In-flight keys are
+  // excluded so a plan change never re-requests what is already on the wire.
   const planKey = useMemo(() => {
     if (!enabled) return '';
-    const cache = cacheRef.current;
-    const finals = finalKeysRef.current;
-    const toFetch = correlation.keys.filter(k => !cache.has(k) || (terminalKeys.has(k) && !finals.has(k)));
-    return toFetch.sort().join(',');
-    // `version` is a deliberate dependency: cache mutations happen in the
-    // effect and must invalidate this memo.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, correlation, terminalKeys, version]);
+    return correlation.keys
+      .filter(k => {
+        if (inflightRef.current.has(k)) return false;
+        const e = cache.get(k);
+        return !e || (terminalKeys.has(k) && !e.final);
+      })
+      .sort()
+      .join(',');
+  }, [enabled, correlation, terminalKeys, cache]);
 
   useEffect(() => {
     if (!planKey) return;
-    const keys = planKey.split(',');
+    const keys = planKey.split(',').filter(k => !inflightRef.current.has(k));
+    if (keys.length === 0) return;
+    for (const k of keys) inflightRef.current.add(k);
     const { sessionIdByKey, traceIdByKey, agentsByKey } = correlation;
-    // Snapshot which of these keys are final at request time; a run that
-    // finishes mid-flight will re-plan on the next render anyway.
+    // Snapshot which keys are final at request time; a run that finishes
+    // mid-flight gets its final refetch on the next plan.
     const finalNow = new Set(keys.filter(k => terminalKeys.has(k)));
-    let cancelled = false;
-    setInflight(n => n + 1);
-    setError(null);
 
-    const pick = <T>(m: Record<string, T>, chunk: string[]) => {
-      const out: Record<string, T> = {};
-      for (const k of chunk) if (m[k] !== undefined) out[k] = m[k];
-      return out;
-    };
-
-    fetchChunked(keys, TELEMETRY_BATCH_CHUNK, async (chunk) => {
-      const res = await fetchBatchRef.current(
-        chunk,
-        pick(sessionIdByKey, chunk),
-        pick(traceIdByKey, chunk),
-        pick(agentsByKey, chunk),
-      );
-      return (res.metrics || []) as TelemetryMetricsResult[];
-    }, MAX_CONCURRENT_CHUNKS)
-      .then(results => {
-        if (cancelled) return;
-        const byKey = new Map(results.filter(r => r && r.runId).map(r => [r.runId, r]));
-        for (const k of keys) {
-          // A key the server did not echo back is treated as "no spans" so the
-          // cell settles on "—" rather than a permanent skeleton.
-          cacheRef.current.set(k, byKey.get(k) || { runId: k, hasSpans: false, status: 'success' });
-          if (finalNow.has(k)) finalKeysRef.current.add(k);
-        }
-      })
-      .catch(err => {
-        if (cancelled) return;
+    type Outcome = { key: string; result: TelemetryMetricsResult; ok: boolean };
+    fetchChunked<Outcome>(keys, TELEMETRY_BATCH_CHUNK, async (chunk) => {
+      try {
+        const res = await fetchBatchRef.current(chunk, pick(sessionIdByKey, chunk), pick(traceIdByKey, chunk), pick(agentsByKey, chunk));
+        const byKey = new Map((res.metrics || []).filter(r => r && r.runId).map(r => [r.runId, r as TelemetryMetricsResult]));
+        // A key the server did not echo back is treated as "no spans" so the
+        // cell settles on "—" rather than a permanent skeleton.
+        return chunk.map(k => ({ key: k, ok: true, result: byKey.get(k) || { runId: k, hasSpans: false, status: 'success' } }));
+      } catch (err) {
         const message = err instanceof Error ? err.message : 'metrics unavailable';
         console.error('[useRunTelemetry] batch metrics request failed:', message);
-        // Cache an error entry per key so the plan settles (no retry storm) and
-        // the cells read "—" with the unavailable tooltip.
-        for (const k of keys) {
-          cacheRef.current.set(k, { runId: k, error: message, status: 'error' });
-          if (finalNow.has(k)) finalKeysRef.current.add(k);
+        return chunk.map(k => ({ key: k, ok: false, result: { runId: k, error: message, status: 'error' } }));
+      }
+    }, MAX_CONCURRENT_CHUNKS).then(outcomes => {
+      for (const k of keys) inflightRef.current.delete(k);
+      if (!mountedRef.current) return;
+      setCache(prev => {
+        const next = new Map(prev);
+        for (const o of outcomes) {
+          const existing = prev.get(o.key);
+          // Never replace a good value with an error: a failed final refresh
+          // keeps the (provisional) numbers rather than blanking the row.
+          if (!o.ok && existing && !existing.result.error) {
+            next.set(o.key, { result: existing.result, final: existing.final || finalNow.has(o.key) });
+          } else {
+            next.set(o.key, { result: o.result, final: finalNow.has(o.key) });
+          }
         }
-        setError('metrics unavailable');
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setInflight(n => Math.max(0, n - 1));
-        setVersion(v => v + 1);
+        return next;
       });
-
-    return () => { cancelled = true; setInflight(n => Math.max(0, n - 1)); };
-    // The plan string is the semantic dependency; `correlation`/`terminalKeys`
-    // are read for their hint maps and are consistent with the plan by
-    // construction.
+      setError(outcomes.some(o => !o.ok) ? 'metrics unavailable' : null);
+    });
+    // `correlation` / `terminalKeys` are consistent with `planKey` by
+    // construction; the plan string is the semantic dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planKey]);
 
   const byRunId = useMemo(() => {
     const metricsByKey: Record<string, TelemetryMetricsResult | undefined> = {};
-    for (const [k, v] of cacheRef.current) metricsByKey[k] = v;
+    for (const [k, e] of cache) metricsByKey[k] = e.result;
     return aggregateAllRunTelemetry(runs, reportsById, metricsByKey);
-    // `version` invalidates on cache change (see planKey).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runs, reportsById, version]);
+  }, [runs, reportsById, cache]);
 
   const loadingRunIds = useMemo(() => {
     const out = new Set<string>();
     if (!enabled) return out;
-    const cache = cacheRef.current;
     for (const run of runs) {
-      const keys = correlation.keysByRun[run.id] || [];
-      if (keys.some(k => !cache.has(k))) out.add(run.id);
+      if ((correlation.keysByRun[run.id] || []).some(k => !cache.has(k))) out.add(run.id);
     }
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, runs, correlation, version]);
+  }, [enabled, runs, correlation, cache]);
 
   const refetch = useCallback(() => {
-    cacheRef.current = new Map();
-    finalKeysRef.current = new Set();
+    setCache(new Map());
     setError(null);
-    setVersion(v => v + 1);
   }, []);
 
-  return { byRunId, loading: inflight > 0, loadingRunIds, error, refetch };
+  return { byRunId, loading: loadingRunIds.size > 0, loadingRunIds, error, refetch };
 }

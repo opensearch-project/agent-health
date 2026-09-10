@@ -31,8 +31,8 @@ import { buildJudgeAgentsHints, type JudgeAgentsHint } from '@/services/traces/j
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 /**
- * Roll-up for one run. `undefined` for a run whose reports have no metrics
- * result at all (nothing was requested / the batch call failed for it).
+ * Roll-up for one run. `undefined` for a run with no loaded reports to
+ * correlate (nothing was requested for it).
  */
 export interface RunTelemetry {
   /** Sum of `totalTokens` over every report with spans. */
@@ -54,6 +54,16 @@ export interface RunTelemetry {
   spansCases: number;
   /** Reports considered for this run (those with a metrics key). */
   totalCases: number;
+  /** Reports whose metrics request failed (per-key error entry). */
+  errorCases: number;
+  /**
+   * True when EVERY report's metrics request failed — nothing at all is
+   * known about this run's spans. Renders "—" with "Metrics unavailable".
+   * A partial failure (some keys errored, others answered) is NOT
+   * unavailable: the sums cover the answered keys and the tooltip's
+   * "spans found for N of M" tells the rest.
+   */
+  unavailable: boolean;
   /** True when at least one report had spans. Drives the "—" rendering. */
   hasSpans: boolean;
   /**
@@ -200,7 +210,7 @@ export function aggregateRunTelemetry(
   metricsByKey: Record<string, TelemetryMetricsResult | undefined>,
 ): RunTelemetry | undefined {
   let totalTokens = 0, costUsd = 0, llmCalls = 0, toolCalls = 0;
-  let spansCases = 0, totalCases = 0, partial = false;
+  let spansCases = 0, totalCases = 0, errorCases = 0, partial = false;
   const durations: number[] = [];
 
   for (const result of Object.values(run.results || {})) {
@@ -213,7 +223,8 @@ export function aggregateRunTelemetry(
     if (typeof d === 'number' && Number.isFinite(d) && d > 0) durations.push(d);
 
     const m = metricsByKey[key];
-    if (!m || m.error || m.status === 'pending' || m.hasSpans === false) continue;
+    if (m?.error) { errorCases++; continue; }
+    if (!m || m.status === 'pending' || m.hasSpans === false) continue;
     spansCases++;
     totalTokens += m.totalTokens || 0;
     costUsd += m.costUsd || 0;
@@ -226,7 +237,8 @@ export function aggregateRunTelemetry(
   return {
     totalTokens, costUsd, llmCalls, toolCalls,
     medianDurationMs: median(durations),
-    spansCases, totalCases,
+    spansCases, totalCases, errorCases,
+    unavailable: errorCases === totalCases,
     hasSpans: spansCases > 0,
     partial,
   };

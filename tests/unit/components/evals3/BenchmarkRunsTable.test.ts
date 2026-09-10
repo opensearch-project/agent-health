@@ -248,8 +248,10 @@ import {
 
 const tel = (over: Partial<RunTelemetry> = {}): RunTelemetry => ({
   totalTokens: 5_900_000, costUsd: 20.19, llmCalls: 312, toolCalls: 118,
-  medianDurationMs: 44_000, spansCases: 4, totalCases: 4, hasSpans: true, partial: false, ...over,
+  medianDurationMs: 44_000, spansCases: 4, totalCases: 4, errorCases: 0, unavailable: false, hasSpans: true, partial: false, ...over,
 });
+const unavailableTel = (over: Partial<RunTelemetry> = {}): RunTelemetry =>
+  tel({ hasSpans: false, spansCases: 0, errorCases: 4, unavailable: true, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0, ...over });
 
 describe('BenchmarkRunsTable — telemetry columns', () => {
   it('adds Tokens / Cost / LLM calls / Time/case headers between Pass % and Judge', () => {
@@ -311,15 +313,26 @@ describe('BenchmarkRunsTable — telemetry columns', () => {
     expect(cell.textContent).toBe('');
   });
 
-  it('telemetryUnavailable → every telemetry cell reads "—" with the unavailable tooltip; rest of the row still renders', () => {
+  it('a run whose metrics request failed → span cells read "—" with the unavailable tooltip; Time/case (from reports) and the rest of the row still render', () => {
     const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
-    renderTable({ rows: [row], telemetryByRunId: { r1: tel() }, telemetryUnavailable: true });
-    for (const id of ['run-tokens-cell', 'run-cost-cell', 'run-llmcalls-cell', 'run-timepercase-cell']) {
+    renderTable({ rows: [row], telemetryByRunId: { r1: unavailableTel({ medianDurationMs: 44_000 }) } });
+    for (const id of ['run-tokens-cell', 'run-cost-cell', 'run-llmcalls-cell']) {
       const cell = screen.getByTestId(id);
       expect(cell.textContent).toBe('—');
       expect(within(cell).getByText('—').getAttribute('title')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
     }
+    expect(screen.getByTestId('run-timepercase-cell').textContent).toBe('44 s');
     expect(screen.getByTestId('run-size-cell').textContent).toBe('1');
+  });
+
+  it('unavailability is PER RUN: a failed run next to a good one never blanks the good one', () => {
+    const good = buildRunTableRow(mkRun({ id: 'good' }), resolvers);
+    const bad = buildRunTableRow(mkRun({ id: 'bad' }), resolvers);
+    renderTable({ rows: [good, bad], telemetryByRunId: { good: tel(), bad: unavailableTel() } });
+    const [rowGood, rowBad] = screen.getAllByTestId('run-row');
+    expect(within(rowGood).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('value');
+    expect(within(rowBad).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('empty');
+    expect(within(within(rowBad).getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
   });
 
   it('a run with no roll-up at all (no reports) reads "—" with the no-reports tooltip', () => {
@@ -328,13 +341,14 @@ describe('BenchmarkRunsTable — telemetry columns', () => {
     expect(within(screen.getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe(TELEMETRY_NO_REPORTS_TITLE);
   });
 
-  it('telemetryDashTitle precedence: unavailable > no reports > no spans > not recorded > value', () => {
-    expect(telemetryDashTitle({ telemetry: tel(), loading: false, unavailable: true }, true, '1')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
-    expect(telemetryDashTitle({ telemetry: undefined, loading: false, unavailable: false }, true, '1')).toBe(TELEMETRY_NO_REPORTS_TITLE);
-    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false, unavailable: false }, true, '1')).toBe(TELEMETRY_NO_SPANS_TITLE);
-    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false, unavailable: false }, false, '22 s')).toBe('');
-    expect(telemetryDashTitle({ telemetry: tel(), loading: false, unavailable: false }, true, null)).toBe('Not recorded for this run');
-    expect(telemetryDashTitle({ telemetry: tel(), loading: false, unavailable: false }, true, '1')).toBe('');
+  it('telemetryDashTitle precedence: no reports > unavailable (per run) > no spans > not recorded > value', () => {
+    expect(telemetryDashTitle({ telemetry: undefined, loading: false }, true, '1')).toBe(TELEMETRY_NO_REPORTS_TITLE);
+    expect(telemetryDashTitle({ telemetry: unavailableTel(), loading: false }, true, '1')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
+    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false }, true, '1')).toBe(TELEMETRY_NO_SPANS_TITLE);
+    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false }, false, '22 s')).toBe('');
+    expect(telemetryDashTitle({ telemetry: unavailableTel(), loading: false }, false, '22 s')).toBe('');   // wall-clock still valid
+    expect(telemetryDashTitle({ telemetry: tel(), loading: false }, true, null)).toBe('Not recorded for this run');
+    expect(telemetryDashTitle({ telemetry: tel(), loading: false }, true, '1')).toBe('');
   });
 
   it('clicking the Tokens header sorts by tokens; sortRunRows orders by telemetry with no-span runs last', () => {

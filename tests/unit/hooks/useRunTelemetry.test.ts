@@ -141,7 +141,7 @@ describe('useRunTelemetry', () => {
     expect(result.current.byRunId.big?.totalCases).toBe(TELEMETRY_BATCH_CHUNK + 5);
   });
 
-  it('a failed batch call → error set, cells resolve to "no spans" (no skeleton), no retry storm; refetch() recovers', async () => {
+  it('a failed batch call → error set, the run is marked unavailable (no skeleton), no retry storm; refetch() recovers', async () => {
     let fail = true;
     const fetchBatch = jest.fn(async (keys: string[]) => { if (fail) throw new Error('500'); return okMetrics(keys); });
     const { result, rerender } = renderHook(
@@ -151,7 +151,7 @@ describe('useRunTelemetry', () => {
     await waitFor(() => expect(result.current.error).toBe('metrics unavailable'));
     expect(result.current.loading).toBe(false);
     expect(result.current.loadingRunIds.size).toBe(0);
-    expect(result.current.byRunId['run-a']).toMatchObject({ hasSpans: false, totalCases: 1, medianDurationMs: 44_000 });
+    expect(result.current.byRunId['run-a']).toMatchObject({ hasSpans: false, unavailable: true, errorCases: 1, totalCases: 1, medianDurationMs: 44_000 });
 
     rerender({ runs: [run('run-a', ['r1'])] });
     await act(async () => { await new Promise(r => setTimeout(r, 10)); });
@@ -161,11 +161,63 @@ describe('useRunTelemetry', () => {
     act(() => result.current.refetch());
     await waitFor(() => expect(result.current.byRunId['run-a']?.hasSpans).toBe(true));
     expect(result.current.error).toBeNull();
+    expect(result.current.byRunId['run-a']?.unavailable).toBe(false);
+    expect(fetchBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('failures are isolated per chunk: one failed chunk marks only ITS keys unavailable; the other chunk\'s runs render values', async () => {
+    const many: Record<string, TelemetryReport> = {};
+    const idsA: string[] = [], idsB: string[] = [];
+    for (let i = 0; i < TELEMETRY_BATCH_CHUNK; i++) { const id = `a-${i}`; idsA.push(id); many[id] = report(id); }
+    for (let i = 0; i < 3; i++) { const id = `b-${i}`; idsB.push(id); many[id] = report(id); }
+    // The second chunk (3 keys) fails; the first (200 keys) succeeds.
+    const fetchBatch = jest.fn(async (keys: string[]) => { if (keys.length === 3) throw new Error('500'); return okMetrics(keys); });
+    const { result } = renderHook(() => useRunTelemetry([run('run-a', idsA), run('run-b', idsB)], many, { fetchBatch }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(fetchBatch).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBe('metrics unavailable');
+    expect(result.current.byRunId['run-a']).toMatchObject({ hasSpans: true, unavailable: false, spansCases: TELEMETRY_BATCH_CHUNK });
+    expect(result.current.byRunId['run-b']).toMatchObject({ hasSpans: false, unavailable: true, errorCases: 3 });
+  });
+
+  it('a failed FINAL refresh keeps the provisional numbers instead of blanking the row', async () => {
+    let fail = false;
+    const fetchBatch = jest.fn(async (keys: string[]) => { if (fail) throw new Error('500'); return okMetrics(keys); });
+    const { result, rerender } = renderHook(
+      ({ runs }: { runs: ReturnType<typeof run>[] }) => useRunTelemetry(runs, reports, { fetchBatch }),
+      { initialProps: { runs: [run('run-a', ['r1'], 'running')] } },
+    );
+    await waitFor(() => expect(result.current.byRunId['run-a']?.hasSpans).toBe(true));   // provisional value
+    fail = true;
+    rerender({ runs: [run('run-a', ['r1'], 'completed')] });
+    await waitFor(() => expect(fetchBatch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.error).toBe('metrics unavailable'));
+    expect(result.current.byRunId['run-a']).toMatchObject({ hasSpans: true, unavailable: false, totalTokens: 1000 });
+    // ...and the key is now final: no retry storm on further ticks.
+    rerender({ runs: [run('run-a', ['r1'], 'completed')] });
+    await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+    expect(fetchBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('a new key appearing while a request is in flight fetches ONLY the new key (in-flight results are kept, not cancelled)', async () => {
+    const gates: Array<() => void> = [];
+    const fetchBatch = jest.fn((keys: string[]) => new Promise<ReturnType<typeof okMetrics>>(resolve => { gates.push(() => resolve(okMetrics(keys))); }));
+    const { result, rerender } = renderHook(
+      ({ runs }: { runs: ReturnType<typeof run>[] }) => useRunTelemetry(runs, reports, { fetchBatch }),
+      { initialProps: { runs: [run('run-a', ['r1'])] } },
+    );
+    await waitFor(() => expect(fetchBatch).toHaveBeenCalledTimes(1));
+    rerender({ runs: [run('run-a', ['r1']), run('run-b', ['r3'])] });          // a second run lands mid-flight
+    await waitFor(() => expect(fetchBatch).toHaveBeenCalledTimes(2));
+    expect(fetchBatch.mock.calls[1][0]).toEqual(['r3']);                          // only the new key
+    await act(async () => { gates.forEach(g => g()); await new Promise(r => setTimeout(r, 10)); });
+    expect(result.current.byRunId['run-a']?.hasSpans).toBe(true);                // first request's result was kept
+    expect(result.current.byRunId['run-b']?.hasSpans).toBe(true);
     expect(fetchBatch).toHaveBeenCalledTimes(2);
   });
 
   it('a key the server does not echo back settles as "no spans" rather than a permanent skeleton', async () => {
-    const fetchBatch = jest.fn(async () => ({ metrics: [], aggregate: {} as any }));
+    const fetchBatch = jest.fn(async () => ({ metrics: [] as any[], aggregate: {} as any }));
     const { result } = renderHook(() => useRunTelemetry([run('run-a', ['r1'])], reports, { fetchBatch }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.loadingRunIds.size).toBe(0);

@@ -25,7 +25,8 @@ export const STRIP_UNAVAILABLE_TITLE = 'Metrics unavailable';
 export interface RunTelemetryStripProps {
   telemetry: RunTelemetry | undefined;
   loading: boolean;
-  unavailable: boolean;
+  /** Shown as a "Retry" link when the run's metrics request failed. */
+  onRetry?: () => void;
   className?: string;
 }
 
@@ -40,7 +41,7 @@ function Stat({ label, value, title, testId, muted }: {
   );
 }
 
-export const RunTelemetryStrip: React.FC<RunTelemetryStripProps> = ({ telemetry, loading, unavailable, className }) => {
+export const RunTelemetryStrip: React.FC<RunTelemetryStripProps> = ({ telemetry, loading, onRetry, className }) => {
   const wrap = `flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ${className || ''}`;
 
   if (loading && !telemetry) {
@@ -57,39 +58,49 @@ export const RunTelemetryStrip: React.FC<RunTelemetryStripProps> = ({ telemetry,
     );
   }
 
-  // Nothing to say at all (no reports) — stay out of the way.
-  if (!telemetry && !unavailable) return null;
+  // Nothing to say at all (no reports loaded for this run) — stay out of the way.
+  if (!telemetry) return null;
 
+  const unavailable = telemetry.unavailable;
   const dashTitle = unavailable ? STRIP_UNAVAILABLE_TITLE : STRIP_NO_SPANS_TITLE;
-  const hasSpans = !unavailable && !!telemetry?.hasSpans;
-  const prefix = telemetry?.partial ? '≥' : '';
-  const cost = telemetry ? formatCostUsd(telemetry.costUsd) : null;
-  const time = telemetry ? formatDurationCompact(telemetry.medianDurationMs) : '—';
+  const hasSpans = telemetry.hasSpans;
+  const prefix = telemetry.partial ? '≥' : '';
+  const cost = formatCostUsd(telemetry.costUsd);
 
   return (
     <div className={wrap} data-testid="run-telemetry-strip" data-state={hasSpans ? 'value' : 'empty'}>
       <Activity size={11} className="text-muted-foreground shrink-0" />
       <Stat label="Tokens" testId="strip-tokens" muted={!hasSpans}
-        value={hasSpans ? `${prefix}${formatTokensCompact(telemetry!.totalTokens)}` : '—'}
-        title={hasSpans ? `${telemetry!.totalTokens.toLocaleString()} tokens` : dashTitle} />
+        value={hasSpans ? `${prefix}${formatTokensCompact(telemetry.totalTokens)}` : '—'}
+        title={hasSpans ? `${telemetry.totalTokens.toLocaleString()} tokens` : dashTitle} />
       <Stat label="Cost" testId="strip-cost" muted={!hasSpans || cost === null}
         value={hasSpans && cost ? `${prefix}${cost}` : '—'}
-        title={hasSpans ? (cost ? `$${telemetry!.costUsd.toFixed(4)}` : 'Spans carried no cost') : dashTitle} />
+        title={hasSpans ? (cost ? `$${telemetry.costUsd.toFixed(4)}` : 'Spans carried no cost') : dashTitle} />
       <Stat label="LLM calls" testId="strip-llmcalls" muted={!hasSpans}
-        value={hasSpans ? `${prefix}${telemetry!.llmCalls}` : '—'} title={hasSpans ? undefined : dashTitle} />
+        value={hasSpans ? `${prefix}${telemetry.llmCalls}` : '—'} title={hasSpans ? undefined : dashTitle} />
       <Stat label="Tool calls" testId="strip-toolcalls" muted={!hasSpans}
-        value={hasSpans ? `${prefix}${telemetry!.toolCalls}` : '—'} title={hasSpans ? undefined : dashTitle} />
-      <Stat label="Time/case" testId="strip-timepercase" muted={!telemetry || telemetry.medianDurationMs === null}
-        value={unavailable && !telemetry ? '—' : time}
+        value={hasSpans ? `${prefix}${telemetry.toolCalls}` : '—'} title={hasSpans ? undefined : dashTitle} />
+      {/* Wall-clock comes from the reports, not the trace store — valid even
+          when spans were not found or the metrics request failed. */}
+      <Stat label="Time/case" testId="strip-timepercase" muted={telemetry.medianDurationMs === null}
+        value={formatDurationCompact(telemetry.medianDurationMs)}
         title="Median wall-clock per test case (agent + judge)" />
-      {telemetry && (
-        <span
-          className="text-[10px] text-muted-foreground whitespace-nowrap"
-          data-testid="strip-spans"
-          title={unavailable ? STRIP_UNAVAILABLE_TITLE : (telemetry.hasSpans ? 'Cases whose agent spans were found in the trace store' : STRIP_NO_SPANS_TITLE)}
+      <span
+        className="text-[10px] text-muted-foreground whitespace-nowrap"
+        data-testid="strip-spans"
+        title={unavailable ? STRIP_UNAVAILABLE_TITLE : (hasSpans ? 'Cases whose agent spans were found in the trace store' : STRIP_NO_SPANS_TITLE)}
+      >
+        spans: {unavailable ? '—' : `${telemetry.spansCases}/${telemetry.totalCases}`} cases
+      </span>
+      {unavailable && onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          data-testid="strip-retry"
+          className="text-[10px] underline underline-offset-2 text-muted-foreground hover:text-foreground"
         >
-          spans: {unavailable ? '—' : `${telemetry.spansCases}/${telemetry.totalCases}`} cases
-        </span>
+          Retry
+        </button>
       )}
     </div>
   );

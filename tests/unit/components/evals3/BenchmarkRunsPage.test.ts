@@ -550,7 +550,21 @@ describe('BenchmarkRunsPage2 — telemetry columns wiring (one batch metrics cal
     const row = screen.getByText('Telemetry Run').closest('[data-testid="run-row"]') as HTMLElement;
     await waitFor(() => expect(within(row).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('empty'));
     expect(within(within(row).getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe('Metrics unavailable');
+    expect(within(row).getByTestId('run-timepercase-cell').textContent).toBe('48 s');   // wall-clock is from the reports
     expect(within(row).getByTestId('run-passrate-cell').textContent).toContain('50%');   // rest of the row is fine
+    // One request only (error cached), and a Retry affordance that re-requests.
+    expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1);
+    mockFetchBatchMetrics.mockResolvedValue({
+      metrics: [
+        { runId: 'agent-run-1', status: 'success', hasSpans: true, totalTokens: 10, costUsd: 0.01, llmCalls: 1, toolCalls: 0 },
+        { runId: 'agent-run-2', status: 'success', hasSpans: true, totalTokens: 10, costUsd: 0.01, llmCalls: 1, toolCalls: 0 },
+      ],
+      aggregate: {},
+    });
+    fireEvent.click(screen.getByTestId('telemetry-retry'));
+    await waitFor(() => expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(row).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('value'));
+    expect(screen.queryByTestId('telemetry-unavailable-note')).toBeNull();
     errSpy.mockRestore();
   });
 

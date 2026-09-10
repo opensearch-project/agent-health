@@ -1137,6 +1137,18 @@ describe('RunInspectorPage — telemetry strip (tokens · cost · LLM calls · t
     await waitFor(() => expect(screen.getByTestId('run-telemetry-strip').getAttribute('data-state')).toBe('empty'));
     expect(screen.getByTestId('strip-tokens').getAttribute('title')).toBe('Metrics unavailable');
     expect(screen.queryByTestId('run-inspector-error')).toBeNull();
+    // Retry is wired to the hook's refetch: one more request, then values.
+    expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1);
+    mockFetchBatchMetrics.mockResolvedValue({
+      metrics: [
+        { runId: 'rep-0', status: 'success', hasSpans: true, totalTokens: 10, costUsd: 0.01, llmCalls: 1, toolCalls: 0 },
+        { runId: 'rep-1', status: 'success', hasSpans: true, totalTokens: 10, costUsd: 0.01, llmCalls: 1, toolCalls: 0 },
+      ],
+      aggregate: {},
+    });
+    fireEvent.click(screen.getByTestId('strip-retry'));
+    await waitFor(() => expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('run-telemetry-strip').getAttribute('data-state')).toBe('value'));
     err.mockRestore();
   });
 });

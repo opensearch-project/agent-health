@@ -360,6 +360,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
     byRunId: telemetryByRunId,
     loadingRunIds: telemetryLoadingRunIds,
     error: telemetryError,
+    refetch: refetchTelemetry,
   } = useRunTelemetry(filteredRuns, reportSummaries, { enabled: activeTab === 'runs' });
 
   // Ids of merged-in rows that exist as first-class evaluation-run documents
@@ -792,8 +793,13 @@ export const BenchmarkRunsPage2: React.FC = () => {
                 onToggleExpand={handleToggleExpand}
                 telemetryByRunId={telemetryByRunId}
                 telemetryLoadingRunIds={telemetryLoadingRunIds}
-                telemetryUnavailable={telemetryError !== null}
               />
+              {telemetryError && (
+                <div className="mt-1 text-[11px] text-muted-foreground flex items-center gap-1" data-testid="telemetry-unavailable-note">
+                  Telemetry metrics unavailable for some runs
+                  <button type="button" onClick={refetchTelemetry} className="underline underline-offset-2 hover:text-foreground" data-testid="telemetry-retry">Retry</button>
+                </div>
+              )}
             </>
           )}
 

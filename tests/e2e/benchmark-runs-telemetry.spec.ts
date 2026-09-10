@@ -233,21 +233,34 @@ test.describe('Benchmark Runs — telemetry columns + inspector strip', () => {
     expect(await row.getByTestId('run-tokens-cell').locator('span').getAttribute('title')).toBe('No spans found for this run yet');
   });
 
-  test('batch endpoint 500 → every telemetry cell reads "—" (Metrics unavailable); the page still renders', async ({ page }) => {
+  test('batch endpoint 500 → span cells read "—" (Metrics unavailable), page still renders, Retry recovers', async ({ page }) => {
     test.skip(!benchmarkId, 'Could not seed benchmark runs (storage not configured?)');
     await routeBatch(page, async route => { await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'boom' }) }); });
     await openRunsTab(page);
 
     const sub = page.locator('[data-testid="run-row"]', { hasText: RUN_SUB });
     await expect(sub.getByTestId('run-tokens-cell')).toHaveAttribute('data-state', 'empty', { timeout: 15_000 });
-    await expect(sub.getByTestId('run-tokens-cell').locator('span')).toHaveAttribute('title', 'Metrics unavailable');
-    await expect(sub.getByTestId('run-timepercase-cell').locator('span')).toHaveAttribute('title', 'Metrics unavailable');
+    for (const id of ['run-tokens-cell', 'run-cost-cell', 'run-llmcalls-cell']) {
+      await expect(sub.getByTestId(id).locator('span')).toHaveAttribute('title', 'Metrics unavailable');
+    }
+    // Wall-clock comes from the reports, not the trace store — still shown.
+    await expect(sub.getByTestId('run-timepercase-cell')).toHaveText('44 s');
     // Everything else on the row is intact.
     await expect(sub.getByTestId('run-passrate-cell')).toContainText('66.7%');
     await expect(page.getByTestId('benchmark-passrate-chart')).toBeVisible();
-    // No retry storm: one request, then the cached error.
+    // No retry storm: one request, then the cached error + a Retry affordance.
     await page.waitForTimeout(800);
     expect(batchCalls).toHaveLength(1);
+    await expect(page.getByTestId('telemetry-unavailable-note')).toBeVisible();
+
+    // Retry: the endpoint recovers → one more request → values appear, note disappears.
+    await page.unroute('**/api/metrics/batch');
+    await routeBatch(page, fulfillWith(mockMetrics()));
+    await page.getByTestId('telemetry-retry').click();
+    await expect(sub.getByTestId('run-tokens-cell')).toHaveAttribute('data-state', 'value', { timeout: 15_000 });
+    await expect(sub.getByTestId('run-tokens-cell')).toContainText('5.9M');
+    await expect(page.getByTestId('telemetry-unavailable-note')).toHaveCount(0);
+    expect(batchCalls).toHaveLength(1);   // routeBatch reset the log; exactly one retry request
   });
 
   test('the run inspector (benchmark run detail) shows the telemetry strip: tokens · cost · LLM calls · tool calls · time/case · spans N/M', async ({ page }) => {
