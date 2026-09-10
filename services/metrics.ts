@@ -37,14 +37,36 @@ export async function fetchRunMetrics(runId: string, traceId?: string): Promise<
 }
 
 /**
+ * One Strategy-C/D correlation hint for a run (mirrors
+ * `ServiceWindowHint` in server/services/tracesService.ts and the
+ * `agents[]` element `/api/traces` accepts).
+ */
+export interface MetricsAgentHint {
+  serviceName: string;
+  startedAt: number;
+  endedAt: number;
+  sessionId?: string;
+}
+
+/**
  * Fetch metrics for multiple runs in batch
  * Backend handles config resolution (file or env vars) - no headers needed from frontend
  *
- * @param runIds - Array of run IDs to fetch metrics for
+ * @param runIds - Array of run IDs (or, for reports with no runId, report ids)
+ *   to fetch metrics for; results come back under the same keys
  * @param traceIdByRunId - Optional Strategy-A correlator map (runId -> report.traceId)
+ * @param agentsByRunId - Optional Strategy-C/D hints per key (agent
+ *   service.name + run window, optional session.id) so a report with no
+ *   correlation id at all is still matched by the spans its agent emitted in
+ *   that window — the same correlation the Traces tab / trace judge use
  * @returns Object containing individual metrics and aggregate statistics
  */
-export async function fetchBatchMetrics(runIds: string[], sessionIdByRunId?: Record<string, string>, traceIdByRunId?: Record<string, string>): Promise<{
+export async function fetchBatchMetrics(
+  runIds: string[],
+  sessionIdByRunId?: Record<string, string>,
+  traceIdByRunId?: Record<string, string>,
+  agentsByRunId?: Record<string, MetricsAgentHint[]>,
+): Promise<{
   metrics: TraceMetrics[];
   aggregate: {
     totalRuns: number;
@@ -70,6 +92,7 @@ export async function fetchBatchMetrics(runIds: string[], sessionIdByRunId?: Rec
       runIds,
       ...(sessionIdByRunId ? { sessionIds: sessionIdByRunId } : {}),
       ...(traceIdByRunId ? { traceIds: traceIdByRunId } : {}),
+      ...(agentsByRunId && Object.keys(agentsByRunId).length > 0 ? { agents: agentsByRunId } : {}),
     })
   });
 

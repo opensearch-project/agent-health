@@ -66,6 +66,13 @@ jest.mock('@/services/client', () => ({
   updateEvaluationRun: jest.fn(),
 }));
 
+// Telemetry strip: the inspector hands its report summaries to useRunTelemetry
+// (one POST /api/metrics/batch). Default: no spans anywhere.
+const mockFetchBatchMetrics = jest.fn();
+jest.mock('@/services/metrics', () => ({
+  fetchBatchMetrics: (...a: unknown[]) => mockFetchBatchMetrics(...a),
+}));
+
 const mockEnsurePolling = jest.fn();
 jest.mock('@/services/traces/browserRecovery', () => ({
   ensureTracePollingForReport: (...a: unknown[]) => mockEnsurePolling(...a),
@@ -236,6 +243,8 @@ beforeEach(() => {
   // `results` for most tests). Tests exercising the eval-source lazy fetch
   // set a specific resolved value.
   mockTestCaseGetById.mockResolvedValue(null);
+  mockFetchBatchMetrics.mockReset();
+  mockFetchBatchMetrics.mockResolvedValue({ metrics: [], aggregate: {} });
   // `jest.clearAllMocks()` clears call history but NOT a persistent
   // `mockResolvedValue` set by an earlier test (that needs `mockReset()`).
   // Explicitly reset + default `getEvaluationRun` to "not found" every test
@@ -1081,5 +1090,65 @@ describe('RunInspectorPage — inline rename (eval-run mode only)', () => {
 
     await waitFor(() => expect(screen.getByTestId('run-inspector-rename-error')).toBeTruthy());
     expect(screen.getByTestId('run-inspector-rename-error').textContent).toMatch(/200 characters or fewer/);
+  });
+});
+
+describe('RunInspectorPage — telemetry strip (tokens · cost · LLM calls · tool calls · time/case · spans)', () => {
+  it('requests metrics ONCE for the run\'s reports (keys = runId or report id, with hints) and renders the strip values', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue({
+      'rep-0': { id: 'rep-0', status: 'completed', passFailStatus: 'passed', metricsStatus: 'ready', trajectory: [], runId: 'agent-run-0', sessionId: 'sess-0', connectorProtocol: 'claude-code', timestamp: '2024-01-01T00:00:00Z', performanceMetrics: { durationMs: 40_000, agentDurationMs: 1 } },
+      'rep-1': { id: 'rep-1', status: 'completed', passFailStatus: 'failed', metricsStatus: 'ready', trajectory: [], connectorProtocol: 'rest', timestamp: '2024-01-01T00:01:00Z', performanceMetrics: { durationMs: 48_000, agentDurationMs: 1 } },
+    });
+    mockFetchBatchMetrics.mockResolvedValue({
+      metrics: [
+        { runId: 'agent-run-0', status: 'success', hasSpans: true, totalTokens: 3_000_000, costUsd: 10.10, llmCalls: 200, toolCalls: 70 },
+        { runId: 'rep-1', status: 'success', hasSpans: true, totalTokens: 2_900_000, costUsd: 10.09, llmCalls: 112, toolCalls: 48 },
+      ],
+      aggregate: {},
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    renderPage();
+    await waitFor(() => expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1));
+    const [keys, sessionIds, , agents] = mockFetchBatchMetrics.mock.calls[0];
+    expect(keys.sort()).toEqual(['agent-run-0', 'rep-1']);      // no runId → keyed by report id
+    expect(sessionIds).toEqual({ 'agent-run-0': 'sess-0' });
+    expect(agents['agent-run-0'][0]).toMatchObject({ serviceName: 'claude-code-agent', sessionId: 'sess-0' });
+
+    await waitFor(() => expect(screen.getByTestId('run-telemetry-strip').getAttribute('data-state')).toBe('value'));
+    expect(screen.getByTestId('strip-tokens').textContent).toBe('Tokens5.9M');
+    expect(screen.getByTestId('strip-cost').textContent).toBe('Cost$20.19');
+    expect(screen.getByTestId('strip-llmcalls').textContent).toBe('LLM calls312');
+    expect(screen.getByTestId('strip-toolcalls').textContent).toBe('Tool calls118');
+    expect(screen.getByTestId('strip-timepercase').textContent).toBe('Time/case44 s');
+    expect(screen.getByTestId('strip-spans').textContent).toBe('spans: 2/2 cases');
+    warn.mockRestore();
+  });
+
+  it('batch endpoint failure → strip reads "—" (Metrics unavailable) and the page still renders its rows', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+    mockFetchBatchMetrics.mockRejectedValue(new Error('500'));
+    const err = jest.spyOn(console, 'error').mockImplementation(() => {});
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
+    await waitFor(() => expect(screen.getByTestId('run-telemetry-strip').getAttribute('data-state')).toBe('empty'));
+    expect(screen.getByTestId('strip-tokens').getAttribute('title')).toBe('Metrics unavailable');
+    expect(screen.queryByTestId('run-inspector-error')).toBeNull();
+    // Retry is wired to the hook's refetch: one more request, then values.
+    expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1);
+    mockFetchBatchMetrics.mockResolvedValue({
+      metrics: [
+        { runId: 'rep-0', status: 'success', hasSpans: true, totalTokens: 10, costUsd: 0.01, llmCalls: 1, toolCalls: 0 },
+        { runId: 'rep-1', status: 'success', hasSpans: true, totalTokens: 10, costUsd: 0.01, llmCalls: 1, toolCalls: 0 },
+      ],
+      aggregate: {},
+    });
+    fireEvent.click(screen.getByTestId('strip-retry'));
+    await waitFor(() => expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('run-telemetry-strip').getAttribute('data-state')).toBe('value'));
+    err.mockRestore();
   });
 });

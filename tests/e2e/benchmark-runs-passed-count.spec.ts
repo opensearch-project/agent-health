@@ -113,12 +113,13 @@ test.describe('Benchmark Runs list — passed count matches run.results, not sta
     await page.waitForSelector('h2', { timeout: 30000 });
     await expect(page.locator('text=Passed-Count E2E Run')).toBeVisible({ timeout: 15000 });
 
-    // This benchmark has exactly one run, so the stats block on the page is
+    // This benchmark has exactly one run, so the stats cell on the page is
     // unambiguous. The recomputed passed count is 1 (from run.results),
     // NOT the stale run.stats.passed === 2.
-    const passedBadge = page.locator('[class*="text-green-700"]', { hasText: '1' });
-    await expect(passedBadge).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('[class*="text-green-700"]', { hasText: '2' })).toHaveCount(0);
+    const stats = page.locator('[data-testid="run-row"]', { hasText: 'Passed-Count E2E Run' }).getByTestId('run-stats');
+    await expect(stats.locator('[class*="text-green-700"]')).toHaveText('1', { timeout: 15000 });
+    // 1 passed / 0 failed → 100% over the evaluable set (errored excluded).
+    await expect(page.getByTestId('run-passrate-cell')).toContainText('100%');
 
     // AlertTriangle-tagged errored badge shows the miscounted case, proving
     // it was excluded from "passed" rather than silently folded into it.
