@@ -37,6 +37,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { isRunInProgress, getEffectiveRunStatus } from '@/lib/runStats';
+import { deriveAddRunButtonState } from '@/lib/runLaunchState';
+import { debug } from '@/lib/debug';
 import { executeBenchmarkRun, listEvaluationRuns, deleteEvaluationRun, cancelEvaluationRun } from '@/services/client';
 import { useBenchmarkCancellation } from '@/hooks/useBenchmarkCancellation';
 import { Benchmark, BenchmarkRun, TestCase, BenchmarkProgress, BenchmarkStartedEvent, Evaluator, EvaluationRun } from '@/types';
@@ -130,9 +132,25 @@ export const BenchmarkRunsPage2: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
-  // Running state
-  const [isRunning, setIsRunning] = useState(false);
-  const [runProgress, setRunProgress] = useState<BenchmarkProgress | null>(null);
+  // Running state for the run THIS page launched via Add Run.
+  //
+  // Bug (owner report, 2026-09-09): the header button used to be bound to a
+  // single `isRunning` boolean that was only reset when the launching SSE
+  // stream ended. On 30–60+ min runs an idle proxy/tunnel/browser closes that
+  // stream long before `completed` arrives, so the button spun forever even
+  // though the run finished server-side (the per-row status on the same page
+  // was correct — it comes from the polled run docs). The button now derives
+  // from the polled RUN DOCUMENT: `isLaunching` covers the window between
+  // POST and the `started` event (no runId yet); after that `launchedRunId`
+  // is looked up in the merged, polled run list and the button stays
+  // "Running…" exactly until that doc is terminal — whether or not the SSE
+  // stream is still alive. See lib/runLaunchState.ts.
+  const [isLaunching, setIsLaunching] = useState(false);
+  const [launchedRun, setLaunchedRun] = useState<{ id: string; at: number } | null>(null);
+  // True while the launching SSE stream is still delivering per-case
+  // progress; once it drops (or ends without `completed`) the progress panel
+  // falls back to the polled doc's `results` counts.
+  const [isStreamLive, setIsStreamLive] = useState(false);
   const [useCaseStatuses, setUseCaseStatuses] = useState<UseCaseRunStatus[]>([]);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -417,6 +435,49 @@ export const BenchmarkRunsPage2: React.FC = () => {
     return filteredRuns.some(run => isRunInProgress(run));
   }, [filteredRuns]);
 
+  // Header-button state, derived from the polled run docs (see the comment on
+  // `launchedRun` above). Looked up in the UNFILTERED merged list so a version
+  // filter that hides the new run can't make the button lie either way.
+  const addRunButtonState = deriveAddRunButtonState({
+    launching: isLaunching,
+    launchedRunId: launchedRun?.id ?? null,
+    launchedAt: launchedRun?.at ?? null,
+    runs: allMergedRuns,
+  });
+  const isRunning = addRunButtonState !== 'idle';
+  const launchedRunDoc = useMemo(
+    () => (launchedRun ? allMergedRuns.find(r => r.id === launchedRun.id) ?? null : null),
+    [allMergedRuns, launchedRun]
+  );
+
+  // Once the polled doc says the launched run is terminal, forget it — the
+  // button is back to "Add Run" and the next launch starts clean. Also drops
+  // the progress panel (it only renders while `isRunning`).
+  useEffect(() => {
+    if (launchedRun && addRunButtonState === 'idle' && !isLaunching) {
+      debug('BenchmarkRunsPage', `Launched run ${launchedRun.id} is terminal per polled doc — header reset`);
+      setLaunchedRun(null);
+      setIsStreamLive(false);
+    }
+  }, [launchedRun, addRunButtonState, isLaunching]);
+
+  // Progress panel rows. While the SSE stream is live they come from its
+  // per-case events; after it drops they are rebuilt from the polled doc's
+  // `results` so the panel keeps moving (and finishes) without the stream.
+  const progressStatuses = useMemo<UseCaseRunStatus[]>(() => {
+    if (isStreamLive || !launchedRunDoc) return useCaseStatuses;
+    const results = launchedRunDoc.results || {};
+    return useCaseStatuses.map(uc => {
+      const status = (results[uc.id] as { status?: string } | undefined)?.status;
+      if (status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'running') {
+        return { ...uc, status };
+      }
+      // No result for this case yet: it hasn't started (a stale `running`
+      // from the dropped stream goes back to pending until the doc says so).
+      return uc.status === 'running' ? { ...uc, status: 'pending' as const } : uc;
+    });
+  }, [isStreamLive, launchedRunDoc, useCaseStatuses]);
+
   // Polling
   useEffect(() => {
     const shouldPoll = isRunning || hasPendingEvaluations || hasServerInProgressRuns;
@@ -476,13 +537,14 @@ export const BenchmarkRunsPage2: React.FC = () => {
       return { id, name: testCase?.name || id, status: 'pending' as const };
     });
     setUseCaseStatuses(initialStatuses);
-    setIsRunning(true);
-    setRunProgress(null);
+    setIsLaunching(true);
+    setLaunchedRun(null);
+    setIsStreamLive(true);
+    let launchedId: string | null = null;
     try {
       await executeBenchmarkRun(
         benchmark.id, runConfigValues,
         (progress: BenchmarkProgress) => {
-          setRunProgress(progress);
           setUseCaseStatuses(prev => prev.map((uc, index) => {
             if (index < progress.currentTestCaseIndex) return { ...uc, status: 'completed' as const };
             if (index === progress.currentTestCaseIndex) {
@@ -495,24 +557,46 @@ export const BenchmarkRunsPage2: React.FC = () => {
           }));
         },
         (startedEvent: BenchmarkStartedEvent) => {
+          // From here on the header tracks the run DOCUMENT (polled), not
+          // this connection. Poll immediately so the new doc shows up.
+          launchedId = startedEvent.runId;
+          setLaunchedRun({ id: startedEvent.runId, at: Date.now() });
+          setIsLaunching(false);
+          loadBenchmark();
           setUseCaseStatuses(prev => prev.map(uc => {
             const serverTc = startedEvent.testCases.find(tc => tc.id === uc.id);
             return serverTc ? { ...uc, name: serverTc.name } : uc;
           }));
         }
       );
+      // Stream delivered `completed` — the server has already persisted the
+      // terminal doc, so this is server truth too: reset the header now
+      // rather than waiting a poll cycle, then refresh the rows.
       setUseCaseStatuses(prev => prev.map(uc =>
         uc.status === 'pending' || uc.status === 'running' ? { ...uc, status: 'completed' as const } : uc
       ));
+      setLaunchedRun(null);
       loadBenchmark();
     } catch (error) {
-      console.error('Error running benchmark:', error);
-      setUseCaseStatuses(prev => prev.map(uc =>
-        uc.status === 'pending' || uc.status === 'running' ? { ...uc, status: 'failed' as const } : uc
-      ));
+      if (launchedId) {
+        // The stream dropped (idle proxy/tunnel/browser) or ended without
+        // `completed`, but the run keeps executing server-side by design
+        // (the route's sendSSE treats the stream as an observer). Do NOT
+        // flip the UI to failed — fall back to polling the run doc, which
+        // is what the header and the progress panel derive from now.
+        debug('BenchmarkRunsPage', `SSE stream for run ${launchedId} ended before completion; falling back to polling:`, error);
+        loadBenchmark();
+      } else {
+        // Never got a runId: the POST itself failed (validation, source
+        // resolution, benchmark missing). Nothing is running server-side.
+        console.error('Error running benchmark:', error);
+        setUseCaseStatuses(prev => prev.map(uc =>
+          uc.status === 'pending' || uc.status === 'running' ? { ...uc, status: 'failed' as const } : uc
+        ));
+      }
     } finally {
-      setIsRunning(false);
-      setRunProgress(null);
+      setIsLaunching(false);
+      setIsStreamLive(false);
     }
   };
 
@@ -631,7 +715,14 @@ export const BenchmarkRunsPage2: React.FC = () => {
           >
             <Pencil size={12} className="mr-1" />Edit
           </Button>
-          <Button size="sm" className="h-7 text-xs bg-opensearch-blue hover:bg-blue-600" onClick={handleAddRun} disabled={isRunning}>
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-opensearch-blue hover:bg-blue-600"
+            onClick={handleAddRun}
+            disabled={isRunning}
+            data-testid="add-run-button"
+            data-run-state={addRunButtonState}
+          >
             {isRunning
               ? <><Loader2 size={12} className="mr-1 animate-spin" />Running...</>
               : <><Plus size={12} className="mr-1" />Add Run</>}
@@ -660,23 +751,23 @@ export const BenchmarkRunsPage2: React.FC = () => {
         const runsBody = (
           <>
           {/* Running Progress */}
-          {isRunning && useCaseStatuses.length > 0 && (
-            <Card className="mb-3 border-blue-500/50">
+          {isRunning && progressStatuses.length > 0 && (
+            <Card className="mb-3 border-blue-500/50" data-testid="run-progress-panel">
               <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium flex items-center gap-2">
                     <Loader2 size={14} className="animate-spin" /> Running...
                   </span>
                   <span className="text-xs text-muted-foreground">
-                    {useCaseStatuses.filter(uc => uc.status === 'completed').length} / {useCaseStatuses.length}
+                    {progressStatuses.filter(uc => uc.status === 'completed').length} / {progressStatuses.length}
                   </span>
                 </div>
                 <Progress
-                  value={(useCaseStatuses.filter(uc => uc.status === 'completed' || uc.status === 'failed' || uc.status === 'cancelled').length / useCaseStatuses.length) * 100}
+                  value={(progressStatuses.filter(uc => uc.status === 'completed' || uc.status === 'failed' || uc.status === 'cancelled').length / progressStatuses.length) * 100}
                   className="h-2 mb-3"
                 />
                 <div className="space-y-1 max-h-32 overflow-y-auto">
-                  {useCaseStatuses.map(uc => (
+                  {progressStatuses.map(uc => (
                     <div key={uc.id} className="flex items-center gap-2 text-xs">
                       {uc.status === 'pending' && <Circle size={12} className="text-muted-foreground" />}
                       {uc.status === 'running' && <Loader2 size={12} className="text-blue-700 dark:text-blue-400 animate-spin" />}

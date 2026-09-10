@@ -70,7 +70,11 @@ jest.mock('@/lib/resolveAgentModel', () => ({
 
 import express, { Application } from 'express';
 const request = require('supertest');
-import evaluationRunsRouter from '@/server/routes/storage/evaluationRuns';
+import evaluationRunsRouter, {
+  startSseHeartbeat,
+  getEvaluationRunSseHeartbeatMs,
+  DEFAULT_EVALUATION_RUN_SSE_HEARTBEAT_MS,
+} from '@/server/routes/storage/evaluationRuns';
 
 function makeApp(): Application {
   const app = express();
@@ -286,6 +290,118 @@ describe('Evaluation Runs API', () => {
       expect(createdRun.name).toBe('My Run');
       expect(createdRun.description).toBe('desc');
       expect(createdRun.modelId).toBe('resolved-model');
+    });
+
+    describe('SSE keep-alive heartbeat (Add Run stuck on "Running…", 2026-09-09)', () => {
+      const originalEnv = process.env.EVALUATION_RUN_SSE_HEARTBEAT_MS;
+      afterEach(() => {
+        if (originalEnv === undefined) delete process.env.EVALUATION_RUN_SSE_HEARTBEAT_MS;
+        else process.env.EVALUATION_RUN_SSE_HEARTBEAT_MS = originalEnv;
+      });
+
+      it('writes `: ping` comment lines while the run executes and none after it completes', async () => {
+        process.env.EVALUATION_RUN_SSE_HEARTBEAT_MS = '20';
+        // Hold the run open long enough for several heartbeats.
+        mockExecuteEvaluationRun.mockImplementation(() => new Promise(resolve =>
+          setTimeout(() => resolve({ results: {}, stats: { total: 1 } }), 130)
+        ));
+
+        const res = await request(app).post('/api/storage/evaluation-runs').send(body);
+
+        expect(res.status).toBe(200);
+        const pings = (res.text.match(/^: ping$/gm) || []).length;
+        expect(pings).toBeGreaterThanOrEqual(3);
+        // Heartbeats are comment frames: they never masquerade as events.
+        expect(res.text).not.toMatch(/event: ping/);
+        // The stream still ends with the terminal event, AFTER the last ping.
+        expect(res.text.lastIndexOf(': ping')).toBeLessThan(res.text.lastIndexOf('event: completed'));
+        expect(res.text.trimEnd().endsWith('}')).toBe(true);
+      });
+
+      it('emits no heartbeat when disabled via EVALUATION_RUN_SSE_HEARTBEAT_MS=0', async () => {
+        process.env.EVALUATION_RUN_SSE_HEARTBEAT_MS = '0';
+        mockExecuteEvaluationRun.mockImplementation(() => new Promise(resolve =>
+          setTimeout(() => resolve({ results: {}, stats: { total: 1 } }), 60)
+        ));
+        const res = await request(app).post('/api/storage/evaluation-runs').send(body);
+        expect(res.text).not.toContain(': ping');
+        expect(res.text).toContain('event: completed');
+      });
+
+      it('stops the heartbeat when execution throws (error path also clears the interval)', async () => {
+        process.env.EVALUATION_RUN_SSE_HEARTBEAT_MS = '20';
+        mockExecuteEvaluationRun.mockImplementation(() => new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('agent crashed')), 70)
+        ));
+        const res = await request(app).post('/api/storage/evaluation-runs').send(body);
+        expect(res.text).toContain(': ping');
+        expect(res.text).toContain('event: error');
+        expect(res.text.lastIndexOf(': ping')).toBeLessThan(res.text.lastIndexOf('event: error'));
+      });
+    });
+  });
+
+  describe('startSseHeartbeat / getEvaluationRunSseHeartbeatMs', () => {
+    beforeEach(() => { jest.useFakeTimers(); });
+    afterEach(() => { jest.useRealTimers(); });
+
+    function fakeRes(overrides: Partial<{ destroyed: boolean; writableEnded: boolean }> = {}) {
+      return { destroyed: false, writableEnded: false, write: jest.fn(), ...overrides } as any;
+    }
+
+    it('writes a comment frame every interval and stops (idempotently) when told to', () => {
+      const res = fakeRes();
+      const stop = startSseHeartbeat(res, 15_000);
+      jest.advanceTimersByTime(14_999);
+      expect(res.write).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1);
+      expect(res.write).toHaveBeenCalledTimes(1);
+      expect(res.write).toHaveBeenCalledWith(': ping\n\n');
+      jest.advanceTimersByTime(30_000);
+      expect(res.write).toHaveBeenCalledTimes(3);
+      stop();
+      stop(); // idempotent
+      jest.advanceTimersByTime(60_000);
+      expect(res.write).toHaveBeenCalledTimes(3);
+    });
+
+    it('skips writes on a destroyed or ended response and swallows write errors (observer-only stream)', () => {
+      const dead = fakeRes({ destroyed: true });
+      const stopDead = startSseHeartbeat(dead, 10);
+      jest.advanceTimersByTime(35);
+      expect(dead.write).not.toHaveBeenCalled();
+      stopDead();
+
+      const ended = fakeRes({ writableEnded: true });
+      const stopEnded = startSseHeartbeat(ended, 10);
+      jest.advanceTimersByTime(35);
+      expect(ended.write).not.toHaveBeenCalled();
+      stopEnded();
+
+      const throwing = fakeRes();
+      throwing.write.mockImplementation(() => { throw new Error('EPIPE'); });
+      const stopThrowing = startSseHeartbeat(throwing, 10);
+      expect(() => jest.advanceTimersByTime(35)).not.toThrow();
+      expect(throwing.write).toHaveBeenCalledTimes(3);
+      stopThrowing();
+    });
+
+    it('a non-positive interval installs no timer at all', () => {
+      const res = fakeRes();
+      const stop = startSseHeartbeat(res, 0);
+      jest.advanceTimersByTime(100_000);
+      expect(res.write).not.toHaveBeenCalled();
+      stop();
+    });
+
+    it('resolves the interval from EVALUATION_RUN_SSE_HEARTBEAT_MS with a 15s default and rejects garbage', () => {
+      expect(getEvaluationRunSseHeartbeatMs({})).toBe(DEFAULT_EVALUATION_RUN_SSE_HEARTBEAT_MS);
+      expect(DEFAULT_EVALUATION_RUN_SSE_HEARTBEAT_MS).toBe(15_000);
+      expect(getEvaluationRunSseHeartbeatMs({ EVALUATION_RUN_SSE_HEARTBEAT_MS: '' })).toBe(15_000);
+      expect(getEvaluationRunSseHeartbeatMs({ EVALUATION_RUN_SSE_HEARTBEAT_MS: '250' })).toBe(250);
+      expect(getEvaluationRunSseHeartbeatMs({ EVALUATION_RUN_SSE_HEARTBEAT_MS: '0' })).toBe(0);
+      expect(getEvaluationRunSseHeartbeatMs({ EVALUATION_RUN_SSE_HEARTBEAT_MS: 'abc' })).toBe(15_000);
+      expect(getEvaluationRunSseHeartbeatMs({ EVALUATION_RUN_SSE_HEARTBEAT_MS: '-5' })).toBe(15_000);
     });
   });
 
