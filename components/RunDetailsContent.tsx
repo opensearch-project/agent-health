@@ -46,7 +46,7 @@ import TraceVisualization from './traces/TraceVisualization';
 import SimpleSpanAttributesTable from './traces/SimpleSpanAttributesTable';
 import ViewToggle, { ViewMode } from './traces/ViewToggle';
 import TraceFullScreenView from './traces/TraceFullScreenView';
-import { computeTrajectoryFromRawEvents } from '@/services/agent';
+import { computeTrajectoryFromRawEvents } from '@/connectors/agui/aguiConverter';
 import { fetchTracesByRunIds, fetchTracesForRun, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';

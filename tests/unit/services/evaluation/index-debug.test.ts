@@ -27,7 +27,7 @@ const mockConnectorRegistry = {
   }),
 };
 
-jest.mock('@/services/connectors/registry', () => ({
+jest.mock('@/connectors/registry', () => ({
   connectorRegistry: mockConnectorRegistry,
 }));
 

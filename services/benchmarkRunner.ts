@@ -32,7 +32,7 @@ import {
   appendNotReachedMarker,
 } from './evaluation';
 import { buildEvaluatorErrorPatch } from './evaluation/evaluatorError';
-import { connectorRegistry } from '@/services/connectors/server';
+import { connectorRegistry } from '@/connectors/server';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';

@@ -3,7 +3,7 @@ name: add-connector
 description: Use when adding, modifying, or debugging agent connectors. Provides connector architecture, built-in types, and custom connector template.
 ---
 
-## Connector System (`services/connectors/`)
+## Connector System (`connectors/`)
 
 Pluggable abstraction for agent communication protocols.
 
@@ -31,14 +31,14 @@ Pluggable abstraction for agent communication protocols.
 
 ### Usage
 ```typescript
-import { connectorRegistry } from '@/services/connectors';
+import { connectorRegistry } from '@/connectors';
 const connector = connectorRegistry.getForAgent(agentConfig);
 const response = await connector.execute(endpoint, request, auth, onProgress);
 ```
 
 ### Creating a Custom Connector
 ```typescript
-import { BaseConnector } from '@/services/connectors';
+import { BaseConnector } from '@/connectors';
 
 class CustomConnector extends BaseConnector {
   readonly type = 'custom' as const;

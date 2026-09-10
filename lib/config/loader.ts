@@ -14,7 +14,7 @@ import { projectStatePath, userStatePath } from './statePaths.js';
 import { logStartupDiagnostic } from '@/lib/diagnostics';
 import { pathToFileURL } from 'url';
 import type { AgentConfig, ModelConfig } from '@/types';
-import type { AgentConnector } from '@/services/connectors/types';
+import type { AgentConnector } from '@/connectors/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { DEFAULT_BACKEND_PORT, resolveBackendPort } from '@/lib/portConfig';
 import type {

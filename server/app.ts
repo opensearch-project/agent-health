@@ -23,8 +23,8 @@ import type { OpenSearchExporterConfig } from '@/lib/telemetry';
 
 // Register server-side connectors (subprocess, claude-code)
 // This import has side effects that register connectors with the registry
-import '@/services/connectors/server';
-import { connectorRegistry } from '@/services/connectors/registry';
+import '@/connectors/server';
+import { connectorRegistry } from '@/connectors/registry';
 
 /**
  * Resolve storage config at startup (no request context available).

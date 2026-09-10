@@ -51,7 +51,7 @@ jest.mock('@/services/evaluation', () => ({
 }));
 
 // Mock connector registry - use inline object to avoid hoisting issues
-jest.mock('@/services/connectors/server', () => ({
+jest.mock('@/connectors/server', () => ({
   connectorRegistry: {
     getForAgent: jest.fn().mockReturnValue({ type: 'mock', name: 'Mock Connector' }),
   },

@@ -14,9 +14,9 @@
  * 5. Error handling for failed requests
  */
 
-import type { ConnectorAuth, ConnectorRequest } from '@/services/connectors/types';
+import type { ConnectorAuth, ConnectorRequest } from '@/connectors/types';
 import type { TestCase } from '@/types';
-import { OpenAICompatibleConnector } from '@/services/connectors/openai-compatible/OpenAICompatibleConnector';
+import { OpenAICompatibleConnector } from '@/connectors/openai-compatible';
 
 describe('OpenAICompatibleConnector Integration Tests', () => {
   let connector: OpenAICompatibleConnector;

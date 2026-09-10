@@ -5,7 +5,7 @@
 
 // @ts-nocheck - Test file uses simplified mock objects
 import type { AgentConfig, TestCase } from '@/types';
-import type { ConnectorAuth } from '@/services/connectors';
+import type { ConnectorAuth } from '@/connectors';
 
 // Mock dependencies before importing the module under test
 jest.mock('@/services/agent', () => ({

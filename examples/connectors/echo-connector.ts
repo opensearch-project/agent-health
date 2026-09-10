@@ -37,8 +37,8 @@
  * handling, progress callbacks, trajectory shape, raw-event replay —
  * read the base class and types directly in the installed package:
  *
- *     node_modules/@opensearch-project/agent-health/lib/dist/services/connectors/base/BaseConnector.js
- *     node_modules/@opensearch-project/agent-health/lib/dist/services/connectors/types.d.ts
+ *     node_modules/@opensearch-project/agent-health/lib/dist/connectors/base/index.js
+ *     node_modules/@opensearch-project/agent-health/lib/dist/connectors/types.d.ts
  *
  * The compiled `.js` preserves the original JSDoc, and the matching
  * `.d.ts` next to it gives you the precise type contract — no need to
@@ -51,7 +51,7 @@
  * (e.g. 'rest' for HTTP-JSON agents) and replace the built-in connector
  * via `registerConnector(new EchoConnector())`. If you need a brand-new
  * protocol id, fork this repo and widen the `ConnectorProtocol` union
- * in `services/connectors/types.ts`.
+ * in `connectors/types.ts`.
  */
 
 import {

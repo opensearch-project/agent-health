@@ -19,7 +19,7 @@
 
 import { runEvaluationWithConnector } from '@/services/evaluation';
 import type { AgentConfig, TestCase, TrajectoryStep, AfterResponseContext, BeforeRequestContext } from '@/types';
-import type { ConnectorRegistry } from '@/services/connectors/types';
+import type { ConnectorRegistry } from '@/connectors/types';
 
 // Mock the Bedrock judge to avoid real API calls and retries
 jest.mock('@/services/evaluation/bedrockJudge', () => ({

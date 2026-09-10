@@ -18,7 +18,7 @@
  *   npm test -- --testPathPattern=sseStream
  */
 
-import { SSEClient, consumeSSEStream } from '@/services/agent/sseStream';
+import { SSEClient, consumeSSEStream } from '@/connectors/agui/sseStream';
 import { AGUIEventType } from '@/types/agui';
 
 // Helper to create a mock ReadableStream from SSE events

@@ -26,7 +26,7 @@ You are helping the user diagnose and fix a bug in Agent Health.
 | SSE stream drops | `services/agent/sseHandler.ts`, response flushing |
 | Evaluation incorrect | `server/routes/judge.ts`, prompt templates |
 | UI not updating | `hooks/`, `services/client/` |
-| Agent connector fails | `services/connectors/`, connector-specific adapter |
+| Agent connector fails | `connectors/`, connector-specific adapter |
 
 ## Step 2: Diagnose
 

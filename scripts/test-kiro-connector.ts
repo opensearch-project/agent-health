@@ -17,7 +17,7 @@
  *   npx tsx scripts/test-kiro-connector.ts
  */
 
-import { kiroConnector } from '@/services/connectors/kiro/KiroConnector';
+import { kiroConnector } from '@/connectors/kiro';
 
 async function main() {
   const request = {

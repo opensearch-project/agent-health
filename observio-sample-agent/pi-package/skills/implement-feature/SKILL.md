@@ -28,7 +28,7 @@ Use the `find_architecture` tool to locate where this feature belongs. The layer
 | Background work | `services/` | SSE streaming, cancellation tokens, persist state immediately |
 | UI interaction | `components/` + `hooks/` | React, shadcn/ui, client service calls |
 | Data persistence | `services/storage/` | `asyncXStorage` with `toAppFormat()`/`toStorageFormat()` |
-| Agent protocol | `services/connectors/` | ConnectorType, streaming adapter |
+| Agent protocol | `connectors/` | ConnectorType, streaming adapter |
 
 **Critical rule**: All clients access OpenSearch through the server HTTP API. Never bypass the server.
 
