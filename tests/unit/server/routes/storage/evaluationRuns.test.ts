@@ -208,6 +208,25 @@ describe('Evaluation Runs API', () => {
       expect(mockBenchmarksAddRun).toHaveBeenCalledWith('bench-1', expect.objectContaining({ id: expect.any(String) }));
     });
 
+    it('stamps the associated benchmark version on both run documents', async () => {
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'bench-1',
+        currentVersion: 7,
+        testCaseIds: ['tc-1'],
+      });
+      mockBenchmarksAddRun.mockResolvedValue(true);
+
+      await request(app).post('/api/storage/evaluation-runs').send({ ...body, benchmarkId: 'bench-1' });
+
+      expect(mockEvaluationRunsCreate).toHaveBeenCalledWith(expect.objectContaining({
+        benchmarkId: 'bench-1',
+        benchmarkVersion: 7,
+      }));
+      expect(mockBenchmarksAddRun).toHaveBeenCalledWith('bench-1', expect.objectContaining({
+        benchmarkVersion: 7,
+      }));
+    });
+
     it('emits an SSE error when the benchmarkId does not exist', async () => {
       mockBenchmarksGetById.mockResolvedValue(null);
       const res = await request(app).post('/api/storage/evaluation-runs').send({ ...body, benchmarkId: 'missing-bench' });

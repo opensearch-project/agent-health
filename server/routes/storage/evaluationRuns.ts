@@ -199,6 +199,10 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     // case documents resolved above. Repeated CLI imports therefore reuse one
     // benchmark and one stable set of testCaseIds instead of creating rows
     // whose definitions and runs live only in evaluation-run documents.
+    // Capture the version at run start so both the first-class EvaluationRun
+    // and its embedded BenchmarkRun projection identify the same benchmark
+    // definition instead of falling through to the legacy "version 1" guess.
+    let benchmarkVersion: number | undefined;
     if (benchmarkId) {
       const benchmark = await storage.benchmarks.getById(benchmarkId);
       if (!benchmark) {
@@ -206,6 +210,7 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
         res.end();
         return;
       }
+      benchmarkVersion = benchmark.currentVersion ?? 1;
       const idsChanged = JSON.stringify(benchmark.testCaseIds || []) !== JSON.stringify(resolvedTestCaseIds);
       if (idsChanged) {
         await storage.benchmarks.update(benchmarkId, { testCaseIds: resolvedTestCaseIds });
@@ -266,6 +271,7 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
       evaluatorId,
       concurrency,
       benchmarkId,
+      benchmarkVersion,
       trigger: trigger || 'manual',
       status: 'running',
       testCaseSnapshots: snapshots,
@@ -329,7 +335,8 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
         const benchmarkRun: BenchmarkRun = {
           id: run.id, name: run.name, createdAt: run.createdAt, completedAt,
           status: finalStatus, agentKey: run.agentKey, modelId: run.modelId,
-          judgeModelId: run.judgeModelId, results: completedRun.results, stats: completedRun.stats,
+          judgeModelId: run.judgeModelId, benchmarkVersion: run.benchmarkVersion,
+          results: completedRun.results, stats: completedRun.stats,
           ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
           ...(run.description ? { description: run.description } : {}),
           ...(run.evaluatorId ? { evaluatorId: run.evaluatorId } : {}),
