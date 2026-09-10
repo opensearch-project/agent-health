@@ -415,13 +415,42 @@ test('rca-investigate', { prompt: 'Investigate the failing service ...' }, async
 ```
 
 This matches the UI "Run Test" path exactly: pick an evaluator on the run
-config, every judged test case in the run uses it. Per-call options always
-win over the bound default — useful when one matcher in a test needs a
-different evaluator:
+config, every judged test case in the run uses it.
+
+**Run-level selection is authoritative.** When the run specifies an
+`evaluatorId` and/or a judge model (UI dropdowns, API `evaluatorId` /
+`judgeModelId`, CLI `-e` / `--judge-model`), that selection is what every
+`judge()` call in the body sends — a per-call `{ evaluatorId }` / `{ model }`
+pin that disagrees is **not applied**. The person who launched the run chose
+the judge; an eval file cannot silently swap it. The runner records the
+disagreement instead of hiding it: the report gets
+`judgeSelectionConflicts: [{ field, runValue, bodyValue }]`, the run-detail
+Judge tab shows an amber "body pinned a different judge — run selection
+applied" chip, and the server logs one warning per conflicting field. Body
+pins **do** apply for any field the run leaves unselected — e.g. a run that
+picks an evaluator but no judge model lets `judge(result, claim, { model })`
+choose the model. Every report also carries `judgeApplied` (per-field value +
+`'run' | 'body' | 'default'` source) so `evaluatorId` / `judgeModelId` on the
+report always name the judge that actually produced the verdict.
 
 ```javascript
+// Run launched with evaluatorId: 'system-rca-default'
 await judge(result, 'meets product gap criteria', { evaluatorId: 'product-gap-eval' });
+// → sends system-rca-default (run wins); report.judgeSelectionConflicts records
+//   { field: 'evaluatorId', runValue: 'system-rca-default', bodyValue: 'product-gap-eval' }
+
+// Run launched with NO judgeModelId
+await judge(result, 'follows the SOP', { model: 'claude-opus-4' });
+// → sends modelId: claude-opus-4 (body applies — the run didn't select one)
 ```
+
+If you call `bindJudge(defaults)` yourself outside a runner, it keeps the
+plain per-call-wins semantics — the authoritative binding
+(`createRunJudgeBinding`) is runner-internal and not part of the SDK surface.
+When the run leaves a field unselected and the body pins *different* values
+for it across calls, `judgeApplied` reports no single value for that field
+with source `'mixed'`; the per-call value is on each `llm-judge`
+`matcherResults[]` entry (`evaluatorId` / `model`).
 
 The **imported** `judge` (from `require('@opensearch-project/agent-health')`)
 is always the unbound version — use it when you genuinely want the server's
@@ -633,6 +662,32 @@ curl -sN -X POST http://localhost:4001/api/storage/evaluation-runs \
     "modelId": "claude-sonnet"
   }'
 ```
+
+### Re-running imported code test cases (stored `sourceFile`)
+
+Every code-imported test case remembers the eval file it came from as a
+cwd-relative `sourceFile` (e.g. `evals/rca.eval.js`). When you later run that
+test case from a **stored** source — a benchmark, explicit test-case ids, a
+label filter, or the legacy `benchmark -n <name>` path — the server re-loads
+the file **relative to its own `process.cwd()`** to get the body back. If the
+file cannot be loaded from there (server started from another directory,
+file moved/renamed, import error) or it loads but no longer defines a test of
+that name, **the run fails before it starts** with an error naming every
+offending test case, its `sourceFile`, and the server's cwd:
+
+```
+Test case "rca-investigate" references source file "evals/rca.eval.js" which is
+not resolvable from cwd /srv/agent-health; start the server from the eval project
+root or re-import the test cases (benchmark -f <file>).
+```
+
+This is deliberate. Earlier versions logged the failure at debug level and
+silently ran the affected test cases through the classic eager-judge path
+instead — so the same stored test cases produced different verdicts depending
+only on where the server happened to be started, with nothing on the report
+saying which path judged it. There is no opt-out: start the server from the
+eval project's root (or a cwd from which the stored relative paths resolve),
+or re-import the file so the stored paths match.
 
 ### Migrating v1 → v2
 

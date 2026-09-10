@@ -102,6 +102,8 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     spans?: unknown[];
     connectorProtocol?: string;
     judgeMode?: 'trajectory-only' | 'trace-tools';
+    judgeApplied?: TestCaseRun['judgeApplied'];
+    judgeSelectionConflicts?: TestCaseRun['judgeSelectionConflicts'];
   };
 
   return {
@@ -185,6 +187,11 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     lastTraceFetchAt: storedAny.lastTraceFetchAt,
     traceError: storedAny.traceError,
     judgeMode: storedAny.judgeMode,
+    // What the SDK judge binding actually applied + overridden body pins
+    // (see services/judgeSelection.ts). Read-through so the run-detail
+    // Judge tab can flag a body/run selection disagreement.
+    judgeApplied: storedAny.judgeApplied,
+    judgeSelectionConflicts: storedAny.judgeSelectionConflicts,
     spans: storedAny.spans as any[] | undefined,
     connectorProtocol: storedAny.connectorProtocol as ConnectorProtocol | undefined,
   };
@@ -240,6 +247,8 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
   if (report.lastTraceFetchAt !== undefined) base.lastTraceFetchAt = report.lastTraceFetchAt;
   if (report.traceError !== undefined) base.traceError = report.traceError;
   if ((report as any).judgeMode !== undefined) (base as any).judgeMode = (report as any).judgeMode;
+  if (report.judgeApplied !== undefined) (base as any).judgeApplied = report.judgeApplied;
+  if (report.judgeSelectionConflicts !== undefined) (base as any).judgeSelectionConflicts = report.judgeSelectionConflicts;
   if (report.spans !== undefined) base.spans = report.spans;
   if (report.connectorProtocol !== undefined) base.connectorProtocol = report.connectorProtocol;
   // SDK matcher verdicts: persist alongside the report

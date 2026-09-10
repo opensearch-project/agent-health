@@ -225,6 +225,11 @@ export async function saveReportWithClient(
     // polled judge loses its inputs (same fields saveReportWithModule keeps).
     judgeModelId: report.judgeModelId,
     evaluatorId: report.evaluatorId,
+    // What the SDK judge binding actually applied (per field + source) and
+    // any body pins the run-level selection overrode. See
+    // services/judgeSelection.ts.
+    ...(report.judgeApplied !== undefined ? { judgeApplied: report.judgeApplied } : {}),
+    ...(report.judgeSelectionConflicts !== undefined ? { judgeSelectionConflicts: report.judgeSelectionConflicts } : {}),
     // SDK matcher verdicts: persist alongside the report so the inspect
     // page can render the per-matcher breakdown.
     ...(report.matcherResults !== undefined ? { matcherResults: report.matcherResults } : {}),

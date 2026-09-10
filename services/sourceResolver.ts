@@ -51,6 +51,13 @@ export async function resolveTestCaseSources(
   const evaluateFnMap = new Map<string, EvaluateFn>();
   const hooksByFile = new Map<string, RegisteredHook[]>();
   const testHookScopes = new Map<string, { sourceFile?: string; describePath?: string }>();
+  // Test cases that came from STORED sources (benchmark / explicit ids /
+  // label filter) rather than a fresh file import. Any of these carrying a
+  // code `sourceFile` must have its body re-materialized below — the same
+  // stored test case must dispatch the same way no matter which route or
+  // source descriptor selected it.
+  const storedSourceTestCases: TestCase[] = [];
+  let sawCodeImport = false;
 
   for (const source of sources) {
     switch (source.type) {
@@ -61,6 +68,7 @@ export async function resolveTestCaseSources(
         }
         const testCases = await fetchTestCasesByIds(benchmark.testCaseIds, storage);
         allTestCases.push(...testCases);
+        storedSourceTestCases.push(...testCases);
         updatedSources.push(source);
         debug('SourceResolver', `Resolved ${testCases.length} test cases from benchmark ${source.benchmarkId}`);
         break;
@@ -69,6 +77,7 @@ export async function resolveTestCaseSources(
       case 'test-case-ids': {
         const testCases = await fetchTestCasesByIds(source.ids, storage);
         allTestCases.push(...testCases);
+        storedSourceTestCases.push(...testCases);
         updatedSources.push(source);
         debug('SourceResolver', `Resolved ${testCases.length} test cases from explicit IDs`);
         break;
@@ -84,6 +93,7 @@ export async function resolveTestCaseSources(
       }
 
       case 'code-import': {
+        sawCodeImport = true;
         const { testCases, fnMap, hooksByFile: codeHooks, testScopes } = await resolveCodeImport(source.filenames, storage);
         const testCaseIds = testCases.map((tc) => tc.id);
         allTestCases.push(...testCases);
@@ -113,6 +123,7 @@ export async function resolveTestCaseSources(
       case 'label-filter': {
         const result = await storage.testCases.search({ labels: source.labels });
         allTestCases.push(...result.items);
+        storedSourceTestCases.push(...result.items);
         updatedSources.push(source);
         debug('SourceResolver', `Found ${result.items.length} test cases matching labels: ${source.labels.join(', ')}`);
         break;
@@ -131,6 +142,34 @@ export async function resolveTestCaseSources(
   const deduplicatedCount = allTestCases.length - seen.size;
   debug('SourceResolver', `Deduplicated ${deduplicatedCount} test cases, ${seen.size} unique remaining`);
 
+  // Re-materialize code bodies for stored test cases that reference a code
+  // `sourceFile` and weren't already mapped by a `code-import` source in this
+  // same request. Pre-fix only the legacy `/execute` route did this (and
+  // swallowed failures), so a benchmark of code-SDK test cases dispatched to
+  // the SDK body or to the classic eager-judge path depending on WHICH route
+  // launched it and on the server's cwd. Unresolvable bodies are a hard error
+  // (see resolveCodeFnMapForStoredTestCases) surfaced through the callers'
+  // existing pre-start error path.
+  const needBodies: TestCase[] = [];
+  const needSeen = new Set<string>();
+  for (const tc of storedSourceTestCases) {
+    if (evaluateFnMap.has(tc.id) || needSeen.has(tc.id)) continue;
+    needSeen.add(tc.id);
+    needBodies.push(tc);
+  }
+  if (needBodies.length > 0) {
+    const stored = await resolveCodeFnMapForStoredTestCases(needBodies, {
+      // A code-import in this same request already reset the evaluator
+      // registry and registered its evaluators — don't wipe them.
+      clearEvaluatorRegistry: !sawCodeImport,
+    });
+    for (const [id, fn] of stored.evaluateFnMap) evaluateFnMap.set(id, fn);
+    for (const [file, hooks] of stored.hooksByFile) {
+      if (!hooksByFile.has(file)) hooksByFile.set(file, hooks);
+    }
+    for (const [id, scope] of stored.testHookScopes) testHookScopes.set(id, scope);
+  }
+
   return {
     testCases: Array.from(seen.values()),
     sources: updatedSources,
@@ -142,6 +181,70 @@ export async function resolveTestCaseSources(
 }
 
 /**
+ * Code-file extensions whose stored `sourceFile` implies an executable test
+ * body that must be re-materialized before a run. `.json` provenance is not
+ * code.
+ */
+function isCodeSourceFile(sf: string): boolean {
+  return sf.endsWith('.eval.js') || sf.endsWith('.eval.ts') || sf.endsWith('.eval.mjs') ||
+    sf.endsWith('.js') || sf.endsWith('.ts') || sf.endsWith('.mjs');
+}
+
+/**
+ * Canonical lookup key for a source file: cwd-relative, forward-slash
+ * separated, resolved against `process.cwd()` whether the input is the
+ * stored relative `sourceFile` (possibly with Windows separators from the
+ * importing machine) or the absolute path the loader resolved. Both sides of
+ * the `(sourceFile, name)` join go through this so a separator or `./`
+ * difference can never silently miss.
+ */
+export function sourceFileKey(p: string, cwd: string = process.cwd()): string {
+  const posix = p.replace(/\\/g, '/');
+  const abs = path.isAbsolute(posix) ? posix : path.resolve(cwd, posix);
+  return path.relative(cwd, abs).split(path.sep).join('/');
+}
+
+/** One stored test case whose code body could not be re-materialized. */
+export interface UnresolvableSourceFile {
+  testCaseId: string;
+  testCaseName: string;
+  sourceFile: string;
+  reason: 'load-failed' | 'no-matching-test';
+  detail?: string;
+}
+
+/**
+ * Error thrown when stored code-SDK test cases cannot be re-materialized
+ * from the server's cwd. Carries the structured list so routes/CLI can
+ * render it; `message` is the human-readable form.
+ */
+export class UnresolvableSourceFilesError extends Error {
+  readonly cwd: string;
+  readonly unresolvable: UnresolvableSourceFile[];
+  constructor(unresolvable: UnresolvableSourceFile[], cwd: string = process.cwd()) {
+    super(formatUnresolvableSourceFiles(unresolvable, cwd));
+    this.name = 'UnresolvableSourceFilesError';
+    this.cwd = cwd;
+    this.unresolvable = unresolvable;
+  }
+}
+
+export function formatUnresolvableSourceFiles(unresolvable: UnresolvableSourceFile[], cwd: string): string {
+  const lines = unresolvable.map(u => {
+    if (u.reason === 'load-failed') {
+      return `Test case "${u.testCaseName}" references source file "${u.sourceFile}" which is not resolvable from cwd ${cwd}` +
+        (u.detail ? ` (${u.detail})` : '');
+    }
+    return `Test case "${u.testCaseName}" references source file "${u.sourceFile}" which loaded from cwd ${cwd} but defines no test named "${u.testCaseName}"`;
+  });
+  return (
+    `Cannot run ${unresolvable.length} code-SDK test case(s): their source files could not be re-materialized from cwd ${cwd}.\n` +
+    lines.map(l => `  - ${l}`).join('\n') +
+    `\nStart the server from the eval project root or re-import the test cases (benchmark -f <file>).`
+  );
+}
+
+/**
  * Re-materialize the code test bodies (and hooks/scopes) for a set of
  * already-stored test cases — the benchmark-run entry point.
  *
@@ -149,16 +252,34 @@ export async function resolveTestCaseSources(
  * e.g. `code-import` filenames, and upserts), this starts from test cases
  * that were persisted by a prior `benchmark -f` import. It discovers their
  * source files from the stored `sourceFile` provenance, dynamically imports
- * each unique file, and maps `storedId → evaluate fn` by `(sourceFile, name)`.
- * It does NOT upsert/bump versions — the test cases already exist.
+ * each unique file (resolved against `process.cwd()`), and maps
+ * `storedId → evaluate fn` by the normalised `(sourceFile, name)` key. It
+ * does NOT upsert/bump versions — the test cases already exist.
  *
- * This is the single home for benchmark-side code-import resolution: the
- * `POST /api/storage/benchmarks/:id/run` route used to hand-roll ~95 lines
- * of equivalent logic inline (#245/#246). Returns empty maps when none of
- * the stored test cases carry a code `sourceFile`.
+ * **Hard error on any unresolvable body.** A stored test case that carries a
+ * code `sourceFile` MUST run its body. If the file cannot be loaded from the
+ * server's cwd (ENOENT, import error) or loads but defines no test of that
+ * name, this throws {@link UnresolvableSourceFilesError} listing every
+ * offender and the cwd — BEFORE the run starts. Pre-fix this logged at
+ * `debug` level and fell through, so the same stored test cases were judged
+ * by the SDK body on a server started from the eval repo and by the classic
+ * eager judge (a different verdict path) on any other server, with nothing
+ * in the report saying which.
+ *
+ * Returns empty maps when none of the stored test cases carry a code
+ * `sourceFile`.
  */
 export async function resolveCodeFnMapForStoredTestCases(
   storedTestCases: TestCase[],
+  options?: {
+    /**
+     * Reset the process-global custom-evaluator registry before loading (the
+     * loader re-registers `defineEvaluator()` ids and a stale registration
+     * from a prior load trips its duplicate-id guard). Default true; callers
+     * that already loaded code in this same request pass false.
+     */
+    clearEvaluatorRegistry?: boolean;
+  },
 ): Promise<{
   evaluateFnMap: Map<string, EvaluateFn>;
   hooksByFile: Map<string, RegisteredHook[]>;
@@ -169,48 +290,93 @@ export async function resolveCodeFnMapForStoredTestCases(
   const testHookScopes = new Map<string, { sourceFile?: string; describePath?: string }>();
 
   // Which stored test cases came from a code file? Collect their unique
-  // source files. `.json` provenance is ignored — only executable bodies.
-  const isCodeFile = (sf: string) =>
-    sf.endsWith('.eval.js') || sf.endsWith('.eval.ts') || sf.endsWith('.eval.mjs') ||
-    sf.endsWith('.js') || sf.endsWith('.ts') || sf.endsWith('.mjs');
-
-  const codeFilesToLoad = new Set<string>();
-  const tcByNameAndFile = new Map<string, TestCase>();
+  // source files (by normalised key) and index the stored docs by
+  // (key, name).
+  const cwd = process.cwd();
+  const codeTestCases: Array<{ tc: TestCase; sourceFile: string; key: string }> = [];
   for (const tc of storedTestCases) {
     const sf = (tc as any).sourceFile as string | undefined;
-    if (sf && isCodeFile(sf)) {
-      codeFilesToLoad.add(sf);
-      tcByNameAndFile.set(`${sf}\u0000${tc.name}`, tc);
+    if (sf && isCodeSourceFile(sf)) {
+      codeTestCases.push({ tc, sourceFile: sf, key: sourceFileKey(sf, cwd) });
     }
   }
-  if (codeFilesToLoad.size === 0) {
+  if (codeTestCases.length === 0) {
     return { evaluateFnMap, hooksByFile, testHookScopes };
   }
 
+  const filesByKey = new Map<string, string>(); // key → first stored sourceFile spelling
+  const tcByKeyAndName = new Map<string, TestCase>();
+  for (const { tc, sourceFile, key } of codeTestCases) {
+    if (!filesByKey.has(key)) filesByKey.set(key, sourceFile);
+    tcByKeyAndName.set(`${key}\u0000${tc.name}`, tc);
+  }
+
+  if (options?.clearEvaluatorRegistry !== false) {
+    const { clearEvaluators } = await import('@/lib/testCases/evaluators');
+    clearEvaluators();
+  }
+
   const { loadTestCasesFromModule } = await import('@/lib/testCases/loader');
-  for (const filePath of codeFilesToLoad) {
+  const loadErrors = new Map<string, string>(); // key → error detail
+  for (const [key, sourceFile] of filesByKey) {
     try {
-      const loaded = await loadTestCasesFromModule(filePath);
-      // Re-derive the relative key the stored docs were keyed on.
-      const relSourceFile = path.relative(process.cwd(), loaded.filePath);
+      const loaded = await loadTestCasesFromModule(path.resolve(cwd, sourceFile.replace(/\\/g, '/')));
+      // Re-derive the relative key the stored docs were keyed on — through
+      // the SAME normaliser, so the join cannot miss on separators.
+      const loadedKey = sourceFileKey(loaded.filePath, cwd);
+      const drifted: string[] = [];
       for (const tc of loaded.testCases) {
-        const stored = tcByNameAndFile.get(`${relSourceFile}\u0000${tc.name}`);
+        const stored = tcByKeyAndName.get(`${loadedKey}\u0000${tc.name}`) ?? tcByKeyAndName.get(`${key}\u0000${tc.name}`);
         if (stored && tc.evaluate) {
           evaluateFnMap.set(stored.id, tc.evaluate as EvaluateFn);
           testHookScopes.set(stored.id, {
             sourceFile: loaded.filePath,
             describePath: tc.benchmarkPath,
           });
+          // The file on disk is the executable truth (that is the SDK's
+          // contract), but the stored doc remembers the hash it was
+          // imported at. Say so loudly when they disagree — the run is
+          // executing a body the stored test case never saw. Not fatal:
+          // editing an eval file and re-running from the UI is a normal
+          // loop; re-import (`benchmark -f`) refreshes the stored hash.
+          const storedHash = (stored as any).sourceHash as string | undefined;
+          if (storedHash && tc.hash && storedHash !== tc.hash) drifted.push(tc.name);
         }
+      }
+      if (drifted.length > 0) {
+        console.warn(
+          `[SourceResolver] source drift: "${sourceFile}" on disk no longer matches the stored sourceHash for ` +
+          `${drifted.length} test case(s) (${drifted.map(n => JSON.stringify(n)).join(', ')}) — running the CURRENT file; ` +
+          `re-import with \`benchmark -f ${sourceFile}\` to refresh the stored definition.`
+        );
       }
       if (loaded.hooks && loaded.hooks.length > 0) {
         hooksByFile.set(loaded.filePath, loaded.hooks);
       }
     } catch (loadErr: any) {
-      // Non-fatal: a missing/!broken file just means those test cases run
-      // without a code body (classic judge path). Mirrors prior behavior.
-      debug('SourceResolver', `Failed to re-resolve code file ${filePath}: ${loadErr?.message ?? loadErr}`);
+      loadErrors.set(key, String(loadErr?.message ?? loadErr).split('\n')[0]);
     }
+  }
+
+  // Every stored code test case must now have a body. Anything left over is
+  // a hard error — fail the run before it starts rather than silently
+  // switching that case to the classic judge path.
+  const unresolvable: UnresolvableSourceFile[] = [];
+  for (const { tc, sourceFile, key } of codeTestCases) {
+    if (evaluateFnMap.has(tc.id)) continue;
+    const detail = loadErrors.get(key);
+    unresolvable.push({
+      testCaseId: tc.id,
+      testCaseName: tc.name,
+      sourceFile,
+      reason: detail !== undefined ? 'load-failed' : 'no-matching-test',
+      ...(detail !== undefined ? { detail } : {}),
+    });
+  }
+  if (unresolvable.length > 0) {
+    const err = new UnresolvableSourceFilesError(unresolvable, cwd);
+    debug('SourceResolver', err.message);
+    throw err;
   }
 
   return { evaluateFnMap, hooksByFile, testHookScopes };

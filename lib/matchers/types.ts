@@ -61,6 +61,12 @@ export interface MatcherResult {
   reasoning?: string;
   /** Model used by the judge for this matcher. */
   model?: string;
+  /**
+   * Evaluator id the judge call actually sent (`/api/judge` `evaluatorId`),
+   * after the run-level binding was applied. Per-call truth for the
+   * report-level `judgeApplied` summary; undefined = server default.
+   */
+  evaluatorId?: string;
 
   // ─── llm-judge enriched fields ───
   // Optional fields populated for `method: 'llm-judge'` entries when the

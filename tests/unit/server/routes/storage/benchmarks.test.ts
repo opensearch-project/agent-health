@@ -1123,6 +1123,8 @@ describe('Experiments Storage Routes', () => {
       mockUpdate.mockResolvedValue({ body: {} });
       // getAllTestCases calls the adapter for real test cases
       mockTestCasesGetAll.mockResolvedValue({ items: [], total: 0 });
+      // Full bodies are fetched by id; the demo id resolves to nothing here.
+      mockTestCasesGetById.mockResolvedValue(null);
       mockSearch.mockResolvedValue({
         body: { hits: { hits: [] } },
       });
@@ -1178,6 +1180,8 @@ describe('Experiments Storage Routes', () => {
         expectedOutcomes: ['ok'],
       };
       mockTestCasesGetAll.mockResolvedValue({ items: [fullTestCase], total: 1 });
+      // The route now fetches full bodies BY ID (not a size-capped scan).
+      mockTestCasesGetById.mockImplementation(async (id: string) => (id === 'tc-1' ? fullTestCase : null));
       mockImagesCreate.mockResolvedValue({ digest: 'sha256:whatever-create-returns' });
 
       const completedRun = {
@@ -1222,6 +1226,69 @@ describe('Experiments Storage Routes', () => {
       expect(typeof persistedRun.imageDigest).toBe('string');
     });
 
+    it('answers 409 JSON BEFORE opening SSE or persisting a run when a stored code-SDK test case\'s sourceFile is not resolvable from cwd', async () => {
+      mockGet.mockResolvedValue({
+        body: {
+          found: true,
+          _source: { id: 'exp-123', name: 'Code Benchmark', testCaseIds: ['tc-code'], runs: [] },
+        },
+      });
+      mockUpdate.mockResolvedValue({ body: {} });
+      // A code-imported test case whose eval file does not exist relative to
+      // THIS process's cwd — pre-fix this silently ran the classic judge path.
+      const codeCase = { id: 'tc-code', name: 'code case', initialPrompt: 'p', context: [], sourceFile: 'tmp-evals/definitely-missing.eval.mjs' };
+      mockTestCasesGetAll.mockResolvedValue({ items: [codeCase], total: 1 });
+      mockTestCasesGetById.mockImplementation(async (id: string) => (id === 'tc-code' ? codeCase : null));
+
+      const { req, res } = createMocks(
+        { id: 'exp-123' },
+        { name: 'Run', agentKey: 'agent', modelId: 'model' }
+      );
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining(
+            `Test case "code case" references source file "tmp-evals/definitely-missing.eval.mjs" which is not resolvable from cwd ${process.cwd()}`
+          ),
+        })
+      );
+      // Fail-fast: no SSE stream, no run doc persisted, no execution.
+      expect(res.flushHeaders).not.toHaveBeenCalled();
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockExecuteRun).not.toHaveBeenCalled();
+    });
+
+    it('refuses to start (503) when the test-case fetch throws — an unknown set can hide code-backed cases (codex_review: no silent classic-path escape hatch)', async () => {
+      mockGet.mockResolvedValue({
+        body: {
+          found: true,
+          _source: { id: 'exp-123', name: 'Code Benchmark', testCaseIds: ['tc-1'], runs: [] },
+        },
+      });
+      mockUpdate.mockResolvedValue({ body: {} });
+      mockTestCasesGetAll.mockResolvedValue({ items: [], total: 0 });
+      mockTestCasesGetById.mockRejectedValue(new Error('storage read timeout'));
+
+      const { req, res } = createMocks(
+        { id: 'exp-123' },
+        { name: 'Run', agentKey: 'agent', modelId: 'model' }
+      );
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('storage read timeout') })
+      );
+      expect(res.flushHeaders).not.toHaveBeenCalled();
+      expect(mockExecuteRun).not.toHaveBeenCalled();
+    });
+
     it('refuses to stamp a digest computed from a PARTIAL test-case set (codex_review finding: a partial digest is a wrong identity, not a harmless skip)', async () => {
       mockGet.mockResolvedValue({
         body: {
@@ -1231,10 +1298,9 @@ describe('Experiments Storage Routes', () => {
       });
       mockUpdate.mockResolvedValue({ body: {} });
       // Only tc-1 resolves -- tc-2 is missing (deleted, corpus paging gap, etc).
-      mockTestCasesGetAll.mockResolvedValue({
-        items: [{ id: 'tc-1', name: 'TC One', initialPrompt: 'do the thing' }],
-        total: 1,
-      });
+      const onlyOne = { id: 'tc-1', name: 'TC One', initialPrompt: 'do the thing' };
+      mockTestCasesGetAll.mockResolvedValue({ items: [onlyOne], total: 1 });
+      mockTestCasesGetById.mockImplementation(async (id: string) => (id === 'tc-1' ? onlyOne : null));
 
       const completedRun = {
         id: 'run-123',
@@ -1272,10 +1338,9 @@ describe('Experiments Storage Routes', () => {
         },
       });
       mockUpdate.mockResolvedValue({ body: {} });
-      mockTestCasesGetAll.mockResolvedValue({
-        items: [{ id: 'tc-1', name: 'TC One', initialPrompt: 'do the thing' }],
-        total: 1,
-      });
+      const tcOne = { id: 'tc-1', name: 'TC One', initialPrompt: 'do the thing' };
+      mockTestCasesGetAll.mockResolvedValue({ items: [tcOne], total: 1 });
+      mockTestCasesGetById.mockImplementation(async (id: string) => (id === 'tc-1' ? tcOne : null));
       mockImagesCreate.mockRejectedValue(new Error('images index down'));
 
       const completedRun = {

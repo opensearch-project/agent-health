@@ -523,6 +523,56 @@ export interface TestCaseRun {
    * existed. See server/services/piAgenticJudgeService.ts.
    */
   judgeMode?: 'trajectory-only' | 'trace-tools';
+  /**
+   * What the SDK judge binding ACTUALLY sent to `/api/judge` for this
+   * report's `judge()` calls, per field, with where each value came from.
+   * Stamped by the runner from the bound judge fixture after the test body
+   * finishes (only when the body made at least one judge call). Distinct
+   * from {@link evaluatorId} / {@link judgeModelId}, which are the run-level
+   * *labels* — pre-fix a body's per-call pin could win the request while the
+   * label still named the run-level selection, so the verdict came from one
+   * judge and the report was labelled with another. See
+   * `bindJudge(defaults, { authoritative: true })` in lib/testCases/judge.ts.
+   */
+  judgeApplied?: JudgeApplied;
+  /**
+   * Body pins the run-level (authoritative) judge selection overrode — one
+   * entry per `(field, bodyValue)`. Present only when a `judge(...)` call in
+   * the test body asked for a different evaluator/model than the run
+   * selected. The run selection was applied; this records the disagreement
+   * so the UI can flag it instead of silently showing a clean report.
+   */
+  judgeSelectionConflicts?: JudgeSelectionConflict[];
+}
+
+/** Where an applied judge-selection value came from. */
+export type JudgeSelectionSource =
+  /** The run-level selection (UI / API / CLI `-e` / `--judge-model`). */
+  | 'run'
+  /** A per-call pin inside the test body (only applies when the run did not select the field). */
+  | 'body'
+  /** Neither — the server resolved its default. */
+  | 'default'
+  /** Per-call body pins DIVERGED across this report's judge() calls (only possible for a field the run left unselected); no single value applies — see matcherResults[].evaluatorId / .model. */
+  | 'mixed';
+
+/** Per-field record of what the judge binding actually applied for a report. */
+export interface JudgeApplied {
+  /** Evaluator id sent to `/api/judge` (undefined = server default, or `'mixed'` per-call body pins). */
+  evaluatorId?: string;
+  evaluatorIdSource: JudgeSelectionSource;
+  /** Judge model id sent to `/api/judge` as `modelId` (undefined = server default, or `'mixed'` per-call body pins). */
+  modelId?: string;
+  modelIdSource: JudgeSelectionSource;
+}
+
+/** A body pin that the authoritative run-level selection overrode. */
+export interface JudgeSelectionConflict {
+  field: 'evaluatorId' | 'modelId';
+  /** What the run selected (and what was applied). */
+  runValue: string;
+  /** What the test body asked for (ignored). */
+  bodyValue: string;
 }
 
 // Alias for backwards compatibility during migration

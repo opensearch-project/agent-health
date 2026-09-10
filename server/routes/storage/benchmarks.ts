@@ -1146,13 +1146,52 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
     // both the image-digest stamp below and the SDK code-import
     // re-materialization further down. `allTestCases`/`testCaseMap` above
     // only carry (id, name) for cheap progress-display lookups.
+    //
+    // Fetched by id (not a `getAll(size:10000)` scan): a page cap or a
+    // transient read failure used to yield a PARTIAL/empty set, which then
+    // silently skipped code-body re-materialization — the exact silent
+    // classic-path fallback this route must not have. A fetch that throws
+    // is fatal here: we cannot prove the benchmark has no code-backed test
+    // cases, so we refuse to start rather than guess. Ids that resolve to
+    // no document are simply absent (the run reports them as not found).
     let fullTestCases: TestCase[] = [];
     try {
-      const allFull = await getStorageModule().testCases.getAll({ size: 10000 });
-      const requested = new Set(benchmark.testCaseIds);
-      fullTestCases = allFull.items.filter(tc => requested.has(tc.id));
+      const fetched = await Promise.all(
+        benchmark.testCaseIds.map(tcId => storage.testCases.getById(tcId)),
+      );
+      fullTestCases = fetched.filter((tc): tc is TestCase => !!tc);
     } catch (err: any) {
-      console.warn(`[StorageAPI] Full test-case fetch failed (non-fatal, image digest/SDK re-materialization skipped): ${err.message}`);
+      console.error(`[StorageAPI] Test-case fetch failed for benchmark ${id}; refusing to start (cannot resolve code bodies): ${err.message}`);
+      return res.status(503).json({ error: `Could not load the benchmark's test cases: ${err.message}` });
+    }
+
+    // SDK code-import: re-materialize the code test bodies (+ hooks/scopes)
+    // for any of this benchmark's test cases that came from a .eval.js/.ts
+    // file. Centralized in sourceResolver (#245/#246) so this route and the
+    // evaluation-runs route share one code-import resolution path.
+    //
+    // Done HERE — before the SSE stream opens and before the run doc is
+    // persisted — because an unresolvable body is now a hard pre-start
+    // error (a stored code test case must run its body; silently falling
+    // back to the classic judge path made the verdict depend on the
+    // server's cwd). Pre-SSE we can still answer with a plain JSON error the
+    // CLI turns into a non-zero exit.
+    let evaluateFnMap: Map<string, (fixtures: any) => Promise<void> | void> | undefined;
+    let hooksByFile: Map<string, import('../../../lib/testCases/types.js').RegisteredHook[]> | undefined;
+    let testHookScopes: Map<string, { sourceFile?: string; describePath?: string }> | undefined;
+    try {
+      // Reuses the `fullTestCases` fetched above for image-digest stamping
+      // — one full-corpus fetch instead of two.
+      const resolved = await resolveCodeFnMapForStoredTestCases(fullTestCases);
+      if (resolved.evaluateFnMap.size > 0) {
+        evaluateFnMap = resolved.evaluateFnMap;
+        console.log(`[StorageAPI] SDK fnMap built with ${resolved.evaluateFnMap.size} entries`);
+      }
+      if (resolved.hooksByFile.size > 0) hooksByFile = resolved.hooksByFile;
+      if (resolved.testHookScopes.size > 0) testHookScopes = resolved.testHookScopes;
+    } catch (err: any) {
+      console.error(`[StorageAPI] SDK code-body resolution failed for benchmark ${id}: ${err.message}`);
+      return res.status(409).json({ error: err.message });
     }
 
     // Stamp the content digest of this run's evaluation conditions and
@@ -1223,27 +1262,6 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
 
     // Handle client disconnect - execution continues in background
     req.on('close', () => {});
-
-    // SDK code-import: re-materialize the code test bodies (+ hooks/scopes)
-    // for any of this benchmark's test cases that came from a .eval.js/.ts
-    // file. Centralized in sourceResolver (#245/#246) so this route and the
-    // evaluation-runs route share one code-import resolution path.
-    let evaluateFnMap: Map<string, (fixtures: any) => Promise<void> | void> | undefined;
-    let hooksByFile: Map<string, import('../../../lib/testCases/types.js').RegisteredHook[]> | undefined;
-    let testHookScopes: Map<string, { sourceFile?: string; describePath?: string }> | undefined;
-    try {
-      // Reuses the `fullTestCases` fetched above for image-digest stamping
-      // — one full-corpus fetch instead of two.
-      const resolved = await resolveCodeFnMapForStoredTestCases(fullTestCases);
-      if (resolved.evaluateFnMap.size > 0) {
-        evaluateFnMap = resolved.evaluateFnMap;
-        console.log(`[StorageAPI] SDK fnMap built with ${resolved.evaluateFnMap.size} entries`);
-      }
-      if (resolved.hooksByFile.size > 0) hooksByFile = resolved.hooksByFile;
-      if (resolved.testHookScopes.size > 0) testHookScopes = resolved.testHookScopes;
-    } catch (err: any) {
-      console.warn(`[StorageAPI] SDK fn-map re-resolution failed (non-fatal): ${err.message}`);
-    }
 
     try {
       // Execute the run

@@ -59,6 +59,15 @@ interface AgentResults {
   passed: number;
   failed: number;
   reports?: TestCaseRun[];
+  /**
+   * Set when the server refused to START the run (e.g. a stored code-SDK
+   * test case whose `sourceFile` is not resolvable from the server's cwd —
+   * `POST /execute` answers 409 before any run doc exists). Distinct from a
+   * run that started and then failed: the command must exit non-zero for a
+   * run that never happened, or a scripted `benchmark -n …` would report a
+   * clean 0/0 and succeed.
+   */
+  startupError?: string;
 }
 
 /**
@@ -326,6 +335,13 @@ async function runBenchmarkForAgent(
       } else {
         spinner.fail(`${agent.name}: ${chalk.red('Failed')} - ${errorMessage}`);
       }
+    }
+
+    // The run never started (no `started` event / no runId): a pre-start
+    // refusal such as an unresolvable code-SDK `sourceFile`. Record it so the
+    // command exits non-zero instead of printing a clean 0/0 summary.
+    if (!startedRunId) {
+      results.startupError = errorMessage;
     }
 
     // Print helpful hints based on the error
@@ -1312,6 +1328,19 @@ export function createBenchmarkCommand(): Command {
           console.log(chalk.gray(`Server still running on port ${serverConfig.port}`));
           console.log(chalk.gray(`  Use --stop-server flag to stop after benchmark`));
           console.log(chalk.gray(`  Or manually: kill $(lsof -t -i:${serverConfig.port})`));
+        }
+
+        // A run the server refused to start is a failed command, not a 0/0
+        // success. Set the exit code (rather than process.exit) so the
+        // finally-block server cleanup below still runs.
+        const startupFailures = allResults.filter(r => r.startupError);
+        if (startupFailures.length > 0) {
+          console.log('');
+          console.error(chalk.red(`  Error: ${startupFailures.length} run(s) could not be started:`));
+          for (const r of startupFailures) {
+            console.error(chalk.red(`    - ${r.agent.name}: ${r.startupError}`));
+          }
+          process.exitCode = 1;
         }
       } finally {
         // Cleanup server based on shouldStopServer flag
