@@ -162,6 +162,26 @@ describe('resolveCodeFnMapForStoredTestCases', () => {
     expect(mockLoad).toHaveBeenCalledTimes(1);
   });
 
+  it('warns (does not fail) when the file on disk no longer matches the stored sourceHash — the CURRENT file runs', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const evalA = jest.fn();
+    mockLoad.mockResolvedValue({
+      filePath: abs('evals/drift.eval.js'),
+      testCases: [{ name: 'first', evaluate: evalA, hash: 'hash-on-disk' }, { name: 'second', evaluate: jest.fn(), hash: 'same' }],
+      hooks: [],
+    });
+    const r = await resolveCodeFnMapForStoredTestCases([
+      { ...stored('id-1', 'first', 'evals/drift.eval.js'), sourceHash: 'hash-at-import' } as any,
+      { ...stored('id-2', 'second', 'evals/drift.eval.js'), sourceHash: 'same' } as any,
+    ]);
+    expect(r.evaluateFnMap.get('id-1')).toBe(evalA);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('source drift');
+    expect(String(warn.mock.calls[0][0])).toContain('"first"');
+    expect(String(warn.mock.calls[0][0])).not.toContain('"second"');
+    warn.mockRestore();
+  });
+
   it('HARD ERROR: a code file that fails to load throws UnresolvableSourceFilesError naming the test case, file and cwd', async () => {
     mockLoad.mockRejectedValue(new Error("Cannot find module '/x/evals/missing.eval.js'"));
     const p = resolveCodeFnMapForStoredTestCases([

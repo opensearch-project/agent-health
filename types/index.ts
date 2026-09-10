@@ -1070,14 +1070,16 @@ export type JudgeSelectionSource =
   /** A per-call pin inside the test body (only applies when the run did not select the field). */
   | 'body'
   /** Neither — the server resolved its default. */
-  | 'default';
+  | 'default'
+  /** Per-call body pins DIVERGED across this report's judge() calls (only possible for a field the run left unselected); no single value applies — see matcherResults[].evaluatorId / .model. */
+  | 'mixed';
 
 /** Per-field record of what the judge binding actually applied for a report. */
 export interface JudgeApplied {
-  /** Evaluator id sent to `/api/judge` (undefined = server default, or divergent per-call body pins). */
+  /** Evaluator id sent to `/api/judge` (undefined = server default, or `'mixed'` per-call body pins). */
   evaluatorId?: string;
   evaluatorIdSource: JudgeSelectionSource;
-  /** Judge model id sent to `/api/judge` as `modelId` (undefined = server default, or divergent per-call body pins). */
+  /** Judge model id sent to `/api/judge` as `modelId` (undefined = server default, or `'mixed'` per-call body pins). */
   modelId?: string;
   modelIdSource: JudgeSelectionSource;
 }

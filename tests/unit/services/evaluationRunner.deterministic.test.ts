@@ -470,9 +470,10 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
     const overrideInit = fetchMock.mock.calls[0][1] as RequestInit;
     const overrideBody = JSON.parse(overrideInit.body as string);
     expect(overrideBody.evaluatorId).toBe('system-rca-default');
-    expect(capturedJudge.selection.conflicts).toEqual([
-      { field: 'evaluatorId', runValue: 'system-rca-default', bodyValue: 'user:override' },
-    ]);
+    // (The conflict record itself is asserted on the persisted report in the
+    // 'run-level evaluator/judge model WIN over body pins' test below — the
+    // fixture the body sees is a plain JudgeFn; selection telemetry is a
+    // runner concern, not SDK surface.)
   });
 
   it('does not set evaluatorId on the body when run.evaluatorId is undefined (server uses default)', async () => {

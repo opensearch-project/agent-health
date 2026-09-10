@@ -50,7 +50,7 @@ import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } fro
 import { createAgentFixture } from '@/lib/testCases/agentFixture';
 import type { AgentRunOptions } from '@/lib/testCases/agentFixture';
 import { evaluate as evaluateFixture } from '@/lib/testCases/evaluators';
-import { judge, bindJudge, clearJudgeCache, type BoundJudgeFn } from '@/lib/testCases/judge';
+import { createRunJudgeBinding, clearJudgeCache, type RunJudgeBinding } from '@/lib/testCases/judge';
 import { stampJudgeSelection } from './judgeSelection';
 import { expect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
@@ -214,7 +214,13 @@ export async function executeEvaluationRun(
     hookDescriptors,
     () => ({
       result: {} as any,            // overwritten by runner with real EvalResult
-      judge,
+      // Hook bodies (beforeAll/beforeEach/…) that call `judge()` get the SAME
+      // run-level authoritative binding the test body gets — pre-fix hooks
+      // received the unbound `judge` and ignored the run's evaluator/model
+      // entirely. Fresh binding per factory call; its snapshot is not folded
+      // into any report (hook verdicts are replayed onto tests by the
+      // orchestrator; per-call truth is on each MatcherResult).
+      judge: createRunJudgeBinding({ evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() }).judge,
       traces: emptyTracesAccessor(),
       expect,
       testInfo: { name: '' },       // overwritten by orchestrator
@@ -544,7 +550,7 @@ export async function executeEvaluationRun(
             // concurrent tests never share verdicts — RFC 004). The judge
             // fixture is pre-bound to the run-level evaluator + model (#257).
             let fixtures: TestFixtures | undefined;
-            let boundJudge: BoundJudgeFn | undefined;
+            let judgeBinding: RunJudgeBinding | undefined;
             const { results: matcherResults, error: evalError } = await runInSession(async () => {
               const before = await hookOrchestrator.beforeTest(desc);
               for (const r of before.matcherResults) recordVerdict(r);
@@ -565,16 +571,13 @@ export async function executeEvaluationRun(
               // `authoritative`: the run-level selection WINS over per-call
               // pins in the body (recorded as conflicts, never applied) —
               // the person who launched the run chose the judge.
-              boundJudge = bindJudge(
-                { evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() },
-                { authoritative: true },
-              );
+              judgeBinding = createRunJudgeBinding({ evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() });
               fixtures = {
                 ...before.fixtures,
                 result: emptyResult,
                 agent: agentFixture,
                 traces: tracesView,
-                judge: boundJudge,
+                judge: judgeBinding.judge,
                 evaluate: evaluateFixture,
               };
               const arg = Object.assign(emptyResult, { ...fixtures, result: emptyResult }) as any;
@@ -642,7 +645,7 @@ export async function executeEvaluationRun(
             // overrode; re-stamp evaluatorId/judgeModelId so the label names
             // the judge that produced the verdict. One warn per conflicting
             // field, via the runner's own logging.
-            stampJudgeSelection(report, boundJudge?.selection, run, {
+            stampJudgeSelection(report, judgeBinding?.snapshot(), run, {
               testCaseId,
               testCaseName: testCase.name,
               logPrefix: '[EvaluationRunner]',

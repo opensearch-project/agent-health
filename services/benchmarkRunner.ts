@@ -55,7 +55,7 @@ import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } fro
 import { createAgentFixture } from '@/lib/testCases/agentFixture';
 import type { AgentRunOptions } from '@/lib/testCases/agentFixture';
 import { evaluate as evaluateFixture } from '@/lib/testCases/evaluators';
-import { judge as judgeFn, bindJudge, clearJudgeCache, type BoundJudgeFn } from '@/lib/testCases/judge';
+import { createRunJudgeBinding, clearJudgeCache, type RunJudgeBinding } from '@/lib/testCases/judge';
 import { stampJudgeSelection } from './judgeSelection';
 import { expect as ahExpect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
@@ -274,7 +274,9 @@ export async function executeRun(
     hookDescriptors,
     () => ({
       result: {} as any,
-      judge: judgeFn,
+      // Same run-level authoritative binding as the test body (see
+      // evaluationRunner.ts for rationale).
+      judge: createRunJudgeBinding({ evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() }).judge,
       traces: emptyTracesAccessor(),
       expect: ahExpect,
       testInfo: { name: '' },
@@ -490,7 +492,7 @@ export async function executeRun(
             // judge model (#257) as AUTHORITATIVE: per-call pins in the body
             // that disagree are recorded as conflicts, not applied.
             let fixtures: TestFixtures | undefined;
-            let boundJudge: BoundJudgeFn | undefined;
+            let judgeBinding: RunJudgeBinding | undefined;
             const { results: matcherResults, error: evalError } = await runInSession(async () => {
               const before = await hookOrchestrator.beforeTest(desc);
               for (const r of before.matcherResults) recordVerdict(r);
@@ -500,16 +502,13 @@ export async function executeRun(
               // leaks into the judge call. serverUrl is pinned to this
               // server's actual bound URL so the SDK judge never defaults
               // to 4001 / a foreign instance.
-              boundJudge = bindJudge(
-                { evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() },
-                { authoritative: true },
-              );
+              judgeBinding = createRunJudgeBinding({ evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() });
               fixtures = {
                 ...before.fixtures,
                 result: emptyResult,
                 agent: agentFixture,
                 traces: tracesView,
-                judge: boundJudge,
+                judge: judgeBinding.judge,
                 evaluate: evaluateFixture,
               };
               try {
@@ -553,7 +552,7 @@ export async function executeRun(
             // its kind, or `'none'` when the body made no LLM judge call.
             Object.assign(report, buildSdkJudgeIdentityPatch(matcherResults, run.judgeModelId));
             // Truthful judge labels + conflict record (see services/judgeSelection.ts).
-            stampJudgeSelection(report, boundJudge?.selection, run, {
+            stampJudgeSelection(report, judgeBinding?.snapshot(), run, {
               testCaseId,
               testCaseName: testCase.name,
               logPrefix: '[BenchmarkRunner]',

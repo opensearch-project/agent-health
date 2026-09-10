@@ -444,9 +444,13 @@ await judge(result, 'follows the SOP', { model: 'claude-opus-4' });
 // → sends modelId: claude-opus-4 (body applies — the run didn't select one)
 ```
 
-If you call `bindJudge(defaults)` yourself outside a runner, the plain form
-keeps per-call-wins semantics; pass `{ authoritative: true }` to get the
-runner's behaviour.
+If you call `bindJudge(defaults)` yourself outside a runner, it keeps the
+plain per-call-wins semantics — the authoritative binding
+(`createRunJudgeBinding`) is runner-internal and not part of the SDK surface.
+When the run leaves a field unselected and the body pins *different* values
+for it across calls, `judgeApplied` reports no single value for that field
+with source `'mixed'`; the per-call value is on each `llm-judge`
+`matcherResults[]` entry (`evaluatorId` / `model`).
 
 The **imported** `judge` (from `require('@opensearch-project/agent-health')`)
 is always the unbound version — use it when you genuinely want the server's
