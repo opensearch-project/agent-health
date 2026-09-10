@@ -151,6 +151,11 @@ export const BenchmarkRunsPage2: React.FC = () => {
   // progress; once it drops (or ends without `completed`) the progress panel
   // falls back to the polled doc's `results` counts.
   const [isStreamLive, setIsStreamLive] = useState(false);
+  // Synchronous re-entrancy guard for handleStartRun: React state (and the
+  // disabled attribute) only catch a second click after the next render, so
+  // a fast double-click on "Start Run" could otherwise POST twice and the
+  // second `started` would overwrite the run this page tracks.
+  const launchInFlightRef = useRef(false);
   const [useCaseStatuses, setUseCaseStatuses] = useState<UseCaseRunStatus[]>([]);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -531,6 +536,8 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
   const handleStartRun = async () => {
     if (!benchmark) return;
+    if (launchInFlightRef.current) return;
+    launchInFlightRef.current = true;
     setIsRunConfigOpen(false);
     const initialStatuses: UseCaseRunStatus[] = (benchmark.testCaseIds || []).map(id => {
       const testCase = testCases.find(tc => tc.id === id);
@@ -595,6 +602,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
         ));
       }
     } finally {
+      launchInFlightRef.current = false;
       setIsLaunching(false);
       setIsStreamLive(false);
     }

@@ -649,6 +649,23 @@ describe('BenchmarkRunsPage2 — Add Run header tracks the run document, not the
     expect(console.error).toHaveBeenCalledWith('Error running benchmark:', expect.any(Error));
   });
 
+  it('a fast double-click on Start Run posts exactly once (synchronous re-entrancy guard)', async () => {
+    const { finish } = mockStream('hang');
+    mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [launchedDoc('running')] });
+    await renderPage();
+    await act(async () => { await Promise.resolve(); });
+
+    fireEvent.click(screen.getByTestId('add-run-button'));
+    await waitFor(() => expect(screen.getByTestId('run-config-dialog')).toBeTruthy());
+    const startBtn = screen.getByRole('button', { name: /Start Run/ });
+    await act(async () => {
+      fireEvent.click(startBtn);
+      fireEvent.click(startBtn); // same tick — before React re-renders/disables anything
+    });
+    expect(mockExecuteBenchmarkRun).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(); });
+  });
+
   it('the "already in progress" guard uses the derived state (alert while running, dialog when idle)', async () => {
     const { finish } = mockStream('hang');
     mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [launchedDoc('running')] });

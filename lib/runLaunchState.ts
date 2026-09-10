@@ -49,9 +49,18 @@ export interface DeriveAddRunButtonStateInput {
   launching: boolean;
   /** runId from the `started` event; null when nothing has been launched. */
   launchedRunId: string | null;
-  /** Wall-clock ms when `launchedRunId` was set (for the missing-doc grace). */
-  launchedAt?: number | null;
-  /** The run documents this page currently knows about (polled). */
+  /**
+   * Wall-clock ms when `launchedRunId` was set — anchors the missing-doc
+   * grace. Required alongside `launchedRunId`: an id with no timestamp is a
+   * caller bug and is treated as "no grace" (fail closed to `idle`), never as
+   * a free 30 s of "Running…".
+   */
+  launchedAt: number | null;
+  /**
+   * The run documents this page currently knows about (polled). The launched
+   * run is the NEWEST doc for this benchmark and the list is newest-first, so
+   * it is in the first page for its whole lifetime in practice.
+   */
   runs: ReadonlyArray<{ id: string; status?: BenchmarkRunStatus }>;
   /** Injectable clock for tests. */
   now?: number;
@@ -65,14 +74,14 @@ export interface DeriveAddRunButtonStateInput {
  * - runId known, doc terminal (completed / failed / cancelled) → `idle`
  */
 export function deriveAddRunButtonState(input: DeriveAddRunButtonStateInput): AddRunButtonState {
-  const { launching, launchedRunId, runs } = input;
+  const { launching, launchedRunId, launchedAt, runs } = input;
   if (launching && !launchedRunId) return 'launching';
   if (!launchedRunId) return 'idle';
 
   const doc = runs.find(r => r.id === launchedRunId);
   if (!doc) {
+    if (launchedAt === null) return 'idle';
     const now = input.now ?? Date.now();
-    const launchedAt = input.launchedAt ?? now;
     return now - launchedAt <= LAUNCHED_RUN_DOC_GRACE_MS ? 'running' : 'idle';
   }
   return isTerminalRunStatus(doc.status) ? 'idle' : 'running';

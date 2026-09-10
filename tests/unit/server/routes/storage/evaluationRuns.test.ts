@@ -346,7 +346,13 @@ describe('Evaluation Runs API', () => {
     afterEach(() => { jest.useRealTimers(); });
 
     function fakeRes(overrides: Partial<{ destroyed: boolean; writableEnded: boolean }> = {}) {
-      return { destroyed: false, writableEnded: false, write: jest.fn(), ...overrides } as any;
+      const listeners: Record<string, Array<() => void>> = {};
+      return {
+        destroyed: false, writableEnded: false, write: jest.fn(),
+        once: jest.fn((event: string, cb: () => void) => { (listeners[event] ||= []).push(cb); }),
+        emit: (event: string) => { for (const cb of listeners[event] || []) cb(); },
+        ...overrides,
+      } as any;
     }
 
     it('writes a comment frame every interval and stops (idempotently) when told to', () => {
@@ -365,18 +371,31 @@ describe('Evaluation Runs API', () => {
       expect(res.write).toHaveBeenCalledTimes(3);
     });
 
-    it('skips writes on a destroyed or ended response and swallows write errors (observer-only stream)', () => {
+    it('stops itself when the response closes (client disconnect mid-run leaves no ticking interval)', () => {
+      const res = fakeRes();
+      startSseHeartbeat(res, 10);
+      jest.advanceTimersByTime(25);
+      expect(res.write).toHaveBeenCalledTimes(2);
+      expect(res.once).toHaveBeenCalledWith('close', expect.any(Function));
+      res.emit('close');
+      res.destroyed = true;
+      jest.advanceTimersByTime(100);
+      expect(res.write).toHaveBeenCalledTimes(2);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('skips writes on a destroyed or ended response and clears itself; swallows write errors (observer-only stream)', () => {
       const dead = fakeRes({ destroyed: true });
-      const stopDead = startSseHeartbeat(dead, 10);
+      startSseHeartbeat(dead, 10);
       jest.advanceTimersByTime(35);
       expect(dead.write).not.toHaveBeenCalled();
-      stopDead();
+      expect(jest.getTimerCount()).toBe(0); // self-cleared on the first tick
 
       const ended = fakeRes({ writableEnded: true });
-      const stopEnded = startSseHeartbeat(ended, 10);
+      startSseHeartbeat(ended, 10);
       jest.advanceTimersByTime(35);
       expect(ended.write).not.toHaveBeenCalled();
-      stopEnded();
+      expect(jest.getTimerCount()).toBe(0);
 
       const throwing = fakeRes();
       throwing.write.mockImplementation(() => { throw new Error('EPIPE'); });

@@ -30,33 +30,33 @@ describe('deriveAddRunButtonState', () => {
   const T0 = 1_700_000_000_000;
 
   it('is idle when nothing has been launched', () => {
-    expect(deriveAddRunButtonState({ launching: false, launchedRunId: null, runs: [] })).toBe('idle');
+    expect(deriveAddRunButtonState({ launching: false, launchedRunId: null, launchedAt: null, runs: [] })).toBe('idle');
     expect(deriveAddRunButtonState({
-      launching: false, launchedRunId: null,
+      launching: false, launchedRunId: null, launchedAt: null,
       runs: [{ id: 'other', status: 'running' }], // someone else's in-flight run does not spin OUR button
     })).toBe('idle');
   });
 
   it('is launching while the POST is in flight and no `started` (runId) has arrived', () => {
-    expect(deriveAddRunButtonState({ launching: true, launchedRunId: null, runs: [] })).toBe('launching');
+    expect(deriveAddRunButtonState({ launching: true, launchedRunId: null, launchedAt: null, runs: [] })).toBe('launching');
   });
 
   it('is running once a runId is known and the polled doc is non-terminal', () => {
     expect(deriveAddRunButtonState({
-      launching: false, launchedRunId: 'r1', runs: [{ id: 'r1', status: 'running' }],
+      launching: false, launchedRunId: 'r1', launchedAt: T0, runs: [{ id: 'r1', status: 'running' }],
     })).toBe('running');
     expect(deriveAddRunButtonState({
-      launching: false, launchedRunId: 'r1', runs: [{ id: 'r1', status: 'pending' }],
+      launching: false, launchedRunId: 'r1', launchedAt: T0, runs: [{ id: 'r1', status: 'pending' }],
     })).toBe('running');
     // A status-less (legacy-shaped) doc is treated as still running.
     expect(deriveAddRunButtonState({
-      launching: false, launchedRunId: 'r1', runs: [{ id: 'r1' }],
+      launching: false, launchedRunId: 'r1', launchedAt: T0, runs: [{ id: 'r1' }],
     })).toBe('running');
   });
 
   it('a runId with `launching` still true is running (the doc is authoritative once we have an id)', () => {
     expect(deriveAddRunButtonState({
-      launching: true, launchedRunId: 'r1', runs: [{ id: 'r1', status: 'running' }],
+      launching: true, launchedRunId: 'r1', launchedAt: T0, runs: [{ id: 'r1', status: 'running' }],
     })).toBe('running');
   });
 
@@ -64,7 +64,7 @@ describe('deriveAddRunButtonState', () => {
     'returns to idle as soon as the polled doc is %s — regardless of any SSE connection',
     status => {
       expect(deriveAddRunButtonState({
-        launching: false, launchedRunId: 'r1', runs: [{ id: 'r1', status }],
+        launching: false, launchedRunId: 'r1', launchedAt: T0, runs: [{ id: 'r1', status }],
       })).toBe('idle');
     }
   );
@@ -84,7 +84,13 @@ describe('deriveAddRunButtonState', () => {
     })).toBe('idle');
   });
 
-  it('defaults the clock to Date.now() and launchedAt to now when omitted (missing doc → running)', () => {
-    expect(deriveAddRunButtonState({ launching: false, launchedRunId: 'r1', runs: [] })).toBe('running');
+  it('defaults the clock to Date.now() (missing doc launched just now → running)', () => {
+    expect(deriveAddRunButtonState({ launching: false, launchedRunId: 'r1', launchedAt: Date.now(), runs: [] })).toBe('running');
+  });
+
+  it('fails closed: a runId with NO launchedAt gets no grace (caller bug, never a free 30 s of "Running…")', () => {
+    expect(deriveAddRunButtonState({ launching: false, launchedRunId: 'r1', launchedAt: null, runs: [] })).toBe('idle');
+    // …but a present doc is still authoritative.
+    expect(deriveAddRunButtonState({ launching: false, launchedRunId: 'r1', launchedAt: null, runs: [{ id: 'r1', status: 'running' }] })).toBe('running');
   });
 });

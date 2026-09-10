@@ -121,24 +121,32 @@ export function getEvaluationRunSseHeartbeatMs(env: NodeJS.ProcessEnv = process.
 /**
  * Start writing `: ping` comment lines to an open SSE response every
  * `intervalMs`. Returns a stop function (idempotent). Writes are guarded the
- * same way sendSSE is: a dead socket is ignored, never thrown.
+ * same way sendSSE is: a dead socket is ignored, never thrown — and the timer
+ * stops itself as soon as the response closes, so a client that disconnects
+ * ten minutes into an hour-long run doesn't leave a ticking interval behind.
  */
 export function startSseHeartbeat(res: Response, intervalMs: number = getEvaluationRunSseHeartbeatMs()): () => void {
   if (intervalMs <= 0) return () => {};
-  let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
-    if (res.destroyed || res.writableEnded) return;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const stop = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+  timer = setInterval(() => {
+    if (res.destroyed || res.writableEnded) {
+      stop();
+      return;
+    }
     try {
       res.write(': ping\n\n');
     } catch {
       // Observer-only stream; the run continues regardless.
     }
   }, intervalMs);
-  return () => {
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
-    }
-  };
+  res.once('close', stop);
+  return stop;
 }
 
 // GET /api/storage/evaluation-runs - List evaluation runs

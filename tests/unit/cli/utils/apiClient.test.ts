@@ -1462,6 +1462,43 @@ describe('ApiClient', () => {
     }, 30000);
   });
 
+  describe('createEvaluationRun — SSE heartbeat contract', () => {
+    // The server writes `: ping` comment frames every 15 s on
+    // POST /api/storage/evaluation-runs (keep-alive for long runs). Every
+    // consumer of that stream must treat a comment-only frame as a no-op.
+    it('ignores `: ping` comment frames between events and still returns the completed run', async () => {
+      const encoder = new TextEncoder();
+      const frames = [
+        `event: started\ndata: ${JSON.stringify({ runId: 'eval-run-1', testCases: [] })}\n\n`,
+        ': ping\n\n',
+        ': pi', 'ng\n\n', // split across chunks
+        `event: progress\ndata: ${JSON.stringify({ runId: 'eval-run-1', completedCount: 1, totalTestCases: 1 })}\n\n`,
+        `event: completed\ndata: ${JSON.stringify({ id: 'eval-run-1', status: 'completed', results: {} })}\n\n`,
+      ];
+      let i = 0;
+      mockFetch.mockResolvedValue({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: jest.fn().mockImplementation(() => i < frames.length
+              ? Promise.resolve({ done: false, value: encoder.encode(frames[i++]) })
+              : Promise.resolve({ done: true, value: undefined })),
+          }),
+        },
+      });
+      const onEvent = jest.fn();
+
+      const run = await client.createEvaluationRun(
+        { sources: [{ type: 'benchmark', benchmarkId: 'b1' }] as any, agentKey: 'demo' },
+        onEvent
+      );
+
+      expect(run).toEqual({ id: 'eval-run-1', status: 'completed', results: {} });
+      // Only real events reach the callback — never a heartbeat.
+      expect(onEvent.mock.calls.map(c => c[0].type)).toEqual(['started', 'progress', 'completed']);
+    });
+  });
+
   describe('runEvaluation - SSE disconnect recovery', () => {
     function createSSEStream(events: any[], disconnectAfter?: number) {
       const encoder = new TextEncoder();
