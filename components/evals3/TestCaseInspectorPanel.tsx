@@ -30,14 +30,10 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
   testCase,
   status,
 }) => {
-  // Issue #242: an evaluator-error report has metricsStatus='error' and a
-  // cleared (null) passFailStatus. The runner derives status='errored'
-  // for these via getResultStatus(); the badge below must light up the
-  // amber ERRORED chip rather than falling through to PENDING.
-  const isErrored = status === 'errored' || report.metricsStatus === 'error';
-  const isPassed = !isErrored && (status === 'passed' || report.passFailStatus === 'passed');
-  const isFailed = !isErrored && (status === 'failed' || report.passFailStatus === 'failed');
-  const displayStatus = isErrored ? 'errored' : isFailed ? 'failed' : isPassed ? 'passed' : status;
+  // `status` is already verdict-aware (matcherResults wins over a later
+  // trace timeout). Do not re-promote metricsStatus=error here or the compact
+  // badge would contradict the Overview verdict (#407).
+  const displayStatus = status;
 
   const badgeConfig: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
     passed: { icon: <CheckCircle2 size={16} className="text-green-500 shrink-0" />, label: 'PASSED', cls: 'bg-green-100 text-green-700 border-green-300 dark:bg-green-500/15 dark:text-green-400 dark:border-green-500/30' },

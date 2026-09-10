@@ -150,6 +150,12 @@ module.exports = {
     // #428: definition-first test-case detail page hero has a focused
     // jsdom/RTL suite exercising its new rendering lines.
     'components/evals3/TestCaseDetailPage.tsx',
+    // Component coverage is currently opt-in while the global baseline is
+    // expanded incrementally. Include the verdict-first surfaces so their
+    // focused interaction tests contribute to patch and project coverage.
+    'components/CitationLink.tsx',
+    'components/RunDetailsContent.tsx',
+    'components/TestCaseRunsPage.tsx',
     '!**/__tests__/**',
     '!**/*.test.ts',
     '!**/dist/**',

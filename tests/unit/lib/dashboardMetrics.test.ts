@@ -10,7 +10,11 @@
  * of lib/dashboardMetrics.ts is exercised indirectly by its consumers.
  */
 
-import { AGENT_COLORS, getAgentColor } from '@/lib/dashboardMetrics';
+import {
+  AGENT_COLORS,
+  aggregateMetricsByBenchmarkAgent,
+  getAgentColor,
+} from '@/lib/dashboardMetrics';
 
 describe('getAgentColor', () => {
   it('honors an explicit AGENT_COLORS override', () => {
@@ -41,5 +45,34 @@ describe('getAgentColor', () => {
   it('always returns a non-empty hex-ish color string for an arbitrary key', () => {
     expect(getAgentColor('')).toMatch(/^#/);
     expect(getAgentColor('some-very-long-agent-key-with-many-characters-in-it')).toMatch(/^#/);
+  });
+});
+
+describe('dashboard pass-rate aggregation', () => {
+  it('uses matcher verdicts and excludes reports with no verdict', () => {
+    const benchmarks = [{
+      id: 'benchmark-1',
+      name: 'Benchmark',
+      runs: [{ id: 'run-1', agentKey: 'demo', createdAt: '2026-01-01T00:00:00.000Z' }],
+    }] as any;
+    const reports = [
+      {
+        id: 'passed', experimentRunId: 'run-1', status: 'completed',
+        metricsStatus: 'error', passFailStatus: null,
+        matcherResults: [{ method: 'llm-judge', role: 'gate', pass: true, score: 1 }],
+      },
+      {
+        id: 'failed', experimentRunId: 'run-1', status: 'completed',
+        passFailStatus: 'failed', metrics: { accuracy: 0 },
+      },
+      {
+        id: 'unjudged', experimentRunId: 'run-1', status: 'completed',
+        metricsStatus: 'error', passFailStatus: null,
+      },
+    ] as any;
+
+    const [result] = aggregateMetricsByBenchmarkAgent(benchmarks, reports, new Map());
+    expect(result.avgPassRate).toBe(50);
+    expect(result.runCount).toBe(1);
   });
 });
