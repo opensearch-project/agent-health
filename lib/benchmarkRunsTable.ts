@@ -188,8 +188,28 @@ export function applyRunFilters(rows: RunTableRow[], filters: RunFilter[]): RunT
 
 // ─── Sorting ─────────────────────────────────────────────────────────────────
 
-export type RunSortField = 'name' | 'agent' | 'model' | 'size' | 'passRate' | 'judge' | 'evaluator' | 'date';
+export type RunSortField =
+  | 'name' | 'agent' | 'model' | 'size' | 'passRate' | 'judge' | 'evaluator' | 'date'
+  // Telemetry columns (tokens · cost · LLM calls · median time/case). Their
+  // values live outside the row (fetched async by useRunTelemetry), so the
+  // sorter takes them through `RunSortTelemetry` below.
+  | 'tokens' | 'cost' | 'llmCalls' | 'timePerCase';
 export interface RunSort { field: RunSortField; dir: 'asc' | 'desc'; }
+
+/**
+ * Per-run telemetry values the sorter reads for the telemetry columns. Kept
+ * as a plain lookup (not on RunTableRow) so the row model stays derivable
+ * from the run alone and the async metrics can arrive later without
+ * rebuilding every row.
+ */
+export interface RunSortTelemetry {
+  totalTokens?: number;
+  costUsd?: number;
+  llmCalls?: number;
+  medianDurationMs?: number | null;
+  /** False when no spans were found — sorts below runs with data. */
+  hasSpans?: boolean;
+}
 
 export const DEFAULT_RUN_SORT: RunSort = { field: 'date', dir: 'desc' };
 
@@ -197,11 +217,15 @@ export function toggleRunSort(current: RunSort, field: RunSortField): RunSort {
   if (current.field === field) return { field, dir: current.dir === 'asc' ? 'desc' : 'asc' };
   // Numeric/date columns default to descending (biggest/newest first);
   // text columns to ascending.
-  const numeric: RunSortField[] = ['size', 'passRate', 'date'];
+  const numeric: RunSortField[] = ['size', 'passRate', 'date', 'tokens', 'cost', 'llmCalls', 'timePerCase'];
   return { field, dir: numeric.includes(field) ? 'desc' : 'asc' };
 }
 
-export function sortRunRows(rows: RunTableRow[], sort: RunSort): RunTableRow[] {
+export function sortRunRows(
+  rows: RunTableRow[],
+  sort: RunSort,
+  telemetryByRunId: Record<string, RunSortTelemetry | undefined> = {},
+): RunTableRow[] {
   const dir = sort.dir === 'asc' ? 1 : -1;
   const cmpNum = (a: number | null, b: number | null) => {
     // nulls always sink to the bottom regardless of direction
@@ -210,8 +234,26 @@ export function sortRunRows(rows: RunTableRow[], sort: RunSort): RunTableRow[] {
     if (b === null) return -1;
     return dir * (a - b);
   };
+  // Telemetry sums are only meaningful when spans were found; a run with no
+  // spans (or no metrics yet) sorts with the nulls, never as a "0".
+  const tel = (row: RunTableRow, pick: (t: RunSortTelemetry) => number | null | undefined): number | null => {
+    const t = telemetryByRunId[row.run.id];
+    if (!t || t.hasSpans === false) return null;
+    const v = pick(t);
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  };
+  const duration = (row: RunTableRow): number | null => {
+    // Median time/case comes from the runner's wall-clock, so it is valid
+    // even without spans.
+    const v = telemetryByRunId[row.run.id]?.medianDurationMs;
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  };
   return [...rows].sort((a, b) => {
     switch (sort.field) {
+      case 'tokens': return cmpNum(tel(a, t => t.totalTokens), tel(b, t => t.totalTokens));
+      case 'cost': return cmpNum(tel(a, t => t.costUsd), tel(b, t => t.costUsd));
+      case 'llmCalls': return cmpNum(tel(a, t => t.llmCalls), tel(b, t => t.llmCalls));
+      case 'timePerCase': return cmpNum(duration(a), duration(b));
       case 'name': return dir * a.run.name.localeCompare(b.run.name);
       case 'agent': return dir * a.agentName.localeCompare(b.agentName);
       case 'model': return dir * a.modelName.localeCompare(b.modelName);

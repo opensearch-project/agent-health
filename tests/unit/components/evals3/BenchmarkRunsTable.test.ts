@@ -234,3 +234,125 @@ describe('formatRunDate', () => {
     expect(formatRunDate('garbage', now)).toBe('—');
   });
 });
+
+// ─── Telemetry columns (Tokens · Cost · LLM calls · Time/case) ──────────────
+// Owner ask (2026-09-09): telemetry on the benchmark pages. Values come from
+// useRunTelemetry via `telemetryByRunId`; this pins the table's three cell
+// states (value / "—" + reason tooltip / loading skeleton) and that the new
+// columns are sortable.
+import { sortRunRows } from '@/lib/benchmarkRunsTable';
+import type { RunTelemetry } from '@/lib/runTelemetry';
+import {
+  TELEMETRY_NO_SPANS_TITLE, TELEMETRY_UNAVAILABLE_TITLE, TELEMETRY_NO_REPORTS_TITLE, telemetryDashTitle,
+} from '@/components/evals3/BenchmarkRunsTable';
+
+const tel = (over: Partial<RunTelemetry> = {}): RunTelemetry => ({
+  totalTokens: 5_900_000, costUsd: 20.19, llmCalls: 312, toolCalls: 118,
+  medianDurationMs: 44_000, spansCases: 4, totalCases: 4, hasSpans: true, partial: false, ...over,
+});
+
+describe('BenchmarkRunsTable — telemetry columns', () => {
+  it('adds Tokens / Cost / LLM calls / Time/case headers between Pass % and Judge', () => {
+    renderTable();
+    const headers = screen.getAllByRole('columnheader').map(h => h.textContent?.trim()).filter(Boolean);
+    expect(headers).toEqual(['Run', 'Agent', 'Model', 'Size', 'Pass %', 'Tokens', 'Cost', 'LLM calls', 'Time/case', 'Judge', 'J. Model', 'Date']);
+  });
+
+  it('renders compact values with detail tooltips when spans were found', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    renderTable({ rows: [row], telemetryByRunId: { r1: tel() } });
+    // The Tokens cell carries the cost as a CSS-hidden (lg:hidden) suffix so
+    // narrow viewports — where the Cost column is hidden — still show it as
+    // "5.9M · $20.19" in ONE cell.
+    expect(screen.getByTestId('run-tokens-cell').textContent).toBe('5.9M · $20.19');
+    expect(within(screen.getByTestId('run-tokens-cell')).getByText('· $20.19').className).toContain('lg:hidden');
+    expect(screen.getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('value');
+    expect(within(screen.getByTestId('run-tokens-cell')).getByText('5.9M').getAttribute('title')).toContain('5,900,000 tokens');
+    expect(within(screen.getByTestId('run-tokens-cell')).getByText('5.9M').getAttribute('title')).toContain('spans found for 4 of 4 cases');
+    expect(screen.getByTestId('run-cost-cell').textContent).toBe('$20.19');
+    expect(screen.getByTestId('run-llmcalls-cell').textContent).toBe('312');
+    expect(within(screen.getByTestId('run-llmcalls-cell')).getByText('312').getAttribute('title')).toContain('118 tool calls');
+    expect(screen.getByTestId('run-timepercase-cell').textContent).toBe('44 s');
+  });
+
+  it('prefixes ≥ when the metrics were flagged partial (size cap hit)', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    renderTable({ rows: [row], telemetryByRunId: { r1: tel({ partial: true }) } });
+    expect(within(screen.getByTestId('run-tokens-cell')).getByText('≥5.9M')).toBeTruthy();
+    expect(screen.getByTestId('run-llmcalls-cell').textContent).toBe('≥312');
+  });
+
+  it('hasSpans:false → "—" with the no-spans tooltip on span-derived cells; Time/case still shows the wall-clock', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    renderTable({ rows: [row], telemetryByRunId: { r1: tel({ hasSpans: false, spansCases: 0, totalTokens: 0, costUsd: 0, llmCalls: 0, medianDurationMs: 22_000 }) } });
+    for (const id of ['run-tokens-cell', 'run-cost-cell', 'run-llmcalls-cell']) {
+      const cell = screen.getByTestId(id);
+      expect(cell.textContent).toBe('—');
+      expect(cell.getAttribute('data-state')).toBe('empty');
+      expect(within(cell).getByText('—').getAttribute('title')).toBe(TELEMETRY_NO_SPANS_TITLE);
+    }
+    expect(screen.getByTestId('run-timepercase-cell').textContent).toBe('22 s');
+  });
+
+  it('spans present but zero cost → Cost reads "—" (not $0.00) while Tokens keeps its value', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    renderTable({ rows: [row], telemetryByRunId: { r1: tel({ costUsd: 0 }) } });
+    expect(screen.getByTestId('run-cost-cell').textContent).toBe('—');
+    expect(within(screen.getByTestId('run-cost-cell')).getByText('—').getAttribute('title')).toBe('Not recorded for this run');
+    expect(screen.getByTestId('run-tokens-cell').textContent).toBe('5.9M');
+  });
+
+  it('shows a skeleton while the run is in telemetryLoadingRunIds and no value has arrived', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    renderTable({ rows: [row], telemetryByRunId: {}, telemetryLoadingRunIds: new Set(['r1']) });
+    const cell = screen.getByTestId('run-tokens-cell');
+    expect(cell.getAttribute('data-state')).toBe('loading');
+    expect(within(cell).getByLabelText('Loading')).toBeTruthy();
+    expect(cell.textContent).toBe('');
+  });
+
+  it('telemetryUnavailable → every telemetry cell reads "—" with the unavailable tooltip; rest of the row still renders', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    renderTable({ rows: [row], telemetryByRunId: { r1: tel() }, telemetryUnavailable: true });
+    for (const id of ['run-tokens-cell', 'run-cost-cell', 'run-llmcalls-cell', 'run-timepercase-cell']) {
+      const cell = screen.getByTestId(id);
+      expect(cell.textContent).toBe('—');
+      expect(within(cell).getByText('—').getAttribute('title')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
+    }
+    expect(screen.getByTestId('run-size-cell').textContent).toBe('1');
+  });
+
+  it('a run with no roll-up at all (no reports) reads "—" with the no-reports tooltip', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    renderTable({ rows: [row], telemetryByRunId: {} });
+    expect(within(screen.getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe(TELEMETRY_NO_REPORTS_TITLE);
+  });
+
+  it('telemetryDashTitle precedence: unavailable > no reports > no spans > not recorded > value', () => {
+    expect(telemetryDashTitle({ telemetry: tel(), loading: false, unavailable: true }, true, '1')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
+    expect(telemetryDashTitle({ telemetry: undefined, loading: false, unavailable: false }, true, '1')).toBe(TELEMETRY_NO_REPORTS_TITLE);
+    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false, unavailable: false }, true, '1')).toBe(TELEMETRY_NO_SPANS_TITLE);
+    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false, unavailable: false }, false, '22 s')).toBe('');
+    expect(telemetryDashTitle({ telemetry: tel(), loading: false, unavailable: false }, true, null)).toBe('Not recorded for this run');
+    expect(telemetryDashTitle({ telemetry: tel(), loading: false, unavailable: false }, true, '1')).toBe('');
+  });
+
+  it('clicking the Tokens header sorts by tokens; sortRunRows orders by telemetry with no-span runs last', () => {
+    const a = buildRunTableRow(mkRun({ id: 'a' }), resolvers);
+    const b = buildRunTableRow(mkRun({ id: 'b' }), resolvers);
+    const c = buildRunTableRow(mkRun({ id: 'c' }), resolvers);
+    const telemetry = { a: tel({ totalTokens: 100 }), b: tel({ totalTokens: 900 }), c: tel({ hasSpans: false, totalTokens: 0 }) };
+    const { props } = renderTable({ rows: [a, b, c], telemetryByRunId: telemetry });
+    fireEvent.click(screen.getByRole('columnheader', { name: /Tokens/ }));
+    expect(props.onSort).toHaveBeenCalledWith('tokens');
+
+    expect(sortRunRows([a, b, c], { field: 'tokens', dir: 'desc' }, telemetry).map(r => r.run.id)).toEqual(['b', 'a', 'c']);
+    expect(sortRunRows([a, b, c], { field: 'tokens', dir: 'asc' }, telemetry).map(r => r.run.id)).toEqual(['a', 'b', 'c']);
+    // Time/case sorts by wall-clock, which a no-span run still has.
+    const t2 = { a: tel({ medianDurationMs: 30_000 }), b: tel({ medianDurationMs: 10_000 }), c: tel({ hasSpans: false, medianDurationMs: 50_000 }) };
+    expect(sortRunRows([a, b, c], { field: 'timePerCase', dir: 'desc' }, t2).map(r => r.run.id)).toEqual(['c', 'a', 'b']);
+    // Cost / LLM calls follow the same rule; missing telemetry sinks to the bottom either way.
+    expect(sortRunRows([a, b, c], { field: 'cost', dir: 'desc' }, { a: tel({ costUsd: 1 }), b: tel({ costUsd: 2 }) }).map(r => r.run.id)).toEqual(['b', 'a', 'c']);
+    expect(sortRunRows([a, b, c], { field: 'llmCalls', dir: 'asc' }, { a: tel({ llmCalls: 5 }), b: tel({ llmCalls: 1 }) }).map(r => r.run.id)).toEqual(['b', 'a', 'c']);
+  });
+});

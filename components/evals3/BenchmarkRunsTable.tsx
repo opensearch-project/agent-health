@@ -6,10 +6,17 @@
 /**
  * Compact runs table for the benchmark detail page's Runs tab.
  *
- * Columns: [select] Run · Agent · Model · Size · Pass % · Judge · J. Model · Date · [actions]
+ * Columns: [select] Run · Agent · Model · Size · Pass % · Tokens · Cost ·
+ * LLM calls · Time/case · Judge · J. Model · Date · [actions]
  * Every categorical cell (Agent / Model / Judge / J. Model / status) is a
  * click-to-filter target; active filters render as removable pills above the
  * table (owned by the parent, which also feeds the chart the same filters).
+ *
+ * The four telemetry columns (owner ask, 2026-09-09: "telemetry should be
+ * emitted for all the pages, especially the benchmarks page") are fed by
+ * `telemetryByRunId` from hooks/useRunTelemetry.ts — one batch metrics call
+ * per page visit. A run whose spans were not found renders "—" with a
+ * tooltip; a run still being fetched renders a skeleton.
  */
 
 import React from 'react';
@@ -21,6 +28,7 @@ import {
   rowFieldValue, rowFieldLabel,
 } from '@/lib/benchmarkRunsTable';
 import { CaseHeatStrip } from '@/components/evals3/BenchmarkCasesTab';
+import { RunTelemetry, formatTokensCompact, formatCostUsd, formatDurationCompact } from '@/lib/runTelemetry';
 import type { EvaluationReport, TestCase } from '@/types';
 
 // Pill/tooltip labels mirror the column headers: the evaluator IS the judge
@@ -136,6 +144,63 @@ export function formatRunDate(iso: string, now: Date = new Date()): string {
   });
 }
 
+// ─── Telemetry cells ─────────────────────────────────────────────────────────
+
+export const TELEMETRY_NO_SPANS_TITLE = 'No spans found for this run yet';
+export const TELEMETRY_UNAVAILABLE_TITLE = 'Metrics unavailable';
+export const TELEMETRY_NO_REPORTS_TITLE = 'No reports to correlate yet';
+
+export interface TelemetryCellState {
+  telemetry: RunTelemetry | undefined;
+  loading: boolean;
+  unavailable: boolean;
+}
+
+/** Why a telemetry cell shows "—" (drives the tooltip). */
+export function telemetryDashTitle(state: TelemetryCellState, dependsOnSpans: boolean, value: string | null): string {
+  if (state.unavailable) return TELEMETRY_UNAVAILABLE_TITLE;
+  if (!state.telemetry) return TELEMETRY_NO_REPORTS_TITLE;
+  if (dependsOnSpans && !state.telemetry.hasSpans) return TELEMETRY_NO_SPANS_TITLE;
+  if (value === null) return 'Not recorded for this run';
+  return '';
+}
+
+/**
+ * One numeric telemetry cell. `value` is the formatted string, or null when
+ * the metric is not available for this run (renders "—" with the reason).
+ * `dependsOnSpans` = false for the wall-clock column, which is valid even
+ * when no spans were found. `narrowSuffix` is appended on narrow viewports
+ * only (used to fold Cost into the Tokens cell when the Cost column is
+ * hidden below `lg`).
+ */
+function TelemetryCell({ state, value, testId, title, dependsOnSpans = true, className, narrowSuffix }: {
+  state: TelemetryCellState; value: string | null; testId: string; title?: string;
+  dependsOnSpans?: boolean; className?: string; narrowSuffix?: string | null;
+}) {
+  const base = `px-2 py-1 align-middle text-right text-[11px] tabular-nums whitespace-nowrap ${className || ''}`;
+  if (state.loading && !state.telemetry) {
+    return (
+      <td className={base} data-testid={testId} data-state="loading">
+        <span className="inline-block h-3 w-10 rounded bg-muted animate-pulse" aria-label="Loading" />
+      </td>
+    );
+  }
+  const dash = telemetryDashTitle(state, dependsOnSpans, value);
+  if (dash) {
+    return (
+      <td className={`${base} text-muted-foreground`} data-testid={testId} data-state="empty">
+        <span title={dash}>—</span>
+      </td>
+    );
+  }
+  return (
+    <td className={base} data-testid={testId} data-state="value">
+      <span title={title}>{state.telemetry?.partial ? `≥${value}` : value}</span>
+      {narrowSuffix && <span className="lg:hidden text-muted-foreground"> · {narrowSuffix}</span>}
+    </td>
+  );
+}
+
 function passRateColor(rate: number | null): string {
   if (rate === null) return 'text-muted-foreground';
   if (rate >= 80) return 'text-green-700 dark:text-green-400';
@@ -167,6 +232,15 @@ export interface BenchmarkRunsTableProps {
   onSelectCase: (testCaseId: string) => void;
   expandedRunIds: Set<string>;
   onToggleExpand: (runId: string) => void;
+  /**
+   * Telemetry columns. Per-run roll-up from useRunTelemetry; a run absent
+   * from the map with `telemetryLoadingRunIds` containing it renders a
+   * skeleton, otherwise "—". `telemetryUnavailable` flips every cell to "—"
+   * with a "Metrics unavailable" tooltip (batch endpoint failed).
+   */
+  telemetryByRunId?: Record<string, RunTelemetry | undefined>;
+  telemetryLoadingRunIds?: Set<string>;
+  telemetryUnavailable?: boolean;
 }
 
 export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => {
@@ -175,9 +249,10 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
     selectable, selectedRunIds, onToggleSelect, onOpenRun, onOpenEvaluator,
     onDelete, deletingId, onCancel, isCancelling,
     testCases, reportsById, onSelectCase, expandedRunIds, onToggleExpand, benchmarkId,
+    telemetryByRunId = {}, telemetryLoadingRunIds, telemetryUnavailable = false,
   } = props;
 
-  const colCount = 10 + (selectable ? 1 : 0);
+  const colCount = 14 + (selectable ? 1 : 0);
 
   return (
     <div className="rounded-md border overflow-x-auto" data-testid="benchmark-runs-table">
@@ -190,6 +265,10 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
             <SortHeader label="Model" field="model" sort={sort} onSort={onSort} />
             <SortHeader label="Size" field="size" sort={sort} onSort={onSort} className="text-right" />
             <SortHeader label="Pass %" field="passRate" sort={sort} onSort={onSort} className="text-right" />
+            <SortHeader label="Tokens" field="tokens" sort={sort} onSort={onSort} className="text-right" />
+            <SortHeader label="Cost" field="cost" sort={sort} onSort={onSort} className="text-right max-lg:hidden" />
+            <SortHeader label="LLM calls" field="llmCalls" sort={sort} onSort={onSort} className="text-right" />
+            <SortHeader label="Time/case" field="timePerCase" sort={sort} onSort={onSort} className="text-right" />
             <SortHeader label="Judge" field="evaluator" sort={sort} onSort={onSort} />
             <SortHeader label="J. Model" field="judge" sort={sort} onSort={onSort} />
             <SortHeader label="Date" field="date" sort={sort} onSort={onSort} />
@@ -210,6 +289,13 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
             const isLatest = run.id === latestRunId;
             const outdated = run.benchmarkVersion !== undefined && currentVersion !== undefined && run.benchmarkVersion < currentVersion;
             const expanded = expandedRunIds.has(run.id);
+            const telemetry = telemetryByRunId[run.id];
+            const telState: TelemetryCellState = {
+              telemetry,
+              loading: !!telemetryLoadingRunIds?.has(run.id),
+              unavailable: telemetryUnavailable,
+            };
+            const spansNote = telemetry ? `spans found for ${telemetry.spansCases} of ${telemetry.totalCases} cases` : '';
             return (
               <React.Fragment key={run.id}>
                 <tr
@@ -327,6 +413,33 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
                       )}
                     </span>
                   </td>
+                  <TelemetryCell
+                    state={telState}
+                    testId="run-tokens-cell"
+                    value={telemetry ? formatTokensCompact(telemetry.totalTokens) : null}
+                    title={telemetry ? `${telemetry.totalTokens.toLocaleString()} tokens · ${spansNote}` : undefined}
+                    narrowSuffix={telemetry ? formatCostUsd(telemetry.costUsd) : null}
+                  />
+                  <TelemetryCell
+                    state={telState}
+                    testId="run-cost-cell"
+                    className="max-lg:hidden"
+                    value={telemetry ? formatCostUsd(telemetry.costUsd) : null}
+                    title={telemetry ? `$${telemetry.costUsd.toFixed(4)} · ${spansNote}` : undefined}
+                  />
+                  <TelemetryCell
+                    state={telState}
+                    testId="run-llmcalls-cell"
+                    value={telemetry ? String(telemetry.llmCalls) : null}
+                    title={telemetry ? `${telemetry.llmCalls} LLM calls · ${telemetry.toolCalls} tool calls · ${spansNote}` : undefined}
+                  />
+                  <TelemetryCell
+                    state={telState}
+                    testId="run-timepercase-cell"
+                    dependsOnSpans={false}
+                    value={telemetry && telemetry.medianDurationMs !== null ? formatDurationCompact(telemetry.medianDurationMs) : null}
+                    title="Median wall-clock per test case (agent + judge)"
+                  />
                   <td className="px-2 py-1 align-middle">
                     {row.evaluatorId ? (
                       <span className="inline-flex items-center gap-1 max-w-[140px]">

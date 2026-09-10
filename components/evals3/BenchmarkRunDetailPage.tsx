@@ -30,6 +30,8 @@ import { RunScore } from '@/components/RunScore';
 import { RunDetailsFlyout } from './RunDetailsFlyout';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
 import { Breadcrumbs } from './Breadcrumbs';
+import { RunTelemetryStrip } from './RunTelemetryStrip';
+import { useRunTelemetry } from '@/hooks/useRunTelemetry';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -117,6 +119,19 @@ export const BenchmarkRunDetailPage: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Telemetry strip: one batch metrics call for this run's reports (same hook
+  // as the Runs table and the inspector).
+  const telemetryRuns = useMemo(
+    () => (run ? [{ id: run.id, status: run.status, results: run.results }] : []),
+    [run],
+  );
+  const telemetryReports = useMemo(() => {
+    const out: Record<string, EvaluationReport> = {};
+    for (const r of results) if (r.reportId && r.report) out[r.reportId] = r.report;
+    return out;
+  }, [results]);
+  const runTelemetry = useRunTelemetry(telemetryRuns, telemetryReports, { enabled: !!run && !loading });
+
   // Load the full test case (including sourceCode) when the flyout opens.
   // Keyed on testCaseId so re-opening the same row doesn't re-fetch.
   const flyoutTcId = flyoutResult?.testCaseId ?? null;
@@ -201,6 +216,12 @@ export const BenchmarkRunDetailPage: React.FC = () => {
                   <span>Model: {modelName}</span>
                   <span>{totalCount} test case{totalCount !== 1 ? 's' : ''}</span>
                 </div>
+                <RunTelemetryStrip
+                  telemetry={runTelemetry.byRunId[run.id]}
+                  loading={runTelemetry.loadingRunIds.has(run.id)}
+                  unavailable={runTelemetry.error !== null}
+                  className="mt-2"
+                />
               </div>
               {/* Stats */}
               <div className="flex items-center gap-5 ml-4 shrink-0">

@@ -42,13 +42,21 @@ jest.mock('react-router-dom', () => ({
 
 const mockGetById = jest.fn();
 const mockGetByIds = jest.fn();
+const mockGetReportSummariesByIds = jest.fn(async () => ({}));
 jest.mock('@/services/storage', () => ({
   asyncBenchmarkStorage: {
     getById: (...a: unknown[]) => mockGetById(...a),
     deleteRun: jest.fn(async () => true),
   },
   asyncTestCaseStorage: { getByIds: (...a: unknown[]) => mockGetByIds(...a) },
-  asyncRunStorage: { getReportSummariesByIds: jest.fn(async () => ({})) },
+  asyncRunStorage: { getReportSummariesByIds: (...a: unknown[]) => mockGetReportSummariesByIds(...(a as [string[]])) },
+}));
+
+// Telemetry columns: the page hands the loaded report summaries to
+// useRunTelemetry, which issues ONE POST /api/metrics/batch per page visit.
+const mockFetchBatchMetrics = jest.fn();
+jest.mock('@/services/metrics', () => ({
+  fetchBatchMetrics: (...a: unknown[]) => mockFetchBatchMetrics(...a),
 }));
 
 const mockListEvaluationRuns = jest.fn();
@@ -190,6 +198,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   window.localStorage.clear();
   mockGetByIds.mockResolvedValue([]);
+  mockGetReportSummariesByIds.mockResolvedValue({});
+  mockFetchBatchMetrics.mockResolvedValue({ metrics: [], aggregate: {} });
   mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [] });
 });
 
@@ -345,13 +355,13 @@ describe('BenchmarkRunsPage2 — Runs tab table, chart and click-to-filter', () 
     }));
   });
 
-  it('renders one table row per run with the sketch columns: Run link, Agent, Model, Size, Pass %, Judge, J. Model, Date', async () => {
+  it('renders one table row per run with the sketch columns: Run link, Agent, Model, Size, Pass %, telemetry, Judge, J. Model, Date', async () => {
     await renderPage();
     await waitFor(() => expect(screen.getAllByTestId('run-row')).toHaveLength(2));
 
     const headers = Array.from(document.querySelectorAll('[data-testid="benchmark-runs-table"] thead th'))
       .map(th => th.textContent?.trim()).filter(Boolean);
-    expect(headers).toEqual(['Run', 'Agent', 'Model', 'Size', 'Pass %', 'Judge', 'J. Model', 'Date']);
+    expect(headers).toEqual(['Run', 'Agent', 'Model', 'Size', 'Pass %', 'Tokens', 'Cost', 'LLM calls', 'Time/case', 'Judge', 'J. Model', 'Date']);
 
     const cc = screen.getByText('CC Run').closest('[data-testid="run-row"]') as HTMLElement;
     const link = within(cc).getByTestId('run-name-link');
@@ -485,5 +495,79 @@ describe('BenchmarkRunsPage2 — Runs tab table, chart and click-to-filter', () 
     const casesPanel = document.querySelector('[role="tabpanel"][data-state="inactive"]') as HTMLElement | null;
     expect(casesPanel).toBeTruthy();
     expect(casesPanel!.className).toContain('data-[state=inactive]:hidden');
+  });
+});
+
+describe('BenchmarkRunsPage2 — telemetry columns wiring (one batch metrics call per page)', () => {
+  const summaries = {
+    'r-1': { id: 'r-1', status: 'completed', passFailStatus: 'passed', runId: 'agent-run-1', sessionId: 'sess-1', traceId: 'trace-1', connectorProtocol: 'claude-code', timestamp: '2026-08-31T07:34:00.000Z', performanceMetrics: { durationMs: 44_000, agentDurationMs: 40_000 } },
+    'r-2': { id: 'r-2', status: 'completed', passFailStatus: 'failed', runId: 'agent-run-2', connectorProtocol: 'claude-code', timestamp: '2026-08-31T07:35:00.000Z', performanceMetrics: { durationMs: 52_000, agentDurationMs: 50_000 } },
+  };
+  const twoCaseRun = makeEmbeddedRun({
+    id: 'run-tel', name: 'Telemetry Run',
+    results: {
+      'tc-1': { reportId: 'r-1', status: 'completed', passFailStatus: 'passed' } as any,
+      'tc-2': { reportId: 'r-2', status: 'completed', passFailStatus: 'failed' } as any,
+    },
+  });
+
+  it('requests metrics ONCE for every report on the tab (keys = report runIds, with sessionIds/traceIds/agents hints) and renders the summed cells', async () => {
+    mockGetById.mockResolvedValue(makeBenchmark({ runs: [twoCaseRun] }));
+    mockGetReportSummariesByIds.mockResolvedValue(summaries as any);
+    mockFetchBatchMetrics.mockResolvedValue({
+      metrics: [
+        { runId: 'agent-run-1', status: 'success', hasSpans: true, totalTokens: 3_000_000, costUsd: 10.10, llmCalls: 200, toolCalls: 70 },
+        { runId: 'agent-run-2', status: 'success', hasSpans: true, totalTokens: 2_900_000, costUsd: 10.09, llmCalls: 112, toolCalls: 48 },
+      ],
+      aggregate: {},
+    });
+    await renderPage();
+    await waitFor(() => expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1));
+    const [keys, sessionIds, traceIds, agents] = mockFetchBatchMetrics.mock.calls[0];
+    expect(keys.sort()).toEqual(['agent-run-1', 'agent-run-2']);
+    expect(sessionIds).toEqual({ 'agent-run-1': 'sess-1' });
+    expect(traceIds).toEqual({ 'agent-run-1': 'trace-1' });
+    expect(agents['agent-run-1'][0]).toMatchObject({ serviceName: 'claude-code-agent', sessionId: 'sess-1' });
+
+    const row = screen.getByText('Telemetry Run').closest('[data-testid="run-row"]') as HTMLElement;
+    await waitFor(() => expect(within(row).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('value'));
+    expect(within(row).getByText('5.9M')).toBeTruthy();
+    expect(within(row).getByTestId('run-cost-cell').textContent).toBe('$20.19');
+    expect(within(row).getByTestId('run-llmcalls-cell').textContent).toBe('312');
+    expect(within(row).getByTestId('run-timepercase-cell').textContent).toBe('48 s');   // median of 44 s / 52 s
+
+    // Polling re-renders (same run set) must not trigger another batch call.
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed batch call leaves the page intact with "—" cells (Metrics unavailable)', async () => {
+    mockGetById.mockResolvedValue(makeBenchmark({ runs: [twoCaseRun] }));
+    mockGetReportSummariesByIds.mockResolvedValue(summaries as any);
+    mockFetchBatchMetrics.mockRejectedValue(new Error('Failed to fetch batch metrics: 500'));
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await renderPage();
+    const row = screen.getByText('Telemetry Run').closest('[data-testid="run-row"]') as HTMLElement;
+    await waitFor(() => expect(within(row).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('empty'));
+    expect(within(within(row).getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe('Metrics unavailable');
+    expect(within(row).getByTestId('run-passrate-cell').textContent).toContain('50%');   // rest of the row is fine
+    errSpy.mockRestore();
+  });
+
+  it('a run whose spans were not found reads "—" with the no-spans tooltip while Time/case still shows the wall-clock', async () => {
+    mockGetById.mockResolvedValue(makeBenchmark({ runs: [twoCaseRun] }));
+    mockGetReportSummariesByIds.mockResolvedValue(summaries as any);
+    mockFetchBatchMetrics.mockResolvedValue({
+      metrics: [
+        { runId: 'agent-run-1', status: 'success', hasSpans: false, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0 },
+        { runId: 'agent-run-2', status: 'success', hasSpans: false, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0 },
+      ],
+      aggregate: {},
+    });
+    await renderPage();
+    const row = screen.getByText('Telemetry Run').closest('[data-testid="run-row"]') as HTMLElement;
+    await waitFor(() => expect(within(row).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('empty'));
+    expect(within(within(row).getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe('No spans found for this run yet');
+    expect(within(row).getByTestId('run-timepercase-cell').textContent).toBe('48 s');
   });
 });
