@@ -74,6 +74,7 @@ import { Progress } from '@/components/ui/progress';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { CollapsibleTestCaseDefinition } from '@/components/evals3/CollapsibleTestCaseDefinition';
+import { JudgeSelectionConflictChip } from '@/components/JudgeSelectionConflictChip';
 
 interface RunDetailsContentProps {
   report: EvaluationReport;
@@ -1145,6 +1146,10 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 pre-snapshot (legacy) reports. */}
             <VerdictSummary report={liveReport} />
 
+            {/* Run-level judge selection overrode a body pin — flag it so the
+                report isn't mistaken for one judged by the evaluator/model
+                the eval author hard-coded. Independent of evaluator loading. */}
+            <JudgeSelectionConflictChip conflicts={liveReport.judgeSelectionConflicts} />
             {/* Evaluator Info */}
             {evaluator && (
               <div>
