@@ -456,9 +456,11 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
     const body = JSON.parse(init.body as string);
     expect(body.evaluatorId).toBe('system-rca-default');
 
-    // Per-call override still wins over the bound run-level evaluator —
-    // matches UI behaviour where users can pick a different evaluator
-    // for a specific test.
+    // The run-level selection is AUTHORITATIVE: a per-call pin in the body
+    // that disagrees is NOT applied (the run's evaluator still rides the
+    // request) and is recorded as a conflict on the bound fixture. The
+    // person who launched the run chose the judge; the eval file author
+    // does not get to silently swap it.
     fetchMock.mockClear();
     await capturedJudge(
       { trajectory: [{ type: 'response', content: 'x' }] },
@@ -467,7 +469,10 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
     );
     const overrideInit = fetchMock.mock.calls[0][1] as RequestInit;
     const overrideBody = JSON.parse(overrideInit.body as string);
-    expect(overrideBody.evaluatorId).toBe('user:override');
+    expect(overrideBody.evaluatorId).toBe('system-rca-default');
+    expect(capturedJudge.selection.conflicts).toEqual([
+      { field: 'evaluatorId', runValue: 'system-rca-default', bodyValue: 'user:override' },
+    ]);
   });
 
   it('does not set evaluatorId on the body when run.evaluatorId is undefined (server uses default)', async () => {
@@ -634,6 +639,105 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
     expect(saved.metricsStatus).toBe('error');
     expect(saved.passFailStatus).toBeNull();
     expect(saved.traceError).toMatch(/judge boom/);
+  });
+
+  it('run-level evaluator/judge model WIN over body pins; report records judgeApplied + judgeSelectionConflicts and truthful labels', async () => {
+    // Body hard-codes a different evaluator AND model than the run selected.
+    const evaluateFn: EvaluateFn = jest.fn(async (fixtures: any) => {
+      await fixtures.agent.run('Investigate');
+      await fixtures.judge(
+        { trajectory: [{ type: 'response', content: 'x' }] },
+        'a claim',
+        { evaluatorId: 'system-factuality', model: 'some-other-model' },
+      );
+    });
+    const evaluateFnMap = new Map<string, EvaluateFn>([['tc-prec', evaluateFn]]);
+    const testCase: TestCase = { id: 'tc-prec', name: 'Precedence', initialPrompt: 'Investigate', context: [] } as unknown as TestCase;
+    const run: EvaluationRun = {
+      id: 'run-prec', agentKey: 'test-agent', modelId: 'claude-sonnet',
+      evaluatorId: 'system-rca-default', judgeModelId: 'demo-model',
+      status: 'running', results: {}, createdAt: new Date().toISOString(),
+    } as unknown as EvaluationRun;
+
+    mockInvokeAgent.mockResolvedValue(stubInvocation({ trajectory: [{ type: 'response', content: 'out' }], agentDurationMs: 5 }));
+    let saved: any;
+    (storage.runs.create as jest.Mock).mockImplementation((report: any) => { saved = report; return Promise.resolve({ ...report, id: 'r' }); });
+    (storage.runs.update as jest.Mock).mockImplementation((_id: any, fields: any) => { saved = fields; return Promise.resolve({ ...fields, id: _id }); });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ passFailStatus: 'passed', metrics: { accuracy: 90 }, llmJudgeReasoning: 'ok' }),
+      text: async () => '',
+    });
+    (global as any).fetch = fetchMock;
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await executeEvaluationRun(run, [testCase], { storageModule: storage, evaluateFnMap, onProgress: jest.fn() });
+
+    // The wire request carried the RUN's selection, not the body's pins.
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.evaluatorId).toBe('system-rca-default');
+    expect(body.modelId).toBe('demo-model');
+
+    // Report: applied + conflicts + labels that match what applied.
+    expect(saved.judgeApplied).toEqual({
+      evaluatorId: 'system-rca-default', evaluatorIdSource: 'run',
+      modelId: 'demo-model', modelIdSource: 'run',
+    });
+    expect(saved.judgeSelectionConflicts).toEqual(expect.arrayContaining([
+      { field: 'evaluatorId', runValue: 'system-rca-default', bodyValue: 'system-factuality' },
+      { field: 'modelId', runValue: 'demo-model', bodyValue: 'some-other-model' },
+    ]));
+    expect(saved.evaluatorId).toBe('system-rca-default');
+    expect(saved.judgeModelId).toBe('demo-model');
+    // Per-call truth on the matcher entry.
+    const llm = saved.matcherResults.filter((m: any) => m.method === 'llm-judge');
+    expect(llm).toHaveLength(1);
+    expect(llm[0].evaluatorId).toBe('system-rca-default');
+    expect(llm[0].model).toBe('demo-model');
+    // ONE structured warning per conflicting field through the runner's logging.
+    const conflictWarns = warnSpy.mock.calls.map(c => String(c[0])).filter(s => s.includes('judge selection conflict'));
+    expect(conflictWarns).toHaveLength(2);
+    expect(conflictWarns[0]).toContain('[EvaluationRunner]');
+    expect(conflictWarns.join('\n')).toContain('"Precedence" (tc-prec)');
+    warnSpy.mockRestore();
+  });
+
+  it('when the run selects NO judge model, a unanimous body pin applies and becomes the report label (no conflict)', async () => {
+    const evaluateFn: EvaluateFn = jest.fn(async (fixtures: any) => {
+      await fixtures.agent.run('Investigate');
+      await fixtures.judge({ trajectory: [{ type: 'response', content: 'x' }] }, 'a claim', { model: 'claude-opus-4' });
+    });
+    const evaluateFnMap = new Map<string, EvaluateFn>([['tc-body', evaluateFn]]);
+    const testCase: TestCase = { id: 'tc-body', name: 'BodyPin', initialPrompt: 'Investigate', context: [] } as unknown as TestCase;
+    const run: EvaluationRun = {
+      id: 'run-body', agentKey: 'test-agent', modelId: 'claude-sonnet',
+      evaluatorId: 'system-rca-default', // no judgeModelId
+      status: 'running', results: {}, createdAt: new Date().toISOString(),
+    } as unknown as EvaluationRun;
+
+    mockInvokeAgent.mockResolvedValue(stubInvocation({ trajectory: [{ type: 'response', content: 'out' }], agentDurationMs: 5 }));
+    let saved: any;
+    (storage.runs.create as jest.Mock).mockImplementation((report: any) => { saved = report; return Promise.resolve({ ...report, id: 'r' }); });
+    (storage.runs.update as jest.Mock).mockImplementation((_id: any, fields: any) => { saved = fields; return Promise.resolve({ ...fields, id: _id }); });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ passFailStatus: 'passed', metrics: { accuracy: 90 }, llmJudgeReasoning: 'ok' }),
+      text: async () => '',
+    });
+    (global as any).fetch = fetchMock;
+
+    await executeEvaluationRun(run, [testCase], { storageModule: storage, evaluateFnMap, onProgress: jest.fn() });
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.modelId).toBe('claude-opus-4');
+    expect(saved.judgeApplied).toEqual({
+      evaluatorId: 'system-rca-default', evaluatorIdSource: 'run',
+      modelId: 'claude-opus-4', modelIdSource: 'body',
+    });
+    expect(saved.judgeSelectionConflicts).toBeUndefined();
+    // Label is truthful: it names the model that actually judged.
+    expect(saved.judgeModelId).toBe('claude-opus-4');
   });
 
   it('custom evaluate() fixture gates the test (#244)', async () => {

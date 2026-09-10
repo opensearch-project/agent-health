@@ -50,7 +50,8 @@ import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } fro
 import { createAgentFixture } from '@/lib/testCases/agentFixture';
 import type { AgentRunOptions } from '@/lib/testCases/agentFixture';
 import { evaluate as evaluateFixture } from '@/lib/testCases/evaluators';
-import { judge, bindJudge, clearJudgeCache } from '@/lib/testCases/judge';
+import { judge, bindJudge, clearJudgeCache, type BoundJudgeFn } from '@/lib/testCases/judge';
+import { stampJudgeSelection } from './judgeSelection';
 import { expect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
 import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
@@ -543,29 +544,37 @@ export async function executeEvaluationRun(
             // concurrent tests never share verdicts — RFC 004). The judge
             // fixture is pre-bound to the run-level evaluator + model (#257).
             let fixtures: TestFixtures | undefined;
+            let boundJudge: BoundJudgeFn | undefined;
             const { results: matcherResults, error: evalError } = await runInSession(async () => {
               const before = await hookOrchestrator.beforeTest(desc);
               for (const r of before.matcherResults) recordVerdict(r);
 
+              // Judge fixture binding. We pass the run-level `judgeModelId`
+              // (customer input) as the bound `model`, NOT the agent's
+              // bedrockModelId. Pre-fix this passed `bedrockModelId` which
+              // meant the agent's model leaked into the judge call as if
+              // it were the judge model — wrong for any judge that's not
+              // configured to use the same model as the agent. The server
+              // /api/judge resolves the actual judge model from the
+              // evaluator config when this is undefined.
+              // Pin the judge fixture to *this* server's actual bound URL.
+              // The runner is in-process so AH_PORT is correct, but passing
+              // serverUrl explicitly stops the SDK judge from re-deriving
+              // (and possibly defaulting to 4001 / a foreign instance) if
+              // env is ever mutated mid-run. See AGENTS.md → server lifecycle.
+              // `authoritative`: the run-level selection WINS over per-call
+              // pins in the body (recorded as conflicts, never applied) —
+              // the person who launched the run chose the judge.
+              boundJudge = bindJudge(
+                { evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() },
+                { authoritative: true },
+              );
               fixtures = {
                 ...before.fixtures,
                 result: emptyResult,
                 agent: agentFixture,
                 traces: tracesView,
-                // Judge fixture binding. We pass the run-level `judgeModelId`
-                // (customer input) as the bound `model`, NOT the agent's
-                // bedrockModelId. Pre-fix this passed `bedrockModelId` which
-                // meant the agent's model leaked into the judge call as if
-                // it were the judge model — wrong for any judge that's not
-                // configured to use the same model as the agent. The server
-                // /api/judge resolves the actual judge model from the
-                // evaluator config when this is undefined.
-                // Pin the judge fixture to *this* server's actual bound URL.
-                // The runner is in-process so AH_PORT is correct, but passing
-                // serverUrl explicitly stops the SDK judge from re-deriving
-                // (and possibly defaulting to 4001 / a foreign instance) if
-                // env is ever mutated mid-run. See AGENTS.md → server lifecycle.
-                judge: bindJudge({ evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() }),
+                judge: boundJudge,
                 evaluate: evaluateFixture,
               };
               const arg = Object.assign(emptyResult, { ...fixtures, result: emptyResult }) as any;
@@ -628,6 +637,16 @@ export async function executeEvaluationRun(
             // fields from `llmJudgeResponse`; pre-fix SDK reports got neither,
             // so an agent-trace-judge SDK run showed the provider with no model.
             Object.assign(report, buildSdkJudgeIdentityPatch(matcherResults, run.judgeModelId));
+            // Truthful judge labels: record what the bound judge ACTUALLY sent
+            // (per field + source) and any body pins the run selection
+            // overrode; re-stamp evaluatorId/judgeModelId so the label names
+            // the judge that produced the verdict. One warn per conflicting
+            // field, via the runner's own logging.
+            stampJudgeSelection(report, boundJudge?.selection, run, {
+              testCaseId,
+              testCaseName: testCase.name,
+              logPrefix: '[EvaluationRunner]',
+            });
             if (evalError !== undefined) {
               (report as any).assertionError =
                 (evalError as any)?.message ?? String(evalError);

@@ -34,14 +34,16 @@
  * judge prompt and provider routing.
  *
  * Run-level evaluator default: the runner injects a bound version of
- * `judge` into `TestFixtures` via `bindJudge(run.evaluatorId)`. Code
- * that destructures `judge` from the fixture (`async ({ judge }) => ...`)
- * automatically picks up the run's evaluator with no per-call argument.
- * Code that imports `judge` from the package gets the unbound version
- * and must pass `evaluatorId` explicitly.
+ * `judge` into `TestFixtures` via `bindJudge({ evaluatorId, model }, { authoritative: true })`.
+ * Code that destructures `judge` from the fixture (`async ({ judge }) => ...`)
+ * automatically picks up the run's evaluator with no per-call argument — and
+ * the run's selection WINS over a per-call pin that disagrees (the pin is
+ * recorded as a conflict on the report, never applied). Code that imports
+ * `judge` from the package gets the unbound version and must pass
+ * `evaluatorId` explicitly.
  */
 
-import type { TrajectoryStep } from '@/types';
+import type { TrajectoryStep, JudgeApplied, JudgeSelectionConflict, JudgeSelectionSource } from '@/types';
 import { recordVerdict } from '../matchers/session.js';
 import { readEnv } from '../envCompat.js';
 import { getBackendUrl, isBackendPortExplicit, DEFAULT_BACKEND_PORT } from '../portConfig.js';
@@ -404,6 +406,9 @@ async function runJudge(
       // by the agent trace judge showed a provider with no model.
       model: options?.model,
       ...buildMatcherJudgeIdentity(raw, options?.model),
+      // Per-call truth: the evaluator this call actually asked the server
+      // for (after any run-level binding). Feeds `judgeApplied` on the report.
+      evaluatorId: options?.evaluatorId,
       // NOTE: no `errorMessage` mirror. It used to copy `reasoning` verbatim
       // on failure, which persisted the same multi-KB string twice and made
       // the UI render it twice (once red as "error", once as "reasoning").
@@ -584,6 +589,54 @@ export const judge: JudgeFn = Object.assign(
 );
 
 /**
+ * Run-level defaults a runner (or an SDK user) binds onto `judge`.
+ */
+export interface BoundJudgeDefaults {
+  evaluatorId?: string;
+  model?: string;
+  serverUrl?: string;
+  skip?: boolean;
+}
+
+export interface BindJudgeOptions {
+  /**
+   * When true, `defaults.evaluatorId` / `defaults.model` are AUTHORITATIVE:
+   * a per-call `{ evaluatorId }` / `{ model }` in the test body that differs
+   * is ignored (the bound value is sent) and recorded as a
+   * {@link JudgeSelectionConflict} on {@link BoundJudgeFn.selection}. Fields
+   * the defaults leave unset still fall through to the per-call value.
+   *
+   * The runners bind with `authoritative: true` so the evaluator + judge
+   * model the person who LAUNCHED the run picked (UI / API / CLI) always win
+   * over pins an eval-file author hard-coded into a body — pre-fix the body
+   * won the request while the report was labelled with the run's choice.
+   *
+   * Default `false` keeps the plain SDK semantics (per-call wins) for users
+   * who call `bindJudge()` themselves outside a runner.
+   */
+  authoritative?: boolean;
+}
+
+/** What a bound judge actually applied across every call made through it. */
+export interface JudgeSelectionSnapshot {
+  /** Per-field applied value + source. See {@link JudgeApplied}. */
+  applied: JudgeApplied;
+  /** Body pins the authoritative binding overrode (deduped per field+bodyValue). */
+  conflicts: JudgeSelectionConflict[];
+  /** Number of judge()/judge.observe() calls made through this binding. */
+  judgeCalls: number;
+}
+
+/**
+ * A `judge` bound to run-level defaults. Same callable surface as
+ * {@link JudgeFn}, plus a read-only `selection` snapshot the runner reads
+ * after the test body finishes to stamp truthful labels on the report.
+ */
+export interface BoundJudgeFn extends JudgeFn {
+  readonly selection: JudgeSelectionSnapshot;
+}
+
+/**
  * Bind run-level defaults to `judge` and return a callable with the same
  * signature. Used by the SDK runner to inject `run.evaluatorId` (and
  * optionally a default judge model) into the `TestFixtures.judge` slot,
@@ -591,48 +644,123 @@ export const judge: JudgeFn = Object.assign(
  * the run's evaluator selection — matching the UI's behaviour where the
  * evaluator picked on the run config applies to every judged test case.
  *
- * Per-call options always win over the bound defaults; pass an empty
- * object (or omit the field) to fall through to the bound value.
+ * Precedence:
+ *   - plain `bindJudge(defaults)`: per-call options win over the bound
+ *     defaults on every field that's actually set (SDK-user semantics).
+ *   - `bindJudge(defaults, { authoritative: true })` (what the runners use):
+ *     `evaluatorId` / `model` set on the defaults WIN over per-call pins; a
+ *     differing pin is recorded on `.selection.conflicts` (never thrown).
+ *     Fields the defaults leave unset still fall through to the per-call
+ *     value. Non-selection options (`serverUrl`, `skip`) keep per-call-wins.
  *
  *   const boundJudge = bindJudge({ evaluatorId: run.evaluatorId });
  *   await boundJudge(result, claim);                                  // uses run.evaluatorId
- *   await boundJudge(result, claim, { evaluatorId: 'other' });        // overrides
+ *   await boundJudge(result, claim, { evaluatorId: 'other' });        // overrides (non-authoritative)
  *   await boundJudge(result, claim, { evaluatorId: undefined });      // still uses bound default
  */
-export function bindJudge(defaults?: {
-  evaluatorId?: string;
-  model?: string;
-  serverUrl?: string;
-  skip?: boolean;
-}): JudgeFn {
-  // No defaults set → return the unbound function unchanged. Keeps zero
-  // overhead for tests that don't use a run-level evaluator. Note `skip` is
-  // compared against `undefined` (not falsiness) so a binding of
-  // `{ skip: false }` — a meaningful "force the judge to run" — is preserved
-  // rather than short-circuited to the unbound judge.
+export function bindJudge(
+  defaults: BoundJudgeDefaults | undefined,
+  options: BindJudgeOptions & { authoritative: true }
+): BoundJudgeFn;
+export function bindJudge(defaults?: BoundJudgeDefaults, options?: BindJudgeOptions): JudgeFn;
+export function bindJudge(defaults?: BoundJudgeDefaults, bindOptions?: BindJudgeOptions): JudgeFn {
+  const authoritative = bindOptions?.authoritative === true;
+  // No defaults set (and nothing to track) → return the unbound function
+  // unchanged. Keeps zero overhead for tests that don't use a run-level
+  // evaluator. Note `skip` is compared against `undefined` (not falsiness)
+  // so a binding of `{ skip: false }` — a meaningful "force the judge to
+  // run" — is preserved rather than short-circuited to the unbound judge.
+  // An authoritative binding is never short-circuited: even with no
+  // run-level selection the runner needs the `.selection` snapshot to
+  // record which body pins actually applied.
   if (
-    !defaults ||
-    (!defaults.evaluatorId && !defaults.model && !defaults.serverUrl && defaults.skip === undefined)
+    !authoritative &&
+    (!defaults ||
+      (!defaults.evaluatorId && !defaults.model && !defaults.serverUrl && defaults.skip === undefined))
   ) {
     return judge;
   }
-  const mergeOptions = (options?: JudgeOptions): JudgeOptions => ({
-    // Per-call options win on every field that's actually set. We treat
-    // an explicit `undefined` the same as a missing field — callers who
-    // want to *clear* a bound default should pass an empty string or
-    // call the unbound `judge` directly.
-    serverUrl: options?.serverUrl ?? defaults.serverUrl,
-    model: options?.model ?? defaults.model,
-    evaluatorId: options?.evaluatorId ?? defaults.evaluatorId,
-    skip: options?.skip ?? defaults.skip,
-  });
-  const bound: JudgeFn = Object.assign(
+  const d: BoundJudgeDefaults = defaults ?? {};
+
+  // ---- selection tracking (what actually went out on each call) ----
+  const appliedValues = {
+    evaluatorId: new Set<string | undefined>(),
+    modelId: new Set<string | undefined>(),
+  };
+  const sources: { evaluatorId: JudgeSelectionSource; modelId: JudgeSelectionSource } = {
+    evaluatorId: d.evaluatorId ? 'run' : 'default',
+    modelId: d.model ? 'run' : 'default',
+  };
+  const conflicts: JudgeSelectionConflict[] = [];
+  let judgeCalls = 0;
+
+  const recordConflict = (field: JudgeSelectionConflict['field'], runValue: string, bodyValue: string) => {
+    if (!conflicts.some(c => c.field === field && c.bodyValue === bodyValue)) {
+      conflicts.push({ field, runValue, bodyValue });
+    }
+  };
+
+  /**
+   * Resolve one selection field. Authoritative + bound → bound wins (record
+   * a conflict when the body disagreed). Otherwise per-call wins, falling
+   * back to the bound default. We treat an explicit `undefined` the same as
+   * a missing field — callers who want to *clear* a bound default should
+   * pass an empty string or call the unbound `judge` directly.
+   */
+  const resolveField = (
+    field: JudgeSelectionConflict['field'],
+    bound: string | undefined,
+    perCall: string | undefined,
+  ): string | undefined => {
+    let value: string | undefined;
+    if (authoritative && bound) {
+      if (perCall && perCall !== bound) recordConflict(field, bound, perCall);
+      value = bound;
+    } else {
+      value = perCall ?? bound;
+      if (perCall) sources[field] = 'body';
+    }
+    appliedValues[field].add(value);
+    return value;
+  };
+
+  const mergeOptions = (options?: JudgeOptions): JudgeOptions => {
+    judgeCalls++;
+    return {
+      serverUrl: options?.serverUrl ?? d.serverUrl,
+      model: resolveField('modelId', d.model, options?.model),
+      evaluatorId: resolveField('evaluatorId', d.evaluatorId, options?.evaluatorId),
+      skip: options?.skip ?? d.skip,
+    };
+  };
+
+  const pick = (field: 'evaluatorId' | 'modelId', bound: string | undefined): string | undefined => {
+    const vals = Array.from(appliedValues[field]);
+    if (vals.length === 0) return bound;      // no calls yet → what WOULD apply
+    if (vals.length === 1) return vals[0];    // every call agreed
+    return undefined;                          // divergent body pins — per-call truth lives on matcherResults
+  };
+
+  const bound = Object.assign(
     (resultOrTrajectory: ResultLike | TrajectoryStep[], claimOrClaims: string | string[], options?: JudgeOptions) =>
       runJudge(resultOrTrajectory, claimOrClaims, mergeOptions(options), 'gate'),
     {
       observe: (resultOrTrajectory: ResultLike | TrajectoryStep[], claimOrClaims: string | string[], options?: JudgeOptions) =>
         runJudge(resultOrTrajectory, claimOrClaims, mergeOptions(options), 'observe'),
     }
-  );
+  ) as BoundJudgeFn;
+  Object.defineProperty(bound, 'selection', {
+    enumerable: true,
+    get: (): JudgeSelectionSnapshot => ({
+      applied: {
+        evaluatorId: pick('evaluatorId', d.evaluatorId),
+        evaluatorIdSource: sources.evaluatorId,
+        modelId: pick('modelId', d.model),
+        modelIdSource: sources.modelId,
+      },
+      conflicts: conflicts.slice(),
+      judgeCalls,
+    }),
+  });
   return bound;
 }

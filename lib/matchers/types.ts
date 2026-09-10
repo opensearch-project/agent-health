@@ -89,6 +89,12 @@ export interface MatcherResult {
    * counts as a judge call for the report's judge identity.
    */
   skipped?: boolean;
+  /**
+   * Evaluator id the judge call actually sent (`/api/judge` `evaluatorId`),
+   * after the run-level binding was applied. Per-call truth for the
+   * report-level `judgeApplied` summary; undefined = server default.
+   */
+  evaluatorId?: string;
 
   // ─── llm-judge enriched fields ───
   // Optional fields populated for `method: 'llm-judge'` entries when the

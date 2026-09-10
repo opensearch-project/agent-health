@@ -106,6 +106,8 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     judgeMode?: 'trajectory-only' | 'trace-tools';
     output?: unknown;
     lastRetryAttempt?: RetryAttemptRecord | null;
+    judgeApplied?: TestCaseRun['judgeApplied'];
+    judgeSelectionConflicts?: TestCaseRun['judgeSelectionConflicts'];
   };
 
   return {
@@ -214,6 +216,11 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     // the "Re-judged <when> with <evaluator> · <model>" line on the Judge tab.
     judgementRetriedAt: (stored as any).judgementRetriedAt,
     judgementRetryCount: (stored as any).judgementRetryCount,
+    // What the SDK judge binding actually applied + overridden body pins
+    // (see services/judgeSelection.ts). Read-through so the run-detail
+    // Judge tab can flag a body/run selection disagreement.
+    judgeApplied: storedAny.judgeApplied,
+    judgeSelectionConflicts: storedAny.judgeSelectionConflicts,
     spans: storedAny.spans as any[] | undefined,
     connectorProtocol: storedAny.connectorProtocol as ConnectorProtocol | undefined,
     // Frozen scoring provenance — the comparison payload's run-level score
@@ -283,6 +290,8 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
   if (report.traceError !== undefined) base.traceError = report.traceError;
   copyReportFailureFields(report as Record<string, any>, base as Record<string, any>);
   if ((report as any).judgeMode !== undefined) (base as any).judgeMode = (report as any).judgeMode;
+  if (report.judgeApplied !== undefined) (base as any).judgeApplied = report.judgeApplied;
+  if (report.judgeSelectionConflicts !== undefined) (base as any).judgeSelectionConflicts = report.judgeSelectionConflicts;
   if (report.spans !== undefined) base.spans = report.spans;
   if (report.connectorProtocol !== undefined) base.connectorProtocol = report.connectorProtocol;
   // SDK matcher verdicts: persist alongside the report

@@ -49,4 +49,4 @@ export type {
   RegisteredHook,
 } from './types.js';
 export type { LoadResult, LoadedTestCase } from './loader.js';
-export type { JudgeVerdict, Verdict, JudgeRole, JudgeFn } from './judge.js';
+export type { JudgeVerdict, Verdict, JudgeRole, JudgeFn, BoundJudgeFn, BoundJudgeDefaults, BindJudgeOptions, JudgeSelectionSnapshot } from './judge.js';

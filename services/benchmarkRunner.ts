@@ -55,7 +55,8 @@ import type { EvalResult, TrajectoryAccessor, TestFixtures, RegisteredHook } fro
 import { createAgentFixture } from '@/lib/testCases/agentFixture';
 import type { AgentRunOptions } from '@/lib/testCases/agentFixture';
 import { evaluate as evaluateFixture } from '@/lib/testCases/evaluators';
-import { judge as judgeFn, bindJudge, clearJudgeCache } from '@/lib/testCases/judge';
+import { judge as judgeFn, bindJudge, clearJudgeCache, type BoundJudgeFn } from '@/lib/testCases/judge';
+import { stampJudgeSelection } from './judgeSelection';
 import { expect as ahExpect } from '@/lib/matchers/expect';
 import type { TrajectoryStep } from '@/types';
 import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
@@ -486,23 +487,29 @@ export async function executeRun(
             // concurrency-safe — RFC 004). Hook outcomes are recorded into
             // the same session so they show up next to body assertions.
             // The judge fixture is pre-bound to the run-level evaluator +
-            // judge model (#257); per-call evaluatorId still wins.
+            // judge model (#257) as AUTHORITATIVE: per-call pins in the body
+            // that disagree are recorded as conflicts, not applied.
             let fixtures: TestFixtures | undefined;
+            let boundJudge: BoundJudgeFn | undefined;
             const { results: matcherResults, error: evalError } = await runInSession(async () => {
               const before = await hookOrchestrator.beforeTest(desc);
               for (const r of before.matcherResults) recordVerdict(r);
+              // See the matching comment in services/evaluationRunner.ts.
+              // Customer-supplied `run.judgeModelId` becomes the bound
+              // judge model; the agent's `bedrockModelId` no longer
+              // leaks into the judge call. serverUrl is pinned to this
+              // server's actual bound URL so the SDK judge never defaults
+              // to 4001 / a foreign instance.
+              boundJudge = bindJudge(
+                { evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() },
+                { authoritative: true },
+              );
               fixtures = {
                 ...before.fixtures,
                 result: emptyResult,
                 agent: agentFixture,
                 traces: tracesView,
-                // See the matching comment in services/evaluationRunner.ts.
-                // Customer-supplied `run.judgeModelId` becomes the bound
-                // judge model; the agent's `bedrockModelId` no longer
-                // leaks into the judge call. serverUrl is pinned to this
-                // server's actual bound URL so the SDK judge never defaults
-                // to 4001 / a foreign instance.
-                judge: bindJudge({ evaluatorId: run.evaluatorId, model: run.judgeModelId, serverUrl: getBackendUrl() }),
+                judge: boundJudge,
                 evaluate: evaluateFixture,
               };
               try {
@@ -545,6 +552,12 @@ export async function executeRun(
             // the first `judge()` matcher that resolved an LLM, `judgeProvider`
             // its kind, or `'none'` when the body made no LLM judge call.
             Object.assign(report, buildSdkJudgeIdentityPatch(matcherResults, run.judgeModelId));
+            // Truthful judge labels + conflict record (see services/judgeSelection.ts).
+            stampJudgeSelection(report, boundJudge?.selection, run, {
+              testCaseId,
+              testCaseName: testCase.name,
+              logPrefix: '[BenchmarkRunner]',
+            });
             if (evalError !== undefined) {
               (report as any).assertionError =
                 (evalError as any)?.message ?? String(evalError);
@@ -897,6 +910,9 @@ async function saveReportWithModule(storage: IStorageModule, report: any): Promi
     // Judge kind, or 'none' when a code-SDK body made no LLM judge call.
     judgeProvider: report.judgeProvider,
     evaluatorId: report.evaluatorId,
+    // What the SDK judge binding actually applied + any overridden body pins.
+    ...(report.judgeApplied !== undefined ? { judgeApplied: report.judgeApplied } : {}),
+    ...(report.judgeSelectionConflicts !== undefined ? { judgeSelectionConflicts: report.judgeSelectionConflicts } : {}),
     status: report.status,
     passFailStatus: report.passFailStatus,
     // Real W3C OTel trace id when we have it (extracted from polled spans),
