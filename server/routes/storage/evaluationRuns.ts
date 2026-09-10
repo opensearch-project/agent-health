@@ -98,6 +98,57 @@ function sendSSE(res: Response, event: string, data: any): void {
   }
 }
 
+/**
+ * Heartbeat interval for the POST /api/storage/evaluation-runs SSE stream.
+ *
+ * A benchmark run can go 30–60+ minutes; between per-case events the stream
+ * is idle for minutes at a time, and idle proxies / tunnels / the Vite dev
+ * proxy / browsers close a silent connection well before the run finishes
+ * (owner report 2026-09-09: the "Add Run" header stuck on "Running…"). A
+ * periodic SSE comment line (`: ping`) keeps the connection alive without
+ * being an event the client has to understand. Injectable via
+ * EVALUATION_RUN_SSE_HEARTBEAT_MS (tests set it low); 0 disables.
+ */
+export const DEFAULT_EVALUATION_RUN_SSE_HEARTBEAT_MS = 15_000;
+
+export function getEvaluationRunSseHeartbeatMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.EVALUATION_RUN_SSE_HEARTBEAT_MS;
+  if (raw === undefined || raw === '') return DEFAULT_EVALUATION_RUN_SSE_HEARTBEAT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_EVALUATION_RUN_SSE_HEARTBEAT_MS;
+}
+
+/**
+ * Start writing `: ping` comment lines to an open SSE response every
+ * `intervalMs`. Returns a stop function (idempotent). Writes are guarded the
+ * same way sendSSE is: a dead socket is ignored, never thrown — and the timer
+ * stops itself as soon as the response closes, so a client that disconnects
+ * ten minutes into an hour-long run doesn't leave a ticking interval behind.
+ */
+export function startSseHeartbeat(res: Response, intervalMs: number = getEvaluationRunSseHeartbeatMs()): () => void {
+  if (intervalMs <= 0) return () => {};
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const stop = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+  timer = setInterval(() => {
+    if (res.destroyed || res.writableEnded) {
+      stop();
+      return;
+    }
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      // Observer-only stream; the run continues regardless.
+    }
+  }, intervalMs);
+  res.once('close', stop);
+  return stop;
+}
+
 // GET /api/storage/evaluation-runs - List evaluation runs
 router.get('/api/storage/evaluation-runs', async (req: Request, res: Response) => {
   try {
@@ -302,6 +353,9 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     const cancellationToken = createCancellationToken();
     activeCancellationTokens.set(runId, cancellationToken);
 
+    // Keep the (possibly minutes-idle) stream alive while the run executes.
+    const stopHeartbeat = startSseHeartbeat(res);
+
     try {
       // Execute the evaluation run
       const completedRun = await executeEvaluationRun(run, testCases, {
@@ -362,6 +416,7 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
 
       sendSSE(res, 'error', { error: error.message, runId });
     } finally {
+      stopHeartbeat();
       // Clean up cancellation token
       activeCancellationTokens.delete(runId);
       res.end();
