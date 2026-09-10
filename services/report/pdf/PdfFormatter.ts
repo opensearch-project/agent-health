@@ -8,6 +8,27 @@ import { BaseFormatter } from '@/services/report/base/BaseFormatter';
 import { HtmlFormatter } from '@/services/report/html/HtmlFormatter';
 
 /**
+ * Minimum Node.js version required by puppeteer 25+ (engines.node >=22.12.0).
+ * npm installs the optional dep on older Node with only an engine warning, so
+ * without this guard a Node 20 install fails deep inside puppeteer with an
+ * inscrutable syntax/runtime error instead of an actionable message.
+ */
+const PUPPETEER_MIN_NODE_MAJOR = 22;
+const PUPPETEER_MIN_NODE_MINOR = 12;
+
+export function assertNodeSupportsPuppeteer(nodeVersion: string = process.versions.node): void {
+  const [major, minor] = nodeVersion.split('.').map(Number);
+  if (major < PUPPETEER_MIN_NODE_MAJOR || (major === PUPPETEER_MIN_NODE_MAJOR && minor < PUPPETEER_MIN_NODE_MINOR)) {
+    throw new Error(
+      `PDF generation requires Node.js >=${PUPPETEER_MIN_NODE_MAJOR}.${PUPPETEER_MIN_NODE_MINOR} ` +
+      `(puppeteer 25's engine floor), but this process is running Node ${nodeVersion}.\n` +
+      'Upgrade Node to 22.12+ to export PDF reports, or use the HTML report format instead — ' +
+      'every other agent-health feature is unaffected.'
+    );
+  }
+}
+
+/**
  * Dynamically load puppeteer (optional dependency).
  *
  * In Jest (CJS), bare require() works and jest.mock() intercepts it.
@@ -47,7 +68,21 @@ export class PdfFormatter extends BaseFormatter {
 
   private htmlFormatter = new HtmlFormatter();
 
+  /**
+   * Runtime engine gate, called before puppeteer is loaded. An instance
+   * method (not inlined into loadPuppeteer) so unit tests that mock the
+   * `puppeteer` module can stub it — CI runs the unit suite on Node 18/20
+   * where the real guard must throw.
+   */
+  protected assertRuntimeSupported(): void {
+    assertNodeSupportsPuppeteer();
+  }
+
   async generate(data: ReportData, options?: FormatterOptions): Promise<FormatterOutput> {
+    // Fail fast with an actionable message on unsupported Node — BEFORE any
+    // HTML rendering or puppeteer loading happens.
+    this.assertRuntimeSupported();
+
     // Generate HTML first
     const htmlOutput = await this.htmlFormatter.generate(data, options);
 

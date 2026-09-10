@@ -101,6 +101,10 @@ describe('PdfFormatter', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     formatter = new PdfFormatter();
+    // The suite runs on Node 18/20/22 in CI; puppeteer here is MOCKED, so
+    // neutralize the real runtime engine gate for the generate() tests. The
+    // gate itself is tested directly in the 'Node engine guard' describe.
+    jest.spyOn(formatter as any, 'assertRuntimeSupported').mockImplementation(() => {});
   });
 
   it('should have format property set to pdf', () => {
@@ -160,6 +164,49 @@ describe('PdfFormatter', () => {
     expect(mockClose).toHaveBeenCalledTimes(1);
   });
 
+  describe('Node engine guard (puppeteer 25 requires Node >=22.12)', () => {
+    const { assertNodeSupportsPuppeteer } = require('@/services/report/pdf/PdfFormatter');
+
+    it('throws an actionable error on Node < 22.12 instead of loading puppeteer', () => {
+      expect(() => assertNodeSupportsPuppeteer('20.11.0')).toThrow(
+        /PDF generation requires Node\.js >=22\.12.*running Node 20\.11\.0/s
+      );
+      expect(() => assertNodeSupportsPuppeteer('18.19.0')).toThrow(/Node\.js >=22\.12/);
+    });
+
+    it('throws on Node 22.x below the 22.12 floor', () => {
+      expect(() => assertNodeSupportsPuppeteer('22.11.0')).toThrow(/Node\.js >=22\.12/);
+    });
+
+    it('allows Node at or above the floor', () => {
+      expect(() => assertNodeSupportsPuppeteer('22.12.0')).not.toThrow();
+      expect(() => assertNodeSupportsPuppeteer('24.15.0')).not.toThrow();
+    });
+
+    it('generate() invokes the gate BEFORE loading puppeteer, and rejects when it throws', async () => {
+      const gated = new PdfFormatter();
+      jest
+        .spyOn(gated as any, 'assertRuntimeSupported')
+        .mockImplementation(() => assertNodeSupportsPuppeteer('20.11.0'));
+
+      await expect(gated.generate(mockReportData)).rejects.toThrow(/Node\.js >=22\.12/);
+      // The guard fires before puppeteer is ever loaded/launched.
+      expect(mockLaunch).not.toHaveBeenCalled();
+    });
+
+    it('generate() proceeds when the gate passes (wired into the path)', async () => {
+      const gated = new PdfFormatter();
+      const spy = jest
+        .spyOn(gated as any, 'assertRuntimeSupported')
+        .mockImplementation(() => assertNodeSupportsPuppeteer('22.12.0'));
+
+      const output = await gated.generate(mockReportData);
+      expect(output.mimeType).toBe('application/pdf');
+      expect(spy).toHaveBeenCalled();
+      expect(mockLaunch).toHaveBeenCalled();
+    });
+  });
+
   describe('when puppeteer is not available', () => {
     beforeEach(() => {
       jest.resetModules();
@@ -175,8 +222,12 @@ describe('PdfFormatter', () => {
     it('should throw error with install instructions', async () => {
       const { PdfFormatter: FreshPdfFormatter } = require('@/services/report/pdf/PdfFormatter');
       const freshFormatter = new FreshPdfFormatter();
+      // Neutralize the engine gate so this test exercises the missing-module
+      // path specifically, on every CI Node version.
+      jest.spyOn(freshFormatter as any, 'assertRuntimeSupported').mockImplementation(() => {});
 
-      await expect(freshFormatter.generate(mockReportData)).rejects.toThrow('puppeteer');
+      await expect(freshFormatter.generate(mockReportData)).rejects.toThrow('Install it with: npm install puppeteer');
     });
   });
+
 });

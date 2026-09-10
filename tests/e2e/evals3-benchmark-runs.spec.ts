@@ -376,13 +376,26 @@ test.describe('Evals3 Benchmark Runs Page — Edit & versioning', () => {
     // Step 1 (Info) → Next.
     await page.click('button:has-text("Next")');
 
-    // Step 2 (Test Cases): add a currently-unselected test case to change the
-    // selection (which triggers the version bump). Toggling by nth index is
-    // fragile — the list contains every backend test case, so a fixed index
-    // can land on the already-selected one and deselect it, leaving zero
-    // selected and Next disabled. Check the first UNCHECKED box instead.
-    const addBox = page.locator('button[role="checkbox"][data-state="unchecked"]').first();
-    await expect(addBox).toBeVisible({ timeout: 10_000 });
+    // Step 2 (Test Cases): add the SECOND SEEDED test case to change the
+    // selection (which triggers the version bump). Toggling by nth index or
+    // "first unchecked box" is fragile — the list contains every backend test
+    // case, and under parallel workers (fullyParallel) other suites seed their
+    // own test cases concurrently, so "first unchecked" can land on someone
+    // else's row. The final assertion checks seededTestCaseIds[1] made it into
+    // the saved version, so the click must target exactly that row. Resolve
+    // the seeded TC's (unique, timestamped) name by id and scope to its row.
+    const tc2Res = await request.get(
+      `/api/storage/test-cases/${encodeURIComponent(seededTestCaseIds[1])}`,
+    );
+    expect(tc2Res.ok(), 'seeded test case 2 must be fetchable').toBeTruthy();
+    const tc2 = await tc2Res.json();
+    const tc2Name: string = tc2.name || tc2.testCase?.name;
+    expect(tc2Name, 'seeded test case 2 must have a name').toBeTruthy();
+
+    const targetRow = page.locator('div.cursor-pointer', { hasText: tc2Name }).first();
+    await expect(targetRow).toBeVisible({ timeout: 10_000 });
+    const addBox = targetRow.locator('button[role="checkbox"]');
+    await expect(addBox).toHaveAttribute('data-state', 'unchecked');
     await addBox.click();
     await page.click('button:has-text("Next")');
 
@@ -535,11 +548,20 @@ test.describe('Evals3 Benchmark Runs Page — Edit without forced run', () => {
     await expect(page.locator('text=Edit Benchmark').first()).toBeVisible({ timeout: 5_000 });
     await page.click('button:has-text("Next")');
 
-    // Change the test-case set by adding a currently-unselected test case
-    // (see the note on the versioning test above — a fixed nth index can
-    // deselect the only-selected TC and disable Save).
-    const addBox2 = page.locator('button[role="checkbox"][data-state="unchecked"]').first();
-    await expect(addBox2).toBeVisible({ timeout: 10_000 });
+    // Change the test-case set by adding the SECOND SEEDED test case (see the
+    // note on the versioning test above — a fixed nth index or "first
+    // unchecked box" can land on a concurrently-seeded row from another
+    // parallel worker). Scope the click to the seeded TC's own row by name.
+    const tc2Res = await request.get(
+      `/api/storage/test-cases/${encodeURIComponent(seededTestCaseIds[1])}`,
+    );
+    expect(tc2Res.ok(), 'seeded test case 2 must be fetchable').toBeTruthy();
+    const tc2 = await tc2Res.json();
+    const tc2Name: string = tc2.name || tc2.testCase?.name;
+    const targetRow2 = page.locator('div.cursor-pointer', { hasText: tc2Name }).first();
+    await expect(targetRow2).toBeVisible({ timeout: 10_000 });
+    const addBox2 = targetRow2.locator('button[role="checkbox"]');
+    await expect(addBox2).toHaveAttribute('data-state', 'unchecked');
     await addBox2.click();
 
     // Capture the PUT/PATCH (the version bump) AND assert NO POST to the
