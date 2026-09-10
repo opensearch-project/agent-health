@@ -1305,6 +1305,43 @@ describe('Experiments Storage Routes', () => {
       expect(typeof persistedRun.imageDigest).toBe('string');
     });
 
+    it('answers 409 JSON BEFORE opening SSE or persisting a run when a stored code-SDK test case\'s sourceFile is not resolvable from cwd', async () => {
+      mockGet.mockResolvedValue({
+        body: {
+          found: true,
+          _source: { id: 'exp-123', name: 'Code Benchmark', testCaseIds: ['tc-code'], runs: [] },
+        },
+      });
+      mockUpdate.mockResolvedValue({ body: {} });
+      // A code-imported test case whose eval file does not exist relative to
+      // THIS process's cwd — pre-fix this silently ran the classic judge path.
+      mockTestCasesGetAll.mockResolvedValue({
+        items: [{ id: 'tc-code', name: 'code case', initialPrompt: 'p', context: [], sourceFile: 'tmp-evals/definitely-missing.eval.mjs' }],
+        total: 1,
+      });
+
+      const { req, res } = createMocks(
+        { id: 'exp-123' },
+        { name: 'Run', agentKey: 'agent', modelId: 'model' }
+      );
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining(
+            `Test case "code case" references source file "tmp-evals/definitely-missing.eval.mjs" which is not resolvable from cwd ${process.cwd()}`
+          ),
+        })
+      );
+      // Fail-fast: no SSE stream, no run doc persisted, no execution.
+      expect(res.flushHeaders).not.toHaveBeenCalled();
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockExecuteRun).not.toHaveBeenCalled();
+    });
+
     it('refuses to stamp a digest computed from a PARTIAL test-case set (codex_review finding: a partial digest is a wrong identity, not a harmless skip)', async () => {
       mockGet.mockResolvedValue({
         body: {
