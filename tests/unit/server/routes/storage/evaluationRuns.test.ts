@@ -259,6 +259,15 @@ describe('Evaluation Runs API', () => {
       expect(mockBenchmarksAddRun).toHaveBeenCalledWith('bench-1', expect.objectContaining({ id: expect.any(String) }));
     });
 
+    it('carries concurrency through onto the embedded BenchmarkRun projection when linking a completed run (regression: this projection is a separate allow-list from asyncBenchmarkStorage\'s mappers)', async () => {
+      mockBenchmarksGetById.mockResolvedValue({ id: 'bench-1', testCaseIds: ['tc-1'] });
+      mockBenchmarksAddRun.mockResolvedValue(true);
+
+      await request(app).post('/api/storage/evaluation-runs').send({ ...body, benchmarkId: 'bench-1', concurrency: 3 });
+
+      expect(mockBenchmarksAddRun).toHaveBeenCalledWith('bench-1', expect.objectContaining({ concurrency: 3 }));
+    });
+
     it('emits an SSE error when the benchmarkId does not exist', async () => {
       mockBenchmarksGetById.mockResolvedValue(null);
       const res = await request(app).post('/api/storage/evaluation-runs').send({ ...body, benchmarkId: 'missing-bench' });

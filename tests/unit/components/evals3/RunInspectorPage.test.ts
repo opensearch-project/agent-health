@@ -296,6 +296,30 @@ beforeEach(() => {
 });
 
 describe('RunInspectorPage — lazy report loading', () => {
+  it('shows · conc N in the header meta when the run has a concurrency value, and omits it for legacy runs', async () => {
+    const bench = makeBenchmark(2);
+    (bench.runs[0] as any).concurrency = 3;
+    mockBenchmarkGetById.mockResolvedValue(bench);
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
+    expect(screen.getByTestId('run-inspector-concurrency').textContent).toContain('conc 3');
+  });
+
+  it('omits the concurrency chip for a legacy run with no concurrency field', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
+    expect(screen.queryByTestId('run-inspector-concurrency')).toBeNull();
+  });
+
   it('loads statuses via ONE summary batch and never per-row full fetches', async () => {
     mockBenchmarkGetById.mockResolvedValue(makeBenchmark(5));
     mockTestCasesGetByIds.mockResolvedValue(makeTestCases(5));

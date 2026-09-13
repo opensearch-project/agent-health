@@ -199,6 +199,25 @@ describe('BenchmarkRunsTable', () => {
     expect(props.onSort).toHaveBeenCalledWith('passRate');
     expect(screen.getByText('Date').closest('th')!.getAttribute('aria-sort')).toBe('none');
   });
+
+  it('renders a Conc. column right after Size, showing the value or an em dash for legacy runs, and sorts on click', () => {
+    const withConc = buildRunTableRow(mkRun({ id: 'r1', concurrency: 3 }), resolvers);
+    const legacy = buildRunTableRow(mkRun({ id: 'r2' }), resolvers);
+    const { props } = renderTable({ rows: [withConc, legacy] });
+
+    const header = screen.getByText('Conc.').closest('th')!;
+    expect(header.getAttribute('title')).toContain('Concurrency');
+    const sizeHeaderIndex = Array.from(header.parentElement!.children).findIndex(th => th.textContent?.includes('Size'));
+    const concHeaderIndex = Array.from(header.parentElement!.children).indexOf(header);
+    expect(concHeaderIndex).toBe(sizeHeaderIndex + 1);
+
+    const cells = screen.getAllByTestId('run-concurrency-cell');
+    expect(cells[0].textContent).toBe('3');
+    expect(cells[1].textContent).toBe('—');
+
+    fireEvent.click(header);
+    expect(props.onSort).toHaveBeenCalledWith('concurrency');
+  });
 });
 
 describe('RunFilterPills', () => {

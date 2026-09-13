@@ -103,6 +103,8 @@ export interface StorageBenchmarkRunConfig {
   evaluatorId?: string;
   headers?: Record<string, string>;
   iterationCount?: number;
+  /** Parallel test case execution limit (1 = sequential). See BenchmarkRun.concurrency in types/index.ts. */
+  concurrency?: number;
   createdAt: string;
   results?: Record<string, { reportId: string; status: string; error?: string }>;
   status?: string;

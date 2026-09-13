@@ -74,8 +74,8 @@ export const RunFilterPills: React.FC<{
 
 // ─── Table ───────────────────────────────────────────────────────────────────
 
-function SortHeader({ label, field, sort, onSort, className }: {
-  label: string; field: RunSortField; sort: RunSort; onSort: (f: RunSortField) => void; className?: string;
+function SortHeader({ label, field, sort, onSort, className, title }: {
+  label: string; field: RunSortField; sort: RunSort; onSort: (f: RunSortField) => void; className?: string; title?: string;
 }) {
   const active = sort.field === field;
   return (
@@ -84,6 +84,7 @@ function SortHeader({ label, field, sort, onSort, className }: {
       aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
       className={`h-7 px-2 text-left align-middle font-medium text-[11px] text-muted-foreground bg-background border-b cursor-pointer select-none hover:text-foreground transition-colors whitespace-nowrap ${className || ''}`}
       onClick={() => onSort(field)}
+      title={title}
     >
       <span className="inline-flex items-center gap-1">
         {label}
@@ -177,7 +178,7 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
     testCases, reportsById, onSelectCase, expandedRunIds, onToggleExpand, benchmarkId,
   } = props;
 
-  const colCount = 10 + (selectable ? 1 : 0);
+  const colCount = 11 + (selectable ? 1 : 0);
 
   return (
     <div className="rounded-md border overflow-x-auto" data-testid="benchmark-runs-table">
@@ -189,6 +190,14 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
             <SortHeader label="Agent" field="agent" sort={sort} onSort={onSort} />
             <SortHeader label="Model" field="model" sort={sort} onSort={onSort} />
             <SortHeader label="Size" field="size" sort={sort} onSort={onSort} className="text-right" />
+            <SortHeader
+              label="Conc."
+              field="concurrency"
+              sort={sort}
+              onSort={onSort}
+              className="text-right"
+              title="Concurrency — parallel test cases"
+            />
             <SortHeader label="Pass %" field="passRate" sort={sort} onSort={onSort} className="text-right" />
             <SortHeader label="Judge" field="evaluator" sort={sort} onSort={onSort} />
             <SortHeader label="J. Model" field="judge" sort={sort} onSort={onSort} />
@@ -293,6 +302,9 @@ export const BenchmarkRunsTable: React.FC<BenchmarkRunsTableProps> = (props) => 
                   <FilterCell row={row} field="agent" filters={filters} onToggle={onToggleFilter} />
                   <FilterCell row={row} field="model" filters={filters} onToggle={onToggleFilter} mono />
                   <td className="px-2 py-1 align-middle text-right text-[11px] tabular-nums" data-testid="run-size-cell">{row.size}</td>
+                  <td className="px-2 py-1 align-middle text-right text-[11px] tabular-nums text-muted-foreground" data-testid="run-concurrency-cell" title="Concurrency — parallel test cases">
+                    {row.concurrency === undefined ? '—' : row.concurrency}
+                  </td>
                   <td className="px-2 py-1 align-middle text-right whitespace-nowrap" data-testid="run-passrate-cell">
                     <span
                       className={`text-xs font-semibold tabular-nums ${passRateColor(row.passRate)}`}

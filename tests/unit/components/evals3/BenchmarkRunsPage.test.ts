@@ -351,7 +351,7 @@ describe('BenchmarkRunsPage2 — Runs tab table, chart and click-to-filter', () 
 
     const headers = Array.from(document.querySelectorAll('[data-testid="benchmark-runs-table"] thead th'))
       .map(th => th.textContent?.trim()).filter(Boolean);
-    expect(headers).toEqual(['Run', 'Agent', 'Model', 'Size', 'Pass %', 'Judge', 'J. Model', 'Date']);
+    expect(headers).toEqual(['Run', 'Agent', 'Model', 'Size', 'Conc.', 'Pass %', 'Judge', 'J. Model', 'Date']);
 
     const cc = screen.getByText('CC Run').closest('[data-testid="run-row"]') as HTMLElement;
     const link = within(cc).getByTestId('run-name-link');

@@ -60,6 +60,13 @@ export interface RunTableRow {
   passRate: number | null;
   /** Number of test cases in the run (snapshotted size, falling back to results). */
   size: number;
+  /**
+   * Parallel test case execution limit (1 = sequential). `undefined` for
+   * legacy runs persisted before this field existed -- rendered as "—",
+   * never coerced to a number so it can't be confused with an actual value
+   * of 1.
+   */
+  concurrency: number | undefined;
 }
 
 export interface RowLabelResolvers {
@@ -110,6 +117,7 @@ export function buildRunTableRow(run: BenchmarkRun, resolve: RowLabelResolvers):
   const notRun = terminal ? Math.max(0, total - settled) : 0;
   const pending = terminal ? 0 : Math.max(0, total - settled - running);
   const size = run.testCaseSnapshots?.length || total;
+  const concurrency = run.concurrency;
   const agentKey = run.agentKey || '';
   const modelId = run.modelId || '';
   const judgeModelId = run.judgeModelId || '';
@@ -128,6 +136,7 @@ export function buildRunTableRow(run: BenchmarkRun, resolve: RowLabelResolvers):
     passed, failed, errored, pending, running, notRun, total,
     passRate: computePassRate(passed, failed),
     size,
+    concurrency,
   };
 }
 
@@ -188,7 +197,7 @@ export function applyRunFilters(rows: RunTableRow[], filters: RunFilter[]): RunT
 
 // ─── Sorting ─────────────────────────────────────────────────────────────────
 
-export type RunSortField = 'name' | 'agent' | 'model' | 'size' | 'passRate' | 'judge' | 'evaluator' | 'date';
+export type RunSortField = 'name' | 'agent' | 'model' | 'size' | 'concurrency' | 'passRate' | 'judge' | 'evaluator' | 'date';
 export interface RunSort { field: RunSortField; dir: 'asc' | 'desc'; }
 
 export const DEFAULT_RUN_SORT: RunSort = { field: 'date', dir: 'desc' };
@@ -197,7 +206,7 @@ export function toggleRunSort(current: RunSort, field: RunSortField): RunSort {
   if (current.field === field) return { field, dir: current.dir === 'asc' ? 'desc' : 'asc' };
   // Numeric/date columns default to descending (biggest/newest first);
   // text columns to ascending.
-  const numeric: RunSortField[] = ['size', 'passRate', 'date'];
+  const numeric: RunSortField[] = ['size', 'concurrency', 'passRate', 'date'];
   return { field, dir: numeric.includes(field) ? 'desc' : 'asc' };
 }
 
@@ -218,6 +227,7 @@ export function sortRunRows(rows: RunTableRow[], sort: RunSort): RunTableRow[] {
       case 'judge': return dir * a.judgeLabel.localeCompare(b.judgeLabel);
       case 'evaluator': return dir * a.evaluatorLabel.localeCompare(b.evaluatorLabel);
       case 'size': return cmpNum(a.size, b.size);
+      case 'concurrency': return cmpNum(a.concurrency ?? null, b.concurrency ?? null);
       case 'passRate': return cmpNum(a.passRate, b.passRate);
       case 'date':
       default:

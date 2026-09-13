@@ -141,7 +141,7 @@ test.describe('Benchmark Runs tab — table + chart + click-to-filter pills', ()
 
     // Column headers exactly as sketched (+ Run as the first column).
     const headers = await page.locator('[data-testid="benchmark-runs-table"] thead th').allInnerTexts();
-    expect(headers.map(h => h.trim()).filter(Boolean)).toEqual(['Run', 'Agent', 'Model', 'Size', 'Pass %', 'Judge', 'J. Model', 'Date']);
+    expect(headers.map(h => h.trim()).filter(Boolean)).toEqual(['Run', 'Agent', 'Model', 'Size', 'Conc.', 'Pass %', 'Judge', 'J. Model', 'Date']);
 
     // Chart sits ABOVE the table with one legend entry per agent.
     const chart = page.getByTestId('benchmark-passrate-chart');

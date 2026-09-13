@@ -217,6 +217,23 @@ describe('EvalRunsPage — Flat/Grouped view toggle', () => {
     expect(row.querySelector('.text-green-500')?.textContent).toBe('1');
     expect(row.querySelector('.text-red-500')?.textContent).toBe('1');
   });
+
+  it('renders the run\'s concurrency value, and an em dash for legacy runs missing the field', async () => {
+    mockGetAllBenchmarks.mockResolvedValueOnce([
+      makeBenchmark({ id: 'bench-1', name: 'Benchmark One', runs: [makeRun({ id: 'run-1', name: 'Run One', concurrency: 3 })] }),
+      makeBenchmark({ id: 'bench-2', name: 'Benchmark Two', runs: [makeRun({ id: 'run-2', name: 'Run Two', concurrency: undefined })] }),
+    ]);
+    await renderPage();
+
+    expect(screen.getByRole('columnheader', { name: 'Conc.' })).toBeTruthy();
+
+    await waitFor(() => expect(screen.getByText('Run One')).toBeTruthy());
+    const rowOne = screen.getByText('Run One').closest('tr') as HTMLElement;
+    expect(rowOne.querySelector('[data-testid="run-concurrency-cell"]')?.textContent).toBe('3');
+
+    const rowTwo = screen.getByText('Run Two').closest('tr') as HTMLElement;
+    expect(rowTwo.querySelector('[data-testid="run-concurrency-cell"]')?.textContent).toBe('—');
+  });
 });
 
 describe('EvalRunsPage — top-level evaluation-runs merge (RunRow convergence)', () => {

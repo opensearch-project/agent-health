@@ -116,8 +116,8 @@ interface RunRow {
  * drops the Benchmark column. The group-header row's own colSpan is GROUPED_COLUMN_COUNT - 1
  * (the checkbox cell is rendered as its own separate <td> before it).
  */
-const FLAT_COLUMN_COUNT = 11;
-const GROUPED_COLUMN_COUNT = 10;
+const FLAT_COLUMN_COUNT = 12;
+const GROUPED_COLUMN_COUNT = 11;
 
 function SortHeader({ label, active, dir, onClick, className }: {
   label: string; active: boolean; dir: 'asc' | 'desc'; onClick: () => void; className?: string;
@@ -762,6 +762,9 @@ export const EvalRunsPage: React.FC = () => {
         )}
         <td className="px-2 py-1.5 align-middle text-[11px]">{rr.agentName}</td>
         <td className="px-2 py-1.5 align-middle text-[11px]">{getModelName(rr.run.modelId)}</td>
+        <td className="px-2 py-1.5 align-middle text-right text-[11px] text-muted-foreground" data-testid="run-concurrency-cell" title="Concurrency — parallel test cases">
+          {rr.run.concurrency === undefined ? '—' : rr.run.concurrency}
+        </td>
         <td className="px-2 py-1.5 align-middle text-[11px]" data-testid="run-judge-cell">{getJudgeModelLabel(rr.run.judgeModelId)}</td>
         <td className="px-2 py-1.5 align-middle text-[11px]" data-testid="run-evaluator-cell">
           {rr.run.evaluatorId ? (
@@ -1147,6 +1150,12 @@ export const EvalRunsPage: React.FC = () => {
               )}
               <SortHeader label="Agent" active={sort.field === 'agent'} dir={sort.dir} onClick={() => handleSort('agent')} />
               <th className="h-7 px-2 text-left align-middle font-medium text-xs text-muted-foreground bg-background border-b whitespace-nowrap">Model</th>
+              <th
+                className="h-7 px-2 text-right align-middle font-medium text-xs text-muted-foreground bg-background border-b whitespace-nowrap"
+                title="Concurrency — parallel test cases"
+              >
+                Conc.
+              </th>
               <SortHeader label="Judge" active={sort.field === 'judge'} dir={sort.dir} onClick={() => handleSort('judge')} />
               <SortHeader label="Evaluator" active={sort.field === 'evaluator'} dir={sort.dir} onClick={() => handleSort('evaluator')} />
               <SortHeader label="Timestamp" active={sort.field === 'timestamp'} dir={sort.dir} onClick={() => handleSort('timestamp')} />

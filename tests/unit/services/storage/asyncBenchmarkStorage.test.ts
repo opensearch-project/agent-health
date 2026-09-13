@@ -130,6 +130,31 @@ describe('AsyncBenchmarkStorage', () => {
       expect(result?.runs[0].results['tc-1'].status).toBe('completed');
       expect(result?.runs[0].results['tc-2'].status).toBe('pending');
     });
+
+    it('carries a run\'s concurrency through the storage mapper (regression: toBenchmarkRun is an allow-list mapper that silently dropped it)', async () => {
+      const withConcurrency = createMockStorageExperiment();
+      (withConcurrency.runs[0] as any).concurrency = 3;
+      mockOsExperiments.getById.mockResolvedValueOnce(withConcurrency);
+
+      const result = await asyncBenchmarkStorage.getById('exp-1');
+      expect(result?.runs[0].concurrency).toBe(3);
+
+      // A legacy run with no concurrency field at all stays undefined --
+      // never coerced to 0/null, which the UI would render as a real value
+      // instead of the "—" legacy fallback.
+      mockOsExperiments.getById.mockResolvedValueOnce(createMockStorageExperiment());
+      const legacyResult = await asyncBenchmarkStorage.getById('exp-1');
+      expect(legacyResult?.runs[0].concurrency).toBeUndefined();
+    });
+
+    it('normalizes a schemaless stored `null` concurrency to `undefined` (codex_review finding: render sites only check `=== undefined`)', async () => {
+      const withNullConcurrency = createMockStorageExperiment();
+      (withNullConcurrency.runs[0] as any).concurrency = null;
+      mockOsExperiments.getById.mockResolvedValueOnce(withNullConcurrency);
+
+      const result = await asyncBenchmarkStorage.getById('exp-1');
+      expect(result?.runs[0].concurrency).toBeUndefined();
+    });
   });
 
   describe('create', () => {
@@ -188,6 +213,26 @@ describe('AsyncBenchmarkStorage', () => {
               judgeModelId: 'us.anthropic.claude-sonnet-4-6',
               evaluatorId: 'example-evaluator-persona',
             }),
+          ]),
+        })
+      );
+    });
+
+    it('preserves concurrency when converting runs to storage format (regression: toStorageFormat is an allow-list mapper)', async () => {
+      const createdExp = createMockStorageExperiment('new-exp');
+      mockOsExperiments.create.mockResolvedValue(createdExp);
+
+      await asyncBenchmarkStorage.create({
+        name: 'Test',
+        description: 'Test',
+        testCaseIds: [],
+        runs: [{ ...createMockBenchmarkRun(), concurrency: 5 }],
+      });
+
+      expect(mockOsExperiments.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runs: expect.arrayContaining([
+            expect.objectContaining({ concurrency: 5 }),
           ]),
         })
       );
@@ -411,6 +456,27 @@ describe('AsyncBenchmarkStorage', () => {
         expect.objectContaining({
           runs: expect.arrayContaining([
             expect.objectContaining({ id: 'run-2', judgeModelId: 'us.anthropic.claude-sonnet-4-6', evaluatorId: 'example-evaluator-persona' }),
+          ]),
+        })
+      );
+      consoleSpy.mockRestore();
+    });
+
+    it('preserves concurrency when adding a run (regression: this inline storage mapper had its own separate whitelist too)', async () => {
+      const exp = createMockStorageExperiment();
+      mockOsExperiments.getById.mockResolvedValue(exp);
+      mockOsExperiments.update.mockResolvedValue(undefined);
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      const newRun = { ...createMockBenchmarkRun('run-2'), concurrency: 4 };
+      const result = await asyncBenchmarkStorage.addRun('exp-1', newRun);
+
+      expect(result).toBe(true);
+      expect(mockOsExperiments.update).toHaveBeenCalledWith(
+        'exp-1',
+        expect.objectContaining({
+          runs: expect.arrayContaining([
+            expect.objectContaining({ id: 'run-2', concurrency: 4 }),
           ]),
         })
       );

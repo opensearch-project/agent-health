@@ -592,6 +592,9 @@ export const RunInspectorPage: React.FC = () => {
             <span className="flex items-center gap-1"><Calendar size={11} /> {formatDate(run.createdAt)}</span>
             <span>{agentName}</span>
             <span>{modelName}</span>
+            {run.concurrency !== undefined && (
+              <span data-testid="run-inspector-concurrency" title="Concurrency — parallel test cases">· conc {run.concurrency}</span>
+            )}
             <span className="flex items-center gap-1">
               <span className="text-green-500 font-semibold">{passCount}✓</span>
               <span className="text-red-500 font-semibold">{failCount}✗</span>
