@@ -67,7 +67,7 @@ export const AssistantModal: React.FC = () => {
       </AssistantModalPrimitive.Anchor>
 
       <AssistantModalPrimitive.Content
-        className="z-50 h-[500px] w-[400px] rounded-xl border bg-background shadow-2xl flex flex-col overflow-hidden max-sm:h-dvh max-sm:w-dvw max-sm:rounded-none"
+        className="z-50 h-[500px] w-[400px] rounded-xl border bg-background shadow-2xl flex flex-col overflow-hidden max-lg:!max-w-[calc(100vw-1rem)] max-lg:!max-h-[calc(100dvh-1rem)] max-lg:overflow-y-auto max-sm:h-dvh max-sm:w-dvw max-sm:rounded-none"
         sideOffset={16}
         data-testid="assistant-modal-content"
       >
