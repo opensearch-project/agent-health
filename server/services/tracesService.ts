@@ -304,6 +304,87 @@ export function buildSessionIdShouldClauses(sessionIds: readonly string[]): Reco
   return attributeFieldPaths('session.id').map((field) => ({ terms: { [field]: sessionIds } }));
 }
 
+/**
+ * One Strategy C/D correlation hint: the OTel `service.name` an agent emits
+ * under plus the wall-clock window of ONE run (Strategy C), optionally with
+ * the agent-emitted `session.id` for that run (Strategy D). This is the
+ * `agents[]` element shape `/api/traces` has always accepted (see
+ * `TracesQueryOptions.agents` in types/index.ts); `/api/metrics/batch` now
+ * accepts the same shape so every reader of the trace cluster correlates
+ * with ONE vocabulary.
+ */
+export interface ServiceWindowHint {
+  serviceName: string;
+  startedAt: number;
+  endedAt: number;
+  sessionId?: string;
+}
+
+/**
+ * Strategy C clause for one hint: `service.name` (or the nested
+ * `gen_ai.agent.name` alternate) AND `startTime` within `[startedAt, endedAt]`.
+ *
+ * NOTE (schema audit): `attributes.gen_ai.agent.name` is the nested path
+ * only — on a flat-@ index the attribute lives at
+ * `span.attributes.gen_ai@agent@name` and this alternate never matches;
+ * `serviceName` (top-level in both schemas) is what carries Strategy C
+ * there. Deliberately NOT widened here: doing so changes Strategy C's
+ * false-positive surface (agents sharing one gen_ai.agent.name across
+ * several service names), which is a separate decision from any
+ * correlation fix. Tracked as a follow-up.
+ */
+export function buildServiceWindowClause(hint: Pick<ServiceWindowHint, 'serviceName' | 'startedAt' | 'endedAt'>): Record<string, unknown> {
+  return {
+    bool: {
+      must: [
+        {
+          bool: {
+            should: [
+              { term: { 'serviceName': hint.serviceName } },
+              { term: { 'attributes.gen_ai.agent.name': hint.serviceName } },
+            ],
+            minimum_should_match: 1,
+          },
+        },
+        {
+          range: {
+            'startTime': {
+              gte: new Date(hint.startedAt).toISOString(),
+              lte: new Date(hint.endedAt).toISOString(),
+            },
+          },
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * The full clause for one `agents[]` hint: Strategy C alone when the hint has
+ * no session id; otherwise `(session.id == hint.sessionId) OR (Strategy C)`
+ * so the precise Strategy-D correlator is preferred and the service window
+ * only fills in spans it doesn't cover. This is the SINGLE place that shape
+ * is spelled out — `fetchTraces` (Traces tab, judge / comparison trace
+ * tools) and `metricsService` (`/api/metrics`, `/api/metrics/batch`) both
+ * build their per-hint clause through it, so the two readers can't drift
+ * apart again (the comparison page's Cost/Tokens/LLM-calls went blank for
+ * every REST-connector run that carried no correlation id even though the
+ * Traces tab and the trace judge found the same spans through this clause).
+ */
+export function buildAgentHintClause(hint: ServiceWindowHint): Record<string, unknown> {
+  const strategyC = buildServiceWindowClause(hint);
+  if (!hint.sessionId) return strategyC;
+  return {
+    bool: {
+      should: [
+        ...buildSessionIdShouldClauses([hint.sessionId]),
+        strategyC,
+      ],
+      minimum_should_match: 1,
+    },
+  };
+}
+
 // ============================================================================
 // Query Functions
 // ============================================================================
@@ -392,58 +473,13 @@ export async function fetchTraces(
 
   if (agents && agents.length > 0) {
     for (const a of agents) {
-      // Strategy C: service.name (or gen_ai.agent.name) within the run window.
-      // NOTE (schema audit): `attributes.gen_ai.agent.name` is the nested path
-      // only — on a flat-@ index the attribute lives at
-      // `span.attributes.gen_ai@agent@name` and this alternate never matches;
-      // `serviceName` (top-level in both schemas) is what carries Strategy C
-      // there. Deliberately NOT widened here: doing so changes Strategy C's
-      // false-positive surface (agents sharing one gen_ai.agent.name across
-      // several service names), which is a separate decision from the
-      // Strategy-B fix. Tracked as a follow-up.
-      const strategyC = {
-        bool: {
-          must: [
-            {
-              bool: {
-                should: [
-                  { term: { 'serviceName': a.serviceName } },
-                  { term: { 'attributes.gen_ai.agent.name': a.serviceName } },
-                ],
-                minimum_should_match: 1,
-              },
-            },
-            {
-              range: {
-                'startTime': {
-                  gte: new Date(a.startedAt).toISOString(),
-                  lte: new Date(a.endedAt).toISOString(),
-                },
-              },
-            },
-          ],
-        },
-      };
-      if (a.sessionId) {
-        // Strategy D: the agent's emitted session.id is a precise per-run
-        // correlator (Claude Code stamps session.id on every span). Prefer it,
-        // unioned with Strategy C as a fallback for spans it doesn't cover.
-        // Match BOTH `attributes.session.id` and its `.keyword` sub-field: a
-        // UUID like `faee44ca-...` is text-analyzed (split on `-`), so a plain
-        // `term` on the analyzed field never matches — the `.keyword` exact field
-        // is what actually correlates (see buildSessionIdShouldClauses).
-        sink.push({
-          bool: {
-            should: [
-              ...buildSessionIdShouldClauses([a.sessionId]),
-              strategyC,
-            ],
-            minimum_should_match: 1,
-          },
-        });
-      } else {
-        sink.push(strategyC);
-      }
+      // Strategy C: service.name (or gen_ai.agent.name) within the run window,
+      // optionally unioned with Strategy D (the agent's emitted session.id —
+      // a precise per-run correlator, e.g. Claude Code stamps it on every
+      // span — preferred, with the window as fallback for spans it doesn't
+      // cover). Built through the shared helper so /api/metrics uses the
+      // identical clause; see buildAgentHintClause for the schema notes.
+      sink.push(buildAgentHintClause(a));
     }
   }
 

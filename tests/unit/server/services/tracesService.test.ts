@@ -10,6 +10,8 @@ import {
   attributeFieldPaths,
   buildRunIdShouldClauses,
   buildSessionIdShouldClauses,
+  buildServiceWindowClause,
+  buildAgentHintClause,
   RUN_ID_ATTRIBUTES,
   OpenSearchSpanSource,
 } from '@/server/services/tracesService';
@@ -542,6 +544,51 @@ describe('tracesService', () => {
         { terms: { 'attributes.session.id.keyword': ['s1', 's2'] } },
         { terms: { 'span.attributes.session@id': ['s1', 's2'] } },
       ]);
+    });
+
+    it('buildServiceWindowClause: service.name (or gen_ai.agent.name) AND startTime within the ISO window — exact DSL', () => {
+      expect(buildServiceWindowClause({ serviceName: 'example-agent', startedAt: 1_000, endedAt: 2_000 })).toEqual({
+        bool: {
+          must: [
+            {
+              bool: {
+                should: [
+                  { term: { serviceName: 'example-agent' } },
+                  { term: { 'attributes.gen_ai.agent.name': 'example-agent' } },
+                ],
+                minimum_should_match: 1,
+              },
+            },
+            { range: { startTime: { gte: '1970-01-01T00:00:01.000Z', lte: '1970-01-01T00:00:02.000Z' } } },
+          ],
+        },
+      });
+    });
+
+    it('buildAgentHintClause: Strategy C alone without a sessionId; (session.id OR window) with one', () => {
+      const window = buildServiceWindowClause({ serviceName: 'a', startedAt: 1, endedAt: 2 });
+      expect(buildAgentHintClause({ serviceName: 'a', startedAt: 1, endedAt: 2 })).toEqual(window);
+      expect(buildAgentHintClause({ serviceName: 'a', startedAt: 1, endedAt: 2, sessionId: 's' })).toEqual({
+        bool: {
+          should: [...buildSessionIdShouldClauses(['s']), window],
+          minimum_should_match: 1,
+        },
+      });
+    });
+
+    it('fetchTraces emits EXACTLY buildAgentHintClause for each agents[] entry (single source of truth shared with /api/metrics)', async () => {
+      const search = jest.fn().mockResolvedValue({ body: { hits: { hits: [], total: { value: 0 } } } });
+      const client = createMockClient({ search });
+      const hints = [
+        { serviceName: 'a', startedAt: 1_000, endedAt: 2_000 },
+        { serviceName: 'b', startedAt: 3_000, endedAt: 4_000, sessionId: 'sess-b' },
+      ];
+
+      await fetchTraces({ agents: hints }, client);
+
+      const query = search.mock.calls[0][0].body.query;
+      // Two hints => union via bool.should; each entry is the shared helper's output verbatim.
+      expect(query.bool.should).toEqual(hints.map(buildAgentHintClause));
     });
   });
 

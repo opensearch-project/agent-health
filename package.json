@@ -62,6 +62,8 @@
     "migrate:labels": "ts-node scripts/migrate-to-labels.ts",
     "migrate:labels:dry-run": "ts-node scripts/migrate-to-labels.ts --dry-run --verbose",
     "migrate:labels:cleanup": "ts-node scripts/migrate-to-labels.ts --cleanup",
+    "smoke:telemetry": "tsx scripts/smoke-telemetry.ts",
+    "backfill:report-run-ids": "tsx scripts/backfill-report-run-ids.ts",
     "test": "jest",
     "test:unit": "jest --testPathPatterns='__tests__|.test.ts' --testPathIgnorePatterns='tests/integration|tests/e2e'",
     "test:integration": "jest --testPathPatterns='tests/integration'",

@@ -36,9 +36,7 @@ import {
   getRealTestCaseMeta,
   countRowsByStatus,
   calculateRowStatus,
-  collectRunIdsFromReports,
-  collectSessionIdsFromReports,
-  collectTraceIdsFromReports,
+  collectMetricsCorrelationFromReports,
   calculateCombinedScore,
   computeTestCaseOverlap,
   RowStatus,
@@ -51,6 +49,15 @@ type StatusFilter = 'all' | 'passed' | 'failed' | 'mixed';
 
 const getAgentName = (key: string) =>
   DEFAULT_CONFIG.agents.find(a => a.key === key)?.name || key;
+
+/**
+ * The OTel `service.name` an agent is configured to emit spans under
+ * (`AgentConfig.traceServiceName`, from agent-health.config.ts via
+ * `refreshConfig()`), used for the Strategy-C metrics correlation hint. The
+ * same lookup the run-report Traces tab performs.
+ */
+const getAgentTraceServiceName = (key: string | undefined) =>
+  key ? DEFAULT_CONFIG.agents.find(a => a.key === key)?.traceServiceName : undefined;
 
 /** A selectable run plus the benchmark it came from (label only). */
 interface RunPoolEntry {
@@ -380,16 +387,20 @@ export const ComparisonPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runPool, selectedRunIds]);
 
-  // Fetch trace metrics for the selected runs.
+  // Fetch trace metrics for the selected runs. Every report is keyed by its
+  // runId (or its own id when the connector produced none) and correlated by
+  // the union of Strategy A/B/C/D — the same hints the trace judge and the
+  // Traces tab use — so a run whose reports carry no correlation id at all
+  // still gets Cost / Tokens / LLM Calls from its agent's service-name +
+  // time-window spans instead of a blank scoreboard row.
   useEffect(() => {
     const loadTraceMetrics = async () => {
       const selectedRunsForMetrics = runPool.filter(p => selectedRunIds.includes(p.run.id)).map(p => p.run);
-      const runIds = collectRunIdsFromReports(selectedRunsForMetrics, reports);
-      const sessionIdByRunId = collectSessionIdsFromReports(selectedRunsForMetrics, reports);
-      const traceIdByRunId = collectTraceIdsFromReports(selectedRunsForMetrics, reports);
-      if (runIds.length === 0) { setTraceMetricsMap(new Map()); return; }
+      const { keys, sessionIdByKey, traceIdByKey, agentsByKey } =
+        collectMetricsCorrelationFromReports(selectedRunsForMetrics, reports, getAgentTraceServiceName);
+      if (keys.length === 0) { setTraceMetricsMap(new Map()); return; }
       try {
-        const { metrics } = await fetchBatchMetrics(runIds, sessionIdByRunId, traceIdByRunId);
+        const { metrics } = await fetchBatchMetrics(keys, sessionIdByKey, traceIdByKey, agentsByKey);
         const map = new Map<string, TraceMetrics>();
         metrics.forEach(m => { if (m.runId && !('error' in m)) map.set(m.runId, m as TraceMetrics); });
         setTraceMetricsMap(map);
