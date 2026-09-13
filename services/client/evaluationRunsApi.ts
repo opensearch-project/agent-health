@@ -100,6 +100,8 @@ export async function executeEvaluationRun(
         }
       }
 
+      // SSE comment lines (`: ping` heartbeats from the server) carry no
+      // `data:` field and are skipped here — they only keep the socket warm.
       if (!eventData) continue;
 
       try {
