@@ -17,6 +17,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { PREFS_KEYS, SharedTimeRange, sharedTimeRangeToMinutes } from '@/lib/preferences';
+import { markPageReady } from '@/lib/pageLatency';
 import {
   Search,
   RefreshCw,
@@ -681,6 +682,7 @@ export const AgentTracesPage: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to fetch traces');
     } finally {
       setIsLoading(false);
+      markPageReady('traces');
     }
   }, [selectedAgent, debouncedSearch, timeRange, processSpansToTraces, sortTraces]);
 

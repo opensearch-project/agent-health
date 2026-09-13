@@ -47,6 +47,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { AssistantProvider } from "@/components/assistant-ui/AssistantProvider";
 import { AssistantModal } from "@/components/assistant-ui/AssistantModal";
+import { DebugLatencyHud } from "@/components/DebugLatencyHud";
+import { startNavigation } from "@/lib/pageLatency";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -97,6 +99,12 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   // Route changes close the off-canvas navigation after a mobile selection.
   useEffect(() => setMobileNavOpen(false), [location.pathname]);
+
+  // Debug/dev-mode page-latency instrumentation (lib/pageLatency.ts) --
+  // a no-op when neither is active. Every route change starts a fresh
+  // navigation window; the page itself reports when it's done loading via
+  // markPageReady().
+  useEffect(() => startNavigation(location.pathname), [location.pathname]);
 
   // Chrome-vertical-tabs-style hover-open: when the sidebar is pinned
   // collapsed to the icon rail, hovering (or keyboard-focusing) it temporarily
@@ -533,6 +541,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
           {children}
           <AssistantModal />
         </AssistantProvider>
+        <DebugLatencyHud />
       </SidebarInset>
       </SidebarProvider>
     </SidebarCollapseContext.Provider>

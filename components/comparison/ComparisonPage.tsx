@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { markPageReady } from '@/lib/pageLatency';
 import {
   Select,
   SelectContent,
@@ -318,6 +319,7 @@ export const ComparisonPage: React.FC = () => {
         console.error('[ComparisonPage] Failed to load run pool:', err);
       } finally {
         setIsLoading(false);
+        markPageReady('comparison');
       }
     };
 

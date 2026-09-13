@@ -18,6 +18,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { usePersistedSet } from '@/hooks/usePersistedSet';
 import { PREFS_KEYS } from '@/lib/preferences';
+import { markPageReady } from '@/lib/pageLatency';
 import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Search, RefreshCw,
@@ -225,6 +226,7 @@ export const EvalRunsPage: React.FC = () => {
       console.error('Failed to load:', err);
     } finally {
       setLoading(false);
+      markPageReady('eval-runs');
     }
   }, []);
 
