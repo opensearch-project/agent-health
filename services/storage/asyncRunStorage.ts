@@ -373,9 +373,16 @@ class AsyncRunStorage {
     // `metrics` added for RunInsightsPane's "Avg Score" detail (run-report-insights):
     // it's a small dynamic object of a handful of numeric fields, not the
     // trajectory/messages bloat #429 fixed - safe to include in the summary.
+    // `runId` / `connectorProtocol` / `performanceMetrics` added for the
+    // benchmark Runs table's telemetry columns (useRunTelemetry): the batch
+    // metrics request is keyed by the connector's native runId (falling back
+    // to traceId, see toTestCaseRun) and carries Strategy-C hints derived
+    // from the protocol + the per-case wall-clock (a 2-field object) —
+    // still KBs per 100 reports, no trajectory/messages bloat.
     const fields = [
-      'status', 'passFailStatus', 'metricsStatus', 'traceId', 'sessionId',
+      'status', 'passFailStatus', 'metricsStatus', 'traceId', 'runId', 'sessionId',
       'judgeModelId', 'modelId', 'agentId', 'testCaseId', 'createdAt', 'annotations', 'metrics',
+      'connectorProtocol', 'performanceMetrics',
     ];
     // Chunk to keep the URL well under practical limits for large benchmarks.
     const stored = await fetchChunked(reportIds, REPORT_ID_CHUNK_SIZE, chunk => opensearchRuns.getByIds(chunk, { fields }));

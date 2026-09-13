@@ -42,6 +42,8 @@ import { RunConfigDialog } from './RunConfigDialog';
 import { RetryJudgementConfirmDialog } from './RetryJudgementConfirmDialog';
 import type { RetryJudgementSummary } from '@/services/client';
 import { RunActionsMenu } from './RunActionsMenu';
+import { RunTelemetryStrip } from './RunTelemetryStrip';
+import { useRunTelemetry } from '@/hooks/useRunTelemetry';
 
 interface TestCaseResult {
   testCaseId: string;
@@ -331,6 +333,22 @@ export const RunInspectorPage: React.FC = () => {
   // one code path (dialog → retryJudgement() with progress polling), not a
   // second fire-and-forget one.
   const handleRetryJudgement = () => { setRetryJudgementDialogOpen(true); };
+
+  // Telemetry strip (tokens · cost · LLM calls · tool calls · median time/case
+  // · spans N/M): ONE batch metrics call for this run's reports, correlated by
+  // the same A/B/C/D hints the Traces tab uses. Fed from the summaries loaded
+  // above (runId / sessionId / traceId / connectorProtocol / performanceMetrics
+  // ride along on the lightweight batch), so no extra report fetch.
+  const telemetryRuns = React.useMemo(
+    () => (run ? [{ id: run.id, status: run.status, results: run.results }] : []),
+    [run],
+  );
+  const telemetryReports = React.useMemo(() => {
+    const out: Record<string, EvaluationReport> = {};
+    for (const r of results) if (r.reportId && r.report) out[r.reportId] = r.report;
+    return out;
+  }, [results]);
+  const runTelemetry = useRunTelemetry(telemetryRuns, telemetryReports, { enabled: !!run && !loading });
 
   // Resolve the source run name for the rerunOf provenance chip (EvaluationRun only).
   useEffect(() => {
@@ -635,6 +653,15 @@ export const RunInspectorPage: React.FC = () => {
             })()}
           </div>
         </div>
+        {/* Telemetry strip — owner ask (2026-09-09): telemetry on every page,
+            especially the benchmark ones. Compact, read-only; "—" with a
+            tooltip when no spans were found for any case. */}
+        <RunTelemetryStrip
+          telemetry={runTelemetry.byRunId[run.id]}
+          loading={runTelemetry.loadingRunIds.has(run.id)}
+          onRetry={runTelemetry.refetch}
+          className="mt-2"
+        />
         {/* Run-level judge-failure banner (lib/judgeFailureSummary.ts). Before
             this existed, a run whose cases all failed AT THE JUDGE STEP
             (e.g. the agent-trace-judge's pre-fix "needs a runId or trace
