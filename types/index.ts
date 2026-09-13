@@ -523,6 +523,18 @@ export interface TestCaseRun {
    * existed. See server/services/piAgenticJudgeService.ts.
    */
   judgeMode?: 'trajectory-only' | 'trace-tools';
+  /**
+   * Set when this report's judgement was re-run via "Retry judgement"
+   * (`POST /api/storage/evaluation-runs/:id/retry-judgement`). Only the
+   * LATEST judgement is kept — the judgement fields above (`passFailStatus`,
+   * `metrics`, `llmJudgeReasoning`, `llmJudgeResponse`, `judgeModelId`,
+   * `evaluatorId`, `judgeMode`, `matcherResults`) are overwritten in place;
+   * this timestamp is what tells the UI to say "Re-judged <when> with
+   * <evaluator> · <model>". The agent output itself is never rewritten.
+   */
+  judgementRetriedAt?: string;
+  /** How many times the judgement was retried (1 on the first retry). */
+  judgementRetryCount?: number;
 }
 
 // Alias for backwards compatibility during migration
@@ -1283,6 +1295,19 @@ export interface EvaluationRun {
    * doc-status-only fallback cancel. See POST .../:id/cancel.
    */
   cancelNote?: string;
+  /**
+   * What the most recent "Retry judgement" on this run was launched with.
+   * Seeds the Retry-judgement dialog's defaults next time ("defaults will
+   * be the last selected ones"); falls back to `evaluatorId` /
+   * `judgeModelId` above when absent. `null` = the evaluator/model default
+   * was chosen explicitly. Only the last retry is remembered (no history).
+   */
+  lastJudgementRetry?: {
+    evaluatorId: string | null;
+    judgeModelId: string | null;
+    scope: 'errored' | 'all';
+    at: string;
+  };
 }
 
 /**

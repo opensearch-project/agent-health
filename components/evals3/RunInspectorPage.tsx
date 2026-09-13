@@ -592,29 +592,32 @@ export const RunInspectorPage: React.FC = () => {
                 judge-failed count), never on URL-derived `mode`.
                   - Re-run: EvaluationRun docs only (BenchmarkRun has no
                     rerun endpoint) → opens the prefilled RunConfigDialog.
-                  - Retry judgement: EvaluationRun + terminal + >0
-                    judge-failed cases; label carries the count. Salvages
-                    judge-failed cases at judge cost only — never re-invokes
-                    the agent (services/evaluation/retryJudgement.ts).
+                  - Retry judgement: EvaluationRun + terminal + >0 completed
+                    cases (always retryable — owner follow-up to #468); the
+                    dialog picks evaluator / judge model / scope. Label carries
+                    the default scope's count (judge-failed cases when any,
+                    else all). Judge cost only — never re-invokes the agent
+                    (services/evaluation/retryJudgement.ts).
                   - Cancel: status running only.
                   - Delete: always, behind a confirm. */}
             {(() => {
               const visibility = getRunActionVisibility(run);
-              // Retry judgement keeps the exact gating the standalone button
-              // had: keyed on the report-derived `erroredCount` (the cases
-              // `metricsStatus: 'error'` — precisely what the confirm dialog
-              // shows and what the server's `scope=errored` will re-judge),
-              // not on `run.results` (whose `passFailStatus` mirror is
-              // absent on older docs and would over-count).
+              // The judge-failed count is the report-derived `erroredCount`
+              // (the cases `metricsStatus: 'error'` — precisely what the
+              // dialog's "Only judge-failed cases" scope will re-judge), not
+              // `run.results` (whose `passFailStatus` mirror is absent on
+              // older docs and would over-count). Enablement itself only
+              // needs SOME completed case to re-judge.
               const runTerminal = run.status !== 'running' && run.status !== 'pending';
-              const canRetryJudgement = !!evalRun && runTerminal && erroredCount > 0;
+              const rejudgeableCount = visibility.rejudgeableCount;
+              const canRetryJudgement = !!evalRun && runTerminal && rejudgeableCount > 0;
               const retryJudgementDisabledReason = canRetryJudgement
                 ? undefined
                 : !evalRun
                   ? visibility.retryJudgementDisabledReason
                   : !runTerminal
                     ? 'Retry judgement is only available once the run has finished'
-                    : 'No judge-failed cases to retry';
+                    : 'No completed test cases to re-judge';
               return (
                 <RunActionsMenu
                   runId={runId!}
@@ -625,7 +628,7 @@ export const RunInspectorPage: React.FC = () => {
                   rerunDisabledReason={visibility.rerunDisabledReason}
                   canRetryJudgement={canRetryJudgement}
                   retryJudgementDisabledReason={retryJudgementDisabledReason}
-                  judgeFailedCount={erroredCount}
+                  retryJudgementCount={erroredCount > 0 ? erroredCount : rejudgeableCount}
                   onDelete={handleDelete}
                   onCancel={handleCancel}
                   onRetryJudgement={handleRetryJudgement}
@@ -666,7 +669,8 @@ export const RunInspectorPage: React.FC = () => {
       {run && isEvaluationRun(run) && (
         <RetryJudgementConfirmDialog
           run={run as EvaluationRun | null}
-          count={erroredCount}
+          judgeFailedCount={erroredCount}
+          rejudgeableCount={getRunActionVisibility(run).rejudgeableCount}
           open={retryJudgementDialogOpen}
           onOpenChange={setRetryJudgementDialogOpen}
           onComplete={(_summary: RetryJudgementSummary) => loadData()}

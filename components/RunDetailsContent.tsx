@@ -50,7 +50,7 @@ import { computeTrajectoryFromRawEvents } from '@/services/agent';
 import { fetchTracesByRunIds, fetchTracesForRun, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
-import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
+import { formatDate, formatRelativeTime, getModelName, getLabelColor, getDifficultyColor } from '@/lib/utils';
 import { RunScore } from '@/components/RunScore';
 import { asyncRunStorage, asyncTestCaseStorage } from '@/services/storage';
 import { tracePollingManager } from '@/services/traces/tracePoller';
@@ -1094,6 +1094,18 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </TabsContent>
 
           <TabsContent value="judge" className="p-6 mt-0 space-y-6 overflow-y-auto">
+            {/* Only the LATEST judgement is kept on a report (retry-judgement
+                overwrites it in place — services/evaluation/retryJudgement.ts),
+                so say plainly when what's shown is a re-judgement and with what. */}
+            {liveReport.judgementRetriedAt && (
+              <p className="text-xs text-muted-foreground -mb-3" data-testid="judgement-retried-line">
+                Re-judged {formatRelativeTime(liveReport.judgementRetriedAt)} with{' '}
+                {evaluator?.name ?? liveReport.evaluatorId ?? 'the default evaluator'}
+                {' · '}
+                {liveReport.judgeModelId ? getModelName(liveReport.judgeModelId) : 'default judge model'}
+                {(liveReport.judgementRetryCount ?? 0) > 1 ? ` (retry #${liveReport.judgementRetryCount})` : ''}
+              </p>
+            )}
             {/* Evaluator Info */}
             {evaluator && (
               <div>

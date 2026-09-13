@@ -86,6 +86,8 @@ jest.mock('@/lib/constants', () => ({
 
 jest.mock('@/lib/utils', () => ({
   formatDate: jest.fn().mockReturnValue('2024-01-01'),
+  formatRelativeTime: jest.fn().mockReturnValue('5m ago'),
+  getModelName: jest.fn((id: string) => (id === 'picked-model' ? 'Picked Model' : id)),
   getLabelColor: jest.fn().mockReturnValue(''),
   getDifficultyColor: jest.fn().mockReturnValue(''),
   cn: jest.fn((...args: any[]) => args.filter(Boolean).join(' ')),
@@ -112,8 +114,11 @@ jest.mock('@/components/ui/tooltip', () => ({
   TooltipContent: ({ children }: any) => React.createElement('span', null, children),
 }));
 
+// Tests that need a non-default initial tab set this (the component reads
+// `?tab=` once on mount; Radix Tabs don't switch on a jsdom click).
+let mockSearchParams = new URLSearchParams();
 jest.mock('react-router-dom', () => ({
-  useSearchParams: () => [new URLSearchParams(), jest.fn()],
+  useSearchParams: () => [mockSearchParams, jest.fn()],
   // useClusterContext (transitively imported) calls useLocation; without it
   // the hook throws "useLocation is not a function". Return a minimal
   // location with an empty state object so `location.state?.fromCluster` works.
@@ -447,6 +452,66 @@ describe('RunDetailsContent', () => {
 
       expect(screen.queryByText(/Waiting for traces/i)).toBeNull();
       expect(screen.queryByText(/Running LLM judge evaluation/i)).toBeNull();
+    });
+  });
+
+  // Retry judgement keeps only the LATEST judgement on a report; the Judge
+  // tab must say when what it shows is a re-judgement and with what
+  // (owner follow-up to #468).
+  describe('"Re-judged … with …" line on the Judge tab', () => {
+    beforeEach(() => { mockSearchParams = new URLSearchParams('tab=judge'); });
+    afterEach(() => { mockSearchParams = new URLSearchParams(); });
+    const openJudgeTab = async () => {
+      await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    };
+
+    it('is absent for a report that was never re-judged', async () => {
+      const report = createReport({ metricsStatus: 'ready' });
+      mockGetReportById.mockResolvedValue(report);
+      await renderAndWait(report);
+      await openJudgeTab();
+      expect(screen.queryByTestId('judgement-retried-line')).toBeNull();
+    });
+
+    it('shows the relative time, the evaluator (name when loaded) and the judge model when judgementRetriedAt is set', async () => {
+      (global as any).fetch = jest.fn(async (url: string) => (
+        url.includes('/api/storage/evaluators/system-factuality')
+          ? { ok: true, json: async () => ({ id: 'system-factuality', name: 'Factuality', isSystem: true, scoringConfig: { metrics: [], passThreshold: 70 } }) }
+          : { ok: false, json: async () => ({}) }
+      ));
+      const report = createReport({
+        metricsStatus: 'ready',
+        judgementRetriedAt: '2026-01-01T00:00:00Z',
+        judgementRetryCount: 2,
+        evaluatorId: 'system-factuality',
+        judgeModelId: 'picked-model',
+      });
+      mockGetReportById.mockResolvedValue(report);
+      await renderAndWait(report);
+      await openJudgeTab();
+      const line = await screen.findByTestId('judgement-retried-line');
+      await waitFor(() => expect(line.textContent).toContain('Factuality'));
+      expect(line.textContent).toContain('Re-judged 5m ago with');
+      expect(line.textContent).toContain('Picked Model');
+      expect(line.textContent).toContain('(retry #2)');
+    });
+
+    it('falls back to the evaluator id / default wording when the evaluator cannot be loaded and no judge model is pinned', async () => {
+      (global as any).fetch = jest.fn(async () => ({ ok: false, json: async () => ({}) }));
+      const report = createReport({
+        metricsStatus: 'ready',
+        judgementRetriedAt: '2026-01-01T00:00:00Z',
+        judgementRetryCount: 1,
+        evaluatorId: 'custom-gone',
+        judgeModelId: undefined,
+      });
+      mockGetReportById.mockResolvedValue(report);
+      await renderAndWait(report);
+      await openJudgeTab();
+      const line = await screen.findByTestId('judgement-retried-line');
+      expect(line.textContent).toContain('custom-gone');
+      expect(line.textContent).toContain('default judge model');
+      expect(line.textContent).not.toContain('retry #');
     });
   });
 

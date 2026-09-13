@@ -83,7 +83,7 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
     const completedRow = page.locator('tr').filter({ hasText: 'E2E Actions Completed Run' });
     await completedRow.locator(`[data-testid="run-actions-menu-trigger-${completedId}"]`).click();
     await expect(page.locator(`[data-testid="run-action-cancel-${completedId}"]`)).toHaveCount(0);
-    // Retry judgement is present but disabled (no judge-failed cases).
+    // Retry judgement is present but disabled (no completed case to re-judge).
     await expect(page.locator(`[data-testid="run-action-retry-judgement-${completedId}"]`)).toBeVisible();
     await expect(page.locator(`[data-testid="run-action-retry-judgement-${completedId}"]`)).toBeDisabled();
     await page.keyboard.press('Escape');
@@ -120,7 +120,7 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
     expect(getRes.status()).toBe(404);
   });
 
-  test('Retry judgement is enabled only for a terminal run with a judge-failed (no-verdict) case, and flips it to passed', async ({ page, request, testData }) => {
+  test('Retry judgement on the run report page opens the picker; confirming flips the judge-failed case to passed', async ({ page, request, testData }) => {
     const tcRes = await request.post('/api/storage/test-cases', {
       data: {
         name: `e2e-retry-judgement-tc-${Date.now()}`,
@@ -170,6 +170,15 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
     await expect(retryItem).toBeVisible({ timeout: 10000 });
     await expect(retryItem).toBeEnabled();
     await retryItem.click();
+
+    // The kebab item opens the SAME picker dialog as the inspector (one
+    // pipeline everywhere, not a fire-and-forget POST from the menu).
+    const dialog = page.locator('[data-testid="retry-judgement-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="retry-judgement-scope-errored"]')).toBeChecked();
+    await page.locator('[data-testid="retry-judgement-confirm-btn"]').click();
+    await expect(page.locator('[data-testid="retry-judgement-summary"]')).toContainText('1 succeeded', { timeout: 20000 });
+    await page.locator('[data-testid="retry-judgement-done-btn"]').click();
 
     // No inline error surfaced by the menu, and the server-side effect is
     // real: the demo judge's accuracy floor (0.7+) always resolves to
@@ -526,7 +535,9 @@ test.describe('Run inspector header — kebab is the only action surface (gating
     await page.keyboard.press('Escape');
   });
 
-  test('COMPLETED clean run: Retry judgement (0) disabled with the no-failures reason; Re-run + Delete enabled', async ({ page, request, testData }) => {
+  // Owner follow-up to #468: retry judgement is always available on a terminal
+  // run with completed cases — a clean run is re-judgeable under "All cases".
+  test('COMPLETED clean run: Retry judgement (1 = all cases) ENABLED; Re-run + Delete enabled', async ({ page, request, testData }) => {
     const testCaseId = await seedTestCase(request, testData, 'clean');
     test.skip(!testCaseId, 'Could not create test case (storage not configured?)');
 
@@ -564,9 +575,9 @@ test.describe('Run inspector header — kebab is the only action surface (gating
 
     expect(await openKebabKinds(page, runId)).toEqual(['rerun', 'retry-judgement', 'delete']);
     const retry = page.locator(`[data-testid="run-action-retry-judgement-${runId}"]`);
-    await expect(retry).toContainText('Retry judgement (0)');
-    await expect(retry).toHaveAttribute('aria-disabled', 'true');
-    await expect(retry).toHaveAttribute('title', 'No judge-failed cases to retry');
+    await expect(retry).toContainText('Retry judgement (1)');
+    await expect(retry).not.toHaveAttribute('aria-disabled', 'true');
+    await expect(retry).not.toHaveAttribute('title', /.+/);
     await expect(page.locator(`[data-testid="run-action-rerun-${runId}"]`)).not.toHaveAttribute('aria-disabled', 'true');
     await expect(page.locator(`[data-testid="run-action-delete-${runId}"]`)).toBeVisible();
 

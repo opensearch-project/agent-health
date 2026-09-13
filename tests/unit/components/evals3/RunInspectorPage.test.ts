@@ -123,17 +123,17 @@ jest.mock('@/components/evals3/RunConfigDialog', () => ({
 }));
 
 jest.mock('@/components/evals3/RetryJudgementConfirmDialog', () => ({
-  RetryJudgementConfirmDialog: ({ run, count, open, onOpenChange, onComplete }: any) => (
+  RetryJudgementConfirmDialog: ({ run, judgeFailedCount, rejudgeableCount, open, onOpenChange, onComplete }: any) => (
     open && run ? React.createElement(
       'div',
       {
         'data-testid': 'retry-judgement-confirm-dialog',
         onClick: () => {
-          onComplete({ retried: count, succeeded: count, failed: 0, results: [] });
+          onComplete({ retried: judgeFailedCount, succeeded: judgeFailedCount, failed: 0, results: [] });
           onOpenChange(false);
         },
       },
-      `Retry dialog for ${run.id} (${count})`,
+      `Retry dialog for ${run.id} (${judgeFailedCount}/${rejudgeableCount})`,
     ) : null
   ),
 }));
@@ -1193,7 +1193,10 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
     expect(retryJudgementItem().textContent).toContain('Retry judgement (2)');
   });
 
-  it('COMPLETED eval-run, CLEAN: Retry judgement (0) disabled with the "no judge-failed" reason; Re-run enabled', async () => {
+  // Owner follow-up to #468: retry judgement is always available on a
+  // terminal run with completed cases — a CLEAN run is re-judgeable under
+  // the dialog's "All cases" scope, and the label carries THAT count.
+  it('COMPLETED eval-run, CLEAN: Retry judgement (N = all cases) ENABLED; Re-run enabled', async () => {
     mockParams = { runId: 'eval-run-1' };
     const { getEvaluationRun } = require('@/services/client');
     getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 2));
@@ -1207,8 +1210,30 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
     kebabHasExactlyFourKinds(false);
     expect(rerunItem().disabled).toBe(false);
     expect(cancelItem()).toBeNull();
+    expect(retryJudgementItem().disabled).toBe(false);
+    expect(retryJudgementItem().getAttribute('title')).toBeNull();
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (2)');
+
+    // The dialog is handed both counts: 0 judge-failed, 2 re-judgeable.
+    fireEvent.click(retryJudgementItem());
+    await waitFor(() => expect(screen.getByTestId('retry-judgement-confirm-dialog')).toBeTruthy());
+    expect(screen.getByTestId('retry-judgement-confirm-dialog').textContent).toContain('(0/2)');
+  });
+
+  it('COMPLETED eval-run with NO completed case: Retry judgement (0) disabled with the no-output reason', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    const fixture = makeEvaluationRunFixture('eval-run-1', 1);
+    fixture.results['tc-0'].status = 'failed';
+    getEvaluationRun.mockResolvedValue(fixture);
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue({});
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
     expect(retryJudgementItem().disabled).toBe(true);
-    expect(retryJudgementItem().getAttribute('title')).toBe('No judge-failed cases to retry');
+    expect(retryJudgementItem().getAttribute('title')).toBe('No completed test cases to re-judge');
     expect(retryJudgementItem().textContent).toContain('Retry judgement (0)');
   });
 
@@ -1224,7 +1249,7 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
     await waitFor(() => expect(retryJudgementItem().disabled).toBe(false));
     fireEvent.click(retryJudgementItem());
     await waitFor(() => expect(screen.getByTestId('retry-judgement-confirm-dialog')).toBeTruthy());
-    expect(screen.getByTestId('retry-judgement-confirm-dialog').textContent).toContain('(1)');
+    expect(screen.getByTestId('retry-judgement-confirm-dialog').textContent).toContain('(1/3)');
   });
 
   it('kebab Delete opens a confirm (no bare-click delete) — the destructive call is NOT made until confirmed', async () => {

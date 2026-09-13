@@ -36,8 +36,12 @@ jest.mock('@/server/adapters/index', () => ({
       update: (...args: any[]) => mockBenchmarksUpdate(...args),
       addRun: (...args: any[]) => mockBenchmarksAddRun(...args),
     },
+    evaluators: {
+      getById: (...args: any[]) => mockEvaluatorsGetById(...args),
+    },
   }),
 }));
+const mockEvaluatorsGetById = jest.fn();
 
 const mockResolveTestCaseSources = jest.fn();
 jest.mock('@/services/sourceResolver', () => ({
@@ -576,6 +580,86 @@ describe('Evaluation Runs API', () => {
       const retryRes = await request(app).post('/api/storage/evaluation-runs/run-release/retry-judgement');
       expect(retryRes.status).toBe(202);
       await pollStatus('run-release');
+    });
+
+    // Follow-up to #468: the dialog picks evaluator / judge model / scope
+    // and sends them in the JSON body; the route validates and forwards
+    // them as `overrides` so they win over the run's own values.
+    describe('body: { scope, evaluatorId, judgeModelId } (retry-judgement picker)', () => {
+      const terminalRun = (id: string) => ({
+        id, docType: 'evaluation-run', status: 'completed', evaluatorId: 'system-rca-default', judgeModelId: 'run-model',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
+      });
+
+      it('forwards a system evaluator + judge model + scope=all as overrides', async () => {
+        mockEvaluationRunsGetById.mockResolvedValueOnce(terminalRun('run-ov'));
+        mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+        const res = await request(app)
+          .post('/api/storage/evaluation-runs/run-ov/retry-judgement')
+          .send({ scope: 'all', evaluatorId: 'system-factuality', judgeModelId: 'other-model' });
+        expect(res.status).toBe(202);
+        expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'run-ov' }),
+          expect.anything(),
+          expect.objectContaining({ scope: 'all', overrides: { evaluatorId: 'system-factuality', judgeModelId: 'other-model' } })
+        );
+        expect(mockEvaluatorsGetById).not.toHaveBeenCalled(); // system ids resolve in-process
+        await pollStatus('run-ov');
+      });
+
+      it('accepts a STORED (custom) evaluator id after checking it exists, and judgeModelId: null for the evaluator default', async () => {
+        mockEvaluationRunsGetById.mockResolvedValueOnce(terminalRun('run-custom'));
+        mockEvaluatorsGetById.mockResolvedValueOnce({ id: 'my-evaluator' });
+        mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+        const res = await request(app)
+          .post('/api/storage/evaluation-runs/run-custom/retry-judgement')
+          .send({ evaluatorId: 'my-evaluator', judgeModelId: null });
+        expect(res.status).toBe(202);
+        expect(mockEvaluatorsGetById).toHaveBeenCalledWith('my-evaluator');
+        expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
+          expect.anything(), expect.anything(),
+          expect.objectContaining({ scope: 'errored', overrides: { evaluatorId: 'my-evaluator', judgeModelId: null } })
+        );
+        await pollStatus('run-custom');
+      });
+
+      it('400s an unknown evaluatorId (system-* that does not exist, or a stored id that 404s) without starting a job', async () => {
+        mockEvaluationRunsGetById.mockResolvedValue(terminalRun('run-bad-ev'));
+        let res = await request(app)
+          .post('/api/storage/evaluation-runs/run-bad-ev/retry-judgement')
+          .send({ evaluatorId: 'system-does-not-exist' });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/Evaluator not found/);
+
+        mockEvaluatorsGetById.mockResolvedValueOnce(null);
+        res = await request(app)
+          .post('/api/storage/evaluation-runs/run-bad-ev/retry-judgement')
+          .send({ evaluatorId: 'gone-evaluator' });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/Evaluator not found: gone-evaluator/);
+        expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
+      });
+
+      it('400s a malformed evaluatorId / judgeModelId / scope', async () => {
+        mockEvaluationRunsGetById.mockResolvedValue(terminalRun('run-malformed'));
+        for (const body of [{ evaluatorId: '' }, { evaluatorId: 42 }, { judgeModelId: '' }, { judgeModelId: 7 }, { scope: 'some' }]) {
+          const res = await request(app).post('/api/storage/evaluation-runs/run-malformed/retry-judgement').send(body);
+          expect(res.status).toBe(400);
+        }
+        expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
+      });
+
+      it('absent keys inherit the run (empty overrides) and ?scope=all on the query string is still honoured', async () => {
+        mockEvaluationRunsGetById.mockResolvedValueOnce(terminalRun('run-legacy-q'));
+        mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+        const res = await request(app).post('/api/storage/evaluation-runs/run-legacy-q/retry-judgement?scope=all');
+        expect(res.status).toBe(202);
+        expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
+          expect.anything(), expect.anything(),
+          expect.objectContaining({ scope: 'all', overrides: {} })
+        );
+        await pollStatus('run-legacy-q');
+      });
     });
   });
 

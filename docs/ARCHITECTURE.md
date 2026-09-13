@@ -225,6 +225,26 @@ Key endpoints used by CLI:
 | `/api/storage/benchmarks/:id/execute` | POST | Execute benchmark (SSE) |
 | `/api/storage/benchmarks/:id/cancel` | POST | Cancel running benchmark |
 | `/api/storage/runs/by-benchmark-run/:benchmarkId/:runId` | GET | Get reports for a run |
+| `/api/storage/evaluation-runs/:id/retry-judgement` | POST | Re-judge a terminal run's cases (202 + background job) |
+| `/api/storage/evaluation-runs/:id/retry-judgement/status` | GET | Poll the retry-judgement job |
+
+### Retry judgement
+
+"Retry judgement" (`services/evaluation/retryJudgement.ts`) re-runs **only the judge** against each
+test case's already-stored agent output — the agent is never re-invoked — and is available on any
+**terminal** evaluation run (completed / failed / cancelled) that has at least one completed case.
+The run surfaces' kebab opens a picker (`components/evals3/RetryJudgementConfirmDialog.tsx`) for
+the **evaluator**, the **judge model** and the **scope** (`errored` = only cases where the judge
+produced no verdict, e.g. trace timeouts / judge 400s; `all` = every completed case), posted as
+`{ scope, evaluatorId, judgeModelId }`. The route validates the evaluator exists (400 otherwise),
+accepts `judgeModelId: null` for "use the evaluator default", and 409s while the run is still
+executing. Per-retry choices win over the run's own `evaluatorId` / `judgeModelId`; absent keys
+inherit them. **Only the latest judgement is kept**: each re-judged report has its judgement fields
+(`passFailStatus`, `metrics`, `llmJudgeReasoning`, `llmJudgeResponse`, `matcherResults`,
+`judgeModelId`, `evaluatorId`, `judgeMode`) overwritten in place and is stamped with
+`judgementRetriedAt` / `judgementRetryCount` (shown on the Judge tab as "Re-judged <when> with
+<evaluator> · <model>"); run stats are recomputed through `lib/runStats`. The run doc records the
+selection as `lastJudgementRetry` so the next dialog defaults to the last-selected values.
 
 ## Why This Architecture?
 

@@ -31,7 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
-import { listEvaluationRuns, updateEvaluationRun, deleteEvaluationRun, cancelEvaluationRun, retryJudgementEvaluationRun } from '@/services/client';
+import { listEvaluationRuns, updateEvaluationRun, deleteEvaluationRun, cancelEvaluationRun } from '@/services/client';
 import { cancelBenchmarkRun } from '@/services/client/benchmarkApi';
 import { Benchmark, TestCase, BenchmarkRun, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -43,6 +43,7 @@ import { formatRelativeTime, getModelName, getJudgeModelLabel, getEvaluatorLabel
 import { Breadcrumbs } from './Breadcrumbs';
 import { InlineRenameField } from './InlineRenameField';
 import { RunConfigDialog } from './RunConfigDialog';
+import { RetryJudgementConfirmDialog } from './RetryJudgementConfirmDialog';
 import { RunActionsMenu } from './RunActionsMenu';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────
@@ -183,6 +184,7 @@ export const EvalRunsPage: React.FC = () => {
   // benchmark-embedded runs aren't supported — see renderRunRow).
   const [rerunTarget, setRerunTarget] = useState<EvaluationRun | null>(null);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
+  const [retryJudgementTarget, setRetryJudgementTarget] = useState<EvaluationRun | null>(null);
 
   // Annotation counts: runId → { totalAnnotations, testCasesWithAnnotations, firstTestCaseId }
   const [annotationMap, setAnnotationMap] = useState<Map<string, { total: number; tcCount: number; firstTcId: string }>>(new Map());
@@ -461,9 +463,10 @@ export const EvalRunsPage: React.FC = () => {
     await loadData();
   };
 
-  const handleRetryJudgementRow = async (rr: RunRow) => {
-    await retryJudgementEvaluationRun(rr.run.id);
-    await loadData();
+  // Opens the evaluator / judge-model / scope picker for this row's run;
+  // the dialog owns the POST + polling, we refresh once it's dismissed.
+  const handleRetryJudgementRow = (rr: RunRow) => {
+    setRetryJudgementTarget(rr.run as unknown as EvaluationRun);
   };
 
   const toggleGroup = (id: string) => {
@@ -804,6 +807,7 @@ export const EvalRunsPage: React.FC = () => {
                 isRunning={visibility.canCancel}
                 canRetryJudgement={visibility.canRetryJudgement}
                 retryJudgementDisabledReason={visibility.retryJudgementDisabledReason}
+                retryJudgementCount={visibility.retryJudgementCount}
                 onDelete={() => handleDeleteRow(rr)}
                 onCancel={() => handleCancelRow(rr)}
                 onRetryJudgement={() => handleRetryJudgementRow(rr)}
@@ -1193,6 +1197,16 @@ export const EvalRunsPage: React.FC = () => {
         open={rerunDialogOpen}
         onOpenChange={open => { setRerunDialogOpen(open); if (!open) setRerunTarget(null); }}
         onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}`)}
+      />
+
+      {/* Retry judgement picker (evaluator / judge model / scope) — shared with the run pages */}
+      <RetryJudgementConfirmDialog
+        run={retryJudgementTarget}
+        judgeFailedCount={getRunActionVisibility(retryJudgementTarget).judgeFailedCount}
+        rejudgeableCount={getRunActionVisibility(retryJudgementTarget).rejudgeableCount}
+        open={retryJudgementTarget !== null}
+        onOpenChange={open => { if (!open) setRetryJudgementTarget(null); }}
+        onComplete={() => { loadData(); }}
       />
     </div>
   );

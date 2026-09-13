@@ -185,6 +185,10 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     lastTraceFetchAt: storedAny.lastTraceFetchAt,
     traceError: storedAny.traceError,
     judgeMode: storedAny.judgeMode,
+    // Retry-judgement stamp (services/evaluation/retryJudgement.ts) — drives
+    // the "Re-judged <when> with <evaluator> · <model>" line on the Judge tab.
+    judgementRetriedAt: (stored as any).judgementRetriedAt,
+    judgementRetryCount: (stored as any).judgementRetryCount,
     spans: storedAny.spans as any[] | undefined,
     connectorProtocol: storedAny.connectorProtocol as ConnectorProtocol | undefined,
   };
