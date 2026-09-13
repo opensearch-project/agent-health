@@ -294,7 +294,7 @@ export default function (pi: ExtensionAPI) {
           patterns: ["shadcn/ui", "React hooks in hooks/"],
         },
         connectors: {
-          dir: "services/connectors/",
+          dir: "connectors/",
           patterns: [
             "ConnectorType",
             "agui-streaming",

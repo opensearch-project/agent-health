@@ -50,7 +50,7 @@ jest.mock('@/services/evaluation', () => ({
   callBedrockJudge: jest.fn(),
 }));
 
-jest.mock('@/services/connectors/server', () => ({
+jest.mock('@/connectors/server', () => ({
   connectorRegistry: { getConnector: jest.fn() },
 }));
 

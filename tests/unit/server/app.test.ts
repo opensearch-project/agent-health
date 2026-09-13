@@ -67,7 +67,7 @@ jest.mock('@/server/middleware/index', () => ({
   setupFinalErrorHandler: mockSetupFinalErrorHandler,
 }));
 
-jest.mock('@/services/connectors/server', () => ({}));
+jest.mock('@/connectors/server', () => ({}));
 
 jest.mock('@/lib/telemetry', () => ({
   initEvalTracerProvider: jest.fn(),

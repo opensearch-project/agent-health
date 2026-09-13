@@ -13,7 +13,7 @@ import chalk from 'chalk';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { loadConfig, getConfigFileInfo, type ResolvedConfig } from '@/lib/config/index.js';
-import { connectorRegistry } from '@/services/connectors/server.js';
+import { connectorRegistry } from '@/connectors/server.js';
 import { resolveBackendPort } from '@/lib/portConfig.js';
 
 interface CheckResult {

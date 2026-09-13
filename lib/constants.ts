@@ -42,9 +42,19 @@ export const CONNECTOR_TYPE_INFO: Record<ConnectorProtocol, ConnectorTypeInfo> =
     description: 'Invokes the Claude Code CLI. Server-only — use the CLI or benchmark runner.',
     serverOnly: true,
   },
+  'kiro': {
+    label: 'Kiro CLI',
+    description: 'Invokes the Kiro CLI and captures stderr tool evidence. Server-only.',
+    serverOnly: true,
+  },
   'pi': {
     label: 'Pi (pi.dev)',
     description: 'Invokes the pi.dev coding agent CLI. Server-only — use the CLI or benchmark runner.',
+    serverOnly: true,
+  },
+  'pi-web': {
+    label: 'pi-web Session',
+    description: 'Runs a recursively settled pi-web session and harvests its transcript. Server-only.',
     serverOnly: true,
   },
   'strands': {

@@ -21,7 +21,7 @@ import { getStorageModule } from './adapters/index.js';
 
 // Register server-side connectors (subprocess, claude-code)
 // This import has side effects that register connectors with the registry
-import '@/services/connectors/server';
+import '@/connectors/server';
 
 // Re-export createApp for CLI usage
 export { createApp } from './app.js';

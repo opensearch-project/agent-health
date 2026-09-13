@@ -8,12 +8,18 @@ import { runEvaluation, callBedrockJudge } from '@/services/evaluation';
 import type { AgentConfig, TestCase, TrajectoryStep } from '@/types';
 
 // Mock dependencies
-jest.mock('@/services/agent', () => ({
+jest.mock('@/connectors/agui/aguiConverter', () => ({
   AGUIToTrajectoryConverter: jest.fn().mockImplementation(() => ({
     processEvent: jest.fn().mockReturnValue([]),
     getRunId: jest.fn().mockReturnValue('mock-run-id'),
+    getThreadId: jest.fn().mockReturnValue(undefined),
   })),
+  computeTrajectoryFromRawEvents: jest.fn().mockReturnValue([]),
+}));
+jest.mock('@/connectors/agui/sseStream', () => ({
   consumeSSEStream: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('@/connectors/agui/payloadBuilder', () => ({
   buildAgentPayload: jest.fn().mockReturnValue({ prompt: 'test' }),
 }));
 
@@ -89,7 +95,8 @@ describe('Evaluation Service Index', () => {
 
   describe('runEvaluation', () => {
     it('should run real agent evaluation and return report', async () => {
-      const { consumeSSEStream, AGUIToTrajectoryConverter } = require('@/services/agent');
+      const { consumeSSEStream } = require('@/connectors/agui/sseStream');
+      const { AGUIToTrajectoryConverter } = require('@/connectors/agui/aguiConverter');
       const { callBedrockJudge } = require('@/services/evaluation/bedrockJudge');
 
       // Setup mock to emit trajectory steps
@@ -98,6 +105,7 @@ describe('Evaluation Service Index', () => {
           { type: 'thinking', content: 'Test thinking', timestamp: new Date().toISOString() },
         ]),
         getRunId: jest.fn().mockReturnValue('run-123'),
+        getThreadId: jest.fn().mockReturnValue(undefined),
       };
       AGUIToTrajectoryConverter.mockImplementation(() => mockConverter);
 
@@ -132,11 +140,13 @@ describe('Evaluation Service Index', () => {
         useTraces: true,
       };
 
-      const { consumeSSEStream, AGUIToTrajectoryConverter } = require('@/services/agent');
+      const { consumeSSEStream } = require('@/connectors/agui/sseStream');
+      const { AGUIToTrajectoryConverter } = require('@/connectors/agui/aguiConverter');
 
       const mockConverter = {
         processEvent: jest.fn().mockReturnValue([]),
         getRunId: jest.fn().mockReturnValue('run-456'),
+        getThreadId: jest.fn().mockReturnValue(undefined),
       };
       AGUIToTrajectoryConverter.mockImplementation(() => mockConverter);
       consumeSSEStream.mockResolvedValue(undefined);
@@ -160,7 +170,7 @@ describe('Evaluation Service Index', () => {
     });
 
     it('should handle evaluation errors gracefully', async () => {
-      const { consumeSSEStream } = require('@/services/agent');
+      const { consumeSSEStream } = require('@/connectors/agui/sseStream');
 
       consumeSSEStream.mockRejectedValue(new Error('Agent connection failed'));
 
@@ -179,12 +189,14 @@ describe('Evaluation Service Index', () => {
     });
 
     it('should skip log fetch when no runId is captured', async () => {
-      const { consumeSSEStream, AGUIToTrajectoryConverter } = require('@/services/agent');
+      const { consumeSSEStream } = require('@/connectors/agui/sseStream');
+      const { AGUIToTrajectoryConverter } = require('@/connectors/agui/aguiConverter');
       const { openSearchClient } = require('@/services/opensearch');
 
       const mockConverter = {
         processEvent: jest.fn().mockReturnValue([]),
         getRunId: jest.fn().mockReturnValue(null), // No runId
+        getThreadId: jest.fn().mockReturnValue(undefined),
       };
       AGUIToTrajectoryConverter.mockImplementation(() => mockConverter);
       consumeSSEStream.mockResolvedValue(undefined);
@@ -197,12 +209,14 @@ describe('Evaluation Service Index', () => {
     });
 
     it('should handle log fetch errors gracefully', async () => {
-      const { consumeSSEStream, AGUIToTrajectoryConverter } = require('@/services/agent');
+      const { consumeSSEStream } = require('@/connectors/agui/sseStream');
+      const { AGUIToTrajectoryConverter } = require('@/connectors/agui/aguiConverter');
       const { openSearchClient } = require('@/services/opensearch');
 
       const mockConverter = {
         processEvent: jest.fn().mockReturnValue([]),
         getRunId: jest.fn().mockReturnValue('run-789'),
+        getThreadId: jest.fn().mockReturnValue(undefined),
       };
       AGUIToTrajectoryConverter.mockImplementation(() => mockConverter);
       consumeSSEStream.mockResolvedValue(undefined);
@@ -220,11 +234,13 @@ describe('Evaluation Service Index', () => {
     });
 
     it('should capture raw events when callback provided', async () => {
-      const { consumeSSEStream, AGUIToTrajectoryConverter } = require('@/services/agent');
+      const { consumeSSEStream } = require('@/connectors/agui/sseStream');
+      const { AGUIToTrajectoryConverter } = require('@/connectors/agui/aguiConverter');
 
       const mockConverter = {
         processEvent: jest.fn().mockReturnValue([]),
         getRunId: jest.fn().mockReturnValue('run-abc'),
+        getThreadId: jest.fn().mockReturnValue(undefined),
       };
       AGUIToTrajectoryConverter.mockImplementation(() => mockConverter);
 
@@ -251,11 +267,13 @@ describe('Evaluation Service Index', () => {
     });
 
     it('should include LLM judge response in report', async () => {
-      const { consumeSSEStream, AGUIToTrajectoryConverter } = require('@/services/agent');
+      const { consumeSSEStream } = require('@/connectors/agui/sseStream');
+      const { AGUIToTrajectoryConverter } = require('@/connectors/agui/aguiConverter');
 
       const mockConverter = {
         processEvent: jest.fn().mockReturnValue([]),
         getRunId: jest.fn().mockReturnValue('run-def'),
+        getThreadId: jest.fn().mockReturnValue(undefined),
       };
       AGUIToTrajectoryConverter.mockImplementation(() => mockConverter);
       consumeSSEStream.mockResolvedValue(undefined);
@@ -270,7 +288,8 @@ describe('Evaluation Service Index', () => {
     });
 
     it('should count trajectory step types correctly', async () => {
-      const { consumeSSEStream, AGUIToTrajectoryConverter } = require('@/services/agent');
+      const { consumeSSEStream } = require('@/connectors/agui/sseStream');
+      const { AGUIToTrajectoryConverter } = require('@/connectors/agui/aguiConverter');
 
       const mockSteps: TrajectoryStep[] = [
         { type: 'thinking', content: 'Thinking...', timestamp: new Date().toISOString() },
@@ -288,6 +307,7 @@ describe('Evaluation Service Index', () => {
           return [];
         }),
         getRunId: jest.fn().mockReturnValue('run-ghi'),
+        getThreadId: jest.fn().mockReturnValue(undefined),
       };
       AGUIToTrajectoryConverter.mockImplementation(() => mockConverter);
 

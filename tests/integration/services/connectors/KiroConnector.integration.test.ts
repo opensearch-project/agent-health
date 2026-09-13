@@ -33,9 +33,9 @@
 import { execSync } from 'child_process';
 import { ToolCallStatus } from '@/types';
 import type { TrajectoryStep } from '@/types';
-import type { ConnectorAuth, ConnectorRequest } from '@/services/connectors/types';
+import type { ConnectorAuth, ConnectorRequest } from '@/connectors/types';
 import type { TestCase } from '@/types';
-import { KiroConnector } from '@/services/connectors/kiro/KiroConnector';
+import { KiroConnector } from '@/connectors/kiro';
 
 /** Detect kiro-cli at module load. If absent, every test in the file is skipped. */
 function kiroAvailable(): boolean {

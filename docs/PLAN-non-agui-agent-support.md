@@ -6,7 +6,7 @@
 # Plan: Non-AG-UI Agent Support in Agent Health
 
 > **Status: Implemented** via the connector system (not the separate adapter pattern originally proposed here).
-> See `services/connectors/strands/` and `services/connectors/langgraph/` for the Strands and LangGraph implementations.
+> See `connectors/strands/` and `connectors/langgraph/` for the Strands and LangGraph implementations.
 
 ## Problem Statement
 

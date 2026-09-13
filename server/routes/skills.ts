@@ -21,7 +21,7 @@ import { parseSkill } from '@/services/skills/parser';
 import { runSkillEval } from '@/services/skills/runner';
 import { proposeImprovement } from '@/services/skills/improver';
 import { generateEvals } from '@/services/skills/evalGenerator';
-import { connectorRegistry } from '@/services/connectors/server';
+import { connectorRegistry } from '@/connectors/server';
 import type { SkillEvalProgressEvent, SkillBenchmarkResult, SkillGradingResult } from '@/types';
 
 const router = Router();

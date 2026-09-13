@@ -16,7 +16,7 @@ import type {
   StorageClusterConfig,
   ObservabilityClusterConfig,
 } from '@/types/index.js';
-import type { AgentConnector } from '@/services/connectors/types.js';
+import type { AgentConnector } from '@/connectors/types.js';
 
 /**
  * Agent configuration for user config files

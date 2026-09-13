@@ -14,9 +14,9 @@
  * 5. Health check behavior
  */
 
-import type { ConnectorAuth, ConnectorRequest } from '@/services/connectors/types';
+import type { ConnectorAuth, ConnectorRequest } from '@/connectors/types';
 import type { TestCase } from '@/types';
-import { LangGraphConnector } from '@/services/connectors/langgraph/LangGraphConnector';
+import { LangGraphConnector } from '@/connectors/langgraph';
 
 describe('LangGraphConnector Integration Tests', () => {
   let connector: LangGraphConnector;

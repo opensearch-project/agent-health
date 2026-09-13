@@ -58,23 +58,34 @@ export type {
   ConnectorAuth,
   ConnectorRequest,
   ConnectorResponse,
-} from '../services/connectors/types.js';
+} from '../connectors/types.js';
 
 // Base connector class (for extending)
-export { BaseConnector } from '../services/connectors/base/BaseConnector.js';
+export { BaseConnector } from '../connectors/base/index.js';
 
 // Built-in connectors
-export { AGUIStreamingConnector } from '../services/connectors/agui/AGUIStreamingConnector.js';
-export { RESTConnector } from '../services/connectors/rest/RESTConnector.js';
-export { SubprocessConnector } from '../services/connectors/subprocess/SubprocessConnector.js';
-export { ClaudeCodeConnector } from '../services/connectors/claude-code/ClaudeCodeConnector.js';
-export { MockConnector } from '../services/connectors/mock/MockConnector.js';
+export { AGUIStreamingConnector } from '../connectors/agui/index.js';
+export { RESTConnector } from '../connectors/rest/index.js';
+export { OpenAICompatibleConnector } from '../connectors/openai-compatible/index.js';
+export { LangGraphConnector } from '../connectors/langgraph/index.js';
+export { SubprocessConnector } from '../connectors/subprocess/index.js';
+export { ClaudeCodeConnector } from '../connectors/claude-code/index.js';
+export { KiroConnector } from '../connectors/kiro/index.js';
+export { PiConnector } from '../connectors/pi/index.js';
+export { PiWebConnector } from '../connectors/pi-web/index.js';
+export { StrandsConnector } from '../connectors/strands/index.js';
+export { MockConnector } from '../connectors/mock/index.js';
+export { connectorFactories } from '../connectors/index.js';
 
 // Connector registry (for programmatic registration)
-export { connectorRegistry, registerConnector } from '../services/connectors/registry.js';
+export {
+  connectorRegistry,
+  registerConnector,
+  registerConnectorFactories,
+} from '../connectors/registry.js';
 
 // ConnectorRegistry type for custom implementations
-export type { ConnectorRegistry } from '../services/connectors/types.js';
+export type { ConnectorRegistry } from '../connectors/types.js';
 
 // Test case SDK (for writing .eval.ts/.eval.js files)
 //

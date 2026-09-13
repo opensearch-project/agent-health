@@ -15,7 +15,7 @@
  * 6. Health check behavior
  */
 
-import type { ConnectorAuth, ConnectorRequest } from '@/services/connectors/types';
+import type { ConnectorAuth, ConnectorRequest } from '@/connectors/types';
 import type { TestCase } from '@/types';
 
 // Mock the AWS SDK modules
@@ -40,7 +40,7 @@ jest.mock('@aws-sdk/client-bedrock-agent', () => ({
   GetAgentCommand: mockGetAgentCommand,
 }));
 
-import { StrandsConnector } from '@/services/connectors/strands/StrandsConnector';
+import { StrandsConnector } from '@/connectors/strands';
 
 describe('StrandsConnector Integration Tests', () => {
   let connector: StrandsConnector;
