@@ -212,6 +212,9 @@ test.describe('RunInsightsPane (run-report-insights) — always-split layout, no
     await page.getByTestId('test-case-row').first().click();
     await expect(page).toHaveURL(/testCase=/);
     await expect(page.getByTestId('run-insights-pane')).toHaveCount(0);
+    // Case details default to the verdict-first Overview tab; the trajectory
+    // remains available under Test Case Output.
+    await page.getByRole('tab', { name: /Test Case Output/ }).click();
     await expect(page.getByText(`step for ${testCaseIds[0]}`)).toBeVisible({ timeout: 15_000 });
 
     // Overview returns to the insights pane, clears both selection and filter.

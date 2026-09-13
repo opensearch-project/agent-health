@@ -173,6 +173,8 @@ export interface StorageRun {
     priority: 'high' | 'medium' | 'low';
   }[];
   connectorProtocol?: string;
+  /** Opaque connector-specific invocation metadata, stored but not indexed. */
+  connectorMetadata?: Record<string, unknown>;
 }
 
 export interface StorageAnalyticsRecord {

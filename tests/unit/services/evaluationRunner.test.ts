@@ -553,7 +553,7 @@ describe('evaluationRunner', () => {
       expect(storage.runs.create).toHaveBeenCalledWith(
         expect.objectContaining({
           status: 'running',
-          metricsStatus: 'pending',
+          traceStatus: 'not_configured',
           testCaseId: 'tc-1',
           evaluatorId: 'system-tool-usage',
           experimentRunId: run.id,

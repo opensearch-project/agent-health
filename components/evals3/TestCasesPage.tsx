@@ -39,6 +39,7 @@ import { QuickRunModal } from '@/components/QuickRunModal';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 import { collectLabels, matchesLabelFilter, ALL_LABELS } from '@/lib/labels';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────
 
@@ -62,14 +63,11 @@ function truncate(s: string | undefined, max: number): string {
 }
 function getPassFail(run: TestCaseRun): 'pass' | 'fail' | 'errored' | 'running' | 'unknown' {
   if (run.status === 'running') return 'running';
-  // Issue #242: a run whose evaluator could not produce a verdict
-  // (`metricsStatus: 'error'`) is bucketed as `errored`, NOT `fail`. The
-  // agent may have completed normally; the judge / trace pipeline
-  // failed before scoring. Surfacing it as 'fail' here would defeat the
-  // distinct bucket the rest of the run-stats pipeline preserves.
+  const verdict = getJudgeVerdict(run);
+  if (verdict?.status === 'passed') return 'pass';
+  if (verdict?.status === 'failed') return 'fail';
+  // metricsStatus is an evaluator error only when no judge verdict exists.
   if (run.metricsStatus === 'error') return 'errored';
-  if (run.passFailStatus === 'passed') return 'pass';
-  if (run.passFailStatus === 'failed') return 'fail';
   // No verdict from the judge — don't fabricate one from a single metric
   // value. The previous fallback of `accuracy >= 50` only worked under the
   // RCA Default evaluator (the only one that emits a metric named

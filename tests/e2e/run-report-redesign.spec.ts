@@ -152,7 +152,9 @@ test.describe('Run report page redesign (legacy /benchmarks/:id/runs/:id) — la
     await page.getByText(/e2e-report-redesign-tc-1-/).click();
 
     await expect(page).toHaveURL(new RegExp(`testCase=${testCaseIds[1]}`));
-    // Case detail (existing RunDetailsContent rendering) shows up.
+    // Case detail lands on the verdict-first Overview tab. Open Test Case
+    // Output before asserting the seeded trajectory step.
+    await page.getByRole('tab', { name: /Test Case Output/ }).click();
     await expect(page.getByText(`step for ${testCaseIds[1]}`)).toBeVisible({ timeout: 15_000 });
 
     // Back/forward: browser back returns to the un-selected list view.
@@ -167,7 +169,9 @@ test.describe('Run report page redesign (legacy /benchmarks/:id/runs/:id) — la
     const targetTcId = testCaseIds[TC_COUNT - 1]; // last row - requires scroll
     await page.goto(`/benchmarks/${benchmarkId}/runs/${runId}?testCase=${targetTcId}`);
 
-    // Preselected case's detail renders immediately, without a click.
+    // The case is preselected immediately, without a click. Its details land
+    // on Overview, so open Test Case Output to inspect the trajectory.
+    await page.getByRole('tab', { name: /Test Case Output/ }).click();
     await expect(page.getByText(`step for ${targetTcId}`)).toBeVisible({ timeout: 15_000 });
 
     // The corresponding row is scrolled into view and visible.

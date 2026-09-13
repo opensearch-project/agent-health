@@ -13,6 +13,8 @@ import { normalizeLegacyUserStep } from '@/lib/trajectoryStepDisplay';
 interface TrajectoryViewProps {
   steps: TrajectoryStep[];
   loading?: boolean;
+  /** One-based trajectory step selected from an evidence citation. */
+  highlightedStepNumber?: number | null;
 }
 
 const PREVIEW_LENGTH = 80;
@@ -36,7 +38,7 @@ const typeBgColors: Record<string, string> = {
   user: 'bg-cyan-500/5 border-cyan-500/20',
 };
 
-export const TrajectoryView: React.FC<TrajectoryViewProps> = ({ steps, loading }) => {
+export const TrajectoryView: React.FC<TrajectoryViewProps> = ({ steps, loading, highlightedStepNumber }) => {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
 
   const toggleStep = (stepId: string) => {
@@ -93,8 +95,10 @@ export const TrajectoryView: React.FC<TrajectoryViewProps> = ({ steps, loading }
         </div>
       )}
 
-      {steps.map((rawStep) => {
+      {steps.map((rawStep, index) => {
         const step = normalizeLegacyUserStep(rawStep);
+        const stepNumber = index + 1;
+        const isHighlighted = highlightedStepNumber === stepNumber;
         const isExpanded = expandedSteps.has(step.id);
         const collapsible = isCollapsible(step);
         const latency = formatLatency(step.latencyMs);
@@ -103,9 +107,16 @@ export const TrajectoryView: React.FC<TrajectoryViewProps> = ({ steps, loading }
         const bgColor = failed ? 'bg-red-500/5 border-red-500/20' : (typeBgColors[step.type] || 'bg-muted/30 border-border/50');
 
         return (
-          <div key={step.id} className={`rounded-md border p-3 ${bgColor}`}>
+          <div
+            key={step.id}
+            id={`trajectory-step-${stepNumber}`}
+            data-step-number={stepNumber}
+            className={`scroll-mt-4 rounded-md border p-3 transition-shadow ${bgColor} ${isHighlighted ? 'ring-2 ring-opensearch-blue shadow-md shadow-opensearch-blue/20' : ''}`}
+          >
             {/* Header line */}
             <div className="flex items-center gap-2 text-xs mb-2">
+              <span className="font-semibold text-foreground">Step {stepNumber}</span>
+              <span className="text-muted-foreground">·</span>
               <span className={`font-semibold ${typeColor}`}>
                 {formatLabel(step)}
               </span>

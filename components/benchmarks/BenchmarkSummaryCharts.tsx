@@ -20,7 +20,7 @@ import { Loader2, Coins, Clock, Cpu, Wrench } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { BenchmarkRun, EvaluationReport } from '@/types';
 import { fetchBatchMetrics, formatCost, formatTokens, formatDuration } from '@/services/metrics';
-import { getRunOverallScore } from '@/lib/utils';
+import { getJudgeVerdict } from '@/lib/reportVerdict';
 
 interface BenchmarkSummaryChartsProps {
   runs: BenchmarkRun[];
@@ -92,24 +92,18 @@ export const BenchmarkSummaryCharts: React.FC<BenchmarkSummaryChartsProps> = ({
         if (result.reportId && result.status === 'completed') {
           const report = reports[result.reportId];
           if (report && report.status === 'completed') {
-            // metricsStatus wins over passFailStatus, which may carry a
-            // stale verdict on errored reports. Errored reports are
-            // excluded from the aggregate score (their zeroed metrics
-            // would otherwise drag the mean toward zero).
-            if (report.metricsStatus === 'error') {
-              erroredCount++;
+            const verdict = getJudgeVerdict(report);
+            // metricsStatus is diagnostic once matcherResults contains a
+            // verdict; only an error with no verdict enters the error bucket.
+            if (!verdict) {
+              if (report.metricsStatus === 'error') erroredCount++;
               return;
             }
-            // Use the run's overall score (mean of all populated metrics),
-            // not just `accuracy`. `null` means the report had no scorable
-            // metrics yet — we skip it from the aggregate rather than
-            // counting it as a 0.
-            const score = getRunOverallScore(report.metrics as Record<string, number | undefined>);
-            if (score !== null) {
-              totalScore += score;
+            if (verdict.score !== null) {
+              totalScore += verdict.score;
               scoredCount++;
             }
-            if (report.passFailStatus === 'passed') passCount++;
+            if (verdict.status === 'passed') passCount++;
             completedCount++;
           }
         }

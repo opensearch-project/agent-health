@@ -257,6 +257,7 @@ describe('indexMappings', () => {
       expect(props.logs).toEqual({ type: 'object', enabled: false });
       expect(props.rawEvents).toEqual({ type: 'object', enabled: false });
       expect(props.improvementStrategies).toEqual({ type: 'object', enabled: false });
+      expect(props.connectorMetadata).toEqual({ type: 'object', enabled: false });
       expect(props.spans).toEqual({ type: 'object', enabled: false });
       expect(matcherProps.actual).toEqual({ type: 'object', enabled: false });
       expect(matcherProps.expected).toEqual({ type: 'object', enabled: false });

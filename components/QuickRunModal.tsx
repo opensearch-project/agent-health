@@ -24,6 +24,7 @@ import { runServerEvaluation, ServerEvaluationReport } from '@/services/client/e
 import { asyncTestCaseStorage } from '@/services/storage';
 import { TrajectoryView } from './TrajectoryView';
 import { RunScore } from '@/components/RunScore';
+import { getJudgeVerdict, getTraceNotice } from '@/lib/reportVerdict';
 
 interface QuickRunModalProps {
   testCase: TestCase | null; // null = ad-hoc run mode
@@ -366,6 +367,8 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   const canRun = effectivePrompt.trim() && selectedAgent && !isRunning;
   const canSave = !testCase && adHocPrompt.trim() && adHocName.trim();
   const hasResults = report !== null;
+  const reportVerdict = getJudgeVerdict(report);
+  const traceNotice = getTraceNotice(report);
 
   return (
     <div
@@ -653,12 +656,12 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                   {/* Status Badge */}
                   {report && (
                     <div className="flex items-center gap-4">
-                      {report.metricsStatus === 'pending' ? (
+                      {!reportVerdict && report.metricsStatus === 'pending' ? (
                         <Badge className="bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/20 dark:text-amber-400 dark:border-amber-500/30 text-sm px-3 py-1">
                           <Clock size={14} className="mr-1" />
                           PENDING
                         </Badge>
-                      ) : report.metricsStatus === 'error' ? (
+                      ) : !reportVerdict && report.metricsStatus === 'error' ? (
                         // Issue #242: distinct ERRORED bucket so an evaluator
                         // that couldn't produce a verdict isn't conflated with
                         // a real agent failure (which would be FAILED in red).
@@ -669,7 +672,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                           <AlertTriangle size={14} className="mr-1" />
                           ERRORED
                         </Badge>
-                      ) : report.passFailStatus === 'passed' ? (
+                      ) : reportVerdict?.status === 'passed' ? (
                         <Badge className="bg-green-100 text-green-700 border-green-300 dark:bg-green-500/20 dark:text-green-400 dark:border-green-500/30 text-sm px-3 py-1">
                           <CheckCircle2 size={14} className="mr-1" />
                           PASSED
@@ -686,7 +689,16 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                             evaluator scored it (RCA Default emits `accuracy`,
                             other evaluators emit different metrics). The
                             tooltip on hover lists each contributing metric. */}
-                        <RunScore metrics={report.metrics as Record<string, number | undefined>} />
+                        <RunScore report={report} />
+                        {traceNotice && (
+                          <span
+                            title={`${traceNotice.title} — ${traceNotice.description}`}
+                            aria-label={`${traceNotice.title}. ${traceNotice.description}`}
+                            className={traceNotice.tone === 'warning' ? 'text-amber-500' : 'text-muted-foreground'}
+                          >
+                            {traceNotice.tone === 'warning' ? <AlertTriangle size={13} /> : <Info size={13} />}
+                          </span>
+                        )}
                       </span>
                     </div>
                   )}

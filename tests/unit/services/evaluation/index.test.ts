@@ -414,6 +414,7 @@ describe('Evaluation Service Index', () => {
 
       expect(result.runId).toBe('subprocess-789');
       expect(result.sessionId).toBe('sess-strategy-d');
+      expect(result.connectorMetadata).toEqual({ sessionId: 'sess-strategy-d', exitCode: 0 });
     });
 
     it('should handle connector execution errors', async () => {

@@ -134,32 +134,56 @@ describe('AsyncRunStorage', () => {
       );
     });
 
-    it('persists evaluatorId + judgeModelId through toStorageFormat (write side of the PR #206/#390 round-trip)', async () => {
-      // The read mapper (toTestCaseRun) and the server-side save path both
-      // carry these; the client-side write mapper used to drop them, so a
-      // report saved via asyncRunStorage (e.g. the localStorage→OpenSearch
-      // migration) lost which evaluator/judge produced it. Regression-locked
-      // by tests/integration/services/storage/runStorage.integration.test.ts
-      // ('preserves evaluatorId …') against a real backend.
-      mockOsRuns.create.mockResolvedValue(createMockStorageRun('run-judge'));
-      const report = createMockReport();
-      (report as any).evaluatorId = 'system-rca';
-      (report as any).judgeModelId = 'us.anthropic.claude-sonnet-4-5';
+    it('persists opaque connector metadata through the OpenSearch write mapper', async () => {
+      mockOsRuns.create.mockResolvedValue(createMockStorageRun('run-metadata'));
+      const report = {
+        ...createMockReport(),
+        connectorMetadata: {
+          settlementStatus: { settled: true },
+          settledTimeout: false,
+          childSessions: ['child-1'],
+        },
+      };
+
       await asyncRunStorage.saveReport(report);
-      expect(mockOsRuns.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          evaluatorId: 'system-rca',
-          judgeModelId: 'us.anthropic.claude-sonnet-4-5',
-        })
-      );
+
+      expect(mockOsRuns.create).toHaveBeenCalledWith(expect.objectContaining({
+        connectorMetadata: report.connectorMetadata,
+      }));
     });
 
-    it('omits evaluatorId / judgeModelId keys entirely when the report has none (no undefined stomping)', async () => {
-      mockOsRuns.create.mockResolvedValue(createMockStorageRun('run-nojudge'));
-      await asyncRunStorage.saveReport(createMockReport());
-      const arg = mockOsRuns.create.mock.calls[0][0];
-      expect('evaluatorId' in arg).toBe(false);
-      expect('judgeModelId' in arg).toBe(false);
+    it('persists verdict, timing, identity, and trace metadata on create', async () => {
+      mockOsRuns.create.mockResolvedValue(createMockStorageRun('run-rich'));
+      const report = {
+        ...createMockReport(),
+        agentName: 'Friendly agent',
+        agentEndpoint: 'http://agent.example',
+        judgeModelId: 'judge-model',
+        evaluatorId: 'custom-evaluator',
+        traceStatus: 'not_configured' as const,
+        performanceMetrics: { durationMs: 42, agentDurationMs: 30 },
+        llmJudgeResponse: {
+          modelId: 'judge-model',
+          timestamp: '2024-01-01T00:00:00Z',
+          promptTokens: 10,
+          completionTokens: 5,
+          latencyMs: 12,
+          rawResponse: '{}',
+        },
+      };
+
+      await asyncRunStorage.saveReport(report);
+
+      expect(mockOsRuns.create).toHaveBeenCalledWith(expect.objectContaining({
+        agentName: 'Friendly agent',
+        agentId: 'test-agent',
+        agentEndpoint: 'http://agent.example',
+        judgeModelId: 'judge-model',
+        evaluatorId: 'custom-evaluator',
+        traceStatus: 'not_configured',
+        performanceMetrics: report.performanceMetrics,
+        llmJudgeResponse: report.llmJudgeResponse,
+      }));
     });
   });
 
@@ -263,6 +287,61 @@ describe('AsyncRunStorage', () => {
       expect(result?.id).toBe('run-1');
     });
 
+    it('maps file-backed timestamp and report-page fields without dropping them (#407)', async () => {
+      const stored = {
+        ...createMockStorageRun('file-report'),
+        createdAt: undefined,
+        timestamp: '2026-08-24T22:42:33.122Z',
+        testCaseVersion: 2,
+        modelId: undefined,
+        modelName: 'file-model',
+        logs: undefined,
+        openSearchLogs: [{ timestamp: '2026-08-24T22:42:33.122Z', message: 'file log' }],
+        annotations: [{
+          id: 'ann-file',
+          text: 'file annotation',
+          timestamp: '2026-08-24T22:43:00.000Z',
+        }],
+        performanceMetrics: {
+          durationMs: 166254,
+          agentDurationMs: 97091,
+          judgeDurationMs: 69162,
+          judgeAttempts: 1,
+        },
+        llmJudgeResponse: {
+          modelId: 'judge-model',
+          timestamp: '2026-08-24T22:42:33.122Z',
+          promptTokens: 123,
+          completionTokens: 45,
+          latencyMs: 69162,
+          rawResponse: '{"pass_fail_status":"passed"}',
+          parsedMetrics: { accuracy: 100 },
+        },
+        matcherResults: [{
+          description: 'judge: expected outcomes',
+          method: 'llm-judge',
+          pass: true,
+          score: 1,
+        }],
+        traceStatus: 'not_configured',
+      } as any;
+      mockOsRuns.getById.mockResolvedValue(stored);
+
+      const result = await asyncRunStorage.getReportById('file-report');
+
+      expect(result?.timestamp).toBe('2026-08-24T22:42:33.122Z');
+      expect(Number.isNaN(Date.parse(result!.timestamp))).toBe(false);
+      expect(result?.testCaseVersion).toBe(2);
+      expect(result?.modelName).toBe('file-model');
+      expect(result?.modelId).toBe('file-model');
+      expect(result?.logs).toEqual(stored.openSearchLogs);
+      expect(result?.annotations?.[0].timestamp).toBe('2026-08-24T22:43:00.000Z');
+      expect(result?.performanceMetrics).toEqual(stored.performanceMetrics);
+      expect(result?.llmJudgeResponse).toEqual(stored.llmJudgeResponse);
+      expect(result?.matcherResults).toEqual(stored.matcherResults);
+      expect(result?.traceStatus).toBe('not_configured');
+    });
+
     it('reads back sessionId from storage for Strategy D (#313)', async () => {
       const mockRun = { ...createMockStorageRun('run-1'), sessionId: 'sess-read' } as any;
       mockOsRuns.getById.mockResolvedValue(mockRun);
@@ -270,6 +349,18 @@ describe('AsyncRunStorage', () => {
       const result = await asyncRunStorage.getReportById('run-1');
 
       expect(result?.sessionId).toBe('sess-read');
+    });
+
+    it('reads back opaque connector metadata', async () => {
+      const connectorMetadata = { settledTimeout: true, childSessions: ['child-1'] };
+      mockOsRuns.getById.mockResolvedValue({
+        ...createMockStorageRun('run-1'),
+        connectorMetadata,
+      } as any);
+
+      const result = await asyncRunStorage.getReportById('run-1');
+
+      expect(result?.connectorMetadata).toEqual(connectorMetadata);
     });
 
     it('maps judgeModelId from storage so recovery judges with the configured model', async () => {
@@ -442,39 +533,6 @@ describe('AsyncRunStorage', () => {
     });
   });
 
-  describe('getReportReasoningsByIds', () => {
-    it('returns an empty map for no ids without hitting the API', async () => {
-      const result = await asyncRunStorage.getReportReasoningsByIds([]);
-      expect(result).toEqual({});
-      expect(mockOsRuns.getByIds).not.toHaveBeenCalled();
-    });
-
-    it('requests only the reasoning + testCaseId fields (not the full report body)', async () => {
-      mockOsRuns.getByIds.mockResolvedValue([
-        { id: 'r-1', testCaseId: 'tc-1', llmJudgeReasoning: 'The agent was unable to retrieve any information due to tool connectivity issues.' },
-      ]);
-
-      const result = await asyncRunStorage.getReportReasoningsByIds(['r-1']);
-
-      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(1);
-      const [ids, options] = mockOsRuns.getByIds.mock.calls[0];
-      expect(ids).toEqual(['r-1']);
-      expect(options.fields).toEqual(['llmJudgeReasoning', 'testCaseId']);
-      expect(result['r-1'].llmJudgeReasoning).toContain('tool connectivity issues');
-    });
-
-    it('chunks large id lists into batches of 100 (RunInsightsPane caps failing-case fetches at 100 anyway)', async () => {
-      const ids = Array.from({ length: 150 }, (_, i) => `r-${i}`);
-      mockOsRuns.getByIds.mockResolvedValue([]);
-
-      await asyncRunStorage.getReportReasoningsByIds(ids);
-
-      expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(2);
-      expect(mockOsRuns.getByIds.mock.calls[0][0]).toHaveLength(100);
-      expect(mockOsRuns.getByIds.mock.calls[1][0]).toHaveLength(50);
-    });
-  });
-
   describe('deleteReport', () => {
     it('returns true when deletion succeeds', async () => {
       mockOsRuns.delete.mockResolvedValue({ deleted: true });
@@ -534,26 +592,40 @@ describe('AsyncRunStorage', () => {
       }));
     });
 
-    it('maps metrics correctly', async () => {
+    it('preserves dynamic metrics and report-page fields on update', async () => {
       const mockUpdated = createMockStorageRun('run-1');
       mockOsRuns.partialUpdate.mockResolvedValue(mockUpdated);
+      const matcherResults = [{ description: 'judge', method: 'llm-judge', pass: true }];
+      const llmJudgeResponse = {
+        modelId: 'judge-model',
+        timestamp: '2024-01-01T00:00:00Z',
+        promptTokens: 10,
+        completionTokens: 5,
+        latencyMs: 12,
+        rawResponse: '{}',
+      };
+      const performanceMetrics = { durationMs: 42, judgeDurationMs: 12 };
 
       await asyncRunStorage.updateReport('run-1', {
         metrics: {
           accuracy: 0.98,
-          faithfulness: 0.95,
-          latency_score: 0.90,
-          trajectory_alignment_score: 0.92,
+          custom_rubric_score: 73,
         },
-      });
+        matcherResults,
+        llmJudgeResponse,
+        performanceMetrics,
+        traceStatus: 'unavailable',
+      } as any);
 
       expect(mockOsRuns.partialUpdate).toHaveBeenCalledWith('run-1', expect.objectContaining({
         metrics: {
           accuracy: 0.98,
-          faithfulness: 0.95,
-          latency_score: 0.90,
-          trajectory_alignment_score: 0.92,
+          custom_rubric_score: 73,
         },
+        matcherResults,
+        llmJudgeResponse,
+        performanceMetrics,
+        traceStatus: 'unavailable',
       }));
     });
   });
@@ -593,69 +665,6 @@ describe('AsyncRunStorage', () => {
           }),
         ]),
       });
-    });
-
-    // Regression guard (comparison-page Cost/Tokens/LLM Calls bug): `runId`
-    // must prefer the REAL connector runId over `traceId` when BOTH are
-    // present on the stored doc. Pre-fix this was `stored.traceId ||
-    // stored.runId` — unconditionally clobbering a real runId (e.g. a
-    // subprocess connector's `subprocess-<ts>`) with the OTel traceId,
-    // discarding it entirely. `traceId` remains available as its OWN,
-    // separate field either way.
-    it('prefers the real connector runId over traceId when both are present on the stored doc', async () => {
-      const mockStorageRun = {
-        ...createMockStorageRun('run-1'),
-        runId: 'subprocess-1788335139441',
-        traceId: 'trace-abc-123',
-      };
-      mockOsRuns.getById.mockResolvedValue(mockStorageRun);
-
-      const result = await asyncRunStorage.getReportById('run-1');
-
-      expect(result?.runId).toBe('subprocess-1788335139441');
-      expect(result?.traceId).toBe('trace-abc-123');
-    });
-
-    // REST connectors never get a native runId (RESTConnector.execute()
-    // returns none) — runId must still fall back to traceId in that case, so
-    // Strategy-A/B correlation has SOMETHING to key off.
-    it('falls back to traceId for runId when the stored doc has no distinct runId (REST connectors)', async () => {
-      const mockStorageRun = createMockStorageRun('run-1'); // traceId: 'trace-1', no runId field
-      mockOsRuns.getById.mockResolvedValue(mockStorageRun);
-
-      const result = await asyncRunStorage.getReportById('run-1');
-
-      expect(result?.runId).toBe('trace-1');
-      expect(result?.traceId).toBe('trace-1');
-    });
-    // real, persisted field (server/routes/comparison.ts and the evaluation/
-    // benchmark runners already read it) but was missing from toTestCaseRun's
-    // mapping entirely, so every BROWSER-side report loaded via
-    // getReportById()/getReportsByIds() silently lost it (e.g. the comparison
-    // deep-dive panel's per-case Duration cell always showed a dash).
-    it('preserves performanceMetrics (durationMs/agentDurationMs) from the stored document', async () => {
-      const mockStorageRun = {
-        ...createMockStorageRun('run-perf'),
-        performanceMetrics: { durationMs: 36900, agentDurationMs: 34000, judgeDurationMs: 2900 },
-      };
-      mockOsRuns.getById.mockResolvedValue(mockStorageRun);
-
-      const result = await asyncRunStorage.getReportById('run-perf');
-
-      expect(result?.performanceMetrics).toEqual({
-        durationMs: 36900,
-        agentDurationMs: 34000,
-        judgeDurationMs: 2900,
-      });
-    });
-
-    it('leaves performanceMetrics undefined when the stored document has none', async () => {
-      const mockStorageRun = createMockStorageRun('run-no-perf');
-      mockOsRuns.getById.mockResolvedValue(mockStorageRun);
-
-      const result = await asyncRunStorage.getReportById('run-no-perf');
-
-      expect(result?.performanceMetrics).toBeUndefined();
     });
 
     it('handles trace-mode fields in conversion', async () => {

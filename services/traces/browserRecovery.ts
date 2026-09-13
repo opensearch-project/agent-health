@@ -54,10 +54,11 @@ export function ensureTracePollingForReport(
     minPendingAgeMs?: number;
   }
 ): void {
-  // Only valid for pending reports with a test case. A missing runId is no
-  // longer disqualifying — the poller correlates via sessionId/service-window
-  // hints derived from the report (REST agents never carry a runId).
-  if (report.metricsStatus !== 'pending' || !testCase) return;
+  // Only valid for trace-mode pending reports with a test case. A missing
+  // runId is no longer disqualifying because the poller can correlate via
+  // sessionId/service-window hints; the neutral marker still prevents stale
+  // no-trace placeholders from entering the timeout path (#407).
+  if (report.traceStatus === 'not_configured' || report.metricsStatus !== 'pending' || !testCase) return;
 
   const minAge = options?.minPendingAgeMs ?? 0;
   if (minAge > 0) {

@@ -172,6 +172,9 @@ export function getIndexMappings(): IndexMappings {
           passFailStatus: { type: 'keyword' },
           traceId: { type: 'keyword' },
           sessionId: { type: 'keyword' },
+          // Connector payloads are intentionally open-ended. Preserve the full
+          // object in _source without dynamically mapping connector-owned keys.
+          connectorMetadata: { type: 'object', enabled: false },
           tags: { type: 'keyword' },
           actualOutcomes: { type: 'object', enabled: false },
           llmJudgeReasoning: { type: 'text' },

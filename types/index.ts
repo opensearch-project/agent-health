@@ -417,6 +417,11 @@ export interface SessionMetadata {
 // Metrics status for trace-mode runs (traces take ~5 min to propagate)
 export type MetricsStatus = 'pending' | 'calculating' | 'ready' | 'error';
 
+// Trace availability is diagnostic metadata and is deliberately separate from
+// MetricsStatus / the judge verdict. In particular, `unavailable` must never
+// turn an already-judged PASS or FAIL into an evaluator error.
+export type TraceStatus = 'not_configured' | 'pending' | 'available' | 'unavailable';
+
 // TestCaseRun = result of running a specific test case version (renamed from EvaluationReport)
 export interface TestCaseRun {
   id: string;
@@ -494,6 +499,12 @@ export interface TestCaseRun {
    * propagate W3C context or tag our `agent_health.run.id`.
    */
   sessionId?: string;
+  /**
+   * Complete opaque metadata returned by the connector for this invocation.
+   * Connector-specific fields (for example pi-web harvest settlement details)
+   * are preserved for audit/debugging without becoming report schema fields.
+   */
+  connectorMetadata?: Record<string, unknown>;
   logs?: OpenSearchLog[]; // OpenSearch logs for the run (master version)
   rawEvents?: any[]; // Raw AG UI events for debugging
   connectorProtocol?: ConnectorProtocol; // Protocol used to execute this run (for trajectory parsing)
@@ -506,7 +517,10 @@ export interface TestCaseRun {
   // Server-side performance metrics (timing data from evaluation execution)
   performanceMetrics?: TestCasePerformanceMetrics;
 
-  // Trace mode fields (for agents with useTraces: true)
+  // Trace metadata. `not_configured` is the neutral marker for agents whose
+  // config has useTraces=false; `unavailable` is a warning when traces were
+  // expected but did not arrive. Neither overrides a judge verdict.
+  traceStatus?: TraceStatus;
   metricsStatus?: MetricsStatus; // Status of deferred metrics/judge calculation
   traceFetchAttempts?: number; // Number of polling attempts for traces
   lastTraceFetchAt?: string; // Timestamp of last trace fetch attempt

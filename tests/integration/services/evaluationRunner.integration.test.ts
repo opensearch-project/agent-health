@@ -570,11 +570,10 @@ describe('executeEvaluationRun', () => {
   });
 
   describe('trace polling integration', () => {
-    it('triggers trace polling when report has metricsStatus pending', async () => {
-      // The polling gate requires a TRACE-MODE agent (agentConfig.useTraces)
-      // — only trace-mode agents legitimately produce 'pending'. A stale
-      // placeholder 'pending' on a non-trace agent must NOT trigger polling
-      // (that was the 10-minute trace-detour bug).
+    it('triggers trace polling for a trace-enabled agent when report has metricsStatus pending', async () => {
+      // Trace polling is explicitly gated by agent configuration. Keep this
+      // test focused on the positive useTraces=true path rather than relying
+      // on the old implicit "pending means poll" behaviour.
       mockLoadConfigSync.mockReturnValue({
         agents: [
           { key: 'test-agent', name: 'Test Agent', endpoint: 'http://localhost:3000/agent', connectorType: 'mock', useTraces: true },

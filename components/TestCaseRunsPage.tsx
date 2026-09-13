@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Play, Calendar, CheckCircle2, XCircle, Trash2, FileText, Pencil, Loader2, X, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Play, Calendar, CheckCircle2, XCircle, Trash2, FileText, Pencil, Loader2, X, AlertTriangle, Clock, Info } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -18,6 +18,7 @@ import { formatDate, formatRelativeTime } from '@/lib/utils';
 import { QuickRunModal } from './QuickRunModal';
 import { TestCaseEditor } from './TestCaseEditor';
 import { TestCaseDetailPanel } from './TestCaseDetailPanel';
+import { getJudgeVerdict, getTraceNotice } from '@/lib/reportVerdict';
 
 // ==================== Sub-Components ====================
 
@@ -29,20 +30,16 @@ interface RunCardProps {
   isDeleting?: boolean;
 }
 
-const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps) => {
-  // Issue #242: distinguish evaluator-error runs from genuine pass/fail.
-  // `metricsStatus === 'error'` means the judge / trace pipeline could not
-  // produce a verdict; rendering it as `FAILED` (the previous behaviour)
-  // would conflate it with a real agent miss.
-  const isErrored = run.metricsStatus === 'error';
-  const isPassed = !isErrored && run.passFailStatus === 'passed';
+export const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps) => {
+  const verdict = getJudgeVerdict(run);
+  const traceNotice = getTraceNotice(run);
+  // A real judge verdict always wins. metricsStatus is lifecycle/diagnostic
+  // metadata and can only produce ERRORED when no verdict exists.
+  const isErrored = !verdict && run.metricsStatus === 'error';
+  const isPending = !verdict && !isErrored;
+  const isPassed = verdict?.status === 'passed';
   const modelDisplayName = DEFAULT_CONFIG.models[run.modelName]?.display_name || run.modelName;
 
-  // Visual triple: icon, ring background, label colour.
-  // Errored gets the amber AlertTriangle treatment used everywhere else
-  // for the same status (RunInspectorPage header, TestCaseInspectorPanel
-  // pill, BenchmarkRunsPage badge — all settled on amber for evaluator
-  // failures distinct from red for agent failures).
   const statusVisual = isErrored
     ? {
         ring: 'bg-amber-500/20',
@@ -50,19 +47,26 @@ const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps)
         label: 'ERRORED',
         labelClass: 'text-amber-500',
       }
-    : isPassed
-    ? {
-        ring: 'bg-opensearch-blue/20',
-        icon: <CheckCircle2 size={20} className="text-opensearch-blue" />,
-        label: 'PASSED',
-        labelClass: 'text-opensearch-blue',
-      }
-    : {
-        ring: 'bg-red-500/20',
-        icon: <XCircle size={20} className="text-red-400" />,
-        label: 'FAILED',
-        labelClass: 'text-red-400',
-      };
+    : isPending
+      ? {
+          ring: 'bg-muted',
+          icon: <Clock size={20} className="text-muted-foreground" />,
+          label: 'PENDING',
+          labelClass: 'text-muted-foreground',
+        }
+      : isPassed
+        ? {
+            ring: 'bg-opensearch-blue/20',
+            icon: <CheckCircle2 size={20} className="text-opensearch-blue" />,
+            label: 'PASSED',
+            labelClass: 'text-opensearch-blue',
+          }
+        : {
+            ring: 'bg-red-500/20',
+            icon: <XCircle size={20} className="text-red-400" />,
+            label: 'FAILED',
+            labelClass: 'text-red-400',
+          };
 
   return (
     <Card
@@ -73,7 +77,11 @@ const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps)
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4 flex-1">
             {/* Status Icon */}
-            <div className={`p-2 rounded-full ${statusVisual.ring}`}>
+            <div
+              className={`p-2 rounded-full ${statusVisual.ring}`}
+              title={isErrored ? 'Evaluator could not produce a judge verdict' : statusVisual.label}
+              aria-label={isErrored ? 'Evaluator could not produce a judge verdict' : statusVisual.label}
+            >
               {statusVisual.icon}
             </div>
 
@@ -87,6 +95,16 @@ const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps)
                   <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-400 border-blue-500/30">
                     Latest
                   </Badge>
+                )}
+                {traceNotice && (
+                  <span
+                    className={traceNotice.tone === 'warning' ? 'text-amber-500' : 'text-muted-foreground'}
+                    title={`${traceNotice.title} — ${traceNotice.description}`}
+                    aria-label={`${traceNotice.title}. ${traceNotice.description}`}
+                    data-testid="metrics-diagnostic"
+                  >
+                    {traceNotice.tone === 'warning' ? <AlertTriangle size={13} /> : <Info size={13} />}
+                  </span>
                 )}
               </div>
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -107,7 +125,7 @@ const RunCard = ({ run, isLatest, onClick, onDelete, isDeleting }: RunCardProps)
                     value. Replaces the previous hardcoded `accuracy` display
                     that read `0%` for any non-RCA-Default evaluator. */}
                 <RunScore
-                  metrics={run.metrics as Record<string, number | undefined>}
+                  report={run}
                   showLabel={false}
                   className="text-opensearch-blue font-semibold"
                 />
