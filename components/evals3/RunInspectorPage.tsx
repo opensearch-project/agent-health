@@ -588,7 +588,7 @@ export const RunInspectorPage: React.FC = () => {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0" data-testid="run-inspector-header-meta">
             <span className="flex items-center gap-1"><Calendar size={11} /> {formatDate(run.createdAt)}</span>
             <span>{agentName}</span>
             <span>{modelName}</span>

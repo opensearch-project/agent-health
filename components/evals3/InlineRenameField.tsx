@@ -116,7 +116,7 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
           maxLength={maxLength + 20}
           disabled={saving}
           data-testid={testId ? `${testId}-input` : undefined}
-          className={textClassName}
+          className={`w-full min-w-0 ${textClassName || ''}`}
           onChange={e => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={e => {
@@ -134,8 +134,24 @@ export const InlineRenameField: React.FC<InlineRenameFieldProps> = ({
   }
 
   return (
-    <div className={`group/rename inline-flex items-center gap-1 min-w-0 ${className || ''}`}>
-      <span className={`truncate ${textClassName || ''}`} title={value} data-testid={testId ? `${testId}-text` : undefined}>
+    // Deliberately `flex` (block-level), not `inline-flex` (shrink-to-fit):
+    // an inline-flex box sizes to its min-content, which for nowrap text is
+    // the FULL text width -- `min-w-0` on it is then a no-op and `truncate`
+    // on the child span never gets a bounded width to clip against. `flex`
+    // fills the available width of its (already width-bounded) containing
+    // block like any other block box, so the span below can actually shrink.
+    // No default `max-w-*` here on purpose: a caller in an unbounded context
+    // (e.g. an auto-layout table cell) passes its own cap via `className`
+    // (see EvalRunsPage) -- stacking a second `max-w-*` utility here would
+    // collide with it and the winner would depend on Tailwind's generated
+    // stylesheet order, not the className prop's intent.
+    <div className={`group/rename flex items-center gap-1 min-w-0 ${className || ''}`}>
+      {/* `min-w-0` here is the OTHER half of the fix: this span is a flex
+          item of the row above, and flex items default to a minimum size
+          of their content (`min-width: auto`), which for nowrap text is
+          the full text width -- that alone blocks shrinking/truncation
+          even once the parent is width-bounded. */}
+      <span className={`truncate min-w-0 ${textClassName || ''}`} title={value} data-testid={testId ? `${testId}-text` : undefined}>
         {value}
       </span>
       <button
