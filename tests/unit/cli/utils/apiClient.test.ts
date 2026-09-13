@@ -245,7 +245,7 @@ describe('ApiClient', () => {
 
       const result = await client.getReportById('report-1');
 
-      expect(mockFetch).toHaveBeenCalledWith(`${baseUrl}/api/storage/runs/report-1`);
+      expect(mockFetch).toHaveBeenCalledWith(`${baseUrl}/api/storage/runs/report-1?include=full`);
       expect(result).toEqual(report);
     });
 
@@ -280,7 +280,7 @@ describe('ApiClient', () => {
 
       await client.getReportById('report/1');
 
-      expect(mockFetch).toHaveBeenCalledWith(`${baseUrl}/api/storage/runs/report%2F1`);
+      expect(mockFetch).toHaveBeenCalledWith(`${baseUrl}/api/storage/runs/report%2F1?include=full`);
     });
   });
 

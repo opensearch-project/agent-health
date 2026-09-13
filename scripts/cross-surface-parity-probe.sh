@@ -144,7 +144,7 @@ wait $SSE_PID 2>/dev/null
 
 HTTP_EVAL_RUN_ID=$(grep -oE '"runId":"[^"]+' "$SSE_LOG" | head -1 | sed 's/"runId":"//')
 HTTP_REPORT_ID=$(grep -oE '"reportId":"[^"]+' "$SSE_LOG" | head -1 | sed 's/"reportId":"//')
-FINAL=$(curl -s "$BASE/api/storage/runs/$HTTP_REPORT_ID")
+FINAL=$(curl -s "$BASE/api/storage/runs/$HTTP_REPORT_ID?include=full")
 FINAL_EVAL=$(echo "$FINAL" | jq -r '.evaluatorId // "null"')
 
 echo "  eval-run:        $HTTP_EVAL_RUN_ID"
@@ -192,7 +192,7 @@ wait $SSE_PID 2>/dev/null
 
 CLI_EVAL_RUN_ID=$(grep -oE '"runId":"[^"]+' "$SSE_LOG" | head -1 | sed 's/"runId":"//')
 CLI_REPORT_ID=$(grep -oE '"reportId":"[^"]+' "$SSE_LOG" | head -1 | sed 's/"reportId":"//')
-FINAL=$(curl -s "$BASE/api/storage/runs/$CLI_REPORT_ID")
+FINAL=$(curl -s "$BASE/api/storage/runs/$CLI_REPORT_ID?include=full")
 FINAL_EVAL=$(echo "$FINAL" | jq -r '.evaluatorId // "null"')
 
 echo "  eval-run:        $CLI_EVAL_RUN_ID"
@@ -235,7 +235,7 @@ probe_running "$UI_TC_ID" "$SSE_LOG"
 wait $SSE_PID 2>/dev/null
 
 UI_REPORT_ID=$(grep -oE '"reportId":"[^"]+' "$SSE_LOG" | head -1 | sed 's/"reportId":"//')
-FINAL=$(curl -s "$BASE/api/storage/runs/$UI_REPORT_ID")
+FINAL=$(curl -s "$BASE/api/storage/runs/$UI_REPORT_ID?include=full")
 FINAL_EVAL=$(echo "$FINAL" | jq -r '.evaluatorId // "null"')
 
 echo "  report:          $UI_REPORT_ID"
