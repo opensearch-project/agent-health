@@ -448,3 +448,85 @@ The end-to-end streaming pipeline converts Claude CLI NDJSON output to real-time
 - **AssistantModal**: Floating "?" button fixed bottom-right, opens 500x400 popup. Mobile-responsive (full viewport on small screens).
 - **AssistantChat**: Full-page chat at `/assistant` route with welcome screen and suggested prompts.
 - **AssistantProvider**: Mounted once in `Layout.tsx`, provides shared runtime context to both interfaces.
+
+## Scoring read model: `ScoringSnapshot` and "legacy scoring"
+
+Every aggregate score the UI shows for a report — the compare page's **Avg
+score**, the run inspector's overall — is derived by ONE pure module,
+[`lib/scoring/snapshotScore.ts`](../lib/scoring/snapshotScore.ts), from two
+things on the report document itself:
+
+- `report.metrics` — the rubric values the judge emitted, by name;
+- `report.scoringSnapshot` — an immutable record of HOW the report was scored,
+  frozen at judge time (`types/index.ts` `ScoringSnapshot`): evaluator id /
+  version / content hash, per-rubric `weights` and `scale` (default 0–100),
+  the `passPolicy` (`threshold` | `gates` | `llm-verdict`), optional
+  `primaryMetrics` names, the resolved judge model, and any `unevaluable`
+  rubrics.
+
+Nothing in the read path consults today's (mutable) evaluator document, so a
+historical number can never change because someone edited the evaluator later.
+
+**Per report** — `scoreFromSnapshot(report)`: each weighted rubric is
+normalized to `[0,1]` via its scale and the score is the weight-normalized mean
+over the rubrics that produced a value. Rubrics listed in `unevaluable`,
+missing from `metrics`, or with a degenerate scale are excluded from the mean
+(never counted as 0) but stay in `total`, so the UI can say "scored X / Y
+rubrics" truthfully. A report without a usable snapshot yields
+`{ source: 'legacy' }`.
+
+**Per run** — `runAggregate(reports)`: the mean of per-report scores over the
+evaluated reports (errored / pending / calculating reports are skipped). A run
+is snapshot-scored only when EVERY evaluated report carries a snapshot; one
+legacy report makes the whole run `legacy` — a mean over half the cases would
+be misleading.
+
+**"Legacy scoring"** is what every report judged before snapshots existed is.
+The compare page renders such a run's Avg score as `—` with a muted
+"legacy scoring" label, shows its rubric values BY NAME in the per-case cells,
+and never picks one rubric (alphabetically or otherwise) to stand in for the
+score — that alphabetical pick is exactly what used to show an unrelated rubric
+at ~90% next to a 45% pass rate. Old runs are not re-scored with today's
+evaluator; they are labelled honestly instead.
+
+Related compare-page surfaces built on the same data
+([`lib/comparison/scoringDisplay.ts`](../lib/comparison/scoringDisplay.ts)):
+
+- **Judge caption** — resolved per report: `report.judgeModel` →
+  `report.llmJudgeResponse.modelId` → `report.judgeModelId` →
+  `run.judgeModelId`; never the agent model (`modelId`). A run whose reports
+  resolved to several judges reads "mixed (a · b)"; runs with no judge
+  recorded read "not recorded".
+- **Pass rate** — labelled with its policy ("judge verdict" for legacy;
+  "score ≥ 0.7" / "gates" from the snapshot) and shown as
+  `passed / evaluated (errored N, pending M)`. "Evaluated" is the JUDGED set
+  (`passed + failed`, the same denominator as `lib/runStats`
+  `passRateOverJudged` and the runs list); errored, pending and not-run cases
+  are excluded from it and called out separately.
+- **Coverage gate** — the Δ row is disabled ("Not comparable — different
+  scoring") when the runs carry different snapshot content hashes, a run mixes
+  snapshots, one is legacy and the other snapshot-scored, shared test cases
+  ran at different versions, or (for snapshot-scored runs) a shared case has
+  no recorded version on one side — unknown provenance is not matching
+  provenance. "Compare anyway" is an explicit, session-scoped override keyed
+  by the compared run set. Two fully legacy runs stay comparable (blocking
+  them would disable the Δ row for every pre-snapshot run); their Δ cells
+  carry a caveat that both sides lack scoring provenance. The coverage cell
+  says "same case IDs" unless the scoring provenance also matches ("same
+  cases, same scoring").
+- **Verdict changes vs Split** — `calculateRowStatus` and the insights band's
+  `partitionByAgreement` share one predicate
+  ([`lib/comparison/verdictAgreement.ts`](../lib/comparison/verdictAgreement.ts)),
+  so "N verdict changes" always equals "Split". In-flight (`pending` /
+  `running`) and `cancelled` cases carry no verdict (they render "Not run"
+  and stay out of both counts); only a run-level `failed` (agent crashed) is
+  a fail verdict. Score-only moves (verdicts agree, per-case score moved > 5
+  points) are counted and labelled separately, and are computed only from
+  like quantities — snapshot score vs snapshot score, or `accuracy` vs
+  `accuracy` for legacy reports; never from an invented zero-filled
+  combination of rubrics.
+
+R1 (this section) adds the type, storage mapping and read model; the snapshot
+WRITE path (a canonical verdict engine that computes the verdict from the
+policy) is R2, and deterministic retrieval metrics on structured
+`expected.ids` / ranked `predicted.ids[]` are R3.

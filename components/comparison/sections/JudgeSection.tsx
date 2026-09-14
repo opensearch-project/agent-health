@@ -103,7 +103,7 @@ const RunJudgeCard: React.FC<{
             {/* Generic "Score: X%" with hover-tooltip listing each metric.
                 Replaces the hardcoded `Accuracy: X%` which was misleading
                 for runs scored by non-RCA-Default evaluators. */}
-            <RunScore metrics={report.metrics as Record<string, number | undefined>} />
+            <RunScore metrics={report.metrics as Record<string, number | undefined>} snapshot={report.scoringSnapshot} />
           </span>
         </div>
       </CardHeader>

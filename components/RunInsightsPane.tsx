@@ -40,6 +40,7 @@ import { asyncRunStorage } from '@/services/storage';
 import { getResultStatus, StatusIcon } from '@/components/evals3/ResultStatus';
 import { ExperimentRun, EvaluationReport, TestCase } from '@/types';
 import { getRunOverallScore } from '@/lib/utils';
+import { runAggregate } from '@/lib/scoring/snapshotScore';
 import { formatCost, formatDuration, formatTokens, fetchBatchMetrics } from '@/services/metrics';
 import { RunSummaryStats } from '@/components/RunSummaryBand';
 import {
@@ -176,9 +177,16 @@ export const RunInsightsPane: React.FC<RunInsightsPaneProps> = ({
   // ── "Details" fold-in — everything RunSummaryPanel (pre-redesign) showed
   // that isn't already on RunSummaryBand above this pane. ─────────────────
   const scoredRows = caseRows.filter(r => r.score !== null && (r.status === 'passed' || r.status === 'failed'));
-  const avgScore = scoredRows.length > 0
-    ? Math.round(scoredRows.reduce((s, r) => s + (r.score ?? 0), 0) / scoredRows.length)
-    : null;
+  // Same read model as the compare page (lib/scoring/snapshotScore.ts):
+  // snapshot weighted mean when every evaluated report carries one, else the
+  // legacy unweighted mean — labelled as such so it is never mistaken for an
+  // evaluator-defined score.
+  const snapshotAggregate = runAggregate(caseRows.map(r => (r.reportId ? reportsMap[r.reportId] : null)));
+  const avgScore = snapshotAggregate.source === 'snapshot'
+    ? (snapshotAggregate.score === null ? null : Math.round(snapshotAggregate.score * 100))
+    : scoredRows.length > 0
+      ? Math.round(scoredRows.reduce((s, r) => s + (r.score ?? 0), 0) / scoredRows.length)
+      : null;
   const perf = experimentRun.performanceMetrics;
   const [traceAggregate, setTraceAggregate] = useState<{ totalInputTokens: number; totalOutputTokens: number; avgDurationMs: number } | null>(null);
   useEffect(() => {
@@ -320,8 +328,14 @@ export const RunInsightsPane: React.FC<RunInsightsPaneProps> = ({
         </summary>
         <div className="mt-3 space-y-3 text-xs">
           {avgScore !== null && (
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Avg Score</span>
+            <div
+              className="flex items-center justify-between cursor-help"
+              data-testid="run-insights-avg-score"
+              title={snapshotAggregate.source === 'snapshot'
+                ? `Mean of each case's weighted rubric score per its scoring snapshot (${snapshotAggregate.scoredReports} scored cases)`
+                : 'Legacy scoring — unweighted mean of every rubric value; these reports carry no scoring snapshot, so this is not an evaluator-defined score.'}
+            >
+              <span className="text-muted-foreground">{snapshotAggregate.source === 'snapshot' ? 'Avg score' : 'Avg score (legacy mean)'}</span>
               <span className="font-semibold text-opensearch-blue">{avgScore}%</span>
             </div>
           )}

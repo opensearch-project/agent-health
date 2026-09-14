@@ -115,7 +115,8 @@ describe('ComparisonScoreboard — column header tooltips', () => {
     expect(headers).toHaveLength(SCOREBOARD_COLUMNS.length + 1);
     for (const col of SCOREBOARD_COLUMNS) {
       const th = screen.getByTestId(`scoreboard-col-${col.key}`);
-      expect(th.textContent).toBe(col.label);
+      // The pass-rate header carries the verdict policy ("judge verdict" for legacy fixtures).
+      expect(th.textContent).toBe(col.key === 'passRate' ? 'Pass rate (judge verdict)' : col.label);
       const title = th.getAttribute('title');
       expect(title).toBeTruthy();
       expect(title).toBe(col.tooltip);
@@ -125,18 +126,18 @@ describe('ComparisonScoreboard — column header tooltips', () => {
     }
   });
 
-  it('pins the exact wording that distinguishes Average accuracy from Avg score', () => {
+  it('pins the Avg score wording (snapshot-derived) and has no accuracy-only column', () => {
     renderScoreboard([makeRun()]);
-    expect(screen.getByTestId('scoreboard-col-avgAccuracy').getAttribute('title')).toBe('Mean of the judge-graded accuracy over test cases that report one',
-    );
-    expect(screen.getByTestId('scoreboard-col-avgScore').getAttribute('title')).toBe('Mean per-case overall score: accuracy if present, else primary rubric, else mean of all rubric metrics',
+    expect(screen.queryByTestId('scoreboard-col-avgAccuracy')).toBeNull();
+    expect(screen.getByTestId('scoreboard-col-avgScore').getAttribute('title')).toBe(
+      'Mean of each case\'s weighted rubric score per its scoring snapshot (0–100); "—" for runs judged before scoring snapshots existed',
     );
   });
 
   it('pins the owner-specified wording for the remaining columns', () => {
     renderScoreboard([makeRun()]);
     const expected: Record<string, string> = {
-      passRate: '% of test cases whose verdict is pass',
+      passRate: 'Passed ÷ evaluated cases (errored cases excluded); the parenthesis names the verdict policy',
       cost: 'Total LLM cost across all test cases in the run',
       tokens: 'Total tokens across all test cases',
       llmCalls: 'Total LLM calls across all test cases',

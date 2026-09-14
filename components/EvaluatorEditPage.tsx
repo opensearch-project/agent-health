@@ -15,8 +15,48 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ENV_CONFIG } from '@/lib/config';
-import type { Evaluator, ScoringMetric } from '@/types';
+import type { Evaluator, EvaluatorKind, ScoringMetric } from '@/types';
 import { EvaluatorVersionHistory } from '@/components/evaluators/EvaluatorVersionHistory';
+import { validateDeterministicEvaluator } from '@/lib/evaluators/deterministic';
+
+/**
+ * Starting point for a deterministic evaluator's JSON definition. Metric
+ * NAMES are free-form; only `compute.type` (ranked-hit | ranked-recall |
+ * mrr) is interpreted. See docs/EVALUATORS.md "Deterministic evaluators".
+ */
+export const DETERMINISTIC_DEFINITION_TEMPLATE = {
+  metrics: [
+    { name: 'hit@1', compute: { type: 'ranked-hit', k: 1 }, weight: 0.25, primary: true },
+    { name: 'hit@5', compute: { type: 'ranked-hit', k: 5 }, weight: 0.25, primary: true },
+    { name: 'recall@20', compute: { type: 'ranked-recall', k: 20, denominator: 'full-gold' }, weight: 0.25, primary: true },
+    { name: 'mrr', compute: { type: 'mrr' }, weight: 0.25, primary: true },
+  ],
+  passPolicy: { kind: 'gates', gates: [{ metric: 'hit@5', min: 1 }] },
+  inputs: {
+    gold: { source: 'expectedOutcomes-pattern', pattern: '^Gold id\\(s\\):\\s*(.+)$' },
+    prediction: {
+      source: 'tool-hits-ordered',
+      idFields: ['id', '_id'],
+      hitsPaths: ['hits', 'results'],
+      anchorTools: [],
+    },
+  },
+};
+
+/** Parse + validate the deterministic definition JSON; returns the body or the first error. */
+export function parseDeterministicDefinition(text: string): { body?: Record<string, unknown>; error?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e: any) {
+    return { error: `Definition is not valid JSON: ${e?.message ?? e}` };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: 'Definition must be a JSON object' };
+  const body = { ...(parsed as Record<string, unknown>), kind: 'deterministic' };
+  const errors = validateDeterministicEvaluator(body);
+  if (errors.length > 0) return { error: errors[0] };
+  return { body };
+}
 
 export const EvaluatorEditPage: React.FC = () => {
   const navigate = useNavigate();
@@ -50,6 +90,9 @@ export const EvaluatorEditPage: React.FC = () => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [kind, setKind] = useState<EvaluatorKind>('llm');
+  const [definitionText, setDefinitionText] = useState(() => JSON.stringify(DETERMINISTIC_DEFINITION_TEMPLATE, null, 2));
+  const [definitionError, setDefinitionError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<ScoringMetric[]>([
     { name: 'accuracy', description: 'Overall accuracy score', weight: 1.0, scale: 100 },
   ]);
@@ -94,8 +137,18 @@ export const EvaluatorEditPage: React.FC = () => {
 
       setName(evaluator.name);
       setDescription(evaluator.description);
-      setSystemPrompt(evaluator.systemPrompt);
-      setMetrics(evaluator.scoringConfig.metrics);
+      setSystemPrompt(evaluator.systemPrompt ?? '');
+      if (evaluator.kind === 'deterministic') {
+        setKind('deterministic');
+        setDefinitionText(JSON.stringify(
+          { metrics: evaluator.metrics ?? [], passPolicy: evaluator.passPolicy, inputs: evaluator.inputs },
+          null,
+          2
+        ));
+      } else {
+        setKind('llm');
+      }
+      setMetrics(evaluator.scoringConfig?.metrics ?? []);
       setPassThreshold(evaluator.scoringConfig.passThreshold);
       setProvider(evaluator.inferenceConfig?.provider || '');
       setModelId(evaluator.inferenceConfig?.modelId || '');
@@ -117,34 +170,54 @@ export const EvaluatorEditPage: React.FC = () => {
       alert('Name is required');
       return;
     }
-    if (!systemPrompt.trim()) {
-      alert('System prompt is required');
-      return;
-    }
-    if (metrics.length === 0) {
-      alert('At least one metric is required');
-      return;
+    let deterministicBody: Record<string, unknown> | undefined;
+    if (kind === 'deterministic') {
+      const parsed = parseDeterministicDefinition(definitionText);
+      if (parsed.error || !parsed.body) {
+        setDefinitionError(parsed.error ?? 'Invalid definition');
+        return;
+      }
+      setDefinitionError(null);
+      deterministicBody = parsed.body;
+    } else {
+      if (!systemPrompt.trim()) {
+        alert('System prompt is required');
+        return;
+      }
+      if (metrics.length === 0) {
+        alert('At least one metric is required');
+        return;
+      }
     }
 
     try {
       setSaving(true);
 
-      const payload = {
-        name: name.trim(),
-        description: description.trim(),
-        systemPrompt: systemPrompt.trim(),
-        scoringConfig: {
-          metrics,
-          passThreshold,
-          scale: 100,
-        },
-        inferenceConfig: {
-          ...(provider && { provider }),
-          ...(modelId && { modelId }),
-          temperature,
-          maxTokens,
-        },
-      };
+      const payload = deterministicBody
+        ? {
+            name: name.trim(),
+            description: description.trim(),
+            kind: 'deterministic',
+            metrics: deterministicBody.metrics,
+            passPolicy: deterministicBody.passPolicy,
+            inputs: deterministicBody.inputs,
+          }
+        : {
+            name: name.trim(),
+            description: description.trim(),
+            systemPrompt: systemPrompt.trim(),
+            scoringConfig: {
+              metrics,
+              passThreshold,
+              scale: 100,
+            },
+            inferenceConfig: {
+              ...(provider && { provider }),
+              ...(modelId && { modelId }),
+              temperature,
+              maxTokens,
+            },
+          };
 
       const url = isEditMode
         ? `${ENV_CONFIG.backendUrl}/api/storage/evaluators/${evaluatorId}`
@@ -464,10 +537,36 @@ export const EvaluatorEditPage: React.FC = () => {
                     disabled={readOnly}
                   />
                 </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="evaluator-kind">Kind</Label>
+                  <Select
+                    value={kind}
+                    onValueChange={(val) => setKind(val === 'deterministic' ? 'deterministic' : 'llm')}
+                    // The kind is fixed once created: switching an LLM evaluator
+                    // to deterministic (or back) would silently change what every
+                    // historical report scored with it means.
+                    disabled={readOnly || isEditMode}
+                  >
+                    <SelectTrigger id="evaluator-kind" data-testid="evaluator-kind-select">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="llm">LLM judge (system prompt)</SelectItem>
+                      <SelectItem value="deterministic">Deterministic (retrieval metrics, no LLM)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {kind === 'deterministic' && (
+                    <p className="text-xs text-muted-foreground">
+                      Scores stored runs in code from the test case's gold ids and the agent's retrieved
+                      ids — no judge model. Applicable to completed runs via Retry judgement.
+                    </p>
+                  )}
+                </div>
               </CardContent>
             </Card>
 
-            {/* Inference Config */}
+            {/* Inference Config (LLM evaluators only) */}
+            {kind === 'llm' && (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Inference Configuration</CardTitle>
@@ -534,11 +633,50 @@ export const EvaluatorEditPage: React.FC = () => {
                 </div>
               </CardContent>
             </Card>
+            )}
           </aside>
 
           {/* ───────── Main: the actual editor surface ───────── */}
           <main className="space-y-6 min-w-0">
+            {kind === 'deterministic' && (
+              <Card className="flex flex-col" data-testid="deterministic-definition-card">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Deterministic definition *</CardTitle>
+                  <CardDescription>
+                    JSON with <code>metrics</code> (free-form names; <code>compute.type</code> ∈{' '}
+                    <code>ranked-hit</code> · <code>ranked-recall</code> · <code>mrr</code>), a{' '}
+                    <code>passPolicy</code> (<code>threshold</code> or <code>gates</code>) and <code>inputs</code>{' '}
+                    (gold from <code>testCase.expected.ids</code> or an <code>expectedOutcomes</code> pattern;
+                    prediction via the <code>tool-hits-ordered</code> extractor). See docs/EVALUATORS.md.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <Textarea
+                    value={definitionText}
+                    onChange={(e) => {
+                      setDefinitionText(e.target.value);
+                      setDefinitionError(null);
+                    }}
+                    onBlur={() => {
+                      if (readOnly) return;
+                      const parsed = parseDeterministicDefinition(definitionText);
+                      setDefinitionError(parsed.error ?? null);
+                    }}
+                    className="font-mono text-sm leading-relaxed resize-y min-h-[50vh]"
+                    spellCheck={false}
+                    disabled={readOnly}
+                    data-testid="deterministic-definition-json"
+                  />
+                  {definitionError && (
+                    <p className="text-sm text-red-600 dark:text-red-400" data-testid="deterministic-definition-error">
+                      {definitionError}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
             {/* System Prompt — the hero. Gets the most space. */}
+            {kind === 'llm' && (<>
             <Card className="flex flex-col">
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -694,6 +832,7 @@ export const EvaluatorEditPage: React.FC = () => {
                 </div>
               </CardContent>
             </Card>
+            </>)}
 
             {/* Latest pane houses ONLY the editor surface. The History pane
                 below is the single home for prior-version inspection. */}

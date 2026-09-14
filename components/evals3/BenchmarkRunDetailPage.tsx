@@ -26,6 +26,7 @@ import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/
 import { Benchmark, BenchmarkRun, TestCase, EvaluationReport } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { getLabelColor, formatDate, getModelName, getRunOverallScore } from '@/lib/utils';
+import { runAggregate } from '@/lib/scoring/snapshotScore';
 import { RunScore } from '@/components/RunScore';
 import { RunDetailsFlyout } from './RunDetailsFlyout';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './ResultStatus';
@@ -139,9 +140,15 @@ export const BenchmarkRunDetailPage: React.FC = () => {
   const totalCount = results.length;
   const judgedCount = passCount + failCount;
   const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
-  const avgScore = results.filter(r => r.score !== null).length > 0
-    ? Math.round(results.reduce((s, r) => s + (r.score ?? 0), 0) / results.filter(r => r.score !== null).length)
-    : null;
+  // Prefer the snapshot read model (lib/scoring/snapshotScore.ts) — the same
+  // definition the compare page uses. Only when EVERY evaluated report lacks
+  // a snapshot fall back to the legacy unweighted mean, labelled as such.
+  const snapshotAggregate = runAggregate(results.map(r => r.report));
+  const avgScore = snapshotAggregate.source === 'snapshot'
+    ? (snapshotAggregate.score === null ? null : Math.round(snapshotAggregate.score * 100))
+    : results.filter(r => r.score !== null).length > 0
+      ? Math.round(results.reduce((s, r) => s + (r.score ?? 0), 0) / results.filter(r => r.score !== null).length)
+      : null;
 
   if (loading) {
     return (
@@ -229,12 +236,17 @@ export const BenchmarkRunDetailPage: React.FC = () => {
                   <div className="text-[10px] text-muted-foreground">Pass Rate</div>
                 </div>
                 {avgScore !== null && (
-                  <div className="text-center">
+                  <div
+                    className="text-center cursor-help"
+                    data-testid="run-detail-avg-score"
+                    title={snapshotAggregate.source === 'snapshot'
+                      ? `Mean of each case's weighted rubric score per its scoring snapshot (${snapshotAggregate.scoredReports} scored cases)`
+                      : 'Legacy scoring — unweighted mean of every rubric value over the scored cases; these reports carry no scoring snapshot, so this is not an evaluator-defined score.'}
+                  >
                     <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{avgScore}%</div>
-                    {/* "Avg Score" not "Avg Accuracy" — individual rows can be
-                        scored under different evaluators emitting different
-                        metrics, so the aggregate is a generic mean of means. */}
-                    <div className="text-[10px] text-muted-foreground">Avg Score</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {snapshotAggregate.source === 'snapshot' ? 'Avg score' : 'Avg score (legacy mean)'}
+                    </div>
                   </div>
                 )}
               </div>
@@ -312,6 +324,7 @@ export const BenchmarkRunDetailPage: React.FC = () => {
                   {r.report
                     ? <RunScore
                         metrics={r.report.metrics as Record<string, number | undefined>}
+                        snapshot={r.report.scoringSnapshot}
                         showLabel={false}
                         className={`text-sm font-semibold tabular-nums ${r.score !== null && r.score >= 50 ? 'text-green-500' : 'text-red-500'}`}
                       />

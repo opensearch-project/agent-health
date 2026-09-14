@@ -40,8 +40,12 @@ jest.mock('@/server/adapters/index', () => ({
       addRun: (...args: any[]) => mockBenchmarksAddRun(...args),
       deleteRun: (...args: any[]) => mockBenchmarksDeleteRun(...args),
     },
+    evaluators: {
+      getById: (...args: any[]) => mockEvaluatorsGetById(...args),
+    },
   }),
 }));
+const mockEvaluatorsGetById = jest.fn(async (id: string) => (id === 'eval-stored' ? { id, name: 'Stored', kind: 'deterministic' } : null));
 
 const mockResolveTestCaseSources = jest.fn();
 jest.mock('@/services/sourceResolver', () => ({
@@ -77,6 +81,7 @@ const mockCountRetryableCases = jest.fn();
 jest.mock('@/services/evaluation/retryJudgement', () => ({
   retryJudgementForRun: (...args: any[]) => mockRetryJudgementForRun(...args),
   countRetryableCases: (...args: any[]) => mockCountRetryableCases(...args),
+  DETERMINISTIC_SCOPE_ERROR: jest.requireActual('@/services/evaluation/retryJudgement').DETERMINISTIC_SCOPE_ERROR,
 }));
 
 import express, { Application } from 'express';
@@ -611,6 +616,64 @@ describe('Evaluation Runs API', () => {
       const job = await pollStatus('run-202');
       expect(job.status).toBe('completed');
       expect(job.summary).toEqual(summary);
+    });
+
+    describe('JSON body { scope, evaluatorId } (mirrors PR #509 field names)', () => {
+      const terminalRun = (id: string) => ({
+        id, docType: 'evaluation-run', status: 'completed',
+        results: { tc1: { status: 'completed', reportId: 'r1' } },
+      });
+
+      it('threads scope + a stored evaluatorId override to the pipeline', async () => {
+        mockEvaluationRunsGetById.mockResolvedValueOnce(terminalRun('run-body'));
+        mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+        const res = await request(app)
+          .post('/api/storage/evaluation-runs/run-body/retry-judgement')
+          .send({ scope: 'all', evaluatorId: 'eval-stored' });
+        expect(res.status).toBe(202);
+        expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'run-body' }),
+          expect.anything(),
+          expect.objectContaining({ scope: 'all', overrides: { evaluatorId: 'eval-stored' } })
+        );
+        expect(mockCountRetryableCases).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'all');
+        await pollStatus('run-body');
+      });
+
+      it('body scope wins over the query string; a system evaluator id is accepted', async () => {
+        mockEvaluationRunsGetById.mockResolvedValueOnce(terminalRun('run-body-2'));
+        mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+        const res = await request(app)
+          .post('/api/storage/evaluation-runs/run-body-2/retry-judgement?scope=all')
+          .send({ scope: 'errored', evaluatorId: 'system-rca-default' });
+        expect(res.status).toBe(202);
+        expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
+          expect.anything(), expect.anything(), expect.objectContaining({ scope: 'errored', overrides: { evaluatorId: 'system-rca-default' } })
+        );
+        await pollStatus('run-body-2');
+      });
+
+      it("400s a deterministic evaluator with scope 'errored' (codex_review: no mixed-truth runs)", async () => {
+        mockEvaluationRunsGetById.mockResolvedValue(terminalRun('run-body-4'));
+        const res = await request(app).post('/api/storage/evaluation-runs/run-body-4/retry-judgement').send({ scope: 'errored', evaluatorId: 'eval-stored' });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/re-scores the whole run; use scope 'all'/);
+        expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
+      });
+
+      it('400s an invalid scope, an empty evaluatorId and an unknown evaluatorId — nothing is started', async () => {
+        mockEvaluationRunsGetById.mockResolvedValue(terminalRun('run-body-3'));
+        const bad = await request(app).post('/api/storage/evaluation-runs/run-body-3/retry-judgement').send({ scope: 'some' });
+        expect(bad.status).toBe(400);
+        expect(bad.body.error).toMatch(/scope must be/);
+        const empty = await request(app).post('/api/storage/evaluation-runs/run-body-3/retry-judgement').send({ evaluatorId: '  ' });
+        expect(empty.status).toBe(400);
+        expect(empty.body.error).toMatch(/evaluatorId must be a non-empty string/);
+        const unknown = await request(app).post('/api/storage/evaluation-runs/run-body-3/retry-judgement').send({ evaluatorId: 'eval-missing' });
+        expect(unknown.status).toBe(400);
+        expect(unknown.body.error).toMatch(/Evaluator not found: eval-missing/);
+        expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
+      });
     });
 
     it('surfaces a pipeline failure through the status poll (not a 500 on the POST)', async () => {

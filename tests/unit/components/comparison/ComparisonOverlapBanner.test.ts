@@ -62,6 +62,10 @@ describe('ComparisonOverlapBanner', () => {
     );
     const banner = screen.getByTestId('comparison-overlap-banner');
     expect(banner.getAttribute('data-overlap')).toBe('full');
-    expect(banner.textContent).toMatch(/fully comparable/i);
+    // Identical case-ID sets prove only "same case IDs" — never "fully
+    // comparable" (scoring snapshots / test-case versions are not checked here).
+    expect(banner.textContent).toMatch(/same case IDs/i);
+    expect(banner.textContent).not.toMatch(/fully comparable/i);
+    expect(banner.getAttribute('data-scoring')).toBe('unverified');
   });
 });

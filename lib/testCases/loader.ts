@@ -17,6 +17,7 @@ import {
   clearRegistry,
 } from './define.js';
 import { getAuthoringSurface } from './authoringSurface.js';
+import * as metricsExports from '../metrics/index.js';
 
 const CODE_EXTENSIONS = ['.ts', '.js', '.mjs'];
 
@@ -249,6 +250,14 @@ export async function loadTestCasesFromModule(filePath: string): Promise<LoadRes
       id === '@opensearch-project/agent-health' ||
       id === '@opensearch/agent-health' ||
       id === 'agent-health';
+    // `@opensearch-project/agent-health/metrics` — the typed retrieval-metric
+    // registry (lib/metrics). Intercepted for the same reason as the package
+    // root, and so an eval file computes Hit@k / Recall@k / MRR with the
+    // SAME functions the deterministic evaluator engine uses.
+    const isMetricsSubpath = (id: string) =>
+      id === '@opensearch-project/agent-health/metrics' ||
+      id === '@opensearch/agent-health/metrics' ||
+      id === 'agent-health/metrics';
     // The object handed back when a CJS eval file requires the SDK. Single
     // source of truth shared with the package exports (see authoringSurface)
     // so `.js` and `.ts`/`.mjs` files see the SAME surface — no drift (#232).
@@ -291,6 +300,9 @@ export async function loadTestCasesFromModule(filePath: string): Promise<LoadRes
     const wrappedRequire = (id: string) => {
       if (isDefineId(id) || isPackageName(id)) {
         return sdkExports;
+      }
+      if (isMetricsSubpath(id)) {
+        return metricsExports;
       }
       // Resolve once, up front, so both the "is this our own define
       // module by a different path" check below AND the new "does this

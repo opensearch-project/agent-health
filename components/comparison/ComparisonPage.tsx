@@ -44,6 +44,7 @@ import {
   RowStatus,
 } from '@/services/comparisonService';
 import { fetchBatchMetrics } from '@/services/metrics';
+import { assessScoringComparability, readCompareAnyway, writeCompareAnyway } from '@/lib/comparison/scoringDisplay';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { Benchmark, BenchmarkRun, EvaluationReport, EvaluationRun, RunAggregateMetrics, TestCaseComparisonRow, TraceMetrics, TestCase } from '@/types';
 
@@ -473,6 +474,20 @@ export const ComparisonPage: React.FC = () => {
     });
   }, [selectedRuns, reports, traceMetricsMap]);
 
+  // Coverage gate: may the aggregate Δ row be shown? Not when the runs carry
+  // different scoring snapshots (or one is legacy-scored) or shared cases ran
+  // at different versions. "Compare anyway" is an explicit, session-scoped
+  // override keyed by the compared run set.
+  const comparability = useMemo(() => assessScoringComparability(runAggregates), [runAggregates]);
+  const [compareAnyway, setCompareAnyway] = useState(false);
+  useEffect(() => {
+    setCompareAnyway(readCompareAnyway(selectedRunIds));
+  }, [selectedRunIds]);
+  const handleCompareAnyway = useCallback(() => {
+    writeCompareAnyway(selectedRunIds, true);
+    setCompareAnyway(true);
+  }, [selectedRunIds]);
+
   // Test case name lookup — checks loaded test cases first, falls back to getRealTestCaseMeta (static data)
   const getTestCaseMeta = useCallback((testCaseId: string) => {
     const tc = testCaseMetaById[testCaseId];
@@ -862,6 +877,9 @@ export const ComparisonPage: React.FC = () => {
                   }
                 }}
                 getAgentName={getAgentName}
+                comparability={comparability}
+                compareAnyway={compareAnyway}
+                onCompareAnyway={handleCompareAnyway}
               />
             )}
 
@@ -918,16 +936,28 @@ export const ComparisonPage: React.FC = () => {
                   <h2 className="text-sm font-semibold">Table Compare</h2>
                   <div className="flex items-center gap-1 ml-2">
                     {(() => {
-                      const totalDiffs =
-                        rowStatusCounts.regression + rowStatusCounts.improvement + rowStatusCounts.mixed;
+                      // Two distinct counts, labelled distinctly: verdict
+                      // changes (== the insights band's "Split" — same
+                      // predicate, lib/comparison/verdictAgreement.ts) and
+                      // score-only moves (verdicts agree, score moved > 5pts).
+                      const { verdictDifferences, scoreOnlyDifferences } = rowStatusCounts;
                       return (
                         <Badge
                           variant="outline"
+                          data-testid="differences-badge"
                           className={`cursor-pointer text-[9px] px-2 py-0.5 transition-colors ${rowStatusFilter === 'differences' ? 'bg-primary/20 border-primary text-primary' : 'hover:bg-muted'}`}
                           onClick={() => setRowStatusFilter('differences')}
-                          title="Show only the rows where the runs disagree"
+                          title="Show only the rows where the runs disagree — verdict changes (same count as “Split” above) plus score-only moves"
                         >
-                          {totalDiffs} differences
+                          {/* One text run: the Badge is a flex container, which
+                              would trim a leading space in a bare text node. */}
+                          <span>
+                            <span data-testid="verdict-differences-count">{verdictDifferences}</span>
+                            {` verdict change${verdictDifferences === 1 ? '' : 's'}`}
+                            {scoreOnlyDifferences > 0 && (
+                              <>{' · '}<span data-testid="score-only-differences-count">{scoreOnlyDifferences}</span>{' score-only'}</>
+                            )}
+                          </span>
                         </Badge>
                       );
                     })()}
