@@ -36,6 +36,12 @@
       "import": "./lib/dist/lib/index.js",
       "require": "./lib/dist/lib/index.js",
       "default": "./lib/dist/lib/index.js"
+    },
+    "./metrics": {
+      "types": "./lib/dist/lib/metrics/index.d.ts",
+      "import": "./lib/dist/lib/metrics/index.js",
+      "require": "./lib/dist/lib/metrics/index.js",
+      "default": "./lib/dist/lib/metrics/index.js"
     }
   },
   "files": [

@@ -135,11 +135,55 @@ function formatValue(v: unknown): string {
 
 // ─── code-assertion / traces / evaluator rows (unchanged behaviour) ────────
 
+/** Deterministic-evaluator rows carry `details.gold` / `details.predicted` (see lib/scoring/deterministicScoring.ts). */
+interface IdListDetails {
+  gold: string[];
+  goldTotal?: number;
+  predicted: string[];
+  predictedTotal?: number;
+  k?: number;
+  extractionRule?: string;
+}
+
+function idListDetails(details: Record<string, unknown> | undefined): IdListDetails | null {
+  if (!details) return null;
+  const gold = details.gold;
+  const predicted = details.predicted;
+  if (!Array.isArray(gold) || !Array.isArray(predicted)) return null;
+  return {
+    gold: gold.map(String),
+    predicted: predicted.map(String),
+    goldTotal: typeof details.goldTotal === 'number' ? details.goldTotal : undefined,
+    predictedTotal: typeof details.predictedTotal === 'number' ? details.predictedTotal : undefined,
+    k: typeof details.k === 'number' ? details.k : undefined,
+    extractionRule: typeof details.extractionRule === 'string' ? details.extractionRule : undefined,
+  };
+}
+
+const IdChips: React.FC<{ ids: string[]; total?: number; goldSet?: Set<string>; testId: string }> = ({ ids, total, goldSet, testId }) => (
+  <span className="inline-flex flex-wrap gap-1 align-middle" data-testid={testId}>
+    {ids.length === 0 && <span className="text-muted-foreground italic">none</span>}
+    {ids.map((id, i) => (
+      <code
+        key={`${id}-${i}`}
+        className={`px-1 py-0.5 rounded text-[11px] ${goldSet?.has(id) ? 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-300' : 'bg-muted'}`}
+      >
+        {id}
+      </code>
+    ))}
+    {typeof total === 'number' && total > ids.length && (
+      <span className="text-muted-foreground">… +{total - ids.length} more</span>
+    )}
+  </span>
+);
+
 const MatcherRow: React.FC<RowProps> = ({ result }) => {
+  const idLists = idListDetails(result.details);
   const hasDetail =
     !!result.errorMessage ||
     !!result.reasoning ||
     !!result.model ||
+    !!idLists ||
     result.actual !== undefined ||
     result.expected !== undefined;
   const [open, setOpen] = useState(!result.pass && hasDetail);
@@ -180,6 +224,16 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
               {meta.icon}
               {meta.label}
             </Badge>
+            {(result.role === 'observe' || result.role === 'primary') && (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0 text-muted-foreground" data-testid={`matcher-role-${result.role}`}>
+                {result.role}
+              </Badge>
+            )}
+            {result.errored && (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0 text-amber-700 border-amber-300 dark:text-amber-300 dark:border-amber-500/40">
+                not evaluable
+              </Badge>
+            )}
             {typeof result.score === 'number' && (
               <span className="text-[10px] text-muted-foreground shrink-0">
                 score {(result.score * 100).toFixed(0)}%
@@ -209,7 +263,28 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
           {result.reasoning && result.reasoning !== result.errorMessage && (
             <div className="text-muted-foreground whitespace-pre-wrap">{result.reasoning}</div>
           )}
-          {result.expected !== undefined && (
+          {idLists && (
+            <div className="space-y-1" data-testid="matcher-id-lists">
+              <div>
+                <span className="font-semibold">gold{typeof idLists.goldTotal === 'number' ? ` (${idLists.goldTotal})` : ''}:</span>{' '}
+                <IdChips ids={idLists.gold} total={idLists.goldTotal} testId="matcher-gold-ids" />
+              </div>
+              <div>
+                <span className="font-semibold">
+                  predicted{typeof idLists.predictedTotal === 'number' ? ` (${idLists.predictedTotal}` : ''}
+                  {typeof idLists.k === 'number' ? `${typeof idLists.predictedTotal === 'number' ? ', ' : ' ('}k=${idLists.k}` : ''}
+                  {typeof idLists.predictedTotal === 'number' || typeof idLists.k === 'number' ? ')' : ''}:
+                </span>{' '}
+                <IdChips ids={idLists.predicted} total={idLists.predictedTotal} goldSet={new Set(idLists.gold)} testId="matcher-predicted-ids" />
+              </div>
+              {idLists.extractionRule && (
+                <div className="text-muted-foreground">
+                  extraction rule: <code className="bg-muted px-1 py-0.5 rounded">{idLists.extractionRule}</code>
+                </div>
+              )}
+            </div>
+          )}
+          {!idLists && result.expected !== undefined && (
             <div>
               <span className="font-semibold">expected:</span>{' '}
               <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.expected)}</code>
@@ -217,8 +292,11 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
           )}
           {result.actual !== undefined && (
             <div>
-              <span className="font-semibold">actual:</span>{' '}
+              <span className="font-semibold">{idLists ? 'value' : 'actual'}:</span>{' '}
               <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.actual)}</code>
+              {idLists && result.expected !== undefined && (
+                <span className="text-muted-foreground"> (gate ≥ {formatValue(result.expected)})</span>
+              )}
             </div>
           )}
           {result.model && (

@@ -46,6 +46,7 @@ import type {
 } from '../types.js';
 import { STORAGE_INDEXES } from '../../middleware/dataSourceConfig.js';
 import { assertNotMigrating } from '../../services/migrationLock.js';
+import { deterministicVersionFields } from '../evaluatorVersionFields.js';
 import { describeOpenSearchError } from '../../services/opensearchClientFactory.js';
 
 // ============================================================================
@@ -1239,7 +1240,10 @@ class OpenSearchEvaluatorOperations implements IEvaluatorOperations {
   async create(evaluator: Partial<Evaluator>): Promise<Evaluator> {
     assertNotMigrating(this.index);
     if (!evaluator.name) throw new Error('Evaluator name is required');
-    if (!evaluator.systemPrompt) throw new Error('Evaluator system prompt is required');
+    // Deterministic evaluators carry no prompt (the route normalizes them to
+    // `systemPrompt: ''` + a synthesized scoringConfig — see
+    // lib/evaluators/deterministic.ts); only LLM evaluators need one.
+    if (!evaluator.systemPrompt && evaluator.kind !== 'deterministic') throw new Error('Evaluator system prompt is required');
     if (!evaluator.scoringConfig) throw new Error('Evaluator scoring config is required');
 
     const now = new Date().toISOString();
@@ -1258,9 +1262,10 @@ class OpenSearchEvaluatorOperations implements IEvaluatorOperations {
         {
           version,
           createdAt: now,
-          systemPrompt: evaluator.systemPrompt,
+          systemPrompt: evaluator.systemPrompt ?? '',
           scoringConfig: evaluator.scoringConfig,
           inferenceConfig: evaluator.inferenceConfig || {},
+          ...deterministicVersionFields(evaluator),
         },
       ],
     } as Evaluator;
@@ -1296,6 +1301,7 @@ class OpenSearchEvaluatorOperations implements IEvaluatorOperations {
       systemPrompt: updates.systemPrompt ?? current.systemPrompt,
       scoringConfig: updates.scoringConfig ?? current.scoringConfig,
       inferenceConfig: updates.inferenceConfig ?? current.inferenceConfig,
+      ...deterministicVersionFields({ ...current, ...updates }),
     };
 
     const doc: Evaluator = {

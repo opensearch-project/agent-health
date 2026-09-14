@@ -19,6 +19,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { projectDataDir } from '../../../lib/config/statePaths.js';
+import { deterministicVersionFields } from '../evaluatorVersionFields.js';
 import type {
   TestCase,
   Benchmark,
@@ -801,7 +802,10 @@ class FileEvaluatorOperations implements IEvaluatorOperations {
 
   async create(evaluator: Partial<Evaluator>): Promise<Evaluator> {
     if (!evaluator.name) throw new Error('Evaluator name is required');
-    if (!evaluator.systemPrompt) throw new Error('Evaluator system prompt is required');
+    // Deterministic evaluators carry no prompt (the route normalizes them to
+    // `systemPrompt: ''` + a synthesized scoringConfig — see
+    // lib/evaluators/deterministic.ts); only LLM evaluators need one.
+    if (!evaluator.systemPrompt && evaluator.kind !== 'deterministic') throw new Error('Evaluator system prompt is required');
     if (!evaluator.scoringConfig) throw new Error('Evaluator scoring config is required');
 
     const now = new Date().toISOString();
@@ -819,9 +823,10 @@ class FileEvaluatorOperations implements IEvaluatorOperations {
         {
           version,
           createdAt: now,
-          systemPrompt: evaluator.systemPrompt,
+          systemPrompt: evaluator.systemPrompt ?? '',
           scoringConfig: evaluator.scoringConfig,
           inferenceConfig: evaluator.inferenceConfig || {},
+          ...deterministicVersionFields(evaluator),
         },
       ],
     } as Evaluator;
@@ -849,6 +854,7 @@ class FileEvaluatorOperations implements IEvaluatorOperations {
       systemPrompt: updates.systemPrompt ?? current.systemPrompt,
       scoringConfig: updates.scoringConfig ?? current.scoringConfig,
       inferenceConfig: updates.inferenceConfig ?? current.inferenceConfig,
+      ...deterministicVersionFields({ ...current, ...updates }),
     };
 
     const doc: Evaluator = {

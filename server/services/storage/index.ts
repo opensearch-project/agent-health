@@ -237,6 +237,10 @@ export async function saveReportWithClient(
   if (report.traceError !== undefined) storageData.traceError = report.traceError;
   if (report.spans !== undefined) storageData.spans = report.spans;
   if (report.connectorProtocol !== undefined) storageData.connectorProtocol = report.connectorProtocol;
+  if (report.scoringSnapshot !== undefined) storageData.scoringSnapshot = report.scoringSnapshot;
+  if (report.llmVerdict !== undefined) storageData.llmVerdict = report.llmVerdict;
+  if (report.verdictConflict !== undefined) storageData.verdictConflict = report.verdictConflict;
+  if (report.score !== undefined) storageData.score = report.score;
 
   const created = await createRunWithClient(client, storageData);
 

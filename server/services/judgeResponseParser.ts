@@ -127,8 +127,9 @@ function normalizeImprovementStrategies(value: unknown): ImprovementStrategy[] {
  * For each declared metric we look first at the top level (the new shape)
  * then at the nested `metrics` object (the legacy shape) — same precedence
  * the bedrock service has used since evaluators became pluggable. Missing or
- * non-numeric values are dropped silently (logged via `debug`) so
- * partially-failed responses still surface what the model did emit.
+ * Missing or non-numeric values are left ABSENT (logged via `debug`) so
+ * partially-failed responses still surface what the model did emit; the
+ * verdict engine records them as `unevaluable`. They are never written as 0.
  */
 function extractMetrics(parsed: any, evaluator: Evaluator | undefined, source: string): EvaluationMetrics {
   const metrics: EvaluationMetrics = {};
@@ -162,14 +163,15 @@ function extractMetrics(parsed: any, evaluator: Evaluator | undefined, source: s
 
   // Back-compat: no evaluator (legacy callers / unit tests) → mirror the
   // historical 4-metric extraction every spawned-CLI service used to do.
+  // A metric the judge did not emit stays ABSENT — it used to be defaulted
+  // to `accuracy: 0`, which persisted a fabricated zero onto reports and
+  // was indistinguishable from "the agent scored 0". Missing is
+  // `unevaluable`, and the verdict engine treats it as such.
   const legacy = ['accuracy', 'faithfulness', 'latency_score', 'trajectory_alignment_score'] as const;
   for (const k of legacy) {
     const v = coerceNumber(parsed?.[k] ?? parsed?.metrics?.[k]);
     if (v !== undefined) metrics[k] = v;
   }
-  // accuracy is the canonical pass/fail metric on legacy reports, default 0
-  // so downstream code that reads metrics.accuracy doesn't NaN.
-  if (metrics.accuracy === undefined) metrics.accuracy = 0;
   return metrics;
 }
 

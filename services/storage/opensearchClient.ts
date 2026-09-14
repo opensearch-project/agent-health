@@ -11,7 +11,7 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
-import type { TestCaseDefinitionCapture } from '@/types';
+import type { PassFailStatus, ScoringSnapshot, TestCaseDefinitionCapture } from '@/types';
 
 const STORAGE_BASE_URL = ENV_CONFIG.storageApiUrl;
 
@@ -160,6 +160,8 @@ export interface StorageRun {
     faithfulness?: number;
     latency_score?: number;
     trajectory_alignment_score?: number;
+    /** Evaluator-declared rubric names flow through unchanged. */
+    [rubric: string]: number | undefined;
   };
   annotations?: StorageRunAnnotation[];
   trajectory?: unknown[];
@@ -176,6 +178,12 @@ export interface StorageRun {
     priority: 'high' | 'medium' | 'low';
   }[];
   connectorProtocol?: string;
+  /** Frozen scoring provenance (types/index.ts ScoringSnapshot); absent on legacy reports. */
+  scoringSnapshot?: ScoringSnapshot;
+  /** Verdict-engine outputs (types/index.ts TestCaseRun); absent on legacy reports. */
+  llmVerdict?: PassFailStatus;
+  verdictConflict?: boolean;
+  score?: number;
 }
 
 export interface StorageAnalyticsRecord {

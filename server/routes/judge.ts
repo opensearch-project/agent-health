@@ -10,7 +10,7 @@
 import { Request, Response, Router } from 'express';
 import { BedrockClient, ListInferenceProfilesCommand } from '@aws-sdk/client-bedrock';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-import { evaluateTrajectory, parseBedrockError } from '@/server/services/bedrockService';
+import { evaluateTrajectory, parseBedrockError, type JudgeResponse } from '@/server/services/bedrockService';
 import { evaluateWithOpenAICompatible, parseOpenAICompatibleError } from '@/server/services/judgeService';
 import { evaluateWithLiteLLM, parseLiteLLMError } from '@/server/services/litellmJudgeService';
 import { evaluateWithClaudeCode, parseClaudeCodeError } from '@/server/services/claudeCodeJudgeService';
@@ -24,6 +24,7 @@ import { debug } from '@/lib/debug';
 import { readEnv } from '@/lib/envCompat';
 import { getStorageModule } from '@/server/adapters';
 import { getDefaultEvaluator, getSystemEvaluatorById, isSystemEvaluatorId } from '@/server/prompts/evaluatorTemplates';
+import { applyScoringToJudgeResponse } from '@/lib/scoring/applyScoring';
 import type { Evaluator } from '@/types';
 
 const router = Router();
@@ -343,6 +344,21 @@ router.get('/api/judge/github-models', async (_req: Request, res: Response) => {
 });
 
 /**
+ * The single exit point for every provider branch of `POST /api/judge`: run
+ * the canonical verdict engine (lib/scoring/applyScoring.ts) so the response
+ * carries the engine's `passFailStatus`, the LLM's own `llmVerdict`, the
+ * normalized weighted `score`, `verdictConflict` and the frozen
+ * `scoringSnapshot`. Every judgement producer (classic judge, trace judge,
+ * SDK `judge()`, retry-judgement, recovery) reads these off the response, so
+ * this is the ONE code path that decides verdicts. Provider errors never reach
+ * here — they propagate to the catch below and the caller records a judge
+ * error with NO metrics.
+ */
+function finalizeJudgeResponse<T extends JudgeResponse>(result: T, evaluator: Evaluator, resolvedModelId: string): T {
+  return applyScoringToJudgeResponse(result, evaluator, resolvedModelId);
+}
+
+/**
  * POST /api/judge - Evaluate agent trajectory
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
@@ -418,7 +434,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       );
       debug('JudgeAPI', 'Demo provider - returning mock evaluation');
       const mockResult = generateMockEvaluation(trajectory, expectedOutcomes);
-      return res.json(mockResult);
+      return res.json(finalizeJudgeResponse(mockResult, evaluator, resolvedModelId));
     }
 
     if (provider === 'claude-code') {
@@ -430,7 +446,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
         { trajectory, expectedOutcomes, expectedTrajectory, logs },
         evaluator
       );
-      return res.json(result);
+      return res.json(finalizeJudgeResponse(result, evaluator, resolvedModelId));
     }
 
     if (provider === 'pi') {
@@ -441,7 +457,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
         { trajectory, expectedOutcomes, expectedTrajectory, logs },
         evaluator
       );
-      return res.json(result);
+      return res.json(finalizeJudgeResponse(result, evaluator, resolvedModelId));
     }
 
     if (provider === 'agent') {
@@ -516,7 +532,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
         evaluator,
         traceToolsAvailable
       );
-      return res.json(result);
+      return res.json(finalizeJudgeResponse(result, evaluator, resolvedModelId));
     }
 
     if (provider === 'agentic') {
@@ -533,7 +549,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
         },
         evaluator
       );
-      return res.json(result);
+      return res.json(finalizeJudgeResponse(result, evaluator, resolvedModelId));
     }
 
     if (provider === 'openai-compatible') {
@@ -543,7 +559,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
         resolvedModelId,
         evaluator
       );
-      return res.json(result);
+      return res.json(finalizeJudgeResponse(result, evaluator, resolvedModelId));
     }
 
     if (provider === 'litellm') {
@@ -553,7 +569,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
         resolvedModelId,
         evaluator
       );
-      return res.json(result);
+      return res.json(finalizeJudgeResponse(result, evaluator, resolvedModelId));
     }
 
     // Default: bedrock
@@ -564,7 +580,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       logs
     }, resolvedModelId, evaluator);
 
-    res.json(result);
+    res.json(finalizeJudgeResponse(result, evaluator, resolvedModelId));
 
   } catch (error: any) {
     console.error('[JudgeAPI] Error during evaluation:', error);

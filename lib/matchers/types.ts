@@ -35,8 +35,12 @@ export interface MatcherResult {
    * for score/insights only and never fails the test (RFC 004 §4.8).
    * `code-assertion` and `traces` matchers are always gates; `llm-judge`
    * entries are `gate` for `judge()` and `observe` for `judge.observe()`.
+   * Deterministic-evaluator rows (lib/scoring/deterministicScoring.ts) use
+   * `primary` for metrics named by a `gates` pass policy — semantically a
+   * gate (every `role !== 'observe'` check treats it as one), labelled so
+   * the Judge tab can tell a declared headline metric from an SDK expect().
    */
-  role?: 'gate' | 'observe';
+  role?: 'gate' | 'observe' | 'primary';
   /**
    * True when the matcher could not be evaluated at all (e.g. the judge
    * endpoint errored) — distinct from a clean `pass: false`. Errored
@@ -53,6 +57,12 @@ export interface MatcherResult {
   expected?: unknown;
   /** Failure message from the chai assertion when pass is false. */
   errorMessage?: string;
+  /**
+   * Structured, renderable detail for code-computed rows. Deterministic
+   * evaluator rows carry `{ gold: string[], predicted: string[], k?, … }`
+   * (id lists truncated to 20) so the Judge tab can list what was compared.
+   */
+  details?: Record<string, unknown>;
 
   // ─── LLM-judge specifics ───
   /** Confidence score on the [0, 1] interval, when available. */
@@ -122,4 +132,16 @@ export interface MatcherResult {
    *   - `evidence`: { expected_sources?: string[]; cited_sources?: Array<string | { id: string; title?: string }> }
    */
   judgeExtraFields?: Record<string, unknown>;
+
+  /**
+   * Verdict-engine provenance for an `llm-judge` entry (from `/api/judge`,
+   * lib/scoring/applyScoring.ts). `pass` above already follows the
+   * evaluator's pass policy; `llmVerdict` is what the model itself said and
+   * `verdictConflict` flags a disagreement. `scoringSnapshot` is the frozen
+   * evaluator version the runner lifts onto the report so SDK runs carry the
+   * same scoring provenance as classic-judge runs.
+   */
+  llmVerdict?: 'passed' | 'failed';
+  verdictConflict?: boolean;
+  scoringSnapshot?: import('../../types/index.js').ScoringSnapshot;
 }

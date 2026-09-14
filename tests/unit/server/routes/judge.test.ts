@@ -937,4 +937,101 @@ describe('Judge Routes', () => {
       );
     });
   });
+
+  describe('verdict engine funnel (lib/scoring/applyScoring)', () => {
+    const thresholdEvaluator = {
+      id: 'eval-threshold',
+      name: 'Threshold evaluator',
+      description: '',
+      isSystem: false,
+      currentVersion: 2,
+      versions: [],
+      createdAt: 'x',
+      updatedAt: 'x',
+      systemPrompt: 'judge',
+      scoringConfig: {
+        metrics: [{ name: 'relevance', weight: 0.5, scale: 100 }, { name: 'grounding', weight: 0.5, scale: 100 }],
+        passThreshold: 70,
+        scale: 100,
+        passPolicy: { kind: 'threshold', minScore: 0.7 },
+      },
+      inferenceConfig: {},
+    };
+
+    it('stamps the computed verdict, llmVerdict, conflict, score and snapshot onto a bedrock response', async () => {
+      mockGetEvaluatorById.mockResolvedValue(thresholdEvaluator);
+      mockEvaluateTrajectory.mockResolvedValue({
+        passFailStatus: 'passed', // the LLM said passed …
+        metrics: { relevance: 60, grounding: 60 }, // … but the weighted score is 0.60 < 0.70
+        llmJudgeReasoning: 'looks fine',
+        improvementStrategies: [],
+        duration: 10,
+      });
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'test' }],
+        expectedOutcomes: ['Test outcome'],
+        modelId: 'unknown-model',
+        evaluatorId: 'eval-threshold',
+      });
+      await getRouteHandler(judgeRoutes, 'post', '/api/judge')(req, res);
+
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.passFailStatus).toBe('failed');
+      expect(body.llmVerdict).toBe('passed');
+      expect(body.verdictConflict).toBe(true);
+      expect(body.score).toBeCloseTo(0.6, 9);
+      expect(body.metrics).toEqual({ relevance: 60, grounding: 60 });
+      expect(body.scoringSnapshot).toMatchObject({
+        evaluatorId: 'eval-threshold',
+        evaluatorVersion: 2,
+        passPolicy: { kind: 'threshold', minScore: 0.7 },
+        weights: { relevance: 0.5, grounding: 0.5 },
+        judgeModelId: 'unknown-model',
+      });
+      expect(body.scoringSnapshot.contentHash).toMatch(/^sha256:/);
+    });
+
+    it('keeps the LLM verdict under the default (llm-verdict) evaluator and records a rubric the judge omitted as unevaluable, not 0', async () => {
+      mockEvaluateTrajectory.mockResolvedValue({
+        passFailStatus: 'failed',
+        metrics: {}, // default evaluator declares `accuracy`; the judge returned nothing numeric
+        llmJudgeReasoning: 'nope',
+        improvementStrategies: [],
+        duration: 10,
+      });
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'test' }],
+        expectedOutcomes: ['Test outcome'],
+        modelId: 'unknown-model',
+      });
+      await getRouteHandler(judgeRoutes, 'post', '/api/judge')(req, res);
+
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.passFailStatus).toBe('failed');
+      expect(body.llmVerdict).toBe('failed');
+      expect(body.verdictConflict).toBe(false);
+      expect(body.score).toBeUndefined();
+      expect(body.metrics).toEqual({});
+      expect(body.scoringSnapshot.passPolicy).toEqual({ kind: 'llm-verdict' });
+      expect(body.scoringSnapshot.unevaluable).toEqual(['accuracy']);
+    });
+
+    it('a provider failure yields a 500 with NO verdict fields (the caller records a judge error, no metrics)', async () => {
+      mockEvaluateTrajectory.mockRejectedValue(new Error('model exploded'));
+      mockParseBedrockError.mockReturnValue('model exploded');
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action', toolName: 'test' }],
+        expectedOutcomes: ['Test outcome'],
+        modelId: 'unknown-model',
+      });
+      await getRouteHandler(judgeRoutes, 'post', '/api/judge')(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.error).toMatch(/Judge evaluation failed/);
+      expect(body.passFailStatus).toBeUndefined();
+      expect(body.metrics).toBeUndefined();
+      expect(body.scoringSnapshot).toBeUndefined();
+    });
+  });
 });

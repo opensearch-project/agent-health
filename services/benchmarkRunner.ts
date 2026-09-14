@@ -32,6 +32,7 @@ import {
   appendNotReachedMarker,
 } from './evaluation';
 import { buildEvaluatorErrorPatch } from './evaluation/evaluatorError';
+import { scoringFieldsFromJudgment, sdkSessionScoring } from '@/lib/scoring/verdictEngine';
 import { connectorRegistry } from '@/services/connectors/server';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
@@ -572,6 +573,9 @@ export async function executeRun(
                 matcherResults,
                 { hasEvalError: evalError !== undefined },
               );
+              // Frozen evaluator snapshot + weighted score lifted from the
+              // judge() matchers (verdict stays the matcher-session outcome).
+              Object.assign(report, sdkSessionScoring(matcherResults, (report as any).metrics));
               // Mark the report as final so trace-mode polling below skips
               // the Bedrock judge fallback (which would error with empty
               // expectedOutcomes for SDK-loaded test cases).
@@ -1128,8 +1132,7 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
           await storage.runs.update(report.id, {
             trajectory: finalTrajectory,
             metricsStatus: 'ready',
-            passFailStatus: judgment.passFailStatus,
-            metrics: judgment.metrics,
+            ...scoringFieldsFromJudgment(judgment),
             llmJudgeReasoning: judgment.llmJudgeReasoning,
             // Set only by the agent (trace) judge provider -- see
             // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
@@ -1165,8 +1168,7 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
           // Emit deferred OTel eval span now that judge is complete
           const completedReport = {
             ...report,
-            passFailStatus: judgment.passFailStatus,
-            metrics: judgment.metrics,
+            ...scoringFieldsFromJudgment(judgment),
             llmJudgeReasoning: judgment.llmJudgeReasoning,
           } as EvaluationReport;
           emitDeferredTestCaseSpan(
@@ -1254,8 +1256,7 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
           await updateRunWithClient(client, report.id, {
             trajectory: finalTrajectory,
             metricsStatus: 'ready',
-            passFailStatus: judgment.passFailStatus,
-            metrics: judgment.metrics,
+            ...scoringFieldsFromJudgment(judgment),
             llmJudgeReasoning: judgment.llmJudgeReasoning,
             // Set only by the agent (trace) judge provider -- see
             // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
@@ -1293,8 +1294,7 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
           if (benchmark && run) {
             const completedReport = {
               ...report,
-              passFailStatus: judgment.passFailStatus,
-              metrics: judgment.metrics,
+              ...scoringFieldsFromJudgment(judgment),
               llmJudgeReasoning: judgment.llmJudgeReasoning,
             } as EvaluationReport;
             const agentTraceId = spans[0]?.traceId;

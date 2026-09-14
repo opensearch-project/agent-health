@@ -6,15 +6,19 @@
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 
 describe('buildEvaluatorErrorPatch (issue #242)', () => {
-  it('sets metricsStatus to error and zeroes the metrics', () => {
+  it('sets metricsStatus to error and writes NO metrics (never default zeros)', () => {
     const patch = buildEvaluatorErrorPatch('judge_failed', new Error('boom'));
     expect(patch.metricsStatus).toBe('error');
-    expect(patch.metrics).toEqual({
-      accuracy: 0,
-      faithfulness: 0,
-      latency_score: 0,
-      trajectory_alignment_score: 0,
-    });
+    expect(patch.metrics).toEqual({});
+    expect(Object.values(patch.metrics)).not.toContain(0);
+  });
+
+  it('clears any earlier verdict-engine fields so a failed re-judge cannot keep a stale snapshot/score', () => {
+    const patch = buildEvaluatorErrorPatch('judge_failed', new Error('boom'));
+    expect(patch.scoringSnapshot).toBeNull();
+    expect(patch.llmVerdict).toBeNull();
+    expect(patch.verdictConflict).toBeNull();
+    expect(patch.score).toBeNull();
   });
 
   it('clears passFailStatus so errored runs are not bucketed as passed', () => {

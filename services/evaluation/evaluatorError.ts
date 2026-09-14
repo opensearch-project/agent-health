@@ -15,12 +15,15 @@
  * separate `traceError` field that nothing surfaced in the UI or in
  * benchmark summaries.
  *
- * Two things every error site must do consistently:
+ * Three things every error site must do consistently:
  *   1. Set `metricsStatus: 'error'` so stats aggregation can bucket the run
  *      into `errored` instead of `failed` (see {@link RunStats}).
  *   2. Replace `llmJudgeReasoning` with a clearly-labelled error message
  *      reflecting the *actual* terminal cause, so the run-report Judge tab
  *      stops showing the misleading "waiting for traces" placeholder.
+ *   3. Write NO metrics and NO verdict (`metrics: {}`, `passFailStatus: null`,
+ *      scoring fields cleared) — never default zeros, never default rubric
+ *      keys. An errored report is "not measured", not "scored 0".
  *
  * `buildEvaluatorErrorPatch()` returns the canonical patch payload covering
  * both. Use it everywhere you would otherwise hand-roll
@@ -51,8 +54,21 @@ export interface EvaluatorErrorPatch {
    * `metricsStatus: 'error'`.
    */
   passFailStatus: null;
-  /** Reset metrics so charts don't graph the placeholder zeroes as a real run. */
-  metrics: { accuracy: 0; faithfulness: 0; latency_score: 0; trajectory_alignment_score: 0 };
+  /**
+   * NO metrics. A judge that never produced a verdict produced no rubric
+   * values either; this used to write the four legacy RCA keys as zeros,
+   * which persisted fabricated `0`s onto every errored report (including
+   * custom-evaluator reports that never had those keys) and made "the judge
+   * failed" indistinguishable from "the agent scored 0". Empty object (not
+   * `undefined`) so the full read-modify-write storage paths actually
+   * REPLACE the stale rubric values from an earlier judgement.
+   */
+  metrics: Record<string, never>;
+  /** Verdict-engine fields from any earlier judgement are cleared alongside (`null` survives object spreads). */
+  scoringSnapshot: null;
+  llmVerdict: null;
+  verdictConflict: null;
+  score: null;
 }
 
 const KIND_LABEL: Record<EvaluatorErrorKind, string> = {
@@ -108,6 +124,10 @@ export function buildEvaluatorErrorPatch(
         `failed before it could produce a verdict. This run is excluded from pass-rate aggregation.\n\n` +
         `**Reason (${kind}):** ${message}`,
     passFailStatus: null,
-    metrics: { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 },
+    metrics: {},
+    scoringSnapshot: null,
+    llmVerdict: null,
+    verdictConflict: null,
+    score: null,
   };
 }
