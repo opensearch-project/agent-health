@@ -11,7 +11,7 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
-import type { TestCaseDefinitionCapture } from '@/types';
+import type { ScoringSnapshot, TestCaseDefinitionCapture } from '@/types';
 
 const STORAGE_BASE_URL = ENV_CONFIG.storageApiUrl;
 
@@ -176,6 +176,8 @@ export interface StorageRun {
     priority: 'high' | 'medium' | 'low';
   }[];
   connectorProtocol?: string;
+  /** Frozen scoring provenance (types/index.ts ScoringSnapshot); absent on legacy reports. */
+  scoringSnapshot?: ScoringSnapshot;
 }
 
 export interface StorageAnalyticsRecord {

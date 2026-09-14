@@ -40,10 +40,20 @@
 import React from 'react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getRunOverallScore } from '@/lib/utils';
+import { scoreFromSnapshot, scoredRubricNames } from '@/lib/scoring/snapshotScore';
+import type { ScoringSnapshot } from '@/types';
 
 export interface RunScoreProps {
   /** The metrics object straight off a TestCaseRun / EvaluationReport. */
   metrics: Record<string, number | undefined> | undefined | null;
+  /**
+   * The report's frozen scoring snapshot, when the caller has the full
+   * report. With one, the number is the snapshot's weighted mean (the same
+   * read model the compare page uses — lib/scoring/snapshotScore.ts) and the
+   * tooltip names the evaluator/version/weights. Without one the number is
+   * the legacy unweighted mean and the tooltip says so.
+   */
+  snapshot?: ScoringSnapshot | null;
   /**
    * Optional class name applied to the visible label. Each call site uses a
    * different size / color (xs muted in lists, lg in detail headers, etc.),
@@ -85,11 +95,15 @@ export function formatMetricsBreakdown(
 
 export const RunScore: React.FC<RunScoreProps> = ({
   metrics,
+  snapshot,
   className,
   showLabel = true,
   silentWhenMissing = false,
 }) => {
-  const score = getRunOverallScore(metrics);
+  const snapshotScore = scoreFromSnapshot({ metrics: metrics ?? {}, scoringSnapshot: snapshot ?? undefined });
+  const score = snapshotScore.source === 'snapshot'
+    ? (snapshotScore.score === null ? null : Math.round(snapshotScore.score * 100))
+    : getRunOverallScore(metrics);
   const breakdown = formatMetricsBreakdown(metrics);
   const metricCount = breakdown.length;
 
@@ -115,10 +129,20 @@ export const RunScore: React.FC<RunScoreProps> = ({
   // `accuracy`), we show the metric name verbatim instead of a redundant
   // "average of 1 metric". For multi-metric evaluators we list each metric
   // and its individual value so the aggregate is auditable.
-  const tooltipBody =
-    metricCount === 1
-      ? `Metric "${breakdown[0]}" emitted by the run's evaluator.`
-      : `Average of ${metricCount} metrics emitted by the run's evaluator:\n${breakdown.join('\n')}`;
+  let tooltipBody: string;
+  if (snapshotScore.source === 'snapshot' && snapshot) {
+    const weights = scoredRubricNames(snapshot).map(n => `${n} ×${snapshot.weights[n]}`).join(', ');
+    tooltipBody =
+      `Weighted score per scoring snapshot — evaluator ${snapshot.evaluatorName || snapshot.evaluatorId} v${snapshot.evaluatorVersion}` +
+      `\nweights: ${weights}\nscored ${snapshotScore.scored} / ${snapshotScore.total} rubrics` +
+      (snapshotScore.unevaluable.length ? ` (unevaluable: ${snapshotScore.unevaluable.join(', ')})` : '') +
+      `\n${breakdown.join('\n')}`;
+  } else {
+    tooltipBody =
+      metricCount === 1
+        ? `Metric "${breakdown[0]}" emitted by the run's evaluator (legacy scoring — no scoring snapshot on this report).`
+        : `Legacy scoring — unweighted mean of ${metricCount} metrics emitted by the run's evaluator (no scoring snapshot on this report):\n${breakdown.join('\n')}`;
+  }
 
   return (
     <TooltipProvider delayDuration={200}>

@@ -273,6 +273,32 @@ export function getIndexMappings(): IndexMappings {
           traceFetchAttempts: { type: 'integer' },
           lastTraceFetchAt: { type: 'date' },
           traceError: { type: 'text' },
+          // Frozen scoring provenance (types/index.ts ScoringSnapshot). The
+          // identity fields are keyword-typed so the compare page / audits
+          // can filter by evaluator or content hash; `weights` / `scale` are
+          // keyed by evaluator-defined rubric NAMES, so they get the same
+          // `dynamic: false` treatment as `metrics` above (no new mapped
+          // field per rubric name; `_source` round-trips regardless).
+          scoringSnapshot: {
+            dynamic: false,
+            properties: {
+              evaluatorId: { type: 'keyword' },
+              evaluatorVersion: { type: 'integer' },
+              contentHash: { type: 'keyword' },
+              evaluatorName: { type: 'keyword' },
+              judgeModelId: { type: 'keyword' },
+              primaryMetrics: { type: 'keyword' },
+              unevaluable: { type: 'keyword' },
+              extractionRule: { type: 'keyword' },
+              goldIdsUsed: { type: 'keyword' },
+              passPolicy: {
+                dynamic: false,
+                properties: { kind: { type: 'keyword' }, minScore: { type: 'float' } },
+              },
+              weights: { type: 'object', enabled: false },
+              scale: { type: 'object', enabled: false },
+            },
+          },
         },
       },
     },

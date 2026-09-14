@@ -32,7 +32,8 @@ const evalRun = (id: string, agentKey: string, reportId: string) => ({
   createdAt: '2026-03-05T10:00:00Z',
   status: 'completed',
   agentKey,
-  modelId: 'claude-sonnet-4-20250514', // SAME judge model on both sides
+  modelId: 'claude-sonnet-4-20250514', // the AGENT model (same on both sides)
+  judgeModelId: 'demo-judge-model',    // SAME judge on both sides → one "Judge:" line
   sources: [{ type: 'test-case-ids', ids: [TC] }],
   trigger: 'cli',
   testCaseSnapshots: [{ id: TC, version: 1, name: 'Declutter Shared Case' }],
@@ -46,6 +47,7 @@ const report = (id: string, agentKey: string) => ({
   testCaseId: TC,
   agentId: agentKey,
   modelId: 'claude-sonnet-4-20250514',
+  judgeModelId: 'demo-judge-model',
   status: 'completed',
   passFailStatus: 'passed',
   metrics: { accuracy: 88 },
@@ -98,10 +100,13 @@ test.describe('Comparison scoreboard — all metrics on the row, no chart, judge
 
     // Change 2 — every RunAggregateMetrics field visible directly on the row.
     await expect(rowA.locator(`[data-testid="run-passrate-${RUN_A}"]`)).toContainText('100%');
-    await expect(rowA.locator(`[data-testid="run-accuracy-${RUN_A}"]`)).toContainText('88%');
+    // No accuracy-only column: "accuracy" is one evaluator's rubric name, not
+    // the score. Snapshot-less reports render "— legacy scoring" for Avg score.
+    await expect(rowA.locator(`[data-testid="run-accuracy-${RUN_A}"]`)).toHaveCount(0);
+    await expect(rowA.locator(`[data-testid="run-avgscore-${RUN_A}"]`)).toContainText('legacy scoring');
     await expect(rowA).toContainText('--'); // cost/duration/tokens fall back to "--" without trace metrics
     await expect(rowB.locator(`[data-testid="run-passrate-${RUN_B}"]`)).toContainText('100%');
-    await expect(rowB.locator(`[data-testid="run-accuracy-${RUN_B}"]`)).toContainText('88%');
+    await expect(rowB.locator(`[data-testid="run-avgscore-${RUN_B}"]`)).toContainText('legacy scoring');
 
     // The standalone "All metrics" expander + MetricComparisonPanel are gone.
     await expect(page.locator('[data-testid="scoreboard-all-metrics-toggle"]')).toHaveCount(0);
@@ -118,8 +123,10 @@ test.describe('Comparison scoreboard — all metrics on the row, no chart, judge
 
     const judgeLine = page.locator('[data-testid="scoreboard-judge-line"]');
     await expect(judgeLine).toHaveCount(1);
-    await expect(judgeLine).toContainText('Judge:');
-    // Not "Judge: A ... · B ..." since both runs share the same modelId.
+    await expect(judgeLine).toContainText('Judge: demo-judge-model');
+    // Names the JUDGE, never the agent model.
+    await expect(judgeLine).not.toContainText('claude-sonnet');
+    // Not "Judge: A ... · B ..." since both runs share the same judge.
     await expect(judgeLine).not.toContainText('· B');
   });
 

@@ -625,6 +625,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                     RCA Default evaluator emits. */}
                 <RunScore
                   metrics={liveReport.metrics as Record<string, number | undefined>}
+                  snapshot={liveReport.scoringSnapshot}
                   showLabel={false}
                   className="text-xs font-semibold text-blue-700 dark:text-blue-400"
                 />

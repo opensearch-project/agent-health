@@ -417,6 +417,74 @@ export interface SessionMetadata {
 // Metrics status for trace-mode runs (traces take ~5 min to propagate)
 export type MetricsStatus = 'pending' | 'calculating' | 'ready' | 'error';
 
+// ============ Scoring snapshot (immutable per-report scoring provenance) ============
+
+/**
+ * How a report's pass/fail verdict was (or is to be) decided.
+ *
+ *  - `threshold`   — pass iff the weighted score (normalized to [0,1]) is
+ *                    >= `minScore`.
+ *  - `gates`       — pass iff every listed metric (in its own raw scale) is
+ *                    >= its `min`.
+ *  - `llm-verdict` — the judge's own `pass_fail_status` is authoritative
+ *                    (the historical behaviour; every pre-snapshot report is
+ *                    implicitly this).
+ */
+export type ScoringPassPolicy =
+  | { kind: 'threshold'; minScore: number }
+  | { kind: 'gates'; gates: Array<{ metric: string; min: number }> }
+  | { kind: 'llm-verdict' };
+
+/**
+ * Immutable record of HOW a report was scored, frozen onto the report at
+ * judge time. Every aggregate score the UI shows for a report — the compare
+ * page's "Avg score", the run inspector's overall — is derived from THIS
+ * object and the report's own `metrics`, never from today's (mutable)
+ * evaluator document. Reports persisted before snapshots existed carry none
+ * and render as "legacy scoring": their rubric values are shown by name but
+ * are never aggregated into a single score (see `lib/scoring/snapshotScore.ts`).
+ *
+ * This PR (R1) adds the type, storage mapping and the read model only; the
+ * write path (R2, canonical verdict engine) populates it for new judgements.
+ */
+export interface ScoringSnapshot {
+  /** Evaluator document id at judge time. */
+  evaluatorId: string;
+  /** Evaluator version whose rubric/weights produced this report. */
+  evaluatorVersion: number;
+  /**
+   * Stable hash of the evaluator version content (prompt + rubrics + weights
+   * + policies). Two reports are scored comparably iff their hashes match —
+   * the compare page's coverage gate keys on this.
+   */
+  contentHash: string;
+  /** Display name of the evaluator at judge time (evaluators can be renamed). */
+  evaluatorName?: string;
+  /** Rubric name → weight. Rubrics absent here are not part of the score. */
+  weights: Record<string, number>;
+  /** Per-rubric raw scale; a rubric missing here is assumed 0–100. */
+  scale?: Record<string, { min: number; max: number }>;
+  passPolicy: ScoringPassPolicy;
+  /**
+   * Metric names the evaluator declares as headline metrics (e.g. a
+   * retrieval evaluator's Hit@1 / Recall@20). The compare page renders each
+   * as its own column; nothing here is interpreted — names are passed through.
+   */
+  primaryMetrics?: string[];
+  /** The judge model that actually produced the metrics (resolved, not the configured kind). */
+  judgeModelId?: string;
+  /** Structured gold ids the deterministic rubrics were computed against (R3). */
+  goldIdsUsed?: string[];
+  /** Identifier of the rule used to extract the prediction from the agent output (R3). */
+  extractionRule?: string;
+  /**
+   * Rubrics that could not be computed for this report (input missing, judge
+   * omitted the key, …). Excluded from the weighted mean — never scored as 0 —
+   * but still counted in the rubric total so "scored X / Y" is honest.
+   */
+  unevaluable?: string[];
+}
+
 // TestCaseRun = result of running a specific test case version (renamed from EvaluationReport)
 export interface TestCaseRun {
   id: string;
@@ -523,6 +591,11 @@ export interface TestCaseRun {
    * existed. See server/services/piAgenticJudgeService.ts.
    */
   judgeMode?: 'trajectory-only' | 'trace-tools';
+  /**
+   * Frozen scoring provenance for this report (see {@link ScoringSnapshot}).
+   * Absent on every report judged before snapshots existed → "legacy scoring".
+   */
+  scoringSnapshot?: ScoringSnapshot;
 }
 
 // Alias for backwards compatibility during migration
@@ -1401,21 +1474,36 @@ export interface RunAggregateMetrics {
   /**
    * Mean `metrics.accuracy` over the reports that actually carry one.
    * `undefined` when no report in the run has an accuracy score (e.g.
-   * custom evaluators scoring different metric keys) — renders "--", not 0%.
+   * custom evaluators scoring different metric keys). Named by metric — it
+   * is NOT the run's score; kept for the legacy summary table / HTML export.
    */
   avgAccuracy?: number;
   /**
-   * Run-level "Avg score" — mean, over test cases that have a derivable
-   * score, of each case's overall score. Unlike `avgAccuracy` (accuracy-
-   * only, `undefined` whenever a run's reports carry no `metrics.accuracy`),
-   * this is defined for custom-evaluator runs too: per case the derivation
-   * is `metrics.accuracy` -> the primary rubric -> the mean of every numeric
-   * metric on the report (see `computeOverallScore` / `getPrimaryRubric` in
-   * services/comparisonService.ts for the exact tiering and why). Only
-   * `undefined` when NOT ONE case in the run has any numeric metric at all.
+   * Run-level "Avg score" (0–100): mean of the per-report weighted scores
+   * derived from each report's {@link ScoringSnapshot} (see
+   * `lib/scoring/snapshotScore.ts`). `undefined` when the run is
+   * legacy-scored (`scoring.source === 'legacy'`) — rendered as "—", never
+   * reconstructed from an arbitrary rubric.
    */
   avgScore?: number;
+  /** Provenance behind `avgScore` (evaluator, weights, policy, coverage). */
+  scoring: RunScoringSummary;
+  /** Cases with a verdict (`passed + failed`) — the pass-rate denominator; errored / pending / not-run are excluded. */
+  evaluatedCount: number;
+  /** Cases still pending or never run (excluded from `evaluatedCount`; shown in the pass-rate detail). */
+  pendingCount: number;
   passRatePercent: number;
+  /**
+   * The judge that produced this run's verdicts, resolved per report
+   * (`report.judgeModel` → `report.llmJudgeResponse.modelId` →
+   * `report.judgeModelId` → `run.judgeModelId`). Never the agent model.
+   * Set only when every report resolves to the SAME judge; see `judgeModelIds`.
+   */
+  judgeModelId?: string;
+  /** Every distinct judge the run's reports resolved to (first-seen order); >1 = mixed judges. */
+  judgeModelIds: string[];
+  /** testCaseId → version each report ran at (coverage gate input). */
+  testCaseVersions: Record<string, number>;
   // Trace metrics (optional - populated from metrics API)
   totalTokens?: number;
   totalInputTokens?: number;
@@ -1425,6 +1513,30 @@ export interface RunAggregateMetrics {
   totalLlmCalls?: number;
   totalToolCalls?: number;
 }
+
+/**
+ * Run-level scoring provenance shown on the compare page (hover on "Avg
+ * score", pass-rate policy label, primary-metric columns, coverage gate).
+ */
+export type RunScoringSummary =
+  | {
+      source: 'snapshot';
+      evaluatorId: string;
+      evaluatorName?: string;
+      evaluatorVersion: number;
+      /** Distinct snapshot hashes seen across the run's evaluated reports (normally exactly one). */
+      contentHashes: string[];
+      weights: Record<string, number>;
+      passPolicy: ScoringPassPolicy;
+      /** Reports that produced a score / reports that were evaluated. */
+      scoredReports: number;
+      /** Rubric-level coverage summed over scored reports. */
+      scoredRubrics: number;
+      totalRubrics: number;
+      /** Declared headline metrics with their run-level mean (raw scale). */
+      primaryMetrics: Array<{ name: string; mean?: number; scale: { min: number; max: number } }>;
+    }
+  | { source: 'legacy' };
 
 // Result for a single test case within a run
 export interface TestCaseRunResult {
@@ -1445,19 +1557,13 @@ export interface TestCaseRunResult {
   trajectoryAlignment?: number;
   latencyScore?: number;
   /**
-   * The report's PRIMARY RUBRIC — a heuristic single evaluator metric
-   * MetricCell falls back to showing when `accuracy` is absent (custom
-   * evaluators carry no accuracy field at all; e.g. fact_precision /
-   * provenance_verifiability / abstention_integrity / payload_economy). See
-   * `getPrimaryRubric` in services/comparisonService.ts for how the key is
-   * chosen (alphabetically-first numeric metric — NOT necessarily the
-   * evaluator's own declared/highest-weight rubric; see that function's doc
-   * for why). Only populated when the report has no numeric `accuracy` —
-   * `undefined` whenever `accuracy` IS present, since MetricCell never reads
-   * it in that case and an unconditionally-populated "primary" field would
-   * read as more authoritative than the heuristic actually is.
+   * Per-case weighted score (0–100) from the report's {@link ScoringSnapshot}.
+   * `undefined` for legacy-scored reports — the cell then shows the rubric
+   * values by NAME (`rubricValues`), never one of them relabelled as a score.
    */
-  primaryRubric?: { key: string; value: number };
+  score?: number;
+  /** Every numeric metric on the report, by name, in stored order (legacy display). */
+  rubricValues?: Record<string, number>;
   testCaseVersion?: string;
   /** Error message if status is 'failed' */
   error?: string;

@@ -13,8 +13,9 @@
  * overview (which use lib/runStats, dividing by `total - errored`) showed 100%.
  *
  * This seeds exactly that shape via the storage API and asserts the Compare
- * view's Detailed-metrics summary renders 100% / Acc 90% (the evaluable set),
- * not the deflated 50% / Acc 45%.
+ * scoreboard renders 100% with the denominators spelled out as
+ * "1 / 1 (errored 1)", not the deflated 50%. (The accuracy-only column that
+ * used to read "90%" here is gone — see the snapshot-aware Avg score.)
  */
 
 import { test, expect } from './fixtures/test-fixtures';
@@ -113,7 +114,7 @@ test.describe('Comparison — errored runs excluded from pass rate', () => {
     for (const id of testCaseIds) await request.delete(`/api/storage/test-cases/${id}`).catch(() => {});
   });
 
-  test('renders 100% pass rate and Acc 90% (errored case excluded, not 50% / 45%)', async ({ page }) => {
+  test('renders 100% pass rate as "1 / 1 (errored 1)" (errored case excluded, not 50%)', async ({ page }) => {
     test.skip(!seeded, 'Could not seed benchmark/run/reports (storage not configured?)');
 
     await page.goto(`/compare/${benchmarkId}`);
@@ -128,10 +129,17 @@ test.describe('Comparison — errored runs excluded from pass rate', () => {
     // The fix: 1 passed / (2 total - 1 errored) = 100%, NOT 1/2 = 50%.
     await expect(passRate).toHaveText('100%');
 
-    const accuracy = page.locator(`[data-testid="run-accuracy-${runId}"]`);
-    // Accuracy averaged over the evaluable case only: 90, NOT (90+0)/2 = 45.
-    // (The consolidated metrics matrix labels the row "Avg Accuracy" and shows
-    // the bare value, so the cell reads "90%" rather than the old "Acc 90%".)
-    await expect(accuracy).toHaveText('90%');
+    // The denominators are spelled out: 1 passed / 1 evaluated, and the
+    // errored case is called out rather than silently folded into either.
+    await expect(page.locator(`[data-testid="run-passrate-detail-${runId}"]`)).toHaveText('1 / 1 (errored 1)');
+    await expect(page.locator('[data-testid="scoreboard-col-passRate"]')).toHaveText('Pass rate (judge verdict)');
+
+    // There is no accuracy-only column any more ("accuracy" is one evaluator's
+    // rubric name, not the score); a snapshot-less run's Avg score is
+    // "— legacy scoring", never a fabricated 45% or 0%.
+    await expect(page.locator(`[data-testid="run-accuracy-${runId}"]`)).toHaveCount(0);
+    const avgScore = page.locator(`[data-testid="run-avgscore-${runId}"]`);
+    await expect(avgScore).toContainText('—');
+    await expect(avgScore).toContainText('legacy scoring');
   });
 });
