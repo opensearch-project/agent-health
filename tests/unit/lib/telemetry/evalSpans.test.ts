@@ -320,6 +320,34 @@ describe('Evaluation Span Helpers', () => {
       );
     });
 
+    it('emits the CONFIGURED judge id on agent_health.judge.model_id (stable cardinality) and the RESOLVED LLM on agent_health.judge.model', () => {
+      const report = createTestReport({
+        judgeModelId: 'agent-trace-judge',
+        judgeModel: 'amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        llmJudgeResponse: {
+          // the sidecar now carries the REAL model -- must NOT leak onto model_id
+          modelId: 'amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+          judgeProvider: 'agent', timestamp: 't', promptTokens: 0, completionTokens: 0, latencyMs: 1, rawResponse: '{}',
+        },
+      } as any);
+
+      finalizeTestCaseSpan(mockSpan as any, report);
+
+      expect(mockSpan.setAttribute).toHaveBeenCalledWith('agent_health.judge.model_id', 'agent-trace-judge');
+      expect(mockSpan.setAttribute).toHaveBeenCalledWith('agent_health.judge.model', 'amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0');
+    });
+
+    it('falls back to llmJudgeResponse.modelId for judge.model_id on reports without judgeModelId, and omits judge.model when unresolved', () => {
+      const report = createTestReport({
+        llmJudgeResponse: { modelId: 'us.anthropic.claude-sonnet-4-6', timestamp: 't', promptTokens: 0, completionTokens: 0, latencyMs: 1, rawResponse: '{}' },
+      } as any);
+
+      finalizeTestCaseSpan(mockSpan as any, report);
+
+      expect(mockSpan.setAttribute).toHaveBeenCalledWith('agent_health.judge.model_id', 'us.anthropic.claude-sonnet-4-6');
+      expect(mockSpan.setAttribute).not.toHaveBeenCalledWith('agent_health.judge.model', expect.anything());
+    });
+
     it('should set error status for failed evaluations', () => {
       const report = createTestReport({ status: 'failed' });
 

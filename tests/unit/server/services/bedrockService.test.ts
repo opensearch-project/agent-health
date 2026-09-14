@@ -407,6 +407,27 @@ describe('BedrockService', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
 
+    it('records the effective model id as judgeModel and judgeProvider=bedrock on EVERY verdict (not only under AH_JUDGE_DEBUG)', async () => {
+      const OLD = process.env.AH_JUDGE_DEBUG;
+      process.env.AH_JUDGE_DEBUG = '0';
+      try {
+        mockSend.mockResolvedValue({
+          output: { message: { content: [{ text: '{"pass_fail_status": "passed", "accuracy": 0.9, "reasoning": "Good"}' }] } },
+        });
+        const result = await evaluateTrajectory(
+          { trajectory: [createStep({ type: 'action', toolName: 'test' })], expectedOutcomes: ['Test outcome'] },
+          'us.anthropic.claude-sonnet-4-6'
+        );
+        expect(result.judgeModel).toBe('us.anthropic.claude-sonnet-4-6');
+        expect(result.judgeProvider).toBe('bedrock');
+        expect(result.judgeDebug).toBeUndefined();
+        // and it equals the modelId the Converse call was actually made with
+        expect((mockSend.mock.calls.at(-1)![0] as any).modelId).toBe(result.judgeModel);
+      } finally {
+        if (OLD === undefined) delete process.env.AH_JUDGE_DEBUG; else process.env.AH_JUDGE_DEBUG = OLD;
+      }
+    });
+
     // Bedrock contract change 4.6 -> 4.7/4.8: newer models reject ANY explicit
     // temperature ("temperature is deprecated for this model"). The judge must
     // omit the field entirely for those models — issue #299.

@@ -55,6 +55,7 @@ import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator'
 import { bucketRunResults } from '@/lib/runStats';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
 import { buildCancelledMarkers } from '@/services/evaluationRunFinalize';
+import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity } from '@/lib/judgeIdentity';
 import { loadConfigSync } from '@/lib/config/index';
 import { getBackendUrl } from '@/lib/portConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -227,6 +228,14 @@ export async function executeEvaluationRun(
   // failure), accumulated for the run-level `judgeFailureSummary` computed
   // after the loop below. See lib/judgeFailureSummary.ts.
   const judgeFailureReasons: Array<string | undefined> = [];
+
+  // Run-level record of the UNDERLYING judge LLM (BenchmarkRun.judgeModel):
+  // the first report that resolved one wins -- every case of a run shares
+  // the judge configuration, so one value describes the run. Distinct from
+  // `run.judgeModelId`, which for the agent trace judge names a provider.
+  const noteJudgeModel = (judgeModel: string | undefined) => {
+    if (judgeModel && !run.judgeModel) run.judgeModel = judgeModel;
+  };
 
   try {
     // Per-case result persistence is BOOKKEEPING, not evaluation. It used to
@@ -754,7 +763,9 @@ export async function executeEvaluationRun(
             savedReport.metricsStatus === 'pending'
           ) {
             debug('EvaluationRunner', `[${testCaseId}] Trace mode: polling for traces (runId=${savedReport.runId ?? 'none — window/session correlation'})`);
-            judgeOutcome = await waitForTracesAndJudge(savedReport, testCase, storageModule, agentConfig);
+            judgeOutcome = await waitForTracesAndJudge(savedReport, testCase, storageModule, agentConfig, noteJudgeModel);
+          } else {
+            noteJudgeModel((savedReport as any).judgeModel ?? (report as any).judgeModel);
           }
 
           // Update result with success. The run-level status mirrors the
@@ -951,7 +962,8 @@ async function waitForTracesAndJudge(
   report: EvaluationReport,
   testCase: TestCase,
   storage: IStorageModule,
-  agentConfig: AgentConfig
+  agentConfig: AgentConfig,
+  onJudgeModel?: (judgeModel: string | undefined) => void
 ): Promise<PassFailStatus | null> {
   return new Promise<PassFailStatus | null>((resolve) => {
     tracePollingManager.startPolling(
@@ -1007,6 +1019,8 @@ async function waitForTracesAndJudge(
               // Set only by the agent (trace) judge provider -- see
               // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
               ...(judgment.judgeMode ? { judgeMode: judgment.judgeMode } : {}),
+              // Underlying LLM that judged (TestCaseRun.judgeModel) -- see lib/judgeIdentity.
+              ...buildJudgeIdentityPatch(judgment, judgeModelId),
               // Unified judge surface (issue #230 follow-up).
               // The deterministic path doesn't reach here — trace-mode
               // judge runs only when the test case has no SDK body —
@@ -1023,7 +1037,7 @@ async function waitForTracesAndJudge(
               // trace-deferred SDK path. Same shape as the synchronous
               // /api/evaluate path.
               llmJudgeResponse: {
-                modelId: judgeModelId || '',
+                ...buildLlmJudgeResponseIdentity(judgment, judgeModelId),
                 timestamp: new Date().toISOString(),
                 promptTokens: 0,
                 completionTokens: 0,
@@ -1037,6 +1051,7 @@ async function waitForTracesAndJudge(
             } as any);
 
             debug('EvaluationRunner', `[${testCase.id}] Trace judge complete: ${judgment.passFailStatus}`);
+            onJudgeModel?.(buildJudgeIdentityPatch(judgment, judgeModelId).judgeModel);
             // Resolve with the JUDGMENT we just computed rather than making
             // the caller re-read `report.id` from storage — this is the fix
             // for the stale-`savedReport` bug (trace-judged runs displaying

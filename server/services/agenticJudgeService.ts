@@ -162,6 +162,11 @@ async function evaluateWithClaudeCodeAgentic(
     userPrompt,
   });
   if (judgeDebug) parsed.judgeDebug = judgeDebug;
+  // The agentic backends (claude-code CLI / custom endpoint) pick their own
+  // model and don't report it back through this path — record the backend
+  // as the judge identity so the report at least says WHICH agentic judge
+  // ran (never a silent `agentic-claude-code` masquerading as a model).
+  parsed.judgeProvider = 'agentic';
   return parsed;
 }
 

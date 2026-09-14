@@ -66,8 +66,21 @@ export const ATTR_TEST_CASE_EXPECTED = 'test.case.expected' as const;
 // Agent Health extension attributes (agent_health.* prefix)
 // =============================================================================
 
-/** Model ID used by the LLM judge */
+/**
+ * The CONFIGURED judge id (run-config `judgeModelId`, e.g. a Bedrock id or the
+ * provider name `agent-trace-judge`). Stable across a run; kept as-is so
+ * dashboards keyed on it don't change cardinality when the underlying LLM is
+ * also recorded (see {@link ATTR_AGENT_HEALTH_JUDGE_MODEL}).
+ */
 export const ATTR_AGENT_HEALTH_JUDGE_MODEL_ID = 'agent_health.judge.model_id' as const;
+
+/**
+ * The UNDERLYING LLM that produced the verdict, as resolved at judge time
+ * (`TestCaseRun.judgeModel`, e.g. `amazon-bedrock/global.anthropic.claude-sonnet-4-5-...`).
+ * Distinct from the configured id above, which for the agent trace judge is a
+ * provider, not a model.
+ */
+export const ATTR_AGENT_HEALTH_JUDGE_MODEL = 'agent_health.judge.model' as const;
 
 /** Time spent in LLM judge evaluation (ms) */
 export const ATTR_AGENT_HEALTH_JUDGE_DURATION_MS = 'agent_health.judge.duration_ms' as const;

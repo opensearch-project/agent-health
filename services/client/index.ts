@@ -63,3 +63,11 @@ export {
   type RetryJudgementJobStatus,
   type RerunOverrides,
 } from './evaluationRunsApi';
+
+export {
+  fetchJudgeModelCatalog,
+  useAgentJudgeResolvedModel,
+  judgeModelOptionLabel,
+  type JudgeModelCatalogEntry,
+  type AgentJudgeResolvedModel,
+} from './judgeModelsApi';

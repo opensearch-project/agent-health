@@ -56,6 +56,7 @@ import {
 
   // Agent Health extensions
   ATTR_AGENT_HEALTH_JUDGE_MODEL_ID,
+  ATTR_AGENT_HEALTH_JUDGE_MODEL,
   ATTR_AGENT_HEALTH_JUDGE_DURATION_MS,
   ATTR_AGENT_HEALTH_JUDGE_ATTEMPTS,
   ATTR_AGENT_HEALTH_AGENT_DURATION_MS,
@@ -243,8 +244,15 @@ export function finalizeTestCaseSpan(span: Span, report: TestCaseRun, endTime?: 
   if (report.performanceMetrics?.judgeAttempts !== undefined) {
     span.setAttribute(ATTR_AGENT_HEALTH_JUDGE_ATTEMPTS, report.performanceMetrics.judgeAttempts);
   }
-  if (report.llmJudgeResponse?.modelId) {
-    span.setAttribute(ATTR_AGENT_HEALTH_JUDGE_MODEL_ID, report.llmJudgeResponse.modelId);
+  // Configured judge id (stable, e.g. `agent-trace-judge`) on the existing
+  // attribute; the RESOLVED underlying LLM on its own attribute so neither
+  // dashboards keyed on the former nor the new signal lose fidelity.
+  const configuredJudge = report.judgeModelId || report.llmJudgeResponse?.modelId;
+  if (configuredJudge) {
+    span.setAttribute(ATTR_AGENT_HEALTH_JUDGE_MODEL_ID, configuredJudge);
+  }
+  if (report.judgeModel) {
+    span.setAttribute(ATTR_AGENT_HEALTH_JUDGE_MODEL, report.judgeModel);
   }
 
   // Set span status based on evaluation outcome

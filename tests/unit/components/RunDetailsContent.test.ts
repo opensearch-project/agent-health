@@ -95,6 +95,11 @@ jest.mock('@/lib/utils', () => ({
   // function". Provide faithful stubs: a numeric score and an empty breakdown.
   getRunOverallScore: jest.fn().mockReturnValue(null),
   formatMetricsBreakdown: jest.fn().mockReturnValue([]),
+  // JudgeModelLabel (rendered in the judge tab) reads this from @/lib/utils.
+  // Stub returns the em-dash "no judge recorded" shape so components that
+  // render it don't crash; tests covering the judge-model label itself live
+  // in tests/unit/components/JudgeModelLabel.test.ts against the real impl.
+  getJudgeModelDisplay: jest.fn().mockReturnValue({ label: '—', title: 'No judge recorded for this run' }),
 }));
 
 jest.mock('react-markdown', () => {

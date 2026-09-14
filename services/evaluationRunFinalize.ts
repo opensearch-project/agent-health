@@ -73,10 +73,12 @@ export interface FinalizeEvaluationRunInput {
   /**
    * The runner's in-memory run at completion. `results`/`testCaseSnapshots`
    * drive the merge + stats; `judgeFailureSummary` (run-level judge-failure
-   * reason, see lib/judgeFailureSummary.ts) is a plain top-level field the
-   * runner computes and is carried through onto the doc when present.
+   * reason, see lib/judgeFailureSummary.ts) and `judgeModel` (the underlying
+   * judge LLM, first resolved report wins — see lib/judgeIdentity.ts) are
+   * plain top-level fields the runner computes and are carried through onto
+   * the doc when present.
    */
-  completedRun: Pick<EvaluationRun, 'results' | 'testCaseSnapshots'> & Partial<Pick<EvaluationRun, 'judgeFailureSummary'>>;
+  completedRun: Pick<EvaluationRun, 'results' | 'testCaseSnapshots'> & Partial<Pick<EvaluationRun, 'judgeFailureSummary' | 'judgeModel'>>;
   completedAt?: string;
 }
 
@@ -126,6 +128,7 @@ export async function finalizeEvaluationRun(
     stats,
     completedAt,
     ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
+    ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
   });
   return { run, stats, cancelledMarkers };
 }

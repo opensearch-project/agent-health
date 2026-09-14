@@ -28,6 +28,7 @@ import {
 } from '@/lib/matchers/judgeAccessor';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { buildJudgeIdentityPatch } from '@/lib/judgeIdentity';
 
 /**
  * Ensure trace polling is running for a pending report. The provided
@@ -118,6 +119,8 @@ export function ensureTracePollingForReport(
             // Set only by the agent (trace) judge provider -- see
             // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
             ...(judgment.judgeMode ? { judgeMode: judgment.judgeMode } : {}),
+            // Underlying LLM that judged (TestCaseRun.judgeModel) -- see lib/judgeIdentity.
+            ...buildJudgeIdentityPatch(judgment, judgeModelId),
             // Unified judge surface (issue #230 follow-up).
             matcherResults: [
               buildJudgeMatcherEntry(judgment, {

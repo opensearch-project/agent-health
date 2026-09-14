@@ -48,6 +48,7 @@ import { JudgeModelSelect } from '@/components/JudgeModelSelect';
 import { asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { TestCase, EvaluationReport, TrajectoryStep, Evaluator, RunConfigInput } from '@/types';
 import { getLabelColor, formatDate, formatRelativeTime, getModelName, getRunDisplayName } from '@/lib/utils';
+import { judgeModelText } from '@/components/JudgeModelLabel';
 import { RunScore } from '@/components/RunScore';
 import { TestCaseEditor } from '@/components/TestCaseEditor';
 import { TrajectoryView } from '@/components/TrajectoryView';
@@ -650,6 +651,8 @@ export const TestCaseDetailPage: React.FC = () => {
                     ? (evaluatorNameById[run.evaluatorId] || run.evaluatorId)
                     : 'Default';
                   const modelLabel = getModelName(run.modelName);
+                  // Judge identity (kind · underlying LLM) -- see lib/judgeIdentity.
+                  const judgeLabel = judgeModelText(run);
                   const justCopied = copiedRunId === run.id;
                   return (
                     <div
@@ -710,13 +713,13 @@ export const TestCaseDetailPage: React.FC = () => {
                         {/* Row 2: agent · evaluator · judge model */}
                         <div
                           className="text-[9px] text-muted-foreground mt-0.5 truncate"
-                          title={`Agent: ${run.agentName || '—'} • Evaluator: ${evaluatorLabel} • Judge: ${modelLabel}`}
+                          title={`Agent: ${run.agentName || '—'} • Model: ${modelLabel} • Evaluator: ${evaluatorLabel} • Judge: ${judgeLabel}`}
                         >
                           <span className="text-foreground/80">{run.agentName || '—'}</span>
                           <span className="mx-1 opacity-50">·</span>
                           <span>{evaluatorLabel}</span>
                           <span className="mx-1 opacity-50">·</span>
-                          <span>{modelLabel}</span>
+                          <span data-testid="tc-run-judge">{judgeLabel}</span>
                         </div>
                         {/* Row 3: timestamp (separate so it stays visible even
                             when row 2 truncates on narrow panels) */}
@@ -792,6 +795,8 @@ export const TestCaseDetailPage: React.FC = () => {
                     ? (evaluatorNameById[run.evaluatorId] || run.evaluatorId)
                     : 'Default';
                   const modelLabel = getModelName(run.modelName);
+                  // Judge identity (kind · underlying LLM) -- see lib/judgeIdentity.
+                  const judgeLabel = judgeModelText(run);
                   const justCopied = copiedRunId === run.id;
                   return (
                     <div
@@ -819,9 +824,9 @@ export const TestCaseDetailPage: React.FC = () => {
                       </button>
                       <span
                         className="text-[10px] text-muted-foreground flex-1 truncate"
-                        title={`Agent: ${run.agentName || '—'} • Evaluator: ${evaluatorLabel} • Judge: ${modelLabel}`}
+                        title={`Agent: ${run.agentName || '—'} • Model: ${modelLabel} • Evaluator: ${evaluatorLabel} • Judge: ${judgeLabel}`}
                       >
-                        {run.agentName || '—'} · {evaluatorLabel} · {modelLabel} · {formatRelativeTime(run.timestamp)}
+                        {run.agentName || '—'} · {evaluatorLabel} · <span data-testid="tc-run-judge">{judgeLabel}</span> · {formatRelativeTime(run.timestamp)}
                       </span>
                       <RunScore
                         metrics={run.metrics as Record<string, number | undefined>}

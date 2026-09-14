@@ -11,6 +11,7 @@ import { formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import type { RunAggregateMetrics, BenchmarkRun } from '@/types';
 import type { TestCaseOverlap } from '@/services/comparisonService';
 import { runReportPath } from '@/lib/runReportPath';
+import { JudgeModelLabel, judgeModelText } from '@/components/JudgeModelLabel';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -197,18 +198,41 @@ const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentNa
  * one name; differing judges show both, labeled A/B.
  */
 const JudgeLine: React.FC<{ selectedRuns: BenchmarkRun[] }> = ({ selectedRuns }) => {
-  const modelIds = selectedRuns.map(r => r.modelId).filter((m): m is string => !!m);
-  if (modelIds.length === 0) return null;
-  const allSame = modelIds.every(m => m === modelIds[0]);
-
+  // The JUDGE identity (judgeModel · judgeModelId -- see lib/judgeIdentity),
+  // NOT the agent's `modelId`, which is what this line used to show under the
+  // "Judge:" label. Runs that pre-date judge tracking fall back to the
+  // agent model so the line still renders something meaningful for them.
+  const judgeRuns = selectedRuns.map(r =>
+    r.judgeModel || r.judgeModelId ? { judgeModel: r.judgeModel, judgeModelId: r.judgeModelId } : null
+  );
+  const anyJudge = judgeRuns.some(Boolean);
+  if (!anyJudge) {
+    const modelIds = selectedRuns.map(r => r.modelId).filter((m): m is string => !!m);
+    if (modelIds.length === 0) return null;
+    const allSame = modelIds.every(m => m === modelIds[0]);
+    return (
+      <div className="px-4 py-1.5 text-[11px] text-muted-foreground" data-testid="scoreboard-judge-line">
+        {allSame ? (
+          <span>Judge: {getModelName(modelIds[0])}</span>
+        ) : (
+          <span>
+            Judge: A {getModelName(modelIds[0])}
+            {modelIds[1] !== undefined && <> · B {getModelName(modelIds[1])}</>}
+          </span>
+        )}
+      </div>
+    );
+  }
+  const texts = judgeRuns.map(judgeModelText);
+  const allSame = texts.every(t => t === texts[0]);
   return (
     <div className="px-4 py-1.5 text-[11px] text-muted-foreground" data-testid="scoreboard-judge-line">
       {allSame ? (
-        <span>Judge: {getModelName(modelIds[0])}</span>
+        <span className="inline-flex items-baseline gap-1">Judge: <JudgeModelLabel run={judgeRuns[0]} /></span>
       ) : (
-        <span>
-          Judge: A {getModelName(modelIds[0])}
-          {modelIds[1] !== undefined && <> · B {getModelName(modelIds[1])}</>}
+        <span className="inline-flex items-baseline gap-1 flex-wrap">
+          Judge: A <JudgeModelLabel run={judgeRuns[0]} />
+          {judgeRuns.length > 1 && <> · B <JudgeModelLabel run={judgeRuns[1]} /></>}
         </span>
       )}
     </div>

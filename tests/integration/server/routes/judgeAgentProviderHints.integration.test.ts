@@ -40,6 +40,8 @@ import request from 'supertest';
 const mockEvaluateWithPiAgenticTrace = jest.fn();
 jest.mock('@/server/services/piAgenticJudgeService', () => ({
   evaluateWithPiAgenticTrace: (...args: any[]) => mockEvaluateWithPiAgenticTrace(...args),
+  describeDefaultAgentJudgeModel: jest.fn(),
+  AGENT_JUDGE_MODEL_ENV: 'AH_AGENT_JUDGE_MODEL_ID',
 }));
 
 const mockGetEvaluatorById = jest.fn();

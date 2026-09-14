@@ -72,6 +72,8 @@ jest.mock('@/lib/utils', () => ({
   // state at their initial empty arrays (loadData's own try/catch swallows
   // it), which breaks every test in this file that expects real rows.
   getJudgeModelLabel: jest.fn(() => 'Judge'),
+  // JudgeModelLabel (judge kind · underlying LLM) reads this one.
+  getJudgeModelDisplay: jest.fn(() => ({ label: 'Judge', title: 'Judge' })),
   getEvaluatorLabel: jest.fn(() => 'Evaluator'),
 }));
 

@@ -152,7 +152,34 @@ export async function evaluateWithClaudeCode(
     userPrompt,
   });
   if (judgeDebug) parsed.judgeDebug = judgeDebug;
+  // The claude CLI's `--output-format json` envelope carries `modelUsage`
+  // keyed by the model id(s) that answered; record the first as the judge
+  // model when present. Otherwise only the provider kind is known.
+  const usedModel = extractClaudeCodeModel(result);
+  if (usedModel) parsed.judgeModel = usedModel;
+  parsed.judgeProvider = 'claude-code';
   return parsed;
+}
+
+/**
+ * Best-effort: the model id the claude CLI reported using. `spawnClaude`
+ * resolves to the verdict TEXT (not the envelope) for successful runs, so
+ * this only finds a model when the envelope leaked through as raw stdout;
+ * returns undefined otherwise. @internal
+ */
+export function extractClaudeCodeModel(raw: string): string | undefined {
+  try {
+    const parsed = JSON.parse(raw);
+    const usage = parsed?.modelUsage;
+    if (usage && typeof usage === 'object') {
+      const [first] = Object.keys(usage);
+      if (first) return first;
+    }
+    if (typeof parsed?.model === 'string' && parsed.model) return parsed.model;
+  } catch {
+    /* verdict text, not the envelope */
+  }
+  return undefined;
 }
 
 // ============================================================================

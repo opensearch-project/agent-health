@@ -109,6 +109,27 @@ export interface JudgeResponse {
    * which cases had trace evidence behind them.
    */
   judgeMode?: 'trajectory-only' | 'trace-tools';
+  /**
+   * The UNDERLYING LLM that produced this verdict, as resolved by the
+   * provider at call time. For plain providers (bedrock / openai-compatible /
+   * litellm) this is the effective model id the request was sent with. For
+   * the agent (trace) judge — whose configured `modelId`
+   * (`agent-trace-judge`) names a PROVIDER, not a model — this is the
+   * provider-qualified pi-registry id the SDK session actually ran on
+   * (`amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0`).
+   * Pre-fix the only record of this was `judgeDebug.modelId`, which is
+   * undefined unless `AH_JUDGE_DEBUG=1` — so no persisted agent-trace-judge
+   * report on the cluster said which LLM judged it. Persisted onto
+   * `TestCaseRun.judgeModel` and `LLMJudgeResponse.modelId`.
+   */
+  judgeModel?: string;
+  /**
+   * Provider kind that executed the call ('bedrock' | 'agent' | 'pi' |
+   * 'agentic' | 'claude-code' | 'openai-compatible' | 'litellm'). Always
+   * set alongside {@link judgeModel} so persisting the real model id onto
+   * `LLMJudgeResponse.modelId` never loses which judge produced it.
+   */
+  judgeProvider?: string;
 }
 
 // ============================================================================
@@ -455,6 +476,10 @@ export async function evaluateTrajectory(
     userPrompt,
   });
   if (judgeDebug) parsed.judgeDebug = judgeDebug;
+  // Always record which LLM judged (not only under AH_JUDGE_DEBUG). For
+  // Bedrock the effective model id IS the model.
+  parsed.judgeModel = effectiveModelId;
+  parsed.judgeProvider = 'bedrock';
   return parsed;
 }
 

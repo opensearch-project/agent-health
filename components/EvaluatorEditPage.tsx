@@ -56,6 +56,9 @@ export const EvaluatorEditPage: React.FC = () => {
   const [passThreshold, setPassThreshold] = useState(70);
   const [provider, setProvider] = useState<string>('');
   const [modelId, setModelId] = useState('');
+  // Agent (trace) judge only: pin the UNDERLYING LLM the pi SDK session runs
+  // on instead of the registry auto-pick. See InferenceConfig.agentJudgeModelId.
+  const [agentJudgeModelId, setAgentJudgeModelId] = useState('');
   const [temperature, setTemperature] = useState(0.1);
   const [maxTokens, setMaxTokens] = useState(4096);
 
@@ -99,6 +102,7 @@ export const EvaluatorEditPage: React.FC = () => {
       setPassThreshold(evaluator.scoringConfig.passThreshold);
       setProvider(evaluator.inferenceConfig?.provider || '');
       setModelId(evaluator.inferenceConfig?.modelId || '');
+      setAgentJudgeModelId(evaluator.inferenceConfig?.agentJudgeModelId || '');
       setTemperature(evaluator.inferenceConfig?.temperature ?? 0.1);
       setMaxTokens(evaluator.inferenceConfig?.maxTokens ?? 4096);
       setIsSystem(evaluator.isSystem);
@@ -141,6 +145,7 @@ export const EvaluatorEditPage: React.FC = () => {
         inferenceConfig: {
           ...(provider && { provider }),
           ...(modelId && { modelId }),
+          ...(agentJudgeModelId && { agentJudgeModelId }),
           temperature,
           maxTokens,
         },
@@ -239,6 +244,7 @@ export const EvaluatorEditPage: React.FC = () => {
           inferenceConfig: {
             ...(provider && { provider }),
             ...(modelId && { modelId }),
+            ...(agentJudgeModelId && { agentJudgeModelId }),
             temperature,
             maxTokens,
           },
@@ -490,6 +496,7 @@ export const EvaluatorEditPage: React.FC = () => {
                       <SelectItem value="default">Default</SelectItem>
                       <SelectItem value="bedrock">Bedrock</SelectItem>
                       <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>
+                      <SelectItem value="agent">Agent Trace Judge</SelectItem>
                       <SelectItem value="demo">Demo</SelectItem>
                     </SelectContent>
                   </Select>
@@ -504,6 +511,22 @@ export const EvaluatorEditPage: React.FC = () => {
                     disabled={readOnly}
                   />
                 </div>
+                {provider === 'agent' && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="agentJudgeModelId">Underlying LLM (agent judge)</Label>
+                    <Input
+                      id="agentJudgeModelId"
+                      value={agentJudgeModelId}
+                      onChange={(e) => setAgentJudgeModelId(e.target.value)}
+                      placeholder="e.g. us.anthropic.claude-sonnet-4-5 (blank = auto-pick)"
+                      disabled={readOnly}
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Pins the model the in-process agent judge runs on. Blank keeps the
+                      registry auto-pick (also pinnable server-wide via <code>AH_AGENT_JUDGE_MODEL_ID</code>).
+                    </p>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="temperature">Temperature</Label>
