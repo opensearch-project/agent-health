@@ -507,18 +507,29 @@ describe('Pi Judge Service - parsePiError', () => {
     );
   });
 
-  it('should map JSON parse errors to parse failure message', () => {
+  // Agent-error surfacing: parse failures are reported as "no parseable
+  // verdict" with the original detail retained — never the old "Failed to
+  // parse Pi judge response. The CLI may have returned invalid JSON.", which
+  // blamed the Pi CLI for an in-process `agent`-provider model returning an
+  // empty turn (owner incident).
+  it('should map JSON parse errors to a provider-neutral "no parseable verdict" message', () => {
     const error = new Error('Unexpected token in JSON at position 0');
     expect(parsePiError(error)).toBe(
-      'Failed to parse Pi judge response. The CLI may have returned invalid JSON.'
+      'Judge returned no parseable verdict: Unexpected token in JSON at position 0'
+    );
+    expect(parsePiError(error)).not.toMatch(/CLI may have returned invalid JSON/);
+  });
+
+  it('should map "parse" errors to a provider-neutral "no parseable verdict" message', () => {
+    const error = new Error('Could not parse response body');
+    expect(parsePiError(error)).toBe(
+      'Judge returned no parseable verdict: Could not parse response body'
     );
   });
 
-  it('should map "parse" errors to parse failure message', () => {
-    const error = new Error('Could not parse response body');
-    expect(parsePiError(error)).toBe(
-      'Failed to parse Pi judge response. The CLI may have returned invalid JSON.'
-    );
+  it('passes the shared parser\'s precise message through untouched', () => {
+    const msg = 'AgentJudge: judge returned no parseable verdict — the model returned an empty response.';
+    expect(parsePiError(new Error(msg))).toBe(msg);
   });
 
   it('should return original message for unrecognized errors', () => {

@@ -10,6 +10,8 @@
 
 import type { TrajectoryStep, ToolCallStatus } from '@/types';
 import { BaseConnector } from '@/services/connectors/base/BaseConnector';
+import { fetchWithTimeout, resolveConnectorTimeoutMs } from '@/services/connectors/base/fetchWithTimeout';
+import { AgentRequestError } from '@/services/evaluation/agentFailure';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -56,23 +58,35 @@ export class RESTConnector extends BaseConnector {
     const payload = request.payload || this.buildPayload(request);
     const headers = this.buildAuthHeaders(auth);
     this.injectTraceparentHeaders(headers);
+    // Explicit request timeout (default = undici's silent 300 s). Configure
+    // per agent via `connectorConfig.timeoutMs`. See fetchWithTimeout.ts.
+    const timeoutMs = resolveConnectorTimeoutMs(request.connectorConfig);
 
     this.debug('Executing REST request');
     this.debug('Endpoint:', endpoint);
+    this.debug('Timeout (ms):', timeoutMs);
     this.debug('Payload:', JSON.stringify(payload).substring(0, 500));
 
-    const response = await fetch(endpoint, {
+    const startedAt = Date.now();
+    const response = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...headers,
       },
       body: JSON.stringify(payload),
+      timeoutMs,
+      connectorType: this.type,
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`REST request failed: ${response.status} - ${errorText}`);
+      throw new AgentRequestError(`REST request failed: ${response.status} - ${errorText}`, {
+        endpoint,
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs,
+        httpStatus: response.status,
+      });
     }
 
     const data = await response.json();

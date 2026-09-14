@@ -308,8 +308,17 @@ export function parsePiError(error: Error): string {
     return 'AWS credentials expired or invalid. Please refresh your AWS credentials.';
   } else if (msg.includes('ETIMEDOUT') || msg.includes('timed out') || msg.includes('SIGTERM')) {
     return 'Pi evaluation timed out. The trajectory may be too large.';
+  } else if (msg.includes('no parseable verdict')) {
+    // Shared parser (judgeResponseParser.ts) already produced a precise,
+    // provider-neutral message ("judge returned no parseable verdict — the
+    // model returned an empty response" / "… did not contain a JSON
+    // object"). Pass it through: pre-fix this branch rewrote it to
+    // "Failed to parse Pi judge response. The CLI may have returned invalid
+    // JSON.", which blamed the Pi CLI for an in-process `agent`-provider
+    // model returning an empty turn (owner incident).
+    return msg;
   } else if (msg.includes('JSON') || msg.includes('parse')) {
-    return 'Failed to parse Pi judge response. The CLI may have returned invalid JSON.';
+    return `Judge returned no parseable verdict: ${msg}`;
   }
 
   return msg || 'Unknown error occurred';

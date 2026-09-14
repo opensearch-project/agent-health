@@ -186,7 +186,7 @@ describe('runEvaluationWithConnector — agent-trace-judge against a useTraces:f
     expect(isJudgeFailedCase(report, runResult)).toBe(true);
   });
 
-  it('a genuine agent-invocation failure (not a judge failure) still lands on the OUTER catch as status:"failed"', async () => {
+  it('a genuine agent-invocation failure (not a judge failure) lands on the OUTER catch as an AGENT-stage failure (status:"failed", failureStage:"agent") and never reaches the judge', async () => {
     const throwingRegistry: ConnectorRegistry = {
       getForAgent: () => ({
         type: 'rest',
@@ -207,8 +207,18 @@ describe('runEvaluationWithConnector — agent-trace-judge against a useTraces:f
     ) as any;
 
     expect(report.status).toBe('failed');
-    expect(report.metricsStatus).toBeUndefined();
-    expect(report.llmJudgeReasoning).toMatch(/^Evaluation failed:.*ECONNREFUSED/);
+    // Agent-error surfacing: the outer catch now writes the canonical
+    // agent-stage shape (metricsStatus:'error' so stats bucket it as errored,
+    // never as a verdict; failureStage:'agent'; the real cause on `error`).
+    expect(report.metricsStatus).toBe('error');
+    expect(report.failureStage).toBe('agent');
+    expect(report.passFailStatus).toBeNull();
+    expect(report.error).toMatch(/ECONNREFUSED/);
+    expect(report.agentError.kind).toBe('connection');
+    expect(report.llmJudgeReasoning).toMatch(/Agent request failed — not judged/);
+    expect(report.llmJudgeReasoning).toMatch(/ECONNREFUSED/);
+    // It is NOT a judge failure — retry-judgement must not offer it.
+    expect(isJudgeFailedCase(report, { reportId: 'r', status: report.status })).toBe(false);
     // The judge was never even called -- fetch should not have been reached.
     expect(mockFetch).not.toHaveBeenCalled();
   });

@@ -127,7 +127,8 @@ describe('code-eval trace attach + agent-failure surfacing — FileStorageModule
     // The key persistence guarantee: passFailStatus is CLEARED (null/absent) on
     // disk, not a stale 'failed' — an errored run must be excluded from pass-rate.
     expect((saved as any).passFailStatus == null).toBe(true);
-    expect((saved as any).llmJudgeReasoning).toMatch(/Agent run did not complete/);
+    expect((saved as any).llmJudgeReasoning).toMatch(/Agent request failed/);
+    expect((saved as any).failureStage).toBe('agent');
     expect((saved as any).llmJudgeReasoning).toMatch(/Subprocess timed out after 600000ms/);
   });
 });
