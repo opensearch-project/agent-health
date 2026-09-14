@@ -607,6 +607,26 @@ and the evaluator reference in [docs/skills/AGENT_HEALTH.md](./skills/AGENT_HEAL
 > `agent-health.config.ts` instead, same as you already would for the app's
 > own credentials.
 
+### Where the server resolves `sourceFile` — and `describePath`
+
+Imported test cases remember two pieces of provenance:
+
+- **`sourceFile`** — the eval file, stored *relative* to the eval root it was
+  found under (`evals/demo.eval.js`). At run time the server re-opens it to
+  execute the body, resolving the relative path against its **eval roots**
+  (`AGENT_HEALTH_EVAL_ROOTS` env → `evalRoots` config → server cwd, first hit
+  wins). A file under none of the roots is a pre-start error, not a silent
+  fallback. See [CONFIGURATION.md → Where the server looks for eval source
+  files](CONFIGURATION.md#where-the-server-looks-for-eval-source-files-evalroots).
+- **`describePath`** — the `describe()` chain the test was registered under,
+  as an array of titles outermost-first (`['Payments', 'Checkout']`; `[]` for
+  a test at file top level). It is persisted on the test case, kept by
+  `export` → `benchmark -f` JSON round-trips, shown read-only on the Test Case
+  detail page, and drives the "Group by describe" affordance on a benchmark's
+  Cases tab (grouped by the outermost title). Cases imported before the field
+  existed simply show no group; re-importing an unchanged file backfills it in
+  place without a version bump.
+
 ### Via the UI
 
 `/evaluations/runs/new` → pick "Code import" → select your `.eval.js` files.

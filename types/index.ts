@@ -649,6 +649,15 @@ export interface TestCase {
   // view with a re-import hint). Deliberately NOT part of `sourceHash`, so
   // adding it never bumps versions on re-import of an unchanged file.
   definition?: TestCaseDefinitionCapture;
+  // The `describe()` chain the test was registered under, outermost first
+  // (`['Suite', 'Nested']`). Empty array for a code-SDK test declared at file
+  // top level; absent on JSON/UI-authored cases and on code-imported cases
+  // persisted before this field existed (the UI shows no group for those —
+  // never "undefined"). Additive, display/grouping only; NOT part of
+  // `sourceHash` (the file text already is), so adding it never bumps a
+  // version on re-import of an unchanged file — bulkUpsert backfills it in
+  // place instead.
+  describePath?: string[];
 
   // Metadata
   isPromoted: boolean;              // Available for experiments

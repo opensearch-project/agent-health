@@ -22,6 +22,15 @@ jest.mock('path', () => ({
 
 jest.mock('@/lib/debug', () => ({ debug: jest.fn() }));
 
+// Eval-root lookup is a cwd-only pass-through here (every stored path
+// "exists"); the multi-root behaviour has its own suite
+// (sourceResolver.evalRoots.test.ts).
+jest.mock('@/lib/config/evalRoots', () => ({
+  lookupSourceFile: jest.fn((f: string) => ({ resolved: { abs: f, root: '/cwd' }, tried: ['/cwd'] })),
+  toStoredSourceFile: jest.fn((abs: string) => ({ sourceFile: abs, root: '/cwd' })),
+  formatEvalRootsHint: jest.fn((tried: string[]) => tried.join(', ')),
+}));
+
 jest.mock('@/lib/testCases/loader', () => ({
   loadTestCasesFromModule: jest.fn(),
 }));

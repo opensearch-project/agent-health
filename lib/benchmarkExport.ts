@@ -27,6 +27,12 @@ export function convertTestCasesToExportFormat(testCases: TestCase[]): Validated
       exported.subcategory = tc.subcategory;
     }
 
+    // Preserve the describe() chain so a re-import keeps the grouping.
+    // Omitted (not `[]`) when the stored case has none.
+    if (Array.isArray(tc.describePath) && tc.describePath.length > 0) {
+      exported.describePath = [...tc.describePath];
+    }
+
     return exported;
   });
 }

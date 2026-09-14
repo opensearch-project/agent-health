@@ -25,6 +25,18 @@ jest.mock('@/lib/testCaseValidation', () => ({
   validateTestCasesArrayJson: jest.fn(),
 }));
 
+// Eval-root resolution is covered by tests/unit/lib/config/evalRoots.test.ts
+// and sourceResolver.evalRoots.test.ts; here it is a cwd-only pass-through
+// that honours the mocked `fs.existsSync` (the pre-feature behaviour).
+jest.mock('@/lib/config/evalRoots', () => ({
+  lookupSourceFile: jest.fn((f: string) => {
+    const exists = (jest.requireMock('fs') as { existsSync: jest.Mock }).existsSync(f);
+    return exists ? { resolved: { abs: f, root: '/cwd' }, tried: ['/cwd'] } : { resolved: null, tried: ['/cwd'] };
+  }),
+  toStoredSourceFile: jest.fn((abs: string) => ({ sourceFile: abs, root: '/cwd' })),
+  formatEvalRootsHint: jest.fn((tried: string[]) => tried.join(', ')),
+}));
+
 jest.mock('@/lib/debug', () => ({
   debug: jest.fn(),
 }));

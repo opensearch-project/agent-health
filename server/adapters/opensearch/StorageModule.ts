@@ -323,8 +323,13 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
           // it IN PLACE on the current version doc (no version bump: the test
           // content is unchanged) when, and only when, the stored record has
           // none. Never overwrite an existing definition on this path.
-          if (!existing.definition && tc.definition) {
-            results.push(await this.backfillDefinition(existing, tc.definition));
+          // `describePath` (describe() chain, additive, display-only) is
+          // backfilled the same way and for the same reason.
+          const backfill: Partial<Pick<TestCase, 'definition' | 'describePath'>> = {};
+          if (!existing.definition && tc.definition) backfill.definition = tc.definition;
+          if (!existing.describePath && tc.describePath) backfill.describePath = tc.describePath;
+          if (Object.keys(backfill).length > 0) {
+            results.push(await this.backfillDisplayFields(existing, backfill));
           } else {
             results.push(existing);
           }
@@ -348,21 +353,25 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
   }
 
   /**
-   * Write `definition` onto the CURRENT version doc of `existing` without
-   * creating a new version. Used only by bulkUpsert's equal-hash path to
-   * backfill records imported before per-test definition capture existed.
+   * Write additive display-only fields (`definition`, `describePath`) onto
+   * the CURRENT version doc of `existing` without creating a new version.
+   * Used only by bulkUpsert's equal-hash path to backfill records imported
+   * before those fields existed.
    */
-  private async backfillDefinition(existing: TestCase, definition: NonNullable<TestCase['definition']>): Promise<TestCase> {
+  private async backfillDisplayFields(
+    existing: TestCase,
+    fields: Partial<Pick<TestCase, 'definition' | 'describePath'>>,
+  ): Promise<TestCase> {
     assertNotMigrating(this.index);
     const ver = (existing as any).version ?? existing.currentVersion ?? 1;
     const docId = `${existing.id}-v${ver}`;
     await this.client.update({
       index: this.index,
       id: docId,
-      body: { doc: { definition } },
+      body: { doc: fields },
       refresh: 'wait_for',
     });
-    return { ...existing, definition };
+    return { ...existing, ...fields };
   }
 }
 

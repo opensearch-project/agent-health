@@ -97,6 +97,14 @@ export interface CodeTestCase {
    * loader/CLI then puts the test into the file-default benchmark.
    */
   benchmarkPath?: string;
+  /**
+   * The same describe chain as an ARRAY of titles, outermost first
+   * (`['A', 'B']` for `describe('A', () => describe('B', …))`). Empty for a
+   * test registered outside any describe. Unlike `benchmarkPath` this is
+   * lossless when a title itself contains ' > '. Persisted on imported test
+   * cases as `TestCase.describePath` for grouping in the UI.
+   */
+  describePath?: string[];
 }
 
 /**

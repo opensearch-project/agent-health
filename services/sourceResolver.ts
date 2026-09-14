@@ -11,6 +11,7 @@ import type { IStorageModule } from '@/server/adapters/types';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 import { getCategoryFromLabels, getDifficultyFromLabels } from '@/lib/testCaseLabels';
 import { debug } from '@/lib/debug';
+import { lookupSourceFile, toStoredSourceFile, formatEvalRootsHint } from '@/lib/config/evalRoots';
 import type { EvalResult, RegisteredHook } from '@/lib/testCases/types';
 
 /**
@@ -190,9 +191,16 @@ export async function resolveCodeFnMapForStoredTestCases(
   const { loadTestCasesFromModule } = await import('@/lib/testCases/loader');
   for (const filePath of codeFilesToLoad) {
     try {
-      const loaded = await loadTestCasesFromModule(filePath);
-      // Re-derive the relative key the stored docs were keyed on.
-      const relSourceFile = path.relative(process.cwd(), loaded.filePath);
+      // Locate the stored (root-relative) sourceFile under the configured
+      // eval roots (AGENT_HEALTH_EVAL_ROOTS > config evalRoots > cwd) — see
+      // lib/config/evalRoots.ts. The lookup key stays the RELATIVE path as
+      // stored; `lookup.resolved.root` records which root supplied it.
+      const lookup = lookupSourceFile(filePath);
+      if (!lookup.resolved) {
+        throw new Error(`not found under eval roots ${formatEvalRootsHint(lookup.tried)}`);
+      }
+      const loaded = await loadTestCasesFromModule(lookup.resolved.abs);
+      const relSourceFile = filePath;
       for (const tc of loaded.testCases) {
         const stored = tcByNameAndFile.get(`${relSourceFile}\u0000${tc.name}`);
         if (stored && tc.evaluate) {
@@ -342,12 +350,18 @@ async function resolveCodeImport(
   const testScopes = new Map<string, { sourceFile?: string; describePath?: string }>();
 
   for (const filename of filenames) {
-    if (!fs.existsSync(filename)) {
-      throw new Error(`Code file not found: ${filename}`);
+    // Relative filenames are looked up under the eval roots (first hit wins);
+    // the persisted `sourceFile` is spelled relative to the root that matched
+    // so a later run on a server with a different cwd — but the same roots —
+    // can re-materialize the body. With no roots configured this is exactly
+    // the old cwd-relative behaviour.
+    const lookup = lookupSourceFile(filename);
+    if (!lookup.resolved) {
+      throw new Error(`Code file not found: ${filename} (looked under eval roots ${formatEvalRootsHint(lookup.tried)})`);
     }
 
-    const loaded = await loadTestCasesFromModule(filename);
-    const sourceFile = path.relative(process.cwd(), loaded.filePath);
+    const loaded = await loadTestCasesFromModule(lookup.resolved.abs);
+    const { sourceFile } = toStoredSourceFile(loaded.filePath);
     const sourceFileName = path.basename(sourceFile);
     const sourceLanguage = detectSourceLanguage(sourceFile);
 
@@ -395,6 +409,9 @@ async function resolveCodeImport(
         // Description fed in via test() options also flows here — it was
         // already supported in the type but never forwarded.
         ...(tc.options.description ? { description: tc.options.description } : {}),
+        // describe() chain (outermost first; [] at file top level) so the
+        // UI can group a benchmark's cases by suite. Additive, display-only.
+        ...(tc.describePath ? { describePath: tc.describePath } : {}),
       };
     });
 

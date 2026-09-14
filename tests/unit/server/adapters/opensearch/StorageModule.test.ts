@@ -585,6 +585,32 @@ describe('OpenSearchStorageModule', () => {
         expect(result.unchanged).toBe(1);
         expect(mockClient.update).not.toHaveBeenCalled();
       });
+
+      // `describePath` (describe() chain) is the same kind of additive,
+      // display-only field: backfilled in place on the equal-hash path, in the
+      // SAME partial update as definition, never overwriting an existing value.
+      it('backfills describePath (with definition) in place; never overwrites an existing describePath', async () => {
+        mockClient.search.mockResolvedValue(makeSearchResponse([existing]));
+        mockClient.update.mockResolvedValue({ body: { result: 'updated' } });
+        const result = await mod.testCases.bulkUpsert([
+          { name: 'Legacy', sourceFile: 'evals/s.eval.js', sourceHash: 'same', definition, describePath: ['Suite', 'Inner'] },
+        ]);
+        expect(result.unchanged).toBe(1);
+        expect(result.testCases[0].describePath).toEqual(['Suite', 'Inner']);
+        expect(mockClient.update).toHaveBeenCalledTimes(1);
+        expect(mockClient.update).toHaveBeenCalledWith(expect.objectContaining({
+          id: 'tc-legacy-v3',
+          body: { doc: { definition, describePath: ['Suite', 'Inner'] } },
+        }));
+
+        mockClient.update.mockClear();
+        mockClient.search.mockResolvedValue(makeSearchResponse([{ ...existing, definition, describePath: ['Suite'] }]));
+        const again = await mod.testCases.bulkUpsert([
+          { name: 'Legacy', sourceFile: 'evals/s.eval.js', sourceHash: 'same', definition, describePath: ['Renamed'] },
+        ]);
+        expect(again.testCases[0].describePath).toEqual(['Suite']);
+        expect(mockClient.update).not.toHaveBeenCalled();
+      });
     });
   });
 

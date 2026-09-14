@@ -14,6 +14,7 @@ import { setupMiddleware, setupSpaFallback, setupFinalErrorHandler } from './mid
 import { loadConfig } from '@/lib/config/index';
 import { migrateYamlToJsonIfNeeded } from './services/configMigration.js';
 import { getStorageConfigFromFile, getObservabilityConfigFromFile, getStorageConfigFromTs, getObservabilityConfigFromTs, setTsClusterConfig } from './services/configService.js';
+import { setConfiguredEvalRoots } from '@/lib/config/evalRoots';
 import { getStorageConfigFromEnv, getObservabilityConfigFromEnv } from './middleware/dataSourceConfig.js';
 import { initializeStorageFromConfig } from './services/storageInitializer.js';
 import { runColdStartMigrations } from './services/coldStartMigrations.js';
@@ -69,6 +70,9 @@ export async function createApp(): Promise<Express> {
   // used. Pass `null` (not undefined) for absent fields so each createApp()
   // fully resets the bridge (undefined means "leave previous value").
   setTsClusterConfig({ storage: config.storage ?? null, observability: config.observability ?? null });
+  // Same bridge for `evalRoots` (where relative code-SDK `sourceFile`s are
+  // resolved). `AGENT_HEALTH_EVAL_ROOTS` still wins over this at read time.
+  setConfiguredEvalRoots(config.evalRoots ?? null);
 
   // Register user-defined connectors from config (so they work in benchmark execution)
   if (config.connectors?.length) {

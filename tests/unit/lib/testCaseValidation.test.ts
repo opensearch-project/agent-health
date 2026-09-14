@@ -125,6 +125,15 @@ describe('testCaseValidation', () => {
       expect(result.success).toBe(true);
     });
 
+    it('accepts an optional describePath string array and rejects non-string entries', () => {
+      const base = { name: 'T', category: 'RCA', difficulty: 'Easy', initialPrompt: 'p' };
+      expect(testCaseSchema.safeParse({ ...base, describePath: ['Suite', 'Inner'] }).success).toBe(true);
+      expect(testCaseSchema.parse({ ...base, describePath: ['Suite'] }).describePath).toEqual(['Suite']);
+      expect(testCaseSchema.parse(base).describePath).toBeUndefined();
+      expect(testCaseSchema.safeParse({ ...base, describePath: 'Suite' }).success).toBe(false);
+      expect(testCaseSchema.safeParse({ ...base, describePath: [1] }).success).toBe(false);
+    });
+
     it('should validate context items structure', () => {
       const invalidContext = {
         name: 'Test',

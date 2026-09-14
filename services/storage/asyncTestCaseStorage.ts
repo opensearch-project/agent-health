@@ -115,6 +115,9 @@ function toTestCase(stored: StorageTestCase): TestCase {
     sourceFileName: stored.sourceFileName,
     sourceLanguage: stored.sourceLanguage,
     definition: stored.definition,
+    // describe() chain — additive grouping/display field; absent on legacy
+    // and JSON/UI-authored cases (the UI then shows no group).
+    describePath: stored.describePath,
     isPromoted: stored.tags?.includes('promoted') ?? false,
     createdAt: stored.createdAt,
     updatedAt: stored.updatedAt,

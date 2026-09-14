@@ -230,7 +230,60 @@ Debug logging can also be toggled at runtime via the Settings page "Verbose Logg
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VITE_BACKEND_PORT` | Backend server port | `4001` |
+| `AGENT_HEALTH_EVAL_ROOTS` | Path-delimiter-separated directories a relative code-SDK `sourceFile` is resolved against (see [`evalRoots`](#where-the-server-looks-for-eval-source-files-evalroots)) | server cwd |
 | `BEDROCK_MODEL_ID` | Judge model ID | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+
+## Where the server looks for eval source files (`evalRoots`)
+
+Code-SDK test cases imported from an `.eval.js` / `.eval.ts` / `.eval.mjs`
+file are stored with a **relative** `sourceFile` (e.g. `evals/demo.eval.js`).
+When a run of those stored cases starts, the server must re-open that file to
+execute the test bodies. Historically the path was resolved against the
+server's `process.cwd()` **only** — so a shared server started from the
+agent-health checkout could not run suites that live in another repo.
+
+The server now resolves a relative `sourceFile` against an ordered list of
+**eval roots**; the first directory that contains the file wins. Absolute
+`sourceFile`s are used verbatim.
+
+| Precedence | Source | Notes |
+|-----------|--------|-------|
+| 1 (highest) | `AGENT_HEALTH_EVAL_ROOTS` env var | Path-delimiter separated (`:` on POSIX, `;` on Windows), e.g. `AGENT_HEALTH_EVAL_ROOTS=/srv/eval-suites:/srv/other-suites` |
+| 2 | `evalRoots: string[]` in `agent-health.config.ts` (code-first) **or** `"evalRoots": [...]` in `.agent-health/state.json` (ui-first) | Same rule as every other setting: an authored `.ts` config makes `state.json` ignored |
+| 3 (default) | `[process.cwd()]` | Identical to the pre-feature behaviour |
+
+Relative roots are resolved against the server's cwd. A configured list
+**replaces** the default — add `.` explicitly to keep the cwd as a fallback.
+Because a stored `sourceFile` is relative, the same relative path under two
+roots resolves to the **first** root that has it — keep relative eval paths
+unique across roots (e.g. one suite repo per root, or distinct sub-directories).
+The effective list is exposed on `GET /api/storage/config/status` as
+`evalRoots: { roots, source }`, and the CLI `benchmark` command prints a
+one-line hint before a run when a stored case's `sourceFile` is under none of
+the server's roots.
+
+```ts
+// agent-health.config.ts
+export default defineConfig({
+  evalRoots: ['/srv/eval-suites', '.'],
+});
+```
+
+Two consequences worth knowing:
+
+- **Newly imported cases are keyed relative to the root that matched.** A
+  `code-import` of `evals/demo.eval.js` found under `/srv/eval-suites` is
+  stored as `evals/demo.eval.js`, so any server with the same roots can run it.
+- **An unresolvable `sourceFile` is a hard pre-start error** (with
+  [#503](https://github.com/opensearch-project/agent-health/pull/503)): a
+  stored code case whose file is under none of the roots fails the run before
+  it starts, listing the roots tried, instead of silently falling back to the
+  classic LLM-judge path. Fix it by pointing `AGENT_HEALTH_EVAL_ROOTS` at the
+  directory that contains the suite (or re-importing with `benchmark -f`).
+
+> Running the CLI from the eval repo against a server started from a
+> *different* directory trips the CLI's foreign-instance guard; set
+> `AH_REUSE_FOREIGN_SERVER=1` to opt in (that is the shared-server workflow).
 
 ## TypeScript Config File (Optional)
 
@@ -305,6 +358,7 @@ export default defineConfig({
 | `connectors` | `AgentConnector[]` | Custom connectors |
 | `storage` | `StorageClusterConfig` | OpenSearch storage cluster (endpoint + auth) |
 | `observability` | `ObservabilityClusterConfig` | OpenSearch traces/logs cluster (endpoint + auth + index patterns) |
+| `evalRoots` | `string[]` | Directories a relative code-SDK `sourceFile` is resolved against, first hit wins (see [Where the server looks for eval source files](#where-the-server-looks-for-eval-source-files-evalroots)) |
 | `testCases` | `string \| string[]` | Test case file patterns |
 | `reporters` | `ReporterConfig[]` | Output reporters |
 | `judge` | `JudgeConfig` | Judge model configuration |

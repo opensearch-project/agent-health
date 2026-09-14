@@ -70,6 +70,14 @@ export interface ConfigStatus {
       drifted: boolean;
     };
   };
+  /**
+   * Ordered directories the server resolves a relative code-SDK `sourceFile`
+   * against (first hit wins) and where that list came from.
+   */
+  evalRoots?: {
+    roots: string[];
+    source: 'environment' | 'typescript' | 'file' | 'default';
+  };
 }
 
 // ============================================================================

@@ -43,6 +43,20 @@ function toSummary(doc: any): any {
 }
 
 /**
+ * Bounds for the additive `describePath` (describe() chain) field — it is a
+ * `keyword` array in OpenSearch, so reject junk-drawer inputs: at most
+ * MAX_DESCRIBE_DEPTH nesting levels of at most MAX_DESCRIBE_TITLE_CHARS each.
+ */
+const MAX_DESCRIBE_DEPTH = 32;
+const MAX_DESCRIBE_TITLE_CHARS = 256;
+
+function isValidDescribePath(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length <= MAX_DESCRIBE_DEPTH
+    && value.every(v => typeof v === 'string' && v.length <= MAX_DESCRIBE_TITLE_CHARS);
+}
+
+/**
  * Check if an ID belongs to sample data (read-only)
  */
 function isSampleId(id: string): boolean {
@@ -455,6 +469,15 @@ router.post('/api/storage/test-cases/bulk', async (req: Request, res: Response) 
     }
 
     const storage = getStorageModule();
+
+    // `describePath` is an additive display/grouping field: keep it only when
+    // it is a bounded string array (outermost describe first); anything else
+    // is dropped rather than persisted as garbage the UI would render.
+    for (const tc of testCases) {
+      if (tc && 'describePath' in tc && !isValidDescribePath(tc.describePath)) {
+        delete tc.describePath;
+      }
+    }
 
     // Provenance gate. Reject mixed batches — in `bulkUpsert` an item without
     // `sourceFile` matches an existing record by `name` ALONE

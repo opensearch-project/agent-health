@@ -601,6 +601,38 @@ export class ApiClient {
 
 
   /**
+   * Server configuration status (no credentials). Used by the CLI to learn
+   * where THIS server resolves relative code-SDK `sourceFile`s
+   * (`evalRoots`). Returns null on any failure — callers treat it as a
+   * best-effort hint source, never a gate.
+   */
+  async getConfigStatus(): Promise<{ evalRoots?: { roots: string[]; source: string } } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/storage/config/status`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Summary projection of several test cases in ONE request
+   * (`GET /api/storage/test-cases?ids=…&fields=summary`) — name/labels/
+   * provenance (`sourceFile`, …) without prompt/context/source bodies.
+   */
+  async getTestCaseSummaries(ids: string[]): Promise<TestCase[]> {
+    if (ids.length === 0) return [];
+    const params = new URLSearchParams({ ids: ids.join(','), fields: 'summary' });
+    const res = await fetch(`${this.baseUrl}/api/storage/test-cases?${params.toString()}`);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch test case summaries: ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    return (data.testCases ?? data.items ?? []) as TestCase[];
+  }
+
+  /**
    * Get a single test case by ID
    */
   async getTestCase(id: string): Promise<TestCase | null> {

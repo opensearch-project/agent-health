@@ -61,6 +61,7 @@ import { ENV_CONFIG } from '@/lib/config';
 import { Markdown, hasRealMarkdown } from '@/components/ui/markdown';
 import { TestCaseDefinition } from '@/components/TestCaseDefinition';
 import { SdkTestDefinitionView } from '@/components/evals3/SdkTestDefinitionView';
+import { DescribePathChain } from '@/components/evals3/DescribePathChain';
 
 // Render a test-case prompt ("task definition"): as markdown when it actually
 // contains markdown (so headings / bullet lists indent instead of collapsing
@@ -496,6 +497,7 @@ export const TestCaseDetailPage: React.FC = () => {
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
                 This is the prompt, evidence context, and success rubric applied to each run below.
               </p>
+              <DescribePathChain testCase={testCase} className="mt-2" />
             </div>
             <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground sm:justify-end">
               <Badge variant="outline" className="text-[10px]">Version {testCase.currentVersion || 1}</Badge>

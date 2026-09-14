@@ -83,6 +83,8 @@ export interface StorageTestCase {
   sourceLanguage?: 'javascript' | 'typescript';
   /** Per-test SDK definition capture (see TestCase.definition). */
   definition?: TestCaseDefinitionCapture;
+  /** describe() chain, outermost first (see TestCase.describePath). */
+  describePath?: string[];
 }
 
 export interface StorageBenchmarkRunConfig {

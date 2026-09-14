@@ -256,6 +256,18 @@ describe('configService (real implementation, config v2)', () => {
       expect(json).not.toContain('super-secret');
       expect(json).not.toContain('obs-secret');
     });
+
+    // Where THIS server resolves relative code-SDK `sourceFile`s — the UI/CLI
+    // read it from here (see lib/config/evalRoots.ts for the precedence).
+    it('exposes evalRoots: default [cwd]; state.json evalRoots (ui-first); AGENT_HEALTH_EVAL_ROOTS wins', () => {
+      expect(getConfigStatus().evalRoots).toEqual({ roots: [process.cwd()], source: 'default' });
+
+      mockReadLayeredState.mockReturnValue({ evalRoots: ['/srv/eval-repo'] });
+      expect(getConfigStatus().evalRoots).toEqual({ roots: ['/srv/eval-repo'], source: 'file' });
+
+      process.env.AGENT_HEALTH_EVAL_ROOTS = ['/srv/a', '/srv/b'].join(require('path').delimiter);
+      expect(getConfigStatus().evalRoots).toEqual({ roots: ['/srv/a', '/srv/b'], source: 'environment' });
+    });
   });
 
   // ==========================================================================

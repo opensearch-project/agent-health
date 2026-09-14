@@ -187,6 +187,7 @@ export function test(
     evaluate,
     sourceFile: state.activeFile ?? undefined,
     benchmarkPath,
+    describePath: [...state.describeStack],
   });
 }
 

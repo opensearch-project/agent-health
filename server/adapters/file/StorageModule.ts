@@ -301,9 +301,14 @@ class FileTestCaseOperations implements ITestCaseOperations {
         if (existing.sourceHash === tc.sourceHash) {
           // See OpenSearchTestCaseOperations.bulkUpsert: backfill a missing
           // per-test `definition` in place (same version) — never overwrite.
-          if (!existing.definition && tc.definition) {
+          // `describePath` (describe() chain, additive, display-only) is
+          // backfilled the same way and for the same reason.
+          const backfill: Partial<Pick<TestCase, 'definition' | 'describePath'>> = {};
+          if (!existing.definition && tc.definition) backfill.definition = tc.definition;
+          if (!existing.describePath && tc.describePath) backfill.describePath = tc.describePath;
+          if (Object.keys(backfill).length > 0) {
             const ver = this.ver(existing) || 1;
-            const doc = { ...existing, definition: tc.definition } as TestCase;
+            const doc = { ...existing, ...backfill } as TestCase;
             writeJsonFile(this.docPath(existing.id, ver), doc);
             results.push(doc);
           } else {

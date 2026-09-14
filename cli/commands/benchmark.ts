@@ -30,6 +30,7 @@ import type { AgentConfig, Benchmark, BenchmarkRun, TestCase, TestCaseRun, Evalu
 import { existsSync, statSync } from 'fs';
 import { isCodeFile, detectSourceLanguage } from '@/lib/testCases/loader.js';
 import { createBenchmarkDoctorCommand } from '@/cli/commands/benchmarkDoctor.js';
+import { collectEvalRootsHints, formatEvalRootsHint } from '@/cli/utils/evalRootsHint.js';
 import { computeBenchmarkRepairPlan, applyRepairPlan, computeVersionLinkRepairPlan } from '@/cli/utils/benchmarkDoctor.js';
 
 interface BenchmarkOptions {
@@ -627,6 +628,13 @@ async function runUnifiedMode(
   if (concurrency > 1) console.log(chalk.gray(`  Concurrency: ${concurrency}`));
   if (benchmarkId) console.log(chalk.gray(`  Benchmark: ${options.name}`));
   else console.log(chalk.gray(`  Mode: Ad-hoc (no benchmark association)`));
+
+  // Stored code-SDK test cases (-n / -t) whose `sourceFile` the server's eval
+  // roots do not contain: say where the server looks BEFORE the run starts.
+  // Best-effort and advisory only (see cli/utils/evalRootsHint.ts).
+  for (const hint of await collectEvalRootsHints(api, sources)) {
+    console.log(chalk.yellow(`  ${formatEvalRootsHint(hint)}`));
+  }
   console.log('');
 
   // Execute via evaluation-runs API (SSE)
@@ -968,6 +976,9 @@ export function createBenchmarkCommand(): Command {
                   // options + evaluate body. Lets the run report show one
                   // test's definition instead of the whole file.
                   definition: tc.definition,
+                  // describe() chain, outermost first ([] at file top level)
+                  // — groups the benchmark's Cases tab by suite.
+                  ...(tc.describePath ? { describePath: tc.describePath } : {}),
                   description: tc.options.description,
                   // Forward expectedOutcomes / expectedTrajectory — see
                   // services/sourceResolver.ts for rationale. Without
@@ -1197,6 +1208,17 @@ export function createBenchmarkCommand(): Command {
           console.log(chalk.gray(`  Benchmark: ${bm.name} (${bm.id}) — ${bm.testCaseIds.length} test cases`));
         }
         console.log(chalk.gray(`  Server: ${serverResult.baseUrl}`));
+
+        // Stored code-SDK test cases whose `sourceFile` the server's eval
+        // roots do not contain: say where the server looks BEFORE running.
+        // Best-effort and advisory only (see cli/utils/evalRootsHint.ts).
+        if (!fileMode) {
+          const hints = await collectEvalRootsHints(
+            api,
+            benchmarksToRun.map(bm => ({ type: 'benchmark' as const, benchmarkId: bm.id })),
+          );
+          for (const hint of hints) console.log(chalk.yellow(`  ${formatEvalRootsHint(hint)}`));
+        }
 
         // Find agents
         let agents: AgentConfig[] = [];

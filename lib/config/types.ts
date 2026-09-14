@@ -219,6 +219,16 @@ export interface UserConfig {
   observability?: ObservabilityClusterConfig;
 
   /**
+   * Directories the server resolves a code-SDK test case's relative
+   * `sourceFile` against (first hit wins). Lets one server run eval suites
+   * that live outside its own cwd. Overridden by the `AGENT_HEALTH_EVAL_ROOTS`
+   * env var (path-delimiter separated); defaults to `[process.cwd()]`.
+   * Relative entries resolve against the server's cwd; the list REPLACES the
+   * default, so include `.` to keep the cwd as a fallback.
+   */
+  evalRoots?: string[];
+
+  /**
    * Remote servers for aggregating coding agent data from multiple machines.
    * Each remote runs `agent-health serve --headless` and this dashboard
    * fetches + merges their session data into a unified view.
@@ -270,6 +280,8 @@ export interface ResolvedConfig {
   storage?: StorageClusterConfig;
   /** OpenSearch observability cluster config authored in the TS config (optional). */
   observability?: ObservabilityClusterConfig;
+  /** Eval source roots authored in the TS config (optional; see UserConfig.evalRoots). */
+  evalRoots?: string[];
 }
 
 /**

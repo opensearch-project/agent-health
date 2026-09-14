@@ -57,6 +57,21 @@ describe('benchmarkExport', () => {
       expect(exported.isPromoted).toBeUndefined();
     });
 
+    it('round-trips describePath (describe() chain) and omits it when absent or empty', () => {
+      const [grouped, legacy, topLevel] = convertTestCasesToExportFormat([
+        makeTestCase({ describePath: ['Suite', 'Inner'] }),
+        makeTestCase({ describePath: undefined }),
+        makeTestCase({ describePath: [] }),
+      ]) as any[];
+      expect(grouped.describePath).toEqual(['Suite', 'Inner']);
+      expect('describePath' in legacy).toBe(false);
+      expect('describePath' in topLevel).toBe(false);
+      // Export output must still satisfy the import schema (round-trip contract).
+      const { testCaseSchema } = jest.requireActual('@/lib/testCaseValidation');
+      expect(testCaseSchema.safeParse(grouped).success).toBe(true);
+      expect(testCaseSchema.parse(grouped).describePath).toEqual(['Suite', 'Inner']);
+    });
+
     it('should include subcategory when present', () => {
       const testCases = [makeTestCase({ subcategory: 'Network' })];
       const result = convertTestCasesToExportFormat(testCases);

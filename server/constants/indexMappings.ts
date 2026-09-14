@@ -62,6 +62,9 @@ export function getIndexMappings(): IndexMappings {
           // and `options` is user-shaped, so keep it out of dynamic mapping
           // the same way `context` / `expectedTrajectory` are.
           definition: { type: 'object', enabled: false },
+          // describe() chain of a code-SDK test (outermost first). Keyword so
+          // the Cases tab can group/aggregate by describePath[0].
+          describePath: { type: 'keyword' },
           category: { type: 'keyword' },
           difficulty: { type: 'keyword' },
           tags: { type: 'keyword' },

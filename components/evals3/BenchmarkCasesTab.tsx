@@ -15,6 +15,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { BenchmarkCaseDefinition } from '@/components/evals3/BenchmarkCaseDefinition';
+import { DescribeGroupFilter, UNGROUPED, type DescribeGroupSelection } from '@/components/evals3/DescribeGroupFilter';
+import { DescribePathChain } from '@/components/evals3/DescribePathChain';
+import { groupCasesByDescribe } from '@/lib/describeGroups';
 import {
   buildCaseReviewRows,
   computePagerDrag,
@@ -300,6 +303,7 @@ export const BenchmarkCasesTab: React.FC<BenchmarkCasesTabProps> = ({
 }) => {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<CaseReviewFilter>('all');
+  const [describeGroup, setDescribeGroup] = useState<DescribeGroupSelection>(null);
   const [lastSelectedCaseId, setLastSelectedCaseId] = useState<string | undefined>(selectedCaseId);
   const [visibleCount, setVisibleCount] = useState(CASE_LIST_PAGE_SIZE);
   const listRef = useRef<HTMLDivElement>(null);
@@ -349,9 +353,18 @@ export const BenchmarkCasesTab: React.FC<BenchmarkCasesTabProps> = ({
     () => buildCaseReviewRows(reviewCases, recentRuns, reportsById),
     [reviewCases, recentRuns, reportsById],
   );
+  // Group-by-describe affordance: cases carrying a `describePath` bucket
+  // under their outermost describe() title; legacy/JSON cases are ungrouped.
+  const describeGrouping = useMemo(() => groupCasesByDescribe(testCases), [testCases]);
+  const describeGroupIds = useMemo(() => {
+    if (describeGroup === null) return null;
+    if (describeGroup === UNGROUPED) return new Set(describeGrouping.ungroupedIds);
+    return new Set(describeGrouping.groups.find(group => group.title === describeGroup)?.ids ?? []);
+  }, [describeGroup, describeGrouping]);
   const filteredRows = useMemo(
-    () => filterAndSortCaseRows(rows, search, filter),
-    [rows, search, filter],
+    () => filterAndSortCaseRows(rows, search, filter)
+      .filter(row => describeGroupIds === null || describeGroupIds.has(row.testCase.id)),
+    [rows, search, filter, describeGroupIds],
   );
   const counts = useMemo(() => ({
     'needs-attention': rows.filter(row => row.bucket === 'needs-attention').length,
@@ -381,7 +394,7 @@ export const BenchmarkCasesTab: React.FC<BenchmarkCasesTabProps> = ({
   // window mounted or hide rows that a narrower filter would show sooner.
   useEffect(() => {
     setVisibleCount(CASE_LIST_PAGE_SIZE);
-  }, [search, filter]);
+  }, [search, filter, describeGroup]);
 
   // Always keep the selected/last-selected row rendered even if it falls
   // outside the incremental window (e.g. deep link, keyboard nav, or a
@@ -657,6 +670,7 @@ export const BenchmarkCasesTab: React.FC<BenchmarkCasesTabProps> = ({
               </button>
             ))}
           </div>
+          <DescribeGroupFilter grouping={describeGrouping} selected={describeGroup} onSelect={setDescribeGroup} />
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
             <span>{filteredRows.length} shown{counts['no-data'] > 0 ? ` · ${counts['no-data']} no data` : ''}</span>
             <span>Pass rate ↑ · ↑/↓ or j/k</span>
@@ -729,6 +743,7 @@ export const BenchmarkCasesTab: React.FC<BenchmarkCasesTabProps> = ({
                   <Button variant="ghost" size="sm" className="md:hidden h-7 px-2" onClick={onClearCase}><ArrowLeft size={14} className="mr-1" />Cases</Button>
                   <div className="min-w-0">
                     <h3 className="font-semibold truncate">{selectedRow.testCase.name}</h3>
+                    <DescribePathChain testCase={selectedRow.testCase} withLabel={false} className="mt-0.5" />
                     <p className="text-[11px] text-muted-foreground md:hidden">{FILTER_LABEL[filter]} · {pager.position} / {pager.total}</p>
                   </div>
                 </div>

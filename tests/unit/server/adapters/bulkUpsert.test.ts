@@ -116,6 +116,39 @@ describe('bulkUpsert', () => {
     });
   });
 
+  it('backfills describePath in place on equal-hash re-import and persists it on create/update', async () => {
+    const base = {
+      name: 'Grouped Test',
+      initialPrompt: 'p',
+      sourceFile: 'evals/grouped.eval.js',
+      sourceHash: 'same-hash',
+    };
+    const first = await storage.testCases.bulkUpsert([base]);
+    expect(first.testCases[0].describePath).toBeUndefined();
+
+    // Same hash + describePath now attached → unchanged, same version, backfilled.
+    const second = await storage.testCases.bulkUpsert([{ ...base, describePath: ['Suite', 'Inner'] }]);
+    expect(second.unchanged).toBe(1);
+    expect(second.testCases[0].currentVersion).toBe(1);
+    expect((await storage.testCases.getById(first.testCases[0].id))?.describePath).toEqual(['Suite', 'Inner']);
+
+    // Never overwritten on the equal-hash path once present.
+    await storage.testCases.bulkUpsert([{ ...base, describePath: ['Other'] }]);
+    expect((await storage.testCases.getById(first.testCases[0].id))?.describePath).toEqual(['Suite', 'Inner']);
+
+    // A hash drift (file edited, e.g. the describe was renamed) takes the
+    // update path and DOES replace it, with a version bump.
+    const third = await storage.testCases.bulkUpsert([{ ...base, sourceHash: 'new-hash', describePath: ['Renamed'] }]);
+    expect(third.updated).toBe(1);
+    expect(third.testCases[0].currentVersion).toBe(2);
+    expect(third.testCases[0].describePath).toEqual(['Renamed']);
+
+    // Fresh record created with describePath persists it verbatim ([] for top-level tests).
+    const created = await storage.testCases.bulkUpsert([{ ...base, name: 'Top-level Test', describePath: [] }]);
+    expect(created.created).toBe(1);
+    expect(created.testCases[0].describePath).toEqual([]);
+  });
+
   it('updates sourceCode when sourceHash drifts (source edited)', async () => {
     const v1 = [{
       name: 'Drifting Test',

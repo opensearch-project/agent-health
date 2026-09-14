@@ -307,6 +307,17 @@ describe('AsyncTestCaseStorage', () => {
 
       expect(result).toBeNull();
     });
+
+    // Regression: the read mapper enumerates fields explicitly, so a new
+    // additive field silently vanishes unless it is threaded through here —
+    // the Cases-tab grouping rendered nothing until this was added.
+    it('preserves the code-SDK describePath on read (and leaves it undefined for legacy docs)', async () => {
+      mockOsTestCases.getById.mockResolvedValue({ ...createMockStorageTestCase(), describePath: ['Suite', 'Inner'] });
+      expect((await asyncTestCaseStorage.getById('tc-1'))?.describePath).toEqual(['Suite', 'Inner']);
+
+      mockOsTestCases.getById.mockResolvedValue(createMockStorageTestCase());
+      expect((await asyncTestCaseStorage.getById('tc-1'))?.describePath).toBeUndefined();
+    });
   });
 
   describe('create', () => {

@@ -48,6 +48,10 @@ export const testCaseSchema = z.object({
   // / `TestCaseFormState` / the editor save path would silently drop it on
   // round-trip (PR #258 review feedback).
   expectedOutcomes: z.array(z.string()).optional().default([]),
+  // describe() chain of a code-SDK test (outermost first). Optional so
+  // `export` → `benchmark -f` round-trips the grouping without making it a
+  // requirement for hand-written JSON.
+  describePath: z.array(z.string()).optional(),
 });
 
 export const testCasesArraySchema = z.array(testCaseSchema).min(1, 'Array cannot be empty');
@@ -62,7 +66,7 @@ export const testCasesArraySchema = z.array(testCaseSchema).min(1, 'Array cannot
 export type ValidatedTestCaseInput = Pick<
   CreateTestCaseInput,
   'name' | 'description' | 'category' | 'subcategory' | 'difficulty' | 'initialPrompt' | 'context' | 'expectedOutcomes'
->;
+> & { describePath?: string[] };
 
 // Form state for the TestCaseEditor component
 export interface TestCaseFormState {

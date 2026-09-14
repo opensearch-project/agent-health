@@ -28,6 +28,7 @@ import {
   projectStatePath,
   userStatePath,
 } from '@/lib/config/statePaths';
+import { getEvalRootsStatus, type EvalRootsStatus } from '@/lib/config/evalRoots';
 import type { StorageClusterConfig, ObservabilityClusterConfig, ClusterAuthType } from '../../types/index.js';
 
 // Type for the config file sections owned by this module
@@ -106,6 +107,8 @@ export interface ConfigStatus {
       drifted: boolean;
     };
   };
+  /** Where relative code-SDK `sourceFile`s are resolved (see lib/config/evalRoots.ts). */
+  evalRoots?: EvalRootsStatus;
   warnings?: string[];
 }
 
@@ -428,6 +431,9 @@ export function getConfigStatus(agents?: any[]): ConfigStatus {
         drifted,
       },
     },
+    // Where relative code-SDK `sourceFile`s are resolved (env > config > cwd)
+    // so the UI/CLI can tell the user where THIS server looks.
+    evalRoots: getEvalRootsStatus(),
     ...(warnings.length > 0 && { warnings }),
   };
 }
