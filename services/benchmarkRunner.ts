@@ -61,6 +61,7 @@ import { DEFAULT_CONFIG } from '@/lib/constants';
 import { tracePollingManager } from './traces/tracePoller';
 import { fetchSpansForRun, type TraceWindowAgent } from './traces/fetchSpansForRun';
 import { getCustomAgents } from '@/server/services/customAgentStore';
+import { reportProvenanceFrom } from '@/server/services/agentProvenance';
 import { debug } from '@/lib/debug';
 import { RunResultStatus } from '@/types';
 import {
@@ -627,6 +628,10 @@ export async function executeRun(
           // them. Mirrors the same stamp in runSingleUseCase.
           (report as any).judgeModelId = (report as any).judgeModelId ?? run.judgeModelId;
           (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
+          // Agent-configuration provenance mirror (run doc is the source of
+          // truth, stamped at creation by the execute route). Persisted via
+          // saveReportWithClient's explicit allow-list.
+          Object.assign(report as any, reportProvenanceFrom(run));
           // Eval test_case span traceId — Strategy A correlator for the trace
           // poller (see evaluationRunner for details).
           (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;

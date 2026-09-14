@@ -256,6 +256,46 @@ describe('Experiment Runner', () => {
       expect(savedReportArg.evaluatorId).toBe('eval-abc');
     });
 
+    it('mirrors the run\'s agent-configuration provenance onto every saved report (classic path)', async () => {
+      // lib/agentFingerprint.ts: the run doc is stamped at creation by the
+      // execute route; the runner copies the three hash fields onto each
+      // report so case-level comparisons can tell "same agent, different
+      // prompt" apart. The config SOURCE (path + sha) stays run-level only.
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      const run = {
+        ...createBenchmarkRun('run-1'),
+        agentFingerprint: 'f'.repeat(64), agentFingerprintShort: 'ffffffffffff', agentPromptHash: 'p'.repeat(64),
+        agentConfigSource: { path: '/cfg/agent-health.config.ts', gitSha: 'a'.repeat(40) },
+      };
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1]);
+      mockRunEvaluationWithConnector.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: { accuracy: 0.9 } });
+      mockSaveReportWithClient.mockImplementation((_c: any, report: any) =>
+        Promise.resolve({ ...report, id: 'saved-report-1', metricsStatus: 'ready' }));
+
+      await executeRun(experiment, run, jest.fn(), { client: mockClient });
+
+      const saved = mockSaveReportWithClient.mock.calls[0][1];
+      expect(saved.agentFingerprint).toBe('f'.repeat(64));
+      expect(saved.agentFingerprintShort).toBe('ffffffffffff');
+      expect(saved.agentPromptHash).toBe('p'.repeat(64));
+      expect(saved.agentConfigSource).toBeUndefined();
+    });
+
+    it('legacy run without provenance saves reports without provenance fields (no undefined keys stamped)', async () => {
+      const testCase1 = createTestCase('tc-1');
+      const experiment = createExperiment(['tc-1']);
+      mockGetAllTestCasesWithClient.mockResolvedValue([testCase1]);
+      mockRunEvaluationWithConnector.mockResolvedValue({ id: 'report-1', trajectory: [], metrics: {} });
+      mockSaveReportWithClient.mockImplementation((_c: any, report: any) =>
+        Promise.resolve({ ...report, id: 'saved-report-1', metricsStatus: 'ready' }));
+
+      await executeRun(experiment, createBenchmarkRun('run-1'), jest.fn(), { client: mockClient });
+
+      const saved = mockSaveReportWithClient.mock.calls[0][1];
+      expect('agentFingerprint' in saved).toBe(false);
+    });
+
     it('control inversion: deterministic body drives the agent via agent.run() (not the eager judge path)', async () => {
       const testCase1 = createTestCase('tc-1');
       const experiment = createExperiment(['tc-1']);

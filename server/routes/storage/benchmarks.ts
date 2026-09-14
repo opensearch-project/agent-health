@@ -32,6 +32,7 @@ import { getCustomAgents } from '../../services/customAgentStore.js';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '../../../lib/judgeFailureSummary.js';
 import { deleteRunEverywhere } from '../../services/runDelete.js';
 import { registerRunCanceller, cancelActiveRun } from '../../services/runCancellation.js';
+import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 
 /**
  * Normalize benchmark data for legacy documents without version fields.
@@ -1152,6 +1153,10 @@ router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Res
       benchmarkVersion: benchmark.currentVersion,
       testCaseSnapshots,
       results: {},
+      // Agent-configuration provenance (fingerprint + prompt hash + config
+      // file/sha) — same stamp as the unified evaluation-runs path so legacy
+      // benchmark runs are comparable on it too. See lib/agentFingerprint.ts.
+      ...(await resolveAgentProvenance(runConfig.agentKey, { agentEndpoint: runConfig.agentEndpoint })),
     };
 
     // Initialize pending status for all test cases

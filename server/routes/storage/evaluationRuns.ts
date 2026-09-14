@@ -34,6 +34,7 @@ import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
 import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.js';
 import { validateRunNameUpdate } from '../../../lib/runName.js';
 import { finalizeEvaluationRun } from '../../../services/evaluationRunFinalize.js';
+import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 
 const router = Router();
 
@@ -290,6 +291,10 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
       testCaseSnapshots: snapshots,
       results: {},
       createdAt: now,
+      // Agent-configuration provenance: WHICH version of this agent's config
+      // produced the numbers (fingerprint + prompt hash + config file/sha).
+      // See lib/agentFingerprint.ts. Spread of `undefined` is a no-op.
+      ...(await resolveAgentProvenance(agentKey, { agentEndpoint })),
     };
 
     // Stamp the content digest of this run's evaluation conditions and
@@ -362,6 +367,12 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
           ...(run.evaluatorId ? { evaluatorId: run.evaluatorId } : {}),
           ...(run.headers ? { headers: run.headers } : {}),
           ...(run.concurrency ? { concurrency: run.concurrency } : {}),
+          ...(run.agentFingerprint ? {
+            agentFingerprint: run.agentFingerprint,
+            agentFingerprintShort: run.agentFingerprintShort,
+            ...(run.agentPromptHash ? { agentPromptHash: run.agentPromptHash } : {}),
+            ...(run.agentConfigSource ? { agentConfigSource: run.agentConfigSource } : {}),
+          } : {}),
           testCaseSnapshots: run.testCaseSnapshots,
         };
         const linked = await storage.benchmarks.addRun(benchmarkId, benchmarkRun);
@@ -587,6 +598,10 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
       benchmarkVersion: config.benchmarkVersion,
       rerunOf: sourceRun.id,
       ...(modified ? { modified: true } : {}),
+      // The re-run naturally gets the CURRENT agent config's fingerprint; the
+      // inspector compares it with the source run's to say "config changed
+      // since source run". See lib/agentFingerprint.ts.
+      ...(await resolveAgentProvenance(config.agentKey, { agentEndpoint: config.agentEndpoint })),
     };
 
     await storage.evaluationRuns.create(newRun);
