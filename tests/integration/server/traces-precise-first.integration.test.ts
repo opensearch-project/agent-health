@@ -100,6 +100,8 @@ describe('precise-first trace correlation (integration, file backend)', () => {
       { traceId: TRACE_A, spanId: 'a000000000000003', parentSpanId: 'a000000000000001', name: 'execute_tool search', startMs: T0 + 200, attrs: { 'gen_ai.conversation.id': RUN_A } },
       { traceId: TRACE_B, spanId: 'b000000000000001', name: 'POST /invoke', startMs: T0 + 1_000, attrs: { 'gen_ai.conversation.id': RUN_B } },
       { traceId: TRACE_B, spanId: 'b000000000000002', parentSpanId: 'b000000000000001', name: 'chat', startMs: T0 + 1_100, attrs: { 'agent_health.run.id': RUN_B } },
+      // Identity-less child of run B (HTTP client span): must follow its trace, not survive as an orphan.
+      { traceId: TRACE_B, spanId: 'b000000000000003', parentSpanId: 'b000000000000002', name: 'GET /search', startMs: T0 + 1_150 },
       // Run C: a Strategy-C-only agent — no run id, no session id, its own trace.
       { traceId: TRACE_C, spanId: 'c000000000000001', name: 'POST /invoke', startMs: T0 + 2_000 },
       { traceId: TRACE_C, spanId: 'c000000000000002', parentSpanId: 'c000000000000001', name: 'chat', startMs: T0 + 2_100 },
@@ -144,6 +146,7 @@ describe('precise-first trace correlation (integration, file backend)', () => {
     // RUN_B is carried by gen_ai.conversation.id on the root and agent_health.run.id on the child.
     const b = await request(app).post('/api/traces').send({ runIds: [RUN_B], agents: window }).expect(200);
     expect(b.body.spans.map((s: any) => s.spanId).sort()).toEqual(['b000000000000001', 'b000000000000002']);
+    // (b…03 carries no run id, so an exact runIds query can't see it — that is Strategy A's job.)
     expect(b.body.correlation.strategy).toBe('runIds');
   });
 
@@ -160,10 +163,11 @@ describe('precise-first trace correlation (integration, file backend)', () => {
       .expect(200);
 
     const spans = res.body.spans;
-    // Kept: run C's untagged tree. Dropped: A (3), B (2) by run id and D (1) by session.id.
+    // Kept: run C's untagged tree. Dropped: A (3), B (3 — incl. the identity-less
+    // child, which follows its trace) by run id and D (1) by session.id.
     expect(spans.map((s: any) => s.spanId).sort()).toEqual(['c000000000000001', 'c000000000000002']);
     expect(roots(spans)).toHaveLength(1);
-    expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 6 });
+    expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 7 });
     expect(res.body.total).toBe(2);
   });
 
@@ -173,12 +177,12 @@ describe('precise-first trace correlation (integration, file backend)', () => {
       .expect(200);
     expect(res.body.spans.map((s: any) => s.spanId).sort())
       .toEqual(['c000000000000001', 'c000000000000002', 'd000000000000001']);
-    expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 5 });
+    expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 6 });
   });
 
   it('an exact query with no window hint behaves as before (single query, labelled)', async () => {
     const res = await request(app).post('/api/traces').send({ traceId: TRACE_B }).expect(200);
-    expect(res.body.spans).toHaveLength(2);
+    expect(res.body.spans).toHaveLength(3);
     expect(res.body.correlation).toEqual({ strategy: 'traceId', windowFiltered: 0 });
   });
 

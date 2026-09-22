@@ -101,16 +101,27 @@ export function spanRunIds(span: Span): string[] {
   );
 }
 
+function spanSessionId(span: Span): string | undefined {
+  const sid = attr(span, 'session.id');
+  return typeof sid === 'string' && sid.length > 0 ? sid : undefined;
+}
+
 /**
  * Post-filter for window (Strategy C) results: drop spans that positively
- * identify themselves as belonging to ANOTHER run. A span is dropped when
- *   - it carries a run-id attribute and none of its values is a requested
- *     run id (only checked when the caller asked for run ids), or
- *   - it carries `session.id` and that is not a requested session id (only
- *     checked when the caller asked for one).
- * Spans without those attributes are kept — Strategy C exists for them.
- * `traceId` is deliberately NOT compared: agents that reach the window
- * fallback don't propagate W3C context, so their trace ids never match.
+ * identify themselves as belonging to ANOTHER run. Identity is resolved per
+ * TRACE, not just per span — a run's root usually carries the run id while
+ * its HTTP/DB children don't, and those children must follow their root
+ * (measured live: 13 of 72 window spans were identity-less children of
+ * other runs' roots). A span is dropped when
+ *   - its trace carries a run-id attribute on any span and none of those
+ *     values is a requested run id (only checked when the caller asked for
+ *     run ids), or
+ *   - its trace carries `session.id` on any span and none is a requested
+ *     session id (only checked when the caller asked for one).
+ * Traces without any such attribute are kept whole — Strategy C exists for
+ * them. `traceId` equality is deliberately NOT required: agents that reach
+ * the window fallback don't propagate W3C context, so their trace ids never
+ * match the eval span's.
  */
 export function filterWindowSpans(
   spans: Span[],
@@ -118,15 +129,30 @@ export function filterWindowSpans(
 ): { kept: Span[]; filtered: number } {
   const runIds = new Set(identity.runIds);
   const sessionIds = new Set(identity.sessionIds);
+
+  // Per-trace identity: the union of every run id / session id seen on any
+  // span of that trace (a span with no traceId is judged on its own).
+  const traceRunIds = new Map<string, Set<string>>();
+  const traceSessionIds = new Map<string, Set<string>>();
+  const addTo = (map: Map<string, Set<string>>, key: string, value: string) => {
+    const set = map.get(key) ?? new Set<string>();
+    set.add(value);
+    map.set(key, set);
+  };
+  for (const span of spans) {
+    if (!span.traceId) continue;
+    for (const id of spanRunIds(span)) addTo(traceRunIds, span.traceId, id);
+    const sid = spanSessionId(span);
+    if (sid) addTo(traceSessionIds, span.traceId, sid);
+  }
+
   const kept = spans.filter((span) => {
-    if (runIds.size > 0) {
-      const own = spanRunIds(span);
-      if (own.length > 0 && !own.some((id) => runIds.has(id))) return false;
-    }
-    if (sessionIds.size > 0) {
-      const sid = attr(span, 'session.id');
-      if (typeof sid === 'string' && sid.length > 0 && !sessionIds.has(sid)) return false;
-    }
+    const ownRunIds = span.traceId ? traceRunIds.get(span.traceId) : new Set(spanRunIds(span));
+    if (runIds.size > 0 && ownRunIds && ownRunIds.size > 0 && ![...ownRunIds].some((id) => runIds.has(id))) return false;
+    const ownSessionIds = span.traceId
+      ? traceSessionIds.get(span.traceId)
+      : new Set([spanSessionId(span)].filter((v): v is string => !!v));
+    if (sessionIds.size > 0 && ownSessionIds && ownSessionIds.size > 0 && ![...ownSessionIds].some((id) => sessionIds.has(id))) return false;
     return true;
   });
   return { kept, filtered: spans.length - kept.length };
