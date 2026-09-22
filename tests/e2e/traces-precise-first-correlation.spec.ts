@@ -112,13 +112,16 @@ test.describe('Run report Traces tab — precise-first correlation', () => {
   test.beforeAll(async ({ request }) => {
     if (!(await fileBackend(request))) return;
     // Run A and run B: same service, overlapping wall-clock, each tagged with
-    // its own run id via the OTEL-standard gen_ai.conversation.id. Run C: a
-    // Strategy-C-only agent — its spans carry neither run id nor our trace id.
+    // its own run id (A via the OTEL-standard attribute, B via ours). Run C's
+    // agent is Strategy-C-only — its spans carry neither run id nor our trace
+    // id (the 'dddd' tree). A third-party-id tree ('ffff') fills the OTEL
+    // ids with its own thread id and must never be mistaken for another run.
     await request.post('/v1/traces', {
       data: otlpPayload([
         ...tree(TRACE_A, 'a', T0, 'search products', { 'gen_ai.conversation.id': RUN_A }),
-        ...tree(TRACE_B, 'b', T0 + 2_000, 'search orders', { 'gen_ai.conversation.id': RUN_B }),
+        ...tree(TRACE_B, 'b', T0 + 2_000, 'search orders', { 'agent_health.run.id': RUN_B, 'gen_ai.conversation.id': RUN_B }),
         ...tree(hex32('dddd'), 'd', T0 + 4_000, 'search inventory'),
+        ...tree(hex32('ffff'), 'f', T0 + 6_000, 'search reviews', { 'gen_ai.conversation.id': 'thread-42' }),
       ]),
     });
     await request.post('/api/storage/runs', { data: report(REPORT_A, RUN_A, TRACE_A) });
@@ -152,22 +155,27 @@ test.describe('Run report Traces tab — precise-first correlation', () => {
     await expect(caption).toHaveAttribute('data-strategy', 'traceId');
   });
 
-  test('a Strategy-C-only run falls back to the window, drops other runs\' spans and says so', async ({ page, request }) => {
+  test('a Strategy-C-only run falls back to the window, drops other runs\' traces and says so', async ({ page, request }) => {
     test.skip(!(await fileBackend(request)), 'needs the file trace backend (no OpenSearch observability cluster)');
 
     const body = await openTracesTab(page, REPORT_C);
 
     const spans: any[] = body.spans;
-    // Only the untagged tree survives; A (3) and B (3) are dropped as other runs.
-    expect(spans).toHaveLength(3);
-    expect(spans.filter((s) => !s.parentSpanId)).toHaveLength(1);
+    // Run B (Agent Health's own run id, another run) is dropped whole; run A
+    // (OTEL-standard id only — positive-match attribute, never negative
+    // evidence), the untagged tree and the third-party-id tree are kept.
+    expect(spans.some((s) => s.name.includes('search orders'))).toBe(false);
+    expect(spans.some((s) => s.attributes?.['agent_health.run.id'])).toBe(false);
     expect(spans.some((s) => s.name.includes('search inventory'))).toBe(true);
-    expect(spans.some((s) => s.attributes?.['gen_ai.conversation.id'])).toBe(false);
-    expect(body.correlation).toEqual({ strategy: 'window', windowFiltered: 6 });
+    expect(spans.some((s) => s.name.includes('search reviews'))).toBe(true);
+    expect(spans).toHaveLength(9);
+    expect(spans.filter((s) => !s.parentSpanId)).toHaveLength(3);
+    expect(body.correlation).toEqual({ strategy: 'window', windowFiltered: 3 });
 
     await expect(page.getByTestId('trace-timeline-chart')).toBeVisible();
+    await expect(page.getByRole('tab', { name: /Traces/ })).toContainText('9');
     const caption = page.getByTestId('trace-correlation-caption');
-    await expect(caption).toHaveText('Matched by service-name window — 6 spans from other runs filtered');
+    await expect(caption).toHaveText('Matched by service-name window — 3 spans from other runs filtered');
     await expect(caption).toHaveAttribute('data-strategy', 'window');
   });
 });

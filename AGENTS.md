@@ -386,16 +386,25 @@ it as a **fallback, not a peer** (precise-first; see
 
 1. The exact correlators present on the request — `traceId` (A), `runIds`
    (B), `sessionId` (D) — are queried first, unioned with each other.
-2. Only when that returns **zero** spans is the window clause queried.
-3. The window result is post-filtered by run identity, resolved **per
-   trace**: if any span of a trace carries a run-id attribute
-   (`agent_health.run.id` / `gen_ai.conversation.id`) or `session.id` and
-   none of those values is the requested run/session, the whole trace is
-   dropped (a run's root usually carries the id; its HTTP/DB children don't
-   and must follow it). Traces that carry none of those attributes are kept
-   (that is exactly the population Strategy C exists for). `traceId`
-   equality is deliberately not required — agents that reach the fallback
-   don't propagate W3C context.
+2. If that returns any of the **agent's** spans, that is the answer; the
+   window is never consulted. Agent Health's own eval/judge spans
+   (`test_case`, `gen_ai.operation.name = evaluation`) do not count as a
+   hit — the eval span sits on the requested trace and carries the run id
+   itself, so for a Strategy-C-only agent the exact query returns exactly
+   that one span, which must not suppress the fallback.
+3. Otherwise the window clause is queried and post-filtered by run identity,
+   resolved **per trace**: if any span of a trace carries Agent Health's own
+   `agent_health.run.id` and none of those values is the requested run id,
+   the whole trace is dropped (a run's root usually carries the id; its
+   HTTP/DB children don't and must follow it). Only our own attribute is
+   negative evidence — `gen_ai.conversation.id` and `session.id` are
+   OTEL-standard ids a third-party agent may legitimately fill with its own
+   thread/session id, so a mismatch there proves nothing and those traces
+   are kept (as are traces with no identity at all — that is exactly the
+   population Strategy C exists for). `traceId` equality is deliberately not
+   required — agents that reach the fallback don't propagate W3C context.
+   Any eval/judge spans the exact query did find are kept in front of the
+   window result.
 4. The response reports what happened: `correlation: { strategy:
    'traceId' | 'runIds' | 'sessionId' | 'window', windowFiltered: n }`,
    and the Traces tab captions it ("Matched by trace id" / "Matched by
@@ -407,10 +416,11 @@ unioned in — a benchmark at concurrency 3–5 rendered three root spans / 60+
 spans for a single invocation. Callers should therefore pass **every**
 correlator they have (`fetchTracesForRun({ runId, traceId, sessionId,
 windowAgents })`); the more exact ids on the request, the less often the
-window is consulted. Consequence for agent authors: an agent that relies on
-the window (no A/B/D) but stamps `gen_ai.conversation.id` with its own
-non-run id will have those spans filtered — adopt A (propagate
-`TRACEPARENT`) or set the attribute to `AGENT_EVAL_RUN_ID` instead.
+window is consulted. Consequence for agent authors: stamping
+`agent_health.run.id = AGENT_EVAL_RUN_ID` (or propagating `TRACEPARENT`) is
+what lets neighbouring runs of your agent be told apart when the window is
+the only correlator left; the OTEL-standard ids alone match positively but
+never exclude.
 
 This strategy was originally opt-in via a UI checkbox — the noise risk it can
 surface is real (concurrent runs of the same agent on overlapping windows,

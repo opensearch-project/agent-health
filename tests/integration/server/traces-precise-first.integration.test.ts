@@ -91,22 +91,22 @@ describe('precise-first trace correlation (integration, file backend)', () => {
     app.use(otlpReceiverRoutes);
     app.use(tracesRoutes);
 
-    // Run A and run B: same service, overlapping wall-clock, each tagged
-    // with its own run id (the OTEL-standard attribute on A, our own on B's
-    // child, to cover both RUN_ID_ATTRIBUTES).
+    // Run A and run B: same service, overlapping wall-clock. A is tagged with
+    // the OTEL-standard attribute (positive matching honours both), B with
+    // Agent Health's own attribute (the only one used as negative evidence).
     await request(app).post('/v1/traces').send(otlpPayload([
       { traceId: TRACE_A, spanId: 'a000000000000001', name: 'POST /invoke', startMs: T0, attrs: { 'gen_ai.conversation.id': RUN_A } },
       { traceId: TRACE_A, spanId: 'a000000000000002', parentSpanId: 'a000000000000001', name: 'chat', startMs: T0 + 100, attrs: { 'gen_ai.conversation.id': RUN_A } },
       { traceId: TRACE_A, spanId: 'a000000000000003', parentSpanId: 'a000000000000001', name: 'execute_tool search', startMs: T0 + 200, attrs: { 'gen_ai.conversation.id': RUN_A } },
-      { traceId: TRACE_B, spanId: 'b000000000000001', name: 'POST /invoke', startMs: T0 + 1_000, attrs: { 'gen_ai.conversation.id': RUN_B } },
+      { traceId: TRACE_B, spanId: 'b000000000000001', name: 'POST /invoke', startMs: T0 + 1_000, attrs: { 'agent_health.run.id': RUN_B, 'gen_ai.conversation.id': RUN_B } },
       { traceId: TRACE_B, spanId: 'b000000000000002', parentSpanId: 'b000000000000001', name: 'chat', startMs: T0 + 1_100, attrs: { 'agent_health.run.id': RUN_B } },
       // Identity-less child of run B (HTTP client span): must follow its trace, not survive as an orphan.
       { traceId: TRACE_B, spanId: 'b000000000000003', parentSpanId: 'b000000000000002', name: 'GET /search', startMs: T0 + 1_150 },
       // Run C: a Strategy-C-only agent — no run id, no session id, its own trace.
       { traceId: TRACE_C, spanId: 'c000000000000001', name: 'POST /invoke', startMs: T0 + 2_000 },
       { traceId: TRACE_C, spanId: 'c000000000000002', parentSpanId: 'c000000000000001', name: 'chat', startMs: T0 + 2_100 },
-      // A span of another session (Strategy D identity) inside the window.
-      { traceId: 'dddd4444dddd4444dddd4444dddd4444', spanId: 'd000000000000001', name: 'POST /invoke', startMs: T0 + 3_000, attrs: { 'session.id': 'sess-other' } },
+      // A third-party agent filling the OTEL-standard ids with its own thread/session id — NOT another run.
+      { traceId: 'dddd4444dddd4444dddd4444dddd4444', spanId: 'd000000000000001', name: 'POST /invoke', startMs: T0 + 3_000, attrs: { 'session.id': 'sess-other', 'gen_ai.conversation.id': 'thread-42' } },
     ])).expect(200);
   });
 
@@ -156,28 +156,54 @@ describe('precise-first trace correlation (integration, file backend)', () => {
     expect(res.body.correlation).toEqual({ strategy: 'sessionId', windowFiltered: 0 });
   });
 
-  it('falls back to the window ONLY when the exact clauses match nothing, and drops other runs\' spans', async () => {
+  it('falls back to the window ONLY when the exact clauses match nothing, and drops other runs\' traces', async () => {
     // Run C's report has a runId/traceId the agent never stamped (Strategy-C agent).
     const res = await request(app).post('/api/traces')
       .send({ traceId: 'ffff0000ffff0000ffff0000ffff0000', runIds: [RUN_C], sessionId: 'sess-c', agents: window, size: 1000 })
       .expect(200);
 
     const spans = res.body.spans;
-    // Kept: run C's untagged tree. Dropped: A (3), B (3 — incl. the identity-less
-    // child, which follows its trace) by run id and D (1) by session.id.
-    expect(spans.map((s: any) => s.spanId).sort()).toEqual(['c000000000000001', 'c000000000000002']);
-    expect(roots(spans)).toHaveLength(1);
-    expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 7 });
-    expect(res.body.total).toBe(2);
+    // Dropped: run B's whole trace (3 spans, incl. the identity-less child) —
+    // its agent_health.run.id names another run. Kept: run C's untagged tree,
+    // run A (OTEL-standard id only: positive-match attribute, never negative
+    // evidence) and the third-party-id trace.
+    expect(spans.map((s: any) => s.spanId).filter((id: string) => id.startsWith('b'))).toEqual([]);
+    expect(spans.map((s: any) => s.spanId).sort()).toEqual([
+      'a000000000000001', 'a000000000000002', 'a000000000000003',
+      'c000000000000001', 'c000000000000002',
+      'd000000000000001',
+    ]);
+    expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 3 });
+    expect(res.body.total).toBe(6);
   });
 
-  it('window fallback without a requested sessionId keeps other-session spans (nothing to compare against)', async () => {
+  it("an exact result holding only Agent Health's eval span does not suppress the window", async () => {
+    // Run E: the eval `test_case` span is on the requested trace and carries the
+    // run id; the agent itself emitted nothing correlatable (Strategy-C agent).
+    const TRACE_E = 'eeee5555eeee5555eeee5555eeee5555';
+    await request(app).post('/v1/traces').send({
+      resourceSpans: [{
+        resource: { attributes: [{ key: 'service.name', value: { stringValue: 'agent-health' } }] },
+        scopeSpans: [{ scope: { name: 'agent-health' }, spans: [{
+          traceId: TRACE_E, spanId: 'e000000000000001', name: 'test_case', kind: 1,
+          startTimeUnixNano: NS(T0 + 1_900), endTimeUnixNano: NS(T0 + 3_000),
+          attributes: [
+            { key: 'gen_ai.operation.name', value: { stringValue: 'evaluation' } },
+            { key: 'agent_health.run.id', value: { stringValue: 'run-e' } },
+          ],
+          status: { code: 1 },
+        }] }],
+      }],
+    }).expect(200);
+
     const res = await request(app).post('/api/traces')
-      .send({ runIds: [RUN_C], agents: window, size: 1000 })
+      .send({ traceId: TRACE_E, runIds: ['run-e'], agents: window, size: 1000 })
       .expect(200);
-    expect(res.body.spans.map((s: any) => s.spanId).sort())
-      .toEqual(['c000000000000001', 'c000000000000002', 'd000000000000001']);
-    expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 6 });
+    const ids = res.body.spans.map((s: any) => s.spanId);
+    expect(ids[0]).toBe('e000000000000001');                 // our eval span, kept in front
+    expect(ids).toContain('c000000000000001');                // window spans follow
+    expect(ids.some((id: string) => id.startsWith('b'))).toBe(false); // run B still dropped
+    expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 3 });
   });
 
   it('an exact query with no window hint behaves as before (single query, labelled)', async () => {

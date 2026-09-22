@@ -503,7 +503,7 @@ describe('Traces Routes', () => {
     describe('precise-first correlation (exact clauses before the service-name window)', () => {
       const WINDOW = [{ serviceName: 'retrieval-agent', startedAt: 1_000, endedAt: 900_000 }];
       const mine = { traceId: 'trace-mine', spanId: 'm1', name: 'invoke_agent', attributes: { 'gen_ai.conversation.id': 'run-mine' } };
-      const other = { traceId: 'trace-other', spanId: 'o1', name: 'invoke_agent', attributes: { 'gen_ai.conversation.id': 'run-other' } };
+      const other = { traceId: 'trace-other', spanId: 'o1', name: 'invoke_agent', attributes: { 'agent_health.run.id': 'run-other' } };
       const untagged = { traceId: 'trace-x', spanId: 'u1', name: 'chat', attributes: {} };
 
       it('runs ONLY the exact query (no agents clause) when it matches, and labels the strategy', async () => {

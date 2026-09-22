@@ -10,8 +10,8 @@
  * concurrency > 1 the service-name window (Strategy C) matched neighbouring
  * runs of the same agent and the server unioned them with the exact
  * traceId/runId matches. The exact clauses must now run FIRST, the window
- * only on an empty exact result, and window spans naming another run must be
- * dropped.
+ * only when they found none of the agent's spans, and window traces that
+ * carry Agent Health's own run id for another run must be dropped.
  */
 
 import {
@@ -19,6 +19,7 @@ import {
   filterWindowSpans,
   pickDirectStrategy,
   hasDirectCorrelator,
+  hasAgentSpans,
   spanRunIds,
 } from '@/server/services/traceCorrelation';
 import type { TracesQueryOptions } from '@/server/adapters/types';
@@ -47,10 +48,13 @@ const B_RUN = 'run-b';
 
 const aRoot = span({ traceId: A_TRACE, spanId: 'a-root', attributes: { 'service.name': 'retrieval-agent', 'gen_ai.conversation.id': A_RUN } });
 const aChild = span({ traceId: A_TRACE, spanId: 'a-child', parentSpanId: 'a-root', attributes: { 'service.name': 'retrieval-agent', 'agent_health.run.id': A_RUN } });
-const bRoot = span({ traceId: B_TRACE, spanId: 'b-root', attributes: { 'service.name': 'retrieval-agent', 'gen_ai.conversation.id': B_RUN } });
-const bChild = span({ traceId: B_TRACE, spanId: 'b-child', parentSpanId: 'b-root', attributes: { 'service.name': 'retrieval-agent', 'agent_health.run.id': B_RUN } });
+// Agent Health's own eval span for run A: on the requested trace AND carrying the run id.
+const aEval = span({ traceId: A_TRACE, spanId: 'a-eval', name: 'test_case', attributes: { 'service.name': 'agent-health', 'gen_ai.operation.name': 'evaluation', 'agent_health.run.id': A_RUN, 'gen_ai.conversation.id': A_RUN } });
+const bRoot = span({ traceId: B_TRACE, spanId: 'b-root', attributes: { 'service.name': 'retrieval-agent', 'agent_health.run.id': B_RUN } });
+const bChild = span({ traceId: B_TRACE, spanId: 'b-child', parentSpanId: 'b-root', attributes: { 'service.name': 'retrieval-agent' } });
 const untagged = span({ traceId: 'cccc0000cccc0000cccc0000cccc0000', spanId: 'c-untagged', attributes: { 'service.name': 'retrieval-agent' } });
-const sessOther = span({ traceId: 'dddd0000dddd0000dddd0000dddd0000', spanId: 'd-sess', attributes: { 'service.name': 'retrieval-agent', 'session.id': 'sess-other' } });
+// A third-party agent filling the OTEL-standard ids with ITS OWN thread/session id — not evidence of another run.
+const thirdParty = span({ traceId: 'dddd0000dddd0000dddd0000dddd0000', spanId: 'd-thread', attributes: { 'service.name': 'retrieval-agent', 'gen_ai.conversation.id': 'thread-42', 'session.id': 'sess-other' } });
 const sessMine = span({ traceId: 'eeee0000eeee0000eeee0000eeee0000', spanId: 'e-sess', attributes: { 'service.name': 'retrieval-agent', 'session.id': 'sess-mine' } });
 
 const WINDOW = [{ serviceName: 'retrieval-agent', startedAt: T0 - 60_000, endedAt: T0 + 60_000 }];
@@ -83,63 +87,60 @@ describe('traceCorrelation — precise-first', () => {
     });
   });
 
-  describe('spanRunIds', () => {
+  describe('spanRunIds / hasAgentSpans', () => {
     it('reads both agent_health.run.id and gen_ai.conversation.id', () => {
       expect(spanRunIds(aRoot)).toEqual([A_RUN]);
       expect(spanRunIds(aChild)).toEqual([A_RUN]);
       expect(spanRunIds(span({ attributes: { 'agent_health.run.id': 'x', 'gen_ai.conversation.id': 'y' } }))).toEqual(['x', 'y']);
       expect(spanRunIds(untagged)).toEqual([]);
     });
+
+    it("hasAgentSpans ignores Agent Health's own eval/judge spans", () => {
+      expect(hasAgentSpans([aEval])).toBe(false);
+      expect(hasAgentSpans([aEval, span({ name: 'test_suite_run demo' , attributes: {} })])).toBe(false);
+      expect(hasAgentSpans([aEval, aRoot])).toBe(true);
+      expect(hasAgentSpans([])).toBe(false);
+    });
   });
 
   describe('filterWindowSpans (run-identity post-filter)', () => {
-    it('drops spans whose gen_ai.conversation.id / agent_health.run.id name another run, keeps untagged spans', () => {
-      const { kept, filtered } = filterWindowSpans([aRoot, aChild, bRoot, bChild, untagged], { runIds: [A_RUN], sessionIds: [] });
+    it('drops traces whose agent_health.run.id names another run; keeps untagged traces', () => {
+      const { kept, filtered } = filterWindowSpans([aRoot, aChild, bRoot, bChild, untagged], { runIds: [A_RUN] });
       expect(kept.map((s) => s.spanId)).toEqual(['a-root', 'a-child', 'c-untagged']);
       expect(filtered).toBe(2);
     });
 
-    it('drops spans whose session.id names another session, keeps the requested one and untagged spans', () => {
-      const { kept, filtered } = filterWindowSpans([sessMine, sessOther, untagged], { runIds: [], sessionIds: ['sess-mine'] });
-      expect(kept.map((s) => s.spanId)).toEqual(['e-sess', 'c-untagged']);
-      expect(filtered).toBe(1);
-    });
-
-    it('does not filter on an identity the caller did not request', () => {
-      // No runIds requested → run-id attributes are not evidence of a foreign run.
-      expect(filterWindowSpans([bRoot, sessOther], { runIds: [], sessionIds: [] }).filtered).toBe(0);
-      // Only a session requested → run-id attributes are ignored, session.id is not.
-      const r = filterWindowSpans([bRoot, sessOther, sessMine], { runIds: [], sessionIds: ['sess-mine'] });
-      expect(r.kept.map((s) => s.spanId)).toEqual(['b-root', 'e-sess']);
-    });
-
     it('resolves identity per TRACE: identity-less children follow a root that names another run', () => {
-      // Run B's root carries the id; its HTTP/DB children don't. Pre-fix those
-      // children survived the filter as orphans (13 of 72 spans, measured live).
+      // Run B's root carries the id; its HTTP/DB children don't. Judged span by
+      // span those children survived as orphans (13 of 72 spans, measured live).
       const bHttp = span({ traceId: B_TRACE, spanId: 'b-http', parentSpanId: 'b-root', attributes: { 'service.name': 'retrieval-agent' } });
       const bDb = span({ traceId: B_TRACE, spanId: 'b-db', parentSpanId: 'b-http', attributes: { 'service.name': 'retrieval-agent', 'db.system.name': 'opensearch' } });
-      const { kept, filtered } = filterWindowSpans([bRoot, bHttp, bDb, untagged], { runIds: [A_RUN], sessionIds: [] });
+      const { kept, filtered } = filterWindowSpans([bRoot, bHttp, bDb, untagged], { runIds: [A_RUN] });
       expect(kept.map((s) => s.spanId)).toEqual(['c-untagged']);
       expect(filtered).toBe(3);
     });
 
     it('keeps a whole trace when any of its spans names the requested run', () => {
       const aHttp = span({ traceId: A_TRACE, spanId: 'a-http', parentSpanId: 'a-root', attributes: { 'service.name': 'retrieval-agent' } });
-      const { kept } = filterWindowSpans([aRoot, aHttp, bRoot], { runIds: [A_RUN], sessionIds: [] });
-      expect(kept.map((s) => s.spanId)).toEqual(['a-root', 'a-http']);
+      const { kept } = filterWindowSpans([aChild, aHttp, bRoot], { runIds: [A_RUN] });
+      expect(kept.map((s) => s.spanId)).toEqual(['a-child', 'a-http']);
     });
 
-    it('resolves session identity per trace too, and judges a traceId-less span on its own attributes', () => {
-      const otherChild = span({ traceId: 'dddd0000dddd0000dddd0000dddd0000', spanId: 'd-child', parentSpanId: 'd-sess', attributes: { 'service.name': 'retrieval-agent' } });
-      const loose = { ...span({ spanId: 'loose', attributes: { 'service.name': 'retrieval-agent', 'session.id': 'sess-other' } }), traceId: undefined } as unknown as Span;
-      const { kept, filtered } = filterWindowSpans([sessOther, otherChild, sessMine, loose, untagged], { runIds: [], sessionIds: ['sess-mine'] });
-      expect(kept.map((s) => s.spanId)).toEqual(['e-sess', 'c-untagged']);
-      expect(filtered).toBe(3);
+    it('uses ONLY agent_health.run.id as negative evidence — a foreign gen_ai.conversation.id / session.id is not proof of another run', () => {
+      const { kept, filtered } = filterWindowSpans([thirdParty, sessMine, untagged], { runIds: [A_RUN] });
+      expect(kept.map((s) => s.spanId)).toEqual(['d-thread', 'e-sess', 'c-untagged']);
+      expect(filtered).toBe(0);
     });
 
     it('never compares traceId (window-fallback agents do not propagate W3C context)', () => {
       const foreignTrace = span({ traceId: 'zzzz', spanId: 'z', attributes: { 'service.name': 'retrieval-agent' } });
-      expect(filterWindowSpans([foreignTrace], { runIds: [A_RUN], sessionIds: ['sess-mine'] }).kept).toHaveLength(1);
+      expect(filterWindowSpans([foreignTrace], { runIds: [A_RUN] }).kept).toHaveLength(1);
+    });
+
+    it('judges a traceId-less span on its own attributes and is a no-op without requested run ids', () => {
+      const loose = { ...span({ spanId: 'loose', attributes: { 'agent_health.run.id': B_RUN } }), traceId: undefined } as unknown as Span;
+      expect(filterWindowSpans([loose, untagged], { runIds: [A_RUN] }).kept.map((s) => s.spanId)).toEqual(['c-untagged']);
+      expect(filterWindowSpans([bRoot, loose], { runIds: [] }).filtered).toBe(0);
     });
   });
 
@@ -158,12 +159,12 @@ describe('traceCorrelation — precise-first', () => {
   });
 
   describe('queryTracesPreciseFirst', () => {
-    it('direct + window: returns ONLY the exact matches and never consults the window when they are non-empty', async () => {
-      // The reporter's shape: trace id matches 2 spans; the window would add run B (2 more roots).
-      const be = fakeBackend([aRoot, aChild], [aRoot, aChild, bRoot, bChild]);
+    it('direct + window: returns ONLY the exact matches and never consults the window when they hold agent spans', async () => {
+      // The reporter's shape: trace id matches the run's tree; the window would add run B (more roots).
+      const be = fakeBackend([aEval, aRoot, aChild], [aRoot, aChild, bRoot, bChild]);
       const res = await queryTracesPreciseFirst(be.query, { traceId: A_TRACE, runIds: [A_RUN], agents: WINDOW, size: 1000 });
 
-      expect(res.spans.map((s) => s.spanId)).toEqual(['a-root', 'a-child']);
+      expect(res.spans.map((s) => s.spanId)).toEqual(['a-eval', 'a-root', 'a-child']);
       expect(res.correlation).toEqual({ strategy: 'traceId', windowFiltered: 0 });
       expect(be.calls).toHaveLength(1);
       // Direct query carries the exact clauses and NO window.
@@ -171,8 +172,8 @@ describe('traceCorrelation — precise-first', () => {
       expect(be.calls[0].agents).toBeUndefined();
     });
 
-    it('direct + window: falls back to the window ONLY when the exact query is empty, and post-filters other runs', async () => {
-      const be = fakeBackend([], [untagged, bRoot, bChild, sessOther]);
+    it('direct + window: falls back to the window when the exact query is empty, dropping other runs\' traces', async () => {
+      const be = fakeBackend([], [untagged, bRoot, bChild, thirdParty]);
       const res = await queryTracesPreciseFirst(be.query, {
         traceId: A_TRACE, runIds: [A_RUN], sessionId: 'sess-mine', agents: WINDOW,
       });
@@ -184,9 +185,37 @@ describe('traceCorrelation — precise-first', () => {
       expect(be.calls[1].runIds).toBeUndefined();
       expect(be.calls[1].sessionId).toBeUndefined();
 
-      expect(res.spans.map((s) => s.spanId)).toEqual(['c-untagged']);
-      expect(res.correlation).toEqual({ strategy: 'window', windowFiltered: 3 });
-      expect(res.total).toBe(1);
+      // Run B (our own run id, another run) is dropped; the untagged trace and
+      // the third-party-id trace are kept — neither proves it is another run.
+      expect(res.spans.map((s) => s.spanId)).toEqual(['c-untagged', 'd-thread']);
+      expect(res.correlation).toEqual({ strategy: 'window', windowFiltered: 2 });
+      expect(res.total).toBe(2);
+    });
+
+    it("an exact result holding ONLY Agent Health's eval span is not a hit: the window still runs and the eval span is kept in front", async () => {
+      // A Strategy-C-only agent: the eval `test_case` span sits on the requested
+      // trace and carries the run id, so the direct query returns exactly it.
+      const be = fakeBackend([aEval], [untagged, bRoot]);
+      const res = await queryTracesPreciseFirst(be.query, { traceId: A_TRACE, runIds: [A_RUN], agents: WINDOW });
+
+      expect(be.calls).toHaveLength(2);
+      expect(res.spans.map((s) => s.spanId)).toEqual(['a-eval', 'c-untagged']);
+      expect(res.correlation).toEqual({ strategy: 'window', windowFiltered: 1 });
+      expect(res.total).toBe(2);
+    });
+
+    it('eval-only exact result + empty window → returns the eval span labelled by how it was found', async () => {
+      const be = fakeBackend([aEval], []);
+      const res = await queryTracesPreciseFirst(be.query, { traceId: A_TRACE, runIds: [A_RUN], agents: WINDOW });
+      expect(be.calls).toHaveLength(2);
+      expect(res.spans.map((s) => s.spanId)).toEqual(['a-eval']);
+      expect(res.correlation).toEqual({ strategy: 'traceId', windowFiltered: 0 });
+    });
+
+    it('de-duplicates a span present in both the exact and the window result', async () => {
+      const be = fakeBackend([aEval], [aEval, untagged]);
+      const res = await queryTracesPreciseFirst(be.query, { runIds: [A_RUN], agents: WINDOW });
+      expect(res.spans.map((s) => s.spanId)).toEqual(['a-eval', 'c-untagged']);
     });
 
     it('labels runIds / sessionId matches when there is no traceId hit', async () => {
@@ -197,14 +226,14 @@ describe('traceCorrelation — precise-first', () => {
       expect((await queryTracesPreciseFirst(bySession.query, { sessionId: 'sess-mine', agents: WINDOW })).correlation.strategy).toBe('sessionId');
     });
 
-    it('window-only (no exact correlator): single query, post-filtered against agents[].sessionId', async () => {
-      const be = fakeBackend([], [sessMine, sessOther, untagged]);
+    it('window-only (no exact correlator): single query, nothing to filter against', async () => {
+      const be = fakeBackend([], [sessMine, thirdParty, untagged, bRoot]);
       const res = await queryTracesPreciseFirst(be.query, {
         agents: [{ ...WINDOW[0], sessionId: 'sess-mine' }],
       });
       expect(be.calls).toHaveLength(1);
-      expect(res.spans.map((s) => s.spanId)).toEqual(['e-sess', 'c-untagged']);
-      expect(res.correlation).toEqual({ strategy: 'window', windowFiltered: 1 });
+      expect(res.spans).toHaveLength(4);
+      expect(res.correlation).toEqual({ strategy: 'window', windowFiltered: 0 });
     });
 
     it('direct-only: single query, plain cursor, labelled by the matching strategy', async () => {

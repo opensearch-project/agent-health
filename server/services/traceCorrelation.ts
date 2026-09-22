@@ -19,16 +19,24 @@
  *
  * Pre-fix the server OR'd all of them into one `bool.should`, so a run that
  * correlated perfectly by trace id STILL had its neighbours' spans unioned in
- * (observed live: 3 root spans / 60 spans for a single invocation at
+ * (observed live: 3 root spans / 72 spans for a single invocation at
  * concurrency 5). This module keeps Strategy C always-on (an empty Traces tab
  * by default was judged worse than noise) but makes it a FALLBACK:
  *
  *   1. run the direct clauses first (A ∪ B ∪ D);
- *   2. only if they return nothing, run the window query;
- *   3. post-filter the window result: a span that carries a run-id attribute
- *      or `session.id` naming a DIFFERENT run is dropped; spans with no such
- *      attribute are kept (that is exactly the population Strategy C exists
- *      for).
+ *   2. if they found any of the AGENT's spans, that is the answer — the
+ *      window is never consulted. Agent Health's own eval/judge spans do not
+ *      count as a hit: the eval `test_case` span sits on the requested trace
+ *      and carries the run id itself, so for an agent that emits none of
+ *      A/B/D the direct query returns exactly that one span — which must
+ *      not suppress the fallback that is the only way to find the agent;
+ *   3. otherwise run the window query and post-filter it: a trace that
+ *      carries Agent Health's own `agent_health.run.id` naming a DIFFERENT
+ *      run is dropped whole; everything else is kept (that is exactly the
+ *      population Strategy C exists for). Only our own attribute is used as
+ *      negative evidence — `gen_ai.conversation.id` and `session.id` are
+ *      OTEL-standard ids a third-party agent may legitimately fill with its
+ *      own thread/session id, so a mismatch there proves nothing.
  *
  * The response says which strategy produced the spans so the UI can caption
  * it ("matched by trace id" / "matched by service-name window — N spans from
@@ -40,6 +48,7 @@
 import type { Span } from '../../types/index.js';
 import type { TracesQueryOptions } from '../adapters/types.js';
 import { RUN_ID_ATTRIBUTES } from './tracesService.js';
+import { isEvalOrJudgeSpan } from './metricsService.js';
 
 export type CorrelationStrategy = 'traceId' | 'runIds' | 'sessionId' | 'window' | 'none';
 
@@ -70,6 +79,12 @@ export interface CorrelatedTracesResult {
   spans: Span[];
   total: number;
   nextCursor: string | null;
+  /**
+   * Whether the BACKEND has more results for the phase that produced this
+   * page. In the window phase the post-filter may shrink a page (even to
+   * zero) without changing this flag — a paginating caller keeps following
+   * `nextCursor` until it is null.
+   */
   hasMore: boolean;
   correlation: CorrelationInfo;
   truncated?: boolean;
@@ -77,6 +92,9 @@ export interface CorrelatedTracesResult {
 }
 
 type Phase = 'direct' | 'window';
+
+/** Agent Health's OWN run-id attribute — the only one safe to use as negative evidence. */
+const OWN_RUN_ID_ATTRIBUTE = 'agent_health.run.id';
 
 function validIds(ids: readonly unknown[] | undefined): string[] {
   return (ids ?? []).filter((id): id is string => typeof id === 'string' && id.length > 0);
@@ -91,69 +109,59 @@ function attr(span: Span, key: string): unknown {
   return (span.attributes as Record<string, unknown> | undefined)?.[key];
 }
 
+function stringAttr(span: Span, key: string): string | undefined {
+  const v = attr(span, key);
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
 /**
  * Every run-id value a span advertises (`agent_health.run.id`,
- * `gen_ai.conversation.id`). Empty when the span carries neither.
+ * `gen_ai.conversation.id`) — used for POSITIVE matching/labelling only.
  */
 export function spanRunIds(span: Span): string[] {
-  return RUN_ID_ATTRIBUTES.map((k) => attr(span, k)).filter(
-    (v): v is string => typeof v === 'string' && v.length > 0
-  );
+  return RUN_ID_ATTRIBUTES.map((k) => stringAttr(span, k)).filter((v): v is string => !!v);
 }
 
-function spanSessionId(span: Span): string | undefined {
-  const sid = attr(span, 'session.id');
-  return typeof sid === 'string' && sid.length > 0 ? sid : undefined;
+/** True when at least one span is the agent's own work (not an eval/judge span). */
+export function hasAgentSpans(spans: Span[]): boolean {
+  return spans.some((s) => !isEvalOrJudgeSpan((s.attributes ?? {}) as Record<string, unknown>, s.name));
 }
 
 /**
- * Post-filter for window (Strategy C) results: drop spans that positively
- * identify themselves as belonging to ANOTHER run. Identity is resolved per
- * TRACE, not just per span — a run's root usually carries the run id while
- * its HTTP/DB children don't, and those children must follow their root
+ * Post-filter for window (Strategy C) results: drop traces that positively
+ * identify themselves as belonging to ANOTHER Agent Health run. Identity is
+ * resolved per TRACE — a run's root usually carries the run id while its
+ * HTTP/DB children don't, and those children must follow their root
  * (measured live: 13 of 72 window spans were identity-less children of
- * other runs' roots). A span is dropped when
- *   - its trace carries a run-id attribute on any span and none of those
- *     values is a requested run id (only checked when the caller asked for
- *     run ids), or
- *   - its trace carries `session.id` on any span and none is a requested
- *     session id (only checked when the caller asked for one).
- * Traces without any such attribute are kept whole — Strategy C exists for
- * them. `traceId` equality is deliberately NOT required: agents that reach
- * the window fallback don't propagate W3C context, so their trace ids never
- * match the eval span's.
+ * other runs' roots). A trace is dropped when any of its spans carries
+ * `agent_health.run.id` and none of those values is a requested run id;
+ * a span without a traceId is judged on its own attributes. Nothing else is
+ * negative evidence: traces without the attribute are kept whole (Strategy C
+ * exists for them), `gen_ai.conversation.id` / `session.id` may carry a
+ * third-party agent's own ids, and `traceId` equality is not required
+ * (window-fallback agents don't propagate W3C context).
  */
 export function filterWindowSpans(
   spans: Span[],
-  identity: { runIds: readonly string[]; sessionIds: readonly string[] }
+  identity: { runIds: readonly string[] }
 ): { kept: Span[]; filtered: number } {
   const runIds = new Set(identity.runIds);
-  const sessionIds = new Set(identity.sessionIds);
+  if (runIds.size === 0) return { kept: spans, filtered: 0 };
 
-  // Per-trace identity: the union of every run id / session id seen on any
-  // span of that trace (a span with no traceId is judged on its own).
   const traceRunIds = new Map<string, Set<string>>();
-  const traceSessionIds = new Map<string, Set<string>>();
-  const addTo = (map: Map<string, Set<string>>, key: string, value: string) => {
-    const set = map.get(key) ?? new Set<string>();
-    set.add(value);
-    map.set(key, set);
-  };
   for (const span of spans) {
-    if (!span.traceId) continue;
-    for (const id of spanRunIds(span)) addTo(traceRunIds, span.traceId, id);
-    const sid = spanSessionId(span);
-    if (sid) addTo(traceSessionIds, span.traceId, sid);
+    const own = stringAttr(span, OWN_RUN_ID_ATTRIBUTE);
+    if (!own || !span.traceId) continue;
+    const set = traceRunIds.get(span.traceId) ?? new Set<string>();
+    set.add(own);
+    traceRunIds.set(span.traceId, set);
   }
 
   const kept = spans.filter((span) => {
-    const ownRunIds = span.traceId ? traceRunIds.get(span.traceId) : new Set(spanRunIds(span));
-    if (runIds.size > 0 && ownRunIds && ownRunIds.size > 0 && ![...ownRunIds].some((id) => runIds.has(id))) return false;
-    const ownSessionIds = span.traceId
-      ? traceSessionIds.get(span.traceId)
-      : new Set([spanSessionId(span)].filter((v): v is string => !!v));
-    if (sessionIds.size > 0 && ownSessionIds && ownSessionIds.size > 0 && ![...ownSessionIds].some((id) => sessionIds.has(id))) return false;
-    return true;
+    const own = span.traceId ? traceRunIds.get(span.traceId) : undefined;
+    const ids = own ?? new Set([stringAttr(span, OWN_RUN_ID_ATTRIBUTE)].filter((v): v is string => !!v));
+    if (ids.size === 0) return true; // no identity → Strategy C's population
+    return [...ids].some((id) => runIds.has(id));
   });
   return { kept, filtered: spans.length - kept.length };
 }
@@ -208,16 +216,9 @@ function windowOptions(options: TracesQueryOptions): TracesQueryOptions {
   return rest;
 }
 
-function windowIdentity(options: TracesQueryOptions): { runIds: string[]; sessionIds: string[] } {
-  return {
-    runIds: validIds(options.runIds),
-    sessionIds: validIds([options.sessionId, ...(options.agents ?? []).map((a) => a.sessionId)]),
-  };
-}
-
 async function runWindow(query: TraceQueryFn, options: TracesQueryOptions, wrapCursor: boolean): Promise<CorrelatedTracesResult> {
   const page = await query(windowOptions(options));
-  const { kept, filtered } = filterWindowSpans(page.spans ?? [], windowIdentity(options));
+  const { kept, filtered } = filterWindowSpans(page.spans ?? [], { runIds: validIds(options.runIds) });
   const nextCursor = page.nextCursor ?? null;
   return {
     spans: kept,
@@ -248,10 +249,12 @@ async function runDirect(query: TraceQueryFn, options: TracesQueryOptions, wrapC
 /**
  * Execute a traces query with precise-first semantics (see module doc).
  *
- * - direct + window correlators → direct first, window only on an empty
- *   direct result (post-filtered); phase-tagged cursors for pagination.
+ * - direct + window correlators → direct first; if it found any agent span
+ *   that is the result. Otherwise the window (post-filtered), with the
+ *   direct query's own eval/judge spans kept in front of it — they ARE this
+ *   run's — de-duplicated by spanId. Phase-tagged cursors for pagination.
  * - direct only → one query, labelled by the strategy that matched.
- * - window only → one query, post-filtered against `agents[].sessionId`.
+ * - window only → one query (no run id to filter against → nothing dropped).
  * - neither (time-range browse) → one query, `strategy: 'none'`.
  */
 export async function queryTracesPreciseFirst(
@@ -267,9 +270,19 @@ export async function queryTracesPreciseFirst(
       const continued = { ...options, cursor: phased.cursor };
       return phased.phase === 'direct' ? runDirect(query, continued, true) : runWindow(query, continued, true);
     }
-    const first = await runDirect(query, options, true);
-    if (first.spans.length > 0) return first;
-    return runWindow(query, options, true);
+    const exact = await runDirect(query, options, true);
+    if (hasAgentSpans(exact.spans)) return exact;
+
+    const fallback = await runWindow(query, options, true);
+    if (exact.spans.length === 0) return fallback;
+    if (fallback.spans.length === 0) return exact; // only our own eval spans exist — say how they were found
+    const seen = new Set(exact.spans.map((s) => s.spanId));
+    const windowOnly = fallback.spans.filter((s) => !seen.has(s.spanId));
+    return {
+      ...fallback,
+      spans: [...exact.spans, ...windowOnly],
+      total: fallback.total + exact.spans.length,
+    };
   }
 
   if (direct) return runDirect(query, options, false);
