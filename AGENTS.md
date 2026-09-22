@@ -373,16 +373,41 @@ fallback (Strategy C).
   many), so it can't correlate a whole run. `session.id` is the per-run id with
   real adoption today; `gen_ai.conversation.id` is the standard we *emit*.
 
-### Strategy C — service-name + time-window (always-on fallback)
+### Strategy C — service-name + time-window (always-on FALLBACK)
 
 For closed-source / 3rd-party agents that do neither A nor B, register the
 agent's OpenSearch `service.name` on the connector via
-`traceContext.serviceName`. The run-report Traces tab **always** issues this
-clause unioned with A/B — the API receives `agents: [{serviceName, startedAt,
+`traceContext.serviceName`. The run-report Traces tab **always** sends this
+clause alongside A/B/D — the API receives `agents: [{serviceName, startedAt,
 endedAt}]` derived from the connector's `traceServiceName` (or the protocol→
-name convention map) and the run's wall-clock window. The OpenSearch query
-builder unions all three clauses via `bool.should` so spans matching any
-strategy are returned without duplication.
+name convention map) and the run's wall-clock window — but the server treats
+it as a **fallback, not a peer** (precise-first; see
+`server/services/traceCorrelation.ts`):
+
+1. The exact correlators present on the request — `traceId` (A), `runIds`
+   (B), `sessionId` (D) — are queried first, unioned with each other.
+2. Only when that returns **zero** spans is the window clause queried.
+3. The window result is post-filtered by run identity: a span that carries a
+   run-id attribute (`agent_health.run.id` / `gen_ai.conversation.id`) or
+   `session.id` naming a **different** run/session is dropped; spans that
+   carry none of those are kept (that is exactly the population Strategy C
+   exists for). `traceId` is deliberately not compared — agents that reach
+   the fallback don't propagate W3C context.
+4. The response reports what happened: `correlation: { strategy:
+   'traceId' | 'runIds' | 'sessionId' | 'window', windowFiltered: n }`,
+   and the Traces tab captions it ("Matched by trace id" / "Matched by
+   service-name window — N spans from other runs filtered").
+
+Why: the clauses used to be OR'd into one `bool.should`, so a run that
+correlated perfectly by trace id STILL had its concurrent neighbours' trees
+unioned in — a benchmark at concurrency 3–5 rendered three root spans / 60+
+spans for a single invocation. Callers should therefore pass **every**
+correlator they have (`fetchTracesForRun({ runId, traceId, sessionId,
+windowAgents })`); the more exact ids on the request, the less often the
+window is consulted. Consequence for agent authors: an agent that relies on
+the window (no A/B/D) but stamps `gen_ai.conversation.id` with its own
+non-run id will have those spans filtered — adopt A (propagate
+`TRACEPARENT`) or set the attribute to `AGENT_EVAL_RUN_ID` instead.
 
 This strategy was originally opt-in via a UI checkbox — the noise risk it can
 surface is real (concurrent runs of the same agent on overlapping windows,
@@ -390,8 +415,8 @@ other users on a shared OTel cluster running the same agent, long-lived agent
 sessions that cross run boundaries) — but in practice the run-report Traces
 tab landed on a near-empty trace tree by default until the user noticed the
 toggle. Empty-by-default was a worse cost than the noise risk, so Strategy C
-is now always-on. Users who need stricter isolation can override the
-connector's `serviceName` to a tenant-scoped value.
+stays always-on as the fallback. Users who need stricter isolation can
+override the connector's `serviceName` to a tenant-scoped value.
 
 Window derivation:
   - When `report.performanceMetrics.durationMs` is set: `[timestamp −

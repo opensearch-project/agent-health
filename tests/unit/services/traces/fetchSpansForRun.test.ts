@@ -48,6 +48,24 @@ describe('fetchSpansForRun', () => {
     });
   });
 
+  it('forwards the exact correlators (traceId / sessionId) so the server can match before the window', async () => {
+    mockFetch.mockResolvedValueOnce({ spans: [{ spanId: 's1' }], total: 1 } as any);
+    const windowAgents = [{ serviceName: 'retrieval-agent', startedAt: 1, endedAt: 2 }];
+
+    await fetchSpansForRun('run-1', {
+      maxAttempts: 1, intervalMs: 0, windowAgents,
+      traceId: 'aaaa0000aaaa0000aaaa0000aaaa0000', sessionId: 'sess-1',
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith({
+      runId: 'run-1',
+      traceId: 'aaaa0000aaaa0000aaaa0000aaaa0000',
+      sessionId: 'sess-1',
+      includeWindowFallback: true,
+      windowAgents,
+    });
+  });
+
   // ── The fix: Strategy-C correlation ──────────────────────────────────────
   it('correlates by service-name + time window when runId tags nothing (Claude Code / subprocess agents)', async () => {
     const spans = [

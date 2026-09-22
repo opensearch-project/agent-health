@@ -9,6 +9,12 @@
  * Mirrors the OpenSearch DSL in server/services/tracesService.ts (strategies
  * A/B/C/D + must-filters) so backends that fetch a candidate set and filter
  * locally (file store, CloudWatch) return exactly what the cluster would.
+ *
+ * `sessionId` (Strategy D) is a CORRELATION clause, unioned like traceId /
+ * runIds / agents — NOT a must-filter — exactly as tracesService.ts pushes it
+ * to `sink`: a stale report session id (e.g. Claude Code's span `session.id`
+ * differing from the `session_id` captured on the report) must not zero out
+ * spans that traceId / runIds already matched.
  */
 
 import type { TracesQueryOptions } from '../types.js';
@@ -49,7 +55,6 @@ export function matchesQuery(s: Span, options: TracesQueryOptions, useUnion: boo
   const a = s.attributes || {};
 
   // ---- must-filters (always required) ----
-  if (sessionId && a['session.id'] !== sessionId) return false;
   if (startTime !== undefined && spanMs(s) < toMs(startTime)) return false;
   if (endTime !== undefined && spanMs(s) > toMs(endTime)) return false;
   if (serviceName && !serviceMatches(s, serviceName)) return false;
@@ -82,6 +87,8 @@ export function matchesQuery(s: Span, options: TracesQueryOptions, useUnion: boo
       clauses.push(strategyC || strategyD);
     }
   }
+  // Strategy D (request-level): the report's session.id, unioned with the rest.
+  if (sessionId) clauses.push(a['session.id'] === sessionId);
 
   // useUnion → at least one correlation clause (should); else → all clauses (must).
   // No correlation clauses (pure time-range browse) → matches on must-filters alone.
