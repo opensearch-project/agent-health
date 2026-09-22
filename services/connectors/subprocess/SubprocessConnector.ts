@@ -83,6 +83,13 @@ export class SubprocessConnector<
    */
   override traceContext = { propagateEnv: true };
 
+  /**
+   * A CLI agent runs on whatever model its own installation / connector
+   * config selects; the generic subprocess connector never forwards a
+   * run-level model. Subclasses that DO accept one (Pi's `--model`) override.
+   */
+  override readonly ownsModel: boolean = true;
+
   protected config: SubprocessConfig;
 
   constructor(config?: Partial<SubprocessConfig>) {
