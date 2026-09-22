@@ -271,6 +271,16 @@ describe('Runs Storage Routes', () => {
       expect(body.runs).toEqual([]);
     });
 
+    it('accepts agentId (the POST /runs/search name) as an alias for agentKey', async () => {
+      mockRunsSearch.mockResolvedValue({ items: [], total: 0 });
+      const { req, res } = createMocks({}, {}, { agentId: 'ml-commons' });
+      await getRouteHandler(runsRoutes, 'get', '/api/storage/runs')(req, res);
+      expect(mockRunsSearch).toHaveBeenCalledWith(
+        { testCaseId: undefined, agentId: 'ml-commons' },
+        { size: 100, from: 0, _source: undefined },
+      );
+    });
+
     it('rejects unknown query params with 400 UNKNOWN_QUERY_PARAM instead of silently ignoring them', async () => {
       const { req, res } = createMocks({}, {}, { testcaseid: 'tc-1' });
       const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
@@ -278,7 +288,7 @@ describe('Runs Storage Routes', () => {
 
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith({
-        error: expect.stringMatching(/Unknown query parameter 'testcaseid'.*Supported: size, from, fields, ids, testCaseId, agentKey/),
+        error: expect.stringMatching(/Unknown query parameter 'testcaseid'.*Supported: size, from, fields, ids, testCaseId, agentKey, agentId/),
         code: 'UNKNOWN_QUERY_PARAM',
       });
       expect(mockRunsGetAll).not.toHaveBeenCalled();

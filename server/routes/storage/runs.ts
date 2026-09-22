@@ -93,10 +93,10 @@ function getTimestampMs(run: { timestamp?: string; createdAt?: string }): number
  * unfiltered list back with a 200, and downstream code attributed those
  * runs to the wrong test case.
  */
-const RUNS_LIST_QUERY_PARAMS: ReadonlySet<string> = new Set(['size', 'from', 'fields', 'ids', 'testCaseId', 'agentKey']);
+const RUNS_LIST_QUERY_PARAMS: ReadonlySet<string> = new Set(['size', 'from', 'fields', 'ids', 'testCaseId', 'agentKey', 'agentId']);
 
 /** First query-param name not in `allowed`, or null when all are known. */
-export function findUnknownQueryParam(query: Record<string, unknown>, allowed: ReadonlySet<string>): string | null {
+function findUnknownQueryParam(query: Record<string, unknown>, allowed: ReadonlySet<string>): string | null {
   for (const key of Object.keys(query)) {
     if (!allowed.has(key)) return key;
   }
@@ -116,7 +116,10 @@ router.get('/api/storage/runs', async (req: Request, res: Response) => {
     }
     const { size = '100', from = '0', fields, ids } = req.query;
     const testCaseId = typeof req.query.testCaseId === 'string' && req.query.testCaseId.trim() ? req.query.testCaseId.trim() : undefined;
-    const agentKey = typeof req.query.agentKey === 'string' && req.query.agentKey.trim() ? req.query.agentKey.trim() : undefined;
+    // `agentKey` is the app-side name; `agentId` (the storage-side name used
+    // by POST /runs/search) is accepted as an alias.
+    const rawAgent = req.query.agentKey ?? req.query.agentId;
+    const agentKey = typeof rawAgent === 'string' && rawAgent.trim() ? rawAgent.trim() : undefined;
 
     // Batch fetch by ids — collapses N per-report round-trips (e.g. the
     // comparison page loading every cell's report) into ONE request; the
@@ -187,7 +190,7 @@ router.get('/api/storage/runs', async (req: Request, res: Response) => {
     // Sort sample data by timestamp descending (newest first); apply the
     // same filters so demo runs don't leak into a filtered list either.
     const sortedSampleData = SAMPLE_RUNS
-      .filter((r) => (!testCaseId || r.testCaseId === testCaseId) && (!agentKey || (r as TestCaseRun).agentKey === agentKey))
+      .filter((r) => (!testCaseId || r.testCaseId === testCaseId) && (!agentKey || r.agentKey === agentKey))
       .sort((a, b) => getTimestampMs(b) - getTimestampMs(a));
 
     // User data first, then sample data

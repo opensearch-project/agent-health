@@ -149,12 +149,26 @@ describe('POST /api/evaluate — model resolution', () => {
     expect(captured()).toMatchObject({ modelId: 'provider.deployment-v2', modelSource: 'agent' });
   });
 
-  it('CLI agent (model-owning connector, nothing declared) → runs with no model recorded, modelSource agent', async () => {
+  it('CLI agent (model-owning connector, nothing declared) → runs with NO model recorded (not ""), modelSource agent', async () => {
     const { captured } = storageWithCapture();
     const res = createMockRes();
     await getEvaluateHandler()(createMockReq({ testCase: INLINE_TC, agentKey: 'cli-agent', modelId: 'claude-sonnet-4.5' }), res);
     expect(res.json).not.toHaveBeenCalled();
-    expect(captured()).toMatchObject({ modelId: '', modelSource: 'agent' });
+    expect(captured().modelSource).toBe('agent');
+    // Absent, never an empty string — '' would be indexed / rendered as a real value.
+    expect(captured().modelId).toBeUndefined();
+    expect(captured().modelName).toBeUndefined();
+    // The runner still gets an (empty) model id so its judge chain falls
+    // through to the server default, exactly as benchmark runs of such agents do.
+    expect(mockRunSingleUseCase.mock.calls[0][0].modelId).toBe('');
+  });
+
+  it("the 'started' SSE event reports the resolved model and any ignored caller modelId", async () => {
+    storageWithCapture();
+    const res = createMockRes();
+    await getEvaluateHandler()(createMockReq({ testCase: INLINE_TC, agentKey: 'retrieval-agent', modelId: 'claude-sonnet-4.5' }), res);
+    const started = res.writes.map((w) => JSON.parse(w.replace(/^data: /, ''))).find((e) => e.type === 'started');
+    expect(started.model).toEqual({ modelId: 'provider.deployment-v2', modelSource: 'agent', ignoredRequestedModelId: 'claude-sonnet-4.5' });
   });
 
   it('catalog agent + catalog modelId → recorded with modelSource request (unchanged behaviour)', async () => {
