@@ -80,6 +80,14 @@ export interface FetchSpansForRunOptions {
    * correlation returns 0 spans and the judge never sees the trace (#XXX).
    */
   windowAgents?: TraceWindowAgent[];
+  /**
+   * Strategy A (exact): the run's own OTel traceId (the eval `test_case`
+   * span's trace, adopted by W3C-propagating agents). Passing it lets the
+   * server match exactly before it ever consults the window fallback.
+   */
+  traceId?: string;
+  /** Strategy D (exact): the agent-emitted `session.id` (e.g. Claude Code). */
+  sessionId?: string;
 }
 
 export interface FetchSpansForRunResult {
@@ -116,11 +124,15 @@ export async function fetchSpansForRun(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      // Union of Strategy B (runId) and Strategy C (service-name + time window),
-      // matching the run-report Traces tab. Either clause alone can be empty
-      // (e.g. Claude Code never tags spans with our runId), so we need both.
+      // Every correlator we have — exact ones (A traceId / B runId / D
+      // session.id) plus the Strategy-C service-name window — matching the
+      // run-report Traces tab. The server is precise-first: the window is
+      // consulted only when the exact clauses match nothing (e.g. Claude Code
+      // never tags spans with our runId), and other runs' spans are dropped.
       const result = await fetchTracesForRun({
         runId: runId || undefined,
+        traceId: options.traceId || undefined,
+        sessionId: options.sessionId || undefined,
         includeWindowFallback: !!windowAgents,
         windowAgents,
       });
