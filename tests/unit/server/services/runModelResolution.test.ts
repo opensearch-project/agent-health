@@ -17,12 +17,8 @@
  */
 
 import type { AgentConfig, ModelConfig } from '@/types';
-import {
-  resolveRunModel,
-  getAgentModelOwnership,
-  pickDefaultAgentModelKey,
-  PREFERRED_DEFAULT_AGENT_MODEL_KEY,
-} from '@/server/services/runModelResolution';
+import { resolveRunModel, getAgentModelOwnership, pickDefaultAgentModelKey } from '@/server/services/runModelResolution';
+import { DEFAULT_AGENT_MODEL_ID } from '@/lib/agentModelCatalog';
 
 const CATALOG: Record<string, ModelConfig> = {
   'demo-model': { model_id: 'mock://demo-model', display_name: 'Demo Model', provider: 'demo', context_window: 1, max_output_tokens: 1 },
@@ -128,10 +124,10 @@ describe('resolveRunModel', () => {
       expect(resolveRunModel(catalogAgent, undefined, CATALOG)).toEqual({
         ok: true,
         model: {
-          modelId: PREFERRED_DEFAULT_AGENT_MODEL_KEY,
+          modelId: DEFAULT_AGENT_MODEL_ID,
           modelName: 'Claude Sonnet 4.5',
           modelSource: 'default',
-          catalogEntry: CATALOG[PREFERRED_DEFAULT_AGENT_MODEL_KEY],
+          catalogEntry: CATALOG[DEFAULT_AGENT_MODEL_ID],
         },
       });
     });

@@ -35,8 +35,6 @@ import { resolveAgentModel } from '@/lib/resolveAgentModel';
 import { AGENT_MODEL_PROVIDERS, DEFAULT_AGENT_MODEL_ID } from '@/lib/agentModelCatalog';
 import { connectorRegistry } from '@/services/connectors/server';
 
-export { AGENT_MODEL_PROVIDERS, DEFAULT_AGENT_MODEL_ID as PREFERRED_DEFAULT_AGENT_MODEL_KEY };
-
 export interface AgentModelOwnership {
   /** True when the agent (not the caller) decides which model runs. */
   ownsModel: boolean;

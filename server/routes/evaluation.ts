@@ -135,7 +135,7 @@ function toTestCase(sample: typeof SAMPLE_TEST_CASES[0]): TestCase {
  * logged server-side at info level.
  *
  * SSE events:
- * - { type: 'started', testCase, agent, reportId }
+ * - { type: 'started', testCase, agent, reportId, model: { modelId?, modelSource, ignoredRequestedModelId? } }
  * - { type: 'heartbeat' }
  * - { type: 'step', stepIndex, step: { type, content, toolName?, toolArgs? } }
  * - { type: 'completed', report: { id, status, passFailStatus, metrics, ... }, reportId }
@@ -281,8 +281,10 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
       // For agent-owned models this is informational (`modelSource: 'agent'`):
       // the agent ran on this model because ITS config says so, not because
       // the caller picked it. Empty when the agent declares nothing.
-      modelId: runModel.modelId,
-      modelName: runModel.modelName,
+      // Omitted (not '') when a connector-owned agent declares nothing — an
+      // empty string would be indexed and rendered as a real value.
+      modelId: runModel.modelId || undefined,
+      modelName: runModel.modelName || undefined,
       modelSource: runModel.modelSource,
       // Persist the run-level judge model so the run-detail UI can show
       // "judge model: <whatever the customer picked>" as part of the audit
@@ -356,7 +358,19 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
     });
 
     // Send started event with reportId for polling fallback
-    res.write(`data: ${JSON.stringify({ type: 'started', testCase: testCase.name, agent: agent.name, reportId: preCreatedReportId })}\n\n`);
+    // `model` tells the caller what was actually resolved — including a
+    // modelId it sent that was ignored because the agent owns its model.
+    res.write(`data: ${JSON.stringify({
+      type: 'started',
+      testCase: testCase.name,
+      agent: agent.name,
+      reportId: preCreatedReportId,
+      model: {
+        modelId: runModel.modelId || undefined,
+        modelSource: runModel.modelSource,
+        ignoredRequestedModelId: modelResolution.ignoredRequestedModelId,
+      },
+    })}\n\n`);
 
     // Run the evaluation with step progress
     let stepCount = 0;

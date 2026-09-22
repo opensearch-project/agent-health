@@ -255,12 +255,16 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   // Quick Run of a catalog agent was rejected with "Model not found" and the
   // dropdown rendered blank. Fall back to the catalog default instead.
   useEffect(() => {
-    if (agentOwnsModel || selectedModelConfig) return;
+    // `modelOwnership` is only present once GET /api/agents has populated the
+    // config — before that, DEFAULT_CONFIG.models is the hardcoded default
+    // catalog and a server-defined custom model would look "unknown".
+    const serverConfigLoaded = selectedAgent?.modelOwnership !== undefined;
+    if (!serverConfigLoaded || agentOwnsModel || selectedModelConfig) return;
     const fallback = DEFAULT_CONFIG.models[DEFAULT_AGENT_MODEL_ID]
       ? DEFAULT_AGENT_MODEL_ID
       : Object.keys(DEFAULT_CONFIG.models).find(k => AGENT_MODEL_PROVIDERS.has(DEFAULT_CONFIG.models[k]?.provider));
     if (fallback && fallback !== selectedModelId) setSelectedModelId(fallback);
-  }, [agentOwnsModel, selectedModelConfig, selectedModelId, setSelectedModelId]);
+  }, [selectedAgent, agentOwnsModel, selectedModelConfig, selectedModelId, setSelectedModelId]);
 
   // Lock body scroll when modal is open
   useEffect(() => {

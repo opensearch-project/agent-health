@@ -18,6 +18,9 @@
  *
  * Only `loadConfigSync` is mocked (to inject the REST agent — custom agents
  * added via the API cannot carry `connectorConfig`); everything else is real.
+ * The file store is the worktree's shared `.agent-health/data`, so every
+ * report this file creates is deleted by id in `afterAll` and the filter
+ * assertions are scoped to those ids (other suites may share the agent key).
  * Mounts individual routers rather than `createApp()` for the same ts-jest
  * `import.meta.url` reason documented in
  * agentJudgeImprovementStrategies.integration.test.ts.
@@ -29,8 +32,6 @@
 import express from 'express';
 import http from 'node:http';
 import request from 'supertest';
-import { rmSync } from 'node:fs';
-import path from 'node:path';
 
 const DECLARED_MODEL = 'provider.retrieval-deployment-v2';
 
@@ -67,7 +68,6 @@ jest.mock('@/lib/config/index', () => {
 jest.mock('@/lib/debug', () => ({ debug: jest.fn() }));
 
 const TEST_TIMEOUT = 30000;
-const DATA_DIR = path.join(process.cwd(), '.agent-health-test-data', 'evaluateModelOptional');
 
 function completedEvent(sseText: string): any {
   const line = sseText.split('\n').find((l) => l.startsWith('data: ') && l.includes('"type":"completed"'));
@@ -83,8 +83,6 @@ describe('POST /api/evaluate — modelId optional (integration)', () => {
   const createdReportIds: string[] = [];
 
   beforeAll(async () => {
-    process.env.AGENT_HEALTH_DATA_DIR = DATA_DIR;
-
     // A minimal REST agent: records the payload it was sent and answers.
     agentServer = http.createServer((req, res) => {
       let body = '';
@@ -121,7 +119,6 @@ describe('POST /api/evaluate — modelId optional (integration)', () => {
     }
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => agentServer.close(() => resolve()));
-    try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
   beforeEach(() => {
@@ -240,14 +237,20 @@ describe('POST /api/evaluate — modelId optional (integration)', () => {
       expect(other.body.runs.map((r: any) => r.testCaseId)).toEqual(['ahtest-rest-tc-2']);
     });
 
-    it('?agentKey= filters and combines with ?fields=', async () => {
-      const list = await request(app).get('/api/storage/runs?agentKey=retrieval-agent&fields=id,agentKey,modelSource');
+    it('?agentKey= (and its ?agentId= alias) filters and combines with ?fields=', async () => {
+      const list = await request(app).get('/api/storage/runs?agentKey=retrieval-agent&size=500&fields=id,agentKey,modelSource');
       expect(list.status).toBe(200);
-      expect(list.body.runs.length).toBeGreaterThanOrEqual(2);
-      for (const r of list.body.runs) {
-        expect(r.agentKey).toBe('retrieval-agent');
-        expect(r.modelSource).toBe('agent');
-      }
+      for (const r of list.body.runs) expect(r.agentKey).toBe('retrieval-agent');
+      const mine = list.body.runs.filter((r: any) => createdReportIds.includes(r.id));
+      expect(mine.length).toBe(createdReportIds.length);
+      for (const r of mine) expect(r.modelSource).toBe('agent');
+
+      const alias = await request(app).get('/api/storage/runs?agentId=retrieval-agent&size=500&fields=id');
+      expect(alias.status).toBe(200);
+      expect(alias.body.runs.map((r: any) => r.id)).toEqual(expect.arrayContaining(createdReportIds));
+
+      const none = await request(app).get('/api/storage/runs?agentKey=no-such-agent-ahtest');
+      expect(none.body.runs).toEqual([]);
     });
 
     it('unknown query param → 400 UNKNOWN_QUERY_PARAM', async () => {
