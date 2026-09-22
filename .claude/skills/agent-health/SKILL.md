@@ -410,7 +410,7 @@ primitive returns `llmJudgeReasoning`.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/storage/runs` | List runs. Query: `size?`, `from?`, `fields?`, `ids?`, `testCaseId?`, `agentKey?` — unknown params → 400 `UNKNOWN_QUERY_PARAM` |
+| GET | `/api/storage/runs` | List runs. Query: `size?`, `from?`, `fields?`, `ids?`, `testCaseId?`, `agentKey?` (alias `agentId?`) — unknown params → 400 `UNKNOWN_QUERY_PARAM` |
 | GET | `/api/storage/runs/:id` | Get run by ID |
 | POST | `/api/storage/runs` | Create run |
 | PATCH | `/api/storage/runs/:id` | Update run |

@@ -24,7 +24,7 @@
  * Route: /evaluations/test-cases/:testCaseId
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Play, Calendar, Pencil, AlertTriangle,
@@ -105,6 +105,10 @@ export const TestCaseDetailPage: React.FC = () => {
 
   const [testCase, setTestCase] = useState<TestCase | null>(null);
   const [runs, setRuns] = useState<EvaluationReport[]>([]);
+  // Latest runs list for async handlers that outlive a render (the run-error
+  // fallback below reads it after the request settles).
+  const runsRef = useRef(runs);
+  useEffect(() => { runsRef.current = runs; }, [runs]);
   const [totalRuns, setTotalRuns] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -439,7 +443,7 @@ export const TestCaseDetailPage: React.FC = () => {
       setRunError(error instanceof Error ? error.message : 'Evaluation failed');
       // The synthetic running row is gone; fall back to the latest saved run
       // so the right panel doesn't dead-end on "Select a run to inspect".
-      setSelectedRunId(prev => (prev === RUNNING_RUN_ID ? (runs[0]?.id ?? null) : prev));
+      setSelectedRunId(prev => (prev === RUNNING_RUN_ID ? (runsRef.current[0]?.id ?? null) : prev));
     } finally {
       setIsRunning(false);
     }
