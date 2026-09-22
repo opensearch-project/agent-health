@@ -387,12 +387,15 @@ it as a **fallback, not a peer** (precise-first; see
 1. The exact correlators present on the request — `traceId` (A), `runIds`
    (B), `sessionId` (D) — are queried first, unioned with each other.
 2. Only when that returns **zero** spans is the window clause queried.
-3. The window result is post-filtered by run identity: a span that carries a
-   run-id attribute (`agent_health.run.id` / `gen_ai.conversation.id`) or
-   `session.id` naming a **different** run/session is dropped; spans that
-   carry none of those are kept (that is exactly the population Strategy C
-   exists for). `traceId` is deliberately not compared — agents that reach
-   the fallback don't propagate W3C context.
+3. The window result is post-filtered by run identity, resolved **per
+   trace**: if any span of a trace carries a run-id attribute
+   (`agent_health.run.id` / `gen_ai.conversation.id`) or `session.id` and
+   none of those values is the requested run/session, the whole trace is
+   dropped (a run's root usually carries the id; its HTTP/DB children don't
+   and must follow it). Traces that carry none of those attributes are kept
+   (that is exactly the population Strategy C exists for). `traceId`
+   equality is deliberately not required — agents that reach the fallback
+   don't propagate W3C context.
 4. The response reports what happened: `correlation: { strategy:
    'traceId' | 'runIds' | 'sessionId' | 'window', windowFiltered: n }`,
    and the Traces tab captions it ("Matched by trace id" / "Matched by

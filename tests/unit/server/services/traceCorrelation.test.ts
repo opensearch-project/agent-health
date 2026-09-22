@@ -113,6 +113,30 @@ describe('traceCorrelation — precise-first', () => {
       expect(r.kept.map((s) => s.spanId)).toEqual(['b-root', 'e-sess']);
     });
 
+    it('resolves identity per TRACE: identity-less children follow a root that names another run', () => {
+      // Run B's root carries the id; its HTTP/DB children don't. Pre-fix those
+      // children survived the filter as orphans (13 of 72 spans, measured live).
+      const bHttp = span({ traceId: B_TRACE, spanId: 'b-http', parentSpanId: 'b-root', attributes: { 'service.name': 'retrieval-agent' } });
+      const bDb = span({ traceId: B_TRACE, spanId: 'b-db', parentSpanId: 'b-http', attributes: { 'service.name': 'retrieval-agent', 'db.system.name': 'opensearch' } });
+      const { kept, filtered } = filterWindowSpans([bRoot, bHttp, bDb, untagged], { runIds: [A_RUN], sessionIds: [] });
+      expect(kept.map((s) => s.spanId)).toEqual(['c-untagged']);
+      expect(filtered).toBe(3);
+    });
+
+    it('keeps a whole trace when any of its spans names the requested run', () => {
+      const aHttp = span({ traceId: A_TRACE, spanId: 'a-http', parentSpanId: 'a-root', attributes: { 'service.name': 'retrieval-agent' } });
+      const { kept } = filterWindowSpans([aRoot, aHttp, bRoot], { runIds: [A_RUN], sessionIds: [] });
+      expect(kept.map((s) => s.spanId)).toEqual(['a-root', 'a-http']);
+    });
+
+    it('resolves session identity per trace too, and judges a traceId-less span on its own attributes', () => {
+      const otherChild = span({ traceId: 'dddd0000dddd0000dddd0000dddd0000', spanId: 'd-child', parentSpanId: 'd-sess', attributes: { 'service.name': 'retrieval-agent' } });
+      const loose = { ...span({ spanId: 'loose', attributes: { 'service.name': 'retrieval-agent', 'session.id': 'sess-other' } }), traceId: undefined } as unknown as Span;
+      const { kept, filtered } = filterWindowSpans([sessOther, otherChild, sessMine, loose, untagged], { runIds: [], sessionIds: ['sess-mine'] });
+      expect(kept.map((s) => s.spanId)).toEqual(['e-sess', 'c-untagged']);
+      expect(filtered).toBe(3);
+    });
+
     it('never compares traceId (window-fallback agents do not propagate W3C context)', () => {
       const foreignTrace = span({ traceId: 'zzzz', spanId: 'z', attributes: { 'service.name': 'retrieval-agent' } });
       expect(filterWindowSpans([foreignTrace], { runIds: [A_RUN], sessionIds: ['sess-mine'] }).kept).toHaveLength(1);
