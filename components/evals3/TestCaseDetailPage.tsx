@@ -57,6 +57,7 @@ import { TestCaseInspectorPanel } from '@/components/evals3/TestCaseInspectorPan
 import { getResultStatus, StatusIcon, getStatusDescription } from '@/components/evals3/ResultStatus';
 import { runServerEvaluation } from '@/services/client/evaluationApi';
 import { DEFAULT_CONFIG, getPreferredDefaultAgentKey } from '@/lib/constants';
+import { AGENT_MODEL_PROVIDERS, DEFAULT_AGENT_MODEL_ID } from '@/lib/agentModelCatalog';
 import { PREFS_KEYS } from '@/lib/preferences';
 import { ENV_CONFIG } from '@/lib/config';
 import { Markdown, hasRealMarkdown } from '@/components/ui/markdown';
@@ -325,23 +326,45 @@ export const TestCaseDetailPage: React.FC = () => {
     // Seed config from latest run (if any), else from persisted prefs, else defaults.
     const latestRun = runs[0];
     let defaultAgent = DEFAULT_CONFIG.agents[0]?.key || '';
-    let defaultModel = Object.keys(DEFAULT_CONFIG.models)[0] || '';
+    // Catalog default for catalog-model agents: the shared UI default, else
+    // the first agent-capable entry (never a judge-only pseudo-model).
+    let defaultModel = DEFAULT_CONFIG.models[DEFAULT_AGENT_MODEL_ID]
+      ? DEFAULT_AGENT_MODEL_ID
+      : (Object.keys(DEFAULT_CONFIG.models).find(k => AGENT_MODEL_PROVIDERS.has(DEFAULT_CONFIG.models[k]?.provider)) || Object.keys(DEFAULT_CONFIG.models)[0] || '');
     try {
       const storedAgent = localStorage.getItem('agent-health:' + PREFS_KEYS.agentKey);
       const storedModel = localStorage.getItem('agent-health:' + PREFS_KEYS.modelId);
       if (storedAgent) defaultAgent = JSON.parse(storedAgent);
-      if (storedModel) defaultModel = JSON.parse(storedModel);
+      // A persisted preference only counts when it is still a catalog key —
+      // pre-fix this page itself persisted provider-native ids here.
+      const parsedModel = storedModel ? JSON.parse(storedModel) : undefined;
+      if (typeof parsedModel === 'string' && DEFAULT_CONFIG.models[parsedModel]) defaultModel = parsedModel;
     } catch { /* fall through to defaults */ }
     if (!defaultAgent) defaultAgent = getPreferredDefaultAgentKey();
+    // Only re-use the latest run's model when it is a catalog key. Runs of
+    // agents that own their model record a provider-native id (informational,
+    // `modelSource: 'agent'`); seeding that back as the catalog choice made
+    // the next "Run Test" fail with `400 Model not found` — silently.
+    const latestCatalogModelId = latestRun?.modelId && DEFAULT_CONFIG.models[latestRun.modelId] ? latestRun.modelId : undefined;
     setRunConfig({
       name: `Run ${runs.length + 1}`, description: '',
       agentKey: latestRun?.agentKey || defaultAgent,
-      modelId: latestRun?.modelId || defaultModel,
+      modelId: latestCatalogModelId || defaultModel,
       evaluatorId: latestRun?.evaluatorId,
     });
     setRunError(null);
     setIsRunConfigOpen(true);
   };
+
+  // Who picks the model for the agent selected in the run dialog. Agents that
+  // own their model (see `modelOwnership` on GET /api/agents) get no catalog
+  // model sent — the server would ignore it — and the dialog shows the
+  // agent-declared model read-only instead.
+  const runConfigAgent = DEFAULT_CONFIG.agents.find(a => a.key === runConfig.agentKey);
+  const runConfigAgentOwnsModel = runConfigAgent?.modelOwnership?.ownsModel === true;
+  const runConfigModelLabel = runConfigAgentOwnsModel
+    ? (runConfigAgent?.modelOwnership?.declaredModelId || 'Set by the agent')
+    : getModelName(runConfig.modelId);
 
   const handleStartRun = async () => {
     // Guard against rapid double-click on the dialog's Run button. Without
@@ -372,13 +395,16 @@ export const TestCaseDetailPage: React.FC = () => {
       // (matches QuickRunModal/BenchmarkRunsPage behavior).
       try {
         localStorage.setItem('agent-health:' + PREFS_KEYS.agentKey, JSON.stringify(runConfig.agentKey));
-        localStorage.setItem('agent-health:' + PREFS_KEYS.modelId, JSON.stringify(runConfig.modelId));
+        if (!runConfigAgentOwnsModel) {
+          localStorage.setItem('agent-health:' + PREFS_KEYS.modelId, JSON.stringify(runConfig.modelId));
+        }
       } catch { /* ignore quota errors */ }
 
       const result = await runServerEvaluation(
         {
           agentKey: runConfig.agentKey,
-          modelId: runConfig.modelId,
+          // Only catalog-model agents take a model from the caller.
+          modelId: runConfigAgentOwnsModel ? undefined : runConfig.modelId,
           // Forward customer-supplied judge model id alongside agent
           // model. When undefined, the server picks via
           // evaluator.inferenceConfig.modelId → BEDROCK_MODEL_ID env.
@@ -406,7 +432,14 @@ export const TestCaseDetailPage: React.FC = () => {
       setSelectedRunId(result.reportId);
     } catch (error) {
       console.error('Evaluation error:', error);
+      // Persist the server's own message (e.g. `400 Model not found: …`) in
+      // the page-level banner below. Pre-fix it was only handed to the live
+      // panel, which unmounts the moment `isRunning` flips back to false —
+      // a rejected request left no trace on screen at all.
       setRunError(error instanceof Error ? error.message : 'Evaluation failed');
+      // The synthetic running row is gone; fall back to the latest saved run
+      // so the right panel doesn't dead-end on "Select a run to inspect".
+      setSelectedRunId(prev => (prev === RUNNING_RUN_ID ? (runs[0]?.id ?? null) : prev));
     } finally {
       setIsRunning(false);
     }
@@ -480,6 +513,26 @@ export const TestCaseDetailPage: React.FC = () => {
             {passRate}% pass rate
           </span>
         </div>
+        {runError && !isRunning && (
+          <div
+            role="alert"
+            data-testid="run-error-banner"
+            className="mt-3 p-3 text-sm rounded border text-red-600 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-500/10 dark:border-red-500/30 flex items-start gap-2"
+          >
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <span className="font-medium">Run failed: </span>{runError}
+            </div>
+            <button
+              type="button"
+              className="shrink-0 p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-500/20"
+              onClick={() => setRunError(null)}
+              aria-label="Dismiss run error"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── Definition hero ─────────────────────────────────────────
@@ -625,7 +678,7 @@ export const TestCaseDetailPage: React.FC = () => {
                           : 'Default'}
                       </span>
                       <span className="mx-1 opacity-50">·</span>
-                      <span>{getModelName(runConfig.modelId)}</span>
+                      <span>{runConfigModelLabel}</span>
                     </div>
                   </div>
                 </div>
@@ -747,7 +800,7 @@ export const TestCaseDetailPage: React.FC = () => {
               steps={liveSteps}
               runName={runConfig.name}
               agentKey={runConfig.agentKey}
-              modelId={runConfig.modelId}
+              modelLabel={runConfigModelLabel}
               error={runError}
               reconnect={reconnectState}
             />
@@ -893,6 +946,14 @@ export const TestCaseDetailPage: React.FC = () => {
                     ))}
                   </SelectContent>
                 </Select>
+                <p
+                  className="text-[11px] text-muted-foreground truncate"
+                  data-testid="tc-run-agent-model"
+                  title={runConfigModelLabel}
+                >
+                  Agent model: <span className="text-foreground/80">{runConfigModelLabel}</span>
+                  {runConfigAgentOwnsModel ? ' (set by the agent)' : ''}
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -932,7 +993,7 @@ export const TestCaseDetailPage: React.FC = () => {
                 <Button variant="ghost" onClick={() => setIsRunConfigOpen(false)}>Cancel</Button>
                 <Button
                   onClick={handleStartRun}
-                  disabled={isRunning || !runConfig.name.trim() || !runConfig.agentKey || !runConfig.modelId}
+                  disabled={isRunning || !runConfig.name.trim() || !runConfig.agentKey || (!runConfigAgentOwnsModel && !runConfig.modelId)}
                   className="bg-opensearch-blue hover:bg-blue-600"
                 >
                   <Play size={16} className="mr-1" /> Start Run
@@ -973,12 +1034,13 @@ interface LiveRunPanelProps {
   steps: TrajectoryStep[];
   runName: string;
   agentKey: string;
-  modelId: string;
+  /** Display label of the run's model (catalog name, or the agent-declared id). */
+  modelLabel: string;
   error: string | null;
   reconnect: { reportId: string; reason: string; lastStatus?: string } | null;
 }
 const LiveRunPanel: React.FC<LiveRunPanelProps> = ({
-  testCase, steps, runName, agentKey, modelId, error, reconnect,
+  testCase, steps, runName, agentKey, modelLabel, error, reconnect,
 }) => {
   // Default tab is Test Case Output so the user immediately sees the
   // streaming trajectory — that's the whole point of running inline.
@@ -994,7 +1056,6 @@ const LiveRunPanel: React.FC<LiveRunPanelProps> = ({
   }, [steps.length, activeTab]);
 
   const agentLabel = (DEFAULT_CONFIG.agents.find(a => a.key === agentKey)?.name) || agentKey || '—';
-  const modelLabel = getModelName(modelId);
 
   return (
     <div className="h-full flex flex-col">

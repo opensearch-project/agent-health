@@ -73,6 +73,9 @@ export class PiConnector extends SubprocessConnector<PiExecutionState> {
 
   override traceContext = { propagateEnv: true, serviceName: 'pi-agent' };
 
+  /** Pi accepts a run-level model via `--model` (see buildSubprocessConfig). */
+  override readonly ownsModel = false;
+
   constructor(config?: Partial<SubprocessConfig>) {
     super({ ...PI_DEFAULT_CONFIG, ...config });
   }

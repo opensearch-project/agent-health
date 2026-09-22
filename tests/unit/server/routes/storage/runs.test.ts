@@ -235,6 +235,56 @@ describe('Runs Storage Routes', () => {
       );
     });
 
+    it('honours ?testCaseId= via the adapter search (regression: it used to be silently ignored → unfiltered list)', async () => {
+      mockRunsSearch.mockResolvedValue({
+        items: [{ id: 'run-tc1', testCaseId: 'tc-1', createdAt: '2024-02-01T00:00:00Z' }],
+        total: 1,
+      });
+
+      const { req, res } = createMocks({}, {}, { testCaseId: 'tc-1', size: '20', fields: 'id,testCaseId' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+      await handler(req, res);
+
+      expect(mockRunsGetAll).not.toHaveBeenCalled();
+      expect(mockRunsSearch).toHaveBeenCalledWith(
+        { testCaseId: 'tc-1', agentId: undefined },
+        { size: 20, from: 0, _source: ['id', 'testCaseId'] },
+      );
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      // Only the matching real run — sample runs belong to other test cases and are filtered out too.
+      expect(body.runs.map((r: any) => r.id)).toEqual(['run-tc1']);
+    });
+
+    it('honours ?agentKey= (mapped to the storage-side agentId filter) and keeps matching sample runs', async () => {
+      mockRunsSearch.mockResolvedValue({ items: [], total: 0 });
+
+      const { req, res } = createMocks({}, {}, { agentKey: 'ml-commons' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+      await handler(req, res);
+
+      expect(mockRunsSearch).toHaveBeenCalledWith(
+        { testCaseId: undefined, agentId: 'ml-commons' },
+        { size: 100, from: 0, _source: undefined },
+      );
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      // The mocked SAMPLE_RUNS have no agentKey → none match.
+      expect(body.runs).toEqual([]);
+    });
+
+    it('rejects unknown query params with 400 UNKNOWN_QUERY_PARAM instead of silently ignoring them', async () => {
+      const { req, res } = createMocks({}, {}, { testcaseid: 'tc-1' });
+      const handler = getRouteHandler(runsRoutes, 'get', '/api/storage/runs');
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        error: expect.stringMatching(/Unknown query parameter 'testcaseid'.*Supported: size, from, fields, ids, testCaseId, agentKey/),
+        code: 'UNKNOWN_QUERY_PARAM',
+      });
+      expect(mockRunsGetAll).not.toHaveBeenCalled();
+      expect(mockRunsSearch).not.toHaveBeenCalled();
+    });
+
     it('batch ids path returns full docs minus rawEvents when no fields given', async () => {
       mockRunsGetById.mockImplementation(async (id: string) => ({
         id,
