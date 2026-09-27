@@ -15,7 +15,7 @@
  * This seeds exactly that shape via the storage API and asserts the Compare
  * scoreboard renders 100% with the denominators spelled out as
  * "1 / 1 (errored 1)", not the deflated 50%. (The accuracy-only column that
- * used to read "90%" here is gone — see the snapshot-aware Avg score.)
+ * used to read "90%" here is gone, and so is the "Avg score" column.)
  */
 
 import { test, expect } from './fixtures/test-fixtures';
@@ -135,11 +135,10 @@ test.describe('Comparison — errored runs excluded from pass rate', () => {
     await expect(page.locator('[data-testid="scoreboard-col-passRate"]')).toHaveText('Pass rate (judge verdict)');
 
     // There is no accuracy-only column any more ("accuracy" is one evaluator's
-    // rubric name, not the score); a snapshot-less run's Avg score is
-    // "— legacy scoring", never a fabricated 45% or 0%.
+    // rubric name, not the score) and no "Avg score" column either, so a
+    // fabricated 45% / 0% has nowhere to appear on the row.
     await expect(page.locator(`[data-testid="run-accuracy-${runId}"]`)).toHaveCount(0);
-    const avgScore = page.locator(`[data-testid="run-avgscore-${runId}"]`);
-    await expect(avgScore).toContainText('—');
-    await expect(avgScore).toContainText('legacy scoring');
+    await expect(page.locator(`[data-testid="run-avgscore-${runId}"]`)).toHaveCount(0);
+    await expect(page.locator('[data-testid="scoreboard-row-A"]')).not.toContainText('45%');
   });
 });

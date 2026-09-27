@@ -13,8 +13,8 @@
  * description. The run names should be clickable to the run link, complete
  * name should show up on hover."):
  *  - every column header renders a non-empty `title` tooltip, with the exact
- *    wording pinned for the two easily-confused ones (Average accuracy vs
- *    Avg score);
+ *    wording pinned per column; neither an accuracy-only column nor an
+ *    "Avg score" column exists any more;
  *  - the run name is an anchor to the run-report route (benchmark-scoped
  *    when the run belongs to a benchmark, bare eval-run route otherwise),
  *    carrying the FULL run name as its title;
@@ -126,12 +126,32 @@ describe('ComparisonScoreboard — column header tooltips', () => {
     }
   });
 
-  it('pins the Avg score wording (snapshot-derived) and has no accuracy-only column', () => {
-    renderScoreboard([makeRun()]);
+  it('renders neither an accuracy-only column nor an "Avg score" column', () => {
+    // A snapshot-scored fixture with a populated aggregate still gets no
+    // "Avg score" header/cell: the column was dropped as noise (it read "—"
+    // for every run judged before scoring snapshots existed).
+    renderScoreboard([makeRun({
+      avgScore: 82,
+      scoring: {
+        source: 'snapshot',
+        evaluatorId: 'eval-demo',
+        evaluatorName: 'Demo evaluator',
+        evaluatorVersion: 2,
+        contentHashes: ['abc'],
+        weights: { fact_precision: 0.7, abstention_integrity: 0.3 },
+        passPolicy: { kind: 'threshold', minScore: 0.7 },
+        scoredReports: 10,
+        scoredRubrics: 20,
+        totalRubrics: 20,
+        primaryMetrics: [],
+      } as RunAggregateMetrics['scoring'],
+    })]);
     expect(screen.queryByTestId('scoreboard-col-avgAccuracy')).toBeNull();
-    expect(screen.getByTestId('scoreboard-col-avgScore').getAttribute('title')).toBe(
-      'Mean of each case\'s weighted rubric score per its scoring snapshot (0–100); "—" for runs judged before scoring snapshots existed',
-    );
+    expect(screen.queryByTestId('scoreboard-col-avgScore')).toBeNull();
+    expect(screen.queryByText('Avg score')).toBeNull();
+    expect(screen.queryByTestId('run-avgscore-run-a')).toBeNull();
+    expect(screen.queryByText('82%')).toBeNull();
+    expect(SCOREBOARD_COLUMNS.map(c => c.key)).not.toContain('avgScore');
   });
 
   it('pins the owner-specified wording for the remaining columns', () => {

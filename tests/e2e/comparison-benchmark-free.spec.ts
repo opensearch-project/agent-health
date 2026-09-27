@@ -173,9 +173,10 @@ test.describe('Benchmark-free comparison (test-level primitive)', () => {
 
     // Every metric renders directly on the row (Change 2) — no click needed.
     await expect(rowA.locator(`[data-testid="run-passrate-${RUN_A}"]`)).toBeVisible();
-    // No accuracy-only column any more; the run-level score cell is "Avg score".
+    // Neither an accuracy-only column nor an "Avg score" column any more —
+    // the per-metric columns carry the score signal.
     await expect(rowA.locator(`[data-testid="run-accuracy-${RUN_A}"]`)).toHaveCount(0);
-    await expect(rowA.locator(`[data-testid="run-avgscore-${RUN_A}"]`)).toBeVisible();
+    await expect(rowA.locator(`[data-testid="run-avgscore-${RUN_A}"]`)).toHaveCount(0);
 
     // Inline "Open run" link (Change 3) — no drawer, no click-to-expand.
     // Since #469 the run NAME is also a link to the same report path (owner:

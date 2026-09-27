@@ -211,8 +211,8 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     judgementRetryCount: (stored as any).judgementRetryCount,
     spans: storedAny.spans as any[] | undefined,
     connectorProtocol: storedAny.connectorProtocol as ConnectorProtocol | undefined,
-    // Frozen scoring provenance — the compare page's "Avg score" reads ONLY
-    // this + `metrics`; absent on pre-snapshot reports (legacy scoring).
+    // Frozen scoring provenance — the comparison payload's run-level score
+    // reads ONLY this + `metrics`; absent on pre-snapshot reports (legacy scoring).
     scoringSnapshot: stored.scoringSnapshot,
     llmVerdict: stored.llmVerdict,
     verdictConflict: stored.verdictConflict,

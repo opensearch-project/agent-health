@@ -12,9 +12,11 @@
  * the AGENT model, and identical case-ID sets were called "fully comparable".
  *
  * Asserts, on the real rendered compare page:
- *   (i)   "Avg score" for the snapshot run is the WEIGHTED value (70%, not
- *         92%) and its hover names evaluator / version / weights / scored X/Y;
- *   (ii)  the legacy run shows "—" + "legacy scoring";
+ *   (i)   there is NO "Avg score" column at all (fast follow — it read "—" for
+ *         every pre-snapshot run); the ≈92 rubric never surfaces as a score,
+ *         and the snapshot's declared primary metric renders as its own
+ *         column by name;
+ *   (ii)  the legacy run's primary-metric cell is "—" (no snapshot);
  *   (iii) the judge caption names the judge model, not the agent model;
  *   (iv)  pass rate reads "passed / evaluated (errored N)" with the policy;
  *   (v)   two runs with different snapshot hashes → Δ row disabled with
@@ -96,12 +98,16 @@ async function seed(request: APIRequestContext, testData: TestDataTracker): Prom
 
   // Every judged report: fact_precision 60, abstention_integrity 92.
   //   weighted (A: 0.7/0.3)  = 0.696 → 70%   |  weighted (C: 0.5/0.5) = 0.76 → 76%
+  // (the run-level weighted score stays in the payload but is no longer a
+  // scoreboard column). Run C's judged reports carry hit_at_1 = 0 so the
+  // primary-metric Δ between A (1.00) and C (0.00) is a real number.
   const metrics = { fact_precision: 60, abstention_integrity: 92, hit_at_1: 1 };
+  const metricsC = { ...metrics, hit_at_1: 0 };
   const verdictsA: Array<'passed' | 'failed' | null> = testCaseIds.map((_, i) => (i === 11 ? null : i < 5 ? 'passed' : 'failed')); // 5/11 = 45%
   const verdictsB: Array<'passed' | 'failed' | null> = testCaseIds.map((_, i) => (i < 8 ? 'passed' : 'failed'));              // split vs A on 5,6,7
   const verdictsC = verdictsA;
 
-  const seedRun = async (verdicts: Array<'passed' | 'failed' | null>, snapshot?: Record<string, unknown>) => {
+  const seedRun = async (verdicts: Array<'passed' | 'failed' | null>, snapshot?: Record<string, unknown>, judgedMetrics: Record<string, number> = metrics) => {
     const ids: Array<string | null> = [];
     for (let i = 0; i < CASES; i++) {
       const v = verdicts[i];
@@ -109,7 +115,7 @@ async function seed(request: APIRequestContext, testData: TestDataTracker): Prom
         testCaseId: testCaseIds[i],
         testCaseVersionId: `${testCaseIds[i]}-v1`,
         ...(v
-          ? { passFailStatus: v, metrics, ...(snapshot ? { scoringSnapshot: snapshot } : {}) }
+          ? { passFailStatus: v, metrics: judgedMetrics, ...(snapshot ? { scoringSnapshot: snapshot } : {}) }
           : { passFailStatus: null, metricsStatus: 'error', traceError: 'Judge evaluation failed: seeded', metrics: { fact_precision: 0, abstention_integrity: 0 }, ...(snapshot ? { scoringSnapshot: snapshot } : {}) }),
       }));
     }
@@ -119,7 +125,7 @@ async function seed(request: APIRequestContext, testData: TestDataTracker): Prom
 
   const reportsA = await seedRun(verdictsA, snapshotA);
   const reportsB = await seedRun(verdictsB);
-  const reportsC = await seedRun(verdictsC, snapshotC);
+  const reportsC = await seedRun(verdictsC, snapshotC, metricsC);
   if (!reportsA || !reportsB || !reportsC) return null;
 
   const stamp = Date.now();
@@ -150,8 +156,8 @@ async function seed(request: APIRequestContext, testData: TestDataTracker): Prom
   return { benchmarkId: bm.id, runA, runB, runC };
 }
 
-test.describe('Comparison — snapshot-aware "Avg score", judge caption, policy-labelled pass rate', () => {
-  test('snapshot run vs legacy run: weighted Avg score, legacy dash, judge caption, pass-rate denominators, banner, differences == split', async ({ page, request, testData }) => {
+test.describe('Comparison — snapshot-aware scoring (no Avg score column), judge caption, policy-labelled pass rate', () => {
+  test('snapshot run vs legacy run: no Avg score column, primary metric by name, judge caption, pass-rate denominators, banner, differences == split', async ({ page, request, testData }) => {
     const seeded = await seed(request, testData);
     test.skip(!seeded, 'Could not seed benchmark/runs/reports (storage not configured?)');
     const { benchmarkId, runA, runB } = seeded!;
@@ -159,28 +165,33 @@ test.describe('Comparison — snapshot-aware "Avg score", judge caption, policy-
     await page.goto(`/compare/${benchmarkId}?runs=${runA},${runB}`);
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
 
-    // (i) Avg score = weighted mean (70%), NOT the ≈92 rubric.
-    const avgA = page.locator(`[data-testid="run-avgscore-${runA}"]`);
-    await expect(avgA).toHaveText('70%', { timeout: 20000 });
-    await expect(avgA).not.toContainText('92');
-    await avgA.hover();
-    const hover = await avgA.getAttribute('title');
-    expect(hover).toContain('Evaluator Demo retrieval evaluator v2');
-    expect(hover).toContain('weights: fact_precision 0.7, abstention_integrity 0.3');
-    expect(hover).toMatch(/scored 22 \/ 22 rubrics over 11 cases/);
+    // (i) No "Avg score" column: neither header nor per-run cell, for the
+    // snapshot run OR the legacy run — and the ≈92 rubric never surfaces as a
+    // run-level score anywhere on either row.
+    const rowA = page.locator('[data-testid="scoreboard-row-A"]');
+    const rowB = page.locator('[data-testid="scoreboard-row-B"]');
+    await expect(rowA).toBeVisible({ timeout: 20000 });
+    await expect(rowB).toBeVisible();
+    await expect(page.locator('[data-testid="scoreboard-col-avgScore"]')).toHaveCount(0);
+    await expect(page.locator(`[data-testid="run-avgscore-${runA}"]`)).toHaveCount(0);
+    await expect(page.locator(`[data-testid="run-avgscore-${runB}"]`)).toHaveCount(0);
+    await expect(page.locator('[data-testid="comparison-scoreboard"] thead')).not.toContainText('Avg score');
+    await expect(rowA).not.toContainText('92%');
+    await expect(rowB).not.toContainText('92%');
+    await expect(rowB).not.toContainText('legacy scoring');
 
     // No accuracy-only column anywhere.
     await expect(page.locator('[data-testid="scoreboard-col-avgAccuracy"]')).toHaveCount(0);
-    // Primary metric declared by the snapshot renders as its own column, by name.
+    // Primary metric declared by the snapshot renders as its own column, by
+    // name, directly after the pass-rate column.
+    const headers = page.locator('[data-testid="comparison-scoreboard"] thead th[data-testid^="scoreboard-col-"]');
+    await expect(headers.nth(1)).toHaveAttribute('data-testid', 'scoreboard-col-passRate');
+    await expect(headers.nth(2)).toHaveAttribute('data-testid', 'scoreboard-col-primary:hit_at_1');
     await expect(page.locator('[data-testid="scoreboard-col-primary:hit_at_1"]')).toHaveText('hit_at_1');
     await expect(page.locator(`[data-testid="run-primary-hit_at_1-${runA}"]`)).toHaveText('1.00');
-    await expect(page.locator(`[data-testid="run-primary-hit_at_1-${runB}"]`)).toHaveText('—');
 
-    // (ii) Legacy run: "—" + "legacy scoring", explained on hover.
-    const avgB = page.locator(`[data-testid="run-avgscore-${runB}"]`);
-    await expect(avgB).toContainText('—');
-    await expect(page.locator(`[data-testid="run-avgscore-legacy-${runB}"]`)).toHaveText('legacy scoring');
-    expect(await avgB.getAttribute('title')).toContain('judged before scoring snapshots existed');
+    // (ii) Legacy run: its primary-metric cell is "—" (no snapshot declares it).
+    await expect(page.locator(`[data-testid="run-primary-hit_at_1-${runB}"]`)).toHaveText('—');
 
     // (iii) Judge caption names the judge, never the agent model.
     const judgeLine = page.locator('[data-testid="scoreboard-judge-line"]');
@@ -217,8 +228,9 @@ test.describe('Comparison — snapshot-aware "Avg score", judge caption, policy-
     await page.goto(`/compare/${benchmarkId}?runs=${runA},${runC}`);
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
 
-    await expect(page.locator(`[data-testid="run-avgscore-${runA}"]`)).toHaveText('70%', { timeout: 20000 });
-    await expect(page.locator(`[data-testid="run-avgscore-${runC}"]`)).toHaveText('76%');
+    await expect(page.locator(`[data-testid="run-primary-hit_at_1-${runA}"]`)).toHaveText('1.00', { timeout: 20000 });
+    await expect(page.locator(`[data-testid="run-primary-hit_at_1-${runC}"]`)).toHaveText('0.00');
+    await expect(page.locator('[data-testid="scoreboard-col-avgScore"]')).toHaveCount(0);
     // Same policy on both → header carries it.
     await expect(page.locator('[data-testid="scoreboard-col-passRate"]')).toHaveText('Pass rate (score ≥ 0.7)');
 
@@ -229,21 +241,25 @@ test.describe('Comparison — snapshot-aware "Avg score", judge caption, policy-
     expect(reason).toMatch(/different scoring snapshots \(/);
     expect(reason).toContain('Snapshot run A: Demo retrieval evaluator v2');
     expect(reason).toContain('Snapshot run C: Demo retrieval evaluator v3');
-    await expect(page.locator('[data-testid="scoreboard-delta-avgscore"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="scoreboard-delta-primary-hit_at_1"]')).toHaveCount(0);
     // Same case IDs, but NOT "same cases, same scoring".
     await expect(page.locator('[data-testid="comparison-overlap-banner"]')).toContainText('same case IDs');
 
-    // Override: "Compare anyway" reveals the Δ row (|70 − 76| = 6).
+    // Override: "Compare anyway" reveals the Δ row — the primary-metric Δ is
+    // |1.00 − 0.00| = 1.00 (sign depends on A/B order) and carries the
+    // "compared anyway" caveat on hover; the pass-rate Δ is visible.
     await page.locator('[data-testid="scoreboard-compare-anyway"]').click();
     await expect(blocked).toHaveCount(0);
-    await expect(page.locator('[data-testid="scoreboard-delta-avgscore"]')).toHaveText(/^[+-]6$/); // |70 − 76|, sign depends on A/B order
+    const primaryDelta = page.locator('[data-testid="scoreboard-delta-primary-hit_at_1"]');
+    await expect(primaryDelta).toHaveText(/^[+-]?1\.00$/);
+    expect(await primaryDelta.getAttribute('title')).toContain('Compared anyway');
     await expect(page.locator('[data-testid="scoreboard-delta-passrate"]')).toBeVisible();
 
     // Session-scoped: a reload keeps the override for this run set.
     await page.reload();
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
-    await expect(page.locator(`[data-testid="run-avgscore-${runA}"]`)).toHaveText('70%', { timeout: 20000 });
+    await expect(page.locator(`[data-testid="run-primary-hit_at_1-${runA}"]`)).toHaveText('1.00', { timeout: 20000 });
     await expect(page.locator('[data-testid="scoreboard-delta-blocked"]')).toHaveCount(0);
-    await expect(page.locator('[data-testid="scoreboard-delta-avgscore"]')).toHaveText(/^[+-]6$/); // |70 − 76|, sign depends on A/B order
+    await expect(primaryDelta).toHaveText(/^[+-]?1\.00$/);
   });
 });

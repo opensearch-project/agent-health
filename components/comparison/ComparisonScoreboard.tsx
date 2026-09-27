@@ -12,7 +12,6 @@ import type { RunAggregateMetrics, BenchmarkRun, RunScoringSummary } from '@/typ
 import type { TestCaseOverlap } from '@/services/comparisonService';
 import { runReportPath } from '@/lib/runReportPath';
 import {
-  avgScoreTooltip,
   formatMetricInScale,
   formatPassRateDetail,
   judgeCaption,
@@ -63,11 +62,14 @@ export interface ComparisonScoreboardProps {
  * primary-metric columns come from the runs' scoring snapshots — see
  * {@link buildScoreboardColumns}. There is deliberately NO accuracy-only
  * column any more: "accuracy" is one evaluator's rubric name, not the score.
+ * Nor is there an "Avg score" column: it read "—" for every run judged
+ * before scoring snapshots existed (owner: noise), so the run-level
+ * weighted aggregate stays in the payload (`RunAggregateMetrics.avgScore`)
+ * but is not rendered here — the per-metric columns carry the score signal.
  */
 export const SCOREBOARD_COLUMNS: ReadonlyArray<{ key: string; label: string; tooltip: string }> = [
   { key: 'run', label: 'Run', tooltip: 'Run name — click to open the run report' },
   { key: 'passRate', label: 'Pass rate', tooltip: 'Passed ÷ evaluated cases (errored cases excluded); the parenthesis names the verdict policy' },
-  { key: 'avgScore', label: 'Avg score', tooltip: 'Mean of each case\'s weighted rubric score per its scoring snapshot (0–100); "—" for runs judged before scoring snapshots existed' },
   { key: 'cost', label: 'Cost', tooltip: 'Total LLM cost across all test cases in the run' },
   { key: 'avgDuration', label: 'Avg Duration', tooltip: 'Mean wall-clock duration per test case' },
   { key: 'tokens', label: 'Tokens', tooltip: 'Total tokens across all test cases' },
@@ -81,8 +83,8 @@ export interface ScoreboardColumn { key: string; label: string; tooltip: string;
 /**
  * Column list for a given run set: the static columns with the pass-rate
  * header labelled by policy, plus one column per primary metric any run's
- * snapshot declares (inserted after "Avg score", declaration order, names
- * passed through verbatim — nothing here knows what "Hit@1" means).
+ * snapshot declares (inserted after the pass-rate column, declaration order,
+ * names passed through verbatim — nothing here knows what "Hit@1" means).
  */
 export function buildScoreboardColumns(runs: ReadonlyArray<RunAggregateMetrics>): ScoreboardColumn[] {
   const primaryNames: string[] = [];
@@ -95,7 +97,7 @@ export function buildScoreboardColumns(runs: ReadonlyArray<RunAggregateMetrics>)
   for (const col of SCOREBOARD_COLUMNS) {
     if (col.key === 'passRate') out.push({ ...col, label: passRateHeaderLabel(runs) });
     else out.push({ ...col });
-    if (col.key === 'avgScore') {
+    if (col.key === 'passRate') {
       for (const name of primaryNames) {
         out.push({
           key: `primary:${name}`,
@@ -112,8 +114,6 @@ export function buildScoreboardColumns(runs: ReadonlyArray<RunAggregateMetrics>)
 /** Runs built before `scoring` existed (or partial fixtures) read as legacy. */
 const scoringOf = (run: Pick<RunAggregateMetrics, 'scoring'>): RunScoringSummary => run.scoring ?? { source: 'legacy' };
 
-/** Label under the "—" of a legacy-scored run. */
-export const LEGACY_SCORING_LABEL = 'legacy scoring';
 /** Δ-row text when the coverage gate blocks the aggregate comparison. */
 export const NOT_COMPARABLE_LABEL = 'Not comparable — different scoring';
 
@@ -613,25 +613,6 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                             </div>
                           </div>
                         </td>
-                        <td
-                          className="px-3 py-2 text-right tabular-nums cursor-help"
-                          data-testid={`run-avgscore-${run.runId}`}
-                          title={avgScoreTooltip(scoringOf(run))}
-                        >
-                          {scoringOf(run).source === 'snapshot' && run.avgScore !== undefined ? (
-                            formatPercent(run.avgScore)
-                          ) : (
-                            <span className="inline-flex flex-col items-end leading-tight">
-                              <span>—</span>
-                              <span
-                                className="text-[9px] text-muted-foreground/80 normal-case tracking-normal"
-                                data-testid={`run-avgscore-legacy-${run.runId}`}
-                              >
-                                {LEGACY_SCORING_LABEL}
-                              </span>
-                            </span>
-                          )}
-                        </td>
                         {columns.filter(c => c.primaryMetric).map(col => {
                           const pm = primaryMean(run, col.primaryMetric as string);
                           return (
@@ -728,7 +709,6 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                     // (two-run specs pin them); further rows are suffixed by letter.
                     const tid = (base: string) => (first ? base : `${base}-${letter}`);
                     const passRateDelta = runA.passRatePercent - runB.passRatePercent;
-                    const avgScoreDelta = diff(runA.avgScore, runB.avgScore);
                     const costDelta = diff(runA.totalCostUsd, runB.totalCostUsd);
                     const durationDelta = diff(runA.avgDurationMs, runB.avgDurationMs);
                     const tokensDelta = diff(runA.totalTokens, runB.totalTokens);
@@ -795,14 +775,6 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                         {formatDelta(runA.passRatePercent, runB.passRatePercent, 'pp')}
                       </span>
                     </td>
-                    <td className="px-3 py-1.5 text-right">
-                      <DeltaCell
-                        testId={tid('scoreboard-delta-avgscore')}
-                        delta={avgScoreDelta}
-                        text={formatDelta(runA.avgScore, runB.avgScore)}
-                        title={deltaCaveat ?? `A minus ${letter}, both from scoring snapshots`}
-                      />
-                    </td>
                     {columns.filter(c => c.primaryMetric).map(col => {
                       const a = primaryMean(runA, col.primaryMetric as string);
                       const b = primaryMean(runB, col.primaryMetric as string);
@@ -813,6 +785,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                             testId={tid(`scoreboard-delta-primary-${col.primaryMetric}`)}
                             delta={d}
                             text={d === undefined ? '' : d === 0 ? '—' : `${d > 0 ? '+' : ''}${formatMetricInScale(d, a!.scale).replace(/^—$/, '')}`}
+                            title={deltaCaveat ?? `A minus B, mean ${col.primaryMetric} from both scoring snapshots`}
                           />
                         </td>
                       );

@@ -602,9 +602,9 @@ export type ScoringPassPolicy =
 
 /**
  * Immutable record of HOW a report was scored, frozen onto the report at
- * judge time. Every aggregate score the UI shows for a report — the compare
- * page's "Avg score", the run inspector's overall — is derived from THIS
- * object and the report's own `metrics`, never from today's (mutable)
+ * judge time. Every aggregate score the UI shows for a report — the run
+ * inspector's overall, the comparison payload's run-level `avgScore` — is
+ * derived from THIS object and the report's own `metrics`, never from today's (mutable)
  * evaluator document. Reports persisted before snapshots existed carry none
  * and render as "legacy scoring": their rubric values are shown by name but
  * are never aggregated into a single score (see `lib/scoring/snapshotScore.ts`).
@@ -1905,11 +1905,13 @@ export interface RunAggregateMetrics {
    */
   avgAccuracy?: number;
   /**
-   * Run-level "Avg score" (0–100): mean of the per-report weighted scores
+   * Run-level weighted score (0–100): mean of the per-report weighted scores
    * derived from each report's {@link ScoringSnapshot} (see
    * `lib/scoring/snapshotScore.ts`). `undefined` when the run is
-   * legacy-scored (`scoring.source === 'legacy'`) — rendered as "—", never
-   * reconstructed from an arbitrary rubric.
+   * legacy-scored (`scoring.source === 'legacy'`) — never reconstructed from
+   * an arbitrary rubric. Part of the comparison payload; the compare
+   * scoreboard no longer renders it as a column (it read "—" for every
+   * pre-snapshot run), the per-metric columns carry the score signal.
    */
   avgScore?: number;
   /** Provenance behind `avgScore` (evaluator, weights, policy, coverage). */
