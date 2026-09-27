@@ -178,8 +178,11 @@ test.describe('Comparison — Avg Accuracy dash when no report carries accuracy'
 
     await expect(page.locator('[data-testid="scoreboard-col-avgScore"]')).toHaveCount(0);
     await expect(page.locator(`[data-testid="run-avgscore-${runId}"]`)).toHaveCount(0);
-    await expect(scoreboard.getByText('Avg score', { exact: false })).toHaveCount(0);
-    await expect(page.locator('[data-testid="scoreboard-row-A"]')).not.toContainText('80%');
+    await expect(scoreboard.locator('thead th[data-testid^="scoreboard-col-"]')).toHaveText([
+      'Run', 'Pass rate (judge verdict)', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage',
+    ]);
+    const rowText = await page.locator('[data-testid="scoreboard-row-A"]').innerText();
+    expect(rowText.match(/\d+%/g)).toEqual(['50%']);
   });
 
   test('per-case cells show rubric values by name (stored order), not a "primary rubric"', async ({ page }) => {

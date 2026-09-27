@@ -80,6 +80,9 @@ export const SCOREBOARD_COLUMNS: ReadonlyArray<{ key: string; label: string; too
 
 export interface ScoreboardColumn { key: string; label: string; tooltip: string; primaryMetric?: string }
 
+/** Static column the evaluator-declared primary-metric columns are inserted after. */
+export const PRIMARY_METRICS_AFTER_COLUMN = 'passRate';
+
 /**
  * Column list for a given run set: the static columns with the pass-rate
  * header labelled by policy, plus one column per primary metric any run's
@@ -97,7 +100,7 @@ export function buildScoreboardColumns(runs: ReadonlyArray<RunAggregateMetrics>)
   for (const col of SCOREBOARD_COLUMNS) {
     if (col.key === 'passRate') out.push({ ...col, label: passRateHeaderLabel(runs) });
     else out.push({ ...col });
-    if (col.key === 'passRate') {
+    if (col.key === PRIMARY_METRICS_AFTER_COLUMN) {
       for (const name of primaryNames) {
         out.push({
           key: `primary:${name}`,

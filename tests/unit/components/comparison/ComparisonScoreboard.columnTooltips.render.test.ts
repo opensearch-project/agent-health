@@ -126,32 +126,64 @@ describe('ComparisonScoreboard — column header tooltips', () => {
     }
   });
 
-  it('renders neither an accuracy-only column nor an "Avg score" column', () => {
+  const snapshotScoring = (primaryMetrics: Array<{ name: string; mean?: number; scale: { min: number; max: number } }> = []): RunAggregateMetrics['scoring'] => ({
+    source: 'snapshot',
+    evaluatorId: 'eval-demo',
+    evaluatorName: 'Demo evaluator',
+    evaluatorVersion: 2,
+    contentHashes: ['abc'],
+    weights: { fact_precision: 0.7, abstention_integrity: 0.3 },
+    passPolicy: { kind: 'threshold', minScore: 0.7 },
+    scoredReports: 10,
+    scoredRubrics: 20,
+    totalRubrics: 20,
+    primaryMetrics,
+  });
+
+  /** Header labels in DOM order (the unlabeled actions column is the trailing ''). */
+  const headerLabels = () => screen.getAllByRole('columnheader').map(th => th.textContent);
+
+  it('renders exactly the static columns — no accuracy-only and no "Avg score" column, under any key or label', () => {
     // A snapshot-scored fixture with a populated aggregate still gets no
     // "Avg score" header/cell: the column was dropped as noise (it read "—"
-    // for every run judged before scoring snapshots existed).
-    renderScoreboard([makeRun({
-      avgScore: 82,
-      scoring: {
-        source: 'snapshot',
-        evaluatorId: 'eval-demo',
-        evaluatorName: 'Demo evaluator',
-        evaluatorVersion: 2,
-        contentHashes: ['abc'],
-        weights: { fact_precision: 0.7, abstention_integrity: 0.3 },
-        passPolicy: { kind: 'threshold', minScore: 0.7 },
-        scoredReports: 10,
-        scoredRubrics: 20,
-        totalRubrics: 20,
-        primaryMetrics: [],
-      } as RunAggregateMetrics['scoring'],
-    })]);
-    expect(screen.queryByTestId('scoreboard-col-avgAccuracy')).toBeNull();
-    expect(screen.queryByTestId('scoreboard-col-avgScore')).toBeNull();
-    expect(screen.queryByText('Avg score')).toBeNull();
+    // for every run judged before scoring snapshots existed). Pinning the
+    // FULL header list means a re-added column fails this test regardless
+    // of the key, test id or wording it comes back under.
+    renderScoreboard([makeRun({ avgScore: 82, scoring: snapshotScoring() })]);
+    expect(headerLabels()).toEqual([
+      'Run', 'Pass rate (score ≥ 0.7)', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage', '',
+    ]);
+    expect(SCOREBOARD_COLUMNS.map(c => c.key)).toEqual(['run', 'passRate', 'cost', 'avgDuration', 'tokens', 'llmCalls', 'toolCalls', 'coverage']);
+    // The row carries no aggregate score cell either: its only percentage is the pass rate.
+    const row = screen.getByTestId('scoreboard-row-A');
+    expect(row.textContent!.match(/\d+%/g)).toEqual(['80%']);
     expect(screen.queryByTestId('run-avgscore-run-a')).toBeNull();
-    expect(screen.queryByText('82%')).toBeNull();
-    expect(SCOREBOARD_COLUMNS.map(c => c.key)).not.toContain('avgScore');
+  });
+
+  it('primary-metric columns sit directly after the pass-rate column and every body/Δ row has as many cells as the header', () => {
+    const hit = { name: 'hit_at_1', scale: { min: 0, max: 1 } };
+    renderScoreboard([
+      makeRun({ avgScore: 82, scoring: snapshotScoring([{ ...hit, mean: 1 }]) }),
+      makeRun({ runId: 'run-b', runName: 'Run B', avgScore: 60, scoring: snapshotScoring([{ ...hit, mean: 0.5 }]) }),
+    ]);
+    expect(headerLabels()).toEqual([
+      'Run', 'Pass rate (score ≥ 0.7)', 'hit_at_1', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage', '',
+    ]);
+    expect(screen.getByTestId('run-primary-hit_at_1-run-a').textContent).toBe('1.00');
+    expect(screen.getByTestId('run-primary-hit_at_1-run-b').textContent).toBe('0.50');
+    expect(screen.getByTestId('scoreboard-delta-primary-hit_at_1').textContent).toBe('+0.50');
+    // Structural guard: the Δ footer is a hand-laid row (dynamic primary cells
+    // + fixed cells + padding), so pin that every row spans the full header —
+    // a removed or re-added column that forgets its footer cell shifts the Δ
+    // values under the wrong headers.
+    const table = screen.getByTestId('comparison-scoreboard').querySelector('table')!;
+    const headerCells = table.querySelectorAll('thead th').length;
+    const rows = Array.from(table.querySelectorAll('tbody tr, tfoot tr'));
+    expect(rows).toHaveLength(3); // A, B, Δ
+    for (const tr of rows) {
+      const span = Array.from(tr.querySelectorAll('td')).reduce((n, td) => n + (td.colSpan || 1), 0);
+      expect(span).toBe(headerCells);
+    }
   });
 
   it('pins the owner-specified wording for the remaining columns', () => {

@@ -175,18 +175,21 @@ test.describe('Comparison — snapshot-aware scoring (no Avg score column), judg
     await expect(page.locator('[data-testid="scoreboard-col-avgScore"]')).toHaveCount(0);
     await expect(page.locator(`[data-testid="run-avgscore-${runA}"]`)).toHaveCount(0);
     await expect(page.locator(`[data-testid="run-avgscore-${runB}"]`)).toHaveCount(0);
-    await expect(page.locator('[data-testid="comparison-scoreboard"] thead')).not.toContainText('Avg score');
-    await expect(rowA).not.toContainText('92%');
-    await expect(rowB).not.toContainText('92%');
-    await expect(rowB).not.toContainText('legacy scoring');
+    // Exact header list: a re-added column under ANY key/label fails here.
+    await expect(page.locator('[data-testid="comparison-scoreboard"] thead th[data-testid^="scoreboard-col-"]')).toHaveText([
+      'Run', 'Pass rate (mixed policies)', 'hit_at_1', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage',
+    ]);
+    // The only percentages on either row are the pass rates (45% / 67%) — the ≈92 rubric never surfaces.
+    for (const row of [rowA, rowB]) {
+      const pct = (await row.innerText()).match(/\d+%/g);
+      expect(pct).toHaveLength(1);
+      expect(['45%', '67%']).toContain(pct![0]);
+    }
 
     // No accuracy-only column anywhere.
     await expect(page.locator('[data-testid="scoreboard-col-avgAccuracy"]')).toHaveCount(0);
     // Primary metric declared by the snapshot renders as its own column, by
     // name, directly after the pass-rate column.
-    const headers = page.locator('[data-testid="comparison-scoreboard"] thead th[data-testid^="scoreboard-col-"]');
-    await expect(headers.nth(1)).toHaveAttribute('data-testid', 'scoreboard-col-passRate');
-    await expect(headers.nth(2)).toHaveAttribute('data-testid', 'scoreboard-col-primary:hit_at_1');
     await expect(page.locator('[data-testid="scoreboard-col-primary:hit_at_1"]')).toHaveText('hit_at_1');
     await expect(page.locator(`[data-testid="run-primary-hit_at_1-${runA}"]`)).toHaveText('1.00');
 

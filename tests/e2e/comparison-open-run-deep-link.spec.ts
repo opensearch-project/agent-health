@@ -201,7 +201,7 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
     // 8 static columns (the accuracy-only and "Avg score" columns are gone);
     // snapshot-declared primary metrics would add more, but these legacy
     // fixtures declare none.
-    await expect(headers).toHaveCount(8);
+    await expect(headers).toHaveText(['Run', 'Pass rate (judge verdict)', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage']);
     for (let i = 0; i < 8; i++) {
       const title = await headers.nth(i).getAttribute('title');
       expect(title, `header ${i} should have a tooltip`).toBeTruthy();

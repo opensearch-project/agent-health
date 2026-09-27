@@ -139,6 +139,10 @@ test.describe('Comparison — errored runs excluded from pass rate', () => {
     // fabricated 45% / 0% has nowhere to appear on the row.
     await expect(page.locator(`[data-testid="run-accuracy-${runId}"]`)).toHaveCount(0);
     await expect(page.locator(`[data-testid="run-avgscore-${runId}"]`)).toHaveCount(0);
-    await expect(page.locator('[data-testid="scoreboard-row-A"]')).not.toContainText('45%');
+    await expect(page.locator('[data-testid="comparison-scoreboard"] thead th[data-testid^="scoreboard-col-"]')).toHaveText([
+      'Run', 'Pass rate (judge verdict)', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage',
+    ]);
+    const rowText = await page.locator('[data-testid="scoreboard-row-A"]').innerText();
+    expect(rowText.match(/\d+%/g)).toEqual(['100%']);
   });
 });
