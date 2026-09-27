@@ -614,14 +614,6 @@ select:focus {
     max-width: 100%;
     flex-wrap: wrap;
   }
-  .mobile-responsive-content [role="tablist"] {
-    max-width: 100%;
-    justify-content: flex-start;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .mobile-responsive-content [role="tablist"] > * { flex: 0 0 auto; }
-
   /* Touch targets: preserve visual compactness while providing a 40px hit box. */
   .mobile-responsive-content button,
   .mobile-responsive-content [role="button"],
@@ -633,15 +625,6 @@ select:focus {
     min-width: 40px;
   }
 
-  /* Radix overlays must fit inside the phone viewport. */
-  [role="dialog"] {
-    max-width: calc(100vw - 1rem) !important;
-    max-height: calc(100dvh - 1rem) !important;
-    overflow-y: auto;
-  }
-  [data-radix-popper-content-wrapper] {
-    max-width: calc(100vw - .5rem);
-  }
 }
 
 @media (max-width: 639px) {
