@@ -9,7 +9,7 @@
 
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import config from '../config';
-import { TrajectoryStep, ImprovementStrategy, Evaluator, EvaluationMetrics } from '@/types';
+import { TrajectoryStep, ImprovementStrategy, Evaluator, EvaluationMetrics, PassFailStatus, ScoringSnapshot } from '@/types';
 import { debug } from '@/lib/debug';
 import { getDefaultEvaluator } from '@/server/prompts/evaluatorTemplates';
 import { AGENT_PATH_SYSTEM_ADDENDUM } from '@/server/prompts/judgePrompt';
@@ -109,6 +109,18 @@ export interface JudgeResponse {
    * which cases had trace evidence behind them.
    */
   judgeMode?: 'trajectory-only' | 'trace-tools';
+  /**
+   * Verdict-engine outputs, stamped by the `/api/judge` route via
+   * `applyScoringToJudgeResponse` (lib/scoring/applyScoring.ts) AFTER the
+   * provider returned. `passFailStatus` above is then the ENGINE's verdict
+   * (== the LLM's under the frozen `llm-verdict` policy); the LLM's own
+   * verdict is preserved here as `llmVerdict`. Providers never set these.
+   */
+  llmVerdict?: PassFailStatus;
+  verdictConflict?: boolean;
+  /** Weighted mean of the evaluator's rubrics normalized to [0,1]; absent when nothing was scorable. */
+  score?: number;
+  scoringSnapshot?: ScoringSnapshot;
 }
 
 // ============================================================================

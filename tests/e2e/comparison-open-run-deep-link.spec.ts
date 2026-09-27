@@ -198,16 +198,17 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
     // Owner: "each column should be explainable by a hover with a one line
     // description" — every labeled header carries a non-empty title.
     const headers = page.locator('[data-testid="comparison-scoreboard"] thead th[data-testid^="scoreboard-col-"]');
-    await expect(headers).toHaveCount(10);
-    for (let i = 0; i < 10; i++) {
+    // 9 static columns (the accuracy-only column is gone); snapshot-declared
+    // primary metrics would add more, but these legacy fixtures declare none.
+    await expect(headers).toHaveCount(9);
+    for (let i = 0; i < 9; i++) {
       const title = await headers.nth(i).getAttribute('title');
       expect(title, `header ${i} should have a tooltip`).toBeTruthy();
       expect(title).not.toContain('\n');
     }
-    await expect(page.locator('[data-testid="scoreboard-col-avgAccuracy"]')).toHaveAttribute(
-      'title', 'Mean of the judge-graded accuracy over test cases that report one');
+    await expect(page.locator('[data-testid="scoreboard-col-avgAccuracy"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="scoreboard-col-avgScore"]')).toHaveAttribute(
-      'title', 'Mean per-case overall score: accuracy if present, else primary rubric, else mean of all rubric metrics');
+      'title', 'Mean of each case\'s weighted rubric score per its scoring snapshot (0–100); "—" for runs judged before scoring snapshots existed');
 
     // Keyboard: the name link is focusable and Enter activates it (the
     // sticky header must not swallow the event).

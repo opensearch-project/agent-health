@@ -8,15 +8,25 @@ import { Link } from 'react-router-dom';
 import { ChevronUp, ExternalLink, X, ArrowUpDown } from 'lucide-react';
 import { cn, formatRelativeTime, getModelName } from '@/lib/utils';
 import { formatCost, formatDuration, formatTokens } from '@/services/metrics';
-import type { RunAggregateMetrics, BenchmarkRun } from '@/types';
+import type { RunAggregateMetrics, BenchmarkRun, RunScoringSummary } from '@/types';
 import type { TestCaseOverlap } from '@/services/comparisonService';
 import { runReportPath } from '@/lib/runReportPath';
+import {
+  avgScoreTooltip,
+  formatMetricInScale,
+  formatPassRateDetail,
+  judgeCaption,
+  passRateHeaderLabel,
+  runPassPolicyLabel,
+  type ScoringComparability,
+} from '@/lib/comparison/scoringDisplay';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 export interface ComparisonScoreboardProps {
   runs: RunAggregateMetrics[];
-  selectedRuns: BenchmarkRun[];
+  /** The raw selected runs (kept for callers; the judge caption now reads the resolved judge off `runs`). */
+  selectedRuns?: BenchmarkRun[];
   overlap: TestCaseOverlap;
   /**
    * runId -> benchmarkId lookup (undefined for ad-hoc/eval-runs). Benchmark
@@ -28,6 +38,16 @@ export interface ComparisonScoreboardProps {
   onRemoveRun: (id: string) => void;
   onSwapRuns: () => void;
   getAgentName: (key: string) => string;
+  /**
+   * Coverage gate (see lib/comparison/scoringDisplay.ts
+   * assessScoringComparability): when the runs were scored differently the
+   * Δ row is replaced by "Not comparable — different scoring" until the user
+   * clicks "Compare anyway". Defaults to comparable so single-purpose callers
+   * / older tests need not thread it.
+   */
+  comparability?: ScoringComparability;
+  compareAnyway?: boolean;
+  onCompareAnyway?: () => void;
 }
 
 // ─── Column definitions ──────────────────────────────────────────────────────
@@ -35,14 +55,17 @@ export interface ComparisonScoreboardProps {
 /**
  * Every scoreboard column header carries a one-line hover explanation
  * (owner: "each column should be explainable by a hover with a one line
- * description"). Kept as data so tests can assert the exact wording — the
- * Average accuracy vs Avg score distinction in particular is subtle.
+ * description"). Kept as data so tests can assert the exact wording.
+ *
+ * The pass-rate header is dynamic (it carries the verdict policy) and the
+ * primary-metric columns come from the runs' scoring snapshots — see
+ * {@link buildScoreboardColumns}. There is deliberately NO accuracy-only
+ * column any more: "accuracy" is one evaluator's rubric name, not the score.
  */
 export const SCOREBOARD_COLUMNS: ReadonlyArray<{ key: string; label: string; tooltip: string }> = [
   { key: 'run', label: 'Run', tooltip: 'Run name — click to open the run report' },
-  { key: 'passRate', label: 'Pass Rate', tooltip: '% of test cases whose verdict is pass' },
-  { key: 'avgAccuracy', label: 'Average accuracy', tooltip: 'Mean of the judge-graded accuracy over test cases that report one' },
-  { key: 'avgScore', label: 'Avg score', tooltip: 'Mean per-case overall score: accuracy if present, else primary rubric, else mean of all rubric metrics' },
+  { key: 'passRate', label: 'Pass rate', tooltip: 'Passed ÷ evaluated cases (errored cases excluded); the parenthesis names the verdict policy' },
+  { key: 'avgScore', label: 'Avg score', tooltip: 'Mean of each case\'s weighted rubric score per its scoring snapshot (0–100); "—" for runs judged before scoring snapshots existed' },
   { key: 'cost', label: 'Cost', tooltip: 'Total LLM cost across all test cases in the run' },
   { key: 'avgDuration', label: 'Avg Duration', tooltip: 'Mean wall-clock duration per test case' },
   { key: 'tokens', label: 'Tokens', tooltip: 'Total tokens across all test cases' },
@@ -50,6 +73,47 @@ export const SCOREBOARD_COLUMNS: ReadonlyArray<{ key: string; label: string; too
   { key: 'toolCalls', label: 'Tool Calls', tooltip: 'Total tool invocations across all test cases' },
   { key: 'coverage', label: 'Coverage', tooltip: 'Test cases this run shares with the comparison set' },
 ];
+
+export interface ScoreboardColumn { key: string; label: string; tooltip: string; primaryMetric?: string }
+
+/**
+ * Column list for a given run set: the static columns with the pass-rate
+ * header labelled by policy, plus one column per primary metric any run's
+ * snapshot declares (inserted after "Avg score", declaration order, names
+ * passed through verbatim — nothing here knows what "Hit@1" means).
+ */
+export function buildScoreboardColumns(runs: ReadonlyArray<RunAggregateMetrics>): ScoreboardColumn[] {
+  const primaryNames: string[] = [];
+  for (const run of runs) {
+    const scoring = scoringOf(run);
+    if (scoring.source !== 'snapshot') continue;
+    for (const pm of scoring.primaryMetrics) if (!primaryNames.includes(pm.name)) primaryNames.push(pm.name);
+  }
+  const out: ScoreboardColumn[] = [];
+  for (const col of SCOREBOARD_COLUMNS) {
+    if (col.key === 'passRate') out.push({ ...col, label: passRateHeaderLabel(runs) });
+    else out.push({ ...col });
+    if (col.key === 'avgScore') {
+      for (const name of primaryNames) {
+        out.push({
+          key: `primary:${name}`,
+          label: name,
+          tooltip: `Run-level mean of the evaluator-declared primary metric "${name}" (raw scale)`,
+          primaryMetric: name,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** Runs built before `scoring` existed (or partial fixtures) read as legacy. */
+const scoringOf = (run: Pick<RunAggregateMetrics, 'scoring'>): RunScoringSummary => run.scoring ?? { source: 'legacy' };
+
+/** Label under the "—" of a legacy-scored run. */
+export const LEGACY_SCORING_LABEL = 'legacy scoring';
+/** Δ-row text when the coverage gate blocks the aggregate comparison. */
+export const NOT_COMPARABLE_LABEL = 'Not comparable — different scoring';
 
 /** Tooltip on the delta footer's row label. */
 export const DELTA_ROW_TOOLTIP = 'A minus B per column; blue/green when A is better on that metric, red when worse';
@@ -212,27 +276,57 @@ const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentNa
 // ─── Judge line ──────────────────────────────────────────────────────────────
 
 /**
- * Judge info used to live per-row in an expandable drawer, duplicated once
- * per run. Owner feedback: show it exactly ONCE — a single muted line, not a
- * per-run dropdown. Same judge model across all selected runs collapses to
- * one name; differing judges show both, labeled A/B.
+ * Judge info is shown exactly ONCE — a single muted line. It names the JUDGE
+ * that produced the verdicts (resolved per report: `report.judgeModel` →
+ * `llmJudgeResponse.modelId` → `judgeModelId` → run.judgeModelId; see
+ * lib/comparison/scoringDisplay.ts), never the agent model under test — the
+ * old caption read `run.modelId` and labelled the agent as the judge. Same
+ * judge across all runs collapses to one name; differing judges show both,
+ * labelled A/B. A run whose reports resolved to several judges reads
+ * "mixed (a · b)"; runs with no judge information at all read "not recorded"
+ * — an honest blank, never the agent model standing in.
  */
-const JudgeLine: React.FC<{ selectedRuns: BenchmarkRun[] }> = ({ selectedRuns }) => {
-  const modelIds = selectedRuns.map(r => r.modelId).filter((m): m is string => !!m);
-  if (modelIds.length === 0) return null;
-  const allSame = modelIds.every(m => m === modelIds[0]);
+const JudgeLine: React.FC<{ runs: RunAggregateMetrics[] }> = ({ runs }) => {
+  const captions = runs.slice(0, 2).map(r => judgeCaption(r, getModelName));
+  if (captions.length === 0) return null;
+  const allSame = captions.every(c => c === captions[0]);
 
   return (
     <div className="px-4 py-1.5 text-[11px] text-muted-foreground" data-testid="scoreboard-judge-line">
       {allSame ? (
-        <span>Judge: {getModelName(modelIds[0])}</span>
+        <span>Judge: {captions[0]}</span>
       ) : (
         <span>
-          Judge: A {getModelName(modelIds[0])}
-          {modelIds[1] !== undefined && <> · B {getModelName(modelIds[1])}</>}
+          Judge: A {captions[0]}
+          {captions.length > 1 && <> · B {captions[1]}</>}
         </span>
       )}
     </div>
+  );
+};
+
+/** Δ cell shared by the numeric footer columns. */
+const DeltaCell: React.FC<{
+  testId: string;
+  delta: number | undefined;
+  text: string;
+  betterWhenLower?: boolean;
+  title?: string;
+}> = ({ testId, delta, text, betterWhenLower = false, title }) => {
+  if (delta === undefined) return null;
+  const good = betterWhenLower ? delta < 0 : delta > 0;
+  const bad = betterWhenLower ? delta > 0 : delta < 0;
+  return (
+    <span
+      data-testid={testId}
+      className={cn(
+        'tabular-nums text-[11px]',
+        good ? (betterWhenLower ? 'text-green-400' : 'text-blue-400') : bad ? 'text-red-400' : 'text-muted-foreground'
+      )}
+      title={delta === 0 ? 'No change' : title}
+    >
+      {text}
+    </span>
   );
 };
 
@@ -240,12 +334,14 @@ const JudgeLine: React.FC<{ selectedRuns: BenchmarkRun[] }> = ({ selectedRuns })
 
 export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
   runs,
-  selectedRuns,
   overlap,
   runBenchmarkIdById,
   onRemoveRun,
   onSwapRuns,
   getAgentName,
+  comparability = { comparable: true, reasons: [] },
+  compareAnyway = false,
+  onCompareAnyway,
 }) => {
   const [isCondensed, setIsCondensed] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -285,14 +381,11 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
   if (runs.length === 0) return null;
 
   const [runA, runB] = runs;
+  const columns = buildScoreboardColumns(runs);
   const passRateDelta = runB ? runA.passRatePercent - runB.passRatePercent : 0;
-  const accuracyDelta = (runB && runA.avgAccuracy !== undefined && runB.avgAccuracy !== undefined)
-    ? runA.avgAccuracy - runB.avgAccuracy
-    : undefined;
-  // Only directly comparable when both runs' reports were scored by the same
-  // evaluator — a custom evaluator's "primary rubric" is an
-  // alphabetically-picked metric name, not a fixed quantity across
-  // evaluators (see the delta cell's tooltip below).
+  // Only defined when BOTH runs are snapshot-scored; a legacy run has no
+  // score to diff against (and the coverage gate below blocks the row when
+  // the two snapshots differ).
   const avgScoreDelta = (runB && runA.avgScore !== undefined && runB.avgScore !== undefined)
     ? runA.avgScore - runB.avgScore
     : undefined;
@@ -305,6 +398,24 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
   const tokensDelta = (runB && runA.totalTokens !== undefined && runB.totalTokens !== undefined)
     ? runA.totalTokens - runB.totalTokens
     : undefined;
+  const deltaBlocked = !!runB && !comparability.comparable && !compareAnyway;
+  // Tooltip caveat on the Δ cells: why an overridden comparison is shaky, or
+  // that two legacy runs carry no scoring provenance at all.
+  const bothLegacy = !!runB && runs.slice(0, 2).every(r => scoringOf(r).source === 'legacy');
+  const deltaCaveat = compareAnyway && !comparability.comparable
+    ? `Compared anyway — ${comparability.reasons.join(' · ')}`
+    : bothLegacy
+      ? 'Both runs are legacy-scored: evaluator version and verdict policy were not recorded, so this Δ compares two opaque judge-verdict streams.'
+      : undefined;
+  const primaryMean = (run: RunAggregateMetrics, name: string) => {
+    const scoring = scoringOf(run);
+    return scoring.source === 'snapshot' ? scoring.primaryMetrics.find(pm => pm.name === name) : undefined;
+  };
+  // Coverage wording: "same case IDs" is all that identical test-case sets
+  // prove. Only when the scoring snapshots AND test-case versions also match
+  // may the cell claim "same cases, same scoring".
+  const sameScoring = overlap.fullyOverlapping && comparability.comparable
+    && runs.slice(0, 2).every(r => scoringOf(r).source === 'snapshot');
 
   return (
     <>
@@ -333,7 +444,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border/50 text-[10px] uppercase tracking-wide text-muted-foreground">
-                    {SCOREBOARD_COLUMNS.map(col => (
+                    {columns.map(col => (
                       <th
                         key={col.key}
                         data-testid={`scoreboard-col-${col.key}`}
@@ -385,21 +496,53 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                         </td>
                         <td className="px-3 py-2 text-right relative">
                           <MicroBar percent={run.passRatePercent} color={barColor} />
-                          <span
-                            data-testid={`run-passrate-${run.runId}`}
-                            className="relative font-semibold tabular-nums"
-                          >
-                            {formatPercent(run.passRatePercent)}
-                          </span>
+                          <div className="relative" title={`Pass rate (${runPassPolicyLabel(scoringOf(run))}): passed ÷ evaluated cases; errored cases are excluded from the denominator`}>
+                            <span
+                              data-testid={`run-passrate-${run.runId}`}
+                              className="font-semibold tabular-nums"
+                            >
+                              {formatPercent(run.passRatePercent)}
+                            </span>
+                            <div
+                              data-testid={`run-passrate-detail-${run.runId}`}
+                              className="text-[10px] text-muted-foreground tabular-nums whitespace-nowrap"
+                            >
+                              {formatPassRateDetail(run)}
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          <span data-testid={`run-accuracy-${run.runId}`}>
-                            {formatPercent(run.avgAccuracy)}
-                          </span>
+                        <td
+                          className="px-3 py-2 text-right tabular-nums cursor-help"
+                          data-testid={`run-avgscore-${run.runId}`}
+                          title={avgScoreTooltip(scoringOf(run))}
+                        >
+                          {scoringOf(run).source === 'snapshot' && run.avgScore !== undefined ? (
+                            formatPercent(run.avgScore)
+                          ) : (
+                            <span className="inline-flex flex-col items-end leading-tight">
+                              <span>—</span>
+                              <span
+                                className="text-[9px] text-muted-foreground/80 normal-case tracking-normal"
+                                data-testid={`run-avgscore-legacy-${run.runId}`}
+                              >
+                                {LEGACY_SCORING_LABEL}
+                              </span>
+                            </span>
+                          )}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-avgscore-${run.runId}`}>
-                          {formatPercent(run.avgScore)}
-                        </td>
+                        {columns.filter(c => c.primaryMetric).map(col => {
+                          const pm = primaryMean(run, col.primaryMetric as string);
+                          return (
+                            <td
+                              key={col.key}
+                              className="px-3 py-2 text-right tabular-nums"
+                              data-testid={`run-primary-${col.primaryMetric}-${run.runId}`}
+                              title={pm ? `Mean ${col.primaryMetric} over evaluated cases (raw scale ${pm.scale.min}–${pm.scale.max})` : `${col.primaryMetric} not declared by this run's scoring snapshot`}
+                            >
+                              {pm ? formatMetricInScale(pm.mean, pm.scale) : '—'}
+                            </td>
+                          );
+                        })}
                         <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-cost-${run.runId}`} title={traceCellTitle(run)}>
                           {traceCellPrefix(run, run.totalCostUsd)}{formatCostSafe(run.totalCostUsd)}
                         </td>
@@ -426,7 +569,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                               className="text-muted-foreground cursor-help"
                               title={
                                 overlap.fullyOverlapping
-                                  ? `All ${overlap.runCount} runs ran the same ${overlap.totalTestCases} test case${overlap.totalTestCases === 1 ? '' : 's'} — fully comparable.`
+                                  ? `All ${overlap.runCount} runs ran the same ${overlap.totalTestCases} test case${overlap.totalTestCases === 1 ? '' : 's'} — ${sameScoring ? 'same cases, same scoring.' : 'same case IDs (scoring provenance not verified to match).'}`
                                   : `${overlap.partialTestCases} case${overlap.partialTestCases === 1 ? '' : 's'} only in some runs (shown as "Not run" where skipped). ` +
                                     overlap.perRun
                                       .map(r => `${r.runName}: ${r.count} ran${r.uniqueCount > 0 ? `, ${r.uniqueCount} only here` : ''}`)
@@ -438,8 +581,8 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                                   {overlap.totalTestCases} case{overlap.totalTestCases === 1 ? '' : 's'}
                                 </span>
                               ) : overlap.fullyOverlapping ? (
-                                <span className="text-green-400">
-                                  {overlap.sharedTestCases} in both, fully comparable
+                                <span className={sameScoring ? 'text-green-400' : 'text-muted-foreground'}>
+                                  {overlap.sharedTestCases} in both, {sameScoring ? 'same cases, same scoring' : 'same case IDs'}
                                 </span>
                               ) : (
                                 <span className="text-amber-400">
@@ -494,6 +637,31 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                         </button>
                       </div>
                     </td>
+                    {deltaBlocked ? (
+                      <td className="px-3 py-1.5 text-left" colSpan={columns.length}>
+                        <span className="inline-flex items-center gap-2 text-[11px]">
+                          <span
+                            data-testid="scoreboard-delta-blocked"
+                            className="text-amber-400 cursor-help"
+                            title={comparability.reasons.join(' · ')}
+                          >
+                            {NOT_COMPARABLE_LABEL}
+                          </span>
+                          {onCompareAnyway && (
+                            <button
+                              type="button"
+                              data-testid="scoreboard-compare-anyway"
+                              onClick={onCompareAnyway}
+                              className="text-[10px] underline text-muted-foreground hover:text-foreground"
+                              title="Show the Δ row even though the runs were scored differently (remembered for this browser session)"
+                            >
+                              Compare anyway
+                            </button>
+                          )}
+                        </span>
+                      </td>
+                    ) : (
+                      <>
                     <td className="px-3 py-1.5 text-right">
                       <span
                         data-testid="scoreboard-delta-passrate"
@@ -501,89 +669,63 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                           'font-semibold tabular-nums text-[11px]',
                           passRateDelta > 0 ? 'text-blue-400' : passRateDelta < 0 ? 'text-red-400' : 'text-muted-foreground'
                         )}
-                        title={passRateDelta === 0 ? 'No change' : undefined}
+                        title={passRateDelta === 0 ? 'No change' : deltaCaveat}
                       >
                         {formatDelta(runA.passRatePercent, runB.passRatePercent, 'pp')}
                       </span>
                     </td>
                     <td className="px-3 py-1.5 text-right">
-                      {accuracyDelta !== undefined && (
-                        <span
-                          data-testid="scoreboard-delta-accuracy"
-                          className={cn(
-                            'tabular-nums text-[11px]',
-                            accuracyDelta > 0 ? 'text-blue-400' : accuracyDelta < 0 ? 'text-red-400' : 'text-muted-foreground'
-                          )}
-                          title={accuracyDelta === 0 ? 'No change' : undefined}
-                        >
-                          {formatDelta(runA.avgAccuracy, runB.avgAccuracy, 'pp')}
-                        </span>
-                      )}
+                      <DeltaCell
+                        testId="scoreboard-delta-avgscore"
+                        delta={avgScoreDelta}
+                        text={formatDelta(runA.avgScore, runB.avgScore)}
+                        title={deltaCaveat ?? 'A minus B, both from scoring snapshots'}
+                      />
+                    </td>
+                    {columns.filter(c => c.primaryMetric).map(col => {
+                      const a = primaryMean(runA, col.primaryMetric as string);
+                      const b = primaryMean(runB, col.primaryMetric as string);
+                      const d = a?.mean !== undefined && b?.mean !== undefined ? a.mean - b.mean : undefined;
+                      return (
+                        <td key={col.key} className="px-3 py-1.5 text-right">
+                          <DeltaCell
+                            testId={`scoreboard-delta-primary-${col.primaryMetric}`}
+                            delta={d}
+                            text={d === undefined ? '' : d === 0 ? '—' : `${d > 0 ? '+' : ''}${formatMetricInScale(d, a!.scale).replace(/^—$/, '')}`}
+                          />
+                        </td>
+                      );
+                    })}
+                    <td className="px-3 py-1.5 text-right">
+                      <DeltaCell
+                        testId="scoreboard-delta-cost"
+                        delta={costDelta}
+                        betterWhenLower
+                        text={costDelta === undefined ? '' : costDelta === 0 ? '—' : (costDelta > 0 ? '+' : '') + formatCost(costDelta)}
+                      />
                     </td>
                     <td className="px-3 py-1.5 text-right">
-                      {avgScoreDelta !== undefined && (
-                        <span
-                          data-testid="scoreboard-delta-avgscore"
-                          className={cn(
-                            'tabular-nums text-[11px]',
-                            avgScoreDelta > 0 ? 'text-blue-400' : avgScoreDelta < 0 ? 'text-red-400' : 'text-muted-foreground'
-                          )}
-                          title={
-                            avgScoreDelta === 0
-                              ? 'No change'
-                              : "Only directly comparable when both runs' reports were scored by the same evaluator — a custom evaluator's \"primary rubric\" is an alphabetically-picked metric name, not a fixed quantity across evaluators."
-                          }
-                        >
-                          {formatDelta(runA.avgScore, runB.avgScore)}
-                        </span>
-                      )}
+                      <DeltaCell
+                        testId="scoreboard-delta-duration"
+                        delta={durationDelta}
+                        betterWhenLower
+                        text={durationDelta === undefined ? '' : durationDelta === 0 ? '—' : (durationDelta > 0 ? '+' : '-') + formatDuration(Math.abs(durationDelta))}
+                      />
                     </td>
                     <td className="px-3 py-1.5 text-right">
-                      {costDelta !== undefined && (
-                        <span
-                          data-testid="scoreboard-delta-cost"
-                          className={cn(
-                            'tabular-nums text-[11px]',
-                            costDelta < 0 ? 'text-green-400' : costDelta > 0 ? 'text-red-400' : 'text-muted-foreground'
-                          )}
-                          title={costDelta === 0 ? 'No change' : undefined}
-                        >
-                          {costDelta === 0 ? '—' : (costDelta > 0 ? '+' : '') + formatCost(costDelta)}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-1.5 text-right">
-                      {durationDelta !== undefined && (
-                        <span
-                          data-testid="scoreboard-delta-duration"
-                          className={cn(
-                            'tabular-nums text-[11px]',
-                            durationDelta < 0 ? 'text-green-400' : durationDelta > 0 ? 'text-red-400' : 'text-muted-foreground'
-                          )}
-                          title={durationDelta === 0 ? 'No change' : undefined}
-                        >
-                          {durationDelta === 0 ? '—' : (durationDelta > 0 ? '+' : '-') + formatDuration(Math.abs(durationDelta))}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-1.5 text-right">
-                      {tokensDelta !== undefined && (
-                        <span
-                          data-testid="scoreboard-delta-tokens"
-                          className={cn(
-                            'tabular-nums text-[11px]',
-                            tokensDelta < 0 ? 'text-green-400' : tokensDelta > 0 ? 'text-red-400' : 'text-muted-foreground'
-                          )}
-                          title={tokensDelta === 0 ? 'No change' : undefined}
-                        >
-                          {tokensDelta === 0 ? '—' : (tokensDelta > 0 ? '+' : '-') + formatTokens(Math.abs(tokensDelta))}
-                        </span>
-                      )}
+                      <DeltaCell
+                        testId="scoreboard-delta-tokens"
+                        delta={tokensDelta}
+                        betterWhenLower
+                        text={tokensDelta === undefined ? '' : tokensDelta === 0 ? '—' : (tokensDelta > 0 ? '+' : '-') + formatTokens(Math.abs(tokensDelta))}
+                      />
                     </td>
                     <td className="px-3 py-1.5"></td>
                     <td className="px-3 py-1.5"></td>
                     <td className="px-3 py-1.5"></td>
                     <td className="px-2 py-1.5"></td>
+                      </>
+                    )}
                   </tr>
                 </tfoot>
                 )}
@@ -592,7 +734,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
 
             {/* Judge info — once, not per-row (replaces the old per-run drawer). */}
             <div className="border-t border-border/50">
-              <JudgeLine selectedRuns={selectedRuns} />
+              <JudgeLine runs={runs} />
             </div>
           </>
         )}

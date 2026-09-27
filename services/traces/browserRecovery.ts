@@ -27,6 +27,7 @@ import {
   formatExpectedOutcomesAsClaim,
 } from '@/lib/matchers/judgeAccessor';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
+import { scoringFieldsFromJudgment } from '@/lib/scoring/verdictEngine';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 
 /**
@@ -112,8 +113,7 @@ export function ensureTracePollingForReport(
 
           await asyncRunStorage.updateReport(report.id, {
             metricsStatus: 'ready',
-            passFailStatus: judgment.passFailStatus,
-            metrics: judgment.metrics,
+            ...scoringFieldsFromJudgment(judgment),
             llmJudgeReasoning: judgment.llmJudgeReasoning,
             // Set only by the agent (trace) judge provider -- see
             // JudgeResponse.judgeMode / TestCaseRun.judgeMode.

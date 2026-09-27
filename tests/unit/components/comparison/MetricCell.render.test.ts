@@ -75,43 +75,53 @@ describe('MetricCell accuracy chip (fabricated-0% regression)', () => {
 });
 
 /**
- * Render tests for MetricCell's PRIMARY RUBRIC fallback chip — owner spec:
- * "the percentage of the rubric for each test case should show the primary
- * rubric". When a report carries no `metrics.accuracy` (custom evaluators),
- * the cell falls back to showing the report's primary rubric (see
- * services/comparisonService.ts `getPrimaryRubric`) instead of a bare
- * verdict with no number at all.
+ * Render tests for MetricCell's per-case number when a report carries no
+ * `metrics.accuracy`:
+ *   - snapshot-scored report → the weighted `score` chip;
+ *   - legacy report → rubric values BY NAME (stored order), never one of them
+ *     picked (alphabetically or otherwise) and relabelled as the score.
  */
-describe('MetricCell primary-rubric fallback chip', () => {
-  it('shows the primary rubric name + value when accuracy is absent but a primary rubric exists', () => {
-    renderCell({ result: makeResult({ accuracy: undefined, primaryRubric: { key: 'fact_precision', value: 72 } }) });
-    const chip = screen.getByTestId('metric-cell-primary-rubric');
-    expect(chip.textContent).toBe('fact_precision72%');
-    expect(chip.title).toContain('fact_precision');
-    // Still no fabricated accuracy chip.
+describe('MetricCell score / rubric-by-name chips', () => {
+  it('shows the snapshot score chip when the result carries a per-case score', () => {
+    renderCell({ result: makeResult({ accuracy: undefined, score: 69.6, rubricValues: { fact_precision: 60, abstention_integrity: 92 } }) });
+    const chip = screen.getByTestId('metric-cell-score');
+    expect(chip.textContent).toBe('score69.6%');
+    expect(screen.queryByTestId('metric-cell-rubrics')).toBeNull();
     expect(screen.queryByTestId('metric-cell-accuracy')).toBeNull();
   });
 
-  it('renders nothing extra when neither accuracy nor a primary rubric is present', () => {
+  it('legacy: shows rubric values by name in stored order (first two inline, rest counted) — no "primary rubric"', () => {
+    renderCell({ result: makeResult({ accuracy: undefined, rubricValues: { fact_precision: 72, abstention_integrity: 90, payload_economy: 50 } }) });
+    const chip = screen.getByTestId('metric-cell-rubrics');
+    expect(chip.textContent).toBe('fact_precision72%abstention_integrity90%+1');
+    expect(chip.title).toContain('Legacy scoring');
+    expect(chip.title).toContain('payload_economy 50%');
+    expect(screen.queryByTestId('metric-cell-primary-rubric')).toBeNull();
+    expect(screen.queryByTestId('metric-cell-accuracy')).toBeNull();
+  });
+
+  it('renders nothing extra when neither accuracy, score nor rubric values are present', () => {
     renderCell({ result: makeResult({ accuracy: undefined }) });
-    expect(screen.queryByTestId('metric-cell-primary-rubric')).toBeNull();
+    expect(screen.queryByTestId('metric-cell-rubrics')).toBeNull();
+    expect(screen.queryByTestId('metric-cell-score')).toBeNull();
     expect(screen.queryByTestId('metric-cell-accuracy')).toBeNull();
   });
 
-  it('does NOT render the primary-rubric chip when accuracy IS present (accuracy takes precedence)', () => {
-    renderCell({ result: makeResult({ accuracy: 88, primaryRubric: { key: 'fact_precision', value: 72 } }) });
+  it('does NOT render the rubric chips when accuracy IS present (accuracy shown under its own name)', () => {
+    renderCell({ result: makeResult({ accuracy: 88, rubricValues: { accuracy: 88, fact_precision: 72 } }) });
     expect(screen.getByTestId('metric-cell-accuracy').textContent).toBe('88%');
-    expect(screen.queryByTestId('metric-cell-primary-rubric')).toBeNull();
+    expect(screen.queryByTestId('metric-cell-rubrics')).toBeNull();
   });
 
-  it('never renders the primary-rubric chip for the errored bucket', () => {
-    renderCell({ result: makeResult({ errored: true, accuracy: undefined, primaryRubric: { key: 'fact_precision', value: 72 } }) });
+  it('never renders score / rubric chips for the errored bucket', () => {
+    renderCell({ result: makeResult({ errored: true, accuracy: undefined, score: 50, rubricValues: { fact_precision: 72 } }) });
     expect(screen.getByText('Errored')).toBeTruthy();
-    expect(screen.queryByTestId('metric-cell-primary-rubric')).toBeNull();
+    expect(screen.queryByTestId('metric-cell-rubrics')).toBeNull();
+    expect(screen.queryByTestId('metric-cell-score')).toBeNull();
   });
 
-  it('rounds the primary rubric value to one decimal like accuracy', () => {
-    renderCell({ result: makeResult({ accuracy: undefined, primaryRubric: { key: 'abstention_integrity', value: 72.04 } }) });
-    expect(screen.getByTestId('metric-cell-primary-rubric').textContent).toBe('abstention_integrity72%');
+  it('rounds rubric values to one decimal like accuracy', () => {
+    renderCell({ result: makeResult({ accuracy: undefined, rubricValues: { abstention_integrity: 72.04 } }) });
+    expect(screen.getByTestId('metric-cell-rubrics').textContent).toBe('abstention_integrity72%');
   });
 });

@@ -175,7 +175,9 @@ describe('Evaluation Service Index', () => {
       expect(result.status).toBe('failed');
       expect(result.llmJudgeReasoning).toContain('Evaluation failed');
       expect(result.llmJudgeReasoning).toContain('Agent connection failed');
-      expect(result.metrics.accuracy).toBe(0);
+      // The agent never completed ⇒ nothing was judged ⇒ NO metrics (no
+      // placeholder zeros that read as "scored 0").
+      expect(result.metrics).toEqual({});
     });
 
     it('should skip log fetch when no runId is captured', async () => {

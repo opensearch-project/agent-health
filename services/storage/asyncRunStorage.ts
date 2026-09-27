@@ -196,6 +196,12 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     judgeMode: storedAny.judgeMode,
     spans: storedAny.spans as any[] | undefined,
     connectorProtocol: storedAny.connectorProtocol as ConnectorProtocol | undefined,
+    // Frozen scoring provenance — the compare page's "Avg score" reads ONLY
+    // this + `metrics`; absent on pre-snapshot reports (legacy scoring).
+    scoringSnapshot: stored.scoringSnapshot,
+    llmVerdict: stored.llmVerdict,
+    verdictConflict: stored.verdictConflict,
+    score: stored.score,
   };
 }
 
@@ -253,6 +259,10 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
   if (report.connectorProtocol !== undefined) base.connectorProtocol = report.connectorProtocol;
   // SDK matcher verdicts: persist alongside the report
   if (report.matcherResults !== undefined) (base as any).matcherResults = report.matcherResults;
+  if (report.scoringSnapshot !== undefined) base.scoringSnapshot = report.scoringSnapshot;
+  if (report.llmVerdict !== undefined) base.llmVerdict = report.llmVerdict;
+  if (report.verdictConflict !== undefined) base.verdictConflict = report.verdictConflict;
+  if (report.score !== undefined) base.score = report.score;
 
   return base;
 }
@@ -382,9 +392,12 @@ class AsyncRunStorage {
     // `metrics` added for RunInsightsPane's "Avg Score" detail (run-report-insights):
     // it's a small dynamic object of a handful of numeric fields, not the
     // trajectory/messages bloat #429 fixed - safe to include in the summary.
+    // `scoringSnapshot` (small, bounded object) rides along with `metrics` so
+    // summary-only readers can derive the snapshot score without the full doc.
     const fields = [
       'status', 'passFailStatus', 'metricsStatus', 'traceId', 'sessionId',
       'judgeModelId', 'modelId', 'agentId', 'testCaseId', 'createdAt', 'annotations', 'metrics',
+      'scoringSnapshot', 'llmVerdict', 'verdictConflict', 'score',
     ];
     // Chunk to keep the URL well under practical limits for large benchmarks.
     const stored = await fetchChunked(reportIds, REPORT_ID_CHUNK_SIZE, chunk => opensearchRuns.getByIds(chunk, { fields }));
@@ -448,14 +461,12 @@ class AsyncRunStorage {
     if (updates.improvementStrategies !== undefined) storageUpdates.improvementStrategies = updates.improvementStrategies;
     if ((updates as any).matcherResults !== undefined) (storageUpdates as any).matcherResults = (updates as any).matcherResults;
 
-    // Map metrics
+    // Map metrics — pass the evaluator's rubric keys through verbatim. This
+    // used to project onto the four legacy RCA keys only, which silently
+    // dropped every custom-evaluator rubric on update (and re-introduced the
+    // legacy key names as `undefined`).
     if (updates.metrics) {
-      storageUpdates.metrics = {
-        accuracy: updates.metrics.accuracy,
-        faithfulness: updates.metrics.faithfulness,
-        latency_score: updates.metrics.latency_score,
-        trajectory_alignment_score: updates.metrics.trajectory_alignment_score,
-      };
+      storageUpdates.metrics = { ...updates.metrics } as StorageRun['metrics'];
     }
 
     // Pass through trace-mode specific fields directly
@@ -464,6 +475,10 @@ class AsyncRunStorage {
     if (updates.lastTraceFetchAt !== undefined) storageUpdates.lastTraceFetchAt = updates.lastTraceFetchAt;
     if (updates.traceError !== undefined) storageUpdates.traceError = updates.traceError;
     if ((updates as any).judgeMode !== undefined) storageUpdates.judgeMode = (updates as any).judgeMode;
+    if (updates.scoringSnapshot !== undefined) storageUpdates.scoringSnapshot = updates.scoringSnapshot;
+    if (updates.llmVerdict !== undefined) storageUpdates.llmVerdict = updates.llmVerdict;
+    if (updates.verdictConflict !== undefined) storageUpdates.verdictConflict = updates.verdictConflict;
+    if (updates.score !== undefined) storageUpdates.score = updates.score;
     if (updates.spans !== undefined) storageUpdates.spans = updates.spans;
 
     const updated = await opensearchRuns.partialUpdate(reportId, storageUpdates);

@@ -26,7 +26,11 @@ import {
   countRetryableCases,
   type RetryJudgementScope,
   type RetryJudgementSummary,
+  type RetryJudgementOverrides,
+  DETERMINISTIC_SCOPE_ERROR,
 } from '../../../services/evaluation/retryJudgement.js';
+import { isDeterministicEvaluator } from '../../../lib/evaluators/deterministic.js';
+import { isSystemEvaluatorId, getSystemEvaluatorById } from '../../prompts/evaluatorTemplates.js';
 import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
 import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
@@ -652,15 +656,49 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
 // Mirrors the /rerun handler above: respond immediately, run the pipeline in
 // the background, let the caller poll for progress/completion — see GET
 // .../retry-judgement/status below.
+//
+// BODY (optional): `{ scope?: 'errored' | 'all', evaluatorId?: string }`.
+// `?scope=` on the query string is still honoured; the body wins when both
+// are present. `evaluatorId` must name an existing (system or stored)
+// evaluator → 400 otherwise; absent → the run's own evaluator (pre-existing
+// behaviour). A `kind: 'deterministic'` evaluator re-scores every selected
+// report in code from its stored trajectory — no LLM is called (see
+// services/evaluation/retryJudgement.ts). Field names mirror PR #509's
+// picker so the two reconcile trivially.
 router.post('/api/storage/evaluation-runs/:id/retry-judgement', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const scope: RetryJudgementScope = req.query.scope === 'all' ? 'all' : 'errored';
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const rawScope = body.scope ?? req.query.scope;
+    if (rawScope !== undefined && rawScope !== 'errored' && rawScope !== 'all') {
+      return res.status(400).json({ error: "scope must be 'errored' or 'all'" });
+    }
+    const scope: RetryJudgementScope = rawScope === 'all' ? 'all' : 'errored';
     const storage = getStorageModule();
 
     const run = await storage.evaluationRuns.getById(id);
     if (!run) {
       return res.status(404).json({ error: 'Evaluation run not found' });
+    }
+
+    const overrides: RetryJudgementOverrides = {};
+    if (body.evaluatorId !== undefined) {
+      const evaluatorId = body.evaluatorId;
+      if (typeof evaluatorId !== 'string' || !evaluatorId.trim()) {
+        return res.status(400).json({ error: 'evaluatorId must be a non-empty string' });
+      }
+      const evaluatorDoc = isSystemEvaluatorId(evaluatorId)
+        ? getSystemEvaluatorById(evaluatorId)
+        : await storage.evaluators.getById(evaluatorId).catch(() => null);
+      if (!evaluatorDoc) {
+        return res.status(400).json({ error: `Evaluator not found: ${evaluatorId}` });
+      }
+      // A deterministic evaluator must re-score the WHOLE run (see
+      // DETERMINISTIC_SCOPE_ERROR in services/evaluation/retryJudgement.ts).
+      if (scope !== 'all' && isDeterministicEvaluator(evaluatorDoc)) {
+        return res.status(400).json({ error: DETERMINISTIC_SCOPE_ERROR });
+      }
+      overrides.evaluatorId = evaluatorId;
     }
 
     // The run must be in a TERMINAL state — retrying judgement on a run
@@ -695,6 +733,7 @@ router.post('/api/storage/evaluation-runs/:id/retry-judgement', async (req: Requ
 
     retryJudgementForRun(run, storage, {
       scope,
+      overrides,
       concurrency: 3,
       onProgress: (completedCount, totalCount) => {
         job.completed = completedCount;

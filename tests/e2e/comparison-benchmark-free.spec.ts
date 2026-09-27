@@ -173,7 +173,9 @@ test.describe('Benchmark-free comparison (test-level primitive)', () => {
 
     // Every metric renders directly on the row (Change 2) — no click needed.
     await expect(rowA.locator(`[data-testid="run-passrate-${RUN_A}"]`)).toBeVisible();
-    await expect(rowA.locator(`[data-testid="run-accuracy-${RUN_A}"]`)).toBeVisible();
+    // No accuracy-only column any more; the run-level score cell is "Avg score".
+    await expect(rowA.locator(`[data-testid="run-accuracy-${RUN_A}"]`)).toHaveCount(0);
+    await expect(rowA.locator(`[data-testid="run-avgscore-${RUN_A}"]`)).toBeVisible();
 
     // Inline "Open run" link (Change 3) — no drawer, no click-to-expand.
     // Since #469 the run NAME is also a link to the same report path (owner:
@@ -185,7 +187,11 @@ test.describe('Benchmark-free comparison (test-level primitive)', () => {
     await expect(rowA.locator(`[data-testid="run-name-link-${RUN_A}"]`)).toHaveAttribute('href', `/evaluations/runs/${RUN_A}`);
 
     // Judge info renders exactly once for the whole scoreboard, not per row.
-    await expect(page.locator('[data-testid="scoreboard-judge-line"]')).toHaveCount(1);
+    // These fixtures record no judge at all → honest "not recorded", never the agent model.
+    const judgeLine = page.locator('[data-testid="scoreboard-judge-line"]');
+    await expect(judgeLine).toHaveCount(1);
+    await expect(judgeLine).toContainText('Judge: not recorded');
+    await expect(judgeLine).not.toContainText('claude-sonnet');
 
     // No "All metrics" expander and no chart in this flow anymore.
     await expect(page.locator('[data-testid="scoreboard-all-metrics-toggle"]')).toHaveCount(0);

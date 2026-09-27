@@ -121,7 +121,10 @@ describe('ComparisonScoreboard — delta footer (expanded table)', () => {
 
     const passRate = screen.getByTestId('scoreboard-delta-passrate');
     expect(passRate.textContent).toBe('+20pp');
-    expect(passRate.title).toBe('');
+    // Two legacy-scored fixtures: no "No change" tooltip, but the Δ does carry
+    // the legacy-provenance caveat (both runs lack a scoring snapshot).
+    expect(passRate.title).not.toBe('No change');
+    expect(passRate.title).toContain('legacy-scored');
     expect(passRate.className).toContain('text-blue-400');
 
     const cost = screen.getByTestId('scoreboard-delta-cost');

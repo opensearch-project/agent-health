@@ -29,6 +29,7 @@ import { resolveAgentModel } from '@/lib/resolveAgentModel';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
+import { scoringFieldsFromJudgment, sdkSessionScoring } from '@/lib/scoring/verdictEngine';
 import { connectorRegistry } from '@/services/connectors/server';
 import { startTestCaseSpan, finalizeTestCaseSpan, addEvaluationResultEvents } from '@/lib/telemetry';
 import { ATTR_AGENT_HEALTH_AGENT_RUN_ID } from '@/lib/telemetry/constants';
@@ -628,6 +629,9 @@ export async function executeEvaluationRun(
                 matcherResults,
                 { hasEvalError: evalError !== undefined },
               );
+              // Frozen evaluator snapshot + weighted score lifted from the
+              // judge() matchers (verdict stays the matcher-session outcome).
+              Object.assign(report, sdkSessionScoring(matcherResults, (report as any).metrics));
               // Matcher session already decided the verdict — mark final so the
               // trace-mode polling / Bedrock-judge path below is skipped.
               (report as any).metricsStatus = 'completed';
@@ -1001,8 +1005,7 @@ async function waitForTracesAndJudge(
             await storage.runs.update(report.id, {
               trajectory: finalTrajectory,
               metricsStatus: 'ready',
-              passFailStatus: judgment.passFailStatus,
-              metrics: judgment.metrics,
+              ...scoringFieldsFromJudgment(judgment),
               llmJudgeReasoning: judgment.llmJudgeReasoning,
               // Set only by the agent (trace) judge provider -- see
               // JudgeResponse.judgeMode / TestCaseRun.judgeMode.

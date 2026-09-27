@@ -41,6 +41,7 @@ import { fetchRunMetrics, formatCost, formatDuration, formatTokens } from '@/ser
 import { TrajectoryView } from './TrajectoryView';
 import { RawEventsPanel } from './RawEventsPanel';
 import { MatcherResultsPanel } from './MatcherResultsPanel';
+import { VerdictSummary } from './judge/VerdictSummary';
 import { getJudgeReasoningText, getJudgeMatcherResults } from '@/lib/matchers/judgeAccessor';
 import { resolveImprovementStrategies } from '@/lib/judgeStrategies';
 import TraceVisualization from './traces/TraceVisualization';
@@ -599,8 +600,19 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           {/* Dynamic Metrics from Evaluator */}
           {evaluator ? (
             evaluator.scoringConfig.metrics.map((metric, idx) => {
-              const metricValue = (liveReport.metrics as any)[metric.name];
-              const displayValue = metricValue != null ? `${metricValue}%` : '—';
+              const metricValue = (liveReport.metrics as any)?.[metric.name];
+              // Format in the metric's OWN scale: 0–1 metrics (deterministic
+              // retrieval evaluators, per the report's snapshot or the
+              // evaluator's declared scale) as fractions, 0–100 as percentages.
+              const scaleMax = liveReport.scoringSnapshot?.scale?.[metric.name]?.max ?? metric.scale ?? 100;
+              // A snapshot-scored report that lacks a rubric value was judged
+              // but the judge did not return this rubric: "not evaluable",
+              // never 0 (and never a bare dash that reads like "pending").
+              const displayValue = typeof metricValue === 'number'
+                ? (scaleMax <= 1 ? (Math.round(metricValue * 100) / 100).toFixed(2) : `${Math.round(metricValue * 10) / 10}%`)
+                : liveReport.scoringSnapshot && liveReport.metricsStatus !== 'error'
+                  ? 'not evaluable'
+                  : '—';
               return (
                 <Card key={metric.name} className="bg-muted/50 col-span-2">
                   <CardContent className="p-2">
@@ -625,6 +637,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                     RCA Default evaluator emits. */}
                 <RunScore
                   metrics={liveReport.metrics as Record<string, number | undefined>}
+                  snapshot={liveReport.scoringSnapshot}
                   showLabel={false}
                   className="text-xs font-semibold text-blue-700 dark:text-blue-400"
                 />
@@ -1095,6 +1108,13 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </TabsContent>
 
           <TabsContent value="judge" className="p-6 mt-0 space-y-6 overflow-y-auto">
+            {/* Verdict — what the canonical verdict engine decided and how
+                (policy, LLM's own verdict, conflict, unevaluable rubrics), or
+                the explicit "no metrics" state for a judge error. Reads only
+                the report's frozen scoringSnapshot; renders nothing for
+                pre-snapshot (legacy) reports. */}
+            <VerdictSummary report={liveReport} />
+
             {/* Evaluator Info */}
             {evaluator && (
               <div>
@@ -1122,8 +1142,14 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                         </div>
                       ))}
                     </div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      Pass Threshold: {evaluator.scoringConfig.passThreshold}%
+                    <div className="mt-2 text-xs text-muted-foreground" data-testid="evaluator-pass-policy">
+                      {evaluator.kind === 'deterministic' && evaluator.passPolicy
+                        ? evaluator.passPolicy.kind === 'gates'
+                          ? `Pass policy: gates (${evaluator.passPolicy.gates.map(g => `${g.metric} ≥ ${g.min}`).join(', ')}) · deterministic, no LLM`
+                          : evaluator.passPolicy.kind === 'threshold'
+                            ? `Pass policy: weighted score ≥ ${evaluator.passPolicy.minScore} · deterministic, no LLM`
+                            : 'Pass policy: judge verdict'
+                        : `Pass Threshold: ${evaluator.scoringConfig.passThreshold}%`}
                     </div>
                   </div>
                 </CardContent></Card>

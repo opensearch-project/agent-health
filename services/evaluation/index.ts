@@ -20,6 +20,7 @@ import type { MatcherResult } from '@/lib/matchers/types';
 import type { TracesAccessor } from '@/lib/matchers/traces';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
+import { scoringFieldsFromJudgment } from '@/lib/scoring/verdictEngine';
 
 // Re-export for use by experimentRunner when calling judge after trace polling
 export { callBedrockJudge };
@@ -549,12 +550,8 @@ export async function runEvaluationWithConnector(
         status: 'completed',
         metricsStatus: 'pending',
         trajectory: fullTrajectory,
-        metrics: {
-          accuracy: 0,
-          faithfulness: 0,
-          latency_score: 0,
-          trajectory_alignment_score: 0,
-        },
+        // No judgement yet ⇒ no metrics (never placeholder zeros).
+        metrics: {},
         llmJudgeReasoning: 'Waiting for traces to become available...',
         improvementStrategies: [],
         runId: agentRunId || undefined,
@@ -581,7 +578,7 @@ export async function runEvaluationWithConnector(
         testCaseVersion: testCase.currentVersion ?? 1,
         status: 'completed',
         trajectory: fullTrajectory,
-        metrics: { accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0 },
+        metrics: {}, // caller judges later; no placeholder zeros
         llmJudgeReasoning: '',
         improvementStrategies: [],
         runId: agentRunId || undefined,
@@ -715,9 +712,11 @@ export async function runEvaluationWithConnector(
       testCaseId: testCase.id,
       testCaseVersion: testCase.currentVersion ?? 1,
       status: 'completed',
-      passFailStatus: judgment.passFailStatus,
+      // Verdict-engine fields (passFailStatus, metrics, llmVerdict,
+      // verdictConflict, score, scoringSnapshot) — ONE shared shape, never
+      // hand-copied so no producer can drift from the engine.
+      ...scoringFieldsFromJudgment(judgment),
       trajectory: fullTrajectory,
-      metrics: judgment.metrics,
       llmJudgeReasoning: judgment.llmJudgeReasoning,
       // Set only by the agent (trace) judge provider -- see
       // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
@@ -784,12 +783,8 @@ export async function runEvaluationWithConnector(
       testCaseVersion: testCase.currentVersion ?? 1,
       status: 'failed',
       trajectory: fullTrajectory,
-      metrics: {
-        accuracy: 0,
-        faithfulness: 0,
-        latency_score: 0,
-        trajectory_alignment_score: 0,
-      },
+      // The agent never completed ⇒ nothing was judged ⇒ no metrics.
+      metrics: {},
       llmJudgeReasoning: `Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       improvementStrategies: [],
       rawEvents,
@@ -907,12 +902,7 @@ export async function runEvaluation(
         status: 'completed',
         metricsStatus: 'pending', // Will be updated after traces are available
         trajectory: fullTrajectory,
-        metrics: {
-          accuracy: 0,
-          faithfulness: 0,
-          latency_score: 0,
-          trajectory_alignment_score: 0,
-        },
+        metrics: {}, // no judgement yet ⇒ no metrics
         llmJudgeReasoning: 'Waiting for traces to become available...',
         improvementStrategies: [],
         runId: agentRunId || undefined,
@@ -983,9 +973,11 @@ export async function runEvaluation(
       testCaseId: testCase.id,
       testCaseVersion: testCase.currentVersion ?? 1,
       status: 'completed',
-      passFailStatus: judgment.passFailStatus,
+      // Verdict-engine fields (passFailStatus, metrics, llmVerdict,
+      // verdictConflict, score, scoringSnapshot) — ONE shared shape, never
+      // hand-copied so no producer can drift from the engine.
+      ...scoringFieldsFromJudgment(judgment),
       trajectory: fullTrajectory,
-      metrics: judgment.metrics,
       llmJudgeReasoning: judgment.llmJudgeReasoning,
       // Set only by the agent (trace) judge provider -- see
       // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
@@ -1019,12 +1011,8 @@ export async function runEvaluation(
       testCaseVersion: testCase.currentVersion ?? 1,
       status: 'failed',
       trajectory: fullTrajectory,
-      metrics: {
-        accuracy: 0,
-        faithfulness: 0,
-        latency_score: 0,
-        trajectory_alignment_score: 0,
-      },
+      // The agent never completed ⇒ nothing was judged ⇒ no metrics.
+      metrics: {},
       llmJudgeReasoning: `Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       improvementStrategies: [],
       rawEvents,
