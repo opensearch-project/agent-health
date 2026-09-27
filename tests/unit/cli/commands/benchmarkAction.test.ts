@@ -624,5 +624,31 @@ describe('Benchmark Command - Real Module Coverage', () => {
       );
       expect(mockCreateServerCleanup).not.toHaveBeenCalled();
     });
+
+    it('named mode: a run the server REFUSED to start (409 unresolvable sourceFile) sets exitCode=1 instead of a clean 0/0 summary', async () => {
+      const benchmark = makeBenchmark({ id: 'bench-code', name: 'Code Benchmark', testCaseIds: ['tc-1'] });
+      mockIsServerRunning.mockResolvedValue(true);
+      mockEnsureServer.mockResolvedValue({ baseUrl: 'http://localhost:4100', wasStarted: false } as any);
+      currentApi.findBenchmark.mockResolvedValue(benchmark);
+      // ApiClient.executeBenchmark throws on a non-OK pre-SSE answer — no
+      // `started` event ever fires, so there is no runId to recover.
+      currentApi.executeBenchmark.mockRejectedValue(
+        new Error(
+          'Failed to execute benchmark: Test case "code case" references source file "evals/x.eval.js" which is not resolvable from cwd /srv; start the server from the eval project root or re-import the test cases',
+        ),
+      );
+      const prevExitCode = process.exitCode;
+      process.exitCode = undefined;
+      try {
+        await runBenchmarkCommand(['-n', 'Code Benchmark', '-a', 'DEMO AGENT']);
+        expect(process.exitCode).toBe(1);
+      } finally {
+        process.exitCode = prevExitCode;
+      }
+      expect(joinedConsoleOutput(errorSpy)).toContain('1 run(s) could not be started');
+      expect(joinedConsoleOutput(errorSpy)).toContain('which is not resolvable from cwd');
+      // Server cleanup still ran (exitCode, not process.exit, so finally executes).
+      expect(cleanupSpy).toHaveBeenCalled();
+    });
   });
 });

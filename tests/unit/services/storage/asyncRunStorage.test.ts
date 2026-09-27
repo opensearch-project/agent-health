@@ -272,6 +272,17 @@ describe('AsyncRunStorage', () => {
       expect(result?.sessionId).toBe('sess-read');
     });
 
+    it('reads back judgeApplied + judgeSelectionConflicts (the client read mapper whitelists fields — without this the conflict chip never renders)', async () => {
+      const conflicts = [{ field: 'evaluatorId', runValue: 'system-rca-default', bodyValue: 'system-factuality' }];
+      const applied = { evaluatorId: 'system-rca-default', evaluatorIdSource: 'run', modelId: 'demo-model', modelIdSource: 'run' };
+      mockOsRuns.getById.mockResolvedValue({ ...createMockStorageRun('run-1'), judgeApplied: applied, judgeSelectionConflicts: conflicts } as any);
+
+      const result = await asyncRunStorage.getReportById('run-1');
+
+      expect(result?.judgeApplied).toEqual(applied);
+      expect(result?.judgeSelectionConflicts).toEqual(conflicts);
+    });
+
     it('maps judgeModelId from storage so recovery judges with the configured model', async () => {
       const mockRun = { ...createMockStorageRun('run-1'), judgeModelId: 'claude-sonnet-4-6' } as any;
       mockOsRuns.getById.mockResolvedValue(mockRun);
