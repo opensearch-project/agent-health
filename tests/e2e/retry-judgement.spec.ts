@@ -115,7 +115,7 @@ test.describe('Run inspector — Retry judgement (kebab item)', () => {
     await page.keyboard.press('Escape');
   });
 
-  test('clicking opens a confirm dialog showing the count + judge model', async ({ page }) => {
+  test('clicking opens the picker dialog with the judge-failed scope preselected, the count, and evaluator + judge model selects', async ({ page }) => {
     test.skip(!seeded, 'Could not seed run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${runId}/inspect`);
@@ -125,8 +125,10 @@ test.describe('Run inspector — Retry judgement (kebab item)', () => {
 
     const dialog = page.locator('[data-testid="retry-judgement-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="retry-judgement-scope-errored"]')).toBeChecked();
     await expect(page.locator('[data-testid="retry-judgement-count"]')).toHaveText('1');
-    await expect(dialog).toContainText('Judge model:');
+    await expect(dialog).toContainText('Judge model');
+    await expect(page.locator('[data-testid="retry-judgement-evaluator-trigger"]')).toBeVisible();
 
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible();
@@ -193,7 +195,10 @@ test.describe('Run inspector — Retry judgement (kebab item)', () => {
   });
 });
 
-test.describe('Run inspector — Retry judgement kebab item disabled when no judge failures', () => {
+// Owner follow-up to #468: "Retry judgement should be a retryable step all
+// the time" — a clean (fully judged) run is re-judgeable under the dialog's
+// "All cases" scope, so the kebab item is ENABLED and carries that count.
+test.describe('Run inspector — Retry judgement kebab item is ENABLED on a clean run (all-cases scope)', () => {
   let testCaseId: string | null = null;
   let runId: string | null = null;
   let passedReportId: string | null = null;
@@ -259,18 +264,24 @@ test.describe('Run inspector — Retry judgement kebab item disabled when no jud
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('kebab item is present but disabled when there are no judge-failed cases', async ({ page }) => {
+  test('kebab item is enabled with the all-cases count when there are no judge-failed cases; the dialog preselects "All cases"', async ({ page }) => {
     test.skip(!seeded, 'Could not seed run (storage not configured?)');
 
     await page.goto(`/evaluations/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
     const btn = await openRetryJudgementItem(page, runId!);
-    await expect(btn).toContainText('Retry judgement (0)');
-    // Radix marks disabled items via aria-disabled / data-disabled.
-    await expect(btn).toHaveAttribute('aria-disabled', 'true');
-    await expect(btn).toHaveAttribute('title', 'No judge-failed cases to retry');
-    await page.keyboard.press('Escape');
+    await expect(btn).toContainText('Retry judgement (1)');
+    await expect(btn).not.toHaveAttribute('aria-disabled', 'true');
+    await btn.click();
+
+    const dialog = page.locator('[data-testid="retry-judgement-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="retry-judgement-scope-all"]')).toBeChecked();
+    await expect(page.locator('[data-testid="retry-judgement-scope-errored"]')).toBeDisabled();
+    await expect(page.locator('[data-testid="retry-judgement-count"]')).toHaveText('1');
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible();
   });
 });
 

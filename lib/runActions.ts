@@ -19,15 +19,18 @@
  *     RunConfigDialog / EvalRunsPage).
  *   - Retry judgement: only EvaluationRun docs, only when the run is
  *     terminal (not running) AND it has at least one test case whose agent
- *     execution completed but the judge produced NO verdict (a judge-failed
- *     / "errored" case — trace timeout, judge 400, "evaluator could not
- *     run" — as opposed to an agent-failed one — retrying the judge on a
- *     case the agent itself never finished has nothing to re-grade). Same
- *     predicate the retry-judgement pipeline itself selects on
- *     (services/evaluation/retryJudgement.ts `isJudgeFailedCase`, keyed on
- *     the report's `metricsStatus: 'error'`, which the runner mirrors onto
- *     the run's results map as a `completed` result with no
- *     `passFailStatus`) and that `lib/runStats` buckets as `errored`.
+ *     execution completed (`results[*].status === 'completed'`) — i.e.
+ *     there is stored agent output to re-judge. Owner requirement
+ *     (follow-up to #468): "Retry judgement should be a retryable step all
+ *     the time" — so it is NOT limited to judge-failed cases anymore; the
+ *     dialog lets the user pick the scope (only judge-failed cases vs. all
+ *     cases) plus the evaluator + judge model. `judgeFailedCount` (the
+ *     "errored" bucket — trace timeout, judge 400, "evaluator could not
+ *     run", exactly what `scope=errored` re-judges) is still computed to
+ *     pick the default scope and label the item. The pipeline itself
+ *     (services/evaluation/retryJudgement.ts) additionally requires a
+ *     stored trajectory per report; the run doc can't see that, so the
+ *     server-side count may be lower than `rejudgeableCount`.
  */
 
 import type { BenchmarkRun, EvaluationRun } from '@/types';
@@ -91,6 +94,21 @@ export function countJudgeFailed(run: RunLike | null | undefined): number {
   return count;
 }
 
+/**
+ * Count test cases whose AGENT execution completed (`status === 'completed'`)
+ * — every one of them has stored output the judge can be re-run against,
+ * regardless of the current verdict. This is what `scope=all` re-judges and
+ * what gates the Retry-judgement item.
+ */
+export function countRejudgeable(run: RunLike | null | undefined): number {
+  if (!run?.results) return 0;
+  let count = 0;
+  for (const r of Object.values(run.results)) {
+    if ((r as { status?: string }).status === 'completed') count++;
+  }
+  return count;
+}
+
 export interface RunActionVisibility {
   /** Delete is always available for any run in any status. */
   canDelete: boolean;
@@ -100,18 +118,26 @@ export interface RunActionVisibility {
   canRerun: boolean;
   /** Reason to show (e.g. as a disabled-item tooltip) when canRerun is false. */
   rerunDisabledReason?: string;
-  /** Retry judgement: EvaluationRun, terminal, with >0 judge-failed cases. */
+  /** Retry judgement: EvaluationRun, terminal, with >0 completed (re-judgeable) cases. */
   canRetryJudgement: boolean;
   /** Reason to show when canRetryJudgement is false. */
   retryJudgementDisabledReason?: string;
   /** Number of judge-failed test cases (0 when not applicable/unknown). */
   judgeFailedCount: number;
+  /** Number of completed cases with agent output to re-judge (`scope=all`). */
+  rejudgeableCount: number;
+  /**
+   * Cases the Retry-judgement dialog's DEFAULT scope will re-judge — the
+   * judge-failed count when there are any, otherwise every re-judgeable
+   * case. Shown as "Retry judgement (N)" on the kebab item.
+   */
+  retryJudgementCount: number;
 }
 
 const RERUN_NOT_SUPPORTED_REASON = "Re-run isn't available for legacy benchmark-embedded runs";
 const RETRY_JUDGEMENT_NOT_SUPPORTED_REASON = "Retry judgement isn't available for legacy benchmark-embedded runs";
 const RETRY_JUDGEMENT_STILL_RUNNING_REASON = 'Retry judgement is only available once the run finishes';
-const RETRY_JUDGEMENT_NONE_FAILED_REASON = 'No judge-failed test cases to retry';
+const RETRY_JUDGEMENT_NOTHING_TO_REJUDGE_REASON = 'No completed test cases to re-judge';
 
 /**
  * Minimum time a run must have been persisted before a Cancel request with
@@ -162,13 +188,14 @@ export function getRunActionVisibility(run: RunLike | null | undefined): RunActi
   const running = isRunRunning(run);
   const terminal = isRunTerminal(run);
   const judgeFailedCount = evalRun ? countJudgeFailed(run) : 0;
+  const rejudgeableCount = evalRun ? countRejudgeable(run) : 0;
 
-  const canRetryJudgement = evalRun && terminal && judgeFailedCount > 0;
+  const canRetryJudgement = evalRun && terminal && rejudgeableCount > 0;
   let retryJudgementDisabledReason: string | undefined;
   if (!canRetryJudgement) {
     if (!evalRun) retryJudgementDisabledReason = RETRY_JUDGEMENT_NOT_SUPPORTED_REASON;
     else if (!terminal) retryJudgementDisabledReason = RETRY_JUDGEMENT_STILL_RUNNING_REASON;
-    else retryJudgementDisabledReason = RETRY_JUDGEMENT_NONE_FAILED_REASON;
+    else retryJudgementDisabledReason = RETRY_JUDGEMENT_NOTHING_TO_REJUDGE_REASON;
   }
 
   return {
@@ -179,5 +206,7 @@ export function getRunActionVisibility(run: RunLike | null | undefined): RunActi
     canRetryJudgement,
     retryJudgementDisabledReason,
     judgeFailedCount,
+    rejudgeableCount,
+    retryJudgementCount: judgeFailedCount > 0 ? judgeFailedCount : rejudgeableCount,
   };
 }

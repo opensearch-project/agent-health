@@ -41,6 +41,7 @@ import {
   retryJudgementForRun,
   retryJudgementForCase,
   countRetryableCases,
+  resolveRetryJudgeConfig,
 } from '@/services/evaluation/retryJudgement';
 
 const mockedCallBedrockJudge = callBedrockJudge as jest.Mock;
@@ -304,7 +305,13 @@ describe('retryJudgementForRun', () => {
     expect(reports['r-errored'].metricsStatus).toBe('completed');
     expect(reports['r-passed'].passFailStatus).toBe('passed'); // untouched, still its original value
 
-    const updateCall = (storage.evaluationRuns.update as jest.Mock).mock.calls[0];
+    // First update stamps `lastJudgementRetry` (dialog defaults), the LAST
+    // one persists results/stats.
+    const updateCalls = (storage.evaluationRuns.update as jest.Mock).mock.calls;
+    expect(updateCalls[0][1]).toEqual({
+      lastJudgementRetry: { scope: 'errored', evaluatorId: 'rca-default', judgeModelId: 'demo-model', at: expect.any(String) },
+    });
+    const updateCall = updateCalls[updateCalls.length - 1];
     expect(updateCall[0]).toBe('eval-run-1');
     expect(updateCall[1].results['tc-errored'].passFailStatus).toBe('passed');
     expect(updateCall[1].stats).toEqual({ passed: 2, failed: 0, errored: 0, pending: 0, notRun: 0, total: 2 });
@@ -330,7 +337,7 @@ describe('retryJudgementForRun', () => {
     expect(reports['r-errored'].metricsStatus).toBe('error');
     expect(reports['r-errored'].passFailStatus).toBeNull();
 
-    const updateCall = (storage.evaluationRuns.update as jest.Mock).mock.calls[0];
+    const updateCall = (storage.evaluationRuns.update as jest.Mock).mock.calls.at(-1)!;
     // Still-failed case stays out of passed/failed — bucketed errored, same as
     // the original run.
     expect(updateCall[1].stats.errored).toBe(1);
@@ -395,6 +402,157 @@ describe('retryJudgementForRun', () => {
     }
   });
 
+  // Follow-up to #468 — the Retry-judgement picker: per-retry evaluator /
+  // judge-model overrides win over the run's values, only the latest
+  // judgement is kept (overwritten in place + stamped), and the run
+  // remembers what the retry was launched with.
+  describe('per-retry overrides (evaluator / judge model picker)', () => {
+    const passing = {
+      passFailStatus: 'passed',
+      metrics: { accuracy: 100, faithfulness: 100, latency_score: 100, trajectory_alignment_score: 100 },
+      llmJudgeReasoning: 'Re-judged fine',
+      improvementStrategies: [],
+      rawResponse: '{"raw":true}',
+      judgeDurationMs: 42,
+    };
+
+    describe('resolveRetryJudgeConfig — precedence: overrides > run > report > server default', () => {
+      const report = { judgeModelId: 'report-model', modelId: 'agent-model' };
+      const run = { judgeModelId: 'run-model', evaluatorId: 'run-evaluator' };
+
+      it('uses the run\'s values when no override is given', () => {
+        expect(resolveRetryJudgeConfig(report, run)).toEqual({ judgeModelId: 'run-model', evaluatorId: 'run-evaluator' });
+      });
+
+      it('explicit overrides win over the run AND the report', () => {
+        expect(resolveRetryJudgeConfig(report, run, { evaluatorId: 'system-factuality', judgeModelId: 'picked-model' }))
+          .toEqual({ judgeModelId: 'picked-model', evaluatorId: 'system-factuality' });
+      });
+
+      it('judgeModelId: null ("evaluator default") skips the run\'s and report\'s pinned model', () => {
+        process.env.BEDROCK_MODEL_ID = 'env-default';
+        try {
+          expect(resolveRetryJudgeConfig(report, run, { judgeModelId: null }).judgeModelId).toBe('env-default');
+        } finally {
+          delete process.env.BEDROCK_MODEL_ID;
+        }
+        // …and the agent's own model is the very last resort.
+        expect(resolveRetryJudgeConfig(report, run, { judgeModelId: null }).judgeModelId).toBe('agent-model');
+      });
+
+      it('falls through run → report → default for the judge model when the run has none; an unset evaluator resolves to the CONCRETE built-in default (what /api/judge would use anyway) so the report is stamped truthfully', () => {
+        expect(resolveRetryJudgeConfig(report, { judgeModelId: undefined, evaluatorId: undefined }))
+          .toEqual({ judgeModelId: 'report-model', evaluatorId: 'system-rca-default' });
+      });
+    });
+
+    it('judges with the overridden evaluator + model, overwrites ONLY the judgement fields, stamps the retry, keeps the agent output', async () => {
+      mockedCallBedrockJudge.mockResolvedValue(passing);
+      const originalTrajectory = [{ type: 'assistant', content: 'original agent output' } as any];
+      const reports: Record<string, EvaluationReport> = {
+        'r-1': makeReport({
+          id: 'r-1', testCaseId: 'tc-1', metricsStatus: 'ready' as any, passFailStatus: 'failed',
+          trajectory: originalTrajectory, evaluatorId: 'run-evaluator', judgeModelId: 'run-model',
+          judgeMode: 'trace-tools', llmJudgeReasoning: 'old reasoning', rawEvents: [{ type: 'RUN_STARTED' }],
+        }),
+      };
+      const storage = makeStorage(reports);
+      const run = makeRun({
+        judgeModelId: 'run-model', evaluatorId: 'run-evaluator',
+        results: { 'tc-1': { reportId: 'r-1', status: 'completed', passFailStatus: 'failed' } as any },
+      });
+
+      await retryJudgementForRun(run, storage as any, {
+        scope: 'all',
+        overrides: { evaluatorId: 'system-factuality', judgeModelId: 'picked-model' },
+      });
+
+      // The judge got the OVERRIDES, not the run's values.
+      expect(mockedCallBedrockJudge.mock.calls[0][4]).toBe('picked-model');
+      expect(mockedCallBedrockJudge.mock.calls[0][5]).toBe('system-factuality');
+
+      const updated = reports['r-1'] as any;
+      // Judgement fields overwritten in place — no history array anywhere.
+      expect(updated.passFailStatus).toBe('passed');
+      expect(updated.llmJudgeReasoning).toBe('Re-judged fine');
+      expect(updated.judgeModelId).toBe('picked-model');
+      expect(updated.evaluatorId).toBe('system-factuality');
+      expect(updated.llmJudgeResponse).toEqual(expect.objectContaining({ modelId: 'picked-model', rawResponse: '{"raw":true}', latencyMs: 42 }));
+      expect(updated.judgeMode).toBeNull(); // stale trace-judge mode cleared, not carried over
+      expect(updated.metricsStatus).toBe('completed');
+      expect(updated.judgementRetriedAt).toEqual(expect.any(String));
+      expect(updated.judgementRetryCount).toBe(1);
+      expect(Object.keys(updated).some(k => /history/i.test(k))).toBe(false);
+      // Agent output untouched.
+      expect(updated.trajectory).toEqual(originalTrajectory);
+      expect(updated.rawEvents).toEqual([{ type: 'RUN_STARTED' }]);
+    });
+
+    it('replaces a stale report.evaluatorId with the evaluator that actually judged the retry (default when neither override nor run pins one) — codex_review finding', async () => {
+      mockedCallBedrockJudge.mockResolvedValue(passing);
+      const reports: Record<string, EvaluationReport> = {
+        'r-stale': makeReport({ id: 'r-stale', testCaseId: 'tc-s', metricsStatus: 'error' as any, evaluatorId: 'custom-that-was-deleted' }),
+      };
+      const storage = makeStorage(reports);
+      const run = makeRun({ evaluatorId: undefined, results: { 'tc-s': { reportId: 'r-stale', status: 'completed' } as any } });
+
+      await retryJudgementForRun(run, storage as any);
+
+      expect(mockedCallBedrockJudge.mock.calls[0][5]).toBe('system-rca-default');
+      expect((reports['r-stale'] as any).evaluatorId).toBe('system-rca-default');
+    });
+
+    it('increments judgementRetryCount on a second retry and still keeps exactly one judgement', async () => {
+      mockedCallBedrockJudge.mockResolvedValue(passing);
+      const reports: Record<string, EvaluationReport> = {
+        'r-2': makeReport({ id: 'r-2', testCaseId: 'tc-2', passFailStatus: 'passed', judgementRetryCount: 1, judgementRetriedAt: '2026-01-01T00:00:00Z' }),
+      };
+      const storage = makeStorage(reports);
+      const run = makeRun({ results: { 'tc-2': { reportId: 'r-2', status: 'completed', passFailStatus: 'passed' } as any } });
+
+      await retryJudgementForRun(run, storage as any, { scope: 'all' });
+
+      expect((reports['r-2'] as any).judgementRetryCount).toBe(2);
+      expect((reports['r-2'] as any).judgementRetriedAt).not.toBe('2026-01-01T00:00:00Z');
+      expect(typeof (reports['r-2'] as any).llmJudgeReasoning).toBe('string'); // one judgement, not a list
+    });
+
+    it('records lastJudgementRetry on the run doc up front (what the dialog seeds from next time)', async () => {
+      mockedCallBedrockJudge.mockResolvedValue(passing);
+      const reports: Record<string, EvaluationReport> = {
+        'r-3': makeReport({ id: 'r-3', testCaseId: 'tc-3', metricsStatus: 'error' as any }),
+      };
+      const storage = makeStorage(reports);
+      const run = makeRun({
+        judgeModelId: 'run-model', evaluatorId: 'run-evaluator',
+        results: { 'tc-3': { reportId: 'r-3', status: 'completed' } as any },
+      });
+
+      await retryJudgementForRun(run, storage as any, { scope: 'all', overrides: { evaluatorId: 'system-factuality', judgeModelId: null } });
+
+      const firstUpdate = (storage.evaluationRuns.update as jest.Mock).mock.calls[0];
+      expect(firstUpdate[0]).toBe('eval-run-1');
+      expect(firstUpdate[1]).toEqual({
+        lastJudgementRetry: { scope: 'all', evaluatorId: 'system-factuality', judgeModelId: null, at: expect.any(String) },
+      });
+      // Written BEFORE any judge call so it survives an interrupted job.
+      const firstUpdateOrder = (storage.evaluationRuns.update as jest.Mock).mock.invocationCallOrder[0];
+      expect(firstUpdateOrder).toBeLessThan(mockedCallBedrockJudge.mock.invocationCallOrder[0]);
+    });
+
+    it('with no overrides, lastJudgementRetry mirrors the run\'s own evaluator / judge model (null when unset)', async () => {
+      const reports: Record<string, EvaluationReport> = {};
+      const storage = makeStorage(reports);
+      const run = makeRun({ judgeModelId: undefined, evaluatorId: undefined, results: {} });
+
+      await retryJudgementForRun(run, storage as any);
+
+      expect((storage.evaluationRuns.update as jest.Mock).mock.calls[0][1]).toEqual({
+        lastJudgementRetry: { scope: 'errored', evaluatorId: null, judgeModelId: null, at: expect.any(String) },
+      });
+    });
+  });
+
   it('returns a no-op summary when there is nothing to retry', async () => {
     const reports: Record<string, EvaluationReport> = {
       'r-passed': makeReport({ id: 'r-passed', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
@@ -408,8 +566,10 @@ describe('retryJudgementForRun', () => {
 
     expect(summary).toEqual({ retried: 0, succeeded: 0, failed: 0, results: [] });
     expect(mockedCallBedrockJudge).not.toHaveBeenCalled();
-    // Run doc still gets its stats recomputed/persisted even with zero retries.
-    expect(storage.evaluationRuns.update).toHaveBeenCalledTimes(1);
+    // Run doc still gets its stats recomputed/persisted even with zero
+    // retries (plus the up-front `lastJudgementRetry` stamp).
+    expect(storage.evaluationRuns.update).toHaveBeenCalledTimes(2);
+    expect((storage.evaluationRuns.update as jest.Mock).mock.calls.at(-1)![1]).toHaveProperty('stats');
   });
 
   it('scope=all re-judges every rejudgeable case, including already-passed ones', async () => {

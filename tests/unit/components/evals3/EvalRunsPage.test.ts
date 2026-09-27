@@ -51,7 +51,6 @@ jest.mock('@/services/client', () => ({
   updateEvaluationRun: (...a: unknown[]) => mockUpdateEvaluationRun(...a),
   deleteEvaluationRun: jest.fn(),
   cancelEvaluationRun: jest.fn(),
-  retryJudgementEvaluationRun: jest.fn(),
 }));
 
 jest.mock('@/lib/constants', () => ({

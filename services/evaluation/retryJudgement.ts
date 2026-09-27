@@ -45,10 +45,32 @@ import { computeRunStats } from '@/lib/runStats';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
 import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
+import { getDefaultEvaluator } from '@/server/prompts/evaluatorTemplates';
 import { debug } from '@/lib/debug';
 import { readEnv } from '@/lib/envCompat';
 
 export type RetryJudgementScope = 'errored' | 'all';
+
+/**
+ * Judge configuration the caller picks for THIS retry (the "Retry judgement"
+ * dialog's evaluator / judge-model selects). Owner requirement (follow-up to
+ * #468): "the judgement should allow for evaluator type and prompt evaluator
+ * when retrying; defaults will be the last selected ones."
+ *
+ *   - key absent  → inherit the run's value (`run.evaluatorId` /
+ *                   `run.judgeModelId`), i.e. the pre-existing behaviour.
+ *   - `evaluatorId: string` → judge with that evaluator (validated to exist
+ *                   by the route).
+ *   - `judgeModelId: string` → judge with that model.
+ *   - `judgeModelId: null` → the dialog's "Use evaluator default": skip the
+ *                   run's/report's pinned model and let the server-default
+ *                   judge model apply (`BEDROCK_MODEL_ID`, then the
+ *                   evaluator's own `inferenceConfig` in /api/judge).
+ */
+export interface RetryJudgementOverrides {
+  evaluatorId?: string;
+  judgeModelId?: string | null;
+}
 
 export interface RetryJudgementCaseResult {
   testCaseId: string;
@@ -162,6 +184,34 @@ function resolveAgentConfig(agentKey: string | undefined): AgentConfig | undefin
 }
 
 /**
+ * Resolve the judge model + evaluator for one retried case. Precedence:
+ * explicit per-retry {@link RetryJudgementOverrides} > the run's values >
+ * the report's own value (judge model only) > server default. Exported for
+ * unit tests.
+ *
+ * The evaluator always resolves to a CONCRETE id: an unset evaluator means
+ * the built-in default (`getDefaultEvaluator()` — exactly what /api/judge
+ * falls back to when no `evaluatorId` is sent), so the retried report is
+ * stamped with the evaluator that actually judged it instead of keeping a
+ * possibly stale `evaluatorId` from before (codex_review finding).
+ */
+export function resolveRetryJudgeConfig(
+  report: Pick<EvaluationReport, 'judgeModelId' | 'modelId'>,
+  run: Pick<EvaluationRun, 'judgeModelId' | 'evaluatorId'>,
+  overrides: RetryJudgementOverrides = {}
+): { judgeModelId: string; evaluatorId: string } {
+  const serverDefault = readEnv('BEDROCK_MODEL_ID', 'AGENT_HEALTH_BEDROCK_MODEL_ID') || report.modelId || '';
+  let judgeModelId: string;
+  if (overrides.judgeModelId === null) {
+    judgeModelId = serverDefault;
+  } else {
+    judgeModelId = overrides.judgeModelId || run.judgeModelId || report.judgeModelId || serverDefault;
+  }
+  const evaluatorId = overrides.evaluatorId || run.evaluatorId || getDefaultEvaluator().id;
+  return { judgeModelId, evaluatorId };
+}
+
+/**
  * Re-run ONLY the judge pipeline for one already-completed test case,
  * against the report's stored trajectory. Never re-invokes the agent.
  *
@@ -178,7 +228,8 @@ export async function retryJudgementForCase(
   testCase: TestCase,
   run: Pick<EvaluationRun, 'judgeModelId' | 'evaluatorId' | 'agentKey'>,
   storage: IStorageModule,
-  agentConfig: AgentConfig | undefined
+  agentConfig: AgentConfig | undefined,
+  overrides: RetryJudgementOverrides = {}
 ): Promise<{ passFailStatus: PassFailStatus | null; error?: string }> {
   let trajectory = report.trajectory || [];
 
@@ -201,11 +252,7 @@ export async function retryJudgementForCase(
     }
   }
 
-  const judgeModelId =
-    run.judgeModelId ||
-    report.judgeModelId ||
-    readEnv('BEDROCK_MODEL_ID', 'AGENT_HEALTH_BEDROCK_MODEL_ID') ||
-    report.modelId;
+  const { judgeModelId, evaluatorId } = resolveRetryJudgeConfig(report, run, overrides);
   try {
     const judgment = await callBedrockJudge(
       trajectory,
@@ -216,19 +263,44 @@ export async function retryJudgementForCase(
       undefined,
       () => {},
       judgeModelId,
-      run.evaluatorId,
+      evaluatorId,
       report.runId,
       buildJudgeAgentsHints(report, agentConfig?.traceServiceName)
     );
 
+    // Only the LATEST judgement is kept on the report (owner's choice — no
+    // history array), so every judgement field is overwritten together and
+    // the retry is stamped (`judgementRetriedAt` / `judgementRetryCount`)
+    // so the report is truthful about having been re-judged. The agent
+    // output (trajectory/rawEvents/spans/...) is never touched beyond the
+    // trace-refresh above.
     await storage.runs.update(report.id, {
       trajectory,
       passFailStatus: judgment.passFailStatus,
       metrics: judgment.metrics,
       llmJudgeReasoning: judgment.llmJudgeReasoning,
+      llmJudgeResponse: {
+        modelId: judgeModelId,
+        timestamp: new Date().toISOString(),
+        promptTokens: 0,
+        completionTokens: 0,
+        latencyMs: judgment.judgeDurationMs ?? 0,
+        rawResponse: judgment.rawResponse ?? judgment.llmJudgeReasoning,
+        parsedMetrics: judgment.metrics,
+        improvementStrategies: judgment.improvementStrategies,
+        ...(judgment.judgeDebug ? { judgeDebug: judgment.judgeDebug } : {}),
+      },
+      // The judge config that produced THIS verdict — may differ from the
+      // run's when the caller overrode them for the retry.
+      judgeModelId,
+      evaluatorId,
       // Set only by the agent (trace) judge provider -- see
-      // JudgeResponse.judgeMode / TestCaseRun.judgeMode.
-      ...(judgment.judgeMode ? { judgeMode: judgment.judgeMode } : {}),
+      // JudgeResponse.judgeMode / TestCaseRun.judgeMode. `null` (not
+      // omitted) when this judge didn't set it, so a prior trace-judge
+      // verdict's mode can't outlive the verdict it described.
+      judgeMode: judgment.judgeMode ?? null,
+      judgementRetriedAt: new Date().toISOString(),
+      judgementRetryCount: (report.judgementRetryCount ?? 0) + 1,
       matcherResults: [
         buildJudgeMatcherEntry(judgment, {
           claim: formatExpectedOutcomesAsClaim(testCase.expectedOutcomes),
@@ -346,15 +418,36 @@ export async function countRetryableCases(
 export async function retryJudgementForRun(
   run: EvaluationRun,
   storage: IStorageModule,
-  options?: { scope?: RetryJudgementScope; concurrency?: number; onProgress?: (completed: number, total: number) => void }
+  options?: {
+    scope?: RetryJudgementScope;
+    concurrency?: number;
+    onProgress?: (completed: number, total: number) => void;
+    /** Per-retry judge config; see {@link RetryJudgementOverrides}. */
+    overrides?: RetryJudgementOverrides;
+  }
 ): Promise<RetryJudgementSummary> {
   const scope = options?.scope ?? 'errored';
+  const overrides = options?.overrides ?? {};
   const concurrency = Math.max(1, Math.min(options?.concurrency ?? MAX_RETRY_CONCURRENCY, MAX_RETRY_CONCURRENCY));
 
   const reportsById = await fetchReportsById(run, storage);
 
   const testCaseIds = selectRetryableCases(run, reportsById, scope);
   const agentConfig = resolveAgentConfig(run.agentKey);
+
+  // "Defaults will be the last selected ones": remember what THIS retry was
+  // launched with so the next Retry-judgement dialog can preselect it.
+  // Written up front (before any judge call) so it's visible even if the
+  // job is still running / gets interrupted. Not the per-case judge model
+  // fallback chain — the user's selection as made (`null` = "evaluator
+  // default").
+  const lastJudgementRetry: NonNullable<EvaluationRun['lastJudgementRetry']> = {
+    scope,
+    evaluatorId: overrides.evaluatorId || run.evaluatorId || null,
+    judgeModelId: overrides.judgeModelId === undefined ? (run.judgeModelId || null) : (overrides.judgeModelId || null),
+    at: new Date().toISOString(),
+  };
+  await storage.evaluationRuns.update(run.id, { lastJudgementRetry });
 
   const results: RetryJudgementCaseResult[] = [];
   const updatedResults: Record<string, any> = { ...run.results };
@@ -397,7 +490,7 @@ export async function retryJudgementForRun(
         return;
       }
 
-      const { passFailStatus, error } = await retryJudgementForCase(report, testCase, run, storage, agentConfig);
+      const { passFailStatus, error } = await retryJudgementForCase(report, testCase, run, storage, agentConfig, overrides);
 
       const nextResult: any = { ...result, status: 'completed' };
       if (passFailStatus) {

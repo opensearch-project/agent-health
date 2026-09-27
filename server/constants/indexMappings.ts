@@ -126,6 +126,17 @@ export function getIndexMappings(): IndexMappings {
           // `results.put()` partial updates and `docType.keyword` term
           // queries both continued to work unchanged.
           results: { type: 'object', enabled: false },
+          // EvaluationRun only: what the last "Retry judgement" was launched
+          // with (seeds the dialog's defaults). Explicit so `at` is a date
+          // and the ids stay keyword, matching the neighbouring id fields.
+          lastJudgementRetry: {
+            properties: {
+              evaluatorId: { type: 'keyword' },
+              judgeModelId: { type: 'keyword' },
+              scope: { type: 'keyword' },
+              at: { type: 'date' },
+            },
+          },
           runs: {
             type: 'nested',
             properties: {
@@ -273,6 +284,9 @@ export function getIndexMappings(): IndexMappings {
           traceFetchAttempts: { type: 'integer' },
           lastTraceFetchAt: { type: 'date' },
           traceError: { type: 'text' },
+          // Retry-judgement stamp (services/evaluation/retryJudgement.ts).
+          judgementRetriedAt: { type: 'date' },
+          judgementRetryCount: { type: 'integer' },
         },
       },
     },

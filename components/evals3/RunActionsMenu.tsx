@@ -55,10 +55,11 @@ export interface RunActionsMenuProps {
   retryJudgementDisabledReason?: string;
   /**
    * When provided, the Retry Judgement label reads "Retry judgement (N)" so
-   * the user sees how many judge-failed cases the action will re-judge —
-   * the same count the RetryJudgementConfirmDialog is handed.
+   * the user sees how many cases the action will re-judge under the
+   * RetryJudgementConfirmDialog's DEFAULT scope (judge-failed cases when
+   * there are any, otherwise all cases — `getRunActionVisibility().retryJudgementCount`).
    */
-  judgeFailedCount?: number;
+  retryJudgementCount?: number;
   onDelete: () => Promise<void> | void;
   onCancel: () => Promise<void> | void;
   onRetryJudgement: () => Promise<void> | void;
@@ -76,7 +77,7 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
   rerunDisabledReason,
   canRetryJudgement,
   retryJudgementDisabledReason,
-  judgeFailedCount,
+  retryJudgementCount,
   onDelete,
   onCancel,
   onRetryJudgement,
@@ -156,15 +157,15 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
             onSelect={e => {
               e.preventDefault();
               if (!canRetryJudgement) return;
-              // Close first: on the inspector this opens the
-              // RetryJudgementConfirmDialog, and a modal dialog stacked on a
-              // still-open modal dropdown fights over focus.
+              // Close first: this opens the RetryJudgementConfirmDialog
+              // (evaluator / judge-model / scope picker), and a modal dialog
+              // stacked on a still-open modal dropdown fights over focus.
               setMenuOpen(false);
               runAction('retry-judgement', onRetryJudgement);
             }}
           >
             <RefreshCw size={14} className="mr-2" />
-            {judgeFailedCount === undefined ? 'Retry judgement' : `Retry judgement (${judgeFailedCount})`}
+            {retryJudgementCount === undefined ? 'Retry judgement' : `Retry judgement (${retryJudgementCount})`}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem

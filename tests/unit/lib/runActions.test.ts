@@ -15,6 +15,7 @@ import {
   isRunRunning,
   isRunTerminal,
   countJudgeFailed,
+  countRejudgeable,
   getRunActionVisibility,
   isOldEnoughForZombieCancel,
   ZOMBIE_CANCEL_MIN_AGE_MS,
@@ -84,6 +85,26 @@ describe('countJudgeFailed', () => {
   });
 });
 
+describe('countRejudgeable', () => {
+  it('counts every completed result regardless of verdict (what scope=all re-judges)', () => {
+    expect(countRejudgeable(evalRun({
+      results: {
+        tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' },
+        tc2: { status: 'completed', passFailStatus: 'failed', reportId: 'r2' },
+        tc3: { status: 'completed', reportId: 'r3' },
+        tc4: { status: 'failed', reportId: 'r4' },
+        tc5: { status: 'pending', reportId: 'r5' },
+      },
+    }))).toBe(3);
+  });
+
+  it('returns 0 when results is empty/missing', () => {
+    expect(countRejudgeable(evalRun({ results: {} }))).toBe(0);
+    expect(countRejudgeable(null)).toBe(0);
+    expect(countRejudgeable({ status: 'completed' } as any)).toBe(0);
+  });
+});
+
 describe('getRunActionVisibility — full matrix', () => {
   it('delete is always true, for every docType/status combination', () => {
     for (const status of ['running', 'completed', 'failed', 'cancelled']) {
@@ -130,7 +151,10 @@ describe('getRunActionVisibility — full matrix', () => {
     expect(visibility.retryJudgementDisabledReason).toMatch(/only available once the run finishes/i);
   });
 
-  it('retry judgement is false for a terminal EvaluationRun with zero judge-failed cases (graded pass AND graded fail both count as judged)', () => {
+  // Owner follow-up to #468: "Retry judgement should be a retryable step all
+  // the time" — a terminal run with ANY completed case is retryable (scope
+  // 'all' re-judges graded cases too), not only one with judge failures.
+  it('retry judgement is ENABLED for a terminal EvaluationRun with zero judge-failed cases (graded pass AND graded fail are re-judgeable); count = all cases', () => {
     const run = evalRun({
       status: 'completed',
       results: {
@@ -139,12 +163,14 @@ describe('getRunActionVisibility — full matrix', () => {
       },
     });
     const visibility = getRunActionVisibility(run);
-    expect(visibility.canRetryJudgement).toBe(false);
+    expect(visibility.canRetryJudgement).toBe(true);
     expect(visibility.judgeFailedCount).toBe(0);
-    expect(visibility.retryJudgementDisabledReason).toMatch(/no judge-failed/i);
+    expect(visibility.rejudgeableCount).toBe(2);
+    expect(visibility.retryJudgementCount).toBe(2);
+    expect(visibility.retryJudgementDisabledReason).toBeUndefined();
   });
 
-  it('retry judgement is true for a terminal EvaluationRun with >0 judge-failed cases', () => {
+  it('retry judgement is true for a terminal EvaluationRun with >0 judge-failed cases; count = the judge-failed cases (default scope)', () => {
     const run = evalRun({
       status: 'completed',
       results: {
@@ -155,7 +181,29 @@ describe('getRunActionVisibility — full matrix', () => {
     const visibility = getRunActionVisibility(run);
     expect(visibility.canRetryJudgement).toBe(true);
     expect(visibility.judgeFailedCount).toBe(1);
+    expect(visibility.rejudgeableCount).toBe(2);
+    expect(visibility.retryJudgementCount).toBe(1);
     expect(visibility.retryJudgementDisabledReason).toBeUndefined();
+  });
+
+  it('retry judgement is DISABLED (with the no-output reason) for a terminal EvaluationRun with no completed case at all', () => {
+    for (const results of [{}, { tc1: { status: 'failed', reportId: 'r1' } }, { tc1: { status: 'cancelled', reportId: 'r1' } }]) {
+      const visibility = getRunActionVisibility(evalRun({ status: 'completed', results }));
+      expect(visibility.canRetryJudgement).toBe(false);
+      expect(visibility.rejudgeableCount).toBe(0);
+      expect(visibility.retryJudgementCount).toBe(0);
+      expect(visibility.retryJudgementDisabledReason).toBe('No completed test cases to re-judge');
+    }
+  });
+
+  it('retry judgement is enabled for cancelled runs too (terminal), as long as some case completed', () => {
+    const run = evalRun({
+      status: 'cancelled',
+      results: { tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' }, tc2: { status: 'cancelled', reportId: 'r2' } },
+    });
+    const visibility = getRunActionVisibility(run);
+    expect(visibility.canRetryJudgement).toBe(true);
+    expect(visibility.rejudgeableCount).toBe(1);
   });
 
   it('retry judgement is true for a "failed" (not just "completed") terminal run with judge-failed cases', () => {
