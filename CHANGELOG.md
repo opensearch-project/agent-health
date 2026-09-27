@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+- Ashwin P Chandran (@ashwin-pc) as maintainer and code owner ([#540](https://github.com/opensearch-project/agent-health/pull/540))
+
 ## [0.7.0] - 2026-09-17
 
 Run report v2 and a verdict-first reading of results, a comparison-page overhaul (all metrics on run rows, comparison-wide trace grounding, deep-dive model selector), a benchmark case-review workspace with Cases/Runs tabs and pass-rate-over-time, complete run lifecycle actions (cancel / delete / re-run / retry judgement), code-SDK `.eval.ts` support with always-recorded metrics, and judge-input integrity fixes: concurrent subprocess runs no longer cross-wire session ids, the trace poller keeps connector tool evidence, and the trace judge degrades to trajectory-only for non-instrumented agents instead of failing the run. Dependency audit findings resolved (15 → 0) and a responsive mobile layout.
