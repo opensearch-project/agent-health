@@ -64,6 +64,15 @@ interface ExpectedBehavior {
 }
 
 /**
+ * How many times to ask the judge again when its reply had NO parseable
+ * verdict (empty final turn, malformed JSON). Two total attempts: models
+ * are stochastic so one retry is worth it; ten (the transient-error budget
+ * above) is not — owner incident: 5 cases × 10 attempts × exponential
+ * backoff ≈ 8.5 min wasted per case on a judge that had nothing to judge.
+ */
+export const PARSE_FAILURE_MAX_ATTEMPTS = 2;
+
+/**
  * Real Bedrock Judge implementation via backend proxy with exponential backoff retry
  * Calls the backend API which handles AWS Bedrock communication
  * The backend routes to the appropriate provider (demo/bedrock/ollama) based on modelId
@@ -107,6 +116,9 @@ export async function callBedrockJudge(
   console.log('[BedrockJudge] Model:', modelId || '(using default)');
 
   const judgeStartTime = Date.now();
+  // Raw text of the most recent unparseable judge reply (kept so the
+  // terminal error carries it for `report.judgeError.rawResponse`).
+  let lastRawResponse: string | undefined;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -141,6 +153,16 @@ export async function callBedrockJudge(
       if (!response.ok) {
         const errorData = await response.json();
         const errorMessage = errorData.error || `API request failed with status ${response.status}`;
+        // 422 JUDGE_UNPARSEABLE: the model replied but produced no verdict
+        // (empty turn / malformed JSON). Not a throttle — allow ONE more
+        // attempt (models are stochastic) then stop, keeping the raw text.
+        if (response.status === 422 || errorData.code === 'JUDGE_UNPARSEABLE') {
+          lastRawResponse = typeof errorData.rawResponse === 'string' ? errorData.rawResponse : lastRawResponse;
+          throw Object.assign(new Error(errorMessage), {
+            unparseable: true,
+            rawResponse: lastRawResponse,
+          });
+        }
         // 4xx client errors are validation failures — retrying won't help
         if (response.status >= 400 && response.status < 500) {
           throw Object.assign(new Error(`Bedrock Judge validation error (not retryable): ${errorMessage}`), { nonRetryable: true });
@@ -199,9 +221,21 @@ export async function callBedrockJudge(
         throw error;
       }
 
+      // Unparseable verdict: cap at PARSE_FAILURE_MAX_ATTEMPTS total attempts
+      // (not the transient-error budget of 10) and surface the raw text.
+      if ((error as any)?.unparseable && attempt >= PARSE_FAILURE_MAX_ATTEMPTS) {
+        throw Object.assign(
+          new Error(`Bedrock Judge evaluation failed after ${attempt} attempts: ${errorMessage}`),
+          { unparseable: true, rawResponse: lastRawResponse, judgeAttempts: attempt },
+        );
+      }
+
       // If this is the last attempt, throw the error
       if (isLastAttempt) {
-        throw new Error(`Bedrock Judge evaluation failed after ${maxRetries} attempts: ${errorMessage}`);
+        throw Object.assign(
+          new Error(`Bedrock Judge evaluation failed after ${maxRetries} attempts: ${errorMessage}`),
+          { judgeAttempts: attempt, ...(lastRawResponse !== undefined ? { rawResponse: lastRawResponse } : {}) },
+        );
       }
 
       // Calculate exponential backoff delay: 1s, 2s, 4s
@@ -253,4 +287,17 @@ export function simulateBedrockJudge(
       }
     ]
   };
+}
+
+/**
+ * Extract the judge-step failure detail (raw reply text + attempt count) a
+ * failed `callBedrockJudge` error carries, for `report.judgeError`.
+ */
+export function judgeErrorDetailFrom(error: unknown): { message: string; rawResponse?: string; attempts?: number } {
+  const e = error as any;
+  const message = e instanceof Error ? e.message : typeof e === 'string' ? e : 'Unknown judge error';
+  const detail: { message: string; rawResponse?: string; attempts?: number } = { message };
+  if (typeof e?.rawResponse === 'string') detail.rawResponse = e.rawResponse;
+  if (typeof e?.judgeAttempts === 'number') detail.attempts = e.judgeAttempts;
+  return detail;
 }

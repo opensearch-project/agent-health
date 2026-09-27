@@ -417,6 +417,46 @@ export interface SessionMetadata {
 // Metrics status for trace-mode runs (traces take ~5 min to propagate)
 export type MetricsStatus = 'pending' | 'calculating' | 'ready' | 'error';
 
+/**
+ * Which STAGE of a test-case run failed. Set alongside `metricsStatus:
+ * 'error'` / `status: 'failed'` so consumers stop inferring the stage from
+ * `traceError` prose, an empty trajectory, or a `kind=…` regex.
+ *
+ *  - `agent`: the agent request itself never produced output (HTTP timeout,
+ *    connection refused, non-2xx, subprocess crash). There is NOTHING to
+ *    judge — retry-judgement must not offer these; a re-run is the remedy.
+ *  - `judge`: the agent completed but the evaluator/judge could not produce a
+ *    verdict (empty model reply, parse failure, provider error). Salvageable
+ *    by retry-judgement against the stored trajectory.
+ *  - `trace`: the trace pipeline failed (spans never arrived / didn't
+ *    converge / fetch failed) before judging.
+ */
+export type FailureStage = 'agent' | 'judge' | 'trace';
+
+/** Coarse classification of an agent-request failure (`TestCaseRun.agentError`). */
+export type AgentErrorKind = 'timeout' | 'connection' | `http_${number}` | 'unknown';
+
+/**
+ * Structured record of WHY the agent step failed, persisted on the report so
+ * the run-detail "Test Case Output" tab can show the real cause (the
+ * unwrapped `error.cause` for undici's opaque `fetch failed`, the endpoint,
+ * how long we waited, and the timeout that was in force) instead of an
+ * empty trajectory and a misleading "evaluator could not run".
+ */
+export interface AgentErrorInfo {
+  kind: AgentErrorKind;
+  /** Unwrapped, human-readable cause (never the bare `fetch failed`). */
+  message: string;
+  /** Wall-clock ms from the start of the agent request to the failure. */
+  elapsedMs?: number;
+  /** Endpoint/command the connector was calling. */
+  endpoint?: string;
+  /** Request timeout the connector applied, when known (ms). */
+  timeoutMs?: number;
+  /** HTTP status, for `http_<status>` kinds. */
+  httpStatus?: number;
+}
+
 // TestCaseRun = result of running a specific test case version (renamed from EvaluationReport)
 export interface TestCaseRun {
   id: string;
@@ -511,6 +551,22 @@ export interface TestCaseRun {
   traceFetchAttempts?: number; // Number of polling attempts for traces
   lastTraceFetchAt?: string; // Timestamp of last trace fetch attempt
   traceError?: string; // Error message if trace fetch failed
+  /**
+   * Human-readable terminal error for this run — the REAL cause (e.g. the
+   * unwrapped undici `HeadersTimeoutError` for an agent request that never
+   * returned), not a downstream symptom. Set whenever `failureStage` is set.
+   */
+  error?: string;
+  /** Which stage failed; see {@link FailureStage}. Unset for healthy runs. */
+  failureStage?: FailureStage;
+  /** Structured agent-request failure detail; set iff `failureStage === 'agent'`. */
+  agentError?: AgentErrorInfo;
+  /**
+   * Judge-step failure detail (set iff `failureStage === 'judge'`): the raw
+   * text the judge model returned (empty string when it returned nothing) and
+   * how many attempts were made, so the failure is inspectable from the UI.
+   */
+  judgeError?: { message: string; rawResponse?: string; attempts?: number };
   spans?: Span[]; // Fetched trace spans for debugging
   /**
    * Set exclusively by the agent (trace) judge provider (`judgeModelId:

@@ -16,6 +16,7 @@
 
 import { getOpenSearchClient, INDEXES, isStorageConfigured } from '../opensearchClient.js';
 import { computeStatsForRun } from './statsComputation.js';
+import { copyReportFailureFields } from '@/lib/reportFailureFields';
 import type { Client } from '@opensearch-project/opensearch';
 
 // Re-export for convenience
@@ -235,6 +236,8 @@ export async function saveReportWithClient(
   if (report.traceFetchAttempts !== undefined) storageData.traceFetchAttempts = report.traceFetchAttempts;
   if (report.lastTraceFetchAt !== undefined) storageData.lastTraceFetchAt = report.lastTraceFetchAt;
   if (report.traceError !== undefined) storageData.traceError = report.traceError;
+  // Failure detail (failureStage / error / agentError / judgeError) — see lib/reportFailureFields.ts.
+  copyReportFailureFields(report, storageData);
   if (report.spans !== undefined) storageData.spans = report.spans;
   if (report.connectorProtocol !== undefined) storageData.connectorProtocol = report.connectorProtocol;
 

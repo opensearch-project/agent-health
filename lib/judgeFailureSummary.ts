@@ -42,6 +42,8 @@ export interface CaseFailureLike {
   traceError?: string;
   /** Option-B BC field; also the legacy shape's error carrier. */
   llmJudgeReasoning?: string;
+  /** Explicit stage marker (post agent-error-surfacing). */
+  failureStage?: string;
 }
 
 const PATCH_JUDGE_FAILURE_RE = /kind=judge_failed/;
@@ -55,6 +57,8 @@ const LEGACY_JUDGE_FAILURE_RE = /^Evaluation failed:.*\bjudge\b/i;
  */
 export function extractJudgeFailureReason(report: CaseFailureLike | null | undefined): string | undefined {
   if (!report) return undefined;
+  // Explicit stage marker wins: an agent-request failure is never a judge failure.
+  if (report.failureStage && report.failureStage !== 'judge') return undefined;
 
   if (report.metricsStatus === 'error' && PATCH_JUDGE_FAILURE_RE.test(report.traceError || '')) {
     // traceError format: "<Label> (kind=judge_failed): <message>" -- the
