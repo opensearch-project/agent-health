@@ -96,7 +96,19 @@ export async function createApp(): Promise<Express> {
     ...config.telemetry,
     opensearch: opensearchExporterConfig,
   }));
-  process.once('SIGTERM', async () => { await shutdownEvalTracer(); });
+  // Flush the evaluation tracer exactly once, whoever asks first: the SIGTERM
+  // listener below, or a shutdown hook that wants to await the flush before
+  // process.exit (cli/utils/gracefulShutdown.ts reads it off app.locals —
+  // the CLI bundle cannot import this module instance, so the hook is handed
+  // over on the app). NOTE: registering any SIGTERM listener replaces Node's
+  // default terminate-on-SIGTERM, so every entrypoint that calls createApp()
+  // must exit the process itself (server/index.ts, cli/utils/startServer.ts).
+  let telemetryShutdown: Promise<void> | undefined;
+  const shutdownTelemetry = (): Promise<void> => {
+    if (!telemetryShutdown) telemetryShutdown = shutdownEvalTracer();
+    return telemetryShutdown;
+  };
+  process.once('SIGTERM', () => { void shutdownTelemetry(); });
 
   // Swap to OpenSearch storage when configured and reachable
   await initializeStorageBackend();
@@ -114,6 +126,8 @@ export async function createApp(): Promise<Express> {
   }
 
   const app = express();
+  // (guarded: unit tests stub express() with a bare object without `locals`)
+  if (app.locals) app.locals.shutdownTelemetry = shutdownTelemetry;
 
   // Setup middleware (CORS, JSON parsing, static assets)
   setupMiddleware(app);

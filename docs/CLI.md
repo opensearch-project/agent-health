@@ -124,7 +124,7 @@ agent-health benchmark [options]
 | `--stop-server` | Stop the server after benchmark completes | Keep running |
 
 **Modes:**
-- **Quick mode** (no `-n`, no `-f`): Runs all stored test cases as an **ad-hoc evaluation run** (no benchmark entity is created)
+- **Quick mode** (no `-n`, no `-f`, no server already running): Runs **all stored test cases** under **one stable benchmark** named `Quick run — all test cases`. The benchmark is found by name (exact, then unique trimmed/case-insensitive match) and created only on the first run; if the stored test-case set has changed since the last quick run, the benchmark is updated to the current full set (a new benchmark version) before the run starts. Every quick run therefore shows up on Evaluations → Runs with its Benchmark column linking to that benchmark's page, and history accumulates there — re-running the command never creates another benchmark (the CLI prints `Created benchmark …` on the first run and `Reusing benchmark …` afterwards). The server it starts is stopped when the run finishes.
 - **Named mode** (`-n <name>`): Runs a specific existing benchmark
 - **File mode** (`-f <path>`): Imports test cases from a JSON file **or runs a code SDK file** (`.eval.js` / `.eval.ts` — see [SDK.md](./SDK.md)), creates a benchmark, and runs it. `.eval.ts` is executed as synthetic CJS (like `.eval.js`) and works from anywhere on disk; only `.eval.mjs` resolves `@opensearch-project/agent-health` through normal Node module resolution, so an `.eval.mjs` file needs the package reachable as a real dependency from its location (see the note in [SDK.md](./SDK.md#migrating-v1--v2))
 

@@ -96,6 +96,10 @@ import ora from 'ora';
 import { loadConfig } from '@/lib/config/index.js';
 import { ApiClient } from '@/cli/utils/apiClient.js';
 import {
+  QUICK_MODE_BENCHMARK_DESCRIPTION,
+  QUICK_MODE_BENCHMARK_NAME,
+} from '@/cli/utils/quickModeBenchmark.js';
+import {
   createServerCleanup,
   ensureServer,
   isServerRunning,
@@ -112,8 +116,11 @@ type MockApiClient = {
   createBenchmark: jest.Mock;
   executeBenchmark: jest.Mock;
   findBenchmark: jest.Mock;
+  findBenchmarkDetailed: jest.Mock;
+  getEvaluationRun: jest.Mock;
   getReportById: jest.Mock;
   listTestCases: jest.Mock;
+  updateBenchmark: jest.Mock;
 };
 
 class ProcessExitError extends Error {
@@ -176,8 +183,11 @@ function makeApiClient(overrides: Partial<MockApiClient> = {}): MockApiClient {
     createBenchmark: jest.fn(),
     executeBenchmark: jest.fn(),
     findBenchmark: jest.fn(),
+    findBenchmarkDetailed: jest.fn().mockResolvedValue({ benchmark: null, ambiguousMatches: [] }),
+    getEvaluationRun: jest.fn(),
     getReportById: jest.fn(),
     listTestCases: jest.fn(),
+    updateBenchmark: jest.fn(),
     ...overrides,
   };
 }
@@ -465,69 +475,213 @@ describe('Benchmark Command - Real Module Coverage', () => {
       expect(exitSpy).not.toHaveBeenCalled();
     });
 
-    it('runs quick mode with the default agent and prints markdown summary output', async () => {
-      mockEnsureServer.mockResolvedValue({
-        baseUrl: 'http://localhost:4001',
-        wasStarted: false,
-      } as any);
-
-      const benchmark = makeBenchmark({
-        id: 'bench-quick',
-        name: 'quick-123',
-        testCaseIds: ['tc-1', 'tc-2'],
+    it('file mode refuses to create a benchmark under an ambiguous -n name (no third near-duplicate)', async () => {
+      const inputFile = join(tempDir, 'ambiguous-cases.json');
+      writeFileSync(inputFile, JSON.stringify(validFileTestCases(), null, 2));
+      currentApi.bulkCreateTestCases.mockResolvedValue({
+        created: 2,
+        errors: 0,
+        testCases: [
+          { id: 'tc-1', name: 'File Case 1' },
+          { id: 'tc-2', name: 'File Case 2' },
+        ],
       });
-      const run = makeRun({
-        id: 'run-quick',
+      currentApi.findBenchmarkDetailed.mockResolvedValue({
+        benchmark: null,
+        ambiguousMatches: [
+          makeBenchmark({ id: 'bench-a', name: 'My Bench' }),
+          makeBenchmark({ id: 'bench-b', name: 'my bench ' }),
+        ],
+      });
+
+      await expect(runBenchmarkCommand(['-f', inputFile, '-n', 'MY BENCH', '-a', 'demo-agent'])).rejects.toThrow(
+        'process.exit(1)'
+      );
+
+      expect(currentApi.createBenchmark).not.toHaveBeenCalled();
+      expect(currentApi.updateBenchmark).not.toHaveBeenCalled();
+      expect(currentApi.executeBenchmark).not.toHaveBeenCalled();
+      const failMessages = mockOra.mock.results
+        .flatMap((r) => (r.value.fail as jest.Mock).mock.calls.map((c) => c[0]));
+      expect(failMessages.join('\n')).toContain('Benchmark name "MY BENCH" is ambiguous');
+      expect(failMessages.join('\n')).toContain('"My Bench" (bench-a)');
+    });
+
+    function mockQuickModeSse(runId: string) {
+      // Unified evaluation-runs API: SSE stream (started → progress → completed)
+      const encoder = new TextEncoder();
+      const sseChunks = [
+        `event: started\ndata: ${JSON.stringify({
+          runId,
+          testCases: [
+            { id: 'tc-1', name: 'Quick Case 1', status: 'pending' },
+            { id: 'tc-2', name: 'Quick Case 2', status: 'pending' },
+          ],
+        })}\n\n`,
+        `event: progress\ndata: ${JSON.stringify({ completedCount: 2 })}\n\n`,
+        `event: completed\ndata: ${JSON.stringify({ status: 'completed' })}\n\n`,
+      ].map((c) => encoder.encode(c));
+      let chunkIdx = 0;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: jest.fn().mockImplementation(async () =>
+              chunkIdx < sseChunks.length
+                ? { done: false, value: sseChunks[chunkIdx++] }
+                : { done: true, value: undefined }
+            ),
+          }),
+        },
+      } as any);
+      currentApi.getEvaluationRun.mockResolvedValue({
+        id: runId,
+        status: 'completed',
+        benchmarkId: 'bench-quick',
         results: {
           'tc-1': { reportId: 'report-1', status: 'completed' },
-          'tc-2': { reportId: '', status: 'failed', error: 'Judge failed' },
+          'tc-2': { reportId: 'report-2', status: 'completed' },
         },
       });
+    }
 
-      currentApi.listTestCases.mockResolvedValue([
-        { id: 'tc-1', name: 'Quick Case 1' },
-        { id: 'tc-2', name: 'Quick Case 2' },
-      ]);
-      currentApi.createBenchmark.mockResolvedValue(benchmark);
-      currentApi.executeBenchmark.mockImplementation(
-        async (_benchmarkId: string, _runConfig: any, onProgress?: (event: any) => void) => {
-          onProgress?.({
-            type: 'started',
-            runId: 'run-quick',
-            testCases: [
-              { id: 'tc-1', name: 'Quick Case 1', status: 'pending' },
-              { id: 'tc-2', name: 'Quick Case 2', status: 'pending' },
-            ],
-          });
-          onProgress?.({
-            type: 'progress',
-            currentTestCaseIndex: 1,
-            totalTestCases: 2,
-            currentTestCase: { id: 'tc-2', name: 'Quick Case 2' },
-            completedCount: 1,
-            result: { status: 'failed', error: 'Judge failed' },
-          });
+    describe('quick mode → ONE stable benchmark', () => {
+      const quickBenchmark = makeBenchmark({
+        id: 'bench-quick',
+        name: QUICK_MODE_BENCHMARK_NAME,
+        testCaseIds: ['tc-1', 'tc-2'],
+        currentVersion: 1,
+      });
 
-          return run;
-        }
-      );
-      currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
+      beforeEach(() => {
+        mockEnsureServer.mockResolvedValue({
+          baseUrl: 'http://localhost:4001',
+          wasStarted: true,
+        } as any);
+        currentApi.listTestCases.mockResolvedValue([
+          { id: 'tc-2', name: 'Quick Case 2' },
+          { id: 'tc-1', name: 'Quick Case 1' },
+        ]);
+        mockQuickModeSse('run-quick');
+      });
 
-      await runBenchmarkCommand(['--output', 'markdown', '--verbose']);
+      it('first run: creates the stable quick-mode benchmark and runs it as a benchmark source', async () => {
+        currentApi.findBenchmarkDetailed.mockResolvedValue({ benchmark: null, ambiguousMatches: [] });
+        currentApi.createBenchmark.mockResolvedValue(quickBenchmark);
 
-      const output = joinedConsoleOutput(logSpy);
-      expect(output).toContain('Running in quick mode');
-      expect(output).toContain('Agent: Demo Agent (default)');
-      expect(output).toContain('## Benchmark Summary');
-      expect(output).toContain('| Agent | Passed | Failed | Pass Rate | Run ID |');
-      expect(currentApi.listTestCases).toHaveBeenCalledTimes(1);
-      expect(currentApi.createBenchmark).toHaveBeenCalledWith(
-        expect.objectContaining({
-          description: 'Auto-generated benchmark for quick mode',
+        await runBenchmarkCommand([]);
+
+        const output = joinedConsoleOutput(logSpy);
+        expect(output).toContain(
+          `Running in quick mode (all test cases under benchmark '${QUICK_MODE_BENCHMARK_NAME}')`
+        );
+        expect(output).toContain(`Benchmark: ${QUICK_MODE_BENCHMARK_NAME}`);
+        // Attached to a benchmark — never an ad-hoc run.
+        expect(output).not.toContain('This was an ad-hoc run');
+        expect(output).toContain('/evaluations/benchmarks/bench-quick/runs/run-quick');
+
+        // Looked up by the STABLE name (never `quick-<timestamp>`), created once with the full set.
+        expect(currentApi.findBenchmarkDetailed).toHaveBeenCalledWith(QUICK_MODE_BENCHMARK_NAME);
+        expect(currentApi.createBenchmark).toHaveBeenCalledTimes(1);
+        expect(currentApi.createBenchmark).toHaveBeenCalledWith({
+          name: QUICK_MODE_BENCHMARK_NAME,
+          description: QUICK_MODE_BENCHMARK_DESCRIPTION,
           testCaseIds: ['tc-1', 'tc-2'],
-        })
-      );
-      expect(cleanupSpy).toHaveBeenCalled();
+        });
+        expect(currentApi.updateBenchmark).not.toHaveBeenCalled();
+        expect(currentApi.executeBenchmark).not.toHaveBeenCalled();
+        const spinnerTexts = mockOra.mock.calls.map((c) => c[0]);
+        expect(spinnerTexts.some((t: string) => t.startsWith('Resolving benchmark'))).toBe(true);
+        const succeedMessages = mockOra.mock.results
+          .flatMap((r) => (r.value.succeed as jest.Mock).mock.calls.map((c) => c[0]));
+        expect(succeedMessages).toContain(`Created benchmark '${QUICK_MODE_BENCHMARK_NAME}' (bench-quick)`);
+
+        // The run went through the unified evaluation-runs API with a single benchmark source
+        // and the benchmarkId set, so it is dual-written into the benchmark.
+        expect(global.fetch).toHaveBeenCalledWith(
+          'http://localhost:4001/api/storage/evaluation-runs',
+          expect.objectContaining({ method: 'POST' })
+        );
+        const postBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+        expect(postBody.sources).toEqual([{ type: 'benchmark', benchmarkId: 'bench-quick' }]);
+        expect(postBody.benchmarkId).toBe('bench-quick');
+        // Legacy quick-mode lifecycle: the server it started is stopped afterwards.
+        expect(mockCreateServerCleanup).toHaveBeenCalledWith(expect.anything(), true);
+        expect(cleanupSpy).toHaveBeenCalled();
+        expect(exitSpy).not.toHaveBeenCalled();
+      });
+
+      it('second run: reuses the existing benchmark without creating or touching it when the case set is unchanged', async () => {
+        currentApi.findBenchmarkDetailed.mockResolvedValue({ benchmark: quickBenchmark, ambiguousMatches: [] });
+
+        await runBenchmarkCommand([]);
+
+        expect(currentApi.createBenchmark).not.toHaveBeenCalled();
+        expect(currentApi.updateBenchmark).not.toHaveBeenCalled();
+        const succeedMessages = mockOra.mock.results
+          .flatMap((r) => (r.value.succeed as jest.Mock).mock.calls.map((c) => c[0]));
+        expect(succeedMessages).toContain(`Reusing benchmark '${QUICK_MODE_BENCHMARK_NAME}' (bench-quick)`);
+        const postBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+        expect(postBody.sources).toEqual([{ type: 'benchmark', benchmarkId: 'bench-quick' }]);
+        expect(postBody.benchmarkId).toBe('bench-quick');
+        expect(exitSpy).not.toHaveBeenCalled();
+      });
+
+      it('refreshes the benchmark to the current full stored set (before the run starts) when it drifted', async () => {
+        const stale = makeBenchmark({ ...quickBenchmark, testCaseIds: ['tc-1', 'tc-old'] });
+        currentApi.findBenchmarkDetailed.mockResolvedValue({ benchmark: stale, ambiguousMatches: [] });
+        currentApi.updateBenchmark.mockResolvedValue({ ...stale, testCaseIds: ['tc-1', 'tc-2'], currentVersion: 2 });
+
+        await runBenchmarkCommand([]);
+
+        expect(currentApi.createBenchmark).not.toHaveBeenCalled();
+        expect(currentApi.updateBenchmark).toHaveBeenCalledTimes(1);
+        expect(currentApi.updateBenchmark).toHaveBeenCalledWith('bench-quick', { testCaseIds: ['tc-1', 'tc-2'] });
+        // The PUT happened before the run was started.
+        expect(currentApi.updateBenchmark.mock.invocationCallOrder[0]).toBeLessThan(
+          (global.fetch as jest.Mock).mock.invocationCallOrder[0]
+        );
+        const succeedMessages = mockOra.mock.results
+          .flatMap((r) => (r.value.succeed as jest.Mock).mock.calls.map((c) => c[0]));
+        expect(succeedMessages).toContain(
+          `Reusing benchmark '${QUICK_MODE_BENCHMARK_NAME}' (bench-quick) — test cases refreshed to the current 2 stored (v2)`
+        );
+        expect(exitSpy).not.toHaveBeenCalled();
+      });
+
+      it('refuses to run (and to create a third near-duplicate) when the quick-mode name is ambiguous', async () => {
+        const a = makeBenchmark({ id: 'bench-a', name: 'quick run — all test cases' });
+        const b = makeBenchmark({ id: 'bench-b', name: 'QUICK RUN — ALL TEST CASES ' });
+        currentApi.findBenchmarkDetailed.mockResolvedValue({ benchmark: null, ambiguousMatches: [a, b] });
+
+        await expect(runBenchmarkCommand([])).rejects.toThrow('process.exit(1)');
+
+        expect(currentApi.createBenchmark).not.toHaveBeenCalled();
+        expect(currentApi.updateBenchmark).not.toHaveBeenCalled();
+        expect(global.fetch).not.toHaveBeenCalledWith(
+          'http://localhost:4001/api/storage/evaluation-runs',
+          expect.anything()
+        );
+        const errOutput = joinedConsoleOutput(errorSpy);
+        expect(errOutput).toContain('"quick run — all test cases" (bench-a)');
+        expect(errOutput).toContain('(bench-b)');
+        expect(cleanupSpy).toHaveBeenCalled();
+      });
+
+      it('exits when the benchmark cannot be created (server error), after stopping the server it started', async () => {
+        currentApi.findBenchmarkDetailed.mockResolvedValue({ benchmark: null, ambiguousMatches: [] });
+        currentApi.createBenchmark.mockRejectedValue(new Error('Failed to create benchmark: 500'));
+
+        await expect(runBenchmarkCommand([])).rejects.toThrow('process.exit(1)');
+
+        const failMessages = mockOra.mock.results
+          .flatMap((r) => (r.value.fail as jest.Mock).mock.calls.map((c) => c[0]));
+        expect(failMessages).toContain(
+          'Failed to resolve quick-mode benchmark: Failed to create benchmark: 500'
+        );
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(cleanupSpy).toHaveBeenCalled();
+      });
     });
 
     it('runs named benchmark mode, resolves agent names, and exports html via the report endpoint', async () => {

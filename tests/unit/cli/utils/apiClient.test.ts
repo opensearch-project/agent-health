@@ -329,6 +329,84 @@ describe('ApiClient', () => {
 
       expect(result).toBeNull();
     });
+
+    it('should reuse a unique trimmed/case-insensitive name match (dedup hardening)', async () => {
+      const benchmark = { id: 'bench-1', name: 'My Benchmark' };
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ benchmarks: [benchmark] }),
+      });
+
+      const result = await client.findBenchmark('  my benchmark ');
+
+      expect(result).toEqual(benchmark);
+    });
+
+    it('should prefer the exact name match over fuzzy candidates', async () => {
+      const exact = { id: 'bench-exact', name: 'My Benchmark' };
+      const fuzzy = { id: 'bench-fuzzy', name: 'my benchmark' };
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ benchmarks: [fuzzy, exact] }),
+      });
+
+      const result = await client.findBenchmark('My Benchmark');
+
+      expect(result).toEqual(exact);
+    });
+
+    it('should return null when the fuzzy match is ambiguous (no guessing)', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({
+          benchmarks: [
+            { id: 'bench-1', name: 'My Benchmark' },
+            { id: 'bench-2', name: 'my benchmark' },
+          ],
+        }),
+      });
+
+      const result = await client.findBenchmark('MY BENCHMARK');
+
+      expect(result).toBeNull();
+    });
+
+    it('findBenchmarkDetailed surfaces the colliding docs so callers can refuse to create', async () => {
+      // A create-if-missing caller must be able to distinguish "not found"
+      // (create) from "ambiguous" (error) — otherwise `-n foo` with existing
+      // Foo + FOO would mint a THIRD near-duplicate.
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({
+          benchmarks: [
+            { id: 'bench-1', name: 'My Benchmark' },
+            { id: 'bench-2', name: 'my benchmark' },
+          ],
+        }),
+      });
+
+      const result = await client.findBenchmarkDetailed('MY BENCHMARK');
+
+      expect(result.benchmark).toBeNull();
+      expect(result.ambiguousMatches.map((b) => b.id).sort()).toEqual(['bench-1', 'bench-2']);
+    });
+
+    it('findBenchmarkDetailed reports no ambiguity on a genuine miss', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ benchmarks: [{ id: 'b1', name: 'Other' }] }),
+      });
+
+      const result = await client.findBenchmarkDetailed('nope');
+
+      expect(result.benchmark).toBeNull();
+      expect(result.ambiguousMatches).toEqual([]);
+    });
   });
 
   describe('listTestCases', () => {

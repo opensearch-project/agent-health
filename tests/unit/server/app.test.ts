@@ -37,6 +37,7 @@ jest.mock('@/lib/config/index', () => ({
 
 // Mock Express to avoid CJS/ESM interop issues
 const mockApp = {
+  locals: {} as Record<string, unknown>,
   get: jest.fn().mockReturnThis(),
   post: jest.fn().mockReturnThis(),
   put: jest.fn().mockReturnThis(),
@@ -128,6 +129,7 @@ jest.mock('@/server/services/storageInitializer', () => ({
 }));
 
 import { createApp } from '@/server/app';
+import { shutdownEvalTracer } from '@/lib/telemetry';
 
 describe('createApp', () => {
   beforeEach(() => {
@@ -216,5 +218,38 @@ describe('createApp', () => {
     expect(mockSetupSpaFallback).toHaveBeenCalledTimes(1);
     expect(mockSetupSpaFallback).toHaveBeenCalledWith(mockApp);
     expect(callOrder.indexOf('routes')).toBeLessThan(callOrder.indexOf('spaFallback'));
+  });
+
+  describe('telemetry shutdown hook', () => {
+    beforeEach(() => {
+      mockApp.locals = {};
+      process.removeAllListeners('SIGTERM');
+    });
+
+    it('exposes app.locals.shutdownTelemetry that flushes the tracer exactly once across callers', async () => {
+      (shutdownEvalTracer as jest.Mock).mockResolvedValue(undefined);
+      await createApp();
+
+      const hook = mockApp.locals.shutdownTelemetry as () => Promise<void>;
+      expect(typeof hook).toBe('function');
+
+      const first = hook();
+      const second = hook();
+      await Promise.all([first, second]);
+      // The graceful-shutdown handler (cli/utils/startServer.ts) and the
+      // SIGTERM listener both call it; the provider must be shut down once.
+      expect(shutdownEvalTracer).toHaveBeenCalledTimes(1);
+      expect(first).toBe(second);
+    });
+
+    it('registers a SIGTERM listener that triggers the same once-only flush', async () => {
+      (shutdownEvalTracer as jest.Mock).mockResolvedValue(undefined);
+      await createApp();
+
+      expect(process.listenerCount('SIGTERM')).toBe(1);
+      process.emit('SIGTERM' as NodeJS.Signals);
+      await (mockApp.locals.shutdownTelemetry as () => Promise<void>)();
+      expect(shutdownEvalTracer).toHaveBeenCalledTimes(1);
+    });
   });
 });

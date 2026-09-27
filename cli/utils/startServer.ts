@@ -11,6 +11,7 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
+import { installGracefulShutdown } from './gracefulShutdown.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -58,6 +59,14 @@ export async function startServer(options: StartOptions): Promise<number> {
       const server = app.listen(port, '0.0.0.0');
 
       server.on('listening', () => {
+        // Without this the process ignores SIGTERM (createApp's tracer-flush
+        // listener replaces Node's default) and CLI flows that stop the
+        // server they started hang forever. See cli/utils/gracefulShutdown.ts.
+        installGracefulShutdown(server, {
+          // Await the app's telemetry flush (see server/app.ts) so the final
+          // evaluation spans are exported before the process exits.
+          beforeExit: () => app.locals?.shutdownTelemetry?.(),
+        });
         resolve(port);
       });
 

@@ -22,6 +22,7 @@ import { resolveAgentModel } from '@/lib/resolveAgentModel.js';
 import { ensureServer, createServerCleanup, isServerRunning, type EnsureServerResult } from '@/cli/utils/serverLifecycle.js';
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, ServerError, type BenchmarkExecutionEvent } from '@/cli/utils/apiClient.js';
+import { QUICK_MODE_BENCHMARK_NAME, resolveQuickModeBenchmark } from '@/cli/utils/quickModeBenchmark.js';
 import { resolveUnifiedRunOutcome } from '@/cli/utils/evaluationRunOutcome.js';
 import { validateTestCasesArrayJson, type ValidatedTestCaseInput } from '@/lib/testCaseValidation.js';
 import { calculateRunStats, getReportIdsFromRun } from '@/lib/runStats.js';
@@ -503,7 +504,8 @@ async function runUnifiedMode(
   config: ResolvedConfig,
   serverConfig: any,
   isCI: boolean,
-  fileArray: string[]
+  fileArray: string[],
+  unifiedOpts: { quickAllTestCases?: boolean; forceStopServer?: boolean } = {}
 ): Promise<void> {
   // Build sources from flags
   const sources: TestCaseSource[] = [];
@@ -523,12 +525,18 @@ async function runUnifiedMode(
   if (options.name && !isFilePath(options.name) && !hasExplicitSources) {
     // -n flag: will be resolved server-side
     const api = new ApiClient(`http://localhost:${serverConfig.port}`);
-    const benchmark = await api.findBenchmark(options.name);
-    if (!benchmark) {
+    const found = await api.findBenchmarkDetailed(options.name);
+    if (found.ambiguousMatches.length > 0) {
+      console.error(chalk.red(`  Error: Benchmark name "${options.name}" is ambiguous — it matches:`));
+      for (const m of found.ambiguousMatches) console.error(chalk.gray(`    - "${m.name}" (${m.id})`));
+      console.log(chalk.gray('  Use the exact name (case-sensitive) or the benchmark ID.'));
+      process.exit(1);
+    }
+    if (!found.benchmark) {
       console.error(chalk.red(`  Error: Benchmark not found: "${options.name}"`));
       process.exit(1);
     }
-    sources.push({ type: 'benchmark', benchmarkId: benchmark.id });
+    sources.push({ type: 'benchmark', benchmarkId: found.benchmark.id });
   }
 
   if (fileArray.length > 0) {
@@ -564,7 +572,7 @@ async function runUnifiedMode(
     sources.push({ type: 'label-filter', labels: options.label });
   }
 
-  if (sources.length === 0) {
+  if (sources.length === 0 && !unifiedOpts.quickAllTestCases) {
     console.error(chalk.red('  Error: No test case sources specified.'));
     console.log(chalk.gray('  Use -n, -f, -d, -t, or --label to specify sources.'));
     process.exit(1);
@@ -574,7 +582,7 @@ async function runUnifiedMode(
   const connectSpinner = ora('Connecting to server...').start();
   let serverResult: EnsureServerResult;
   let cleanup: () => void;
-  const shouldStopServer = isCI || options.stopServer;
+  const shouldStopServer = isCI || options.stopServer || !!unifiedOpts.forceStopServer;
 
   try {
     serverResult = await ensureServer(serverConfig);
@@ -588,6 +596,55 @@ async function runUnifiedMode(
   }
 
   const api = new ApiClient(serverResult.baseUrl);
+
+  // Quick mode (no name/file/flags, server not already running): run ALL stored
+  // test cases under ONE stable benchmark. Previously this path minted a fresh
+  // `quick-<timestamp>` Benchmark doc on every invocation, growing the
+  // benchmarks list unbounded. Runs must still belong to a benchmark, though
+  // (the Runs page's Benchmark column links to it and history accumulates
+  // there), so quick mode finds-or-creates `QUICK_MODE_BENCHMARK_NAME`,
+  // refreshes its test-case set to the current full stored set when it
+  // drifted, and runs it as a single `benchmark` source.
+  let quickBenchmark: Benchmark | undefined;
+  if (unifiedOpts.quickAllTestCases) {
+    const testCasesSpinner = ora('Fetching test cases...').start();
+    const allTestCases = await api.listTestCases();
+    if (allTestCases.length === 0) {
+      testCasesSpinner.fail('No test cases found');
+      console.log(chalk.gray('  Add test cases via the UI or provide a file with -f option.'));
+      cleanup();
+      process.exit(1);
+    }
+    testCasesSpinner.succeed(`Found ${allTestCases.length} test cases`);
+
+    const benchmarkSpinner = ora(`Resolving benchmark '${QUICK_MODE_BENCHMARK_NAME}'...`).start();
+    try {
+      const resolution = await resolveQuickModeBenchmark(api, allTestCases.map((tc) => tc.id));
+      if (resolution.outcome === 'ambiguous') {
+        benchmarkSpinner.fail(`Benchmark name "${QUICK_MODE_BENCHMARK_NAME}" is ambiguous — it matches:`);
+        for (const m of resolution.matches) console.error(chalk.gray(`    - "${m.name}" (${m.id})`));
+        console.log(chalk.gray('  Rename or delete the near-duplicates so exactly one benchmark carries that name.'));
+        cleanup();
+        process.exit(1);
+      }
+      quickBenchmark = resolution.benchmark;
+      if (resolution.outcome === 'created') {
+        benchmarkSpinner.succeed(`Created benchmark '${quickBenchmark.name}' (${quickBenchmark.id})`);
+      } else {
+        benchmarkSpinner.succeed(
+          `Reusing benchmark '${quickBenchmark.name}' (${quickBenchmark.id})` +
+            (resolution.refreshed
+              ? ` — test cases refreshed to the current ${allTestCases.length} stored (v${quickBenchmark.currentVersion})`
+              : '')
+        );
+      }
+    } catch (error) {
+      benchmarkSpinner.fail(`Failed to resolve quick-mode benchmark: ${error instanceof Error ? error.message : error}`);
+      cleanup();
+      process.exit(1);
+    }
+    sources.push({ type: 'benchmark', benchmarkId: quickBenchmark!.id });
+  }
 
   // Find agent
   let agentKey: string;
@@ -607,11 +664,23 @@ async function runUnifiedMode(
   // `-n` names the benchmark the run is grouped under — create it when the name
   // is new so the run is benchmark-associated (parity with JSON `-f` legacy mode
   // and the documented `benchmark -f foo.eval.js -n "My Benchmark"` behavior).
-  let benchmarkId: string | undefined;
-  if (options.name && !isFilePath(options.name)) {
-    const existing = await api.findBenchmark(options.name);
-    if (existing) {
-      benchmarkId = existing.id;
+  let benchmarkId: string | undefined = quickBenchmark?.id;
+  let benchmarkName: string | undefined = quickBenchmark?.name;
+  if (!quickBenchmark && options.name && !isFilePath(options.name)) {
+    benchmarkName = options.name;
+    const found = await api.findBenchmarkDetailed(options.name);
+    if (found.ambiguousMatches.length > 0) {
+      // Refuse to guess AND refuse to create a third near-duplicate under a
+      // colliding name — either would silently attach runs to the wrong
+      // benchmark or make the duplication worse.
+      console.error(chalk.red(`  Error: Benchmark name "${options.name}" is ambiguous — it matches:`));
+      for (const m of found.ambiguousMatches) console.error(chalk.gray(`    - "${m.name}" (${m.id})`));
+      console.log(chalk.gray('  Use the exact name (case-sensitive) or the benchmark ID.'));
+      cleanup();
+      process.exit(1);
+    }
+    if (found.benchmark) {
+      benchmarkId = found.benchmark.id;
     } else if (hasExplicitSources) {
       const created = await api.createBenchmark({
         name: options.name,
@@ -625,7 +694,7 @@ async function runUnifiedMode(
   console.log(chalk.gray(`  Sources: ${sources.length} source(s)`));
   console.log(chalk.gray(`  Model: ${modelId}`));
   if (concurrency > 1) console.log(chalk.gray(`  Concurrency: ${concurrency}`));
-  if (benchmarkId) console.log(chalk.gray(`  Benchmark: ${options.name}`));
+  if (benchmarkId) console.log(chalk.gray(`  Benchmark: ${benchmarkName}`));
   else console.log(chalk.gray(`  Mode: Ad-hoc (no benchmark association)`));
   console.log('');
 
@@ -880,15 +949,29 @@ export function createBenchmarkCommand(): Command {
       if (fileMode) {
         console.log(chalk.cyan(`  Running in file mode (importing test cases from ${filePath})`));
       } else if (quickMode) {
-        console.log(chalk.cyan('  Running in quick mode (auto-creating benchmark from test cases)'));
+        // Quick mode runs ALL stored test cases via the unified API under ONE
+        // stable benchmark (`QUICK_MODE_BENCHMARK_NAME`, find-or-create). It
+        // must NOT create a `quick-<timestamp>` Benchmark doc per invocation
+        // (the old behavior) — that grew the benchmarks list unbounded when the
+        // same command was re-run — but it must not go ad-hoc either: the
+        // Runs page links each run to its benchmark and history accumulates
+        // there.
+        console.log(chalk.cyan(`  Running in quick mode (all test cases under benchmark '${QUICK_MODE_BENCHMARK_NAME}')`));
+        await runUnifiedMode(options, config, serverConfig, isCI, fileArray, {
+          quickAllTestCases: true,
+          // Preserve legacy quick-mode behavior: it started the server itself
+          // (quickMode requires no server running) and stopped it afterwards.
+          forceStopServer: true,
+        });
+        return;
       }
 
       // Ensure server is running
       const connectSpinner = ora('Connecting to server...').start();
       let serverResult: EnsureServerResult;
       let cleanup: () => void;
-      // Clean up server: in CI, quick/file mode, or when --stop-server flag is used
-      const shouldStopServer = isCI || quickMode || fileMode || options.stopServer;
+      // Clean up server: in CI, file mode, or when --stop-server flag is used
+      const shouldStopServer = isCI || fileMode || options.stopServer;
 
       try {
         serverResult = await ensureServer(serverConfig);
@@ -1041,7 +1124,18 @@ export function createBenchmarkCommand(): Command {
             for (const spec of benchmarkSpecs) {
               const tcIds = spec.testCaseNames.map(n => idByName.get(n)).filter((x): x is string => !!x);
               if (tcIds.length === 0) continue;
-              const existingBenchmark = await api.findBenchmark(spec.name);
+              // Ambiguity-safe lookup: `findBenchmark` returns null for an
+              // ambiguous fuzzy match, and this branch CREATES on null — which
+              // would mint a third near-duplicate under the colliding name.
+              const foundSpec = await api.findBenchmarkDetailed(spec.name);
+              if (foundSpec.ambiguousMatches.length > 0) {
+                throw new Error(
+                  `Benchmark name "${spec.name}" is ambiguous — it matches: ` +
+                    foundSpec.ambiguousMatches.map((m) => `"${m.name}" (${m.id})`).join(', ') +
+                    '. Use the exact name (case-sensitive) or rename the near-duplicates.'
+                );
+              }
+              const existingBenchmark = foundSpec.benchmark;
               let bm: Benchmark;
               if (existingBenchmark) {
                 // Merge with existing testCaseIds so cross-file contributions
@@ -1130,31 +1224,6 @@ export function createBenchmarkCommand(): Command {
             createSpinner.succeed(`Prepared ${benchmarksToRun.length} benchmark(s) for execution`);
           } catch (error) {
             importSpinner.fail(`File import failed: ${error instanceof Error ? error.message : error}`);
-            process.exit(1);
-          }
-        } else if (quickMode) {
-          // Quick mode: create benchmark from all test cases
-          const testCasesSpinner = ora('Fetching test cases...').start();
-          try {
-            const testCases = await api.listTestCases();
-            if (testCases.length === 0) {
-              testCasesSpinner.fail('No test cases found');
-              console.log(chalk.gray('  Add test cases via the UI or provide a file with -f option.'));
-              process.exit(1);
-            }
-            testCasesSpinner.succeed(`Found ${testCases.length} test cases`);
-
-            // Create temporary benchmark
-            const createSpinner = ora('Creating quick benchmark...').start();
-            const bm = await api.createBenchmark({
-              name: `quick-${Date.now()}`,
-              description: 'Auto-generated benchmark for quick mode',
-              testCaseIds: testCases.map((tc) => tc.id),
-            });
-            benchmarksToRun.push(bm);
-            createSpinner.succeed(`Created benchmark: ${bm.name}`);
-          } catch (error) {
-            testCasesSpinner.fail(`Failed to create benchmark: ${error instanceof Error ? error.message : error}`);
             process.exit(1);
           }
         } else {
