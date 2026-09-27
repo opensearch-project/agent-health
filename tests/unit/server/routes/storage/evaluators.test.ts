@@ -359,6 +359,67 @@ describe('Evaluators router', () => {
       expect(mockDebug).toHaveBeenCalledWith('StorageAPI', 'Created evaluator: custom-created v1');
     });
 
+    describe('kind: deterministic', () => {
+      const deterministic = () => ({
+        name: 'Ranked retrieval',
+        kind: 'deterministic',
+        metrics: [
+          { name: 'hit@1', compute: { type: 'ranked-hit', k: 1 }, weight: 0.5, primary: true },
+          { name: 'mrr', compute: { type: 'mrr' }, weight: 0.5 },
+        ],
+        passPolicy: { kind: 'gates', gates: [{ metric: 'hit@1', min: 1 }] },
+        inputs: { gold: { source: 'testCase.expected.ids' }, prediction: { source: 'tool-hits-ordered' } },
+      });
+
+      it('creates without a system prompt, normalizing the doc (prompt "", synthesized scoringConfig, metric defaults)', async () => {
+        mockEvaluatorsCreate.mockImplementation(async (doc: any) => ({ id: 'det-1', ...doc }));
+        const res = await request(app).post('/api/storage/evaluators').send(deterministic());
+        expect(res.status).toBe(201);
+        const stored = mockEvaluatorsCreate.mock.calls[0][0];
+        expect(stored.kind).toBe('deterministic');
+        expect(stored.systemPrompt).toBe('');
+        expect(stored.inferenceConfig).toEqual({});
+        expect(stored.metrics[0]).toEqual({ name: 'hit@1', compute: { type: 'ranked-hit', k: 1 }, weight: 0.5, scale: { min: 0, max: 1 }, primary: true });
+        expect(stored.metrics[1].primary).toBe(false);
+        expect(stored.scoringConfig).toEqual({
+          metrics: [
+            { name: 'hit@1', description: 'ranked-hit@1', weight: 0.5, scale: 1 },
+            { name: 'mrr', description: 'mrr', weight: 0.5, scale: 1 },
+          ],
+          passThreshold: 0,
+          scale: 100,
+        });
+      });
+
+      it('400s llm-verdict pass policies, unknown compute types and unknown kinds', async () => {
+        const llmVerdict = await request(app).post('/api/storage/evaluators').send({ ...deterministic(), passPolicy: { kind: 'llm-verdict' } });
+        expect(llmVerdict.status).toBe(400);
+        expect(llmVerdict.body.error).toMatch(/'llm-verdict' is not allowed/);
+        const badType = await request(app).post('/api/storage/evaluators').send({ ...deterministic(), metrics: [{ name: 'x', compute: { type: 'ndcg', k: 5 }, weight: 1 }] });
+        expect(badType.status).toBe(400);
+        expect(badType.body.error).toMatch(/unknown compute type "ndcg"/);
+        const badKind = await request(app).post('/api/storage/evaluators').send({ name: 'x', kind: 'magic', systemPrompt: 'p', scoringConfig: {} });
+        expect(badKind.status).toBe(400);
+        expect(badKind.body.error).toMatch(/kind must be 'llm' or 'deterministic'/);
+        expect(mockEvaluatorsCreate).not.toHaveBeenCalled();
+      });
+
+      it('PUT validates the merged document and re-normalizes', async () => {
+        mockEvaluatorsGetById.mockResolvedValue({ id: 'det-1', ...deterministic(), systemPrompt: '', scoringConfig: { metrics: [], passThreshold: 0, scale: 100 } });
+        mockEvaluatorsUpdate.mockImplementation(async (_id: string, updates: any) => ({ id: 'det-1', currentVersion: 2, ...updates }));
+        const ok = await request(app).put('/api/storage/evaluators/det-1').send({ passPolicy: { kind: 'threshold', minScore: 0.6 } });
+        expect(ok.status).toBe(200);
+        const updates = mockEvaluatorsUpdate.mock.calls[0][1];
+        expect(updates.passPolicy).toEqual({ kind: 'threshold', minScore: 0.6 });
+        expect(updates.scoringConfig.passThreshold).toBe(60);
+        expect(updates.systemPrompt).toBe('');
+
+        const bad = await request(app).put('/api/storage/evaluators/det-1').send({ passPolicy: { kind: 'gates', gates: [{ metric: 'nope', min: 1 }] } });
+        expect(bad.status).toBe(400);
+        expect(bad.body.error).toMatch(/does not name a declared metric/);
+      });
+    });
+
     it('returns 500 when creation fails', async () => {
       mockEvaluatorsCreate.mockRejectedValue(new Error('create failed'));
 

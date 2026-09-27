@@ -73,10 +73,10 @@ describe('ComparisonScoreboard structure', () => {
     expect(src).not.toMatch(/delta === 0 \? '='/);
     expect(src).toContain("costDelta === 0 ? '\u2014'");
     expect(src).toContain("durationDelta === 0 ? '\u2014'");
-    expect(src).toContain("title={costDelta === 0 ? 'No change' : undefined}");
-    expect(src).toContain("title={durationDelta === 0 ? 'No change' : undefined}");
-    expect(src).toContain('data-testid="scoreboard-delta-cost"');
-    expect(src).toContain('data-testid="scoreboard-delta-duration"');
+    // The shared DeltaCell renders the "No change" tooltip for every zero delta.
+    expect(src).toContain("title={delta === 0 ? 'No change' : title}");
+    expect(src).toContain('testId="scoreboard-delta-cost"');
+    expect(src).toContain('testId="scoreboard-delta-duration"');
   });
 
   it('formatDelta returns an em dash (not "=") when there is no difference', () => {
@@ -84,9 +84,11 @@ describe('ComparisonScoreboard structure', () => {
     expect(src).toContain("if (diff === 0) return '\u2014';");
   });
 
-  it('coverage cell shows shared count from overlap prop', () => {
+  it('coverage cell shows shared count from overlap prop and never claims "fully comparable"', () => {
     expect(src).toContain('overlap.sharedTestCases');
-    expect(src).toContain('fully comparable');
+    expect(src).toContain('same case IDs');
+    expect(src).toContain('same cases, same scoring');
+    expect(src).not.toContain('fully comparable');
   });
 
   it('no longer has a per-run expandable drawer or chevron', () => {
@@ -99,11 +101,13 @@ describe('ComparisonScoreboard structure', () => {
 
   it('shows every RunAggregateMetrics metric directly on the run row', () => {
     // Headers are data-driven (SCOREBOARD_COLUMNS) so every one carries a tooltip.
-    for (const label of ['Pass Rate', 'Average accuracy', 'Avg score', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage']) {
+    for (const label of ['Pass rate', 'Avg score', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage']) {
       expect(src).toContain(`label: '${label}'`);
     }
+    // No accuracy-only column: "accuracy" is one evaluator's rubric name.
+    expect(src).not.toContain("label: 'Average accuracy'");
     expect(src).toContain('run-passrate-${run.runId}');
-    expect(src).toContain('run-accuracy-${run.runId}');
+    expect(src).not.toContain('run-accuracy-${run.runId}');
     expect(src).toContain('run-avgscore-${run.runId}');
   });
 
@@ -221,7 +225,11 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
     passedCount: 5,
     failedCount: 0,
     avgAccuracy: 100,
+    evaluatedCount: 5,
     passRatePercent: 100,
+    scoring: { source: 'legacy' as const },
+    judgeModelId: 'judge-model-x',
+    testCaseVersions: {},
   });
 
   const makeSelectedRun = (id: string) => ({
@@ -305,10 +313,15 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
     );
 
     expect(screen.getByTestId('run-passrate-run-a').textContent).toContain('100%');
-    expect(screen.getByTestId('run-accuracy-run-a').textContent).toContain('100%');
-    // Judge info renders exactly once (single shared model here).
+    expect(screen.getByTestId('run-passrate-detail-run-a').textContent).toBe('5 / 5');
+    // Legacy-scored fixture: no accuracy column, "—" + legacy label for Avg score.
+    expect(screen.queryByTestId('run-accuracy-run-a')).toBeNull();
+    expect(screen.getByTestId('run-avgscore-run-a').textContent).toContain('—');
+    expect(screen.getByTestId('run-avgscore-legacy-run-a').textContent).toBe('legacy scoring');
+    // Judge info renders exactly once and names the JUDGE, not the agent model.
     expect(screen.getAllByTestId('scoreboard-judge-line')).toHaveLength(1);
     expect(screen.getByTestId('scoreboard-judge-line').textContent).toContain('Judge:');
+    expect(screen.getByTestId('scoreboard-judge-line').textContent).not.toContain('claude-sonnet');
   });
 
   it('removing a run calls onRemoveRun with that run id', () => {
@@ -429,7 +442,7 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
     expect(screen.getByTestId('comparison-overlap-banner').textContent).toBe('4 in both · 3 only in A · 3 only in B');
   });
 
-  it('coverage cell for a fully-overlapping comparison reads "N in both, fully comparable" (green)', () => {
+  it('coverage cell for a fully-overlapping LEGACY comparison reads "N in both, same case IDs" (not "fully comparable")', () => {
     const runA = makeRun('run-a');
     const runB = makeRun('run-b');
     render(
@@ -444,7 +457,7 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
     );
     const banner = screen.getByTestId('comparison-overlap-banner');
     expect(banner.getAttribute('data-overlap')).toBe('full');
-    expect(banner.textContent).toBe('5 in both, fully comparable');
+    expect(banner.textContent).toBe('5 in both, same case IDs');
   });
 });
 

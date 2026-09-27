@@ -19,6 +19,7 @@
 
 import type { TestCaseComparisonRow } from '@/types';
 import { getCategoryFromLabels, getSubcategoryFromLabels } from '@/lib/testCaseLabels';
+import { rowVerdictAgreement, verdictOf } from '@/lib/comparison/verdictAgreement';
 
 /** Agreement bucket for a row across the selected runs. */
 export type AgreementBucket = 'allPass' | 'allFail' | 'split';
@@ -31,33 +32,14 @@ export interface AgreementPartition {
   uncovered: TestCaseComparisonRow[];
 }
 
-/** True when this run's result counts as a pass for agreement purposes. */
-function isPass(r: { passFailStatus?: string | null } | undefined): boolean {
-  return r?.passFailStatus === 'passed';
-}
-
-/**
- * True when the run produced *some verdict* we can bucket (pass OR fail).
- * Three shapes count:
- *   - a judge verdict (`passFailStatus` passed/failed);
- *   - a run-level failure (`status: 'failed'` — the agent errored/crashed on
- *     this case, which IS a fail verdict for agreement purposes).
- * NOT a verdict (→ uncovered): missing results, and evaluator-errored
- * reports (`errored: true`, `passFailStatus` cleared — issue #242 keeps
- * "the judge broke" distinct from "the agent failed"; bucketing them as
- * fails would poison All-fail with infrastructure noise).
- */
-function hasVerdict(r: { status?: string; passFailStatus?: string | null; errored?: boolean } | undefined): boolean {
-  if (!r || r.status === 'missing') return false;
-  if (r.passFailStatus === 'passed' || r.passFailStatus === 'failed') return true;
-  if (r.errored) return false;
-  return r.status === 'failed';
-}
-
 /**
  * Partition rows into agreement buckets across the given runs.
  * A row only participates when EVERY selected run has a verdict for it —
  * partially-covered rows go to `uncovered` (they can't agree or disagree).
+ *
+ * The verdict predicate lives in `lib/comparison/verdictAgreement.ts` and is
+ * shared with `calculateRowStatus` so "Split" here and "N verdict changes"
+ * on the table header are always the same number.
  */
 export function partitionByAgreement(
   rows: TestCaseComparisonRow[],
@@ -67,27 +49,15 @@ export function partitionByAgreement(
   if (runIds.length === 0) return partition;
 
   for (const row of rows) {
-    const results = runIds.map(id => row.results[id]);
-    if (results.some(r => !hasVerdict(r))) {
-      partition.uncovered.push(row);
-      continue;
-    }
-    const passes = results.filter(r => isPass(r)).length;
-    if (passes === runIds.length) partition.allPass.push(row);
-    else if (passes === 0) partition.allFail.push(row);
-    else partition.split.push(row);
+    partition[rowVerdictAgreement(row, runIds)].push(row);
   }
   return partition;
 }
 
 /** Bucket a single row (same semantics as {@link partitionByAgreement}); null = uncovered. */
 export function bucketRow(row: TestCaseComparisonRow, runIds: string[]): AgreementBucket | null {
-  const results = runIds.map(id => row.results[id]);
-  if (results.some(r => !hasVerdict(r))) return null;
-  const passes = results.filter(r => isPass(r)).length;
-  if (passes === runIds.length) return 'allPass';
-  if (passes === 0) return 'allFail';
-  return 'split';
+  const agreement = rowVerdictAgreement(row, runIds);
+  return agreement === 'uncovered' ? null : agreement;
 }
 
 /**
@@ -256,12 +226,12 @@ export function buildCategoryBreakdown(
     const cat = resolve(extractRowCategoryEffective(row, useCategoryFallback));
     totals[cat] = (totals[cat] || 0) + 1;
     for (const runId of runIds) {
-      const r = row.results[runId];
-      if (!hasVerdict(r)) continue;
+      const verdict = verdictOf(row.results[runId]);
+      if (verdict === null) continue;
       perRun[runId] = perRun[runId] || {};
       const cell = (perRun[runId][cat] = perRun[runId][cat] || { passed: 0, total: 0 });
       cell.total += 1;
-      if (isPass(r)) cell.passed += 1;
+      if (verdict === 'passed') cell.passed += 1;
     }
   }
 

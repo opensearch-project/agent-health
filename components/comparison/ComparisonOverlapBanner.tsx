@@ -19,7 +19,16 @@ import type { TestCaseOverlap } from '@/services/comparisonService';
  *   - partial overlap    → amber callout naming how many cases are shared vs
  *                          only-in-some, so the "Not run" rows below have context.
  */
-export const ComparisonOverlapBanner: React.FC<{ overlap: TestCaseOverlap }> = ({ overlap }) => {
+export const ComparisonOverlapBanner: React.FC<{
+  overlap: TestCaseOverlap;
+  /**
+   * True only when the runs' scoring snapshots AND test-case versions match
+   * (lib/comparison/scoringDisplay.ts assessScoringComparability with every
+   * run snapshot-scored). Identical case-ID sets alone prove only "same case
+   * IDs" — the old banner called that "fully comparable".
+   */
+  sameScoring?: boolean;
+}> = ({ overlap, sameScoring = false }) => {
   if (overlap.runCount < 2 || overlap.totalTestCases === 0) return null;
 
   if (overlap.fullyOverlapping) {
@@ -27,13 +36,14 @@ export const ComparisonOverlapBanner: React.FC<{ overlap: TestCaseOverlap }> = (
       <div
         data-testid="comparison-overlap-banner"
         data-overlap="full"
+        data-scoring={sameScoring ? 'same' : 'unverified'}
         className="flex items-center gap-2 px-3 py-2 rounded-lg border border-green-300 dark:border-green-500/30 bg-green-50 dark:bg-green-500/10 text-green-800 dark:text-green-300 text-xs"
       >
         <CheckCircle2 size={14} className="shrink-0" />
         <span>
           All {overlap.runCount} runs ran the same{' '}
           <span className="font-semibold">{overlap.totalTestCases}</span> test{' '}
-          case{overlap.totalTestCases === 1 ? '' : 's'} — fully comparable.
+          case{overlap.totalTestCases === 1 ? '' : 's'} — {sameScoring ? 'same cases, same scoring.' : 'same case IDs.'}
         </span>
       </div>
     );

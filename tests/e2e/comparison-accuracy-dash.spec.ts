@@ -134,11 +134,16 @@ test.describe('Comparison — Avg Accuracy dash when no report carries accuracy'
     await expect(passRate).toBeVisible({ timeout: 15000 });
     await expect(passRate).toHaveText('50%');
 
-    // The fix: accuracy is "not recorded" (an em dash / "--"), never "0%".
-    const accuracy = page.locator(`[data-testid="run-accuracy-${runId}"]`).first();
-    await expect(accuracy).toBeVisible({ timeout: 15000 });
-    await expect(accuracy).toContainText(/—|--/);
-    await expect(accuracy).not.toContainText('%');
+    // The fix, one step further: there is no accuracy-only column at all any
+    // more ("accuracy" is one evaluator's rubric name, not the score), and the
+    // run-level "Avg score" for a legacy (snapshot-less) run is "—" +
+    // "legacy scoring" — never a fabricated "0%".
+    await expect(page.locator(`[data-testid="run-accuracy-${runId}"]`)).toHaveCount(0);
+    const avgScore = page.locator(`[data-testid="run-avgscore-${runId}"]`).first();
+    await expect(avgScore).toBeVisible({ timeout: 15000 });
+    await expect(avgScore).toContainText('—');
+    await expect(avgScore).not.toContainText('%');
+    await expect(page.locator(`[data-testid="run-avgscore-legacy-${runId}"]`)).toHaveText('legacy scoring');
   });
 
   test('per-case cells omit the accuracy chip (no fabricated "Passed 0%") when reports carry no accuracy', async ({ page }) => {
@@ -157,35 +162,43 @@ test.describe('Comparison — Avg Accuracy dash when no report carries accuracy'
     await expect(page.locator('[data-testid="metric-cell-accuracy"]')).toHaveCount(0);
   });
 
-  // Owner spec follow-up: "an average score for all tests" + "the percentage
-  // of the rubric for each test case should show the primary rubric". Same
-  // seeded custom-evaluator fixture as above (no report carries
-  // metrics.accuracy) — both cases' primary rubric (alphabetically-first
-  // numeric key) is abstention_integrity: 100 and 60.
-  test('scoreboard "Avg score" is a real percentage (accuracy is "--", but Avg score is not)', async ({ page }) => {
+  // The old "Avg score" for this fixture was 80 = the mean of
+  // abstention_integrity (the ALPHABETICALLY-FIRST metric key) — an unrelated
+  // rubric presented as the score. Without a scoring snapshot there is no
+  // honest aggregate, so the cell is "—" + "legacy scoring" and the per-case
+  // cells show every rubric BY NAME instead of one relabelled "primary".
+  test('scoreboard "Avg score" is "— legacy scoring" for snapshot-less reports (no alphabetical rubric pick)', async ({ page }) => {
     test.skip(!seeded, 'Could not seed benchmark/run/reports (storage not configured?)');
 
     await page.goto(`/compare/${benchmarkId}`);
     await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 15000 });
 
-    // (100 + 60) / 2 = 80.
     const avgScore = page.locator(`[data-testid="run-avgscore-${runId}"]`);
     await expect(avgScore).toBeVisible({ timeout: 15000 });
-    await expect(avgScore).toHaveText('80%');
+    await expect(avgScore).not.toContainText('80%');
+    await expect(avgScore).toContainText('legacy scoring');
+    expect(await avgScore.getAttribute('title')).toContain('not aggregated into a score');
   });
 
-  test('per-case cells show the primary-rubric chip instead of a bare verdict', async ({ page }) => {
+  test('per-case cells show rubric values by name (stored order), not a "primary rubric"', async ({ page }) => {
     test.skip(!seeded, 'Could not seed benchmark/run/reports (storage not configured?)');
 
     await page.goto(`/compare/${benchmarkId}`);
     await page.waitForSelector('[data-testid="comparison-page"]', { timeout: 30000 });
     await expect(page.getByText('Passed', { exact: true }).first()).toBeVisible({ timeout: 30000 });
 
-    const chips = page.locator('[data-testid="metric-cell-primary-rubric"]');
+    await expect(page.locator('[data-testid="metric-cell-primary-rubric"]')).toHaveCount(0);
+    const chips = page.locator('[data-testid="metric-cell-rubrics"]');
     await expect(chips.first()).toBeVisible({ timeout: 15000 });
     const texts = await chips.allTextContents();
-    expect(texts.some(t => t.includes('abstention_integrity') && t.includes('100%'))).toBe(true);
-    expect(texts.some(t => t.includes('abstention_integrity') && t.includes('60%'))).toBe(true);
+    // Stored order leads with fact_precision / provenance_verifiability inline
+    // (+N for the rest); abstention_integrity is still there by name in the
+    // hover — but nothing calls any of them "the score".
+    expect(texts.some(t => t.includes('fact_precision') && t.includes('provenance_verifiability') && t.includes('+2'))).toBe(true);
+    const titles = await chips.evaluateAll(els => els.map(e => e.getAttribute('title') || ''));
+    expect(titles.every(t => t.startsWith('Legacy scoring'))).toBe(true);
+    expect(titles.some(t => t.includes('abstention_integrity 100%'))).toBe(true);
+    expect(titles.some(t => t.includes('abstention_integrity 60%'))).toBe(true);
   });
 });

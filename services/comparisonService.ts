@@ -7,6 +7,7 @@ import {
   ExperimentRun,
   EvaluationReport,
   RunAggregateMetrics,
+  RunScoringSummary,
   TestCaseComparisonRow,
   TestCaseRunResult,
   Category,
@@ -14,92 +15,22 @@ import {
 } from '@/types';
 import { TEST_CASES } from '@/data/testCases';
 import { bucketRunResults } from '@/lib/runStats';
-import { getRunOverallScore } from '@/lib/utils';
+import {
+  primaryMetricMeans,
+  rubricScale,
+  rubricValuesByName,
+  runAggregate,
+  scoreFromSnapshot,
+  scoredRubricNames,
+} from '@/lib/scoring/snapshotScore';
+import { resolveJudgeModelId } from '@/lib/comparison/scoringDisplay';
+import { rowVerdictAgreement, verdictOf } from '@/lib/comparison/verdictAgreement';
 import {
   MockTestCaseMeta,
   getMockTestCaseMeta,
   getMockTestCaseVersion,
 } from '@/data/mockComparisonData';
 import { buildJudgeAgentsHints, type JudgeAgentsHint } from '@/services/traces/judgeAgentsHints';
-
-/**
- * The single evaluator metric a per-case cell falls back to showing when a
- * report carries no `metrics.accuracy` (custom evaluators score their own
- * metric keys — e.g. fact_precision / provenance_verifiability /
- * abstention_integrity / payload_economy — and have no accuracy field at
- * all; the real shape found on a live STaRK-retail comparison).
- *
- * Why alphabetical, not the evaluator's declared/weighted rubric order:
- * `Evaluator.scoringConfig.metrics[]` (types/index.ts `ScoringMetric` /
- * `ScoringConfig`) DOES carry an ordered, weighted rubric list, and real
- * evaluator configs explicitly call out a highest-weight metric as "the
- * PRIMARY metric" (see examples/eval-files/ops-rca-evaluator.json:
- * `root_cause_accuracy` at weight 0.6 vs. 0.2/0.1/0.1 for the rest) — that
- * would be the semantically correct source for "the primary rubric".
- * Resolving it here would require the comparison page to additionally fetch
- * each report's Evaluator doc by `report.evaluatorId` (a new network
- * round-trip + cache; ComparisonPage's current data flow only fetches runs +
- * reports, never evaluators). This picks the SAME evaluator-agnostic,
- * alphabetical ordering `getRunOverallScore()` / `RunScore`
- * (components/RunScore.tsx) already use to average a report's metrics
- * without a per-evaluator config lookup, so "primary rubric" and "score
- * breakdown" stay deterministic and mutually consistent. If evaluator docs
- * ever become part of ComparisonPage's fetch set, this should be upgraded to
- * resolve the true declared/highest-weight rubric instead.
- */
-export function getPrimaryRubricKey(
-  metrics: Record<string, number | undefined> | undefined | null
-): string | undefined {
-  if (!metrics) return undefined;
-  const keys = Object.keys(metrics)
-    .filter((k) => typeof metrics[k] === 'number' && Number.isFinite(metrics[k] as number))
-    .sort((a, b) => a.localeCompare(b));
-  return keys[0];
-}
-
-export interface PrimaryRubric {
-  key: string;
-  value: number;
-}
-
-/** The primary rubric (see {@link getPrimaryRubricKey}) as a key/value pair, or undefined when the report has no numeric metric. */
-export function getPrimaryRubric(
-  metrics: Record<string, number | undefined> | undefined | null
-): PrimaryRubric | undefined {
-  const key = getPrimaryRubricKey(metrics);
-  if (key === undefined) return undefined;
-  return { key, value: metrics![key] as number };
-}
-
-/**
- * Per-case "overall score" — the single honest number that feeds the
- * run-level "Avg score" aggregate (see {@link calculateRunAggregates}).
- * Three-tier fallback, each tier only consulted when the previous is
- * unavailable:
- *   1. `metrics.accuracy` — the built-in judge's canonical metric.
- *   2. The primary rubric ({@link getPrimaryRubric}) — a custom evaluator's
- *      single most-representative metric.
- *   3. The mean of every numeric metric on the report ({@link getRunOverallScore})
- *      — documented as a defensive fallback for a report whose metrics map
- *      is non-empty but whose primary rubric couldn't be determined; given
- *      tier 2's current (alphabetical) implementation this cannot actually
- *      happen — whenever there is ≥1 numeric metric, tier 2 always resolves
- *      — but the derivation stays total (never silently drops a case) if
- *      {@link getPrimaryRubricKey}'s implementation changes.
- * Returns `undefined` when the report carries no numeric metric at all.
- */
-export function computeOverallScore(
-  report: { metrics?: Record<string, number | undefined> | null } | undefined | null
-): number | undefined {
-  const metrics = report?.metrics;
-  if (typeof metrics?.accuracy === 'number' && Number.isFinite(metrics.accuracy)) {
-    return metrics.accuracy;
-  }
-  const primary = getPrimaryRubric(metrics);
-  if (primary) return primary.value;
-  const mean = getRunOverallScore(metrics);
-  return mean ?? undefined;
-}
 
 /**
  * Get test case metadata from real TEST_CASES data
@@ -113,6 +44,42 @@ export function getRealTestCaseMeta(testCaseId: string): MockTestCaseMeta | unde
     category: tc.category,
     difficulty: tc.difficulty,
     version: `v${tc.currentVersion}`,
+  };
+}
+
+/**
+ * Collapse a run's snapshot aggregate into the display summary the scoreboard
+ * needs (evaluator identity, weights, pass policy, primary-metric means).
+ * The representative snapshot is the first one seen; `contentHashes` lists
+ * every distinct hash so the coverage gate can flag mixed runs.
+ */
+export function summarizeRunScoring(
+  aggregate: ReturnType<typeof runAggregate>,
+  reports: ReadonlyArray<EvaluationReport | undefined>
+): RunScoringSummary {
+  if (aggregate.source !== 'snapshot' || aggregate.snapshots.length === 0) return { source: 'legacy' };
+  const snapshot = aggregate.snapshots[0];
+  const primaryNames = Array.from(new Set(
+    aggregate.snapshots.flatMap(s => Array.isArray(s.primaryMetrics) ? s.primaryMetrics : [])
+  ));
+  const means = primaryMetricMeans(reports, primaryNames);
+  return {
+    source: 'snapshot',
+    evaluatorId: snapshot.evaluatorId,
+    evaluatorName: snapshot.evaluatorName,
+    evaluatorVersion: snapshot.evaluatorVersion,
+    contentHashes: aggregate.snapshots.map(s => String(s.contentHash ?? '')),
+    weights: Object.fromEntries(scoredRubricNames(snapshot).map(n => [n, snapshot.weights[n]])),
+    passPolicy: snapshot.passPolicy ?? { kind: 'llm-verdict' },
+    scoredReports: aggregate.scoredReports,
+    scoredRubrics: aggregate.scoredRubrics,
+    totalRubrics: aggregate.totalRubrics,
+    // Scale from the first snapshot that declares one for the metric (a
+    // mixed-snapshot run is already flagged by the coverage gate).
+    primaryMetrics: primaryNames.map(name => {
+      const declaring = aggregate.snapshots.find(s => s.scale?.[name]) ?? snapshot;
+      return { name, mean: means[name], scale: rubricScale(declaring, name) };
+    }),
   };
 }
 
@@ -157,37 +124,56 @@ export function calculateRunAggregates(
   // Accuracy is averaged over the *evaluated* reports only (exclude errored and
   // not-yet-evaluated / trace-pending), so placeholder zeros never drag it down.
   // Only reports that actually CARRY a numeric `metrics.accuracy` participate:
-  // custom-evaluator reports score entirely different metric keys (e.g.
-  // fact_precision / provenance_verifiability) and have no accuracy field at
-  // all — the old `?? 0` fallback fabricated a "0%" Avg Accuracy for every
-  // custom-scored run on the compare page. When NO report in the run carries
-  // an accuracy score, avgAccuracy is undefined and renders "--", not 0%.
+  // custom-evaluator reports score entirely different metric keys and have no
+  // accuracy field at all. `avgAccuracy` is a metric named by its key — it is
+  // NOT the run's score (see `avgScore` below) and is no longer a scoreboard
+  // column; it feeds the legacy summary table / HTML export only.
   let totalAccuracy = 0;
   let accuracyCount = 0;
-  // "Avg score" (avgScore): unlike avgAccuracy (accuracy-only), this is
-  // defined for custom-evaluator runs too — each case's overall score comes
-  // from computeOverallScore's accuracy -> primary-rubric -> mean-of-all
-  // tiering, so a run scored entirely by a custom evaluator (no report
-  // carries metrics.accuracy) still gets an honest aggregate instead of
-  // rendering "--" the way avgAccuracy does.
-  let totalScore = 0;
-  let scoreCount = 0;
+  const runReports: Array<EvaluationReport | undefined> = [];
+  const testCaseVersions: Record<string, number> = {};
+  // Every DISTINCT judge the run's reports resolve to (never the agent
+  // model). Exactly one → the caption names it; several → "mixed" (a run
+  // re-judged half-way through, or a fallback judge kicking in) is surfaced
+  // rather than hidden behind whichever report came first (codex review).
+  const judgeModelIds: string[] = [];
   for (const testCaseId of testCaseIds) {
     const result = run.results[testCaseId];
     const report = reports[result.reportId];
     if (!report) continue;
+    runReports.push(report);
+    if (typeof report.testCaseVersion === 'number') testCaseVersions[testCaseId] = report.testCaseVersion;
+    const judge = resolveJudgeModelId(report, run as { judgeModelId?: string });
+    if (judge && !judgeModelIds.includes(judge)) judgeModelIds.push(judge);
     if (report.metricsStatus === 'error' || report.metricsStatus === 'pending' || report.metricsStatus === 'calculating') continue;
     if (typeof report.metrics?.accuracy === 'number') {
       accuracyCount++;
       totalAccuracy += report.metrics.accuracy;
     }
-    const overallScore = computeOverallScore(report);
-    if (overallScore !== undefined) {
-      scoreCount++;
-      totalScore += overallScore;
-    }
   }
-  const evaluable = Math.max(0, testCaseIds.length - erroredCount);
+  if (judgeModelIds.length === 0) {
+    const runJudge = resolveJudgeModelId(undefined, run as { judgeModelId?: string });
+    if (runJudge) judgeModelIds.push(runJudge);
+  }
+
+  // "Avg score": the ONLY run-level score. Derived from each report's frozen
+  // ScoringSnapshot (weighted mean of its rubrics, normalized to [0,1]); a
+  // run with any legacy (snapshot-less) evaluated report has NO score — it
+  // renders "—" + "legacy scoring" rather than a number reconstructed from an
+  // arbitrary rubric (the old alphabetical primary-rubric pick showed an
+  // unrelated rubric at ~90% next to a 45% pass rate).
+  const aggregate = runAggregate(runReports);
+  const scoring = summarizeRunScoring(aggregate, runReports);
+  const avgScore = aggregate.source === 'snapshot' && aggregate.score !== null
+    ? Math.round(aggregate.score * 100)
+    : undefined;
+  // "Evaluated" = the JUDGED set (passed + failed) — the same denominator as
+  // the runs list (lib/runStats). Errored (judge produced no verdict), pending
+  // (not finished) and not-run cases are all excluded, and each is called out
+  // separately in the pass-rate detail so "1 / 2" can never mean "1 passed of
+  // 2 evaluated" while the second case is still running.
+  const evaluable = passedCount + failedCount;
+  const pendingCount = buckets.pending + buckets.notRun;
 
   return {
     runId: run.id,
@@ -200,8 +186,14 @@ export function calculateRunAggregates(
     failedCount,
     erroredCount,
     avgAccuracy: accuracyCount > 0 ? Math.round(totalAccuracy / accuracyCount) : undefined,
-    avgScore: scoreCount > 0 ? Math.round(totalScore / scoreCount) : undefined,
+    avgScore,
+    scoring,
+    evaluatedCount: evaluable,
+    pendingCount,
     passRatePercent: evaluable > 0 ? Math.round((passedCount / evaluable) * 100) : 0,
+    judgeModelId: judgeModelIds.length === 1 ? judgeModelIds[0] : undefined,
+    judgeModelIds,
+    testCaseVersions,
     // Trace metrics will be populated separately via fetchBatchMetrics
     totalTokens: undefined,
     totalInputTokens: undefined,
@@ -407,6 +399,12 @@ export function collectTraceIdsFromReports(
   return traceIdByRunId;
 }
 
+/** Per-case snapshot score on the 0–100 display scale, or undefined for legacy / unscored reports. */
+export function perCaseScore(report: Pick<EvaluationReport, 'metrics' | 'scoringSnapshot'>): number | undefined {
+  const rs = scoreFromSnapshot(report);
+  return rs.source === 'snapshot' && rs.score !== null ? Math.round(rs.score * 1000) / 10 : undefined;
+}
+
 /**
  * Build a `metrics key -> Strategy-C/D hints` map for every report reachable
  * from `runs`, so `fetchBatchMetrics` can correlate a report's spans by the
@@ -510,7 +508,15 @@ export function buildTestCaseComparisonRows(
 
       results[run.id] = {
         reportId: report.id,
-        status: runResult.status === 'completed' ? 'completed' : 'failed',
+        // Only a run-level `failed` (agent crashed on the case) is a fail; an
+        // in-flight (`pending`/`running`) or `cancelled` case has NO verdict
+        // and must never be counted as one — it renders "Not run" and stays
+        // out of Split / verdict-change counts (codex review).
+        status: runResult.status === 'completed'
+          ? 'completed'
+          : (runResult.status === 'pending' || runResult.status === 'running' || runResult.status === 'cancelled')
+            ? 'missing'
+            : 'failed',
         passFailStatus: report.passFailStatus,
         // Issue #242: surface evaluator-error reports so the comparison
         // surface (MetricCell) can light up the amber `Errored` chip
@@ -520,12 +526,10 @@ export function buildTestCaseComparisonRows(
         faithfulness: report.metrics.faithfulness,
         trajectoryAlignment: report.metrics.trajectory_alignment_score,
         latencyScore: report.metrics.latency_score,
-        // Only computed when there is no metrics.accuracy to show instead
-        // (codex review: attaching it unconditionally made an admittedly
-        // heuristic value look authoritative on every result, including ones
-        // where it's never rendered). MetricCell only ever reads this when
-        // `accuracy` is undefined, so this mirrors that precedence exactly.
-        primaryRubric: typeof report.metrics.accuracy === 'number' ? undefined : getPrimaryRubric(report.metrics),
+        // Per-case score from the report's own scoring snapshot (0–100);
+        // legacy reports get none and the cell shows rubric values by name.
+        score: perCaseScore(report),
+        rubricValues: rubricValuesByName(report.metrics),
         testCaseVersion: version,
       };
     }
@@ -662,51 +666,107 @@ export function calculateCombinedScore(result: TestCaseRunResult): number {
 }
 
 /**
- * Determine if a row represents a regression, improvement, or mixed result
- * compared to the reference run (oldest run).
+ * What kind of difference a row shows between the runs:
+ *   - `verdict`    — the runs reached different pass/fail verdicts. Uses the
+ *                    SAME predicate as the insights band's "Split" bucket
+ *                    (`lib/comparison/verdictAgreement.ts`), so the "N verdict
+ *                    changes" badge and "Split" always agree.
+ *   - `score-only` — every run agrees on the verdict but the per-case score
+ *                    moved by more than {@link SCORE_ONLY_THRESHOLD} points.
+ *                    A distinct, weaker signal; labelled separately in the UI.
+ *   - `null`       — no difference (or the row is not covered by every run).
+ */
+export type RowDifferenceKind = 'verdict' | 'score-only' | null;
+
+export interface RowClassification {
+  status: RowStatus;
+  kind: RowDifferenceKind;
+}
+
+/** Only flag pure score moves (verdicts agree) above this many points (0–100 scale). */
+export const SCORE_ONLY_THRESHOLD = 5;
+
+/**
+ * The per-case number used for the secondary "score moved" signal. Snapshot
+ * scores are only compared with snapshot scores. For legacy reports the only
+ * quantity honest enough to diff is a metric both sides actually carry under
+ * the same name — `accuracy` — never the invented 40/30/20/10 zero-filled
+ * combination (`calculateCombinedScore`), which would flag "moves" on
+ * rubrics a report never emitted (codex review). No shared quantity → no
+ * score-only signal.
+ */
+function comparableScores(a: TestCaseRunResult, b: TestCaseRunResult): [number, number] | null {
+  if (typeof a.score === 'number' && typeof b.score === 'number') return [a.score, b.score];
+  if (typeof a.score === 'number' || typeof b.score === 'number') return null;
+  if (typeof a.accuracy === 'number' && typeof b.accuracy === 'number') return [a.accuracy, b.accuracy];
+  return null;
+}
+
+/**
+ * Classify a row relative to the reference run (oldest run).
  *
- * The primary signal is pass/fail — if the baseline passed and any other
- * run failed, that's a regression, regardless of how close the scores are.
- * Score-delta is a secondary tiebreaker for cases where pass/fail is the
- * same but accuracy moved meaningfully (e.g., both passed but one is much
- * weaker).
+ * The primary signal is the verdict: if the runs disagree on pass/fail the
+ * row is a regression (baseline passed, another failed), an improvement
+ * (the reverse) or mixed (both, ≥3 runs). Only when every run has a verdict
+ * AND they all agree is the secondary score-move signal consulted. Rows not
+ * covered by every run (missing / evaluator-errored, #242) are neutral —
+ * "the judge broke" is not a regression of the agent.
+ */
+export function classifyRow(
+  row: TestCaseComparisonRow,
+  baselineRunId: string
+): RowClassification {
+  const runIds = Object.keys(row.results);
+  const baselineResult = row.results[baselineRunId];
+  if (!baselineResult) return { status: 'neutral', kind: null };
+
+  const agreement = rowVerdictAgreement(row, runIds);
+  if (agreement === 'uncovered') return { status: 'neutral', kind: null };
+
+  let hasRegression = false;
+  let hasImprovement = false;
+
+  if (agreement === 'split') {
+    const baselineVerdict = verdictOf(baselineResult);
+    for (const [runId, result] of Object.entries(row.results)) {
+      if (runId === baselineRunId) continue;
+      const v = verdictOf(result);
+      if (v === baselineVerdict) continue;
+      if (baselineVerdict === 'passed') hasRegression = true;
+      else hasImprovement = true;
+    }
+    return { status: resolveStatus(hasRegression, hasImprovement), kind: 'verdict' };
+  }
+
+  // Verdicts agree everywhere — look for a meaningful score move.
+  for (const [runId, result] of Object.entries(row.results)) {
+    if (runId === baselineRunId) continue;
+    const pair = comparableScores(result, baselineResult);
+    if (!pair) continue;
+    const [score, baselineScore] = pair;
+    if (score < baselineScore - SCORE_ONLY_THRESHOLD) hasRegression = true;
+    if (score > baselineScore + SCORE_ONLY_THRESHOLD) hasImprovement = true;
+  }
+  const status = resolveStatus(hasRegression, hasImprovement);
+  return { status, kind: status === 'neutral' ? null : 'score-only' };
+}
+
+function resolveStatus(hasRegression: boolean, hasImprovement: boolean): RowStatus {
+  if (hasRegression && hasImprovement) return 'mixed';
+  if (hasRegression) return 'regression';
+  if (hasImprovement) return 'improvement';
+  return 'neutral';
+}
+
+/**
+ * Determine if a row represents a regression, improvement, or mixed result
+ * compared to the reference run (oldest run). See {@link classifyRow}.
  */
 export function calculateRowStatus(
   row: TestCaseComparisonRow,
   baselineRunId: string
 ): RowStatus {
-  const baselineResult = row.results[baselineRunId];
-  if (!baselineResult || baselineResult.status !== 'completed') {
-    return 'neutral';
-  }
-
-  const SCORE_THRESHOLD = 5; // Only flag pure score moves above this delta.
-  const baselineScore = calculateCombinedScore(baselineResult);
-  const baselinePassed = baselineResult.passFailStatus === 'passed';
-
-  let hasRegression = false;
-  let hasImprovement = false;
-
-  for (const [runId, result] of Object.entries(row.results)) {
-    if (runId === baselineRunId || result.status !== 'completed') continue;
-
-    // Primary signal: pass/fail crossover.
-    if (result.passFailStatus) {
-      const otherPassed = result.passFailStatus === 'passed';
-      if (baselinePassed && !otherPassed) { hasRegression = true; continue; }
-      if (!baselinePassed && otherPassed) { hasImprovement = true; continue; }
-    }
-
-    // Secondary signal: meaningful score move when pass/fail agrees.
-    const score = calculateCombinedScore(result);
-    if (score < baselineScore - SCORE_THRESHOLD) hasRegression = true;
-    if (score > baselineScore + SCORE_THRESHOLD) hasImprovement = true;
-  }
-
-  if (hasRegression && hasImprovement) return 'mixed';
-  if (hasRegression) return 'regression';
-  if (hasImprovement) return 'improvement';
-  return 'neutral';
+  return classifyRow(row, baselineRunId).status;
 }
 
 /**
@@ -741,23 +801,35 @@ export function detectComparisonMode(runs: ExperimentRun[]): ComparisonMode {
   return (agentKeys.size >= 2 || modelIds.size >= 2) ? 'compare' : 'iterate';
 }
 
+/** Row-status tallies plus the two difference kinds (see {@link RowDifferenceKind}). */
+export interface RowStatusCounts extends Record<RowStatus, number> {
+  /** Rows where the runs reached different verdicts — equals the insights band's "Split" count. */
+  verdictDifferences: number;
+  /** Rows where verdicts agree but the score moved more than {@link SCORE_ONLY_THRESHOLD} points. */
+  scoreOnlyDifferences: number;
+}
+
 /**
  * Count rows by status for summary display
  */
 export function countRowsByStatus(
   rows: TestCaseComparisonRow[],
   baselineRunId: string
-): Record<RowStatus, number> {
-  const counts: Record<RowStatus, number> = {
+): RowStatusCounts {
+  const counts: RowStatusCounts = {
     regression: 0,
     improvement: 0,
     mixed: 0,
     neutral: 0,
+    verdictDifferences: 0,
+    scoreOnlyDifferences: 0,
   };
 
   for (const row of rows) {
-    const status = calculateRowStatus(row, baselineRunId);
+    const { status, kind } = classifyRow(row, baselineRunId);
     counts[status]++;
+    if (kind === 'verdict') counts.verdictDifferences++;
+    else if (kind === 'score-only') counts.scoreOnlyDifferences++;
   }
 
   return counts;
