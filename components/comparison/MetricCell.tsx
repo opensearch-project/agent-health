@@ -102,6 +102,7 @@ export const MetricCell: React.FC<MetricCellProps> = ({
   const accDelta = !isReference && accuracy !== undefined && baselineAccuracy !== undefined
     ? round1(accuracy - baselineAccuracy)
     : undefined;
+  const rubricEntries = Object.entries(result.rubricValues ?? {});
 
   return (
     <div className="py-1 px-2.5 group relative">
@@ -129,28 +130,36 @@ export const MetricCell: React.FC<MetricCellProps> = ({
             )}
           </>
         )}
-        {/* No metrics.accuracy on this report (custom evaluator) — fall back
-            to the PRIMARY RUBRIC (see comparisonService.getPrimaryRubric) so
-            the cell shows SOME per-case number instead of just a bare verdict.
-            Compact: the rubric name truncates in a fixed-width span; the
-            full metric name lives in the title tooltip. No delta chip here —
-            unlike accuracy/faithfulness, MetricCell has no
-            baselinePrimaryRubric prop wired from the caller, so there is no
-            baseline value to diff against yet (a plumbing gap, not a "this
-            metric can't be compared" judgment — see ComparisonScoreboard's
-            run-level "Avg score" delta, which DOES compare it, aggregated
-            over many cases instead of one; that delta is only meaningful
-            when both runs share the same evaluator, since a different
-            evaluator's alphabetically-first metric is a different quantity —
-            see its tooltip). */}
-        {show('accuracy') && accuracy === undefined && result.primaryRubric && (
+        {/* Snapshot-scored report: the per-case weighted score (the only
+            number this cell ever calls "score"). */}
+        {show('accuracy') && result.score !== undefined && (
           <span
-            className="inline-flex items-center gap-1 ml-1 max-w-[92px]"
-            title={`Primary rubric: ${result.primaryRubric.key} (this report carries no metrics.accuracy — showing the evaluator's own metric instead)`}
-            data-testid="metric-cell-primary-rubric"
+            className="inline-flex items-center gap-1 ml-1"
+            title="Score: weighted mean of this report's rubrics per its scoring snapshot"
+            data-testid="metric-cell-score"
           >
-            <span className="truncate text-[10px] text-muted-foreground">{result.primaryRubric.key}</span>
-            <span className="text-[11px] font-medium tabular-nums flex-shrink-0">{round1(result.primaryRubric.value)}%</span>
+            <span className="text-[10px] text-muted-foreground">score</span>
+            <span className="text-[11px] font-medium tabular-nums">{round1(result.score)}%</span>
+          </span>
+        )}
+        {/* Legacy report with no accuracy and no snapshot: show the rubric
+            values BY NAME (stored order, first two inline, all in the
+            tooltip). Never pick one and call it the score. */}
+        {show('accuracy') && accuracy === undefined && result.score === undefined && rubricEntries.length > 0 && (
+          <span
+            className="inline-flex items-center gap-1.5 ml-1 max-w-[150px]"
+            title={`Legacy scoring — rubric values by name: ${rubricEntries.map(([k, v]) => `${k} ${round1(v)}%`).join(', ')}`}
+            data-testid="metric-cell-rubrics"
+          >
+            {rubricEntries.slice(0, 2).map(([k, v]) => (
+              <span key={k} className="inline-flex items-center gap-0.5 min-w-0">
+                <span className="truncate text-[10px] text-muted-foreground max-w-[60px]">{k}</span>
+                <span className="text-[11px] font-medium tabular-nums flex-shrink-0">{round1(v)}%</span>
+              </span>
+            ))}
+            {rubricEntries.length > 2 && (
+              <span className="text-[10px] text-muted-foreground">+{rubricEntries.length - 2}</span>
+            )}
           </span>
         )}
       </div>
