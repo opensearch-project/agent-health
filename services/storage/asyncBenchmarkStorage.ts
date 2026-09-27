@@ -105,6 +105,13 @@ function toBenchmarkRun(stored: StorageBenchmarkRunConfig): BenchmarkRun {
     // check is the single source of truth for "missing" (codex_review
     // finding: a schemaless stored `null` would otherwise slip past it).
     concurrency: stored.concurrency ?? undefined,
+    // Agent-configuration provenance (lib/agentFingerprint.ts) — allow-list
+    // mapper, so without these the runs list / inspector chip never renders
+    // for benchmark-embedded runs.
+    agentFingerprint: stored.agentFingerprint,
+    agentFingerprintShort: stored.agentFingerprintShort,
+    agentPromptHash: stored.agentPromptHash,
+    agentConfigSource: stored.agentConfigSource,
     benchmarkVersion: (stored as any).benchmarkVersion ?? 1,
     testCaseSnapshots: (stored as any).testCaseSnapshots ?? [],
     status: stored.status as BenchmarkRunStatus | undefined,
@@ -154,6 +161,12 @@ function toStorageFormat(benchmark: Partial<Benchmark>): Record<string, any> {
       headers: run.headers,
       ...(run.concurrency !== undefined && { concurrency: run.concurrency }),
       createdAt: run.createdAt,
+      ...(run.agentFingerprint && {
+        agentFingerprint: run.agentFingerprint,
+        agentFingerprintShort: run.agentFingerprintShort,
+        agentPromptHash: run.agentPromptHash,
+        agentConfigSource: run.agentConfigSource,
+      }),
       benchmarkVersion: run.benchmarkVersion,
       testCaseSnapshots: run.testCaseSnapshots,
       results: run.results,
@@ -311,6 +324,12 @@ class AsyncBenchmarkStorage {
       headers: r.headers,
       ...(r.concurrency !== undefined && { concurrency: r.concurrency }),
       createdAt: r.createdAt,
+      ...(r.agentFingerprint && {
+        agentFingerprint: r.agentFingerprint,
+        agentFingerprintShort: r.agentFingerprintShort,
+        agentPromptHash: r.agentPromptHash,
+        agentConfigSource: r.agentConfigSource,
+      }),
       status: r.status,
       benchmarkVersion: r.benchmarkVersion,
       testCaseSnapshots: r.testCaseSnapshots,

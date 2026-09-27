@@ -11,6 +11,7 @@ import { formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import type { RunAggregateMetrics, BenchmarkRun } from '@/types';
 import type { TestCaseOverlap } from '@/services/comparisonService';
 import { runReportPath } from '@/lib/runReportPath';
+import { AgentFingerprintChip, AgentConfigChangedBadge } from '@/components/evals3/AgentFingerprintChip';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -167,6 +168,7 @@ const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentNa
           >
             {deltaStr}
           </span>
+          <AgentConfigChangedBadge a={a} b={b} data-testid="scoreboard-condensed-config-changed-badge" />
         </>
       )}
       <span className="text-muted-foreground">
@@ -359,6 +361,20 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                               <div className="text-muted-foreground text-[10px] truncate max-w-[220px]">
                                 {getAgentName(run.agentKey)} — {getModelName(run.modelId)} · {formatRelativeTime(run.createdAt)}
                               </div>
+                              {/* Agent-config provenance: the chip names WHICH
+                                  config version each row measured; the amber
+                                  badge (row A only, once) fires when both rows
+                                  are the SAME agent but DIFFERENT fingerprints
+                                  — i.e. the pass-rate delta is confounded by a
+                                  prompt/config change, not just the agent. */}
+                              {(run.agentFingerprint || (idx === 0 && runB)) && (
+                                <div className="mt-0.5 flex items-center gap-1.5 flex-wrap" data-testid={`scoreboard-provenance-${label}`}>
+                                  <AgentFingerprintChip run={run} compact data-testid={`scoreboard-fingerprint-${run.runId}`} />
+                                  {idx === 0 && runB && (
+                                    <AgentConfigChangedBadge a={runA} b={runB} data-testid="scoreboard-config-changed-badge" />
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>

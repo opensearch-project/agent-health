@@ -44,6 +44,7 @@ import { Breadcrumbs } from './Breadcrumbs';
 import { InlineRenameField } from './InlineRenameField';
 import { RunConfigDialog } from './RunConfigDialog';
 import { RunActionsMenu } from './RunActionsMenu';
+import { AgentFingerprintChip } from './AgentFingerprintChip';
 
 // ─── Time Filter ─────────────────────────────────────────────────────────────
 
@@ -760,7 +761,12 @@ export const EvalRunsPage: React.FC = () => {
             )}
           </td>
         )}
-        <td className="px-2 py-1.5 align-middle text-[11px]">{rr.agentName}</td>
+        <td className="px-2 py-1.5 align-middle text-[11px]" data-testid="run-agent-cell">
+          <div>{rr.agentName}</div>
+          {/* Agent-configuration provenance: WHICH version of this agent's
+              config produced these numbers. Renders nothing for legacy runs. */}
+          <AgentFingerprintChip run={rr.run} compact className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
+        </td>
         <td className="px-2 py-1.5 align-middle text-[11px]">{getModelName(rr.run.modelId)}</td>
         <td className="px-2 py-1.5 align-middle text-right text-[11px] text-muted-foreground" data-testid="run-concurrency-cell" title="Concurrency — parallel test cases">
           {rr.run.concurrency === undefined ? '—' : rr.run.concurrency}
