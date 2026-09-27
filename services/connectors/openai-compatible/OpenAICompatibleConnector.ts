@@ -17,6 +17,7 @@
 
 import type { TrajectoryStep, ToolCallStatus } from '@/types';
 import { BaseConnector } from '@/services/connectors/base/BaseConnector';
+import { agentPromptContext } from '@/services/connectors/types';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -82,8 +83,8 @@ export class OpenAICompatibleConnector extends BaseConnector {
     const messages: ChatMessage[] = [];
 
     // Add context as system message if present
-    if (request.testCase.context && request.testCase.context.length > 0) {
-      const contextText = request.testCase.context
+    if (agentPromptContext(request.testCase.context).length > 0) {
+      const contextText = agentPromptContext(request.testCase.context)
         .map((c: any) => typeof c === 'string' ? c : JSON.stringify(c))
         .join('\n');
       messages.push({

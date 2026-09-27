@@ -431,3 +431,18 @@ describe('testCaseValidation', () => {
     });
   });
 });
+
+describe('context item dispositions', () => {
+  const base = { name: 'Disposition test', category: 'RCA', difficulty: 'Easy', initialPrompt: 'Go' };
+  it('preserves an absent disposition and accepts every supported value', () => {
+    for (const disposition of [undefined, 'prompt', 'connector', 'documentation']) {
+      const context = [{ description: 'item', value: 'value', ...(disposition && { disposition }) }];
+      const result = testCaseSchema.safeParse({ ...base, context });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.context[0].disposition).toBe(disposition);
+    }
+  });
+  it('rejects unknown dispositions', () => {
+    expect(testCaseSchema.safeParse({ ...base, context: [{ description: 'x', value: 'y', disposition: 'secret' }] }).success).toBe(false);
+  });
+});

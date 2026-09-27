@@ -35,7 +35,7 @@ import type { EvalResult } from './types.js';
 /** Options accepted by `agent.run(prompt, options)`. */
 export interface AgentRunOptions {
   /** Context items passed to the agent alongside the prompt. */
-  context?: { description: string; value: string }[];
+  context?: { description: string; value: string; disposition?: 'prompt' | 'connector' | 'documentation' }[];
   /**
    * Structured values forwarded to the connector's payload builder (e.g. a
    * provisioned workspace dir). Stringly-typed env is the lowest common

@@ -13,8 +13,8 @@ const contextItemSchema = z
   .object({
     description: z.string(),
     value: z.string(),
-  })
-  .required();
+    disposition: z.enum(['prompt', 'connector', 'documentation']).optional(),
+  });
 
 const difficultySchema = z.enum(['Easy', 'Medium', 'Hard']);
 
