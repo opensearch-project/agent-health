@@ -197,6 +197,10 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     traceFetchAttempts: storedAny.traceFetchAttempts,
     lastTraceFetchAt: storedAny.lastTraceFetchAt,
     traceError: storedAny.traceError,
+    // Structured agent-step failure (transport / unreachable / empty
+    // response) — see TestCaseRun.agentError. The inspector panel's reason
+    // line and the retry-judgement guard read it browser-side.
+    agentError: (stored as any).agentError,
     judgeMode: storedAny.judgeMode,
     spans: storedAny.spans as any[] | undefined,
     connectorProtocol: storedAny.connectorProtocol as ConnectorProtocol | undefined,

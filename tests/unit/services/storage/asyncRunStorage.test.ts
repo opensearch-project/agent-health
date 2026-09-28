@@ -306,6 +306,15 @@ describe('AsyncRunStorage', () => {
       expect(result?.judgeModelId).toBe('claude-sonnet-4-6');
     });
 
+    it('maps agentError from storage so the inspector panel can show the agent-failure reason (empty response / transport / unreachable)', async () => {
+      const agentError = { stage: 'agent', kind: 'empty-response', code: 'EMPTY_RESPONSE', message: 'EMPTY_RESPONSE — agent returned an empty response (no steps, no answer, no results) from agent endpoint h:1: no agent steps' };
+      mockOsRuns.getById.mockResolvedValue({ ...createMockStorageRun('run-1'), agentError } as any);
+
+      const result = await asyncRunStorage.getReportById('run-1');
+
+      expect(result?.agentError).toEqual(agentError);
+    });
+
     it('maps llmJudgeResponse from storage so the Judge Evaluation tab can read rawResponse', async () => {
       const llmJudgeResponse = {
         modelId: 'agent-trace-judge', timestamp: '2024-01-01T00:00:00Z',

@@ -65,6 +65,19 @@ describe('evaluationRunFinalize', () => {
     expect(out.stats.notRun).toBe(0);
   });
 
+  it('carries the runner-computed judgeFailureSummary / agentFailureSummary onto the terminal write (and omits them when absent)', async () => {
+    const { storage, evaluationRuns } = makeStorage({ 'tc-1': { reportId: 'r1', status: 'completed' } });
+    const base = { results: { 'tc-1': { reportId: 'r1', status: 'completed' } }, testCaseSnapshots: [{ id: 'tc-1' }] } as any;
+    const agentFailureSummary = 'Agent endpoint unreachable — 3 consecutive connection failures (ECONNREFUSED, agent.internal:9000)';
+
+    await finalizeEvaluationRun(storage, { runId: 'run-1', finalStatus: 'completed', completedRun: { ...base, agentFailureSummary, judgeFailureSummary: 'j' }, completedAt: 'T' });
+    expect(evaluationRuns.update.mock.calls[0][1]).toMatchObject({ status: 'completed', agentFailureSummary, judgeFailureSummary: 'j' });
+
+    await finalizeEvaluationRun(storage, { runId: 'run-1', finalStatus: 'completed', completedRun: base, completedAt: 'T' });
+    expect(evaluationRuns.update.mock.calls[1][1]).not.toHaveProperty('agentFailureSummary');
+    expect(evaluationRuns.update.mock.calls[1][1]).not.toHaveProperty('judgeFailureSummary');
+  });
+
   it('cancelled run: stamps `cancelled` markers for never-started planned cases and reports them as notRun (zero pending)', async () => {
     const { storage, evaluationRuns, doc } = makeStorage({ 'tc-1': { reportId: 'r1', status: 'completed', passFailStatus: 'passed' } });
     const completedRun = {

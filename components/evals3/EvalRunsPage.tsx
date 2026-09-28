@@ -22,10 +22,11 @@ import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Search, RefreshCw,
   Activity, BarChart3, SlidersHorizontal, ChevronDown, ChevronRight,
-  Layers, List, GitCompare, AlertTriangle, TrendingDown, Target, X, RotateCcw, Ban, XCircle,
+  Layers, List, GitCompare, AlertTriangle, TrendingDown, Target, X, RotateCcw, Ban, XCircle, Unplug,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { presentAgentFailureSummary } from '@/lib/agentFailureSummary';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -797,6 +798,15 @@ export const EvalRunsPage: React.FC = () => {
                 <XCircle size={9} /> Failed
               </span>
             )}
+            {rr.run.agentFailureSummary && (
+              <span
+                data-testid="run-row-agent-unreachable"
+                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30"
+                title={rr.run.agentFailureSummary}
+              >
+                <Unplug size={9} /> {presentAgentFailureSummary(rr.run.agentFailureSummary).badge}
+              </span>
+            )}
           </div>
           <div className="text-[9px] text-muted-foreground font-mono">{rr.run.id.slice(0, 8)}</div>
         </td>
@@ -863,8 +873,11 @@ export const EvalRunsPage: React.FC = () => {
                 className="flex items-center gap-0.5 text-amber-500 font-medium ml-0.5"
                 data-testid="run-row-errored-badge"
                 title={
-                  rr.run.judgeFailureSummary
-                    ? `Judge failure: ${rr.run.judgeFailureSummary}`
+                  rr.run.agentFailureSummary || rr.run.judgeFailureSummary
+                    ? [
+                        rr.run.agentFailureSummary,
+                        rr.run.judgeFailureSummary ? `Judge failure: ${rr.run.judgeFailureSummary}` : undefined,
+                      ].filter(Boolean).join(' · ')
                     : 'Evaluator could not run on these (e.g. judge validation error). Excluded from pass-rate aggregation.'
                 }
               >

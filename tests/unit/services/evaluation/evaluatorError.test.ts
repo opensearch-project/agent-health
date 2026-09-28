@@ -46,6 +46,7 @@ describe('buildEvaluatorErrorPatch (issue #242)', () => {
       ['trace_callback_failed', /^Post-trace callback failed \(kind=trace_callback_failed\): /],
       ['trace_fetch_failed', /^Trace fetch failed \(kind=trace_fetch_failed\): /],
       ['unknown', /^Evaluator error \(kind=unknown\): /],
+      ['agent_empty_response', /^Agent returned an empty response \(kind=agent_empty_response\): /],
     ];
     for (const [kind, re] of cases) {
       const patch = buildEvaluatorErrorPatch(kind, 'something');
@@ -72,5 +73,17 @@ describe('buildEvaluatorErrorPatch (issue #242)', () => {
     // so a user reading just the Judge tab knows the score isn't real.
     expect(patch.llmJudgeReasoning).toMatch(/\*\*Evaluator could not run\.\*\*/);
     expect(patch.llmJudgeReasoning).toMatch(/excluded from pass-rate aggregation/i);
+  });
+
+  it('agent_empty_response: honest prose — the agent answered with nothing, no verdict, excluded from pass rate', () => {
+    const patch = buildEvaluatorErrorPatch('agent_empty_response', 'EMPTY_RESPONSE — agent returned an empty response (no steps, no answer, no results) from agent endpoint h:1: x');
+    expect(patch.llmJudgeReasoning).toContain('**Agent returned an empty response.**');
+    expect(patch.llmJudgeReasoning).toContain('nothing to judge');
+    expect(patch.llmJudgeReasoning).toContain('excluded from pass-rate aggregation');
+    expect(patch.llmJudgeReasoning).toContain('**Reason (agent_empty_response):** EMPTY_RESPONSE');
+    expect(patch.llmJudgeReasoning).not.toContain('Evaluator could not run');
+    expect(patch.llmJudgeReasoning).not.toContain('Agent run did not complete');
+    expect(patch.passFailStatus).toBeNull();
+    expect(patch.metricsStatus).toBe('error');
   });
 });

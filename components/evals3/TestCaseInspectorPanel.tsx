@@ -84,6 +84,31 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
         <div className="text-[10px] text-muted-foreground mt-1 truncate">
           {report.agentName || '—'} · {report.modelName || '—'}
         </div>
+        {/* Agent-step failure reason (transport / unreachable / empty response
+            — services/evaluation/agentReachability.ts + emptyResponse.ts). The
+            metrics cards that carry it on the full report page are hidden in
+            this panel (`hideMetrics`), so the reason has to live here or the
+            user only sees a bare ERRORED chip. */}
+        {report.agentError && (
+          <div
+            data-testid="inspector-agent-failure"
+            data-kind={report.agentError.kind}
+            className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 text-[10px] text-amber-800 dark:text-amber-300"
+          >
+            <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+            <span className="break-words">
+              <span className="font-semibold">
+                {report.agentError.kind === 'empty-response'
+                  ? 'Agent returned an empty response'
+                  : report.agentError.kind === 'unreachable'
+                    ? 'Agent endpoint unreachable'
+                    : 'Agent request failed'}
+              </span>
+              {' — '}{report.agentError.message}
+              <span className="text-amber-700/80 dark:text-amber-400/80"> Not judged.</span>
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Reusable definition collapsible — same widget on both

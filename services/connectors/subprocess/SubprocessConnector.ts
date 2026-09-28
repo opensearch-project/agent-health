@@ -337,7 +337,13 @@ export class SubprocessConnector<
           console.error(`[Subprocess] EPERM error - operation not permitted`);
         }
 
-        reject(new Error(errorMsg));
+        // Preserve the spawn error's `code` (ENOENT/EACCES/EPERM) and the
+        // original error as `cause` so the runner can classify a missing CLI
+        // binary as a transport-level failure and fast-fail the run
+        // (services/evaluation/agentReachability.ts).
+        const spawnError = new Error(errorMsg, { cause: error }) as Error & { code?: string };
+        spawnError.code = (error as NodeJS.ErrnoException).code;
+        reject(spawnError);
       });
     });
     this.debug('========== execute() COMPLETED ==========');

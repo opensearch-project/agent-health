@@ -36,6 +36,7 @@ import type {
 } from '@/types';
 import type { IStorageModule } from '@/server/adapters/types';
 import { callBedrockJudge } from '@/services/evaluation';
+import { classifyEmptyResponse } from '@/services/evaluation/emptyResponse';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/index';
 import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity } from '@/lib/judgeIdentity';
@@ -99,6 +100,11 @@ export function isJudgeFailedCase(
 ): boolean {
   if (!report || !result) return false;
   if (result.status !== 'completed') return false;
+  // A classified AGENT failure (transport / unreachable / empty-response) has
+  // nothing to salvage at judge cost: an empty response keeps its
+  // placeholder trajectory for display, but re-judging it could only turn
+  // "nothing" into a verdict — the owner incident in reverse.
+  if (report.agentError) return false;
   const hasTrajectory = Array.isArray(report.trajectory) && report.trajectory.length > 0;
   if (!hasTrajectory) return false;
   if (report.metricsStatus === 'error') return true;
@@ -122,6 +128,7 @@ export function isJudgeFailedCase(
  */
 export function hasRejudgeableOutput(report: EvaluationReport | null | undefined): boolean {
   if (!report) return false;
+  if (report.agentError) return false;
   return Array.isArray(report.trajectory) && report.trajectory.length > 0;
 }
 
@@ -181,6 +188,22 @@ export async function retryJudgementForCase(
   storage: IStorageModule,
   agentConfig: AgentConfig | undefined
 ): Promise<{ passFailStatus: PassFailStatus | null; error?: string }> {
+  // Belt and braces for direct callers that bypass selectRetryableCases: a
+  // report the runner already classified as an empty response is never
+  // re-judged (its stored placeholder trajectory is for display only).
+  const refuseEmpty = async (detail: string) => {
+    const message = `not judged: empty response — ${detail}`;
+    debug('RetryJudgement', `[${report.id}] ${message}`);
+    await storage.runs.update(report.id, {
+      ...buildEvaluatorErrorPatch('agent_empty_response', message),
+      agentError: report.agentError ?? { stage: 'agent', kind: 'empty-response', code: 'EMPTY_RESPONSE', message },
+      matcherResults: [],
+      improvementStrategies: [],
+    } as any).catch(() => {});
+    return { passFailStatus: null as PassFailStatus | null, error: message };
+  };
+  if (report.agentError?.kind === 'empty-response') return refuseEmpty(report.agentError.message);
+
   let trajectory = report.trajectory || [];
 
   if (agentConfig?.useTraces) {
@@ -201,6 +224,14 @@ export async function retryJudgementForCase(
       debug('RetryJudgement', `[${report.id}] Trace re-fetch failed, falling back to stored trajectory: ${err}`);
     }
   }
+
+  // The trajectory that will actually be judged (stored, or rebuilt from a
+  // trace re-fetch above) must have SOMETHING in it: no agent step and no
+  // answer text is refused here rather than sent to a model. (Checked after
+  // the re-fetch so a trace_timeout report whose spans have since landed is
+  // still salvageable.)
+  const emptiness = classifyEmptyResponse({ trajectory, rawEvents: report.rawEvents });
+  if (emptiness.empty) return refuseEmpty(emptiness.detail);
 
   const judgeModelId =
     run.judgeModelId ||

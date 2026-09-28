@@ -261,6 +261,50 @@ describe('Judge Routes', () => {
       });
     });
 
+    it('empty-response guard: refuses (422, code EMPTY_RESPONSE) a trajectory with no agent step and blank text WITHOUT calling any provider', async () => {
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'response', content: '   ' }],
+        expectedOutcomes: ['Any reply at all.'],
+        modelId: 'demo-model',
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+      await handler(req, res);
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        error: expect.stringMatching(/^not judged: empty response — /),
+        code: 'EMPTY_RESPONSE',
+        notJudged: true,
+        passFailStatus: null,
+      }));
+      expect(mockEvaluateTrajectory).not.toHaveBeenCalled();
+    });
+
+    it('empty-response guard: a placeholder response step over an empty raw payload (`{}` echo) is refused even for the demo judge', async () => {
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'response', content: '{}' }],
+        rawEvents: [{}],
+        expectedOutcomes: ['Any reply at all.'],
+        modelId: 'demo-model',
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+      await handler(req, res);
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'EMPTY_RESPONSE' }));
+    });
+
+    it('empty-response guard: a trajectory with a real answer (or any agent step) passes through to the provider', async () => {
+      for (const trajectory of [
+        [{ type: 'response', content: 'The cluster is red because two shards are unassigned.' }],
+        [{ type: 'action', toolName: 'cluster_health' }, { type: 'response', content: '' }],
+      ]) {
+        const { req, res } = createMocks({ trajectory, expectedOutcomes: ['Identify root cause'], modelId: 'demo-model' });
+        const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+        await handler(req, res);
+        expect(res.status).not.toHaveBeenCalledWith(422);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ passFailStatus: expect.stringMatching(/passed|failed/) }));
+      }
+    });
+
     it('returns 400 when trajectory is not an array', async () => {
       const { req, res } = createMocks({
         trajectory: 'not-an-array',

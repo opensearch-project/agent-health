@@ -54,6 +54,13 @@ import type { TrajectoryStep } from '@/types';
 import { createHookOrchestrator, type TestDescriptor } from './hookOrchestrator';
 import { bucketRunResults } from '@/lib/runStats';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
+import {
+  EndpointCircuitBreaker,
+  finalizeAgentFailedReport,
+  resolveUnreachableThreshold,
+  stampAgentFailure,
+} from '@/services/evaluation/agentReachability';
+import { resolveEmptyResponseTripsBreaker } from '@/services/evaluation/emptyResponse';
 import { buildCancelledMarkers } from '@/services/evaluationRunFinalize';
 import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity, buildSdkJudgeIdentityPatch, assertJudgeIdentityConsistent, JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
 import { loadConfigSync } from '@/lib/config/index';
@@ -246,6 +253,20 @@ export async function executeEvaluationRun(
       run.judgeProvider = judgeProvider;
     }
   };
+
+  // Fast-fail for unreachable endpoints (services/evaluation/agentReachability.ts):
+  // one breaker per run, keyed by endpoint host. After N consecutive
+  // transport failures the remaining cases fail immediately instead of each
+  // re-dialling a dead endpoint (and, pre-fix, each trace-polling for the
+  // full budget). Threshold: connectorConfig.unreachableThreshold >
+  // AGENT_UNREACHABLE_THRESHOLD env > 3; 0 disables.
+  // Empty responses (2xx with no steps / answer / results) count toward the
+  // same threshold unless connectorConfig.emptyResponseTripsBreaker /
+  // AGENT_EMPTY_RESPONSE_TRIPS_BREAKER says otherwise.
+  const endpointBreaker = new EndpointCircuitBreaker(
+    resolveUnreachableThreshold(agentConfig.connectorConfig),
+    { countEmptyResponses: resolveEmptyResponseTripsBreaker(agentConfig.connectorConfig) },
+  );
 
   try {
     // Per-case result persistence is BOOKKEEPING, not evaluation. It used to
@@ -451,6 +472,7 @@ export async function executeEvaluationRun(
               };
               const doInvoke = () => invokeAgent(agentConfig, bedrockModelId, invocationTestCase, {
                 registry: connectorRegistry,
+                circuitBreaker: endpointBreaker,
                 ...(options?.env ? { env: options.env } : {}),
               });
               // Wrap in the eval span's context so connectors propagate W3C
@@ -634,11 +656,9 @@ export async function executeEvaluationRun(
               // #335: the agent never produced a trajectory (timeout/crash).
               // Surface the underlying message (e.g. "Subprocess timed out after
               // 600000ms") on the report instead of a silent empty `failed`.
-              Object.assign(
-                report,
-                buildEvaluatorErrorPatch('agent_failed', (evalError as any)?.message ?? String(evalError)),
-              );
-              (report as any).skipJudge = true;
+              // Transport / unreachable / empty-response errors additionally get
+              // the structured `agentError` (and the empty-response label).
+              stampAgentFailure(report as any, evalError);
             } else {
               (report as any).passFailStatus = failed ? 'failed' : 'passed';
               // Option B BC shim: legacy `llmJudgeReasoning` is a derived view
@@ -696,11 +716,21 @@ export async function executeEvaluationRun(
                 // on the child report via the saveReport patch below.
                 judgeModelId: run.judgeModelId,
                 skipJudge: false,
+                circuitBreaker: endpointBreaker,
               }
             );
             report = caseSpanContext
               ? await context.with(caseSpanContext, runEval)
               : await runEval();
+
+            // Agent step failed (connector threw: connection refused, spawn
+            // ENOENT, open circuit, timeout, …): the report is FINAL. Stamp the
+            // canonical agent_failed patch now, so the trace-mode default below
+            // never sends a case whose request never happened into trace polling
+            // (pre-fix: full poll budget per case against a dead endpoint).
+            if (finalizeAgentFailedReport(report as any)) {
+              console.warn(`[EvaluationRunner] [${testCaseId}] Agent request failed — not polled or judged: ${(report as any).traceError}`);
+            }
 
             // Classic non-trace reports carry no `metricsStatus`. Without an
             // explicit stamp, the pre-persisted placeholder's 'pending'
@@ -931,6 +961,17 @@ export async function executeEvaluationRun(
     const judgeFailureSummary = computeJudgeFailureSummary(judgeFailureReasons, totalTestCases);
     if (judgeFailureSummary) {
       run.judgeFailureSummary = judgeFailureSummary;
+    }
+
+    // Run-level agent-failure surfacing: when the endpoint breaker opened (or
+    // any case came back with an empty response), say so once on the run doc
+    // (runs list badge + inspector banner) — the per-case reports carry the
+    // same reason, but "N errored" alone is silent about WHY, and about how
+    // many cases were never attempted.
+    const agentFailureSummary = endpointBreaker.summary();
+    if (agentFailureSummary) {
+      run.agentFailureSummary = agentFailureSummary;
+      console.warn(`[EvaluationRunner] Run ${run.id}: ${agentFailureSummary}`);
     }
 
     // Compute performance metrics

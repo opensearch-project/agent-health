@@ -22,6 +22,7 @@ import {
 } from '@/server/services/piAgenticJudgeService';
 import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
 import { hasTraceCorrelation } from '@/services/traces/judgeAgentsHints';
+import { classifyEmptyResponse, EMPTY_RESPONSE_CODE } from '@/services/evaluation/emptyResponse';
 import { loadConfigSync } from '@/lib/config/index';
 import serverConfig from '@/server/config';
 import { debug } from '@/lib/debug';
@@ -393,12 +394,28 @@ router.get('/api/judge/models', async (_req: Request, res: Response) => {
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
   try {
-    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId, runId, agents } = req.body;
+    const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId, runId, agents, rawEvents } = req.body;
 
     // Validate required fields
     if (!trajectory || !Array.isArray(trajectory) || trajectory.length === 0) {
       return res.status(400).json({
         error: 'Trajectory is required and must be a non-empty array'
+      });
+    }
+
+    // Empty-response guard (belt and braces; services/evaluation/emptyResponse.ts).
+    // The runners never send an empty result here, but retry-judgement, the
+    // SDK `judge()` fixture and direct API callers can: a trajectory with no
+    // agent-originated step and no answer text (or one whose only text is a
+    // placeholder unbacked by the supplied raw payload) is refused WITHOUT
+    // calling a model — no judge may turn "nothing" into a pass.
+    const emptiness = classifyEmptyResponse({ trajectory, rawEvents });
+    if (emptiness.empty) {
+      return res.status(422).json({
+        error: `not judged: empty response — ${emptiness.detail}`,
+        code: EMPTY_RESPONSE_CODE,
+        notJudged: true,
+        passFailStatus: null,
       });
     }
 

@@ -508,6 +508,181 @@ Three layered strategies, applied in priority order:
 See the full "Trace correlation conventions" section in
 [AGENTS.md](../AGENTS.md) for the convention map and window-derivation rules.
 
+## Unreachable Endpoints: Fast-Fail and Circuit Breaker
+
+A connector call that fails at the **transport level** — the request never
+reached the agent, or was rejected before the agent did any work — is not
+something to wait on. `invokeAgent()` (`services/evaluation/index.ts`)
+classifies such failures with `services/evaluation/agentReachability.ts` and
+the runners treat them as final:
+
+| Failure class                                             | Examples                                                              | Counts toward the breaker |
+| --------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
+| connection (`ECONNREFUSED`, `ECONNRESET`, `EHOSTUNREACH`) | endpoint down, port closed, load balancer dropping the connection    | yes                       |
+| DNS (`ENOTFOUND`, `EAI_AGAIN`)                            | typo in the hostname, split-horizon DNS                               | yes                       |
+| TLS (`CERT_HAS_EXPIRED`, `DEPTH_ZERO_SELF_SIGNED_CERT`, …) | certificate problems on the agent side                              | yes                       |
+| spawn failure (`ENOENT`, `EACCES`, `EPERM`)               | subprocess connector whose CLI binary is not installed / executable   | yes                       |
+| gateway status (`HTTP_502` / `503` / `504`)               | `REST request failed: 503 - …` from a proxy in front of a dead agent  | yes                       |
+| other rejected status (`HTTP_4xx` / `5xx`, except 408/429) | `401` from a missing API key, `404` route drift, a `500` on one prompt | **no** — case fails fast, run continues |
+
+Only structured signals classify: an error `code` on the `cause` chain, Node's
+own syscall wording at the *start* of a message (`connect ECONNREFUSED …`,
+`getaddrinfo ENOTFOUND …`, `spawn … ENOENT`) or the connectors' own
+`… request failed: <status>` prefix. A code quoted inside an agent's response
+body never does. A failure that arrives **after** the connector has already
+surfaced a step or raw event (a reset mid-stream) is a failure of that case,
+not an unreachable endpoint — it is neither relabelled nor counted. Timeouts,
+in-stream parse errors, hook errors and non-zero subprocess exits are **not**
+transport failures either.
+
+What happens:
+
+1. **Per case** — the case is finalised immediately as an agent failure
+   (`metricsStatus: 'error'`, `failure kind=agent_failed`, bucketed as
+   *errored*, never judged). The report's reason names the failure class and
+   the endpoint **host only** (never the full URL), e.g.
+   `ECONNREFUSED — connection refused while calling agent endpoint
+   agent.example.com:9000: fetch failed`. Trace polling is **not** started —
+   before this, a `useTraces` agent whose endpoint was down still waited the
+   whole `TRACE_POLL_INTERVAL_MS × TRACE_POLL_MAX_ATTEMPTS` budget (10 min by
+   default) on every case before erroring it as a trace timeout.
+2. **Per run** — a circuit breaker keyed by endpoint `host/path` (or the
+   subprocess binary) counts *consecutive* breaker-eligible failures. After
+   the threshold (default **3**) the remaining cases of that run fail at once
+   with `agent endpoint unreachable — 3 consecutive connection failures
+   (ECONNREFUSED, host:port); this case was not attempted`, the run doc gets
+   `agentFailureSummary`, and the UI shows an **Agent unreachable** badge on
+   the runs list plus a banner on the run page / inspector. A successful call
+   resets the count, so a flapping endpoint is not tripped; once open the
+   breaker stays open for the rest of that run (a straggler that was already
+   in flight cannot re-arm it — with `concurrency > 1` up to that many cases
+   may still be dialling when it opens). A new run is a fresh breaker.
+
+Configuration (per agent wins over env; `0` disables the breaker):
+
+```typescript
+{
+  key: 'my-agent',
+  connectorType: 'rest',
+  connectorConfig: {
+    unreachableThreshold: 3,   // consecutive transport failures before fast-failing the run
+  },
+}
+```
+
+```bash
+AGENT_UNREACHABLE_THRESHOLD=3   # default for agents that don't set connectorConfig.unreachableThreshold
+```
+
+## Empty Responses: Nothing to Judge
+
+An agent that answers `2xx` with **nothing** — no tool calls, no assistant
+text, no answer, no results (typically because its own model call failed and
+it returned an empty body instead of an error) — is an **agent failure**, not
+a candidate answer. Before this rule the REST connector's fallback rendered the
+empty body as the response step (`200 {}` → a response step reading `{}`), or
+an `afterResponse` hook rendered a placeholder such as "no results", and the
+LLM judge scored that text — on a lenient rubric ("any reply at all") it
+**passed**.
+
+`invokeAgent()` now runs `classifyEmptyResponse()`
+(`services/evaluation/emptyResponse.ts`) on every connector result, after the
+`afterResponse` hook and before trace polling / judging. A result is EMPTY when
+**any** of these holds:
+
+| Rule | Condition |
+| --- | --- |
+| hook flag | the `afterResponse` hook returned `{ empty: true }` (or `isEmpty: true`, top-level or on `response`) |
+| blank trajectory | no agent-originated step (`tool_result` / `action` by type; `thinking` / `assistant` only with non-blank content), the final response text is blank, and the raw payload carries no content under a known content key |
+| unbacked text | no agent-originated step, a non-blank response step, and a raw payload whose every known content key (`answer`, `response`, `content`, `text`, `message(s)`, `output(s)`, `result(s)`, `steps`, `toolCalls`, `data`, `items`, `hits`, `documents`, …) is null / blank / an empty collection **and** no other key holds a non-empty array / object — i.e. the text is the connector's JSON echo of an empty body, or a placeholder a hook rendered |
+
+Structured results with a null answer (`{ answer: null, results: [{…}] }`) are
+**not** empty — for retrieval agents the results are the answer. Structured
+data under a key agent-health does not know (`{ answer: null, custom_results:
+[{…}] }`), a payload with no known content key at all, or a connector that
+reports no raw events never classify as "unbacked text"; detection is
+deliberately conservative because a false positive would silently error a real
+run. Scalar metadata under unknown keys (`session_id`, `status`, `latency_ms`)
+does not rescue an otherwise empty payload. A hook can always override:
+`{ empty: false }` suppresses the built-in detection.
+
+What happens to an empty result:
+
+1. **Per case** — finalised immediately as an agent failure:
+   `metricsStatus: 'error'`, `passFailStatus: null`, `traceError` =
+   `Agent returned an empty response (kind=agent_empty_response): EMPTY_RESPONSE
+   — agent returned an empty response (no steps, no answer, no results) from
+   agent endpoint <host>: <which rule fired>`, and a structured
+   `agentError: { stage: 'agent', kind: 'empty-response', code:
+   'EMPTY_RESPONSE', message }`. Bucketed as *errored* (never *passed*, never
+   *pending*), never trace-polled, **never judged** — and "Retry judgement"
+   skips it, so a lenient re-judge cannot flip it either. The trajectory and
+   raw payload the agent returned stay on the report so you can see what came
+   back.
+2. **Judge guard** — `POST /api/judge` refuses (HTTP `422`, `code:
+   'EMPTY_RESPONSE'`, `notJudged: true`) a trajectory with no agent step and
+   no answer text without calling a model. Belt and braces for direct callers
+   and the SDK `judge()` fixture.
+3. **Per run** — by default an empty response counts toward the endpoint
+   circuit breaker above (an endpoint returning nothing repeatedly is as dead
+   as one refusing connections): three consecutive empty responses open the
+   breaker and the summary reads `Agent endpoint unreachable — 3 consecutive
+   empty responses (EMPTY_RESPONSE, host:port); N further cases were not
+   attempted`. When the breaker does not trip the run still gets
+   `agentFailureSummary` = `N cases returned an empty response (no steps, no
+   answer, no results) — not judged`. Both shapes show as an **Empty
+   responses** badge on the runs list (the endpoint answers — it is not
+   "unreachable") and a banner on the run page / inspector; a mixed streak of
+   connection failures and empties keeps the **Agent unreachable** badge.
+
+### Hook contract for synthesized text
+
+If your `afterResponse` hook builds trajectory text from a structured payload,
+**flag emptiness yourself** — the hook knows the payload's schema; agent-health
+only knows the common keys:
+
+```typescript
+hooks: {
+  afterResponse: async (ctx) => {
+    const body = ctx.rawEvents?.[0] ?? ctx.response;
+    const steps = Array.isArray(body?.steps) ? body.steps.length : 0;
+    const results = Array.isArray(body?.results) ? body.results.length : 0;
+    const prose = typeof body?.answer === 'string' && body.answer.trim().length > 0;
+    const trajectory = renderTrajectory(body);            // may render "No results" when everything is empty
+    return {
+      ...ctx,
+      trajectory,
+      // Nothing the agent did or said: never let the placeholder be judged.
+      empty: steps === 0 && results === 0 && !prose,
+    };
+  },
+},
+```
+
+`empty: true` forces the agent-failure path even if the rendered text looks
+like an answer; `empty: false` tells agent-health the payload IS an answer in a
+shape it does not recognise; leaving it unset defers to the built-in rules.
+`isEmpty` (top-level) and `response.isEmpty` are accepted aliases. A hook that
+*throws* is a local bug, not an empty response: the case fails as
+`agent_failed` and the endpoint's breaker streak is reset (the endpoint did
+answer).
+
+Configuration:
+
+```typescript
+{
+  key: 'my-agent',
+  connectorType: 'rest',
+  connectorConfig: {
+    emptyResponseTripsBreaker: false,   // empty responses fail the case but do not count toward unreachableThreshold
+  },
+}
+```
+
+```bash
+AGENT_EMPTY_RESPONSE_TRIPS_BREAKER=0   # same, for agents that don't set connectorConfig.emptyResponseTripsBreaker
+```
+
 ## Examples
 
 ### Observio Sample Agent

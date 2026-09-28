@@ -153,7 +153,13 @@ export async function callBedrockJudge(
         const errorMessage = errorData.error || `API request failed with status ${response.status}`;
         // 4xx client errors are validation failures — retrying won't help
         if (response.status >= 400 && response.status < 500) {
-          throw Object.assign(new Error(`Bedrock Judge validation error (not retryable): ${errorMessage}`), { nonRetryable: true });
+          // `code` is forwarded (e.g. `EMPTY_RESPONSE` from the judge route's
+          // empty-response guard) so callers can tell "refused to judge" apart
+          // from a malformed request.
+          throw Object.assign(new Error(`Bedrock Judge validation error (not retryable): ${errorMessage}`), {
+            nonRetryable: true,
+            ...(typeof errorData.code === 'string' ? { code: errorData.code } : {}),
+          });
         }
         throw new Error(errorMessage);
       }

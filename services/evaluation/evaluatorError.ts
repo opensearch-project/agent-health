@@ -29,7 +29,8 @@
 
 export type EvaluatorErrorKind =
   | 'judge_failed'         // Judge call itself threw (e.g. Bedrock validation, network)
-  | 'agent_failed'         // Agent never produced a result (subprocess timeout / crash)
+  | 'agent_failed'         // Agent never produced a result (subprocess timeout / crash / unreachable endpoint)
+  | 'agent_empty_response' // Agent answered, but with no steps, no answer text and no results (nothing to judge)
   | 'trace_timeout'        // Trace polling exceeded max attempts with no spans
   | 'trace_incomplete'     // Spans arrived but never converged (no root span)
   | 'trace_callback_failed'// onTracesFound callback exploded
@@ -58,6 +59,7 @@ export interface EvaluatorErrorPatch {
 const KIND_LABEL: Record<EvaluatorErrorKind, string> = {
   judge_failed: 'Judge evaluation failed',
   agent_failed: 'Agent run did not complete',
+  agent_empty_response: 'Agent returned an empty response',
   trace_timeout: 'Traces never arrived',
   trace_incomplete: 'Trace did not converge',
   trace_callback_failed: 'Post-trace callback failed',
@@ -87,6 +89,7 @@ export function buildEvaluatorErrorPatch(
   // produced a trajectory (timeout/crash). Use prose that says so, instead of
   // the misleading "the evaluator failed" wording, so the Judge tab is honest.
   const isAgent = kind === 'agent_failed';
+  const isEmptyResponse = kind === 'agent_empty_response';
   return {
     metricsStatus: 'error',
     // Both the human label AND the machine-readable kind token are
@@ -97,7 +100,13 @@ export function buildEvaluatorErrorPatch(
     traceError: `${label} (kind=${kind}): ${message}`,
     // The Judge tab renders this directly. Keep the prose concise and
     // explicit: the user must immediately see *why* there is no score.
-    llmJudgeReasoning: isAgent
+    llmJudgeReasoning: isEmptyResponse
+      ? `**Agent returned an empty response.**\n\n` +
+        `The agent answered, but with no steps, no answer text and no results — there is nothing ` +
+        `to judge, so no verdict was produced (a placeholder is never scored as a reply). This run is ` +
+        `excluded from pass-rate aggregation.\n\n` +
+        `**Reason (${kind}):** ${message}`
+      : isAgent
       ? `**Agent run did not complete.**\n\n` +
         `The agent failed to produce a result (e.g. a subprocess timeout or crash) before ` +
         `the evaluation could run, so there is no trajectory to judge. This run is excluded ` +
