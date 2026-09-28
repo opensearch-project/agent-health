@@ -1287,6 +1287,19 @@ export interface BenchmarkRun {
    */
   judgeFailureSummary?: string;
 
+  /**
+   * One-line reason when this run's endpoint circuit breaker opened — N
+   * consecutive transport-level failures (connection refused / DNS / TLS /
+   * rejected status / subprocess spawn failure) to the agent endpoint, after
+   * which the remaining cases were failed without being attempted. Format:
+   * `Agent endpoint unreachable — 3 consecutive connection failures
+   * (ECONNREFUSED, host:port); 59 further cases were not attempted`. Host
+   * only — never a full URL. Computed by
+   * `services/evaluation/agentReachability.ts`; surfaced as the "Agent
+   * unreachable" badge in the runs list and a banner in the run inspector.
+   */
+  agentFailureSummary?: string;
+
   // Server-side performance metrics (populated after run completes)
   performanceMetrics?: RunPerformanceMetrics;
 
@@ -1476,6 +1489,12 @@ export interface EvaluationRun {
    * `EvaluationRun` and `BenchmarkRun` are independent doc shapes.
    */
   judgeFailureSummary?: string;
+
+  /**
+   * Run-level "agent endpoint unreachable" reason — see
+   * {@link BenchmarkRun.agentFailureSummary} (same field, same computation).
+   */
+  agentFailureSummary?: string;
 
   // Performance metrics
   performanceMetrics?: RunPerformanceMetrics;

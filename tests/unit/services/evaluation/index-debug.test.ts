@@ -82,11 +82,16 @@ describe('Evaluation Service Debug Enhancements', () => {
       expect(result.status).toBe('failed');
       expect(result.llmJudgeReasoning).toContain('Connection refused');
 
-      // Verify detailed error logging
+      // Verify detailed error logging. A transport-level failure is rethrown
+      // by invokeAgent as AgentTransportError (failure class + endpoint host
+      // in the message, original error preserved on `cause`) — see
+      // services/evaluation/agentReachability.ts.
+      expect(result.llmJudgeReasoning).toContain('ECONNREFUSED');
+      expect(result.llmJudgeReasoning).toContain('test.com');
       expect(mockDebug).toHaveBeenCalledWith('Eval', 'Error details:', expect.objectContaining({
-        name: 'NetworkError',
-        message: 'Connection refused',
-        cause: 'ECONNREFUSED',
+        name: 'AgentTransportError',
+        message: expect.stringContaining('ECONNREFUSED — connection refused while calling agent endpoint test.com: Connection refused'),
+        cause: error,
         agent: 'Test Agent',
         endpoint: 'http://test.com/agent',
         modelId: 'test-model',

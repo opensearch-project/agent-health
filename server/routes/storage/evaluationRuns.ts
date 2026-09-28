@@ -434,6 +434,7 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
           ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
           ...(completedRun.judgeProvider ? { judgeProvider: completedRun.judgeProvider } : {}),
           ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
+          ...(completedRun.agentFailureSummary ? { agentFailureSummary: completedRun.agentFailureSummary } : {}),
           ...(persistedDescription ? { description: persistedDescription } : {}),
           ...(run.evaluatorId ? { evaluatorId: run.evaluatorId } : {}),
           ...(run.headers ? { headers: run.headers } : {}),

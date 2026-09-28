@@ -613,6 +613,36 @@ describe('RunInspectorPage — Re-run button (eval-run mode)', () => {
     mockParams = { benchmarkId: undefined, runId: 'eval-run-1' };
   });
 
+  it('renders the "Agent unreachable" banner with the run-level reason when the endpoint breaker opened', async () => {
+    const summary = 'Agent endpoint unreachable — 3 consecutive connection failures (ECONNREFUSED, agent.internal:9000); 2 further cases were not attempted';
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue({
+      ...makeEvaluationRunFixture('eval-run-unreachable', 5),
+      agentFailureSummary: summary,
+    });
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(5));
+    mockGetReportSummariesByIds.mockResolvedValue(makeErroredSummaries(5, [0, 1, 2, 3, 4]));
+
+    renderPage();
+
+    const banner = await screen.findByTestId('run-agent-unreachable-banner');
+    expect(banner.textContent).toContain(summary);
+    expect(banner.textContent).toContain('check the agent endpoint and re-run');
+    expect(screen.queryByTestId('run-judge-failure-banner')).toBeNull();
+  });
+
+  it('renders no "Agent unreachable" banner for a run without agentFailureSummary', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-plain', 2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
+    expect(screen.queryByTestId('run-agent-unreachable-banner')).toBeNull();
+  });
+
   it('renders Re-run button for eval-run mode', async () => {
     const { getEvaluationRun } = require('@/services/client');
     getEvaluationRun.mockResolvedValue({

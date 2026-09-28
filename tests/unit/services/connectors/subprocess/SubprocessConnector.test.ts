@@ -285,6 +285,29 @@ describe('SubprocessConnector', () => {
       ).rejects.toThrow("Command 'nonexistent-command' not found");
     });
 
+    it('preserves the spawn error code and cause so ENOENT classifies as a transport failure', async () => {
+      const request: ConnectorRequest = {
+        testCase: mockTestCase,
+        modelId: 'test-model',
+      };
+      const spawnErr = new Error('spawn my-agent-cli ENOENT') as Error & { code: string };
+      spawnErr.code = 'ENOENT';
+
+      setTimeout(() => {
+        mockProcess.emit('error', spawnErr);
+      }, 10);
+
+      let thrown: any;
+      try {
+        await connector.execute('my-agent-cli', request, mockAuth);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown.message).toBe("Command 'my-agent-cli' not found. Is it installed and in PATH?");
+      expect(thrown.code).toBe('ENOENT');
+      expect(thrown.cause).toBe(spawnErr);
+    });
+
     it('should include metadata in response', async () => {
       const request: ConnectorRequest = {
         testCase: mockTestCase,

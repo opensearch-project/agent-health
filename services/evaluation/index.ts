@@ -20,6 +20,14 @@ import type { MatcherResult } from '@/lib/matchers/types';
 import type { TracesAccessor } from '@/lib/matchers/traces';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
+import {
+  AgentTransportError,
+  EndpointCircuitBreaker,
+  classifyTransportFailure,
+  describeEndpointHost,
+  endpointKeyFor,
+  isAgentReachabilityError,
+} from '@/services/evaluation/agentReachability';
 
 // Re-export for use by experimentRunner when calling judge after trace polling
 export { callBedrockJudge };
@@ -54,6 +62,7 @@ const getModels = () => {
 import type {
   ConnectorAuth,
   ConnectorRequest,
+  ConnectorResponse,
   AgentConfigWithConnector,
   ConnectorRegistry,
   AgentConnector,
@@ -314,6 +323,13 @@ export interface RunEvaluationWithConnectorOptions {
   judgeModelId?: string;
   /** When true, skip the LLM judge (caller will handle evaluation) */
   skipJudge?: boolean;
+  /**
+   * Per-run endpoint circuit breaker (see
+   * `services/evaluation/agentReachability.ts`). Forwarded to
+   * {@link invokeAgent}; when the breaker for this agent's endpoint is open
+   * the connector is not called and the case fails immediately.
+   */
+  circuitBreaker?: EndpointCircuitBreaker;
 }
 
 /**
@@ -362,6 +378,15 @@ export interface InvokeAgentOptions {
    * already honours). Sourced from the SDK's `AgentRunOptions.env`.
    */
   env?: Record<string, string>;
+  /**
+   * Per-run endpoint circuit breaker. When set: an open circuit for this
+   * agent's endpoint makes `invokeAgent` throw `AgentUnreachableError`
+   * WITHOUT calling the connector; a transport-level connector failure
+   * (connection refused / DNS / TLS / rejected status / spawn ENOENT) is
+   * counted against the endpoint and rethrown as `AgentTransportError`
+   * (original error on `cause`); a successful call resets the count.
+   */
+  circuitBreaker?: EndpointCircuitBreaker;
 }
 
 /**
@@ -435,15 +460,52 @@ export async function invokeAgent(
     }
   }
 
+  // Fast-fail for unreachable endpoints (services/evaluation/agentReachability.ts).
+  // The breaker is keyed by endpoint host (or subprocess command) and scoped
+  // to the run by the caller. An open circuit means N consecutive transport
+  // failures already happened this run — refuse without calling the connector.
+  const breaker = options.circuitBreaker;
+  const endpointKey = endpointKeyFor(agentWithConnector, effectiveEndpoint);
+  breaker?.assertClosed(endpointKey);
+
+  // Stage awareness: once the connector has surfaced ANY step or raw event the
+  // agent was reached and is answering — a later ECONNRESET / EPIPE is a
+  // mid-stream failure of THIS case, not an unreachable endpoint. It must
+  // neither count toward the breaker nor be relabelled as a connection
+  // failure.
+  // Every streaming connector reports progress per step, so a tracking
+  // `onStep` is always passed; `onRawEvent` keeps its optional contract.
+  let receivedAny = false;
+  const trackedOnStep: NonNullable<typeof onStep> = step => { receivedAny = true; onStep?.(step); };
+  const trackedOnRawEvent: typeof onRawEvent = onRawEvent ? event => { receivedAny = true; onRawEvent(event); } : undefined;
+
   // Execute via connector (with timing)
   const agentStartTime = Date.now();
-  let result = await connector.execute(
-    effectiveEndpoint,
-    request,
-    auth,
-    onStep,
-    onRawEvent
-  );
+  let result: ConnectorResponse;
+  try {
+    result = await connector.execute(
+      effectiveEndpoint,
+      request,
+      auth,
+      trackedOnStep,
+      trackedOnRawEvent
+    );
+  } catch (error) {
+    // Transport-level failure BEFORE any response content: the request never
+    // reached (or was rejected outright by) the agent. Count it against the
+    // endpoint and rethrow with the failure class + host in the message so
+    // the report's failure summary is actionable (`fetch failed` on its own
+    // is not). Everything else — timeouts, mid-stream errors, hook errors —
+    // propagates unchanged.
+    if (isAgentReachabilityError(error) || receivedAny) throw error;
+    const failure = breaker ? breaker.recordFailure(endpointKey, error) : classifyTransportFailure(error);
+    if (failure) {
+      const host = endpointKey.startsWith('command:') ? endpointKey.slice('command:'.length) : describeEndpointHost(effectiveEndpoint);
+      throw new AgentTransportError(failure, host, error);
+    }
+    throw error;
+  }
+  breaker?.recordSuccess(endpointKey);
   const agentDurationMs = Date.now() - agentStartTime;
 
   // Execute afterResponse hook if defined
@@ -524,6 +586,7 @@ export async function runEvaluationWithConnector(
       registry: connectorRegistry,
       onStep,
       onRawEvent,
+      circuitBreaker: options.circuitBreaker,
     });
     const connector = invocation.connector;
     const agentDurationMs = invocation.agentDurationMs;

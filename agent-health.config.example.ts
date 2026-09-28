@@ -30,6 +30,13 @@ export default {
       endpoint: "http://localhost:8000/api/agent",
       connectorType: "rest",
       useTraces: true,           // Enable OpenTelemetry trace collection
+      // connectorConfig: {
+      //   // Fast-fail: after this many CONSECUTIVE connection-level failures
+      //   // (refused / DNS / TLS / rejected status) the remaining cases of a
+      //   // run fail immediately instead of re-dialling a dead endpoint.
+      //   // Default 3 (or AGENT_UNREACHABLE_THRESHOLD env); 0 disables.
+      //   unreachableThreshold: 3,
+      // },
     },
 
     // Example 2: Streaming connector (Server-Sent Events)

@@ -16,7 +16,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Loader2, CheckCircle2, XCircle, Clock, AlertTriangle, Ban,
-  ChevronDown, ChevronRight, ArrowLeft, Bookmark, Link2,
+  ChevronDown, ChevronRight, ArrowLeft, Bookmark, Link2, Unplug,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -373,6 +373,21 @@ export const EvalRunDetailPage: React.FC = () => {
               † Pass rate is over executed cases only
               {errored > 0 ? ` — excludes ${errored} errored (evaluator could not produce a verdict)` : ''}
               {notRun > 0 ? `${errored > 0 ? ',' : ' —'} excludes ${notRun} not run (run ${run.status === 'cancelled' ? 'cancelled' : 'ended'} before they started)` : ''}.
+            </div>
+          )}
+          {/* Endpoint circuit breaker opened during this run — the errored
+              count above is an unreachable agent, not a judge problem. See
+              services/evaluation/agentReachability.ts. */}
+          {run.agentFailureSummary && (
+            <div
+              data-testid="run-detail-agent-unreachable-banner"
+              className="flex items-start gap-1.5 rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-2.5 py-1.5 text-[11px] text-amber-800 dark:text-amber-300"
+            >
+              <Unplug size={12} className="shrink-0 mt-0.5" />
+              <span>
+                {run.agentFailureSummary}
+                <span className="text-amber-700/80 dark:text-amber-400/80"> — check the agent endpoint and re-run; nothing was judged.</span>
+              </span>
             </div>
           )}
 

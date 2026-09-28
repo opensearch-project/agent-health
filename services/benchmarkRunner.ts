@@ -38,6 +38,11 @@ import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judg
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
 import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity, buildSdkJudgeIdentityPatch, assertJudgeIdentityConsistent, JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
 import {
+  EndpointCircuitBreaker,
+  finalizeAgentFailedReport,
+  resolveUnreachableThreshold,
+} from '@/services/evaluation/agentReachability';
+import {
   runInSession,
   recordVerdict,
   emptyTracesAccessor,
@@ -299,6 +304,16 @@ export async function executeRun(
   let throttleUntil = 0;
   let consecutiveThrottles = 0;
 
+  // Fast-fail for unreachable endpoints (services/evaluation/agentReachability.ts):
+  // one breaker per run, keyed by endpoint host. After N consecutive transport
+  // failures the remaining cases fail immediately instead of each re-dialling
+  // a dead endpoint. Mirrors evaluationRunner.
+  // (An unknown agentKey keeps its per-case error path below — resolve the
+  // threshold leniently here.)
+  const endpointBreaker = new EndpointCircuitBreaker(
+    resolveUnreachableThreshold((() => { try { return buildAgentConfigForRun(run).connectorConfig; } catch { return undefined; } })()),
+  );
+
   try {
     // Process each test case with bounded concurrency
     await runWithConcurrencyLimit(
@@ -412,6 +427,7 @@ export async function executeRun(
               };
               const doInvoke = () => invokeAgent(agentConfig, bedrockModelId, invocationTestCase, {
                 registry: connectorRegistry,
+                circuitBreaker: endpointBreaker,
                 ...(opts?.env ? { env: opts.env } : {}),
               });
               const inv = caseSpanContext
@@ -618,11 +634,19 @@ export async function executeRun(
                 // (→ mock judge for demo-modeled agents) while runSingleUseCase
                 // forwarded it correctly.
                 judgeModelId: run.judgeModelId,
+                circuitBreaker: endpointBreaker,
               }
             );
             report = caseSpanContext
               ? await context.with(caseSpanContext, runEval)
               : await runEval();
+
+            // Agent step failed (connector threw): the report is FINAL —
+            // canonical agent_failed patch (metricsStatus:'error', bucketed
+            // `errored`, honest reasoning), never trace-polled or judged.
+            if (finalizeAgentFailedReport(report as any)) {
+              console.warn(`[BenchmarkRunner] [${testCaseId}] Agent request failed — not polled or judged: ${(report as any).traceError}`);
+            }
           }
 
           // Stamp run-level judge inputs onto the report BEFORE saving — the
@@ -784,6 +808,14 @@ export async function executeRun(
       maxTestCaseDurationMs: testCaseDurations.length > 0 ? Math.max(...testCaseDurations) : 0,
       minTestCaseDurationMs: testCaseDurations.length > 0 ? Math.min(...testCaseDurations) : 0,
     };
+
+    // Run-level agent-unreachable surfacing (runs list badge + inspector
+    // banner); the per-case reports carry the same reason.
+    const agentFailureSummary = endpointBreaker.summary();
+    if (agentFailureSummary) {
+      run.agentFailureSummary = agentFailureSummary;
+      console.warn(`[BenchmarkRunner] Run ${run.id}: ${agentFailureSummary}`);
+    }
 
     if (suiteSpan) {
       finalizeTestSuiteRunSpan(suiteSpan, run);

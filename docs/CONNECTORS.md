@@ -508,6 +508,72 @@ Three layered strategies, applied in priority order:
 See the full "Trace correlation conventions" section in
 [AGENTS.md](../AGENTS.md) for the convention map and window-derivation rules.
 
+## Unreachable Endpoints: Fast-Fail and Circuit Breaker
+
+A connector call that fails at the **transport level** — the request never
+reached the agent, or was rejected before the agent did any work — is not
+something to wait on. `invokeAgent()` (`services/evaluation/index.ts`)
+classifies such failures with `services/evaluation/agentReachability.ts` and
+the runners treat them as final:
+
+| Failure class                                             | Examples                                                              | Counts toward the breaker |
+| --------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------- |
+| connection (`ECONNREFUSED`, `ECONNRESET`, `EHOSTUNREACH`) | endpoint down, port closed, load balancer dropping the connection    | yes                       |
+| DNS (`ENOTFOUND`, `EAI_AGAIN`)                            | typo in the hostname, split-horizon DNS                               | yes                       |
+| TLS (`CERT_HAS_EXPIRED`, `DEPTH_ZERO_SELF_SIGNED_CERT`, …) | certificate problems on the agent side                              | yes                       |
+| spawn failure (`ENOENT`, `EACCES`, `EPERM`)               | subprocess connector whose CLI binary is not installed / executable   | yes                       |
+| gateway status (`HTTP_502` / `503` / `504`)               | `REST request failed: 503 - …` from a proxy in front of a dead agent  | yes                       |
+| other rejected status (`HTTP_4xx` / `5xx`, except 408/429) | `401` from a missing API key, `404` route drift, a `500` on one prompt | **no** — case fails fast, run continues |
+
+Only structured signals classify: an error `code` on the `cause` chain, Node's
+own syscall wording at the *start* of a message (`connect ECONNREFUSED …`,
+`getaddrinfo ENOTFOUND …`, `spawn … ENOENT`) or the connectors' own
+`… request failed: <status>` prefix. A code quoted inside an agent's response
+body never does. A failure that arrives **after** the connector has already
+surfaced a step or raw event (a reset mid-stream) is a failure of that case,
+not an unreachable endpoint — it is neither relabelled nor counted. Timeouts,
+in-stream parse errors, hook errors and non-zero subprocess exits are **not**
+transport failures either.
+
+What happens:
+
+1. **Per case** — the case is finalised immediately as an agent failure
+   (`metricsStatus: 'error'`, `failure kind=agent_failed`, bucketed as
+   *errored*, never judged). The report's reason names the failure class and
+   the endpoint **host only** (never the full URL), e.g.
+   `ECONNREFUSED — connection refused while calling agent endpoint
+   agent.example.com:9000: fetch failed`. Trace polling is **not** started —
+   before this, a `useTraces` agent whose endpoint was down still waited the
+   whole `TRACE_POLL_INTERVAL_MS × TRACE_POLL_MAX_ATTEMPTS` budget (10 min by
+   default) on every case before erroring it as a trace timeout.
+2. **Per run** — a circuit breaker keyed by endpoint `host/path` (or the
+   subprocess binary) counts *consecutive* breaker-eligible failures. After
+   the threshold (default **3**) the remaining cases of that run fail at once
+   with `agent endpoint unreachable — 3 consecutive connection failures
+   (ECONNREFUSED, host:port); this case was not attempted`, the run doc gets
+   `agentFailureSummary`, and the UI shows an **Agent unreachable** badge on
+   the runs list plus a banner on the run page / inspector. A successful call
+   resets the count, so a flapping endpoint is not tripped; once open the
+   breaker stays open for the rest of that run (a straggler that was already
+   in flight cannot re-arm it — with `concurrency > 1` up to that many cases
+   may still be dialling when it opens). A new run is a fresh breaker.
+
+Configuration (per agent wins over env; `0` disables the breaker):
+
+```typescript
+{
+  key: 'my-agent',
+  connectorType: 'rest',
+  connectorConfig: {
+    unreachableThreshold: 3,   // consecutive transport failures before fast-failing the run
+  },
+}
+```
+
+```bash
+AGENT_UNREACHABLE_THRESHOLD=3   # default for agents that don't set connectorConfig.unreachableThreshold
+```
+
 ## Examples
 
 ### Observio Sample Agent

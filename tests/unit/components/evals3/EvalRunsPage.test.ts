@@ -628,6 +628,30 @@ describe('EvalRunsPage — in-flight (running) run indication (bug #5, 2026-09-0
     expect(row.querySelector('[data-testid="run-row-not-run"]')).toBeNull();
   });
 
+  it('a run whose endpoint breaker opened shows the "Agent unreachable" badge with the reason (and the errored tooltip carries it)', async () => {
+    const summary = 'Agent endpoint unreachable — 3 consecutive connection failures (ECONNREFUSED, agent.internal:9000); 2 further cases were not attempted';
+    const results: Record<string, unknown> = {};
+    for (let i = 0; i < 5; i++) results[`tc-${i}`] = { reportId: `r-${i}`, status: 'completed' }; // agent_failed → no verdict → errored
+    mockListEvaluationRuns.mockResolvedValue({
+      evaluationRuns: [makeRunningEvalRun({
+        id: 'eval-run-unreachable-1', name: 'Dead Endpoint Run', status: 'completed', results,
+        testCaseSnapshots: Array.from({ length: 5 }, (_, i) => ({ id: `tc-${i}` })),
+        agentFailureSummary: summary,
+      } as any)],
+    });
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('Dead Endpoint Run')).toBeTruthy());
+    const row = screen.getByText('Dead Endpoint Run').closest('tr') as HTMLElement;
+    const badge = row.querySelector('[data-testid="run-row-agent-unreachable"]') as HTMLElement;
+    expect(badge).toBeTruthy();
+    expect(badge.textContent).toContain('Agent unreachable');
+    expect(badge.getAttribute('title')).toBe(summary);
+    expect(row.querySelector('[data-testid="run-row-errored-badge"]')?.getAttribute('title')).toBe(summary);
+    // A completed run: not a Failed badge, no spinner.
+    expect(row.querySelector('[data-testid="run-row-status-failed"]')).toBeNull();
+    expect(row.querySelector('.animate-spin')).toBeNull();
+  });
+
   it('a completed run shows neither a Cancelled nor a Failed badge nor a "not run" annotation', async () => {
     mockListEvaluationRuns.mockResolvedValue({
       evaluationRuns: [makeRunningEvalRun({ id: 'eval-run-done-3', name: 'Finished Run 3', status: 'completed', testCaseSnapshots: [{}], results: { 'tc-0': { reportId: 'r-0', status: 'completed', passFailStatus: 'passed' } } })],
@@ -638,5 +662,6 @@ describe('EvalRunsPage — in-flight (running) run indication (bug #5, 2026-09-0
     expect(row.querySelector('[data-testid="run-row-status-cancelled"]')).toBeNull();
     expect(row.querySelector('[data-testid="run-row-status-failed"]')).toBeNull();
     expect(row.querySelector('[data-testid="run-row-not-run"]')).toBeNull();
+    expect(row.querySelector('[data-testid="run-row-agent-unreachable"]')).toBeNull();
   });
 });

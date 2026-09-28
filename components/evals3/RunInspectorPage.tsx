@@ -20,7 +20,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Loader2, Clock, XCircle, Calendar, AlertTriangle, Link2, Ban } from 'lucide-react';
+import { Loader2, Clock, XCircle, Calendar, AlertTriangle, Link2, Ban, Unplug } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -687,6 +687,22 @@ export const RunInspectorPage: React.FC = () => {
           >
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             <span>{run.judgeFailureSummary}</span>
+          </div>
+        )}
+        {/* Run-level agent-unreachable banner: the endpoint circuit breaker
+            opened (N consecutive connection failures) and the remaining cases
+            were failed without being attempted. See
+            services/evaluation/agentReachability.ts. */}
+        {run?.agentFailureSummary && (
+          <div
+            data-testid="run-agent-unreachable-banner"
+            className="mt-2 flex items-start gap-1.5 rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-2.5 py-1.5 text-[11px] text-amber-800 dark:text-amber-300"
+          >
+            <Unplug size={12} className="shrink-0 mt-0.5" />
+            <span>
+              {run.agentFailureSummary}
+              <span className="text-amber-700/80 dark:text-amber-400/80"> — check the agent endpoint and re-run; nothing was judged.</span>
+            </span>
           </div>
         )}
       </div>
