@@ -18,7 +18,9 @@ import React, { useMemo, useState } from 'react';
 import { Span } from '@/types';
 import { formatDuration } from '@/services/traces/utils';
 import { Input } from '@/components/ui/input';
-import { Search, Copy, Check } from 'lucide-react';
+import { Search, Copy, Check, Database } from 'lucide-react';
+import { isDbSpan } from '@/services/traces/spanCategorization';
+import { extractRetrievalIO } from '@/services/traces/retrievalSpan';
 
 interface SimpleSpanAttributesTableProps {
   span: Span;
@@ -71,6 +73,12 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
     () => new Date(span.endTime).getTime() - new Date(span.startTime).getTime(),
     [span]
   );
+
+  // Retrieval (OTel DB semconv) spans get a one-line summary in the identity
+  // strip — `{operation} {collection} ({system}) · N rows` — so the query
+  // target and result size are visible without scanning the table. The
+  // query text itself stays in the table (db.query.text, pretty-printed).
+  const retrieval = useMemo(() => (isDbSpan(span) ? extractRetrievalIO(span) : null), [span]);
 
   // Flat sorted list of attribute entries. Sort alphabetically so users
   // can scan predictably; this is the "simple table" the user asked for.
@@ -143,6 +151,25 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
           <span className="font-mono text-amber-700 dark:text-amber-400">
             {formatDuration(duration)}
           </span>
+          {retrieval && (
+            <>
+              <span className="text-muted-foreground">·</span>
+              <span
+                className="inline-flex items-center gap-1 font-mono text-cyan-700 dark:text-cyan-300"
+                data-testid="span-retrieval-summary"
+                title="OTel DB semconv span (RETRIEVAL)"
+              >
+                <Database size={11} className="shrink-0" />
+                {retrieval.caption && <span>{retrieval.caption}</span>}
+                {retrieval.returnedRows !== null && (
+                  <span className="text-muted-foreground">
+                    · {retrieval.returnedRows} row{retrieval.returnedRows === 1 ? '' : 's'}
+                  </span>
+                )}
+                {retrieval.statusCode && <span className="text-muted-foreground">· {retrieval.statusCode}</span>}
+              </span>
+            </>
+          )}
           {span.status && span.status !== 'UNSET' && (
             <>
               <span className="text-muted-foreground">·</span>

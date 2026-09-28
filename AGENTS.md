@@ -416,10 +416,29 @@ Use the Agent Health trace viewer to validate your instrumentation:
 3. Verify spans have correct `gen_ai.*` attributes
 4. Check that span hierarchy matches expected flow
 
+### Trace Categorization
+
+Spans are bucketed into `AGENT` / `LLM` / `TOOL` / `RETRIEVAL` / `EVAL` /
+`ERROR` / `OTHER` by [`services/traces/spanCategorization.ts`](./services/traces/spanCategorization.ts).
+Standards decide, in order: a known GenAI `gen_ai.operation.name` is
+authoritative (an `execute_tool` span that also carries `db.*` stays `TOOL`);
+then DB semconv (`db.system.name` / legacy `db.system` → `RETRIEVAL`); then an
+unknown framework-specific operation name that still carries
+`gen_ai.provider.name` / `gen_ai.system` / `gen_ai.agent.name` (→ `LLM` if it
+reports a model / token usage, else `AGENT` orchestration); then HTTP SERVER
+spans (the agent's inbound request boundary → `AGENT`, the outermost one
+flagged `isEntrypoint`). `OTHER` is the explicit "we do not know" bucket. Retrieval spans show `db.query.text` as input and
+`db.response.returned_rows` (+ any `*.hit_ids` / `*.result_ids` /
+`retrieval.ids` attribute, rendered as an id list) as output. Adding a category
+means updating every exhaustive `Record<SpanCategory, …>` map (tsc will point
+at them). Full rule order + category table:
+[docs/ARCHITECTURE.md → Trace Span Categorization](docs/ARCHITECTURE.md#trace-span-categorization).
+
 ### Additional Resources
 
 - [OpenTelemetry Gen AI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
 - [OpenTelemetry Span Attributes Registry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
+- [OpenTelemetry Database Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/db/db-spans/)
 - [Agent Health Trace Categorization](./services/traces/spanCategorization.ts)
 
 ## Testing

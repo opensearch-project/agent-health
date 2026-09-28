@@ -61,6 +61,13 @@ export const TraceSummaryStrip: React.FC<TraceSummaryStripProps> = ({
       </span>
     );
   }
+  if (summary.retrieval > 0) {
+    parts.push(
+      <span key="retrieval" data-testid="trace-summary-retrieval">
+        <span className={valueClassName}>{summary.retrieval}</span> retrieval
+      </span>
+    );
+  }
   if (summary.evalCount > 0) {
     parts.push(
       <span key="eval">

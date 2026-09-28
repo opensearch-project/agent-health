@@ -961,10 +961,19 @@ export interface TraceSummary {
 // ============ Trace Tree View Types ============
 
 /**
- * Span category based on OTel GenAI semantic conventions
+ * Span category based on OTel semantic conventions.
+ *
+ * - AGENT / LLM / TOOL / EVAL — GenAI semconv (`gen_ai.operation.name`) plus
+ *   framework-specific operation names that still carry GenAI context, and the
+ *   HTTP SERVER entrypoint of the agent service.
+ * - RETRIEVAL — DB semconv (`db.system.name` / legacy `db.system`): search,
+ *   vector-store and database calls made on behalf of the agent.
+ * - ERROR — any span whose status is ERROR (takes precedence).
+ * - OTHER — the explicit "we do not know" bucket.
  * @see https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/
+ * @see https://opentelemetry.io/docs/specs/semconv/db/db-spans/
  */
-export type SpanCategory = 'AGENT' | 'LLM' | 'TOOL' | 'EVAL' | 'ERROR' | 'OTHER';
+export type SpanCategory = 'AGENT' | 'LLM' | 'TOOL' | 'RETRIEVAL' | 'EVAL' | 'ERROR' | 'OTHER';
 
 /**
  * Extended span with category metadata for tree visualization
@@ -975,6 +984,12 @@ export interface CategorizedSpan extends Span {
   categoryColor: string;
   categoryIcon: string; // lucide-react icon name
   displayName: string; // Constructed label using OTel attributes
+  /**
+   * True for the inbound request boundary of the agent service (an HTTP SERVER
+   * span). Its duration spans the whole request, so per-category time
+   * attribution should only count its self time, not its wall-clock duration.
+   */
+  isEntrypoint?: boolean;
 }
 
 /**
