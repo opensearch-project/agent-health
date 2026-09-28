@@ -911,6 +911,9 @@ class OpenSearchRunOperations implements IRunOperations {
           from,
           sort: [{ createdAt: { order: 'desc' } }],
           query,
+          // Honour the same `_source` projection getAll() supports so a
+          // filtered `GET /runs?testCaseId=…&fields=…` stays KB-sized.
+          ...(options?._source && options._source.length > 0 ? { _source: options._source } : {}),
         },
       });
 

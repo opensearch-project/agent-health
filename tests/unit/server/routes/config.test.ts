@@ -119,9 +119,12 @@ describe('Config router', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
         agents: [
-          { key: 'observio', name: 'Observio', endpoint: 'http://localhost:4321/agent', builtIn: true },
-          { key: 'demo', name: 'Demo', endpoint: 'mock://demo', builtIn: true },
-          { key: 'local-invalid', name: 'Broken URL', endpoint: 'not-a-url', builtIn: false },
+          // `modelOwnership` is server-computed per agent (see
+          // server/services/runModelResolution.ts): none of these fixtures
+          // declare a model and their connectors take a catalog model.
+          { key: 'observio', name: 'Observio', endpoint: 'http://localhost:4321/agent', builtIn: true, modelOwnership: { ownsModel: false } },
+          { key: 'demo', name: 'Demo', endpoint: 'mock://demo', builtIn: true, modelOwnership: { ownsModel: false } },
+          { key: 'local-invalid', name: 'Broken URL', endpoint: 'not-a-url', builtIn: false, modelOwnership: { ownsModel: false } },
           {
             key: 'custom-1',
             name: 'Custom Agent',
@@ -130,6 +133,7 @@ describe('Config router', () => {
             headers: {},
             connectorType: 'rest',
             builtIn: false,
+            modelOwnership: { ownsModel: false },
           },
         ],
         total: 4,
@@ -141,6 +145,30 @@ describe('Config router', () => {
         },
       });
       expect(res.body.agents[0]).not.toHaveProperty('hooks');
+    });
+
+    it('reports modelOwnership for agents that declare their model or run on a model-owning connector', async () => {
+      mockLoadConfigSync.mockReturnValue({
+        agents: [
+          // REST agent whose model is a provider-native id declared in its own config
+          { key: 'retrieval-agent', name: 'Retrieval agent', endpoint: 'http://localhost:9000/ask', connectorType: 'rest', connectorConfig: { model: 'provider.some-deployment-v2' } },
+          // CLI agent: the connector never forwards a run-level model
+          { key: 'cli-agent', name: 'CLI agent', endpoint: 'some-cli', connectorType: 'claude-code' },
+          // Catalog agent
+          { key: 'streaming', name: 'Streaming', endpoint: 'http://localhost:9001/run', connectorType: 'agui-streaming' },
+        ],
+        models: {},
+      });
+      mockGetCustomAgents.mockReturnValue([]);
+
+      const res = await request(app).get('/api/agents');
+      expect(res.status).toBe(200);
+      const byKey = Object.fromEntries(res.body.agents.map((a: any) => [a.key, a.modelOwnership]));
+      expect(byKey).toEqual({
+        'retrieval-agent': { ownsModel: true, declaredModelId: 'provider.some-deployment-v2' },
+        'cli-agent': { ownsModel: true },
+        streaming: { ownsModel: false },
+      });
     });
 
     it('supports ?filter=custom and ?filter=builtin', async () => {

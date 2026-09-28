@@ -33,6 +33,13 @@ export abstract class BaseConnector implements AgentConnector {
   traceContext?: TraceContextStrategy;
 
   /**
+   * Whether the connector owns the agent's model (never forwards a run-level
+   * `modelId`). Defaults to `false`: HTTP-style connectors put the requested
+   * model on the wire. See {@link AgentConnector.ownsModel}.
+   */
+  readonly ownsModel: boolean = false;
+
+  /**
    * Build payload for the agent request
    * Subclasses must implement this to transform standard format to agent-specific format
    */

@@ -18,16 +18,53 @@ import { runSingleUseCase } from '@/services/benchmarkRunner';
 import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { debug } from '@/lib/debug';
+import { resolveRunModel } from '@/server/services/runModelResolution';
 import type { BenchmarkRun, TestCase, TestCaseRun } from '@/types';
 
 const router = Router();
 
 /**
+ * Machine-readable codes carried on every 4xx body from `/api/evaluate`
+ * (`{ error, code }`), so clients can branch without parsing prose.
+ */
+export type EvaluateRejectionCode =
+  | 'INVALID_REQUEST'
+  | 'AGENT_NOT_FOUND'
+  | 'MODEL_NOT_FOUND'
+  | 'MODEL_REQUIRED'
+  | 'TEST_CASE_NOT_FOUND';
+
+/**
+ * Reject a request BEFORE anything is streamed or stored. Every rejection is
+ * logged at info level (agentKey / testCaseId / code / reason — never the
+ * body, which may carry auth headers) so a run that "never showed up" can be
+ * traced server-side: pre-fix the only trace of a 400 was the client's
+ * response body, which some UIs failed to render at all.
+ */
+function reject(
+  res: Response,
+  req: Request,
+  status: 400 | 404,
+  code: EvaluateRejectionCode,
+  message: string,
+) {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  console.info(
+    `[EvaluationAPI] Rejected ${status} ${code}: ${message}` +
+    ` (agentKey=${body.agentKey ?? '-'} testCaseId=${body.testCaseId ?? (body.testCase ? 'inline' : '-')})`,
+  );
+  return res.status(status).json({ error: message, code });
+}
+
+/**
  * Validate evaluation request body
  *
  * Supports two modes:
- * 1. By reference: { testCaseId, agentKey, modelId } — looks up test case from storage/samples
- * 2. Inline: { testCase, agentKey, modelId } — uses provided test case object directly (for ad-hoc runs)
+ * 1. By reference: { testCaseId, agentKey, modelId? } — looks up test case from storage/samples
+ * 2. Inline: { testCase, agentKey, modelId? } — uses provided test case object directly (for ad-hoc runs)
+ *
+ * `modelId` is optional — see server/services/runModelResolution.ts for how
+ * it is resolved per agent.
  */
 function validateRequest(body: any): string | null {
   if (!body || typeof body !== 'object') {
@@ -45,8 +82,8 @@ function validateRequest(body: any): string | null {
   if (!body.agentKey || typeof body.agentKey !== 'string') {
     return 'agentKey is required and must be a string';
   }
-  if (!body.modelId || typeof body.modelId !== 'string') {
-    return 'modelId is required and must be a string';
+  if (body.modelId !== undefined && body.modelId !== null && typeof body.modelId !== 'string') {
+    return 'modelId must be a string when provided';
   }
   return null;
 }
@@ -88,12 +125,17 @@ function toTestCase(sample: typeof SAMPLE_TEST_CASES[0]): TestCase {
  *   testCaseId?: string;   // Test case ID or name (required unless testCase provided)
  *   testCase?: TestCase;   // Inline test case object (for ad-hoc runs from QuickRunModal)
  *   agentKey: string;      // Agent key
- *   modelId: string;       // Model key
+ *   modelId?: string;      // Catalog model key. Ignored for agents that own their
+ *                          // model (connectorConfig.model / ownsModel connectors);
+ *                          // defaults to the catalog default otherwise.
  *   agentEndpoint?: string; // Optional endpoint override
  * }
  *
+ * 4xx responses carry `{ error, code }` (see EvaluateRejectionCode) and are
+ * logged server-side at info level.
+ *
  * SSE events:
- * - { type: 'started', testCase, agent, reportId }
+ * - { type: 'started', testCase, agent, reportId, model: { modelId?, modelSource, ignoredRequestedModelId? } }
  * - { type: 'heartbeat' }
  * - { type: 'step', stepIndex, step: { type, content, toolName?, toolArgs? } }
  * - { type: 'completed', report: { id, status, passFailStatus, metrics, ... }, reportId }
@@ -107,7 +149,7 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
 
   const validationError = validateRequest(req.body);
   if (validationError) {
-    return res.status(400).json({ error: validationError });
+    return reject(res, req, 400, 'INVALID_REQUEST', validationError);
   }
 
   const { testCaseId, agentKey, modelId, judgeModelId, agentEndpoint, evaluatorId, runName, runDescription } = req.body;
@@ -119,14 +161,25 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
   const allAgents = [...config.agents, ...getCustomAgents()];
   const agent = allAgents.find(a => a.key === agentKey || a.name.toLowerCase() === agentKey.toLowerCase());
   if (!agent) {
-    return res.status(400).json({ error: `Agent not found: ${agentKey}` });
+    return reject(res, req, 400, 'AGENT_NOT_FOUND', `Agent not found: ${agentKey}`);
   }
 
-  // Validate model exists
-  const model = config.models[modelId];
-  if (!model) {
-    return res.status(400).json({ error: `Model not found: ${modelId}` });
+  // Resolve the run model per agent: agent-declared → connector-owned →
+  // requested catalog key → catalog default. Only a catalog-model agent with
+  // an unknown / unresolvable model is rejected.
+  const modelResolution = resolveRunModel(agent, modelId, config.models);
+  if (modelResolution.ok === false) {
+    return reject(res, req, 400, modelResolution.error.code, modelResolution.error.message);
   }
+  const runModel = modelResolution.model;
+  if (modelResolution.ignoredRequestedModelId) {
+    debug(
+      'EvalAPI',
+      `Ignoring client modelId '${modelResolution.ignoredRequestedModelId}': agent '${agent.key}' owns its model` +
+      (runModel.modelId ? ` ('${runModel.modelId}')` : ' (undeclared — agent default applies)'),
+    );
+  }
+  debug('EvalAPI', 'Resolved run model:', runModel.modelId || '(agent default)', 'source:', runModel.modelSource);
 
   // Resolve test case: use inline object if provided, otherwise look up by ID
   let testCase: TestCase | null = null;
@@ -168,7 +221,7 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
   }
 
   if (!testCase) {
-    return res.status(404).json({ error: `Test case not found: ${testCaseId || 'inline'}` });
+    return reject(res, req, 404, 'TEST_CASE_NOT_FOUND', `Test case not found: ${testCaseId || 'inline'}`);
   }
 
   debug('EvalAPI', 'Test case found:', testCase.name);
@@ -179,7 +232,7 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
     name: `CLI Run - ${agent.name}`,
     createdAt: new Date().toISOString(),
     agentKey: agent.key,
-    modelId: modelId,
+    modelId: runModel.modelId,
     // Customer-supplied judge model id (separate from agent's `modelId`).
     // Forwarded into runSingleUseCase → runEvaluationWithConnector → the
     // judge call. Falls back to BEDROCK_MODEL_ID env at the runner level.
@@ -225,8 +278,14 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
       agentName: agent.name,
       agentId: agent.key,
       agentEndpoint: agentEndpoint || agent.endpoint,
-      modelId: modelId,
-      modelName: model.display_name || modelId,
+      // For agent-owned models this is informational (`modelSource: 'agent'`):
+      // the agent ran on this model because ITS config says so, not because
+      // the caller picked it. Empty when the agent declares nothing.
+      // Omitted (not '') when a connector-owned agent declares nothing — an
+      // empty string would be indexed and rendered as a real value.
+      modelId: runModel.modelId || undefined,
+      modelName: runModel.modelName || undefined,
+      modelSource: runModel.modelSource,
       // Persist the run-level judge model so the run-detail UI can show
       // "judge model: <whatever the customer picked>" as part of the audit
       // trail. Optional — absent runs were graded by the server default.
@@ -299,7 +358,19 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
     });
 
     // Send started event with reportId for polling fallback
-    res.write(`data: ${JSON.stringify({ type: 'started', testCase: testCase.name, agent: agent.name, reportId: preCreatedReportId })}\n\n`);
+    // `model` tells the caller what was actually resolved — including a
+    // modelId it sent that was ignored because the agent owns its model.
+    res.write(`data: ${JSON.stringify({
+      type: 'started',
+      testCase: testCase.name,
+      agent: agent.name,
+      reportId: preCreatedReportId,
+      model: {
+        modelId: runModel.modelId || undefined,
+        modelSource: runModel.modelSource,
+        ignoredRequestedModelId: modelResolution.ignoredRequestedModelId,
+      },
+    })}\n\n`);
 
     // Run the evaluation with step progress
     let stepCount = 0;

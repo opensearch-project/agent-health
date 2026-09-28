@@ -170,6 +170,20 @@ export interface AgentConnector {
    * connector class; users may override per-agent via `connectorConfig.traceContext`.
    */
   traceContext?: TraceContextStrategy;
+
+  /**
+   * `true` when the connector never forwards a run-level model to the agent —
+   * the agent runs on whatever it is configured with on its own side
+   * (subprocess CLIs such as Claude Code / Kiro, managed agents such as
+   * Bedrock Agents). Callers use this capability flag (not the connector
+   * type name) to decide whether a client-supplied `modelId` is meaningful:
+   * for an `ownsModel` connector it is ignored and the report records the
+   * agent-declared model (or none) with `modelSource: 'agent'`.
+   *
+   * Independent of `connectorConfig.model`: an agent that declares its model
+   * in its own config owns it regardless of this flag.
+   */
+  readonly ownsModel?: boolean;
 }
 
 // ============ Subprocess Connector Types ============

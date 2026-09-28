@@ -18,6 +18,7 @@ import { VALID_CONNECTOR_TYPES, BUILT_IN_AGENT_KEYS } from '@/lib/constants';
 import { addCustomAgent, removeCustomAgent, getCustomAgents } from '@/server/services/customAgentStore';
 import { getRemoteServers } from '@/server/services/codingAgents/remoteConfig';
 import { getObservioPort, waitForObservioReady } from '@/server/services/observioAgent';
+import { getAgentModelOwnership } from '@/server/services/runModelResolution';
 import { readLayeredState, writeStateScope, isCodeFirstMode } from '@/lib/config/statePaths';
 
 const router = Router();
@@ -71,7 +72,14 @@ router.get('/api/agents', async (req: Request, res: Response) => {
       builtIn: false,
     }));
 
-    let agents = [...configAgents, ...customAgents];
+    // Tell the UI who picks the model for each agent so run dialogs can hide
+    // the Agent Model picker (and show the declared model read-only) for
+    // agents whose model isn't the caller's to choose. Computed here because
+    // the connector registry is server-only.
+    let agents = [...configAgents, ...customAgents].map((agent) => ({
+      ...agent,
+      modelOwnership: getAgentModelOwnership(agent as AgentConfig),
+    }));
 
     // Support optional ?filter=custom|builtin query param
     const filter = req.query?.filter as string | undefined;

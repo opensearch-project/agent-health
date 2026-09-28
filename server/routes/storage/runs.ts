@@ -85,10 +85,40 @@ function getTimestampMs(run: { timestamp?: string; createdAt?: string }): number
   return ts ? new Date(ts).getTime() : 0;
 }
 
-// GET /api/storage/runs - List all (paginated)
+/**
+ * Query params `GET /api/storage/runs` understands. Anything else is rejected
+ * with 400 `UNKNOWN_QUERY_PARAM` rather than silently ignored: a caller that
+ * filtered by a misspelled or unsupported param used to get the FULL
+ * unfiltered list back with a 200, and downstream code attributed those
+ * runs to the wrong test case.
+ */
+const RUNS_LIST_QUERY_PARAMS: ReadonlySet<string> = new Set(['size', 'from', 'fields', 'ids', 'testCaseId', 'agentKey', 'agentId']);
+
+/** First query-param name not in `allowed`, or null when all are known. */
+function findUnknownQueryParam(query: Record<string, unknown>, allowed: ReadonlySet<string>): string | null {
+  for (const key of Object.keys(query)) {
+    if (!allowed.has(key)) return key;
+  }
+  return null;
+}
+
+// GET /api/storage/runs - List all (paginated), optionally filtered by
+// testCaseId / agentKey. `?ids=` is the batch-by-id path (filters ignored).
 router.get('/api/storage/runs', async (req: Request, res: Response) => {
   try {
+    const unknownParam = findUnknownQueryParam(req.query as Record<string, unknown>, RUNS_LIST_QUERY_PARAMS);
+    if (unknownParam) {
+      return res.status(400).json({
+        error: `Unknown query parameter '${unknownParam}'. Supported: ${[...RUNS_LIST_QUERY_PARAMS].join(', ')}`,
+        code: 'UNKNOWN_QUERY_PARAM',
+      });
+    }
     const { size = '100', from = '0', fields, ids } = req.query;
+    const testCaseId = typeof req.query.testCaseId === 'string' && req.query.testCaseId.trim() ? req.query.testCaseId.trim() : undefined;
+    // `agentKey` is the app-side name; `agentId` (the storage-side name used
+    // by POST /runs/search) is accepted as an alias.
+    const rawAgent = req.query.agentKey ?? req.query.agentId;
+    const agentKey = typeof rawAgent === 'string' && rawAgent.trim() ? rawAgent.trim() : undefined;
 
     // Batch fetch by ids — collapses N per-report round-trips (e.g. the
     // comparison page loading every cell's report) into ONE request; the
@@ -139,21 +169,28 @@ router.get('/api/storage/runs', async (req: Request, res: Response) => {
 
     // Fetch from storage backend
     const storage = getStorageModule();
+    const hasFilter = !!(testCaseId || agentKey);
     try {
-      const result = await storage.runs.getAll({
+      const pagination = {
         size: parseInt(size as string),
         from: parseInt(from as string),
         _source: fieldList,
-      });
+      };
+      // Filtered listing goes through the adapter's search (term filters on
+      // testCaseId / agentId — the storage-side name for the agent key).
+      const result = hasFilter
+        ? await storage.runs.search({ testCaseId, agentId: agentKey }, pagination)
+        : await storage.runs.getAll(pagination);
       realData = result.items;
     } catch (e: any) {
       console.warn('[StorageAPI] Storage unavailable, returning sample data only:', e.message);
     }
 
-    // Sort sample data by timestamp descending (newest first)
-    const sortedSampleData = [...SAMPLE_RUNS].sort((a, b) =>
-      getTimestampMs(b) - getTimestampMs(a)
-    );
+    // Sort sample data by timestamp descending (newest first); apply the
+    // same filters so demo runs don't leak into a filtered list either.
+    const sortedSampleData = SAMPLE_RUNS
+      .filter((r) => (!testCaseId || r.testCaseId === testCaseId) && (!agentKey || r.agentKey === agentKey))
+      .sort((a, b) => getTimestampMs(b) - getTimestampMs(a));
 
     // User data first, then sample data
     const allData = [...realData, ...sortedSampleData];

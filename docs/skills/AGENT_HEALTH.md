@@ -380,7 +380,7 @@ The Agent Health server runs on port 4001 and exposes the following REST APIs. A
 | Method | Path | Description |
 |---|---|---|
 | POST | `/api/agent` | Proxy agent request (SSE) → `{ endpoint, payload, headers?, agentKey? }` |
-| POST | `/api/evaluate` | Run evaluation (SSE) → `{ testCaseId?, testCase?, agentKey, modelId }` |
+| POST | `/api/evaluate` | Run evaluation (SSE) → `{ testCaseId?, testCase?, agentKey, modelId? }`. `modelId` is a catalog key and only applies to agents that take one; agents that own their model (`connectorConfig.model`, CLI connectors) ignore it and the run records `modelSource: 'agent'`. 4xx bodies carry `{ error, code }` (`AGENT_NOT_FOUND`, `MODEL_NOT_FOUND`, `TEST_CASE_NOT_FOUND`, …) |
 
 ### Judge
 
@@ -459,7 +459,7 @@ primitive returns `llmJudgeReasoning`.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/storage/runs` | List runs. Query: `size?`, `from?`, `fields?` |
+| GET | `/api/storage/runs` | List runs. Query: `size?`, `from?`, `fields?`, `ids?`, `testCaseId?`, `agentKey?` (alias `agentId?`) — unknown params → 400 `UNKNOWN_QUERY_PARAM` |
 | GET | `/api/storage/runs/:id` | Get run by ID |
 | POST | `/api/storage/runs` | Create run |
 | PATCH | `/api/storage/runs/:id` | Update run |

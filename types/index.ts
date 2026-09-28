@@ -197,6 +197,17 @@ export interface AgentConfig {
   hooks?: AgentHooks; // Lifecycle hooks for custom setup/transform logic
   isCustom?: boolean; // True for user-added custom endpoints (not from config file)
   builtIn?: boolean; // True for built-in agents shipped with the tool
+  /**
+   * Read-only, server-computed on `GET /api/agents` (never authored in
+   * config): who picks this agent's model. `ownsModel: true` when the agent
+   * declares one in its own connector config or its connector never forwards
+   * a run-level model — run dialogs then hide the Agent Model picker and
+   * `POST /api/evaluate` ignores any `modelId` sent for it.
+   */
+  modelOwnership?: {
+    ownsModel: boolean;
+    declaredModelId?: string;
+  };
 }
 
 /**
@@ -212,6 +223,9 @@ export interface ConnectorAuthConfig {
   awsService?: string;
   headers?: Record<string, string>;
 }
+
+/** See {@link TestCaseRun.modelSource}. */
+export type ModelSource = 'agent' | 'request' | 'default';
 
 export interface AppConfig {
   agents: AgentConfig[];
@@ -534,6 +548,16 @@ export interface TestCaseRun {
   agentKey?: string;
   modelName: string;
   modelId?: string;
+  /**
+   * Where {@link modelId} came from on runs started via `POST /api/evaluate`:
+   * `'agent'` — the agent owns its model (declared in its own connector
+   * config, or its connector never forwards one); the recorded id is
+   * informational and any caller-supplied `modelId` was ignored.
+   * `'request'` — the caller picked a catalog model. `'default'` — no model
+   * was requested and the catalog default was applied. Absent on older runs
+   * and on benchmark / evaluation-run reports.
+   */
+  modelSource?: ModelSource;
   /**
    * Optional judge model id, separate from {@link modelId} (which is the
    * agent's LLM). Set explicitly via the run config (UI dropdown / CLI

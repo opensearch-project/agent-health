@@ -46,6 +46,9 @@ export class StrandsConnector extends BaseConnector {
   readonly name = 'Amazon Strands';
   readonly supportsStreaming = true;
 
+  /** A Bedrock Agent's foundation model is fixed on the agent; nothing is forwarded. */
+  override readonly ownsModel = true;
+
   buildPayload(request: ConnectorRequest): any {
     const config = (request.connectorConfig || {}) as Partial<StrandsConfig>;
     return {

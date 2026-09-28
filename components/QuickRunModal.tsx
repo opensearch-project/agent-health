@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { useAgentJudgeResolvedModel, judgeModelOptionLabel } from '@/services/client/judgeModelsApi';
 import { TestCase, TrajectoryStep, Evaluator } from '@/types';
 import { DEFAULT_CONFIG, getPreferredDefaultAgentKey } from '@/lib/constants';
+import { AGENT_MODEL_PROVIDERS, DEFAULT_AGENT_MODEL_ID } from '@/lib/agentModelCatalog';
 import { PREFS_KEYS } from '@/lib/preferences';
 import { ENV_CONFIG } from '@/lib/config';
 import { parseLabels } from '@/lib/labels';
@@ -52,7 +53,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   // Agent's LLM — the model the AGENT uses to think (Bedrock / OpenAI-compatible).
   // Renamed from the historical name `selectedModelId` (which was sent both
   // to the agent AND the judge); see comment on `selectedJudgeModelId` below.
-  const [selectedModelId, setSelectedModelId] = usePersistedState(PREFS_KEYS.modelId, 'claude-sonnet-4.5');
+  const [selectedModelId, setSelectedModelId] = usePersistedState(PREFS_KEYS.modelId, DEFAULT_AGENT_MODEL_ID);
   // Judge's LLM — the model the LLM judge uses to grade the trajectory.
   // Distinct from {@link selectedModelId} (the agent's model). Stored under a
   // dedicated pref key so the choice is persisted independently. `undefined`
@@ -101,6 +102,14 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
   const [githubModels, setGithubModels] = useState<Array<{ id: string; name: string }>>([]);
 
   const selectedAgent = DEFAULT_CONFIG.agents.find(a => a.key === selectedAgentKey);
+  // Agents that own their model (declared in their own connector config, or a
+  // connector that never forwards one — see `modelOwnership` on GET
+  // /api/agents) get no Agent Model picker: the server ignores `modelId` for
+  // them and records what the agent itself declares. Pre-fix the picker's
+  // persisted catalog key was sent anyway and, for agents whose declared
+  // model is a provider-native id, the run was rejected with "Model not found".
+  const agentOwnsModel = selectedAgent?.modelOwnership?.ownsModel === true;
+  const agentDeclaredModelId = selectedAgent?.modelOwnership?.declaredModelId;
 
   // If the persisted agent key no longer matches any known agent (e.g. config
   // changed since the value was stored, or the stored value is empty), fall
@@ -240,6 +249,23 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
     discoveredBedrockModels.find(m => m.key === selectedModelId) as any;
   const selectedModelProvider = selectedModelConfig?.provider || 'bedrock';
 
+  // Self-heal a persisted model preference that no longer names a known
+  // model. Pre-fix, the Test Case Detail page wrote the latest run's
+  // provider-native model id into this shared preference, so every later
+  // Quick Run of a catalog agent was rejected with "Model not found" and the
+  // dropdown rendered blank. Fall back to the catalog default instead.
+  useEffect(() => {
+    // `modelOwnership` is only present once GET /api/agents has populated the
+    // config — before that, DEFAULT_CONFIG.models is the hardcoded default
+    // catalog and a server-defined custom model would look "unknown".
+    const serverConfigLoaded = selectedAgent?.modelOwnership !== undefined;
+    if (!serverConfigLoaded || agentOwnsModel || selectedModelConfig) return;
+    const fallback = DEFAULT_CONFIG.models[DEFAULT_AGENT_MODEL_ID]
+      ? DEFAULT_AGENT_MODEL_ID
+      : Object.keys(DEFAULT_CONFIG.models).find(k => AGENT_MODEL_PROVIDERS.has(DEFAULT_CONFIG.models[k]?.provider));
+    if (fallback && fallback !== selectedModelId) setSelectedModelId(fallback);
+  }, [selectedAgent, agentOwnsModel, selectedModelConfig, selectedModelId, setSelectedModelId]);
+
   // Lock body scroll when modal is open
   useEffect(() => {
     const originalOverflow = document.body.style.overflow;
@@ -306,7 +332,8 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
       const result = await runServerEvaluation(
         {
           agentKey: selectedAgent.key,
-          modelId: selectedModelId,
+          // Only catalog-model agents take a model from the caller.
+          modelId: agentOwnsModel ? undefined : selectedModelId,
           // Customer-supplied judge model (separate dropdown). When unset,
           // server picks per priority: evaluator.inferenceConfig.modelId
           // > BEDROCK_MODEL_ID env. Agentic-provider judges ignore this.
@@ -328,6 +355,8 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
       setReconnectState(null);
     } catch (error) {
       console.error('Evaluation error:', error);
+      // Surface the server's own message (e.g. a 400 `Model not found: …`)
+      // — never fail silently; the Run button re-enables via `finally`.
       setErrorMessage(error instanceof Error ? error.message : 'Evaluation failed');
     } finally {
       setIsRunning(false);
@@ -501,7 +530,26 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                   belong in the Judge Model dropdown below. Pre-fix the
                   unified dropdown let users pick a judge-only model as the
                   agent's model and the agent broke (Bedrock rejected it). */}
-              <div className="space-y-1">
+              {agentOwnsModel ? (
+                <div className="space-y-1" data-testid="quickrun-agent-model-owned">
+                  <div className="flex items-center gap-1">
+                    <Label className="text-xs">Agent Model</Label>
+                    <span
+                      className="text-muted-foreground cursor-default"
+                      title="This agent decides its own model (declared in its connector config or fixed by its CLI / runtime). The value is recorded on the run for reference only."
+                    >
+                      <Info size={11} className="inline" />
+                    </span>
+                  </div>
+                  <div
+                    className="h-8 w-44 px-3 flex items-center rounded border border-dashed border-input bg-muted/40 text-xs text-muted-foreground truncate"
+                    title={agentDeclaredModelId || 'Set by the agent'}
+                  >
+                    {agentDeclaredModelId || 'Set by the agent'}
+                  </div>
+                </div>
+              ) : (
+              <div className="space-y-1" data-testid="quickrun-agent-model-select">
                 <div className="flex items-center gap-1">
                   <Label className="text-xs">Agent Model</Label>
                   <span
@@ -525,9 +573,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                         .filter(([provider]) =>
                           // The agent can only be invoked via these LLM providers.
                           // Hide judge-only providers from the agent dropdown.
-                          provider === 'bedrock' ||
-                          provider === 'openai-compatible' ||
-                          provider === 'litellm'
+                          AGENT_MODEL_PROVIDERS.has(provider)
                         )
                         .map(([provider, models]) => (
                           <SelectGroup key={provider}>
@@ -571,6 +617,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                   </button>
                 </div>
               </div>
+              )}
 
               {/* Judge Model selection — customer input, distinct from the
                   agent's model. "Use evaluator default" maps to undefined,
@@ -622,6 +669,7 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
                 onClick={handleRun}
                 disabled={!canRun}
                 className="bg-opensearch-blue hover:bg-blue-600 h-8"
+                data-testid="quickrun-run-button"
               >
                 {isRunning ? (
                   <>
@@ -640,8 +688,12 @@ export const QuickRunModal: React.FC<QuickRunModalProps> = ({
             {/* Results Area */}
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
               {errorMessage && (
-                <div className="mb-4 p-3 text-sm rounded border text-red-600 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-500/10 dark:border-red-500/30">
-                  {errorMessage}
+                <div
+                  role="alert"
+                  data-testid="quickrun-error"
+                  className="mb-4 p-3 text-sm rounded border text-red-600 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-500/10 dark:border-red-500/30"
+                >
+                  <span className="font-medium">Run failed: </span>{errorMessage}
                 </div>
               )}
               {reconnectState && !report && (
