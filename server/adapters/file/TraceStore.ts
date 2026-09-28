@@ -18,7 +18,7 @@
 
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import type { Span } from '../../../types/index.js';
 import { projectDataDir } from '../../../lib/config/statePaths.js';
 
@@ -35,6 +35,22 @@ function safeTraceFile(traceId: string): string {
     ? traceId
     : createHash('sha256').update(traceId).digest('hex');
   return `${safe}.json`;
+}
+
+/** Per-file write queue shared by every TraceStore instance in this process. */
+const traceFileLocks = new Map<string, Promise<void>>();
+
+async function withTraceFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  const previous = traceFileLocks.get(file) ?? Promise.resolve();
+  const run = previous.then(fn);
+  // The queue tail never rejects, so one failed write cannot wedge the file.
+  const tail = run.then(() => undefined, () => undefined);
+  traceFileLocks.set(file, tail);
+  try {
+    return await run;
+  } finally {
+    if (traceFileLocks.get(file) === tail) traceFileLocks.delete(file);
+  }
 }
 
 export class TraceStore {
@@ -66,16 +82,29 @@ export class TraceStore {
     }
 
     for (const [traceId, incoming] of byTrace) {
-      const existing = await this.readTrace(traceId);
-      const merged = new Map<string, Span>();
-      for (const s of existing) if (s.spanId) merged.set(s.spanId, s);
-      for (const s of incoming) merged.set(s.spanId, s); // newest wins (incoming ids guaranteed)
-      await this.atomicWrite(this.fileFor(traceId), Array.from(merged.values()));
+      // Serialize read-merge-write per trace file (process-wide): the OTLP
+      // receiver builds a fresh TraceStore per request, so two concurrent
+      // exports into one trace (an agent's spans + our eval span for the
+      // same case) would otherwise read the same "existing" set and the
+      // second rename would silently drop the first writer's spans.
+      await withTraceFileLock(this.fileFor(traceId), async () => {
+        const existing = await this.readTrace(traceId);
+        const merged = new Map<string, Span>();
+        for (const s of existing) if (s.spanId) merged.set(s.spanId, s);
+        for (const s of incoming) merged.set(s.spanId, s); // newest wins (incoming ids guaranteed)
+        await this.atomicWrite(this.fileFor(traceId), Array.from(merged.values()));
+      });
     }
   }
 
   private async atomicWrite(file: string, data: Span[]): Promise<void> {
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    // pid + timestamp alone is NOT unique: two concurrent exports into the
+    // same trace within one millisecond (measured: a REST agent's spans and
+    // agent-health's own eval spans landing together) minted the same tmp
+    // name, one rename consumed it and the other failed with ENOENT — which
+    // surfaced to the agent as a 400 from the OTLP receiver and failed the
+    // evaluation. A random suffix makes every writer's tmp file its own.
+    const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(4).toString('hex')}.tmp`;
     await fs.writeFile(tmp, JSON.stringify(data), 'utf8');
     await fs.rename(tmp, file);
   }

@@ -211,7 +211,14 @@ export function transformSpan(source: OpenSearchSpanSource): NormalizedSpan {
     duration: source.durationInNanos ? source.durationInNanos / 1000000 : null,
     status: statusCode === 2 ? 'ERROR' : (statusCode === 1 ? 'OK' : 'UNSET'),
     attributes,
-    events
+    events,
+    ...(Array.isArray((source as any).links) && (source as any).links.length > 0
+      ? {
+          links: (source as any).links
+            .filter((l: any) => l?.traceId && l?.spanId)
+            .map((l: any) => ({ traceId: l.traceId, spanId: l.spanId, attributes: l.attributes || {} })),
+        }
+      : {}),
   };
 }
 

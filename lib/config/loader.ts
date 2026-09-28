@@ -16,7 +16,7 @@ import { pathToFileURL } from 'url';
 import type { AgentConfig, ModelConfig } from '@/types';
 import type { AgentConnector } from '@/services/connectors/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { DEFAULT_BACKEND_PORT, resolveBackendPort } from '@/lib/portConfig';
+import { DEFAULT_BACKEND_PORT, resolveBackendPort, isBackendPortExplicit } from '@/lib/portConfig';
 import type {
   UserConfig,
   UserAgentConfig,
@@ -177,6 +177,9 @@ function mergeConfigs(
   const server: ResolvedServerConfig = {
     ...DEFAULT_SERVER_CONFIG,
     ...userConfig.server,
+    // See ResolvedServerConfig.portExplicit: a port set in the config file or
+    // via AH_PORT is explicit intent (CI-mode reuse of a healthy server).
+    portExplicit: userConfig.server?.port !== undefined || isBackendPortExplicit(),
   };
 
   // Telemetry config (user config overrides env vars, resolved at init time)
@@ -296,7 +299,7 @@ export function loadConfigSync(cwd: string = process.cwd()): ResolvedConfig {
 
   // Return defaults - async loading will update later
   return {
-    server: DEFAULT_SERVER_CONFIG,
+    server: { ...DEFAULT_SERVER_CONFIG, portExplicit: isBackendPortExplicit() },
     agents: DEFAULT_CONFIG.agents as AgentConfig[],
     models: DEFAULT_CONFIG.models,
     connectors: [],

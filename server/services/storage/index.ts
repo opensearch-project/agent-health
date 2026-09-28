@@ -17,6 +17,7 @@
 import { getOpenSearchClient, INDEXES, isStorageConfigured } from '../opensearchClient.js';
 import { computeStatsForRun } from './statsComputation.js';
 import type { Client } from '@opensearch-project/opensearch';
+import { resolveReportTraceId } from '../../../lib/traceIdentity.js';
 
 // Re-export for convenience
 export { isStorageConfigured };
@@ -209,7 +210,17 @@ export async function saveReportWithClient(
     iteration: options?.iteration || 1,
     status: report.status,
     passFailStatus: report.passFailStatus,
-    traceId: report.runId,
+    // Connector/hook-provided run id (Strategy B correlator) and agent
+    // session id (Strategy D). Pre-fix `runId` was written INTO the `traceId`
+    // field ("storage uses traceId for the app-level runId") and the real
+    // eval-span trace id was dropped — so every REST report whose agent
+    // returned an `id` came back with `traceId === runId === 'conv-…'`, and
+    // the trace poller's exact-match filter (`span.traceId === report.traceId`)
+    // rejected every span it fetched → 0/N "Traces never arrived". `traceId`
+    // is now ONLY ever a real W3C trace id (lib/traceIdentity.ts); readers
+    // keep their `runId || traceId` fallback for pre-fix documents.
+    runId: report.runId,
+    traceId: resolveReportTraceId(undefined, report.traceId),
     sessionId: report.sessionId,
     tags: [],
     actualOutcomes: [],

@@ -11,6 +11,7 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
+import { installShutdownHandlers } from './serverShutdown.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -37,6 +38,7 @@ function findPackageRoot(): string {
 
 const MAX_PORT_ATTEMPTS = 10;
 
+
 /**
  * Start the Express server, auto-incrementing port if already in use
  */
@@ -58,6 +60,7 @@ export async function startServer(options: StartOptions): Promise<number> {
       const server = app.listen(port, '0.0.0.0');
 
       server.on('listening', () => {
+        installShutdownHandlers(server);
         resolve(port);
       });
 

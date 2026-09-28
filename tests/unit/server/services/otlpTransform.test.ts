@@ -71,6 +71,24 @@ describe('otlpTransform', () => {
       expect(s.status).toBe('ERROR'); // code 2
     });
 
+    it('maps span links (test_case → test_suite_run) and drops links with invalid ids', () => {
+      const withLinks = JSON.parse(JSON.stringify(body));
+      withLinks.resourceSpans[0].scopeSpans[0].spans[0].links = [
+        {
+          traceId: 'ffff0000ffff0000ffff0000ffff0000',
+          spanId: 'abcdabcdabcdabcd',
+          attributes: [{ key: 'agent_health.link.type', value: { stringValue: 'test_suite_run' } }],
+        },
+        { traceId: 'not-hex', spanId: 'abcdabcdabcdabcd' },
+      ];
+      const s = otlpToSpans(withLinks)[0];
+      expect(s.links).toEqual([
+        { traceId: 'ffff0000ffff0000ffff0000ffff0000', spanId: 'abcdabcdabcdabcd', attributes: { 'agent_health.link.type': 'test_suite_run' } },
+      ]);
+      // No links → field absent (not an empty array), so existing consumers are unaffected.
+      expect(otlpToSpans(body)[0].links).toBeUndefined();
+    });
+
     it('merges resource attributes onto the span (service.name + serviceName)', () => {
       const s = otlpToSpans(body)[0];
       expect(s.attributes!['service.name']).toBe('my-agent');

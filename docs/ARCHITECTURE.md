@@ -222,7 +222,8 @@ Key endpoints used by CLI:
 | `/api/debug` | POST | Toggle debug logging (`{ enabled: boolean }`) |
 | `/api/storage/benchmarks` | GET | List benchmarks |
 | `/api/storage/benchmarks/:id` | GET | Get benchmark by ID |
-| `/api/storage/benchmarks/:id/execute` | POST | Execute benchmark (SSE) |
+| `/api/storage/evaluation-runs` | POST | Execute a benchmark / ad-hoc sources against an agent (SSE) — what `agent-health benchmark` uses for every mode |
+| `/api/storage/benchmarks/:id/execute` | POST | **Deprecated** legacy runner (SSE). Kept for API compatibility; no longer called by the CLI (see [CLI.md → benchmark](./CLI.md#benchmark)) |
 | `/api/storage/benchmarks/:id/cancel` | POST | Cancel running benchmark |
 | `/api/storage/runs/by-benchmark-run/:benchmarkId/:runId` | GET | Get reports for a run |
 

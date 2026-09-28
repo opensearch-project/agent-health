@@ -299,6 +299,16 @@ jobs:
           # storage path runs against the real backend instead of file mode.
           OPENSEARCH_STORAGE_ENDPOINT: http://localhost:9200
           OPENSEARCH_STORAGE_AUTH_TYPE: none
+          # Emit agent-health's own eval spans into the server's embedded OTLP
+          # receiver (file trace store) so trace-correlation integration tests
+          # can assert on the real `test_case` spans / W3C trace ids — e.g.
+          # tests/integration/server/routes/storage/benchmarkExecuteTracePerCase.
+          OTEL_EVAL_ENABLED: 'true'
+          OTEL_EVAL_EXPORTER_ENDPOINT: http://localhost:4001/v1/traces
+          # No external trace backend here; fail trace polls fast instead of
+          # burning the default 10-minute budget per pending report.
+          TRACE_POLL_MAX_ATTEMPTS: '5'
+          TRACE_POLL_INTERVAL_MS: '1000'
 
       - name: Wait for server to be healthy
         run: |
@@ -330,6 +340,19 @@ jobs:
           # CI when the service is down. See tests/helpers/testDataTracker.ts
           # (cleanup) and jest.globalTeardown.cjs for the exact semantics.
           AH_TEST_CLEANUP_STRICT: '1'
+
+      # The customer-surface regression matrix (docs/SURFACE_MATRIX.md) is part
+      # of the integration glob above; this step guards against it silently
+      # not running (renamed folder, changed testPathPatterns, early bail).
+      - name: Verify the customer-surface matrix ran (integration half)
+        run: |
+          EXPECTED=$(ls tests/integration/surface-matrix/*.integration.test.ts | wc -l)
+          RAN=$(grep -cE '^(PASS|FAIL) tests/integration/surface-matrix/' integration-test-output.txt || true)
+          echo "surface-matrix integration specs: expected=$EXPECTED ran=$RAN"
+          if [ "$RAN" -lt "$EXPECTED" ]; then
+            echo "❌ Only $RAN of $EXPECTED surface-matrix integration specs ran — see docs/SURFACE_MATRIX.md"
+            exit 1
+          fi
 
       - name: Upload integration test coverage to Codecov
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
@@ -469,6 +492,19 @@ jobs:
         env:
           CI: true
           E2E_COVERAGE: 'true'
+
+      # UI half of the customer-surface regression matrix (docs/SURFACE_MATRIX.md):
+      # every spec file under tests/e2e/surface-matrix must have produced results.
+      - name: Verify the customer-surface matrix ran (UI half)
+        if: always()
+        run: |
+          EXPECTED=$(ls tests/e2e/surface-matrix/*.spec.ts | wc -l)
+          RAN=$(jq '[.. | objects | select(has("file")) | .file] | unique | map(select(startswith("surface-matrix/"))) | length' playwright-report/results.json 2>/dev/null || echo 0)
+          echo "surface-matrix e2e spec files: expected=$EXPECTED ran=$RAN"
+          if [ "$RAN" -lt "$EXPECTED" ]; then
+            echo "❌ Only $RAN of $EXPECTED surface-matrix e2e spec files ran — see docs/SURFACE_MATRIX.md"
+            exit 1
+          fi
 
       - name: Generate E2E coverage report
         if: always()

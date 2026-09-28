@@ -19,7 +19,8 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import type { ResolvedServerConfig } from '@/lib/config/types.js';
-import { decideServerOwnership, foreignServerError } from './serverOwnership.js';
+import { decideServerOwnership, decideExistingServerAction, foreignServerError } from './serverOwnership.js';
+import { isBackendPortExplicit } from '@/lib/portConfig.js';
 
 // Get CLI version from package.json
 const __filename = fileURLToPath(import.meta.url);
@@ -350,7 +351,9 @@ export function stopServer(process: ChildProcess): void {
  *
  * Behavior:
  * - If server running + reuseExistingServer=true: Reuse it
- * - If server running + reuseExistingServer=false: Error
+ * - If server running + reuseExistingServer=false + explicit port: Reuse it
+ *   (see decideExistingServerAction)
+ * - If server running + reuseExistingServer=false + implicit port: Error
  * - If server not running: Start it
  *
  * @param config - Server configuration
@@ -426,33 +429,38 @@ export async function ensureServer(
       console.log(`[ServerLifecycle] Version mismatch detected!`);
       console.log(`[ServerLifecycle]   Server version: ${serverStatus.version}`);
       console.log(`[ServerLifecycle]   CLI version: ${cliVersion}`);
+    }
 
-      if (reuseExistingServer) {
+    const portExplicit = config.portExplicit ?? isBackendPortExplicit();
+    const action = decideExistingServerAction({ reuseExistingServer, portExplicit, versionMatches });
+
+    switch (action) {
+      case 'restart':
         // Kill old server and start new one with matching version
         console.log(`[ServerLifecycle] Stopping old server and starting v${cliVersion}...`);
         await killServerOnPort(port);
-        // Fall through to start new server below
-      } else {
+        break; // Fall through to start new server below
+      case 'error-version':
         // In CI mode, error out on version mismatch
         throw new Error(
           `Server version mismatch: server=${serverStatus.version}, CLI=${cliVersion}. ` +
             `Stop the existing server or upgrade to matching version.`
         );
-      }
-    } else if (reuseExistingServer) {
-      // Versions match - safe to reuse
-      console.log(`[ServerLifecycle] Reusing existing server (version ${serverStatus.version})`);
-      return {
-        wasStarted: false,
-        baseUrl,
-      };
-    } else {
-      // In CI mode, don't reuse - error out
-      throw new Error(
-        `Server already running on port ${port}. ` +
-          `In CI mode (reuseExistingServer=false), this is an error. ` +
-          `Stop the existing server or set reuseExistingServer: true.`
-      );
+      case 'reuse':
+        // Versions match - safe to reuse
+        console.log(`[ServerLifecycle] Reusing existing server (version ${serverStatus.version})`);
+        return { wasStarted: false, baseUrl };
+      case 'reuse-explicit-port':
+        console.log(`[ServerLifecycle] Using existing server on :${port} (explicit port)`);
+        return { wasStarted: false, baseUrl };
+      case 'error-running':
+        // In CI mode with a defaulted port, don't reuse - error out
+        throw new Error(
+          `Server already running on port ${port}. ` +
+            `In CI mode (reuseExistingServer=false), this is an error. ` +
+            `Stop the existing server, set reuseExistingServer: true, ` +
+            `or name the port explicitly (AH_PORT=${port}) to reuse it on purpose.`
+        );
     }
   }
 

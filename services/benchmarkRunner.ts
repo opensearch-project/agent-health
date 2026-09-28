@@ -66,7 +66,7 @@ import { debug } from '@/lib/debug';
 import { RunResultStatus } from '@/types';
 import {
   startTestSuiteRunSpan,
-  startTestCaseSpan,
+  startIsolatedTestCaseSpan,
   addEvaluationResultEvents,
   finalizeTestCaseSpan,
   finalizeTestSuiteRunSpan,
@@ -74,6 +74,7 @@ import {
 } from '@/lib/telemetry';
 import { SpanStatusCode, context, trace } from '@opentelemetry/api';
 import { ATTR_AGENT_HEALTH_AGENT_RUN_ID } from '@/lib/telemetry/constants';
+import { resolveReportTraceId } from '@/lib/traceIdentity';
 
 /**
  * Safely load config with fallback to defaults.
@@ -224,10 +225,12 @@ export async function executeRun(
 
   console.log(`[BenchmarkRunner] Starting run ${run.id} with concurrency=${concurrency} for ${totalTestCases} test cases`);
 
-  // Start OTel telemetry span for the benchmark run
+  // Start OTel telemetry span for the benchmark run. It is a trace of its own;
+  // every test_case span below is ALSO a root of its own trace and points back
+  // here with a span link (see lib/telemetry/evalSpans.ts for why parentage
+  // would make every agent invocation of the run share one trace id).
   const suiteSpanResult = startTestSuiteRunSpan(benchmark, run);
   const suiteSpan = suiteSpanResult?.span;
-  const suiteContext = suiteSpanResult?.context;
 
   // Initialize results if empty
   if (!run.results) {
@@ -350,15 +353,15 @@ export async function executeRun(
         // span is the active OTel context when the connector spawns/calls the
         // agent. Connectors with `traceContext.propagateEnv/Header` inject
         // TRACEPARENT, making the agent's root span a child of this eval span
-        // (single trace tree). agentRunId is unknown at this point — set as
-        // attribute later when the report comes back.
-        let caseSpan: import('@opentelemetry/api').Span | undefined;
-        let caseSpanContext: import('@opentelemetry/api').Context | undefined;
-        if (suiteContext) {
-          const r = startTestCaseSpan(suiteContext, testCase, benchmark, run);
-          caseSpan = r?.span;
-          caseSpanContext = r?.context;
-        }
+        // (single trace tree PER TEST CASE). The span is a root of its own
+        // trace, span-linked to the suite span — never its child: as a child,
+        // all N cases (and all N agent invocations) of a run shared ONE trace
+        // id, so each report's Strategy-A lookup returned the whole run.
+        // agentRunId is unknown at this point — set as attribute later when
+        // the report comes back.
+        const caseSpanResult = startIsolatedTestCaseSpan(testCase, benchmark, run, { suiteSpan });
+        const caseSpan = caseSpanResult?.span;
+        const caseSpanContext = caseSpanResult?.context;
 
         // Set status to running
         run.results[testCaseId] = { reportId: '', status: 'running' };
@@ -633,8 +636,10 @@ export async function executeRun(
           (report as any).judgeModelId = (report as any).judgeModelId ?? run.judgeModelId;
           (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
           // Eval test_case span traceId — Strategy A correlator for the trace
-          // poller (see evaluationRunner for details).
-          (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
+          // poller. The eval span's id always wins and anything that is not a
+          // W3C trace id (a connector/hook run id, say) is dropped — see
+          // lib/traceIdentity.ts. The connector id stays on report.runId.
+          (report as any).traceId = resolveReportTraceId(caseSpan?.spanContext().traceId, (report as any).traceId);
 
           // Save the report to OpenSearch and get the actual stored ID
           const savedReport = await saveReportWithClient(client, report, {
@@ -951,7 +956,7 @@ export async function runSingleUseCase(
   // Connectors with `traceContext.propagateEnv/Header` inject TRACEPARENT,
   // making the agent's root span a child of this eval span (single trace tree).
   const standaloneBenchmark = { name: `standalone:${agentConfig.name || agentConfig.key}` } as Benchmark;
-  const caseSpanResult = startTestCaseSpan(context.active(), testCase, standaloneBenchmark, run);
+  const caseSpanResult = startIsolatedTestCaseSpan(testCase, standaloneBenchmark, run);
   const caseSpan = caseSpanResult?.span;
   const caseSpanContext = caseSpanResult?.context;
 
@@ -985,8 +990,9 @@ export async function runSingleUseCase(
   // running the AES Oncall test case with `useTraces: true` + the
   // agent (trace) judge.
   (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
-  // Eval test_case span traceId — Strategy A correlator for the trace poller.
-  (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
+  // Eval test_case span traceId — Strategy A correlator for the trace poller
+  // (eval span wins; non-W3C candidates are dropped — lib/traceIdentity.ts).
+  (report as any).traceId = resolveReportTraceId(caseSpan?.spanContext().traceId, (report as any).traceId);
 
   // If a placeholder run was pre-created, update it instead of creating a new one.
   // We use the storage-layer field names (traceId, etc.) to match `saveReportWithModule`

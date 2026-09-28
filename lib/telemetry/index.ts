@@ -23,6 +23,8 @@ export {
 export {
   startTestSuiteRunSpan,
   startTestCaseSpan,
+  startIsolatedTestCaseSpan,
+  buildTestCaseSpanLinks,
   addEvaluationResultEvents,
   finalizeTestCaseSpan,
   finalizeTestSuiteRunSpan,

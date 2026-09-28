@@ -1172,9 +1172,10 @@ describe('TracePollingManager', () => {
     });
 
     it('filters fetched spans to the eval traceId when no sessionId is present', async () => {
-      const mine = span({ spanId: 'mine', traceId: 'eval-trace-1' });
-      const other = span({ spanId: 'other', traceId: 'other-trace' });
-      mockGetReportById.mockResolvedValue(pendingReport({ traceId: 'eval-trace-1' }));
+      const EVAL_TRACE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+      const mine = span({ spanId: 'mine', traceId: EVAL_TRACE });
+      const other = span({ spanId: 'other', traceId: '0f0e0d0c0b0a09080706050403020100' });
+      mockGetReportById.mockResolvedValue(pendingReport({ traceId: EVAL_TRACE }));
       mockUpdateReport.mockResolvedValue(undefined);
       mockFetchTracesForRun.mockResolvedValue({ spans: [mine, other], total: 2 } as any);
       const onTracesFound = jest.fn().mockResolvedValue(undefined);
@@ -1184,6 +1185,43 @@ describe('TracePollingManager', () => {
 
       const judgedSpans = onTracesFound.mock.calls[0][0] as Span[];
       expect(judgedSpans.map(sp => sp.spanId)).toEqual(['mine']);
+    });
+
+    it('keeps spans that carry the report runId even when they are in another trace (Strategy B is positive evidence)', async () => {
+      const EVAL_TRACE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+      const viaRunId = span({ spanId: 'via-run-id', traceId: '0f0e0d0c0b0a09080706050403020100', attributes: { 'gen_ai.conversation.id': 'run-x' } });
+      const foreign = span({ spanId: 'foreign', traceId: '0f0e0d0c0b0a09080706050403020100', attributes: { 'gen_ai.conversation.id': 'run-other' } });
+      mockGetReportById.mockResolvedValue(pendingReport({ traceId: EVAL_TRACE }));
+      mockUpdateReport.mockResolvedValue(undefined);
+      mockFetchTracesForRun.mockResolvedValue({ spans: [viaRunId, foreign], total: 2 } as any);
+      const onTracesFound = jest.fn().mockResolvedValue(undefined);
+
+      tracePollingManager.startPolling('r-guard', 'run-x', { onTracesFound, onError: jest.fn() });
+      await jest.runAllTimersAsync();
+
+      const judgedSpans = onTracesFound.mock.calls[0][0] as Span[];
+      expect(judgedSpans.map(sp => sp.spanId)).toEqual(['via-run-id']);
+    });
+
+    it('does NOT treat a non-W3C report.traceId (connector run id mis-stamped as traceId) as a filter — the pre-fix black hole', async () => {
+      // Legacy /execute reports persisted `traceId === runId === 'conv-…'`.
+      // Pre-fix the poller queried by it (miss), Strategy B found the spans,
+      // and the exact-match filter `span.traceId === 'conv-…'` then rejected
+      // every one of them → "Traces never arrived" after 30 attempts.
+      const found = span({ spanId: 'found', traceId: '0f0e0d0c0b0a09080706050403020100', attributes: { 'gen_ai.conversation.id': 'conv-33c29f9d5b8a' } });
+      mockGetReportById.mockResolvedValue(pendingReport({ traceId: 'conv-33c29f9d5b8a', runId: 'conv-33c29f9d5b8a' } as any));
+      mockUpdateReport.mockResolvedValue(undefined);
+      mockFetchTracesForRun.mockResolvedValue({ spans: [found], total: 1 } as any);
+      const onTracesFound = jest.fn().mockResolvedValue(undefined);
+
+      tracePollingManager.startPolling('r-guard', 'conv-33c29f9d5b8a', { onTracesFound, onError: jest.fn() });
+      await jest.runAllTimersAsync();
+
+      // The bogus traceId is not sent as a Strategy-A key…
+      expect(mockFetchTracesForRun.mock.calls[0][0].evalTraceId).toBeUndefined();
+      // …and the spans Strategy B found are judged, not discarded.
+      const judgedSpans = onTracesFound.mock.calls[0][0] as Span[];
+      expect(judgedSpans.map(sp => sp.spanId)).toEqual(['found']);
     });
 
     it('claims the report (calculating) before invoking the judge callback', async () => {

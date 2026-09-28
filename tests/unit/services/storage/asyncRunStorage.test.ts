@@ -485,7 +485,7 @@ describe('AsyncRunStorage', () => {
       expect(mockOsRuns.getByIds).toHaveBeenCalledTimes(1);
       const [ids, options] = mockOsRuns.getByIds.mock.calls[0];
       expect(ids).toEqual(['r-1']);
-      expect(options.fields).toEqual(expect.arrayContaining(['status', 'passFailStatus', 'metricsStatus', 'traceId', 'annotations']));
+      expect(options.fields).toEqual(expect.arrayContaining(['status', 'passFailStatus', 'metricsStatus', 'runId', 'traceId', 'annotations']));
       expect(result['r-1'].passFailStatus).toBe('passed');
       expect(result['r-1'].metricsStatus).toBe('ready');
       expect(result['r-1'].runId).toBe('otel-1');
@@ -609,6 +609,27 @@ describe('AsyncRunStorage', () => {
         metricsStatus: 'ready',
         traceFetchAttempts: 5,
       }));
+    });
+
+    it('writes runId and traceId as separate stored fields and never puts a connector id into traceId', async () => {
+      mockOsRuns.partialUpdate.mockResolvedValue(createMockStorageRun('run-1'));
+
+      await asyncRunStorage.updateReport('run-1', {
+        runId: 'conv-33c29f9d5b8a',
+        traceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+      } as any);
+      expect(mockOsRuns.partialUpdate).toHaveBeenCalledWith('run-1', expect.objectContaining({
+        runId: 'conv-33c29f9d5b8a',
+        traceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+      }));
+
+      // Pre-fix: `updates.runId` was mapped onto `traceId`, clobbering a real
+      // trace id with the connector id on every later update.
+      mockOsRuns.partialUpdate.mockClear();
+      await asyncRunStorage.updateReport('run-1', { runId: 'conv-33c29f9d5b8a', traceId: 'conv-33c29f9d5b8a' } as any);
+      const patch = mockOsRuns.partialUpdate.mock.calls[0][1];
+      expect(patch.runId).toBe('conv-33c29f9d5b8a');
+      expect(patch).not.toHaveProperty('traceId');
     });
 
     it('maps metrics correctly', async () => {

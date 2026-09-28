@@ -191,7 +191,18 @@ export function getIndexMappings(): IndexMappings {
           createdAt: { type: 'date' },
           status: { type: 'keyword' },
           passFailStatus: { type: 'keyword' },
+          // Connector/hook-provided agent run id (Strategy B trace correlator).
+          // Declared with EXACTLY the shape dynamic mapping already gave it on
+          // every existing cluster (the evaluation-runs runner has written
+          // `runId` for months): `text` + `.keyword` sub-field. A bare
+          // `keyword` here would make the boot-time putMapping fail with a
+          // mapper conflict on those indexes — and take every other new field
+          // in this mapping down with it. New indexes get the same shape, so
+          // reads/queries behave identically on old and new clusters.
+          runId: { type: 'text', fields: { keyword: { type: 'keyword', ignore_above: 256 } } },
+          // OTel W3C trace id of the eval `test_case` span (Strategy A) — never a connector id.
           traceId: { type: 'keyword' },
+          // Agent-emitted session id (Strategy D).
           sessionId: { type: 'keyword' },
           tags: { type: 'keyword' },
           actualOutcomes: { type: 'object', enabled: false },

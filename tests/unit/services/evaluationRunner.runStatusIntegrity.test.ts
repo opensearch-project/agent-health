@@ -47,7 +47,7 @@ jest.mock('@/server/services/customAgentStore', () => ({ getCustomAgents: jest.f
 jest.mock('@/lib/debug', () => ({ debug: jest.fn() }));
 jest.mock('@/services/traces/tracePoller', () => ({ tracePollingManager: { startPolling: jest.fn() } }));
 jest.mock('@/lib/telemetry', () => ({
-  startTestCaseSpan: jest.fn(() => null),
+  startIsolatedTestCaseSpan: jest.fn(() => null),
   finalizeTestCaseSpan: jest.fn(),
   addEvaluationResultEvents: jest.fn(),
 }));

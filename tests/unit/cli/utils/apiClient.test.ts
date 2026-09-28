@@ -504,6 +504,189 @@ describe('ApiClient', () => {
     });
   });
 
+  describe('executeBenchmarkAsEvaluationRun (unified runner; replaces the legacy /execute route)', () => {
+    const encoder = new TextEncoder();
+    const runConfig = { name: 'CLI Run - Agent', agentKey: 'rest-agent', modelId: 'model-1', concurrency: 3, judgeModelId: 'judge-1', evaluatorId: 'eval-1' };
+
+    function makeSSEReader(events: Array<{ event: string; data: any }>) {
+      let callIndex = 0;
+      const chunks = events.map(e => `event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`);
+      return {
+        read: jest.fn().mockImplementation(() => {
+          if (callIndex < chunks.length) {
+            return Promise.resolve({ done: false, value: encoder.encode(chunks[callIndex++]) });
+          }
+          return Promise.resolve({ done: true, value: undefined });
+        }),
+        cancel: jest.fn().mockResolvedValue(undefined),
+      };
+    }
+
+    const evalRun = {
+      id: 'eval-run-1', docType: 'evaluation-run', name: 'CLI Run - Agent', createdAt: 't0', completedAt: 't1',
+      status: 'completed', agentKey: 'rest-agent', modelId: 'model-1', judgeModelId: 'judge-1', evaluatorId: 'eval-1',
+      concurrency: 3, sources: [{ type: 'benchmark', benchmarkId: 'bench-1' }], trigger: 'cli', testCaseSnapshots: [],
+      results: { 'tc-1': { reportId: 'rep-1', status: 'completed' }, 'tc-2': { reportId: 'rep-2', status: 'failed' } },
+      stats: { total: 2, passed: 1, failed: 1, errored: 0, notRun: 0, passRate: 50 },
+      benchmarkId: 'bench-1',
+    };
+
+    it('POSTs to /api/storage/evaluation-runs with a single benchmark source — never /execute', async () => {
+      const reader = makeSSEReader([
+        { event: 'started', data: { runId: 'eval-run-1', testCases: [{ id: 'tc-1', name: 'One' }, { id: 'tc-2', name: 'Two' }] } },
+        { event: 'completed', data: evalRun },
+      ]);
+      mockFetch.mockResolvedValue({ ok: true, body: { getReader: () => reader } });
+
+      await client.executeBenchmarkAsEvaluationRun('bench-1', runConfig as any);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe(`${baseUrl}/api/storage/evaluation-runs`);
+      expect(url).not.toContain('/execute');
+      expect(JSON.parse(init.body)).toEqual({
+        name: 'CLI Run - Agent',
+        sources: [{ type: 'benchmark', benchmarkId: 'bench-1' }],
+        agentKey: 'rest-agent',
+        modelId: 'model-1',
+        judgeModelId: 'judge-1',
+        evaluatorId: 'eval-1',
+        concurrency: 3,
+        benchmarkId: 'bench-1',
+        trigger: 'cli',
+      });
+    });
+
+    it('translates the evaluation-run SSE stream into the legacy BenchmarkExecutionEvent shape and returns a BenchmarkRun projection', async () => {
+      const events: any[] = [];
+      const reader = makeSSEReader([
+        { event: 'started', data: { runId: 'eval-run-1', testCases: [{ id: 'tc-1', name: 'One' }, { id: 'tc-2', name: 'Two' }] } },
+        { event: 'progress', data: { runId: 'eval-run-1', testCaseId: 'tc-1', startedCount: 1, completedCount: 0, totalTestCases: 2, status: 'running' } },
+        { event: 'progress', data: { runId: 'eval-run-1', testCaseId: 'tc-1', startedCount: 2, completedCount: 1, totalTestCases: 2, status: 'running' } },
+        { event: 'testCaseComplete', data: { testCaseId: 'tc-1', result: { reportId: 'rep-1', status: 'completed' } } },
+        { event: 'testCaseComplete', data: { testCaseId: 'tc-2', result: { reportId: 'rep-2', status: 'failed', error: 'boom' } } },
+        { event: 'completed', data: evalRun },
+      ]);
+      mockFetch.mockResolvedValue({ ok: true, body: { getReader: () => reader } });
+
+      const run = await client.executeBenchmarkAsEvaluationRun('bench-1', runConfig as any, (e) => events.push(e));
+
+      expect(events[0]).toEqual({
+        type: 'started',
+        runId: 'eval-run-1',
+        testCases: [{ id: 'tc-1', name: 'One', status: 'pending' }, { id: 'tc-2', name: 'Two', status: 'pending' }],
+      });
+      // Running-progress events carry the snapshot name and the server's count.
+      expect(events[1]).toMatchObject({ type: 'progress', totalTestCases: 2, completedCount: 0, currentTestCase: { id: 'tc-1', name: 'One' } });
+      expect(events[1].result).toBeUndefined();
+      // Per-case completions carry the result (used for ✓/✗ + verbose errors) and a running total.
+      expect(events[3]).toMatchObject({ type: 'progress', completedCount: 1, currentTestCaseIndex: 0, currentTestCase: { id: 'tc-1', name: 'One' }, result: { status: 'completed' } });
+      expect(events[4]).toMatchObject({ type: 'progress', completedCount: 2, currentTestCaseIndex: 1, currentTestCase: { id: 'tc-2', name: 'Two' }, result: { status: 'failed', error: 'boom' } });
+      expect(events[events.length - 1]).toMatchObject({ type: 'completed', run: { id: 'eval-run-1' } });
+
+      // Projection: same id/results/stats as the evaluation run, BenchmarkRun shape.
+      expect(run).toMatchObject({
+        id: 'eval-run-1', status: 'completed', agentKey: 'rest-agent', modelId: 'model-1',
+        judgeModelId: 'judge-1', evaluatorId: 'eval-1', concurrency: 3, completedAt: 't1',
+        results: evalRun.results, stats: evalRun.stats,
+      });
+      expect((run as any).sources).toBeUndefined();
+      expect((run as any).docType).toBeUndefined();
+    });
+
+    it('reports a cancelled run as a cancelled event', async () => {
+      const events: any[] = [];
+      const reader = makeSSEReader([
+        { event: 'started', data: { runId: 'eval-run-1', testCases: [] } },
+        { event: 'completed', data: { ...evalRun, status: 'cancelled' } },
+      ]);
+      mockFetch.mockResolvedValue({ ok: true, body: { getReader: () => reader } });
+
+      const run = await client.executeBenchmarkAsEvaluationRun('bench-1', runConfig as any, (e) => events.push(e));
+      expect(run.status).toBe('cancelled');
+      expect(events[events.length - 1].type).toBe('cancelled');
+    });
+
+    it('throws a ServerError on an SSE error event (no recovery attempt)', async () => {
+      const reader = makeSSEReader([
+        { event: 'started', data: { runId: 'eval-run-1', testCases: [] } },
+        { event: 'error', data: { error: 'Unknown agentKey: nope', runId: 'eval-run-1' } },
+      ]);
+      mockFetch.mockResolvedValue({ ok: true, body: { getReader: () => reader } });
+
+      await expect(client.executeBenchmarkAsEvaluationRun('bench-1', runConfig as any)).rejects.toMatchObject({
+        name: 'ServerError',
+        message: 'Unknown agentKey: nope',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws with the server error body on a non-OK response', async () => {
+      mockFetch.mockResolvedValue({ ok: false, text: jest.fn().mockResolvedValue(JSON.stringify({ error: 'agentKey is required' })) });
+      await expect(client.executeBenchmarkAsEvaluationRun('bench-1', runConfig as any)).rejects.toThrow('Failed to execute benchmark: agentKey is required');
+    });
+
+    it('recovers the terminal run from storage when the stream ends without a completed event', async () => {
+      jest.useFakeTimers();
+      try {
+        const reader = makeSSEReader([
+          { event: 'started', data: { runId: 'eval-run-1', testCases: [{ id: 'tc-1', name: 'One' }] } },
+          { event: 'progress', data: { runId: 'eval-run-1', testCaseId: 'tc-1', startedCount: 1, completedCount: 0, totalTestCases: 1, status: 'running' } },
+        ]);
+        mockFetch
+          .mockResolvedValueOnce({ ok: true, body: { getReader: () => reader } })
+          // pollEvaluationRunStatus → GET /api/storage/evaluation-runs/:id
+          .mockResolvedValue({ ok: true, status: 200, json: jest.fn().mockResolvedValue(evalRun) });
+
+        const promise = client.executeBenchmarkAsEvaluationRun('bench-1', runConfig as any);
+        await jest.runAllTimersAsync();
+        const run = await promise;
+
+        expect(run.id).toBe('eval-run-1');
+        expect(run.status).toBe('completed');
+        expect(mockFetch.mock.calls[1][0]).toBe(`${baseUrl}/api/storage/evaluation-runs/eval-run-1`);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('recovers via polling when the stream throws after the run started', async () => {
+      jest.useFakeTimers();
+      try {
+        let calls = 0;
+        const reader = {
+          read: jest.fn().mockImplementation(() => {
+            calls++;
+            if (calls === 1) return Promise.resolve({ done: false, value: encoder.encode(`event: started\ndata: ${JSON.stringify({ runId: 'eval-run-1', testCases: [] })}\n\n`) });
+            return Promise.reject(new Error('terminated'));
+          }),
+          cancel: jest.fn().mockResolvedValue(undefined),
+        };
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        mockFetch
+          .mockResolvedValueOnce({ ok: true, body: { getReader: () => reader } })
+          .mockResolvedValue({ ok: true, status: 200, json: jest.fn().mockResolvedValue(evalRun) });
+
+        const promise = client.executeBenchmarkAsEvaluationRun('bench-1', runConfig as any);
+        await jest.runAllTimersAsync();
+        const run = await promise;
+        expect(run.id).toBe('eval-run-1');
+        warn.mockRestore();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('rethrows a stream failure that happens before the run started (nothing to recover)', async () => {
+      const reader = {
+        read: jest.fn().mockRejectedValue(new Error('socket hang up')),
+        cancel: jest.fn().mockResolvedValue(undefined),
+      };
+      mockFetch.mockResolvedValue({ ok: true, body: { getReader: () => reader } });
+      await expect(client.executeBenchmarkAsEvaluationRun('bench-1', runConfig as any)).rejects.toThrow('socket hang up');
+    });
+  });
+
   describe('cancelRun', () => {
     it('should cancel run successfully', async () => {
       mockFetch.mockResolvedValue({

@@ -286,7 +286,17 @@ one unified trace tree), agents and connectors follow this layered convention.
 ### Strategy A — W3C trace context (preferred, single trace tree)
 
 The `test_case` span is started **before** the connector invokes the agent and is
-made the active OTel context. Connectors then propagate the context to the agent:
+made the active OTel context. It is the **root of its own trace** — one trace per
+test case, in both the evaluation-runs runner and the legacy benchmark runner
+(`startIsolatedTestCaseSpan`, parent `ROOT_CONTEXT`); the run's `test_suite_run`
+span is a separate trace that each `test_case` span points at with a span
+**link** (`agent_health.link.type = test_suite_run`). Never make `test_case` a
+child of a run-wide span: every case's agent invocation would then adopt the
+same trace id and Strategy A returns the whole run for each report (this broke
+`benchmark -n … -a <rest-agent>` for all `useTraces` REST agents). Likewise
+`report.traceId` is only ever this span's 32-hex W3C trace id
+(`lib/traceIdentity.ts`); connector/hook ids go to `report.runId` /
+`report.sessionId`. Connectors then propagate the context to the agent:
 
 - **Subprocess agents** (Claude Code, Kiro, Pi, anything via `SubprocessConnector`)
   set `traceContext.propagateEnv = true`. The base class injects a W3C
@@ -435,6 +445,14 @@ Do not stop at unit tests. Each change ships with regression tests at the levels
 - **Playwright e2e** (`tests/e2e/`, `npm run test:e2e`) — any UI-visible behavior or bug (badges, connected/error/empty states, toasts). A UI bug is not fixed for good until an e2e test asserts the rendered result.
 
 Rule of thumb: if a human could see or hit it, there must be an integration and/or Playwright test that fails if the bug returns. Reviewers should reject feature/bugfix PRs that only add unit tests for UI- or API-visible behavior.
+
+**Customer-surface regression matrix** — [docs/SURFACE_MATRIX.md](docs/SURFACE_MATRIX.md)
+(`tests/integration/surface-matrix/`, `tests/e2e/surface-matrix/`, `npm run test:surface-matrix`)
+pins every CLI / API / UI way of running benchmarks, single tests and independent
+evaluations by what the customer sees (exit code + printed summary, HTTP status +
+body shape, rendered state) — never internals. When you change or remove an
+execution path, the matrix is what must stay green; when you add a customer-facing
+operation, add its row + spec there.
 
 ```bash
 npm test                                    # All tests

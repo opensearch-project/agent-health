@@ -48,18 +48,18 @@ jest.mock('@/services/traces/tracePoller', () => ({
 // Telemetry is gated by isEvalTelemetryEnabled(); mock it so a test can inject
 // a sentinel eval-span context and assert invokeAgent runs inside it (Strategy A).
 jest.mock('@/lib/telemetry', () => ({
-  startTestCaseSpan: jest.fn(() => null),
+  startIsolatedTestCaseSpan: jest.fn(() => null),
   finalizeTestCaseSpan: jest.fn(),
   addEvaluationResultEvents: jest.fn(),
 }));
 
 import { runEvaluationWithConnector, invokeAgent } from '@/services/evaluation';
-import { startTestCaseSpan } from '@/lib/telemetry';
+import { startIsolatedTestCaseSpan } from '@/lib/telemetry';
 import { context } from '@opentelemetry/api';
 
 const mockRunEval = runEvaluationWithConnector as jest.Mock;
 const mockInvokeAgent = invokeAgent as jest.Mock;
-const mockStartTestCaseSpan = startTestCaseSpan as jest.Mock;
+const mockStartTestCaseSpan = startIsolatedTestCaseSpan as jest.Mock;
 
 /** Build a stub invokeAgent result (the pure invocation primitive). */
 function stubInvocation(opts: {
@@ -694,7 +694,7 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
     // (via context.with) while invokeAgent runs — that is what lets connectors
     // propagate W3C trace context to the agent (AGENTS.md Strategy A).
     const sentinelCtx = context.active().setValue(Symbol('eval-span'), true);
-    const fakeSpan = { setAttribute: jest.fn(), setStatus: jest.fn(), end: jest.fn() };
+    const fakeSpan = { setAttribute: jest.fn(), setStatus: jest.fn(), end: jest.fn(), spanContext: () => ({ traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1 }) };
     mockStartTestCaseSpan.mockImplementation(() => ({ span: fakeSpan, context: sentinelCtx }));
 
     // No OTel SDK/context-manager is registered in unit tests, so context.active()
