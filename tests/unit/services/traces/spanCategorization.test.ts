@@ -20,6 +20,9 @@ import {
   countByCategory,
   checkOTelCompliance,
   hasAnyWarnings,
+  describeAttributeExpectation,
+  readGenAiProvider,
+  GEN_AI_PROVIDER_KEYS,
 } from '@/services/traces/spanCategorization';
 
 // OTel attribute constants
@@ -553,6 +556,93 @@ describe('checkOTelCompliance', () => {
 
     expect(result.isCompliant).toBe(false);
     expect(result.missingAttributes.length).toBeGreaterThan(0);
+  });
+
+  it('accepts gen_ai.provider.name (semconv >= 1.37) in place of the deprecated gen_ai.system', () => {
+    const span = createCategorizedSpan({
+      spanId: '1',
+      category: 'LLM',
+      attributes: {
+        [ATTR_GEN_AI_OPERATION_NAME]: 'chat',
+        [ATTR_GEN_AI_REQUEST_MODEL]: 'some-model',
+        [ATTR_GEN_AI_PROVIDER_NAME]: 'openai',
+      },
+    });
+    const result = checkOTelCompliance(span);
+
+    expect(result.isCompliant).toBe(true);
+    expect(result.missingAttributes).toEqual([]);
+  });
+
+  it('names the preferred key and the deprecated alias when the provider is missing', () => {
+    const span = createCategorizedSpan({
+      spanId: '1',
+      category: 'LLM',
+      attributes: {
+        [ATTR_GEN_AI_OPERATION_NAME]: 'chat',
+        [ATTR_GEN_AI_REQUEST_MODEL]: 'some-model',
+      },
+    });
+    const result = checkOTelCompliance(span);
+
+    expect(result.isCompliant).toBe(false);
+    expect(result.missingAttributes).toEqual([
+      'gen_ai.provider.name (or deprecated gen_ai.system)',
+    ]);
+  });
+
+  it('lists plain keys verbatim alongside any-of groups', () => {
+    const span = createCategorizedSpan({
+      spanId: '1',
+      category: 'LLM',
+      attributes: { [ATTR_GEN_AI_OPERATION_NAME]: 'chat' },
+    });
+    const result = checkOTelCompliance(span);
+    expect(result.missingAttributes).toEqual([
+      ATTR_GEN_AI_REQUEST_MODEL,
+      'gen_ai.provider.name (or deprecated gen_ai.system)',
+    ]);
+  });
+});
+
+describe('describeAttributeExpectation', () => {
+  it('returns a plain key unchanged', () => {
+    expect(describeAttributeExpectation('gen_ai.tool.name')).toBe('gen_ai.tool.name');
+  });
+
+  it('formats an any-of group as preferred + deprecated aliases', () => {
+    expect(describeAttributeExpectation(['a', 'b', 'c'])).toBe('a (or deprecated b, c)');
+    expect(describeAttributeExpectation(['only'])).toBe('only');
+  });
+});
+
+describe('readGenAiProvider', () => {
+  it('prefers gen_ai.provider.name over gen_ai.system', () => {
+    expect(GEN_AI_PROVIDER_KEYS).toEqual([ATTR_GEN_AI_PROVIDER_NAME, ATTR_GEN_AI_SYSTEM]);
+    expect(readGenAiProvider({ [ATTR_GEN_AI_PROVIDER_NAME]: 'openai', [ATTR_GEN_AI_SYSTEM]: 'legacy' })).toBe('openai');
+  });
+
+  it('falls back to the deprecated gen_ai.system alias', () => {
+    expect(readGenAiProvider({ [ATTR_GEN_AI_SYSTEM]: 'aws_bedrock' })).toBe('aws_bedrock');
+  });
+
+  it('returns undefined when neither key is set (or attrs are absent)', () => {
+    expect(readGenAiProvider({})).toBeUndefined();
+    expect(readGenAiProvider({ [ATTR_GEN_AI_PROVIDER_NAME]: '' })).toBeUndefined();
+    expect(readGenAiProvider(undefined)).toBeUndefined();
+    expect(readGenAiProvider(null)).toBeUndefined();
+  });
+
+  it('buildDisplayName uses the alias for the LLM provider', () => {
+    const span = createSpan({
+      spanId: '1',
+      attributes: {
+        [ATTR_GEN_AI_OPERATION_NAME]: 'chat',
+        [ATTR_GEN_AI_SYSTEM]: 'aws',
+        [ATTR_GEN_AI_REQUEST_MODEL]: 'anthropic.claude-v2',
+      },
+    });
+    expect(buildDisplayName(span, 'LLM')).toBe('chat aws claude-v2');
   });
 
   it('returns compliant for TOOL span with required attributes', () => {

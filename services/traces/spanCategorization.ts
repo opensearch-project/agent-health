@@ -30,6 +30,26 @@ import {
 } from '@opentelemetry/semantic-conventions/incubating';
 
 /**
+ * Keys that identify the GenAI provider, preferred first. `gen_ai.system` is
+ * the pre-1.37 semconv name and is still accepted as an alias wherever the
+ * provider is read.
+ */
+export const GEN_AI_PROVIDER_KEYS: readonly string[] = [ATTR_GEN_AI_PROVIDER_NAME, ATTR_GEN_AI_SYSTEM];
+
+/**
+ * Read the GenAI provider from span attributes, accepting the current
+ * `gen_ai.provider.name` and the deprecated `gen_ai.system` alias.
+ */
+export function readGenAiProvider(attrs: Record<string, any> | undefined | null): string | undefined {
+  if (!attrs) return undefined;
+  for (const key of GEN_AI_PROVIDER_KEYS) {
+    const value = attrs[key];
+    if (value !== undefined && value !== null && value !== '') return String(value);
+  }
+  return undefined;
+}
+
+/**
  * OTel operation names that map to AGENT category
  */
 const AGENT_OPERATIONS = [
@@ -176,7 +196,7 @@ export function buildDisplayName(span: Span, category: SpanCategory): string {
     }
 
     case 'LLM': {
-      const provider = attrs[ATTR_GEN_AI_PROVIDER_NAME] || '';
+      const provider = readGenAiProvider(attrs) || '';
       const model = attrs[ATTR_GEN_AI_REQUEST_MODEL] || '';
       // Get short model name (last part after dots)
       const shortModel = model.split('.').pop() || model;
@@ -316,11 +336,21 @@ export function countByCategory(spans: CategorizedSpan[]): Record<SpanCategory, 
 // ============ OTEL Compliance Checking ============
 
 /**
+ * One expected attribute, or an any-of group where the FIRST entry is the
+ * preferred (current semconv) key and the rest are accepted aliases —
+ * typically the key a previous semconv release used before renaming it.
+ */
+export type AttributeExpectation = string | readonly string[];
+
+/**
  * Expected OTEL GenAI attributes by category
  * @see https://opentelemetry.io/docs/specs/semconv/gen-ai/
+ *
+ * `gen_ai.system` was deprecated in semconv 1.37 in favour of
+ * `gen_ai.provider.name`; spans stamping either key are compliant.
  */
-const EXPECTED_ATTRIBUTES: Record<SpanCategory, string[]> = {
-  LLM: [ATTR_GEN_AI_OPERATION_NAME, ATTR_GEN_AI_REQUEST_MODEL, ATTR_GEN_AI_SYSTEM],
+const EXPECTED_ATTRIBUTES: Record<SpanCategory, AttributeExpectation[]> = {
+  LLM: [ATTR_GEN_AI_OPERATION_NAME, ATTR_GEN_AI_REQUEST_MODEL, GEN_AI_PROVIDER_KEYS],
   TOOL: [ATTR_GEN_AI_OPERATION_NAME, ATTR_GEN_AI_TOOL_NAME],
   AGENT: [ATTR_GEN_AI_OPERATION_NAME, ATTR_GEN_AI_AGENT_NAME],
   EVAL: [ATTR_GEN_AI_OPERATION_NAME],
@@ -328,12 +358,31 @@ const EXPECTED_ATTRIBUTES: Record<SpanCategory, string[]> = {
   OTHER: [],  // No expectations for OTHER
 };
 
+function isExpectationSatisfied(attrs: Record<string, any> | undefined, expectation: AttributeExpectation): boolean {
+  const keys = typeof expectation === 'string' ? [expectation] : expectation;
+  return keys.some(key => !!attrs?.[key]);
+}
+
+/**
+ * Human-readable label for a missing expectation: the preferred key, with any
+ * accepted (deprecated) aliases named so users know what would ALSO satisfy it.
+ */
+export function describeAttributeExpectation(expectation: AttributeExpectation): string {
+  if (typeof expectation === 'string') return expectation;
+  const [preferred, ...aliases] = expectation;
+  return aliases.length > 0
+    ? `${preferred} (or deprecated ${aliases.join(', ')})`
+    : preferred;
+}
+
 /**
  * Check if a span follows OTEL GenAI semantic conventions
  */
 export function checkOTelCompliance(span: CategorizedSpan): OTelComplianceResult {
   const expected = EXPECTED_ATTRIBUTES[span.category] || [];
-  const missing = expected.filter(attr => !span.attributes?.[attr]);
+  const missing = expected
+    .filter(expectation => !isExpectationSatisfied(span.attributes, expectation))
+    .map(describeAttributeExpectation);
 
   return {
     isCompliant: missing.length === 0,

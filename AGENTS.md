@@ -225,7 +225,7 @@ Agent instrumentation MUST use the standardized attributes defined in:
    - Use standard operation types: `chat`, `completion`, `embedding`, etc.
 
 2. **Required Attributes**:
-   - `gen_ai.system` - AI system identifier (e.g., `openai`, `anthropic`, `aws.bedrock`)
+   - `gen_ai.provider.name` (formerly `gen_ai.system`, deprecated in semconv 1.37 — still accepted as an alias) - GenAI provider identifier (e.g., `openai`, `anthropic`, `aws.bedrock`)
    - `gen_ai.request.model` - Model identifier
    - `gen_ai.operation.name` - Operation type
    - `gen_ai.request.temperature` - Sampling temperature (if applicable)
@@ -255,7 +255,7 @@ with tracer.start_as_current_span(
     "chat",
     kind=SpanKind.CLIENT,
     attributes={
-        "gen_ai.system": "anthropic",
+        "gen_ai.provider.name": "anthropic",
         "gen_ai.request.model": "claude-sonnet-4",
         "gen_ai.operation.name": "chat",
         "gen_ai.request.temperature": 0.7,

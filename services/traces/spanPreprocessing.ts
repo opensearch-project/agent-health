@@ -17,9 +17,9 @@
  * After: 1 single-pass traversal with all derived data cached
  */
 
-import { Span, CategorizedSpan, TimeRange, SpanCategory } from '@/types';
+import { Span, CategorizedSpan, TimeRange } from '@/types';
 import { getSpanCategory, getCategoryMeta, buildDisplayName } from './spanCategorization';
-import type { CategoryStats, ToolInfo } from './traceStats';
+import { calculateCategoryStats, type CategoryStats, type ToolInfo } from './traceStats';
 
 /**
  * Pre-processed span tree with all derived data computed in a single pass
@@ -48,7 +48,6 @@ export function preprocessSpanTree(
 ): PreprocessedSpanTree {
   const flattenedSpans: CategorizedSpan[] = [];
   const spanIndex = new Map<string, CategorizedSpan>();
-  const categoryMap = new Map<SpanCategory, { count: number; duration: number }>();
   const toolMap = new Map<string, { count: number; duration: number }>();
 
   /**
@@ -78,13 +77,6 @@ export function preprocessSpanTree(
     // Index - for O(1) lookups by spanId
     spanIndex.set(span.spanId, categorizedSpan);
 
-    // Category stats - count and duration
-    const existing = categoryMap.get(category) || { count: 0, duration: 0 };
-    categoryMap.set(category, {
-      count: existing.count + 1,
-      duration: existing.duration + (span.duration || 0),
-    });
-
     // Tool stats - extract tool name and count usage
     if (category === 'TOOL' && span.name) {
       // Extract tool name from span name (e.g., "Tool: Read" -> "Read")
@@ -107,23 +99,9 @@ export function preprocessSpanTree(
   // Process all root spans
   const categorizedTree = spanTree.map(span => processNode(span, 0));
 
-  // Calculate sum of all category durations for percentage calculation
-  let sumOfAllDurations = 0;
-  categoryMap.forEach((data) => {
-    sumOfAllDurations += data.duration;
-  });
-
-  // Convert maps to stats arrays
-  const categoryStats: CategoryStats[] = [];
-  categoryMap.forEach((data, category) => {
-    categoryStats.push({
-      category,
-      count: data.count,
-      totalDuration: data.duration,
-      percentage: sumOfAllDurations > 0 ? (data.duration / sumOfAllDurations) * 100 : 0,
-    });
-  });
-  categoryStats.sort((a, b) => b.totalDuration - a.totalDuration);
+  // Category stats (self-time based, so nested spans aren't double-counted) —
+  // shared with the other trace views so every "Time Distribution" agrees.
+  const categoryStats: CategoryStats[] = calculateCategoryStats(flattenedSpans, timeRange.duration);
 
   const toolStats: ToolInfo[] = [];
   toolMap.forEach((data, name) => {

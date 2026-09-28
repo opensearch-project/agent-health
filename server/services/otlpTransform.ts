@@ -17,6 +17,7 @@
  */
 
 import type { Span, SpanEvent } from '../../types/index.js';
+import { normalizeSpanKind } from '../../lib/spanKind.js';
 
 interface OtlpAnyValue {
   stringValue?: string;
@@ -128,6 +129,10 @@ export function otlpToSpans(body: any): Span[] {
         // spanId-keyed store and silently drop unrelated spans.
         if (!traceId || !spanId) continue;
         const parentSpanId = normalizeId(sp?.parentSpanId);
+        // OTLP/JSON carries the kind as the numeric enum (0-5) or the proto
+        // enum name (`SPAN_KIND_SERVER`); normalise to the canonical name.
+        const kind = normalizeSpanKind(sp?.kind);
+        if (kind) attributes['spanKind'] = kind;
 
         out.push({
           traceId,
@@ -138,6 +143,7 @@ export function otlpToSpans(body: any): Span[] {
           endTime,
           duration: endMs >= startMs ? endMs - startMs : undefined,
           status: statusFromCode(sp?.status?.code),
+          ...(kind ? { kind } : {}),
           attributes,
           events,
         });

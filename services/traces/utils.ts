@@ -71,7 +71,7 @@ export function getKeyAttributes(span: Span): Record<string, string | number | n
   // Default attributes
   return {
     'Service': attrs['service.name'] || attrs['serviceName'],
-    'Kind': attrs['spanKind'],
+    'Kind': span.kind || attrs['spanKind'],
   };
 }
 

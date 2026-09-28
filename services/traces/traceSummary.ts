@@ -18,6 +18,7 @@
 import { Span } from '@/types';
 import { categorizeSpanTree, countByCategory } from './spanCategorization';
 import { flattenSpans } from './traceStats';
+import { attributeLeafUsage } from '@/lib/usageAggregates';
 
 export interface TraceSummary {
   llm: number;
@@ -41,7 +42,11 @@ export interface TraceSummary {
  * tree. The token counters look at every span (including children) and
  * sum the OTel GenAI usage attributes, with `prompt_tokens` /
  * `completion_tokens` accepted as fallbacks for older instrumentation
- * that pre-dates the input/output rename. Models are collected and
+ * that pre-dates the input/output rename. Each span contributes only the
+ * usage its descendants don't already account for (leaf-usage invariant,
+ * see lib/usageAggregates.ts) so agent-level roll-ups aren't added on top
+ * of the per-call numbers; a pure roll-up is excluded from the peak, since
+ * its "input" is not one request. Models are collected and
  * deduplicated across the trace because some agents fan out to multiple
  * models in one trace (e.g. a planner + a tool-using model).
  */
@@ -56,16 +61,24 @@ export function computeTraceSummary(spanTree: Span[]): TraceSummary {
   let peakInputTokens = 0;
   const modelSet = new Set<string>();
 
+  const readIn = (a: Record<string, any>) =>
+    Number(a['gen_ai.usage.input_tokens'] ?? a['gen_ai.usage.prompt_tokens'] ?? a['input_tokens'] ?? 0) || 0;
+  const readOut = (a: Record<string, any>) =>
+    Number(a['gen_ai.usage.output_tokens'] ?? a['gen_ai.usage.completion_tokens'] ?? a['output_tokens'] ?? 0) || 0;
+  const usage = attributeLeafUsage(flat, s => {
+    const a = s.attributes || {};
+    return { input: readIn(a), output: readOut(a) };
+  });
+
   for (const s of flat) {
     const a = s.attributes || {};
-    const it =
-      Number(a['gen_ai.usage.input_tokens'] ?? a['gen_ai.usage.prompt_tokens'] ?? a['input_tokens'] ?? 0) || 0;
-    const ot =
-      Number(a['gen_ai.usage.output_tokens'] ?? a['gen_ai.usage.completion_tokens'] ?? a['output_tokens'] ?? 0) || 0;
-    inputTokens += it;
-    outputTokens += ot;
-    totalTokens += it + ot;
-    if (it > peakInputTokens) peakInputTokens = it;
+    const counted = usage.get(s)!;
+    inputTokens += counted.input;
+    outputTokens += counted.output;
+    totalTokens += counted.input + counted.output;
+    // Peak = largest single request. A pure roll-up is not a request; a
+    // parent with real (remaining) usage is.
+    if (!counted.isAggregate && readIn(a) > peakInputTokens) peakInputTokens = readIn(a);
     const m = a['gen_ai.request.model'] || a['gen_ai.response.model'] || a['model'];
     if (typeof m === 'string' && m.trim()) modelSet.add(m.trim());
   }

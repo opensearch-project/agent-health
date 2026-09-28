@@ -765,6 +765,147 @@ describe('metricsService', () => {
       expect(result.traceId).toBe('trace-1');
     });
 
+    describe('leaf-usage invariant (aggregate spans are not double-counted)', () => {
+      const chat = (spanId: string, parentSpanId: string, input: number, output: number, extra: Record<string, any> = {}) => ({
+        name: 'chat',
+        traceId: 'trace-agg',
+        spanId,
+        parentSpanId,
+        durationInNanos: 1_000_000_000,
+        status: { code: 1 },
+        attributes: {
+          'gen_ai.operation.name': 'chat',
+          'gen_ai.request.model': 'anthropic.claude-sonnet-4',
+          'gen_ai.usage.input_tokens': input,
+          'gen_ai.usage.output_tokens': output,
+          ...extra,
+        },
+      });
+
+      it('parent + children both stamped ⇒ children counted once, parent skipped and reported', () => {
+        // Framework shape: an invoke_agent span whose usage is the SUM of its
+        // chat children (also stamped with the model). Pre-fix: 2x tokens, +1 LLM call.
+        const spans = [
+          {
+            name: 'invoke_agent retrieval-agent',
+            traceId: 'trace-agg',
+            spanId: 'agent',
+            durationInNanos: 5_000_000_000,
+            status: { code: 1 },
+            attributes: {
+              'gen_ai.operation.name': 'invoke_agent',
+              'gen_ai.request.model': 'anthropic.claude-sonnet-4',
+              'gen_ai.usage.input_tokens': 300,
+              'gen_ai.usage.output_tokens': 30,
+              'gen_ai.usage.total_tokens': 330,
+            },
+          },
+          chat('c1', 'agent', 100, 10),
+          chat('c2', 'agent', 200, 20),
+        ];
+
+        const result = computeMetricsFromSpans('run-agg', spans);
+
+        expect(result.inputTokens).toBe(300);
+        expect(result.outputTokens).toBe(30);
+        expect(result.totalTokens).toBe(330);
+        expect(result.llmCalls).toBe(2);
+        expect(result.usageAggregatesSkipped).toBe(1);
+      });
+
+      it('children only ⇒ unchanged (nothing skipped)', () => {
+        const spans = [
+          { name: 'invoke_agent', traceId: 'trace-agg', spanId: 'agent', durationInNanos: 1, status: { code: 1 }, attributes: {} },
+          chat('c1', 'agent', 100, 10),
+          chat('c2', 'agent', 200, 20),
+        ];
+        const result = computeMetricsFromSpans('run-agg', spans);
+        expect(result.inputTokens).toBe(300);
+        expect(result.outputTokens).toBe(30);
+        expect(result.llmCalls).toBe(2);
+        expect(result.usageAggregatesSkipped).toBe(0);
+      });
+
+      it('parent only ⇒ counted (it is the only record of the usage)', () => {
+        const spans = [
+          {
+            name: 'invoke_agent', traceId: 'trace-agg', spanId: 'agent', durationInNanos: 1, status: { code: 1 },
+            attributes: { 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 50, 'gen_ai.usage.output_tokens': 5 },
+          },
+          { name: 'execute_tool search', traceId: 'trace-agg', spanId: 'tool', parentSpanId: 'agent', durationInNanos: 1, status: { code: 1 }, attributes: { 'gen_ai.tool.name': 'search' } },
+        ];
+        const result = computeMetricsFromSpans('run-agg', spans);
+        expect(result.inputTokens).toBe(50);
+        expect(result.outputTokens).toBe(5);
+        expect(result.llmCalls).toBe(1);
+        expect(result.usageAggregatesSkipped).toBe(0);
+      });
+
+      it('mixed tree: aggregate in one branch, lone usage in another, nested passthrough wrapper', () => {
+        const spans = [
+          { name: 'root', traceId: 'trace-agg', spanId: 'root', durationInNanos: 1, status: { code: 1 }, attributes: { 'gen_ai.usage.input_tokens': 1000, 'gen_ai.usage.output_tokens': 100 } }, // aggregate of everything
+          { name: 'cycle-1', traceId: 'trace-agg', spanId: 'cy1', parentSpanId: 'root', durationInNanos: 1, status: { code: 1 }, attributes: {} }, // no usage
+          chat('c1', 'cy1', 400, 40),
+          { name: 'cycle-2', traceId: 'trace-agg', spanId: 'cy2', parentSpanId: 'root', durationInNanos: 1, status: { code: 1 }, attributes: { 'gen_ai.usage.input_tokens': 600, 'gen_ai.usage.output_tokens': 60 } }, // aggregate of c2
+          chat('c2', 'cy2', 600, 60),
+          // A branch whose only usage is on the wrapper itself → counted.
+          { name: 'side', traceId: 'trace-agg', spanId: 'side', parentSpanId: 'cy1', durationInNanos: 1, status: { code: 1 }, attributes: { 'gen_ai.usage.input_tokens': 7, 'gen_ai.usage.output_tokens': 1 } },
+        ];
+        const result = computeMetricsFromSpans('run-agg', spans);
+        expect(result.inputTokens).toBe(400 + 600 + 7);
+        expect(result.outputTokens).toBe(40 + 60 + 1);
+        expect(result.usageAggregatesSkipped).toBe(2); // root + cycle-2
+        expect(result.llmCalls).toBe(2);
+      });
+
+      it('parent carrying MORE usage than its children ⇒ remainder is counted, parent still an LLM call', () => {
+        // A real request span with a nested span that records only part of the usage.
+        const spans = [
+          {
+            name: 'chat', traceId: 'trace-agg', spanId: 'req', durationInNanos: 1, status: { code: 1 },
+            attributes: { 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 1000, 'gen_ai.usage.output_tokens': 100 },
+          },
+          { name: 'stream', traceId: 'trace-agg', spanId: 'st', parentSpanId: 'req', durationInNanos: 1, status: { code: 1 }, attributes: { 'gen_ai.usage.input_tokens': 700, 'gen_ai.usage.output_tokens': 100 } },
+        ];
+        const result = computeMetricsFromSpans('run-agg', spans);
+        expect(result.inputTokens).toBe(1000);
+        expect(result.outputTokens).toBe(100);
+        expect(result.llmCalls).toBe(1);
+        expect(result.usageAggregatesSkipped).toBe(0);
+      });
+
+      it('vendor-total-only span: aws.genai.token_count_total / gen_ai.usage.total_tokens are never added', () => {
+        const spans = [
+          {
+            name: 'chat', traceId: 'trace-agg', spanId: 'c1', durationInNanos: 1, status: { code: 1 },
+            attributes: { 'gen_ai.request.model': 'm', 'aws.genai.token_count_total': 999, 'gen_ai.usage.total_tokens': 999 },
+          },
+        ];
+        const result = computeMetricsFromSpans('run-agg', spans);
+        expect(result.inputTokens).toBe(0);
+        expect(result.outputTokens).toBe(0);
+        expect(result.totalTokens).toBe(0);
+        expect(result.usageAggregatesSkipped).toBe(0);
+      });
+
+      it('vendor total alongside input/output is ignored, not added on top', () => {
+        const spans = [chat('c1', 'none', 100, 10, { 'aws.genai.token_count_total': 110, 'gen_ai.usage.total_tokens': 110 })];
+        const result = computeMetricsFromSpans('run-agg', spans);
+        expect(result.totalTokens).toBe(110);
+      });
+
+      it('applies the invariant on the flat @-encoded schema too (spanId/parentSpanId at top level)', () => {
+        const spans = [
+          { name: 'invoke_agent', traceId: 'trace-agg', spanId: 'agent', durationInNanos: 1, status: { code: 1 }, 'span.attributes.gen_ai@usage@input_tokens': 30, 'span.attributes.gen_ai@usage@output_tokens': 3 },
+          { name: 'chat', traceId: 'trace-agg', spanId: 'c1', parentSpanId: 'agent', durationInNanos: 1, status: { code: 1 }, 'span.attributes.gen_ai@usage@input_tokens': 30, 'span.attributes.gen_ai@usage@output_tokens': 3, 'span.attributes.gen_ai@request@model': 'm' },
+        ] as any[];
+        const result = computeMetricsFromSpans('run-agg', spans);
+        expect(result.inputTokens).toBe(30);
+        expect(result.outputTokens).toBe(3);
+        expect(result.usageAggregatesSkipped).toBe(1);
+      });
+    });
+
     it('falls back to vendor SDK token keys (Claude Code emits bare input_tokens/output_tokens, not gen_ai.usage.*)', () => {
       // Real shape captured from a live Claude Code `claude_code.llm_request`
       // span (comparison-page Cost/Tokens/LLM Calls columns bug): it stamps
@@ -925,6 +1066,47 @@ describe('metricsService', () => {
         { terms: { 'attributes.gen_ai.conversation.id.keyword': ['run-1', 'run-2'] } },
         { terms: { 'span.attributes.gen_ai@conversation@id': ['run-1', 'run-2'] } },
       ]);
+      // The _source projection must keep the ids the leaf-usage invariant
+      // needs; without them every span looks like a root and aggregates
+      // would be double-counted in the batch path only.
+      expect(requestBody._source).toEqual(expect.arrayContaining(['spanId', 'parentSpanId']));
+    });
+
+    it('applies the leaf-usage invariant per run in the batch path', async () => {
+      const doc = (rid: string, spanId: string, parentSpanId: string | undefined, input: number) => ({
+        _source: {
+          name: parentSpanId ? 'chat' : 'invoke_agent',
+          traceId: `trace-${rid}`,
+          spanId,
+          parentSpanId,
+          durationInNanos: 1,
+          status: { code: 1 },
+          attributes: {
+            'agent_health.run.id': rid,
+            'gen_ai.usage.input_tokens': input,
+            'gen_ai.usage.output_tokens': 1,
+            'gen_ai.request.model': 'm',
+          },
+        },
+      });
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          hits: {
+            hits: [
+              doc('run-1', 'a', undefined, 300), doc('run-1', 'a1', 'a', 100), doc('run-1', 'a2', 'a', 200),
+              doc('run-2', 'b', undefined, 50),
+            ],
+          },
+        }),
+      });
+
+      const result = await computeBatchMetrics(['run-1', 'run-2'], defaultConfig);
+      expect(result[0].inputTokens).toBe(300);
+      expect(result[0].llmCalls).toBe(2);
+      expect(result[0].usageAggregatesSkipped).toBe(1);
+      expect(result[1].inputTokens).toBe(50);
+      expect(result[1].usageAggregatesSkipped).toBe(0);
     });
 
     it('should return pending metrics for run IDs with no matching spans', async () => {

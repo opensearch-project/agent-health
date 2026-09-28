@@ -130,7 +130,7 @@ export interface AgentHooks {
    * hooks: {
    *   judge: async ({ trajectory, traces, expectedOutcomes, fetchTraces }) => {
    *     // Custom evaluation logic using traces
-   *     const relevantSpans = traces.filter(s => s.attributes?.['gen_ai.system']);
+   *     const relevantSpans = traces.filter(s => s.attributes?.['gen_ai.provider.name']);
    *     return {
    *       passFailStatus: relevantSpans.length > 0 ? 'passed' : 'failed',
    *       metrics: { accuracy: 85 },
@@ -860,6 +860,8 @@ export interface TraceMetrics {
    * the same service. `mixed` when spans came in through more than one.
    */
   correlatedBy?: 'ids' | 'window' | 'mixed';
+  /** See MetricsResult.usageAggregatesSkipped. */
+  usageAggregatesSkipped?: number;
 }
 
 // ============ Trace Types ============
@@ -879,6 +881,11 @@ export interface Span {
   endTime: string;
   duration?: number;
   status: 'OK' | 'ERROR' | 'UNSET';
+  /**
+   * OTel SpanKind, normalised to the canonical uppercase name by every reader
+   * (see lib/spanKind.ts). Absent when the source document carried no kind.
+   */
+  kind?: 'INTERNAL' | 'SERVER' | 'CLIENT' | 'PRODUCER' | 'CONSUMER';
   attributes?: Record<string, any>;
   events?: SpanEvent[];
   children?: Span[];
@@ -1823,6 +1830,12 @@ export interface MetricsResult {
   partial?: boolean;
   /** See TraceMetrics.correlatedBy. */
   correlatedBy?: 'ids' | 'window' | 'mixed';
+  /**
+   * Number of spans whose `gen_ai.usage.*` was NOT summed because a descendant
+   * span also carried usage (the parent is a roll-up of its children — see
+   * lib/usageAggregates.ts). 0 when every usage-carrying span was a leaf.
+   */
+  usageAggregatesSkipped?: number;
 }
 
 // ============ Data Source Configuration Types ============

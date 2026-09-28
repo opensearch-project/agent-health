@@ -140,7 +140,7 @@ Agent instrumentation MUST adhere to the standardized attributes defined in:
 All LLM interaction spans MUST include:
 ```typescript
 {
-  "gen_ai.system": "anthropic" | "openai" | "aws.bedrock" | ...,
+  "gen_ai.provider.name": "anthropic" | "openai" | "aws.bedrock" | ...,  // formerly gen_ai.system (deprecated alias still accepted)
   "gen_ai.request.model": "claude-sonnet-4",
   "gen_ai.operation.name": "chat" | "completion" | "embedding",
   "gen_ai.request.temperature": 0.7,

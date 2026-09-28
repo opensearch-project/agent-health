@@ -24,6 +24,7 @@ import {
 } from '@/services/traces/traceStats';
 import { categorizeSpanTree } from '@/services/traces/spanCategorization';
 import { getCategoryColors } from '@/services/traces';
+import { TIME_DISTRIBUTION_HELP, formatCategoryStatTitle } from './TraceSummary';
 
 interface TraceInfoViewProps {
   spanTree: Span[];
@@ -191,10 +192,10 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
     setExpandedSummary(expandedSummary === category ? null : category);
   };
 
-  // Calculate total duration and start time
-  const totalDuration = useMemo(() => {
-    return allSpans.reduce((sum, span) => sum + span.duration, 0);
-  }, [allSpans]);
+  // Trace duration = wall-clock span of the trace (earliest start → latest
+  // end). Summing every span's own duration would count nested children on
+  // top of their parents and overstate the trace.
+  const totalDuration = timeRange.duration;
 
   const startTime = useMemo(() => {
     if (allSpans.length === 0) return null;
@@ -263,9 +264,10 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Clock size={14} className="text-muted-foreground" />
-            <span className="text-muted-foreground font-medium text-sm">Time Distribution</span>
+            <span className="text-muted-foreground font-medium text-sm" title={TIME_DISTRIBUTION_HELP}>Time Distribution</span>
+            <span className="text-xs text-muted-foreground/70" data-testid="time-distribution-basis" title={TIME_DISTRIBUTION_HELP}>(self time)</span>
           </div>
-          <span className="text-sm font-medium text-muted-foreground">{formatDuration(totalDuration)}</span>
+          <span className="text-sm font-medium text-muted-foreground" title="Trace wall-clock duration">{formatDuration(totalDuration)}</span>
         </div>
         
         {/* Larger bar */}
@@ -279,7 +281,7 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
                 key={stat.category}
                 className={cn('h-full flex items-center justify-center text-sm font-semibold', colors.bar)}
                 style={{ width: `${widthPercent}%` }}
-                title={`${stat.category}: ${formatDuration(stat.totalDuration)} (${stat.percentage.toFixed(1)}%)`}
+                title={formatCategoryStatTitle(stat)}
               >
                 {stat.percentage >= 10 && (
                   <span className="text-white/95 truncate px-2">
@@ -300,11 +302,11 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
               : stat.percentage.toFixed(0);
             
             return (
-              <div key={stat.category} className="flex items-center gap-2">
+              <div key={stat.category} className="flex items-center gap-2" title={formatCategoryStatTitle(stat)} data-testid={`time-distribution-${stat.category.toLowerCase()}`}>
                 <div className={cn('w-3 h-3 rounded-sm flex-shrink-0', colors.bar)} />
                 <span className="font-medium">{stat.category}</span>
                 <span className="text-muted-foreground">
-                  {formattedPercent}% ({formatDuration(stat.totalDuration)})
+                  {formattedPercent}% ({formatDuration(stat.selfDuration)})
                 </span>
               </div>
             );

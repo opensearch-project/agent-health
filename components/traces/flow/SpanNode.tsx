@@ -142,7 +142,11 @@ function SpanNodeComponent({ data, selected }: SpanNodeProps) {
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="ml-auto">
+                <span
+                  className="ml-auto"
+                  data-testid="otel-compliance-warning"
+                  data-missing-attributes={otelCompliance.missingAttributes.join(' | ')}
+                >
                   <AlertTriangle size={12} className="text-amber-400" />
                 </span>
               </TooltipTrigger>

@@ -156,10 +156,56 @@ const EVAL_SPAN_ON_CLAUDE_CODE_TRACE = atRawSpan({
   ...atAttrs({ 'gen_ai.operation.name': 'evaluation' }),
 });
 
+// --- Aggregate-usage fixture: a framework that stamps gen_ai.usage.* on the
+// invoke_agent span (sum of its chat children) AND on each chat span, in the
+// @-raw flattened shape. Both the parent and the children carry the model.
+const AGG_TRACE_ID = 'trace-aggregate-usage-1';
+const AGG_SPANS: Record<string, any>[] = [
+  atRawSpan({
+    spanId: 'agg-root', traceId: AGG_TRACE_ID, name: 'POST /ask', kind: 'SPAN_KIND_SERVER',
+    durationInNanos: 9_000_000_000,
+  }),
+  atRawSpan({
+    spanId: 'agg-agent', parentSpanId: 'agg-root', traceId: AGG_TRACE_ID, name: 'invoke_agent retrieval-agent',
+    durationInNanos: 8_900_000_000,
+    ...atAttrs({
+      'gen_ai.operation.name': 'invoke_agent',
+      'gen_ai.provider.name': 'openai',
+      'gen_ai.request.model': 'gpt-4o',
+      'gen_ai.usage.input_tokens': '3000',
+      'gen_ai.usage.output_tokens': '300',
+      'gen_ai.usage.total_tokens': '3300',
+    }),
+  }),
+  atRawSpan({
+    spanId: 'agg-cycle-1', parentSpanId: 'agg-agent', traceId: AGG_TRACE_ID, name: 'execute_event_loop_cycle',
+    ...atAttrs({ 'gen_ai.operation.name': 'execute_event_loop_cycle' }),
+  }),
+  atRawSpan({
+    spanId: 'agg-chat-1', parentSpanId: 'agg-cycle-1', traceId: AGG_TRACE_ID, name: 'chat',
+    ...atAttrs({
+      'gen_ai.operation.name': 'chat', 'gen_ai.provider.name': 'openai', 'gen_ai.request.model': 'gpt-4o',
+      'gen_ai.usage.input_tokens': '1000', 'gen_ai.usage.output_tokens': '100', 'gen_ai.usage.total_tokens': '1100',
+    }),
+  }),
+  atRawSpan({
+    spanId: 'agg-cycle-2', parentSpanId: 'agg-agent', traceId: AGG_TRACE_ID, name: 'execute_event_loop_cycle',
+    ...atAttrs({ 'gen_ai.operation.name': 'execute_event_loop_cycle' }),
+  }),
+  atRawSpan({
+    spanId: 'agg-chat-2', parentSpanId: 'agg-cycle-2', traceId: AGG_TRACE_ID, name: 'chat',
+    ...atAttrs({
+      'gen_ai.operation.name': 'chat', 'gen_ai.provider.name': 'openai', 'gen_ai.request.model': 'gpt-4o',
+      'gen_ai.usage.input_tokens': '2000', 'gen_ai.usage.output_tokens': '200', 'gen_ai.usage.total_tokens': '2200',
+    }),
+  }),
+];
+
 const INDEX: Record<string, any>[] = [
   ...CLAUDE_CODE_SPANS,
   EVAL_SPAN_ON_CLAUDE_CODE_TRACE,
   ...REST_SPANS,
+  ...AGG_SPANS,
 ];
 
 function resolveField(doc: Record<string, any>, field: string): unknown {
@@ -302,6 +348,29 @@ describe('metrics correlation + span-schema + vendor token reads (comparison-pag
 
       const sourceFields = client.search.mock.calls[0][0].body._source;
       expect(sourceFields).toEqual(expect.arrayContaining(['span.attributes.*', 'resource.attributes.*']));
+    });
+
+    it('does not double-count usage stamped on an aggregate invoke_agent span (leaf-usage invariant, batch path with _source projection)', async () => {
+      const client = createFakeClient();
+
+      const [m] = await computeBatchMetrics([AGG_TRACE_ID], { client }, undefined, { [AGG_TRACE_ID]: AGG_TRACE_ID });
+
+      // Pre-fix: 6000 / 600 (parent added on top of children) and 3 LLM calls.
+      expect(m.inputTokens).toBe(3000);
+      expect(m.outputTokens).toBe(300);
+      expect(m.totalTokens).toBe(3300);
+      expect(m.llmCalls).toBe(2);
+      expect(m.usageAggregatesSkipped).toBe(1);
+      // The projection must have carried the ids the invariant depends on.
+      expect(client.search.mock.calls[0][0].body._source).toEqual(expect.arrayContaining(['spanId', 'parentSpanId']));
+    });
+
+    it('single-run path agrees with the batch path on the aggregate-usage trace', async () => {
+      const client = createFakeClient();
+      const m = await computeMetrics(AGG_TRACE_ID, { client }, undefined, AGG_TRACE_ID);
+      expect(m.totalTokens).toBe(3300);
+      expect(m.llmCalls).toBe(2);
+      expect(m.usageAggregatesSkipped).toBe(1);
     });
 
     it('still returns pending (not a fabricated success) for a run with no traceId correlator and no matching attributes', async () => {

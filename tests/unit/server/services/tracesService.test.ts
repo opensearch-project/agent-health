@@ -81,6 +81,44 @@ describe('tracesService', () => {
       expect(transformSpan({}).status).toBe('UNSET');
     });
 
+    describe('kind (top-level OTel SpanKind, normalised)', () => {
+      it('exposes the Data Prepper proto enum name as the canonical name', () => {
+        expect(transformSpan({ kind: 'SPAN_KIND_SERVER' }).kind).toBe('SERVER');
+        expect(transformSpan({ kind: 'SPAN_KIND_INTERNAL' }).kind).toBe('INTERNAL');
+        expect(transformSpan({ kind: 'SPAN_KIND_CLIENT' }).kind).toBe('CLIENT');
+      });
+
+      it('accepts the OTLP numeric enum', () => {
+        expect(transformSpan({ kind: 2 }).kind).toBe('SERVER');
+        expect(transformSpan({ kind: 4 }).kind).toBe('PRODUCER');
+        expect(transformSpan({ kind: 0 }).kind).toBeUndefined();
+      });
+
+      it('accepts bare / mixed-case names', () => {
+        expect(transformSpan({ kind: 'Server' }).kind).toBe('SERVER');
+        expect(transformSpan({ kind: 'CONSUMER' }).kind).toBe('CONSUMER');
+      });
+
+      it('falls back to the span.kind / spanKind attributes when the document has no kind field', () => {
+        expect(transformSpan({ attributes: { 'span.kind': 'SPAN_KIND_CLIENT' } } as any).kind).toBe('CLIENT');
+        expect(transformSpan({ attributes: { spanKind: 3 } } as any).kind).toBe('CLIENT');
+        expect(transformSpan({ 'span.attributes.span@kind': 'Server' } as any).kind).toBe('SERVER');
+      });
+
+      it('omits kind entirely when nothing usable is present', () => {
+        const result = transformSpan({ name: 'x' });
+        expect(result.kind).toBeUndefined();
+        expect('kind' in result).toBe(false);
+      });
+
+      it('mirrors the canonical name into attributes.spanKind (same on every ingest path), raw only when unknown', () => {
+        expect(transformSpan({ kind: 'SPAN_KIND_SERVER' }).attributes.spanKind).toBe('SERVER');
+        expect(transformSpan({ kind: 3 }).attributes.spanKind).toBe('CLIENT');
+        expect(transformSpan({ attributes: { 'span.kind': 'Client' } } as any).attributes.spanKind).toBe('CLIENT');
+        expect(transformSpan({ kind: 'SPAN_KIND_UNSPECIFIED' }).attributes.spanKind).toBe('SPAN_KIND_UNSPECIFIED');
+      });
+    });
+
     it('should convert span.attributes with @ notation to dot notation', () => {
       const source: OpenSearchSpanSource = {
         'span.attributes.gen_ai@request@id': 'run-123',

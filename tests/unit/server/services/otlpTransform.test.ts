@@ -92,6 +92,24 @@ describe('otlpTransform', () => {
       expect(s.duration).toBe(1500);
     });
 
+    it('normalises the OTLP numeric kind to the canonical name and mirrors it into attributes.spanKind', () => {
+      const s = otlpToSpans(body)[0];
+      expect(s.kind).toBe('CLIENT'); // kind: 3
+      expect(s.attributes!['spanKind']).toBe('CLIENT');
+    });
+
+    it('accepts the proto enum-name form of kind and omits kind when unspecified', () => {
+      const withName = JSON.parse(JSON.stringify(body));
+      withName.resourceSpans[0].scopeSpans[0].spans[0].kind = 'SPAN_KIND_SERVER';
+      expect(otlpToSpans(withName)[0].kind).toBe('SERVER');
+
+      const unspecified = JSON.parse(JSON.stringify(body));
+      unspecified.resourceSpans[0].scopeSpans[0].spans[0].kind = 0;
+      const s = otlpToSpans(unspecified)[0];
+      expect(s.kind).toBeUndefined();
+      expect(s.attributes!['spanKind']).toBeUndefined();
+    });
+
     it('maps span events', () => {
       const s = otlpToSpans(body)[0];
       expect(s.events).toHaveLength(1);

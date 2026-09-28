@@ -12,6 +12,7 @@
 
 import { Span, TraceSummary } from '@/types';
 import { debug } from '@/lib/debug';
+import { readGenAiProvider } from './spanCategorization';
 
 /**
  * Extract service name from span attributes
@@ -19,7 +20,7 @@ import { debug } from '@/lib/debug';
 function extractServiceName(span: Span): string {
   return (
     span.attributes?.['service.name'] ||
-    span.attributes?.['gen_ai.system'] ||
+    readGenAiProvider(span.attributes) ||
     'unknown'
   );
 }

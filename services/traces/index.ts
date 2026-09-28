@@ -333,6 +333,10 @@ export {
   buildDisplayName,
   checkOTelCompliance,
   hasAnyWarnings,
+  describeAttributeExpectation,
+  readGenAiProvider,
+  GEN_AI_PROVIDER_KEYS,
+  type AttributeExpectation,
 } from './spanCategorization';
 
 // Re-export tool similarity functions
@@ -384,6 +388,7 @@ export {
 export {
   flattenSpans,
   calculateCategoryStats,
+  calculateSelfDurations,
   extractToolName,
   extractToolStats,
   type CategoryStats,

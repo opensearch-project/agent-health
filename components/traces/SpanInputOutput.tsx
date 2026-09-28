@@ -38,6 +38,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Span } from '@/types';
 import { formatDuration } from '@/services/traces/utils';
+import { readGenAiProvider } from '@/services/traces/spanCategorization';
 
 interface SpanInputOutputProps {
   spans: Span[];
@@ -123,7 +124,7 @@ export function extractSpanIO(span: Span): SpanIOData {
     category = 'eval';
   } else if (name.includes('agent') || attrs['gen_ai.agent.name']) {
     category = 'agent';
-  } else if (name.includes('llm') || name.includes('bedrock') || name.includes('converse') || attrs['gen_ai.system']) {
+  } else if (name.includes('llm') || name.includes('bedrock') || name.includes('converse') || readGenAiProvider(attrs)) {
     category = 'llm';
   } else if (name.includes('tool') || attrs['gen_ai.tool.name']) {
     category = 'tool';
@@ -233,7 +234,7 @@ export function extractSpanIO(span: Span): SpanIOData {
     input: input as string | null,
     output: output as string | null,
     toolName: attrs['gen_ai.tool.name'] || attrs['tool.name'],
-    modelId: attrs['gen_ai.request.model'] || attrs['llm.model_name'] || attrs['gen_ai.system'],
+    modelId: attrs['gen_ai.request.model'] || attrs['llm.model_name'] || readGenAiProvider(attrs),
   };
 }
 

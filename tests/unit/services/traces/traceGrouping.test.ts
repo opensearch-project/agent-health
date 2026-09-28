@@ -78,6 +78,20 @@ describe('groupSpansByTrace', () => {
     expect(result[0].serviceName).toBe('bedrock');
   });
 
+  it('falls back to gen_ai.provider.name (current semconv) for service name, preferring it over gen_ai.system', () => {
+    const spans = [
+      createSpan({
+        traceId: 'trace-1',
+        spanId: 'span-1',
+        attributes: { 'gen_ai.provider.name': 'openai', 'gen_ai.system': 'legacy' },
+      }),
+    ];
+
+    const result = groupSpansByTrace(spans);
+
+    expect(result[0].serviceName).toBe('openai');
+  });
+
   it('uses "unknown" when no service name available', () => {
     const spans = [
       createSpan({ traceId: 'trace-1', spanId: 'span-1', attributes: {} }),

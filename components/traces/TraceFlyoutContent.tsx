@@ -403,7 +403,7 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
                     className="p-3 max-w-xs"
                   >
                     <div className="space-y-1.5">
-                      <div className="text-xs font-semibold mb-2">Time Distribution</div>
+                      <div className="text-xs font-semibold mb-2">Time Distribution <span className="font-normal text-muted-foreground">(self time)</span></div>
                       {categoryStats.map((stat) => {
                         const colors = getCategoryColors(stat.category);
                         const formattedPercent = stat.percentage < 1
@@ -416,8 +416,11 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
                               <span className="font-medium">{stat.category}</span>
                             </div>
                             <div className="flex items-center gap-2 text-muted-foreground">
-                              <span>{formatDuration(stat.totalDuration)}</span>
+                              <span>{formatDuration(stat.selfDuration)}</span>
                               <span className="text-muted-foreground/70">({formattedPercent}%)</span>
+                              {stat.totalDuration > stat.selfDuration && (
+                                <span className="text-muted-foreground/60">· {formatDuration(stat.totalDuration)} incl.</span>
+                              )}
                             </div>
                           </div>
                         );

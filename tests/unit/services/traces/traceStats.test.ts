@@ -13,6 +13,8 @@ import {
   flattenSpans,
   calculateCategoryStats,
   extractToolStats,
+  calculateSelfDurations,
+  type CategoryStats,
 } from '@/services/traces/traceStats';
 
 // Helper to create test spans
@@ -179,6 +181,7 @@ describe('calculateCategoryStats', () => {
       category: 'LLM',
       count: 2,
       totalDuration: 800,
+      selfDuration: 800,
       percentage: 100,
     });
   });
@@ -215,14 +218,191 @@ describe('calculateCategoryStats', () => {
     expect(result[0].percentage).toBe(0);
   });
 
-  it('handles undefined duration', () => {
+  it('derives duration from timestamps when the duration field is missing', () => {
     const spans = [
       createSpan({ spanId: '1', category: 'LLM', duration: undefined as unknown as number }),
     ];
 
     const result = calculateCategoryStats(spans, 1000);
     expect(result).toHaveLength(1);
+    // createSpan's default timestamps are 1s apart.
+    expect(result[0].totalDuration).toBe(1000);
+    expect(result[0].selfDuration).toBe(1000);
+  });
+
+  it('treats a span with neither duration nor usable timestamps as 0', () => {
+    const spans = [
+      createSpan({
+        spanId: '1', category: 'LLM',
+        duration: undefined as unknown as number,
+        startTime: 'not-a-date', endTime: 'not-a-date',
+      }),
+    ];
+
+    const result = calculateCategoryStats(spans, 1000);
+    expect(result).toHaveLength(1);
     expect(result[0].totalDuration).toBe(0);
+    expect(result[0].selfDuration).toBe(0);
+    expect(result[0].percentage).toBe(0);
+  });
+});
+
+describe('calculateCategoryStats — self time (nested spans are not double-counted)', () => {
+  const T0 = Date.parse('2024-01-01T00:00:00.000Z');
+  const iso = (offsetMs: number) => new Date(T0 + offsetMs).toISOString();
+  const timed = (
+    spanId: string, category: SpanCategory, start: number, end: number, parentSpanId?: string,
+  ) => createSpan({
+    spanId, category, parentSpanId,
+    startTime: iso(start), endTime: iso(end), duration: end - start,
+  });
+
+  const byCategory = (stats: CategoryStats[]) =>
+    Object.fromEntries(stats.map(s => [s.category, s])) as Record<string, CategoryStats>;
+
+  it('nested chain: agent > llm > tool attributes each level only its own self time', () => {
+    // AGENT 0-1000 wraps LLM 100-700 which wraps TOOL 200-400.
+    const spans = [
+      timed('agent', 'AGENT', 0, 1000),
+      timed('llm', 'LLM', 100, 700, 'agent'),
+      timed('tool', 'TOOL', 200, 400, 'llm'),
+    ];
+
+    const stats = byCategory(calculateCategoryStats(spans));
+    expect(stats.AGENT.selfDuration).toBe(400);  // 1000 - 600
+    expect(stats.LLM.selfDuration).toBe(400);    // 600 - 200
+    expect(stats.TOOL.selfDuration).toBe(200);
+    // Inclusive numbers are preserved for callers that want them.
+    expect(stats.AGENT.totalDuration).toBe(1000);
+    expect(stats.LLM.totalDuration).toBe(600);
+    expect(stats.TOOL.totalDuration).toBe(200);
+    // Shares are of self time: 40 / 40 / 20, summing to 100.
+    expect(stats.AGENT.percentage).toBeCloseTo(40);
+    expect(stats.LLM.percentage).toBeCloseTo(40);
+    expect(stats.TOOL.percentage).toBeCloseTo(20);
+    const sum = Object.values(stats).reduce((acc, s) => acc + s.percentage, 0);
+    expect(sum).toBeCloseTo(100, 6);
+  });
+
+  it('wrapper spans whose children cover them fully have zero self time', () => {
+    // Real-world shape: an agent loop-cycle span containing one LLM call and one
+    // tool call back to back. Inclusive summing would give AGENT 50% here.
+    const spans = [
+      timed('cycle', 'AGENT', 0, 1000),
+      timed('chat', 'LLM', 0, 800, 'cycle'),
+      timed('tool', 'TOOL', 800, 1000, 'cycle'),
+    ];
+
+    const stats = byCategory(calculateCategoryStats(spans));
+    expect(stats.AGENT.selfDuration).toBe(0);
+    expect(stats.AGENT.percentage).toBe(0);
+    expect(stats.LLM.percentage).toBeCloseTo(80);
+    expect(stats.TOOL.percentage).toBeCloseTo(20);
+  });
+
+  it('overlapping siblings are subtracted as an interval union, not a naive sum', () => {
+    // Two concurrent tool calls 100-600 and 300-800 under a 0-1000 parent.
+    // Union covers 100-800 = 700 → parent self = 300 (a naive sum of 500+500
+    // would clamp the parent to 0).
+    const spans = [
+      timed('parent', 'AGENT', 0, 1000),
+      timed('t1', 'TOOL', 100, 600, 'parent'),
+      timed('t2', 'TOOL', 300, 800, 'parent'),
+    ];
+
+    const stats = byCategory(calculateCategoryStats(spans));
+    expect(stats.AGENT.selfDuration).toBe(300);
+    expect(stats.TOOL.selfDuration).toBe(1000);
+    expect(stats.TOOL.totalDuration).toBe(1000);
+  });
+
+  it('children extending past their parent are clipped and self time never goes negative', () => {
+    // Child 500-1500 under parent 0-1000 (clock skew): only 500ms of the
+    // child falls inside the parent.
+    const spans = [
+      timed('parent', 'AGENT', 0, 1000),
+      timed('child', 'LLM', 500, 1500, 'parent'),
+      // Pathological: child claims more than the parent's whole window.
+      timed('p2', 'AGENT', 2000, 2100),
+      timed('c2', 'LLM', 1900, 2300, 'p2'),
+    ];
+
+    const stats = byCategory(calculateCategoryStats(spans));
+    for (const s of Object.values(stats)) expect(s.selfDuration).toBeGreaterThanOrEqual(0);
+    // parent: 1000 - 500 = 500; p2: 100 - 100 = 0
+    expect(stats.AGENT.selfDuration).toBe(500);
+  });
+
+  it('an orphan child (parent not in the list) contributes its full self time', () => {
+    const spans = [
+      timed('orphan', 'LLM', 0, 500, 'missing-parent'),
+      timed('root', 'TOOL', 0, 500),
+    ];
+
+    const stats = byCategory(calculateCategoryStats(spans));
+    expect(stats.LLM.selfDuration).toBe(500);
+    expect(stats.TOOL.selfDuration).toBe(500);
+    expect(stats.LLM.percentage).toBeCloseTo(50);
+  });
+
+  it('only subtracts children from the SAME trace', () => {
+    const spans = [
+      timed('p', 'AGENT', 0, 1000),
+      { ...timed('c', 'LLM', 0, 1000, 'p'), traceId: 'other-trace' },
+    ];
+
+    const stats = byCategory(calculateCategoryStats(spans));
+    // The child belongs to a different trace, so it is not this parent's child.
+    expect(stats.AGENT.selfDuration).toBe(1000);
+  });
+
+  it('zero-duration spans contribute nothing and do not break shares', () => {
+    const spans = [
+      timed('p', 'AGENT', 0, 1000),
+      timed('z', 'TOOL', 500, 500, 'p'),
+      timed('llm', 'LLM', 0, 250, 'p'),
+    ];
+
+    const stats = byCategory(calculateCategoryStats(spans));
+    expect(stats.TOOL.selfDuration).toBe(0);
+    expect(stats.TOOL.percentage).toBe(0);
+    expect(stats.AGENT.selfDuration).toBe(750);
+    expect(stats.AGENT.percentage).toBeCloseTo(75);
+    expect(stats.LLM.percentage).toBeCloseTo(25);
+  });
+
+  it('percentages sum to 100 (± rounding) on a deeper mixed tree', () => {
+    const spans = [
+      timed('root', 'AGENT', 0, 10000),
+      timed('cycle1', 'AGENT', 0, 5000, 'root'),
+      timed('chat1', 'LLM', 0, 3000, 'cycle1'),
+      timed('tool1', 'TOOL', 3000, 4500, 'cycle1'),
+      timed('search1', 'OTHER', 3100, 4400, 'tool1'),
+      timed('cycle2', 'AGENT', 5000, 10000, 'root'),
+      timed('chat2', 'LLM', 5000, 9000, 'cycle2'),
+      timed('chat2b', 'LLM', 9000, 9500, 'cycle2'),
+    ];
+
+    const stats = calculateCategoryStats(spans);
+    const sum = stats.reduce((acc, s) => acc + s.percentage, 0);
+    expect(sum).toBeCloseTo(100, 6);
+    const totalSelf = stats.reduce((acc, s) => acc + s.selfDuration, 0);
+    // Self times partition the root's wall-clock exactly (no gaps in this tree).
+    expect(totalSelf).toBe(10000);
+    // Sorted by self time descending.
+    for (let i = 1; i < stats.length; i++) {
+      expect(stats[i - 1].selfDuration).toBeGreaterThanOrEqual(stats[i].selfDuration);
+    }
+  });
+
+  it('calculateSelfDurations exposes per-span self time', () => {
+    const spans = [
+      timed('p', 'AGENT', 0, 1000),
+      timed('c', 'LLM', 250, 750, 'p'),
+    ];
+    const self = calculateSelfDurations(spans);
+    expect(self.get(spans[0])).toBe(500);
+    expect(self.get(spans[1])).toBe(500);
   });
 });
 

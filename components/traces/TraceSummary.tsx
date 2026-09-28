@@ -120,6 +120,20 @@ export const ToolsUsedSection: React.FC<{
   );
 };
 
+export const TIME_DISTRIBUTION_HELP =
+  'Self time: each span\'s duration minus the time covered by its children, so nested spans are not double-counted. Hover a category for its inclusive time.';
+
+/**
+ * Tooltip text for one category: self time (the share basis) plus the
+ * inclusive time for reference when they differ.
+ */
+export function formatCategoryStatTitle(stat: CategoryStats): string {
+  const self = `${stat.category}: ${formatDuration(stat.selfDuration)} self (${stat.percentage.toFixed(1)}%)`;
+  return stat.totalDuration > stat.selfDuration
+    ? `${self} · ${formatDuration(stat.totalDuration)} incl. children`
+    : self;
+}
+
 /**
  * Time distribution bar component - horizontal bar with legend
  */
@@ -132,11 +146,12 @@ export const TimeDistributionBar: React.FC<{
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground flex items-center gap-2">
+        <span className="text-muted-foreground flex items-center gap-2" title={TIME_DISTRIBUTION_HELP}>
           <Clock size={14} />
           Time Distribution
+          <span className="text-[10px] text-muted-foreground/70" data-testid="time-distribution-basis">(self time)</span>
         </span>
-        <span className="font-mono text-muted-foreground">{formatDuration(totalDuration)}</span>
+        <span className="font-mono text-muted-foreground" title="Trace wall-clock duration">{formatDuration(totalDuration)}</span>
       </div>
 
       {/* Bar */}
@@ -150,7 +165,7 @@ export const TimeDistributionBar: React.FC<{
               key={stat.category}
               className={cn('h-full flex items-center justify-center text-xs font-medium', colors.bar)}
               style={{ width: `${widthPercent}%` }}
-              title={`${stat.category}: ${formatDuration(stat.totalDuration)} (${stat.percentage.toFixed(1)}%)`}
+              title={formatCategoryStatTitle(stat)}
             >
               {stat.percentage >= 8 && (
                 <span className="text-white/90 truncate px-1">
@@ -175,11 +190,11 @@ export const TimeDistributionBar: React.FC<{
             return stat.percentage.toFixed(0);
           })();
           return (
-            <div key={stat.category} className="flex items-center gap-2">
+            <div key={stat.category} className="flex items-center gap-2" title={formatCategoryStatTitle(stat)} data-testid={`time-distribution-${stat.category.toLowerCase()}`}>
               <div className={cn('w-3 h-3 rounded-sm', colors.bar)} />
               <span className={colors.text}>{stat.category}</span>
               <span className="text-muted-foreground">
-                {formattedPercent}% ({formatDuration(stat.totalDuration)})
+                {formattedPercent}% ({formatDuration(stat.selfDuration)})
               </span>
             </div>
           );
