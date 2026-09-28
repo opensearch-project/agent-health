@@ -16,7 +16,10 @@
  *   A. traceId                         — W3C-propagated agents share the eval traceId
  *   B. runIds   → agent_health.run.id   — agents tag spans with the runId
  *   C. agents   → service.name / gen_ai.agent.name within a time window
- * plus must-filters: sessionId (session.id), time range, serviceName, textSearch.
+ *   D. sessionId → session.id (a correlation clause, unioned like the others —
+ *                  NOT a must-filter, mirroring tracesService.ts, so a stale
+ *                  report sessionId can't zero out a traceId/runId match)
+ * plus must-filters: time range, serviceName, textSearch.
  * 2+ correlation clauses are OR-unioned (minimum_should_match: 1); a single
  * clause is required. Sorted newest-first; offset cursor for pagination.
  */
@@ -54,9 +57,9 @@ function serviceMatches(s: Span, name: string): boolean {
 }
 
 export function computeUseUnion(options: TracesQueryOptions): boolean {
-  const { traceId, runIds, agents } = options;
+  const { traceId, runIds, sessionId, agents } = options;
   return (
-    [!!traceId, !!(runIds && runIds.length > 0)].filter(Boolean).length + (agents?.length ?? 0) > 1
+    [!!traceId, !!(runIds && runIds.length > 0), !!sessionId].filter(Boolean).length + (agents?.length ?? 0) > 1
   );
 }
 
@@ -66,7 +69,6 @@ export function matchesQuery(s: Span, options: TracesQueryOptions, useUnion: boo
   const a = s.attributes || {};
 
   // ---- must-filters (always required) ----
-  if (sessionId && a['session.id'] !== sessionId) return false;
   if (startTime !== undefined && spanMs(s) < toMs(startTime)) return false;
   if (endTime !== undefined && spanMs(s) > toMs(endTime)) return false;
   if (serviceName && !serviceMatches(s, serviceName)) return false;
@@ -95,6 +97,7 @@ export function matchesQuery(s: Span, options: TracesQueryOptions, useUnion: boo
       clauses.push(strategyC || strategyD);
     }
   }
+  if (sessionId) clauses.push(a['session.id'] === sessionId);
 
   // useUnion → at least one correlation clause (should); else → all clauses (must).
   // No correlation clauses (pure time-range browse) → matches on must-filters alone.

@@ -36,7 +36,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { EvaluationReport, RunAnnotation, TestCase, TestCasePerformanceMetrics, Span, TimeRange, TraceMetrics, Evaluator } from '@/types';
+import { EvaluationReport, RunAnnotation, TestCase, TestCasePerformanceMetrics, Span, TimeRange, TraceMetrics, Evaluator, TraceCorrelationInfo } from '@/types';
 import { fetchRunMetrics, formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import { TrajectoryView } from './TrajectoryView';
 import { RawEventsPanel } from './RawEventsPanel';
@@ -49,7 +49,7 @@ import SimpleSpanAttributesTable from './traces/SimpleSpanAttributesTable';
 import ViewToggle, { ViewMode } from './traces/ViewToggle';
 import TraceFullScreenView from './traces/TraceFullScreenView';
 import { computeTrajectoryFromRawEvents } from '@/services/agent';
-import { fetchTracesByRunIds, fetchTracesForRun, processSpansIntoTree, calculateTimeRange } from '@/services/traces';
+import { fetchTracesByRunIds, fetchTracesForRun, processSpansIntoTree, calculateTimeRange, describeTraceCorrelation } from '@/services/traces';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { formatDate, getLabelColor, getDifficultyColor } from '@/lib/utils';
@@ -130,13 +130,21 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   const [tracesLoading, setTracesLoading] = useState(false);
   const [tracesError, setTracesError] = useState<string | null>(null);
   const [tracesFetched, setTracesFetched] = useState(false);
-  // Strategy C (always-on): include all spans from the agent's service during
-  // the run's wall-clock window. Was opt-in via a checkbox originally, but in
+  // Which correlation strategy the server matched the spans with (captioned
+  // under the Traces header so a window-fallback match is never mistaken for
+  // an exact one).
+  const [traceCorrelation, setTraceCorrelation] = useState<TraceCorrelationInfo | null>(null);
+  // Strategy C (always-on FALLBACK): include all spans from the agent's service during
+  // the run's wall-clock window WHEN no exact correlator (traceId / runId /
+  // session.id) matched anything. Was opt-in via a checkbox originally, but in
   // practice the run-report Traces tab landed effectively empty (just the
   // eval `test_case` span) until the user noticed and clicked the toggle
   // — the noise risk that motivated opt-in (concurrent runs, cross-team
   // traffic on a shared OTel cluster) is a smaller cost than the user-visible
-  // "empty" state we always ship by default. See AGENTS.md → Trace correlation.
+  // "empty" state we always ship by default. The server runs the window only
+  // after the exact clauses come back empty and drops window spans that name
+  // another run (concurrency > 1 used to union 3 runs' trees into one tab).
+  // See AGENTS.md → Trace correlation.
   const [searchParams] = useSearchParams();
   // Default to the Trajectory tab — the prior "summary" / Overview tab has
   // been removed because everything it surfaced (agent, model, evaluator,
@@ -332,6 +340,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     setTracesLoading(false);
     setTracesError(null);
     setTracesFetched(false);
+    setTraceCorrelation(null);
 
     // Auto-fetch if already on traces tab
     if (activeTab === 'logs' && isTraceMode && report.runId) {
@@ -398,9 +407,15 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
         windowAgents ? `(+window fallback for ${serviceName}${report.sessionId ? ` +session ${report.sessionId}` : ''})` : '');
       const result = await fetchTracesForRun({
         runId: report.runId,
+        // Strategy A / D (exact): the report's own OTel traceId and the
+        // agent-emitted session.id. Without these the server had only the
+        // runId to go on and the window fallback pulled in neighbouring runs.
+        traceId: report.traceId || undefined,
+        sessionId: report.sessionId || undefined,
         includeWindowFallback: true,
         windowAgents,
       });
+      setTraceCorrelation(result.correlation ?? null);
       
       console.info('[RunDetails] Trace fetch result:', {
         spansCount: result.spans?.length || 0,
@@ -927,7 +942,18 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
               /* TRACE MODE: Show trace visualization */
               <div className="space-y-4 flex-1 flex flex-col min-h-0">
                 <div className="flex items-center justify-between flex-shrink-0">
-                  <h3 className="text-lg font-semibold">Traces</h3>
+                  <div className="flex items-baseline gap-3 min-w-0">
+                    <h3 className="text-lg font-semibold">Traces</h3>
+                    {spanTree.length > 0 && !tracesLoading && describeTraceCorrelation(traceCorrelation) && (
+                      <span
+                        className="text-xs text-muted-foreground truncate"
+                        data-testid="trace-correlation-caption"
+                        data-strategy={traceCorrelation?.strategy}
+                      >
+                        {describeTraceCorrelation(traceCorrelation)}
+                      </span>
+                    )}
+                  </div>
                   {spanTree.length > 0 && !tracesLoading && (
                     <div className="flex items-center gap-2">
                       <ViewToggle viewMode={traceViewMode} onChange={setTraceViewMode} />

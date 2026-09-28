@@ -269,6 +269,24 @@ export function attributeFieldPaths(attributeName: string): string[] {
 export const RUN_ID_ATTRIBUTES = ['agent_health.run.id', 'gen_ai.conversation.id'] as const;
 
 /**
+ * True when a span is one of AGENT HEALTH's OWN eval/judge spans (the
+ * `test_case` / `test_suite_run` eval spans, or a judge LLM call tagged
+ * `gen_ai.operation.name = 'evaluation'`). Strategy A (traceId) correlation
+ * pulls in every span on the shared trace, which can include these — they are
+ * not the agent's own work: metrics must not count them, and a traces result
+ * consisting ONLY of them is not evidence that the agent's spans were found
+ * (see traceCorrelation.ts).
+ */
+export function isEvalOrJudgeSpan(attrs: Record<string, any> | undefined, spanName?: string): boolean {
+  return (
+    attrs?.['gen_ai.operation.name'] === 'evaluation' ||
+    spanName === 'test_case' ||
+    spanName === 'test_suite_run' ||
+    (typeof spanName === 'string' && spanName.startsWith('test_suite_run '))
+  );
+}
+
+/**
  * Strategy B `should` clauses for a set of run ids — one `terms` clause per
  * (run-id attribute × attribute field path), so a span correlates if ANY of
  * the six paths holds one of `runIds`. Callers MUST wrap the result in

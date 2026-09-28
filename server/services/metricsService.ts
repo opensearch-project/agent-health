@@ -12,7 +12,7 @@
 import { Client } from '@opensearch-project/opensearch';
 import { MetricsResult, AggregateMetrics, OpenSearchConfig, Span } from '@/types';
 import { getSampleSpansForRunIds } from '../../cli/demo/sampleTraces.js';
-import { transformSpan, buildRunIdShouldClauses, buildSessionIdShouldClauses, buildAgentHintClause, type ServiceWindowHint } from './tracesService.js';
+import { transformSpan, buildRunIdShouldClauses, buildSessionIdShouldClauses, buildAgentHintClause, isEvalOrJudgeSpan, type ServiceWindowHint } from './tracesService.js';
 
 // ============================================================================
 // Model Pricing
@@ -124,22 +124,6 @@ function readOutputTokens(attrs: Record<string, any>): number {
   ) || 0;
 }
 
-/**
- * True when a span is one of AGENT HEALTH's OWN eval/judge spans (the
- * `test_case` / `test_suite_run` eval spans, or a judge LLM call tagged
- * `gen_ai.operation.name = 'evaluation'`). Strategy A (traceId) correlation
- * below pulls in every span on the shared trace, which can include these —
- * they are not the agent's own work and must not inflate its token/cost/LLM
- * counts.
- */
-function isEvalOrJudgeSpan(attrs: Record<string, any>, spanName?: string): boolean {
-  return (
-    attrs['gen_ai.operation.name'] === 'evaluation' ||
-    spanName === 'test_case' ||
-    spanName === 'test_suite_run' ||
-    (typeof spanName === 'string' && spanName.startsWith('test_suite_run '))
-  );
-}
 
 /**
  * Correlation `should` clauses for a single runId — Strategy B

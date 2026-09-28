@@ -21,6 +21,8 @@ jest.mock('@/server/services/tracesService', () => {
     fetchTraces: jest.fn(),
     checkTracesHealth: jest.fn(),
     classifyOpenSearchError: actual.classifyOpenSearchError,
+    RUN_ID_ATTRIBUTES: actual.RUN_ID_ATTRIBUTES,
+    isEvalOrJudgeSpan: actual.isEvalOrJudgeSpan,
   };
 });
 
@@ -158,7 +160,10 @@ describe('Traces Routes', () => {
         expect.any(Object),
         expect.any(String)
       );
-      expect(res.json).toHaveBeenCalledWith({ spans: [], total: 0, nextCursor: null, hasMore: false, backend: 'opensearch', warning: undefined });
+      expect(res.json).toHaveBeenCalledWith({
+        spans: [], total: 0, nextCursor: null, hasMore: false, backend: 'opensearch', warning: undefined,
+        correlation: { strategy: 'traceId', windowFiltered: 0 },
+      });
     });
 
     it('should accept runIds filter', async () => {
@@ -220,6 +225,7 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         backend: 'opensearch',
+        correlation: { strategy: 'traceId', windowFiltered: 0 },
         warning: undefined,
       });
     });
@@ -242,6 +248,7 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         backend: 'opensearch',
+        correlation: { strategy: 'runIds', windowFiltered: 0 },
         warning: undefined,
       });
     });
@@ -280,6 +287,7 @@ describe('Traces Routes', () => {
         nextCursor: null,
         hasMore: false,
         backend: 'file',
+        correlation: { strategy: 'runIds', windowFiltered: 0 },
         warning: undefined,
         warningCategory: undefined,
         suggestion: undefined,
@@ -490,6 +498,48 @@ describe('Traces Routes', () => {
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith({
         error: 'Unexpected error',
+      });
+    });
+
+    describe('precise-first correlation (exact clauses before the service-name window)', () => {
+      const WINDOW = [{ serviceName: 'retrieval-agent', startedAt: 1_000, endedAt: 900_000 }];
+      const mine = { traceId: 'trace-mine', spanId: 'm1', name: 'invoke_agent', attributes: { 'gen_ai.conversation.id': 'run-mine' } };
+      const other = { traceId: 'trace-other', spanId: 'o1', name: 'invoke_agent', attributes: { 'agent_health.run.id': 'run-other' } };
+      const untagged = { traceId: 'trace-x', spanId: 'u1', name: 'chat', attributes: {} };
+
+      it('runs ONLY the exact query (no agents clause) when it matches, and labels the strategy', async () => {
+        mockFetchTraces.mockResolvedValue({ spans: [mine] as any, total: 1 });
+
+        const { req, res } = createMocks({ traceId: 'trace-mine', runIds: ['run-mine'], agents: WINDOW, size: 1000 });
+        await getRouteHandler(tracesRoutes, 'post', '/api/traces')(req, res);
+
+        expect(mockFetchTraces).toHaveBeenCalledTimes(1);
+        const opts = mockFetchTraces.mock.calls[0][0];
+        expect(opts).toMatchObject({ traceId: 'trace-mine', runIds: ['run-mine'], size: 1000 });
+        expect(opts.agents).toBeUndefined();
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+          spans: [mine],
+          correlation: { strategy: 'traceId', windowFiltered: 0 },
+        }));
+      });
+
+      it('falls back to the window only when the exact query is empty, dropping spans that name another run', async () => {
+        mockFetchTraces
+          .mockResolvedValueOnce({ spans: [], total: 0 })
+          .mockResolvedValueOnce({ spans: [untagged, other] as any, total: 2 });
+
+        const { req, res } = createMocks({ runIds: ['run-mine'], agents: WINDOW });
+        await getRouteHandler(tracesRoutes, 'post', '/api/traces')(req, res);
+
+        expect(mockFetchTraces).toHaveBeenCalledTimes(2);
+        expect(mockFetchTraces.mock.calls[0][0].agents).toBeUndefined();
+        expect(mockFetchTraces.mock.calls[1][0]).toMatchObject({ agents: WINDOW });
+        expect(mockFetchTraces.mock.calls[1][0].runIds).toBeUndefined();
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+          spans: [untagged],
+          total: 1,
+          correlation: { strategy: 'window', windowFiltered: 1 },
+        }));
       });
     });
   });

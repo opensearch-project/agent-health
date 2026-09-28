@@ -189,6 +189,8 @@ export async function retryJudgementForCase(
       const fetchResult = await fetchSpansForRun(report.runId, {
         maxAttempts: RETRY_TRACE_FETCH_MAX_ATTEMPTS,
         intervalMs: RETRY_TRACE_FETCH_INTERVAL_MS,
+        traceId: report.traceId,
+        sessionId: report.sessionId,
         windowAgents,
       });
       if (fetchResult.spans.length > 0) {

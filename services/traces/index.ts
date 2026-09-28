@@ -7,7 +7,7 @@
  * Traces Service - Fetch and process trace data from OpenSearch
  */
 
-import { Span, TimeRange, TraceQueryParams, TraceSearchResult } from '@/types';
+import { Span, TimeRange, TraceCorrelationInfo, TraceQueryParams, TraceSearchResult } from '@/types';
 import { getSpanCategory } from './spanCategorization';
 import { getBackendUrl } from '@/lib/portConfig';
 
@@ -96,11 +96,15 @@ export async function fetchTracesByRunIds(runIds: string[]): Promise<TraceSearch
  *                 OTEL-standard `gen_ai.conversation.id`); the server query
  *                 unions both. NOT `gen_ai.request.id` — that is not a
  *                 registered Gen AI semconv attribute. See AGENTS.md → Strategy B.
- *   C. agents   — service.name + time-window fallback (opt-in / `includeWindowFallback`)
+ *   C. agents   — service.name + time-window fallback (`includeWindowFallback`)
  *
- * Strategies A and B are always safe (no false positives). Strategy C is
- * opt-in because it can surface concurrent runs of the same agent and
- * cross-team noise on a shared cluster.
+ * Strategies A, B and D are exact (no false positives). Strategy C is fuzzy:
+ * it can surface concurrent runs of the same agent and cross-team noise on a
+ * shared cluster. The SERVER therefore applies precise-first semantics: the
+ * exact clauses run first and the window is consulted only when they return
+ * nothing (then post-filtered against the run's ids) — see
+ * server/services/traceCorrelation.ts. Callers should pass EVERY correlator
+ * they have; the response's `correlation` says which one matched.
  */
 export async function fetchTracesForRun(params: {
   /**
@@ -144,6 +148,26 @@ export async function fetchTracesForRun(params: {
     query.agents = windowAgents;
   }
   return fetchTraces(query);
+}
+
+/**
+ * Human-readable caption for a `/api/traces` correlation result, e.g.
+ * "Matched by trace id" or "Matched by service-name window — 12 spans from
+ * other runs filtered". `null` when nothing useful can be said.
+ */
+export function describeTraceCorrelation(info: TraceCorrelationInfo | undefined | null): string | null {
+  if (!info) return null;
+  switch (info.strategy) {
+    case 'traceId': return 'Matched by trace id';
+    case 'runIds': return 'Matched by run id';
+    case 'sessionId': return 'Matched by session id';
+    case 'window': {
+      const base = 'Matched by service-name window';
+      const n = info.windowFiltered;
+      return n > 0 ? `${base} — ${n} span${n === 1 ? '' : 's'} from other runs filtered` : base;
+    }
+    default: return null;
+  }
 }
 
 /**

@@ -903,17 +903,25 @@ export interface TraceQueryParams {
   textSearch?: string;
   cursor?: string; // For pagination
   /**
-   * Strategy C (opt-in): include any spans where `serviceName` matches AND
-   * `startTime` falls within `[startedAt, endedAt]`. Used by the run-report
-   * Traces tab as a fallback for agents that don't propagate W3C trace context
-   * (TRACEPARENT) and don't tag spans with `gen_ai.request.id` matching our
-   * runId. May surface unrelated spans (concurrent runs, cross-team noise).
+   * Strategy C (always-on FALLBACK): include any spans where `serviceName`
+   * matches AND `startTime` falls within `[startedAt, endedAt]`. The server
+   * runs this ONLY when the exact correlators (traceId / runIds / sessionId)
+   * return nothing, and drops window spans that carry another run's id.
    * See AGENTS.md → Trace correlation conventions.
    *
    * Strategy D: when `sessionId` is set on an entry, correlate precisely on
    * `attributes.session.id` (unioned with the service.name + window fallback).
    */
   agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>;
+}
+
+/** Which correlation strategy produced a `/api/traces` result (see AGENTS.md). */
+export type TraceCorrelationStrategy = 'traceId' | 'runIds' | 'sessionId' | 'window' | 'none';
+
+export interface TraceCorrelationInfo {
+  strategy: TraceCorrelationStrategy;
+  /** Window-matched spans dropped because they named a different run/session. */
+  windowFiltered: number;
 }
 
 export interface ConversationMessage {
@@ -940,6 +948,7 @@ export interface TraceSearchResult {
   suggestion?: string;
   nextCursor?: string | null;
   hasMore?: boolean;
+  correlation?: TraceCorrelationInfo;
 }
 
 /**

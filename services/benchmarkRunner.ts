@@ -452,7 +452,13 @@ export async function executeRun(
                     endedAt: Date.now() + 60_000,
                   }]
                 : undefined;
-              loadedTraces = await loadTracesAccessor(agentConfig, inv.runId ?? undefined, traceWindow);
+              // Exact correlators first (the eval span's traceId adopted via
+              // TRACEPARENT; the agent's session.id) so neighbouring runs of
+              // the same service inside the window are never pulled in.
+              loadedTraces = await loadTracesAccessor(agentConfig, inv.runId ?? undefined, traceWindow, {
+                traceId: caseSpan?.spanContext().traceId,
+                sessionId: inv.metadata?.sessionId ?? undefined,
+              });
               // Expose traces on the result too (RFC 004 §4.6).
               (evalResult as any).traces = loadedTraces;
               // Parity with the classic trace-judge path: forward the
@@ -1527,7 +1533,8 @@ function buildEvalResult(input: {
 async function loadTracesAccessor(
   agentConfig: AgentConfig,
   runId: string | undefined,
-  windowAgents?: TraceWindowAgent[]
+  windowAgents?: TraceWindowAgent[],
+  exact?: { traceId?: string; sessionId?: string }
 ): Promise<TracesAccessor> {
   if (!agentConfig.useTraces) {
     return emptyTracesAccessor();
@@ -1542,6 +1549,8 @@ async function loadTracesAccessor(
   const result = await fetchSpansForRun(runId, {
     maxAttempts: polling.maxAttempts,
     intervalMs: polling.intervalMs,
+    traceId: exact?.traceId,
+    sessionId: exact?.sessionId,
     windowAgents,
   });
   if (result.spans.length === 0) {

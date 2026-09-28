@@ -42,6 +42,8 @@ jest.mock('@/services/traces', () => ({
   // fetch; added with the trace-correlation work after this mock was first
   // written. Return the same { spans, total } shape the component reads.
   fetchTracesForRun: jest.fn().mockResolvedValue({ spans: [], total: 0 }),
+  // Pure caption helper — use the real one so the rendered text is asserted.
+  describeTraceCorrelation: jest.requireActual('@/services/traces').describeTraceCorrelation,
   processSpansIntoTree: jest.fn().mockReturnValue([]),
   calculateTimeRange: jest.fn().mockReturnValue({ startTime: 0, endTime: 0, duration: 0 }),
   groupSpansByTrace: jest.fn().mockReturnValue([]),
@@ -407,6 +409,85 @@ describe('RunDetailsContent', () => {
         // (it has !traceSpans.length condition)
         expect(screen.queryByText(/Traces not yet available/i)).toBeNull();
       });
+    });
+  });
+
+  describe('trace correlation (precise-first)', () => {
+    // Radix TabsTrigger switches panels on pointer-down; the on-demand trace
+    // fetch is wired to onClick — fire both so the panel AND the fetch happen.
+    async function openTracesTab() {
+      const tab = screen.getByRole('tab', { name: /Traces/ });
+      await act(async () => {
+        fireEvent.mouseDown(tab, { button: 0 });
+        fireEvent.click(tab);
+      });
+    }
+
+    it('passes the report traceId + sessionId alongside runId and the window hint', async () => {
+      const report = createReport({
+        runId: 'run-123',
+        traceId: '7dc10000000000000000000000000abc',
+        sessionId: 'sess-abc',
+        connectorProtocol: 'claude-code' as any,
+        performanceMetrics: { durationMs: 30_000 } as any,
+      });
+      mockGetReportById.mockResolvedValue(report);
+      mockFetchTracesForRun.mockResolvedValue({ spans: mockSpans as any, total: 1, correlation: { strategy: 'traceId', windowFiltered: 0 } });
+      mockProcessSpans.mockReturnValue(mockSpanTree as any);
+
+      await renderAndWait(report);
+      await openTracesTab();
+
+      await waitFor(() => expect(mockFetchTracesForRun).toHaveBeenCalled());
+      const args = mockFetchTracesForRun.mock.calls[0][0];
+      expect(args).toMatchObject({
+        runId: 'run-123',
+        traceId: '7dc10000000000000000000000000abc',
+        sessionId: 'sess-abc',
+        includeWindowFallback: true,
+      });
+      expect(args.windowAgents?.[0]).toMatchObject({ serviceName: 'claude-code-agent', sessionId: 'sess-abc' });
+      expect(args.windowAgents![0].endedAt).toBeGreaterThan(args.windowAgents![0].startedAt);
+    });
+
+    it('captions the Traces header with the strategy that matched', async () => {
+      const report = createReport({ runId: 'run-123', traceId: 'abc' });
+      mockGetReportById.mockResolvedValue(report);
+      mockFetchTracesForRun.mockResolvedValue({ spans: mockSpans as any, total: 1, correlation: { strategy: 'traceId', windowFiltered: 0 } });
+      mockProcessSpans.mockReturnValue(mockSpanTree as any);
+
+      await renderAndWait(report);
+      await openTracesTab();
+
+      const caption = await screen.findByTestId('trace-correlation-caption');
+      expect(caption.textContent).toBe('Matched by trace id');
+      expect(caption.getAttribute('data-strategy')).toBe('traceId');
+    });
+
+    it('captions a window-fallback match with the number of other-run spans filtered', async () => {
+      const report = createReport({ runId: 'run-123' });
+      mockGetReportById.mockResolvedValue(report);
+      mockFetchTracesForRun.mockResolvedValue({ spans: mockSpans as any, total: 1, correlation: { strategy: 'window', windowFiltered: 41 } });
+      mockProcessSpans.mockReturnValue(mockSpanTree as any);
+
+      await renderAndWait(report);
+      await openTracesTab();
+
+      const caption = await screen.findByTestId('trace-correlation-caption');
+      expect(caption.textContent).toBe('Matched by service-name window — 41 spans from other runs filtered');
+    });
+
+    it('renders no caption when the server did not report a correlation', async () => {
+      const report = createReport({ runId: 'run-123' });
+      mockGetReportById.mockResolvedValue(report);
+      mockFetchTracesForRun.mockResolvedValue({ spans: mockSpans as any, total: 1 });
+      mockProcessSpans.mockReturnValue(mockSpanTree as any);
+
+      await renderAndWait(report);
+      await openTracesTab();
+
+      await screen.findByTestId('trace-visualization');
+      expect(screen.queryByTestId('trace-correlation-caption')).toBeNull();
     });
   });
 

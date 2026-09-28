@@ -497,8 +497,12 @@ Three layered strategies, applied in priority order:
   registered attribute and is no longer used.)
 - **Strategy C — service-name + time window (always-on fallback).** Each
   connector declares a default `serviceName` (`claude-code-agent`, `kiro-agent`,
-  `pi-agent`, `observio-sample-agent`); the run-report Traces tab unions a
+  `pi-agent`, `observio-sample-agent`); the run-report Traces tab sends a
   `serviceName + time-window` clause so closed-source agents still correlate.
+  The server consults it **only when no exact correlator (A/B/D) found the
+  agent's spans**, and drops window traces that carry `agent_health.run.id` for
+  another run — so concurrent runs of the same agent no longer bleed into each
+  other's Traces tab.
 - **Strategy D — `session.id` (precise, real-world adopted).** Agents that emit
   the OTEL `session.id` on every span (e.g. Claude Code) are correlated exactly
   on it. `ClaudeCodeConnector` captures the agent's `session_id`, persists it as

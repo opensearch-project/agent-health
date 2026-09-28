@@ -357,16 +357,54 @@ fallback (Strategy C).
   many), so it can't correlate a whole run. `session.id` is the per-run id with
   real adoption today; `gen_ai.conversation.id` is the standard we *emit*.
 
-### Strategy C — service-name + time-window (always-on fallback)
+### Strategy C — service-name + time-window (always-on FALLBACK)
 
 For closed-source / 3rd-party agents that do neither A nor B, register the
 agent's OpenSearch `service.name` on the connector via
-`traceContext.serviceName`. The run-report Traces tab **always** issues this
-clause unioned with A/B — the API receives `agents: [{serviceName, startedAt,
+`traceContext.serviceName`. The run-report Traces tab **always** sends this
+clause alongside A/B/D — the API receives `agents: [{serviceName, startedAt,
 endedAt}]` derived from the connector's `traceServiceName` (or the protocol→
-name convention map) and the run's wall-clock window. The OpenSearch query
-builder unions all three clauses via `bool.should` so spans matching any
-strategy are returned without duplication.
+name convention map) and the run's wall-clock window — but the server treats
+it as a **fallback, not a peer** (precise-first; see
+`server/services/traceCorrelation.ts`):
+
+1. The exact correlators present on the request — `traceId` (A), `runIds`
+   (B), `sessionId` (D) — are queried first, unioned with each other.
+2. If that returns any of the **agent's** spans, that is the answer; the
+   window is never consulted. Agent Health's own eval/judge spans
+   (`test_case`, `gen_ai.operation.name = evaluation`) do not count as a
+   hit — the eval span sits on the requested trace and carries the run id
+   itself, so for a Strategy-C-only agent the exact query returns exactly
+   that one span, which must not suppress the fallback.
+3. Otherwise the window clause is queried and post-filtered by run identity,
+   resolved **per trace**: if any span of a trace carries Agent Health's own
+   `agent_health.run.id` and none of those values is the requested run id,
+   the whole trace is dropped (a run's root usually carries the id; its
+   HTTP/DB children don't and must follow it). Only our own attribute is
+   negative evidence — `gen_ai.conversation.id` and `session.id` are
+   OTEL-standard ids a third-party agent may legitimately fill with its own
+   thread/session id, so a mismatch there proves nothing and those traces
+   are kept (as are traces with no identity at all — that is exactly the
+   population Strategy C exists for). `traceId` equality is deliberately not
+   required — agents that reach the fallback don't propagate W3C context.
+   Any eval/judge spans the exact query did find are kept in front of the
+   window result.
+4. The response reports what happened: `correlation: { strategy:
+   'traceId' | 'runIds' | 'sessionId' | 'window', windowFiltered: n }`,
+   and the Traces tab captions it ("Matched by trace id" / "Matched by
+   service-name window — N spans from other runs filtered").
+
+Why: the clauses used to be OR'd into one `bool.should`, so a run that
+correlated perfectly by trace id STILL had its concurrent neighbours' trees
+unioned in — a benchmark at concurrency 3–5 rendered three root spans / 60+
+spans for a single invocation. Callers should therefore pass **every**
+correlator they have (`fetchTracesForRun({ runId, traceId, sessionId,
+windowAgents })`); the more exact ids on the request, the less often the
+window is consulted. Consequence for agent authors: stamping
+`agent_health.run.id = AGENT_EVAL_RUN_ID` (or propagating `TRACEPARENT`) is
+what lets neighbouring runs of your agent be told apart when the window is
+the only correlator left; the OTEL-standard ids alone match positively but
+never exclude.
 
 This strategy was originally opt-in via a UI checkbox — the noise risk it can
 surface is real (concurrent runs of the same agent on overlapping windows,
@@ -374,8 +412,8 @@ other users on a shared OTel cluster running the same agent, long-lived agent
 sessions that cross run boundaries) — but in practice the run-report Traces
 tab landed on a near-empty trace tree by default until the user noticed the
 toggle. Empty-by-default was a worse cost than the noise risk, so Strategy C
-is now always-on. Users who need stricter isolation can override the
-connector's `serviceName` to a tenant-scoped value.
+stays always-on as the fallback. Users who need stricter isolation can
+override the connector's `serviceName` to a tenant-scoped value.
 
 Window derivation:
   - When `report.performanceMetrics.durationMs` is set: `[timestamp −
