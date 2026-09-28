@@ -19,6 +19,13 @@ import { buildJudgeDebug } from '@/server/services/judgeDebug';
 import { Evaluator } from '@/types';
 import { debug } from '@/lib/debug';
 import { getPiPackagePath } from '@/lib/packagePaths';
+import { JudgeError, classifyJudgeErrorMessage, isJudgeError, redactStderrTail } from '@/server/services/judgeErrors';
+import {
+  describeFit,
+  estimateTokens,
+  fitTrajectoryToBudget,
+  resolvePromptBudgetChars,
+} from '@/server/services/judgePromptBudget';
 import {
   getAgentPathForSpawn,
   getAgentSourceForPrompt,
@@ -32,8 +39,11 @@ import {
 /** Path to the pi-package (for --package flag) */
 const PI_PACKAGE_PATH = getPiPackagePath();
 
-/** Timeout for the pi CLI process (5 minutes) */
-const PI_TIMEOUT_MS = 300_000;
+/** Timeout for the pi CLI process (default 5 minutes; override with AH_PI_JUDGE_TIMEOUT_MS). */
+const PI_TIMEOUT_MS = (() => {
+  const n = Number.parseInt(process.env.AH_PI_JUDGE_TIMEOUT_MS ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : 300_000;
+})();
 
 /** Options for spawning the pi judge CLI. @internal */
 export interface SpawnPiOptions {
@@ -95,14 +105,27 @@ export async function evaluateWithPi(
     ? await getAgentSourceForPrompt({ trajectory, expectedOutcomes })
     : null;
 
-  const userPrompt = buildEvaluationPrompt(
+  // Fit the rendered prompt to the judge's context budget before spawning:
+  // an oversized prompt fails deterministically ("Input is too long for
+  // requested model") on every retry. The CLI does not tell us the model's
+  // window up front, so the Claude-class default applies (override with
+  // AH_JUDGE_PROMPT_BUDGET_TOKENS).
+  const budgetChars = resolvePromptBudgetChars();
+  const fit = fitTrajectoryToBudget(
     trajectory,
-    expectedOutcomes,
-    expectedTrajectory,
-    logs,
-    agentSource,
+    (steps) => buildEvaluationPrompt(steps, expectedOutcomes, expectedTrajectory, logs, agentSource),
+    budgetChars,
   );
-  debug('PiJudge', 'Prompt built, length:', userPrompt.length, 'characters');
+  const userPrompt = fit.prompt;
+  debug('PiJudge', describeFit(fit, budgetChars));
+  if (fit.exceedsBudget) {
+    throw new JudgeError(
+      `Judge context overflow — the evaluation prompt is ~${estimateTokens(fit.prompt.length)} tokens even after truncating ` +
+        `${fit.truncated.length} trajectory field(s); budget is ~${estimateTokens(budgetChars)} tokens. ` +
+        'Reduce the trajectory (AH_JUDGE_TOOL_OUTPUT_CAP / AH_JUDGE_CONTENT_CAP) or raise AH_JUDGE_PROMPT_BUDGET_TOKENS for a larger-context model.',
+      { errorClass: 'context_overflow' },
+    );
+  }
 
   // Saved evaluator's prompt fully replaces the hardcoded baseline; falling
   // back keeps back-compat with callers that don't pass an evaluator (the
@@ -122,11 +145,18 @@ export async function evaluateWithPi(
   debug('PiJudge', '--- Raw Pi Response ---');
   debug('PiJudge', result.substring(0, 500) + (result.length > 500 ? '...' : ''));
 
-  const parsed = parseJudgeResponse(result, {
-    evaluator,
-    duration,
-    source: 'PiJudge',
-  });
+  let parsed: JudgeResponse;
+  try {
+    parsed = parseJudgeResponse(result, {
+      evaluator,
+      duration,
+      source: 'PiJudge',
+    });
+  } catch (err: any) {
+    // The CLI ran and printed something, but not a parseable verdict — the
+    // only case that genuinely is "invalid JSON".
+    throw new JudgeError(err?.message ?? String(err), { errorClass: 'invalid_json', cause: err });
+  }
   debug('PiJudge', '========== PI JUDGE RESPONSE ==========');
   debug('PiJudge', 'Pass/Fail Status:', parsed.passFailStatus?.toUpperCase() || 'MISSING');
   const judgeDebug = buildJudgeDebug({
@@ -298,16 +328,45 @@ function spawnPiRaw(
 
     child.on('error', (error: Error) => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        reject(new Error('Pi CLI not found. It ships as the optionalDependency "@earendil-works/pi-coding-agent"; reinstall without --no-optional, or install pi from https://pi.dev'));
+        reject(new JudgeError('Pi CLI not found. It ships as the optionalDependency "@earendil-works/pi-coding-agent"; reinstall without --no-optional, or install pi from https://pi.dev', { errorClass: 'not_found', cause: error }));
       } else {
         reject(error);
       }
     });
 
-    child.on('close', (code: number | null) => {
+    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      const stderrTail = redactStderrTail(stderr);
       if (code !== 0) {
-        const errorMsg = stderr.trim() || `Pi CLI exited with code ${code}`;
-        reject(new Error(errorMsg));
+        // Distinguish the failure modes an operator needs to tell apart:
+        //   - killed by our timeout (spawn `timeout` → SIGTERM, code null)
+        //   - exited non-zero: classify from stderr (throttling / expired
+        //     creds / context overflow / plain crash) and surface the tail
+        if (code === null && signal) {
+          reject(new JudgeError(
+            `Pi CLI killed by ${signal} after ${Math.round(PI_TIMEOUT_MS / 1000)}s (judge timeout)` +
+              (stderrTail ? `; stderr tail: ${stderrTail}` : ''),
+            { errorClass: 'timeout', stderrTail },
+          ));
+          return;
+        }
+        const cls = classifyJudgeErrorMessage(stderrTail);
+        const label = cls === 'context_overflow'
+          ? 'Judge context overflow — the evaluation prompt exceeds the judge model\'s context window'
+          : `Pi CLI exited with code ${code}`;
+        reject(new JudgeError(
+          `${label}${stderrTail ? `; stderr tail: ${stderrTail}` : ' (no stderr output)'}`,
+          { errorClass: cls === 'unknown' ? 'cli_crash' : cls, stderrTail },
+        ));
+        return;
+      }
+      if (!stdout.trim()) {
+        // Exit 0 but nothing on stdout: the CLI never emitted a verdict. This
+        // is NOT "invalid JSON" — there was no JSON to be invalid.
+        reject(new JudgeError(
+          'Pi CLI exited 0 but printed nothing to stdout (no judge verdict)' +
+            (stderrTail ? `; stderr tail: ${stderrTail}` : ''),
+          { errorClass: 'empty_response', stderrTail },
+        ));
         return;
       }
 
@@ -363,6 +422,14 @@ function spawnPiRaw(
  * Parse error messages from Pi CLI failures
  */
 export function parsePiError(error: Error): string {
+  // Already classified by spawnPi / the parsers: its message names the real
+  // cause (context overflow, CLI crash + stderr tail, empty stdout, ...).
+  // Do NOT collapse it into the generic "invalid JSON" text below.
+  if (isJudgeError(error)) {
+    return error.errorClass === 'invalid_json'
+      ? `Failed to parse Pi judge response — the judge answered but not with a JSON verdict. ${error.message}`
+      : error.message;
+  }
   const msg = error.message;
 
   if (msg.includes('ENOENT') || msg.includes('not found')) {

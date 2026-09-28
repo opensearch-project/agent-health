@@ -21,6 +21,13 @@ import { buildEvaluationPrompt, JudgeRequest, JudgeResponse } from '@/server/ser
 import { parseJudgeResponse } from '@/server/services/judgeResponseParser';
 import { buildJudgeDebug } from '@/server/services/judgeDebug';
 import { createTraceJudgeExtension } from '@/server/services/traceJudgeTools';
+import { JudgeError, classifyJudgeErrorMessage, toJudgeError } from '@/server/services/judgeErrors';
+import {
+  describeFit,
+  estimateTokens,
+  fitTrajectoryToBudget,
+  resolvePromptBudgetChars,
+} from '@/server/services/judgePromptBudget';
 import type { PiSdk } from '@/server/services/piSdkTypes';
 import { Evaluator } from '@/types';
 import { readEnv } from '@/lib/envCompat';
@@ -249,6 +256,65 @@ export function pickNewestClaudeModel<T extends { provider: string; id: string }
   return [...models].sort((a, b) => scoreNewestClaudeModel(b.id) - scoreNewestClaudeModel(a.id))[0];
 }
 
+/**
+ * Minimal view of a pi assistant message we care about after a turn.
+ * `stopReason: 'error'` + `errorMessage` is how the pi agent loop reports a
+ * failed LLM call — `session.prompt()` does NOT throw for it.
+ */
+export interface AssistantOutcome {
+  stopReason?: string;
+  errorMessage?: string;
+  text: string;
+}
+
+/**
+ * Turn the pi SDK's terminal assistant state into a classified error, or
+ * `undefined` when the turn completed normally.
+ *
+ * The pi agent loop records a failed provider call (Bedrock "Input is too
+ * long for requested model", throttling, expired credentials, …) as an
+ * assistant message with `stopReason: 'error'` and the provider's text in
+ * `errorMessage`, then returns normally. Worse, when the failure is a
+ * context overflow the session's overflow-recovery path REMOVES that
+ * message from `session.messages` before we ever see it — so the old code
+ * ("take the last assistant text, parse JSON") saw an empty string and
+ * reported "judge response did not contain a JSON object" with nothing
+ * after "First 200 chars:". This is the "invalid JSON" incident: 10/62
+ * cases of a run, all of them the largest trajectories, all retried 10×.
+ *
+ * `lastFromEvents` is the last assistant message observed via
+ * `session.subscribe` (survives the removal); `messages` is the post-run
+ * `session.messages` fallback for SDK shims/tests that don't expose events.
+ */
+export function classifyAssistantOutcome(
+  lastFromEvents: AssistantOutcome | undefined,
+  finalText: string,
+): JudgeError | undefined {
+  const last = lastFromEvents;
+  if (last?.stopReason === 'error') {
+    const detail = last.errorMessage?.trim() || 'provider returned an error without a message';
+    const cls = classifyJudgeErrorMessage(detail);
+    const label =
+      cls === 'context_overflow'
+        ? 'Judge context overflow — the evaluation prompt (plus any trace-tool results) exceeds the judge model\'s context window'
+        : 'Judge model call failed';
+    return new JudgeError(`${label}: ${detail}`, { errorClass: cls });
+  }
+  if (last?.stopReason === 'aborted') {
+    return new JudgeError(
+      `Judge run was aborted before producing a verdict${last.errorMessage ? `: ${last.errorMessage}` : ''}`,
+      { errorClass: 'timeout' },
+    );
+  }
+  if (!finalText.trim()) {
+    return new JudgeError(
+      `Judge produced no final verdict text (last assistant stopReason=${last?.stopReason ?? 'none'})`,
+      { errorClass: 'empty_response' },
+    );
+  }
+  return undefined;
+}
+
 /** Extract the final assistant text (the verdict JSON) from pi session messages. */
 export function extractFinalAssistantText(messages: any[]): string {
   let last = '';
@@ -462,7 +528,6 @@ export async function evaluateWithPiAgenticTrace(
   debug('AgentJudge', 'runId:', runId ?? '(none)', 'trajectory steps:', trajectory.length, 'traceToolsAvailable:', traceToolsAvailable);
   debug('AgentJudge', 'Evaluator:', evaluator ? `${evaluator.name} (${evaluator.id})` : '(none, using default prompt)');
 
-  const userPrompt = buildEvaluationPrompt(trajectory, expectedOutcomes, expectedTrajectory, logs);
   const serverUrl =
     process.env.AH_JUDGE_SERVER_URL ||
     `http://localhost:${readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001'}`;
@@ -492,6 +557,30 @@ export async function evaluateWithPiAgenticTrace(
   }
   const { model } = resolved;
   debug('AgentJudge', 'model:', qualifiedModelId(model), `(${resolved.source})`);
+
+  // Fit the rendered prompt to the model's context budget BEFORE calling the
+  // provider. A prompt that is certain to be rejected ("Input is too long for
+  // requested model") is a deterministic failure — sending it once per retry
+  // attempt wastes minutes and still yields no verdict. Truncate the largest
+  // step fields with an explicit marker instead; only if even that cannot fit
+  // do we throw a non-retryable, correctly-named error.
+  const budgetChars = resolvePromptBudgetChars((model as any).contextWindow);
+  const fit = fitTrajectoryToBudget(
+    trajectory,
+    (steps) => buildEvaluationPrompt(steps, expectedOutcomes, expectedTrajectory, logs),
+    budgetChars,
+  );
+  const userPrompt = fit.prompt;
+  debug('AgentJudge', describeFit(fit, budgetChars));
+  if (fit.exceedsBudget) {
+    throw new JudgeError(
+      `Judge context overflow — the evaluation prompt is ~${estimateTokens(fit.prompt.length)} tokens even after truncating ` +
+        `${fit.truncated.length} trajectory field(s); budget is ~${estimateTokens(budgetChars)} tokens ` +
+        `(model ${model.id}, context window ${(model as any).contextWindow ?? 'unknown'}). ` +
+        'Reduce the trajectory (AH_JUDGE_TOOL_OUTPUT_CAP / AH_JUDGE_CONTENT_CAP) or use a larger-context judge model.',
+      { errorClass: 'context_overflow' },
+    );
+  }
 
   // Compose the system prompt: saved evaluator's prompt (if any) replaces
   // the default base, then the trace-tool (or trajectory-only) addendum is
@@ -541,8 +630,47 @@ export async function evaluateWithPiAgenticTrace(
     sessionManager: SessionManager.inMemory(),
   });
 
-  await session.prompt(userPrompt);
-  const finalText = extractFinalAssistantText(session.messages);
+  // Observe assistant turns as they END so a provider error (stopReason
+  // 'error' + errorMessage) is captured even when the SDK's overflow-recovery
+  // drops that message from `session.messages` afterwards — see
+  // classifyAssistantOutcome. `subscribe` is optional for SDK shims/tests.
+  let lastAssistant: AssistantOutcome | undefined;
+  const unsubscribe = typeof (session as any).subscribe === 'function'
+    ? (session as any).subscribe((ev: any) => {
+        if ((ev?.type === 'message_end' || ev?.type === 'turn_end') && ev.message?.role === 'assistant') {
+          lastAssistant = {
+            stopReason: ev.message.stopReason,
+            errorMessage: ev.message.errorMessage,
+            text: extractFinalAssistantText([ev.message]),
+          };
+        }
+      })
+    : undefined;
+
+  let finalText: string;
+  try {
+    await session.prompt(userPrompt);
+    finalText = extractFinalAssistantText(session.messages);
+  } catch (err) {
+    // The SDK throws synchronously for a few pre-flight problems (no
+    // credentials, model not configured). Classify rather than let the
+    // route's catch-all call it "invalid JSON".
+    throw toJudgeError(err);
+  } finally {
+    if (typeof unsubscribe === 'function') unsubscribe();
+  }
+  // If the observed last assistant message is missing from session.messages
+  // (overflow-recovery removal) fall back to the last text we saw via events.
+  if (!lastAssistant && session.messages?.length) {
+    const msgs = session.messages;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m: any = msgs[i];
+      if (m?.role === 'assistant') {
+        lastAssistant = { stopReason: m.stopReason, errorMessage: m.errorMessage, text: extractFinalAssistantText([m]) };
+        break;
+      }
+    }
+  }
   const duration = Date.now() - startTime;
 
   // What ACTUALLY answered: prefer the model the transcript reports (pi
@@ -553,11 +681,38 @@ export async function evaluateWithPiAgenticTrace(
     ? qualifyModelId(answered.provider ?? model.provider, answered.model)
     : qualifiedModelId(model);
 
-  const parsed = parseJudgeResponse(finalText, {
-    evaluator,
-    duration,
-    source: 'AgentJudge',
-  });
+  // Verdict first: if the final assistant text parses, that IS the result —
+  // regardless of what the last observed turn event says (the SDK's own
+  // retry/compaction flow can leave a stale intermediate error event behind
+  // a later successful turn; a real verdict must never be discarded for it).
+  // Only when there is no parseable verdict does the observed outcome
+  // explain WHY (overflow / throttling / aborted / empty), else it's the one
+  // genuine "invalid JSON" case.
+  const outcomeError = classifyAssistantOutcome(lastAssistant, finalText);
+  let parsed: JudgeResponse;
+  try {
+    if (outcomeError?.errorClass === 'empty_response') throw outcomeError;
+    parsed = parseJudgeResponse(finalText, {
+      evaluator,
+      duration,
+      source: 'AgentJudge',
+    });
+    if (outcomeError) {
+      debug('AgentJudge', 'verdict parsed despite a trailing non-stop assistant turn:', outcomeError.errorClass);
+    }
+  } catch (err: any) {
+    if (outcomeError) {
+      debug('AgentJudge', 'judge did not produce a verdict:', outcomeError.errorClass, outcomeError.message);
+      throw outcomeError;
+    }
+    // The judge DID answer, just not with a parseable verdict — the only case
+    // that genuinely is "invalid JSON". A `length` stop means the verdict was
+    // cut off by the output-token limit; say so, it's actionable.
+    const cutOff = lastAssistant?.stopReason === 'length'
+      ? ' (judge stopReason=length — the verdict was cut off by the output token limit)'
+      : '';
+    throw new JudgeError(`${err?.message ?? String(err)}${cutOff}`, { errorClass: 'invalid_json', cause: err });
+  }
   // The underlying LLM — ALWAYS recorded (judgeDebug below is env-gated,
   // which is why no persisted agent-trace-judge report said which model
   // judged it). Persisted onto TestCaseRun.judgeModel + LLMJudgeResponse.modelId

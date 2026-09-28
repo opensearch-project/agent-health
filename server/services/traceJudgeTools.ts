@@ -29,8 +29,110 @@ import type { PiExtensionAPI, PiExtensionFactory } from './piSdkTypes';
 import { Type } from 'typebox';
 import { hasTraceCorrelation } from '@/services/traces/judgeAgentsHints';
 
+/** Above this size, skip pretty-printing — the indentation alone is ~30% more chars in the model's context. */
+const PRETTY_PRINT_MAX_CHARS = 20_000;
+
 function textResult(obj: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }], details: obj };
+  const pretty = JSON.stringify(obj, null, 2);
+  const text = pretty.length > PRETTY_PRINT_MAX_CHARS ? JSON.stringify(obj) : pretty;
+  return { content: [{ type: 'text' as const, text }], details: obj };
+}
+
+/**
+ * Character cap for a single trace-tool result. The pi SDK appends tool
+ * results to the SAME model context as the evaluation prompt, and the raw
+ * span dump of one run has been measured at 400k–970k chars (~130k–320k
+ * tokens at the ~3 chars/token JSON tokenizes to) — by itself past a
+ * 200k-token window. Sending that back to the
+ * model turned a judgeable case into a deterministic "Input is too long for
+ * requested model" failure on the judge's SECOND turn. Env override:
+ * `AH_JUDGE_TOOL_RESULT_CAP` (chars).
+ */
+export const DEFAULT_TOOL_RESULT_CAP_CHARS = 100_000;
+/** Long attribute values (tool inputs/outputs echoed into span attrs) are cut to this first. */
+const ATTRIBUTE_VALUE_CAP_CHARS = 2_000;
+
+export function resolveToolResultCap(): number {
+  const n = Number.parseInt(process.env.AH_JUDGE_TOOL_RESULT_CAP ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_TOOL_RESULT_CAP_CHARS;
+}
+
+function capAttributeValues(attrs: unknown, cap: number): unknown {
+  if (!attrs || typeof attrs !== 'object') return attrs;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(attrs as Record<string, unknown>)) {
+    const s = typeof v === 'string' ? v : v != null && typeof v === 'object' ? JSON.stringify(v) : undefined;
+    out[k] = s !== undefined && s.length > cap ? `${s.slice(0, cap)}…[truncated ${s.length - cap} chars]` : v;
+  }
+  return out;
+}
+
+/**
+ * Bound a `query_spans` payload to `capChars` when serialized:
+ *   1. cut long attribute values (the usual culprit: tool call inputs/outputs
+ *      echoed into span attributes) to ATTRIBUTE_VALUE_CAP_CHARS, then to a
+ *      quarter of that if still too big;
+ *   2. if still too big, drop spans from the MIDDLE — the first spans carry
+ *      the run's setup/intent and the last ones carry the outcome/failure
+ *      evidence, which is what a judge needs most — and say how many.
+ * Returns the (possibly) reduced span list plus a `truncation` note the
+ * model can act on (narrow with `nameFilter`).
+ */
+export function boundSpansPayload<T extends { attributes?: unknown }>(
+  spans: T[],
+  capChars: number,
+): { spans: T[]; truncation?: { attributeValuesCapped: boolean; droppedSpans: number; note: string } } {
+  const size = (s: T[]) => JSON.stringify(s).length;
+  if (size(spans) <= capChars) return { spans };
+  let attrCap = ATTRIBUTE_VALUE_CAP_CHARS;
+  let reduced = spans.map((s) => ({ ...s, attributes: capAttributeValues(s.attributes, attrCap) }));
+  if (size(reduced) > capChars) {
+    attrCap = Math.floor(ATTRIBUTE_VALUE_CAP_CHARS / 4);
+    reduced = spans.map((s) => ({ ...s, attributes: capAttributeValues(s.attributes, attrCap) }));
+  }
+  let dropped = 0;
+  while (reduced.length > 1 && size(reduced) > capChars) {
+    // Remove a middle slice proportional to the overshoot so we don't loop
+    // hundreds of times; keep the head and the tail.
+    const overshoot = size(reduced) / capChars;
+    const drop = Math.min(reduced.length - 1, Math.max(1, Math.floor(reduced.length * (1 - 1 / overshoot))));
+    const keep = reduced.length - drop;
+    const head = Math.ceil(keep / 2);
+    const tail = keep - head;
+    reduced = [...reduced.slice(0, head), ...(tail > 0 ? reduced.slice(reduced.length - tail) : [])];
+    dropped += drop;
+  }
+  return {
+    spans: reduced,
+    truncation: {
+      attributeValuesCapped: true,
+      droppedSpans: dropped,
+      note:
+        `Result exceeded the ${capChars}-char tool budget: long attribute values were cut to ${attrCap} chars` +
+        (dropped > 0 ? ` and ${dropped} of ${spans.length} spans were dropped from the middle (first and last spans kept)` : '') +
+        '. Pass nameFilter to narrow the query if you need the rest.',
+    },
+  };
+}
+
+/** Bound a `query_logs` payload by dropping trailing log lines. */
+export function boundLogsPayload<T>(logs: T[], capChars: number): { logs: T[]; truncation?: { droppedLogs: number; note: string } } {
+  const size = (l: T[]) => JSON.stringify(l).length;
+  if (size(logs) <= capChars) return { logs };
+  let reduced = logs;
+  while (reduced.length > 0 && size(reduced) > capChars) {
+    const overshoot = size(reduced) / capChars;
+    const drop = Math.max(1, Math.floor(reduced.length * (1 - 1 / overshoot)));
+    reduced = reduced.slice(0, Math.max(0, reduced.length - drop));
+  }
+  const dropped = logs.length - reduced.length;
+  return {
+    logs: reduced,
+    truncation: {
+      droppedLogs: dropped,
+      note: `Result exceeded the ${capChars}-char tool budget: the last ${dropped} of ${logs.length} log lines were dropped. Pass a query substring to narrow.`,
+    },
+  };
 }
 
 type TraceAgentHint = { serviceName: string; startedAt: number; endedAt: number; sessionId?: string };
@@ -131,11 +233,14 @@ export function createTraceJudgeExtension(
             status: s.status,
             attributes: s.attributes,
           }));
+          const bounded = boundSpansPayload(summary, resolveToolResultCap());
           return textResult({
             runId: runId ?? null,
             scope: runId ? 'runId' : 'agents-hints',
             spanCount: summary.length,
-            spans: summary,
+            returnedSpanCount: bounded.spans.length,
+            spans: bounded.spans,
+            ...(bounded.truncation ? { truncation: bounded.truncation } : {}),
             warning: data?.warning,
           });
         } catch (err: any) {
@@ -188,10 +293,14 @@ export function createTraceJudgeExtension(
             return textResult({ error: `logs query failed: HTTP ${res.status}` });
           }
           const data: any = await res.json();
+          const rawLogs = data?.logs ?? data;
+          const boundedLogs: { logs: unknown; truncation?: { droppedLogs: number; note: string } } =
+            Array.isArray(rawLogs) ? boundLogsPayload(rawLogs, resolveToolResultCap()) : { logs: rawLogs };
           return textResult({
             runId: runId ?? null,
             scope: runId ? 'runId' : 'time-window',
-            logs: data?.logs ?? data,
+            logs: boundedLogs.logs,
+            ...(boundedLogs.truncation ? { truncation: boundedLogs.truncation } : {}),
           });
         } catch (err: any) {
           return textResult({ error: `logs query error: ${err?.message ?? String(err)}` });

@@ -4,6 +4,7 @@
  */
 
 import {
+  repairJsonControlChars,
   parseJudgeResponse,
   extractJsonFromResponse,
 } from '@/server/services/judgeResponseParser';
@@ -364,5 +365,43 @@ describe('computeWeightedOverall / overallScore', () => {
     const raw = JSON.stringify({ pass_fail_status: 'failed', reasoning: 'nothing' });
     const res = parseJudgeResponse(raw, { evaluator });
     expect(res.overallScore).toBeUndefined();
+  });
+});
+
+describe('repairJsonControlChars — raw control characters inside JSON strings', () => {
+  it('escapes literal newlines/tabs inside string values and leaves structural whitespace alone', () => {
+    const broken = '{\n  "pass_fail_status": "failed",\n  "reasoning": "line one\nline two\ttabbed",\n  "accuracy": 40\n}';
+    expect(() => JSON.parse(broken)).toThrow();
+    const repaired = repairJsonControlChars(broken);
+    const parsed = JSON.parse(repaired);
+    expect(parsed.reasoning).toBe('line one\nline two\ttabbed');
+    expect(parsed.accuracy).toBe(40);
+    // structural newlines outside strings are untouched
+    expect(repaired.startsWith('{\n  "pass_fail_status"')).toBe(true);
+  });
+
+  it('respects escapes — an escaped quote does not end the string, an already-escaped \\n is not double-escaped', () => {
+    const text = '{"reasoning": "she said \\"hi\\"\nand left", "ok": "a\\nb"}';
+    const parsed = JSON.parse(repairJsonControlChars(text));
+    expect(parsed.reasoning).toBe('she said "hi"\nand left');
+    expect(parsed.ok).toBe('a\nb');
+  });
+
+  it('encodes other control characters as \\uXXXX', () => {
+    const text = '{"r": "a\u0001b"}';
+    expect(JSON.parse(repairJsonControlChars(text)).r).toBe('a\u0001b');
+  });
+
+  it('parseJudgeResponse recovers a verdict whose reasoning contains a literal line break', () => {
+    const raw = '```json\n{\n  "pass_fail_status": "passed",\n  "accuracy": 90,\n  "reasoning": "**Facts**\n\nAll three present."\n}\n```';
+    const res = parseJudgeResponse(raw, { source: 'Test' });
+    expect(res.passFailStatus).toBe('passed');
+    expect(res.metrics.accuracy).toBe(90);
+    expect(res.llmJudgeReasoning).toBe('**Facts**\n\nAll three present.');
+  });
+
+  it('parseJudgeResponse still rejects JSON that is broken beyond control characters', () => {
+    expect(() => parseJudgeResponse('{"pass_fail_status": "passed", "reasoning": "unterminated}', { source: 'Test' }))
+      .toThrow(/Test: failed to parse judge JSON/);
   });
 });

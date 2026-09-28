@@ -509,10 +509,38 @@ describe('Judge Routes', () => {
 
       await handler(req, res);
 
+      // A 401 from the endpoint is an `auth` failure: deterministic, so the
+      // body carries errorClass/retryable:false (the client stops after one
+      // try); the status stays 500 (unchanged wire contract).
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           error: expect.stringContaining('Judge evaluation failed'),
+          errorClass: 'auth',
+          retryable: false,
+        })
+      );
+    });
+
+    it('returns 500 + retryable:true for an unclassifiable OpenAI-compatible failure', async () => {
+      mockEvaluateWithOpenAICompatible.mockRejectedValue(new Error('something odd happened'));
+      mockParseOpenAICompatibleError.mockReturnValue('OpenAI-compatible judge failed: something odd happened');
+
+      const { req, res } = createMocks({
+        trajectory: [{ type: 'action' }],
+        expectedOutcomes: ['Test'],
+        modelId: 'gpt-4o',
+      });
+      const handler = getRouteHandler(judgeRoutes, 'post', '/api/judge');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: 'Judge evaluation failed: OpenAI-compatible judge failed: something odd happened',
+          errorClass: 'unknown',
+          retryable: true,
         })
       );
     });

@@ -11,6 +11,7 @@
 import { TrajectoryStep, EvaluationMetrics, ImprovementStrategy, OpenSearchLog, PassFailStatus } from '@/types';
 import { ENV_CONFIG } from '@/lib/config';
 import { getBackendUrl } from '@/lib/portConfig';
+import { type JudgeErrorClass, maxJudgeAttemptsFor } from '@/lib/judgeErrorPolicy';
 
 interface JudgeResult {
   passFailStatus: PassFailStatus;
@@ -117,6 +118,7 @@ export async function callBedrockJudge(
   console.log('[BedrockJudge] Model:', modelId || '(using default)');
 
   const judgeStartTime = Date.now();
+  let lastErrorClass: JudgeErrorClass | undefined;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -149,11 +151,32 @@ export async function callBedrockJudge(
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         const errorMessage = errorData.error || `API request failed with status ${response.status}`;
+        // The route classifies its failures (server/services/judgeErrors.ts):
+        // `retryable: false` means the identical request will fail identically
+        // (context overflow, expired credentials, empty/invalid verdict...) —
+        // do not burn the exponential-backoff budget on it. `errorClass`
+        // additionally bounds how many attempts a class deserves (see
+        // maxJudgeAttemptsFor). Older servers omit both fields; then the
+        // status-code rule below applies unchanged.
+        const errorClass: JudgeErrorClass | undefined =
+          typeof errorData.errorClass === 'string' ? (errorData.errorClass as JudgeErrorClass) : undefined;
+        if (errorClass) lastErrorClass = errorClass;
+        if (errorClass && errorData.retryable === false) {
+          if (maxJudgeAttemptsFor(errorClass, maxRetries) <= attempt) {
+            const tail = typeof errorData.stderrTail === 'string' && errorData.stderrTail ? ` [stderr: ${errorData.stderrTail}]` : '';
+            throw Object.assign(
+              new Error(`Judge failed (${errorClass}, not retryable): ${errorMessage}${tail}`),
+              { nonRetryable: true, errorClass },
+            );
+          }
+          // Reduced-budget class (e.g. invalid_json): one more roll of the dice.
+          throw new Error(errorMessage);
+        }
         // 4xx client errors are validation failures — retrying won't help
-        if (response.status >= 400 && response.status < 500) {
-          throw Object.assign(new Error(`Bedrock Judge validation error (not retryable): ${errorMessage}`), { nonRetryable: true });
+        if (response.status >= 400 && response.status < 500 && errorData.retryable !== true) {
+          throw Object.assign(new Error(`Bedrock Judge validation error (not retryable): ${errorMessage}`), { nonRetryable: true, errorClass });
         }
         throw new Error(errorMessage);
       }
@@ -206,14 +229,18 @@ export async function callBedrockJudge(
 
       console.error(`[BedrockJudge] Attempt ${attempt} failed:`, errorMessage);
 
-      // Fail fast on non-retryable errors (4xx validation failures)
+      // Fail fast on non-retryable errors (4xx validation failures,
+      // server-classified deterministic judge failures)
       if ((error as any)?.nonRetryable) {
         throw error;
       }
 
-      // If this is the last attempt, throw the error
-      if (isLastAttempt) {
-        throw new Error(`Bedrock Judge evaluation failed after ${maxRetries} attempts: ${errorMessage}`);
+      // If this is the last attempt for this failure class, throw the error.
+      // A class with a reduced budget (e.g. invalid_json → 2) stops early
+      // instead of re-rolling the same prompt ten times.
+      const attemptsAllowed = maxJudgeAttemptsFor(lastErrorClass, maxRetries);
+      if (isLastAttempt || attempt >= attemptsAllowed) {
+        throw new Error(`Bedrock Judge evaluation failed after ${attempt} attempt${attempt === 1 ? '' : 's'}${lastErrorClass ? ` (${lastErrorClass})` : ''}: ${errorMessage}`);
       }
 
       // Calculate exponential backoff delay: 1s, 2s, 4s

@@ -20,6 +20,7 @@ import {
   describeDefaultAgentJudgeModel,
   AGENT_JUDGE_MODEL_ENV,
 } from '@/server/services/piAgenticJudgeService';
+import { isJudgeError, redactSecrets, toJudgeError } from '@/server/services/judgeErrors';
 import { evaluateWithAgenticJudge, parseAgenticJudgeError } from '@/server/services/agenticJudgeService';
 import { hasTraceCorrelation } from '@/services/traces/judgeAgentsHints';
 import { loadConfigSync } from '@/lib/config/index';
@@ -392,6 +393,12 @@ router.get('/api/judge/models', async (_req: Request, res: Response) => {
  * POST /api/judge - Evaluate agent trajectory
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
+  // The provider actually used, recorded once resolved so the catch block
+  // below formats the error with the RIGHT provider's parser. It used to be
+  // re-derived from `config.models[modelId]` alone — which ignores the
+  // evaluator's `inferenceConfig.provider` (how the pi / agent judges are
+  // normally selected) and fell through to the Bedrock parser.
+  let resolvedProvider: string | undefined;
   try {
     const { trajectory, expectedOutcomes, expectedTrajectory, logs, modelId, evaluatorId, runId, agents } = req.body;
 
@@ -445,6 +452,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       modelConfig = Object.values(config.models).find(m => m.model_id === modelId);
     }
     const provider = evaluator.inferenceConfig?.provider || modelConfig?.provider || 'bedrock';
+    resolvedProvider = provider;
 
     // Use the resolved model_id: evaluator override > config > provided
     const resolvedModelId = evaluator.inferenceConfig?.modelId || modelConfig?.model_id || modelId;
@@ -617,7 +625,7 @@ router.post('/api/judge', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('[JudgeAPI] Error during evaluation:', error);
 
-    const provider = (() => {
+    const provider = resolvedProvider ?? (() => {
       try {
         const config = loadConfigSync();
         const { modelId } = req.body;
@@ -629,7 +637,13 @@ router.post('/api/judge', async (req: Request, res: Response) => {
       }
     })();
 
-    const errorMessage = provider === 'agentic'
+    // A JudgeError's message already names the real cause (context overflow,
+    // CLI crash + stderr tail, empty stdout, ...). Only the pi/agent parser
+    // knows how to phrase its classes; every other provider's legacy
+    // heuristic parser would collapse it back into a generic message.
+    const errorMessage = isJudgeError(error) && provider !== 'pi' && provider !== 'agent'
+      ? error.message
+      : provider === 'agentic'
       ? parseAgenticJudgeError(error)
       : provider === 'pi' || provider === 'agent'
         ? parsePiError(error)
@@ -641,9 +655,21 @@ router.post('/api/judge', async (req: Request, res: Response) => {
               ? parseOpenAICompatibleError(error)
               : parseBedrockError(error);
 
+    // Classify so the caller's retry loop (services/evaluation/bedrockJudge.ts)
+    // can stop immediately on deterministic failures — a context overflow,
+    // expired credentials or an empty verdict come back identical on every
+    // re-send of the same input; only throttling/timeouts/network blips are
+    // worth the exponential-backoff budget. The HTTP status stays 500 for
+    // every judge-side failure (unchanged wire contract); `errorClass` +
+    // `retryable` carry the semantics. Provider/SDK error text can quote
+    // headers or tokens — mask obvious secrets before it leaves the server.
+    const classified = toJudgeError(error);
     res.status(500).json({
-      error: `Judge evaluation failed: ${errorMessage}`,
-      details: error.message
+      error: `Judge evaluation failed: ${redactSecrets(errorMessage)}`,
+      details: redactSecrets(error.message),
+      errorClass: classified.errorClass,
+      retryable: classified.retryable,
+      ...(classified.stderrTail ? { stderrTail: classified.stderrTail } : {}),
     });
   }
 });

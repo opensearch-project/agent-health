@@ -256,6 +256,53 @@ export function computeWeightedOverall(
   return Math.round((weighted / totalWeight) * 100) / 100;
 }
 
+/**
+ * Escape raw control characters (U+0000–U+001F) that appear INSIDE JSON
+ * string literals — the one malformation LLM-emitted verdicts hit in
+ * practice (a literal line break in a long `reasoning` value). Text outside
+ * strings is left untouched, so structural whitespace still parses. Anything
+ * else that is wrong with the document is left for `JSON.parse` to reject.
+ * @internal exported for unit tests
+ */
+export function repairJsonControlChars(text: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        out += ch;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        out += ch;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+        out += ch;
+        continue;
+      }
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) {
+        out +=
+          ch === '\n' ? '\\n'
+          : ch === '\r' ? '\\r'
+          : ch === '\t' ? '\\t'
+          : `\\u${code.toString(16).padStart(4, '0')}`;
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    out += ch;
+  }
+  return out;
+}
+
 export interface ParseOptions {
   /** Evaluator whose scoringConfig drives metric extraction. */
   evaluator?: Evaluator;
@@ -288,9 +335,20 @@ export function parseJudgeResponse(
   try {
     parsed = JSON.parse(jsonText);
   } catch (err: any) {
-    throw new Error(
-      `${source}: failed to parse judge JSON (${err.message}). First 200 chars: ${jsonText.slice(0, 200)}`
-    );
+    // Models routinely emit a literal newline/tab inside a JSON string (the
+    // long `reasoning` field is the usual offender) — invalid JSON, but the
+    // verdict is otherwise intact. Escape control characters that occur
+    // inside string literals and retry before declaring the response
+    // unparseable.
+    const repaired = repairJsonControlChars(jsonText);
+    try {
+      parsed = JSON.parse(repaired);
+      debug(source, 'judge JSON parsed after escaping raw control characters inside strings');
+    } catch {
+      throw new Error(
+        `${source}: failed to parse judge JSON (${err.message}). First 200 chars: ${jsonText.slice(0, 200)}`
+      );
+    }
   }
 
   const metrics = extractMetrics(parsed, options.evaluator, source);

@@ -270,6 +270,24 @@ Debug logging can also be toggled at runtime via the Settings page "Verbose Logg
 | `AGENT_HEALTH_EVAL_ROOTS` | Path-delimiter-separated directories a relative code-SDK `sourceFile` is resolved against (see [`evalRoots`](#where-the-server-looks-for-eval-source-files-evalroots)) | server cwd |
 | `BEDROCK_MODEL_ID` | Judge model ID | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 
+### Judge input budgets
+
+The judge's evaluation prompt is fit to the model's context window before the
+call — the largest trajectory field is truncated first, with an explicit
+`…[truncated N chars to fit the judge's context budget]` marker — so an oversized
+trajectory degrades to a judged verdict instead of a deterministic
+"Input is too long for requested model" failure. Judge failures are classified
+(`context_overflow`, `throttling`, `timeout`, `empty_response`, `invalid_json`, …)
+and only transient classes are retried.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AH_JUDGE_CONTENT_CAP` | Max chars of a single trajectory step's `content` sent to the judge | `50000` |
+| `AH_JUDGE_TOOL_OUTPUT_CAP` | Max chars of a single step's `toolOutput` sent to the judge | `100000` |
+| `AH_JUDGE_NO_TRUNCATE` | `1` disables the two per-step caps above | unset |
+| `AH_JUDGE_PROMPT_BUDGET_TOKENS` | Whole-prompt budget for the pi / agent-trace judges (overrides the default of half the model's context window; ~2.5 chars per token) | half the context window |
+| `AH_JUDGE_TOOL_RESULT_CAP` | Max chars of one `query_spans` / `query_logs` result returned to the agent-trace judge (long attribute values are cut first, then middle spans / trailing log lines are dropped with a note) | `100000` |
+| `AH_PI_JUDGE_TIMEOUT_MS` | Timeout for the spawned `pi` CLI judge | `300000` |
 ## Where the server looks for eval source files (`evalRoots`)
 
 Code-SDK test cases imported from an `.eval.js` / `.eval.ts` / `.eval.mjs`
