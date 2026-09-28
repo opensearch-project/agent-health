@@ -299,6 +299,16 @@ jobs:
           # storage path runs against the real backend instead of file mode.
           OPENSEARCH_STORAGE_ENDPOINT: http://localhost:9200
           OPENSEARCH_STORAGE_AUTH_TYPE: none
+          # Emit agent-health's own eval spans into the server's embedded OTLP
+          # receiver (file trace store) so trace-correlation integration tests
+          # can assert on the real `test_case` spans / W3C trace ids — e.g.
+          # tests/integration/server/routes/storage/benchmarkExecuteTracePerCase.
+          OTEL_EVAL_ENABLED: 'true'
+          OTEL_EVAL_EXPORTER_ENDPOINT: http://localhost:4001/v1/traces
+          # No external trace backend here; fail trace polls fast instead of
+          # burning the default 10-minute budget per pending report.
+          TRACE_POLL_MAX_ATTEMPTS: '5'
+          TRACE_POLL_INTERVAL_MS: '1000'
 
       - name: Wait for server to be healthy
         run: |

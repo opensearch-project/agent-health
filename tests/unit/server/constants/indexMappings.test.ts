@@ -49,6 +49,17 @@ describe('indexMappings', () => {
       expect(runsMapping.mappings.properties.metrics).toBeDefined();
     });
 
+    it('declares the three trace-correlation fields on the runs index, runId in the dynamic-compatible shape', () => {
+      const mappings = getIndexMappings();
+      const runsKey = Object.keys(mappings).find((k) => k.includes('runs'))!;
+      const props = mappings[runsKey].mappings.properties;
+      expect(props.traceId).toEqual({ type: 'keyword' });
+      expect(props.sessionId).toEqual({ type: 'keyword' });
+      // Must match what dynamic mapping already produced on existing clusters
+      // (text + .keyword), or the boot-time putMapping conflicts and fails.
+      expect(props.runId).toEqual({ type: 'text', fields: { keyword: { type: 'keyword', ignore_above: 256 } } });
+    });
+
     it('should have analytics index mapping', () => {
       const mappings = getIndexMappings();
       const analyticsKey = Object.keys(mappings).find((k) => k.includes('analytics'));

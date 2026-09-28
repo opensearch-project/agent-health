@@ -27,6 +27,7 @@ import type {
   ConnectorProtocol,
 } from '@/types';
 import { fetchChunked } from '@/lib/chunkedFetch';
+import { resolveReportTraceId } from '@/lib/traceIdentity';
 
 // Re-export search types for convenience
 export interface SearchQuery {
@@ -222,7 +223,10 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
     iteration: 1, // Default to 1, can be overridden
     status: report.status,
     passFailStatus: report.passFailStatus,
-    traceId: report.runId,
+    // `traceId` is reserved for the OTel W3C trace id; the connector run id
+    // is its own field (mirrors server/services/storage/index.ts).
+    runId: report.runId,
+    traceId: resolveReportTraceId(undefined, report.traceId),
     tags: [],
     actualOutcomes: [],
     llmJudgeReasoning: report.llmJudgeReasoning,
@@ -388,14 +392,18 @@ class AsyncRunStorage {
   async getReportSummariesByIds(reportIds: string[]): Promise<Record<string, EvaluationReport>> {
     if (reportIds.length === 0) return {};
     // Stored-doc field names (the projection runs server-side on the stored
-    // shape): `traceId` maps to app-level `runId` in toTestCaseRun.
+    // shape). `runId` (connector run id) and `traceId` (OTel W3C trace id) are
+    // distinct fields — both are needed so toTestCaseRun's `runId || traceId`
+    // fallback only kicks in for pre-fix documents that never stored a runId,
+    // instead of silently reporting the trace id as the run id for every
+    // summary read.
     // `metrics` added for RunInsightsPane's "Avg Score" detail (run-report-insights):
     // it's a small dynamic object of a handful of numeric fields, not the
     // trajectory/messages bloat #429 fixed - safe to include in the summary.
     // `scoringSnapshot` (small, bounded object) rides along with `metrics` so
     // summary-only readers can derive the snapshot score without the full doc.
     const fields = [
-      'status', 'passFailStatus', 'metricsStatus', 'traceId', 'sessionId',
+      'status', 'passFailStatus', 'metricsStatus', 'runId', 'traceId', 'sessionId',
       'judgeModelId', 'judgeModel', 'judgeProvider', 'modelId', 'agentId', 'testCaseId', 'createdAt', 'annotations', 'metrics',
       'scoringSnapshot',
     ];
@@ -456,7 +464,15 @@ class AsyncRunStorage {
     if (updates.trajectory !== undefined) storageUpdates.trajectory = updates.trajectory;
     if (updates.rawEvents !== undefined) storageUpdates.rawEvents = updates.rawEvents;
     if (updates.logs !== undefined) storageUpdates.logs = updates.logs;
-    if (updates.runId !== undefined) storageUpdates.traceId = updates.runId;
+    // `runId` and `traceId` are separate stored fields. Pre-fix this wrote the
+    // connector run id INTO `traceId` on every update — the same mis-stamp the
+    // create path had — which would clobber a valid W3C trace id after the
+    // fact. A non-W3C `traceId` update is dropped (lib/traceIdentity.ts).
+    if (updates.runId !== undefined) storageUpdates.runId = updates.runId;
+    if (updates.traceId !== undefined) {
+      const traceId = resolveReportTraceId(undefined, updates.traceId);
+      if (traceId !== undefined) storageUpdates.traceId = traceId;
+    }
     if ((updates as any).sessionId !== undefined) (storageUpdates as any).sessionId = (updates as any).sessionId;
     if (updates.improvementStrategies !== undefined) storageUpdates.improvementStrategies = updates.improvementStrategies;
     if ((updates as any).matcherResults !== undefined) (storageUpdates as any).matcherResults = (updates as any).matcherResults;

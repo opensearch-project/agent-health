@@ -23,6 +23,7 @@ import { ensureServer, createServerCleanup, isServerRunning, type EnsureServerRe
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, ServerError, type BenchmarkExecutionEvent } from '@/cli/utils/apiClient.js';
 import { resolveUnifiedRunOutcome } from '@/cli/utils/evaluationRunOutcome.js';
+import { projectEvaluationRunToBenchmarkRun } from '@/lib/benchmarkRunProjection.js';
 import { validateTestCasesArrayJson, type ValidatedTestCaseInput } from '@/lib/testCaseValidation.js';
 import { calculateRunStats, getReportIdsFromRun } from '@/lib/runStats.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
@@ -161,7 +162,50 @@ async function fetchReportsForRun(
 }
 
 /**
- * Run benchmark for a single agent via server API
+ * One-line notice printed once per command when a mode that used to call the
+ * legacy `/execute` route (named benchmark, JSON `-f`, quick mode) runs. The
+ * route is deprecated (see docs/CLI.md → "Benchmark execution path"); the CLI
+ * now executes those modes through the evaluation-runs API.
+ */
+export const LEGACY_EXECUTE_ROUTE_NOTICE =
+  'Note: running through the evaluation-runs API (one trace per test case). ' +
+  'The legacy POST /api/storage/benchmarks/:id/execute route is deprecated and no longer used by the CLI.';
+
+/**
+ * Decide which execution path `benchmark` takes for a given set of flags.
+ *
+ *  - `unified-sources`: ad-hoc sources (-d / -t / --label / several -f / any
+ *    code eval file) → `runUnifiedMode` builds evaluation-run sources directly.
+ *  - `benchmark-run`: everything else (-n <existing>, single JSON -f, quick
+ *    mode) → the classic front-end (import / create benchmark / agent loop /
+ *    summary + export) whose EXECUTION now goes through
+ *    `ApiClient.executeBenchmarkAsEvaluationRun` — never the legacy
+ *    `/execute` route.
+ *
+ * Pure so the decision table is unit-testable.
+ */
+export function resolveBenchmarkDispatch(opts: {
+  files: string[];
+  dir?: string[];
+  testCase?: string[];
+  label?: string[];
+}): 'unified-sources' | 'benchmark-run' {
+  const hasCodeFile = opts.files.some(f => isCodeFile(f));
+  const hasNewFlags =
+    (opts.dir?.length ?? 0) > 0 ||
+    (opts.testCase?.length ?? 0) > 0 ||
+    (opts.label?.length ?? 0) > 0 ||
+    opts.files.length > 1;
+  return hasNewFlags || hasCodeFile ? 'unified-sources' : 'benchmark-run';
+}
+
+/**
+ * Run benchmark for a single agent via server API.
+ *
+ * Executes through the evaluation-runs API (`executeBenchmarkAsEvaluationRun`),
+ * NOT the legacy `/execute` route: the legacy runner put every test case of a
+ * run under one OTel trace, so `useTraces` agents that adopt the propagated
+ * `traceparent` produced one shared trace per run and 0/N reports resolved.
  */
 async function runBenchmarkForAgent(
   api: ApiClient,
@@ -186,8 +230,8 @@ async function runBenchmarkForAgent(
   let startedRunId: string | undefined;
 
   try {
-    // Execute benchmark via server API (SSE stream)
-    const completedRun = await api.executeBenchmark(
+    // Execute benchmark via the evaluation-runs API (SSE stream)
+    const completedRun = await api.executeBenchmarkAsEvaluationRun(
       benchmark.id,
       {
         name: `CLI Run - ${agent.name}`,
@@ -266,9 +310,15 @@ async function runBenchmarkForAgent(
     if (startedRunId) {
       results.runId = startedRunId;
 
-      // Try to recover partial results by fetching run state from server
+      // Try to recover partial results by fetching run state from server.
+      // The evaluation-run document is the source of truth (it exists from
+      // the `started` event on); the benchmark's `runs[]` projection is only
+      // linked once the run completes.
       try {
-        const run = await api.getRun(benchmark.id, startedRunId);
+        const evalRun = await api.getEvaluationRun(startedRunId);
+        const run = evalRun
+          ? projectEvaluationRunToBenchmarkRun(evalRun)
+          : await api.getRun(benchmark.id, startedRunId);
         if (run) {
           results.run = run;
           const reportsMap = await fetchReportsForRun(api, run);
@@ -844,23 +894,28 @@ export function createBenchmarkCommand(): Command {
       const serverConfig = { ...DEFAULT_SERVER_CONFIG, ...config.server };
       const isCI = !!process.env.CI;
 
-      // Detect "unified mode" — new flags that use the evaluation-runs API
+      // Detect "unified sources" mode — ad-hoc source flags that build
+      // evaluation-run sources directly. Code eval files (.eval.js/.ts/.mjs)
+      // must go through `code-import` so their bodies actually execute — the
+      // single-file import path below only bulk-imports test cases and never
+      // runs the SDK body — so any code file forces this mode.
       const fileArray = Array.isArray(options.file) ? options.file : (options.file ? [options.file] : []);
-      // Code eval files (.eval.js/.ts/.mjs) must run through the unified
-      // evaluation-runs API as `code-import` so their bodies actually
-      // execute. The legacy single-file path only bulk-imports test cases
-      // and never runs the SDK body — so any code file forces unified mode.
-      const hasCodeFile = fileArray.some(f => isCodeFile(f));
-      const hasNewFlags = (options.dir && options.dir.length > 0) ||
-        (options.testCase && options.testCase.length > 0) ||
-        (options.label && options.label.length > 0) ||
-        fileArray.length > 1;
+      const dispatch = resolveBenchmarkDispatch({
+        files: fileArray,
+        dir: options.dir,
+        testCase: options.testCase,
+        label: options.label,
+      });
 
-      if (hasNewFlags || hasCodeFile || (fileArray.length > 0 && (options.dir?.length || options.testCase?.length || options.label?.length))) {
-        // Unified evaluation-run mode — delegate to new API
+      if (dispatch === 'unified-sources') {
         await runUnifiedMode(options, config, serverConfig, isCI, fileArray);
         return;
       }
+
+      // Every remaining mode (named benchmark, JSON -f import, quick mode)
+      // used to execute through the legacy /execute route. It now runs through
+      // the evaluation-runs API (see runBenchmarkForAgent) — say so once.
+      console.log(chalk.gray(`  ${LEGACY_EXECUTE_ROUTE_NOTICE}`));
 
       // Check if server is already running (for smart defaults)
       const serverWasRunning = await isServerRunning(serverConfig.port);
@@ -1232,12 +1287,25 @@ export function createBenchmarkCommand(): Command {
           agents = [enabledAgent];
           console.log(chalk.gray(`  Agent: ${agents[0].name} (default)`));
         } else {
+          // Agents the SERVER knows (its config + UI-added custom endpoints).
+          // The server resolves `agentKey` when the run starts, so an agent
+          // that is not in the CLI's local config but exists server-side is
+          // perfectly runnable — fetched lazily, only on a local miss.
+          let serverAgents: AgentConfig[] | undefined;
+          const findServerAgent = async (identifier: string): Promise<AgentConfig | undefined> => {
+            serverAgents ??= await api.listAgents().catch(() => []);
+            return serverAgents.find(
+              (a) => a.key === identifier || a.name.toLowerCase() === identifier.toLowerCase()
+            );
+          };
           for (const agentId of options.agent) {
-            const agent = findAgent(agentId, config);
+            const agent = findAgent(agentId, config) ?? (await findServerAgent(agentId));
             if (!agent) {
               console.error(chalk.red(`  Error: Agent not found: ${agentId}`));
               console.log(chalk.gray('  Available agents:'));
-              for (const a of config.agents) {
+              const known = new Map<string, AgentConfig>();
+              for (const a of [...config.agents, ...(serverAgents ?? [])]) known.set(a.key, a);
+              for (const a of known.values()) {
                 console.log(chalk.gray(`    - ${a.name} (${a.key})`));
               }
               console.log('');

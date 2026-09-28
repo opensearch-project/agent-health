@@ -10,14 +10,26 @@
  * OpenTelemetry semantic conventions for test suites and GenAI evaluation.
  *
  * Span structure:
- *   test_suite_run {benchmarkName}     ← root span (1 per benchmark run)
- *     └── test_case                    ← child span (1 per test case)
- *           └── Event: gen_ai.evaluation.result
+ *   test_suite_run {benchmarkName}     ← root span of ITS OWN trace (1 per benchmark run)
+ *   test_case                          ← root span of ITS OWN trace (1 per test case),
+ *     │                                   span-LINKED to the test_suite_run span
+ *     └── Event: gen_ai.evaluation.result
+ *
+ * Why links instead of parentage: the `test_case` span is the active OTel
+ * context while the connector calls the agent, and connectors with
+ * `traceContext.propagateHeader/Env` inject its `traceparent`. Agents that
+ * honour W3C context therefore emit their spans into the test_case span's
+ * trace. If test_case spans were children of one benchmark-wide
+ * test_suite_run span, EVERY case of the run (and every one of the agent's
+ * invocations) would share a single trace id — Strategy-A correlation then
+ * returns the whole run for each report. Each test_case is a trace root of
+ * its own; the suite relationship is preserved as a span link.
  */
 
 import {
   context,
   trace,
+  ROOT_CONTEXT,
   TraceFlags,
   type Context,
   type Span,
@@ -62,6 +74,8 @@ import {
   ATTR_AGENT_HEALTH_AGENT_DURATION_MS,
   ATTR_AGENT_HEALTH_CONNECTOR_PROTOCOL,
   ATTR_AGENT_HEALTH_AGENT_RUN_ID,
+  ATTR_AGENT_HEALTH_LINK_TYPE,
+  LINK_TYPE_VALUE_TEST_SUITE_RUN,
 
   // Constants
   GEN_AI_OPERATION_NAME_VALUE_EVALUATION,
@@ -172,6 +186,43 @@ export function startTestCaseSpan(
   const ctx = trace.setSpan(parentCtx, span);
   console.log(`[Telemetry] Started test_case span for "${testCase.name}" (agentRunId=${agentRunId || 'none'})`);
   return { span, context: ctx };
+}
+
+/**
+ * Build the span links a `test_case` span carries back to its suite span.
+ * Pure (no tracer access) so the link construction is unit-testable.
+ */
+export function buildTestCaseSpanLinks(suiteSpan: Span | undefined | null): Link[] | undefined {
+  if (!suiteSpan) return undefined;
+  const ctx = suiteSpan.spanContext();
+  if (!trace.isSpanContextValid(ctx)) return undefined;
+  return [{ context: ctx, attributes: { [ATTR_AGENT_HEALTH_LINK_TYPE]: LINK_TYPE_VALUE_TEST_SUITE_RUN } }];
+}
+
+/**
+ * Start a `test_case` span as the ROOT of its own trace (parent =
+ * `ROOT_CONTEXT`, never the ambient context), span-linked to the
+ * `test_suite_run` span when there is one.
+ *
+ * Use this — not `startTestCaseSpan(parentCtx, …)` — everywhere a test case is
+ * about to invoke an agent: it guarantees per-test-case trace isolation for
+ * agents that adopt the propagated `traceparent`, regardless of whatever
+ * span happens to be active in the calling request/runner.
+ */
+export function startIsolatedTestCaseSpan(
+  testCase: TestCase,
+  benchmark: Benchmark,
+  run: BenchmarkRun,
+  options: { suiteSpan?: Span | null; agentRunId?: string } = {}
+): { span: Span; context: Context } | null {
+  return startTestCaseSpan(
+    ROOT_CONTEXT,
+    testCase,
+    benchmark,
+    run,
+    options.agentRunId,
+    buildTestCaseSpanLinks(options.suiteSpan)
+  );
 }
 
 /**

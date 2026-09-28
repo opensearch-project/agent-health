@@ -93,6 +93,24 @@ describe('TraceStore', () => {
     expect(await store.listTraceIds()).toHaveLength(25);
   });
 
+  it('concurrent writes into the SAME trace from separate store instances all land (no tmp-name collision, no lost spans)', async () => {
+    // Regression: the tmp file was `${file}.${pid}.${Date.now()}.tmp` — two
+    // exports into one trace within the same millisecond (an agent's spans +
+    // agent-health's own eval span for that case) minted the same tmp name;
+    // one rename consumed it and the other failed with ENOENT, which the OTLP
+    // receiver returned as a 400 to the agent. The read-merge-write was also
+    // unserialized, so the surviving writer could drop the other's spans.
+    const writers = Array.from({ length: 12 }, (_, i) =>
+      new TraceStore(dir).writeSpans([span({ traceId: 'shared', spanId: `s${i}` })])
+    );
+    await expect(Promise.all(writers)).resolves.toBeDefined();
+
+    const spans = await store.readTrace('shared');
+    expect(spans.map(s => s.spanId).sort()).toEqual(Array.from({ length: 12 }, (_, i) => `s${i}`).sort());
+    const leftovers = (await fs.readdir(dir)).filter(f => f.endsWith('.tmp'));
+    expect(leftovers).toEqual([]);
+  });
+
   it('honors AGENT_HEALTH_DATA_DIR when no baseDir is passed', async () => {
     const prev = process.env.AGENT_HEALTH_DATA_DIR;
     process.env.AGENT_HEALTH_DATA_DIR = dir;

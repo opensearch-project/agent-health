@@ -92,7 +92,7 @@ describe('code-eval trace attach + agent-failure surfacing — FileStorageModule
   it('#334: persists report.traceId + spans from the fetched traces (survives storage round-trip)', async () => {
     mockInvokeAgent.mockResolvedValue(stubInvocation());
     mockFetchTraces.mockResolvedValue({
-      spans: [{ spanId: 'a', traceId: 'trace-xyz', name: 'invoke_agent', startTime: '2024-01-01T00:00:00Z', endTime: '2024-01-01T00:00:01Z', status: 'OK', attributes: {} }],
+      spans: [{ spanId: 'a', traceId: '0123456789abcdef0123456789abcdef' /* real W3C id: non-hex candidates are dropped (lib/traceIdentity.ts) */, name: 'invoke_agent', startTime: '2024-01-01T00:00:00Z', endTime: '2024-01-01T00:00:01Z', status: 'OK', attributes: {} }],
       total: 1,
     } as any);
 
@@ -108,7 +108,7 @@ describe('code-eval trace attach + agent-failure surfacing — FileStorageModule
     const saved = await storage.runs.getById(reportId);
     expect(saved).toBeTruthy();
     expect((saved as any).passFailStatus).toBe('passed');
-    expect((saved as any).traceId).toBe('trace-xyz');
+    expect((saved as any).traceId).toBe('0123456789abcdef0123456789abcdef');
     expect((saved as any).spans).toHaveLength(1);
   });
 

@@ -78,7 +78,7 @@ jest.mock('@/services/traces/tracePoller', () => ({
 }));
 
 jest.mock('@/lib/telemetry/evalSpans', () => ({
-  startTestCaseSpan: jest.fn().mockReturnValue(null),
+  startIsolatedTestCaseSpan: jest.fn().mockReturnValue(null),
   finalizeTestCaseSpan: jest.fn(),
   addEvaluationResultEvents: jest.fn(),
 }));

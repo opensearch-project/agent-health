@@ -427,7 +427,10 @@ describe('Storage Service', () => {
             iteration: 3,
             status: 'completed',
             passFailStatus: 'passed',
-            traceId: 'trace-123',
+            // The connector run id is persisted as `runId` — NOT as `traceId`
+            // (a non-W3C value there black-holed the trace poller; see the
+            // dedicated test below).
+            runId: 'trace-123',
             llmJudgeReasoning: 'Good reasoning',
             metrics: { accuracy: 0.95 },
             trajectory: [{ step: 1 }],
@@ -441,6 +444,47 @@ describe('Storage Service', () => {
       expect(result.id).toMatch(/^run-/);
       expect(result.experimentId).toBe('exp-1');
       expect(result.experimentRunId).toBe('exprun-1');
+    });
+
+    it('persists runId, sessionId and a W3C traceId as three distinct fields', async () => {
+      mockClient.index.mockResolvedValue({ body: { result: 'created' } });
+      const EVAL_TRACE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
+      await saveReport({
+        testCaseId: 'tc-1',
+        agentKey: 'rest-agent',
+        modelId: 'm',
+        status: 'completed',
+        runId: 'conv-33c29f9d5b8a',
+        sessionId: 'sess-1',
+        traceId: EVAL_TRACE,
+      });
+
+      const body = mockClient.index.mock.calls[0][0].body;
+      expect(body.runId).toBe('conv-33c29f9d5b8a');
+      expect(body.sessionId).toBe('sess-1');
+      expect(body.traceId).toBe(EVAL_TRACE);
+    });
+
+    it('never writes a connector run id into traceId (legacy /execute regression: traceId === runId === "conv-…")', async () => {
+      mockClient.index.mockResolvedValue({ body: { result: 'created' } });
+
+      // A REST agent returned `{ id: 'conv-…' }` → report.runId; the runner
+      // stamped no (or a bogus) traceId. Pre-fix the doc came back with
+      // traceId === runId === 'conv-…' and the poller's exact-match filter
+      // rejected every span it fetched.
+      await saveReport({
+        testCaseId: 'tc-1',
+        agentKey: 'rest-agent',
+        modelId: 'm',
+        status: 'completed',
+        runId: 'conv-33c29f9d5b8a',
+        traceId: 'conv-33c29f9d5b8a',
+      });
+
+      const body = mockClient.index.mock.calls[0][0].body;
+      expect(body.runId).toBe('conv-33c29f9d5b8a');
+      expect(body.traceId).toBeUndefined();
     });
 
     it('persists the judge audit trail (judgeModelId + evaluatorId) on the stored doc', async () => {
