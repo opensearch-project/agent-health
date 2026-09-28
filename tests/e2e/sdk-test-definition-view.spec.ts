@@ -59,7 +59,7 @@ async function seedSdkCase(
   request: APIRequestContext,
   testData: TestDataTracker,
   withDefinition: boolean,
-): Promise<{ testCaseId: string; reportId: string }> {
+): Promise<{ testCaseId: string; reportId: string; runId: string }> {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const tcRes = await request.post('/api/storage/test-cases', {
     data: {
@@ -84,12 +84,16 @@ async function seedSdkCase(
   const testCaseId: string = (await tcRes.json()).id;
   testData.testCase(testCaseId);
 
+  // The run-report surface is the run inspector, so the report belongs to a
+  // (seeded) evaluation run and is opened via `?reportId=`.
+  const runId = `eval-run-e2e-sdk-def-${stamp}`;
   const reportId = `report-e2e-sdk-def-${stamp}`;
   const runRes = await request.post('/api/storage/runs', {
     data: {
       id: reportId,
       timestamp: new Date().toISOString(),
       testCaseId,
+      experimentRunId: runId,
       testCaseVersionId: `${testCaseId}-v1`,
       agentKey: 'demo',
       agentId: 'demo',
@@ -105,7 +109,25 @@ async function seedSdkCase(
   });
   expect(runRes.ok(), 'creating run report').toBe(true);
   testData.run(reportId);
-  return { testCaseId, reportId };
+  const evalRunRes = await request.put(`/api/storage/evaluation-runs/${runId}`, {
+    data: {
+      id: runId,
+      docType: 'evaluation-run',
+      name: `E2E SDK definition run ${stamp}`,
+      createdAt: new Date().toISOString(),
+      status: 'completed',
+      agentKey: 'demo',
+      modelId: 'demo-model',
+      sources: [],
+      trigger: 'api',
+      testCaseSnapshots: [],
+      results: { [testCaseId]: { reportId, status: 'completed', passFailStatus: 'passed' } },
+      stats: { passed: 1, failed: 0, pending: 0, errored: 0, total: 1 },
+    },
+  });
+  expect(evalRunRes.ok(), 'creating evaluation run').toBe(true);
+  testData.evaluationRun(runId);
+  return { testCaseId, reportId, runId };
 }
 
 test.describe('Run report — per-test SDK definition view', () => {
@@ -115,8 +137,8 @@ test.describe('Run report — per-test SDK definition view', () => {
   });
 
   test('shows Pretty by default with ONLY this test, Evaluate function on switch, whole file still reachable', async ({ page, request, testData }) => {
-    const { reportId } = await seedSdkCase(request, testData, true);
-    await page.goto(`/runs/${reportId}`);
+    const { reportId, runId } = await seedSdkCase(request, testData, true);
+    await page.goto(`/evaluations/runs/${runId}/inspect?reportId=${reportId}`);
 
     // Open the collapsible "Test Case Definition" section.
     const header = page.getByRole('button', { name: /test case definition/i });
@@ -162,8 +184,8 @@ test.describe('Run report — per-test SDK definition view', () => {
   });
 
   test('legacy SDK record without definition falls back to the whole file with a re-import hint', async ({ page, request, testData }) => {
-    const { reportId } = await seedSdkCase(request, testData, false);
-    await page.goto(`/runs/${reportId}`);
+    const { reportId, runId } = await seedSdkCase(request, testData, false);
+    await page.goto(`/evaluations/runs/${runId}/inspect?reportId=${reportId}`);
 
     const header = page.getByRole('button', { name: /test case definition/i });
     await expect(header).toBeVisible({ timeout: 15_000 });

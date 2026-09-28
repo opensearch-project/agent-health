@@ -4,7 +4,7 @@ This document details the performance optimizations implemented in the Agent Hea
 
 ## Overview
 
-The Benchmark Runs Overview page (`/benchmarks/:id/runs`) displays:
+The Benchmark Runs Overview page (`/evaluations/benchmarks/:id/runs`, `components/evals3/BenchmarkRunsPage.tsx`) displays:
 - Multiple benchmark runs (potentially 100+)
 - Test case execution results for each run
 - Real-time status updates during active runs
@@ -162,7 +162,7 @@ const runsNeedingStats = runs.filter((r) => {
 
 ### 1. Cached Static Fields
 
-**Location**: `components/BenchmarkRunsPage.tsx:92-157`
+**Location**: `components/evals3/BenchmarkRunsPage.tsx` (`loadBenchmark`, `cachedVersions`)
 
 ```typescript
 // Cache for static fields excluded during polling
@@ -185,7 +185,7 @@ if (isPolling && cachedVersions.current) {
 
 ### 2. Conditional Test Case Loading
 
-**Location**: `components/BenchmarkRunsPage.tsx:161-170`
+**Location**: `components/evals3/BenchmarkRunsPage.tsx` (`loadBenchmark`, `if (!isPolling)`)
 
 ```typescript
 // Only fetch test cases on initial load
@@ -203,7 +203,7 @@ if (!isPolling) {
 
 ### 3. Adaptive Polling Intervals
 
-**Location**: `components/BenchmarkRunsPage.tsx:347-355`
+**Location**: `components/evals3/BenchmarkRunsPage.tsx` (polling effect)
 
 ```typescript
 // Use 5s polling for background sync scenarios
@@ -226,7 +226,7 @@ const interval = isRunning ? POLL_INTERVAL_MS : 5000;
 
 ### 4. Derived Status with Memoization
 
-**Location**: `components/BenchmarkRunsPage.tsx:47-77`
+**Location**: `lib/runStats.ts` (`getEffectiveRunStatus`, shared by the benchmark runs and evaluation runs pages)
 
 ```typescript
 const getEffectiveRunStatus = (run: BenchmarkRun): BenchmarkRun['status'] => {
@@ -385,6 +385,6 @@ curl -X POST http://localhost:4001/api/storage/benchmarks/:id/refresh-all-stats
 | API calls (normal) | 30/min | 12/min | 60% ↓ |
 
 **For more details**, see:
-- Code: `components/BenchmarkRunsPage.tsx`
+- Code: `components/evals3/BenchmarkRunsPage.tsx`
 - Backend: `server/routes/storage/benchmarks.ts`
 - Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)

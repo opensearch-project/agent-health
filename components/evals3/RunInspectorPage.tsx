@@ -26,7 +26,9 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
-import { getEvaluationRun, updateEvaluationRun, cancelEvaluationRun, deleteEvaluationRun } from '@/services/client';
+import { getEvaluationRun, updateEvaluationRun, cancelEvaluationRun, deleteEvaluationRun, promoteEvaluationRun } from '@/services/client';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { cancelBenchmarkRun } from '@/services/client/benchmarkApi';
 import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, EvaluationReport, isEvaluationRun } from '@/types';
 import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
@@ -67,6 +69,10 @@ export const RunInspectorPage: React.FC = () => {
   // clicked. Resolve to a testCaseId once results are loaded.
   const [searchParams] = useSearchParams();
   const targetReportId = searchParams.get('reportId');
+  // The retired `/benchmarks/:id/runs/:runId?testCase=<id>` page selected a
+  // case by TEST CASE id; that URL now redirects here with the query string
+  // intact, so honour it as a second selector (reportId wins when both are set).
+  const targetTestCaseId = searchParams.get('testCase');
 
   // `mode` is derived from the route. Benchmark mode reads from
   // asyncBenchmarkStorage and PREFERS the run embedded in benchmark.runs[]
@@ -124,6 +130,13 @@ export const RunInspectorPage: React.FC = () => {
   const initialSelectionDone = React.useRef(false);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [retryJudgementDialogOpen, setRetryJudgementDialogOpen] = useState(false);
+  // "Convert to Benchmark" (promote an ad-hoc EvaluationRun to a named
+  // benchmark) — lived on the retired eval-run detail page; the inspector is
+  // now the only run-report surface, so the dialog moved here.
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  const [promoteName, setPromoteName] = useState('');
+  const [promoting, setPromoting] = useState(false);
+  const [promoteError, setPromoteError] = useState<string | null>(null);
   // Provenance: when this run was itself created via re-run, look up the
   // source run's name for the chip (falls back to a truncated id if the
   // source run was since deleted).
@@ -234,7 +247,18 @@ export const RunInspectorPage: React.FC = () => {
       const resultRows: TestCaseResult[] = tcIds.map((tcId) => {
         const runResult = runData.results[tcId];
         const report = runResult?.reportId ? summaries[runResult.reportId] || null : null;
-        const status = getResultStatus(runResult, report);
+        // When the report summary is unavailable (report doc deleted, batch
+        // fetch failed) fall back to the verdict mirrored on the run's own
+        // results entry so a judged case is not shown as still pending — the
+        // same source the runs list and lib/runStats already trust.
+        // (`passFailStatus` is not part of the typed results entry — it is the
+        // mirror the runner persists alongside it, read here the same untyped
+        // way lib/runStats#bucketRunResults reads it.)
+        const mirroredVerdict = (runResult as { passFailStatus?: string } | undefined)?.passFailStatus;
+        const verdictSource = report ?? (mirroredVerdict
+          ? ({ status: 'completed', passFailStatus: mirroredVerdict, metricsStatus: 'ready' } as unknown as EvaluationReport)
+          : null);
+        const status = getResultStatus(runResult, verdictSource);
         return { testCaseId: tcId, testCase: tcMap.get(tcId) || null, reportId: runResult?.reportId || null, status, report };
       });
 
@@ -251,7 +275,9 @@ export const RunInspectorPage: React.FC = () => {
         // still did it until now.
         const targeted = targetReportId
           ? resultRows.find(r => r.reportId === targetReportId)
-          : null;
+          : targetTestCaseId
+            ? resultRows.find(r => r.testCaseId === targetTestCaseId)
+            : null;
         if (targeted) {
           setSelectedTcId(targeted.testCaseId);
           // Make sure a deep-linked row is actually revealed by the windowed list.
@@ -294,7 +320,7 @@ export const RunInspectorPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [benchmarkId, runId, mode, navigate, targetReportId]);
+  }, [benchmarkId, runId, mode, navigate, targetReportId, targetTestCaseId]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -339,6 +365,39 @@ export const RunInspectorPage: React.FC = () => {
   // second fire-and-forget one.
   const handleRetryJudgement = () => { setRetryJudgementDialogOpen(true); };
 
+  const handlePromote = async () => {
+    if (!runId || !promoteName.trim()) return;
+    setPromoting(true);
+    setPromoteError(null);
+    try {
+      const { benchmark: created } = await promoteEvaluationRun(runId, promoteName.trim());
+      setPromoteOpen(false);
+      // The run is now benchmark-linked — land on its benchmark-scoped
+      // inspector URL so the breadcrumb / "View Benchmark" context is right.
+      navigate(`/evaluations/benchmarks/${encodeURIComponent(created.id)}/runs/${encodeURIComponent(runId)}/inspect`, { replace: true });
+    } catch (err) {
+      setPromoteError(err instanceof Error ? err.message : 'Failed to convert run to a benchmark');
+    } finally {
+      setPromoting(false);
+    }
+  };
+
+  /** Open the New-Run composer pre-filled from this run (evaluation-run docs only). */
+  const handleCustomizeRerun = (source: EvaluationRun) => {
+    navigate('/evaluations/runs/new', {
+      state: {
+        restartFrom: {
+          name: source.name,
+          sources: source.sources,
+          agentKey: source.agentKey,
+          evaluatorId: source.evaluatorId,
+          judgeModelId: source.judgeModelId,
+          benchmarkId: source.benchmarkId,
+        },
+      },
+    });
+  };
+
   // Resolve the source run name for the rerunOf provenance chip (EvaluationRun only).
   useEffect(() => {
     if (!run || !isEvaluationRun(run) || !run.rerunOf) {
@@ -367,14 +426,19 @@ export const RunInspectorPage: React.FC = () => {
   // Reset per-run UI state when navigating between runs. React Router reuses
   // the component instance across param changes, so without this the previous
   // run's selection/window/deep-link handling would leak into the next run.
-  const lastRunIdRef = React.useRef(runId);
+  // The deep-link selectors are part of that identity too: an in-place
+  // navigation from `?reportId=a` to `?reportId=b` must re-run the one-shot
+  // selection rather than keep `a` selected.
+  const selectionKey = `${runId}|${targetReportId ?? ''}|${targetTestCaseId ?? ''}`;
+  const lastSelectionKeyRef = React.useRef(selectionKey);
   useEffect(() => {
-    if (lastRunIdRef.current === runId) return;
-    lastRunIdRef.current = runId;
+    if (lastSelectionKeyRef.current === selectionKey) return;
+    const runChanged = !lastSelectionKeyRef.current.startsWith(`${runId}|`);
+    lastSelectionKeyRef.current = selectionKey;
     initialSelectionDone.current = false;
     setSelectedTcId(null);
-    setVisibleCount(ROWS_PER_PAGE);
-  }, [runId]);
+    if (runChanged) setVisibleCount(ROWS_PER_PAGE);
+  }, [selectionKey, runId]);
 
   // Infinite scroll: reveal the next page of rows when the sentinel at the
   // bottom of the left list becomes visible.
@@ -447,10 +511,17 @@ export const RunInspectorPage: React.FC = () => {
   // as their own bucket. Excluded from the pass-rate denominator below so a
   // misconfigured evaluator can't drag the score to 0%.
   const erroredCount = results.filter(r => r.status === 'errored').length;
-  // Cancelled-before-start cases (explicit `status: 'cancelled'` markers on a
-  // cancelled run) are neither judged nor pending — shown as "n not run".
-  const notRunCount = results.filter(r => r.status === 'cancelled').length;
-  const totalCount = results.length;
+  // Cancelled-before-start cases are neither judged nor pending — shown as
+  // "n not run". Counted from explicit `status: 'cancelled'` markers PLUS,
+  // on a terminal run, any planned case (testCaseSnapshots) that never got a
+  // results entry at all — older cancelled runs only recorded the executed
+  // cases (same planned-aware rule as lib/runStats#bucketRunResults, which
+  // the runs list and the retired eval-run detail page used).
+  const plannedTotal = run?.testCaseSnapshots?.length ?? 0;
+  const terminalRun = run?.status === 'completed' || run?.status === 'failed' || run?.status === 'cancelled';
+  const neverRecorded = terminalRun && plannedTotal > results.length ? plannedTotal - results.length : 0;
+  const notRunCount = results.filter(r => r.status === 'cancelled').length + neverRecorded;
+  const totalCount = results.length + neverRecorded;
   const judgedCount = passCount + failCount;
   const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
   const selectedResult = results.find(r => r.testCaseId === selectedTcId) || null;
@@ -577,7 +648,7 @@ export const RunInspectorPage: React.FC = () => {
                   className={sourceRunMissing
                     ? 'inline-flex items-center gap-1 max-w-[220px] rounded-full border border-muted-foreground/30 bg-muted/40 text-muted-foreground text-xs px-2 py-0.5 hover:bg-muted/60 transition-colors'
                     : 'inline-flex items-center gap-1 max-w-[220px] rounded-full border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 text-xs px-2 py-0.5 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors'}
-                  onClick={() => navigate(`/evaluations/runs/${evalRun.rerunOf}`)}
+                  onClick={() => navigate(`/evaluations/runs/${evalRun.rerunOf}/inspect`)}
                   title={sourceRunMissing
                     ? 'This run was created as a re-run, but the source run no longer exists'
                     : `Re-run of "${sourceRunName || evalRun.rerunOf}"`}
@@ -663,6 +734,10 @@ export const RunInspectorPage: React.FC = () => {
                   onRerun={() => setRerunDialogOpen(true)}
                   canRerun={visibility.canRerun}
                   rerunDisabledReason={visibility.rerunDisabledReason}
+                  onCustomizeRerun={evalRun ? () => handleCustomizeRerun(evalRun) : undefined}
+                  onPromote={evalRun && !evalRun.benchmarkId && evalRun.status === 'completed'
+                    ? () => { setPromoteName(''); setPromoteError(null); setPromoteOpen(true); }
+                    : undefined}
                   canRetryJudgement={canRetryJudgement}
                   retryJudgementDisabledReason={retryJudgementDisabledReason}
                   judgeFailedCount={erroredCount}
@@ -698,8 +773,40 @@ export const RunInspectorPage: React.FC = () => {
           sourceRun={evalRun}
           open={rerunDialogOpen}
           onOpenChange={setRerunDialogOpen}
-          onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}`)}
+          onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}/inspect`)}
         />
+      )}
+
+      {/* Convert to Benchmark dialog (ad-hoc EvaluationRun only) */}
+      {evalRun && (
+        <Dialog open={promoteOpen} onOpenChange={open => { if (!promoting) setPromoteOpen(open); }}>
+          <DialogContent data-testid="promote-run-dialog">
+            <DialogHeader>
+              <DialogTitle>Convert to Benchmark</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              This will create a named benchmark from the test cases in this run.
+              If a benchmark with this name exists, its test case list will be updated.
+            </p>
+            <Input
+              placeholder="Benchmark name"
+              value={promoteName}
+              data-testid="promote-run-name-input"
+              onChange={e => setPromoteName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handlePromote()}
+            />
+            {promoteError && (
+              <p className="text-xs text-red-600 dark:text-red-400" data-testid="promote-run-error">{promoteError}</p>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPromoteOpen(false)} disabled={promoting}>Cancel</Button>
+              <Button onClick={handlePromote} disabled={!promoteName.trim() || promoting} data-testid="promote-run-submit">
+                {promoting ? <Loader2 size={14} className="mr-1 animate-spin" /> : null}
+                Create Benchmark
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Retry Judgement Confirm Dialog (EvaluationRun only) */}

@@ -258,7 +258,7 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
 
     // No click-to-expand needed anymore — the link is inline on the row.
     const linkA = screen.getByTestId('open-run-run-a');
-    expect(linkA.getAttribute('href')).toBe('/evaluations/benchmarks/bench-123/runs/run-a');
+    expect(linkA.getAttribute('href')).toBe('/evaluations/benchmarks/bench-123/runs/run-a/inspect');
   });
 
   it('falls back to /evaluations/runs/:runId for an ad-hoc run with no benchmarkId', () => {
@@ -277,7 +277,7 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
     );
 
     const linkB = screen.getByTestId('open-run-run-b');
-    expect(linkB.getAttribute('href')).toBe('/evaluations/runs/run-b');
+    expect(linkB.getAttribute('href')).toBe('/evaluations/runs/run-b/inspect');
   });
 
   it('falls back to /evaluations/runs/:runId when runBenchmarkIdById is not provided at all', () => {
@@ -294,7 +294,7 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
     );
 
     const linkA = screen.getByTestId('open-run-run-a');
-    expect(linkA.getAttribute('href')).toBe('/evaluations/runs/run-a');
+    expect(linkA.getAttribute('href')).toBe('/evaluations/runs/run-a/inspect');
   });
 
   it('shows every metric on the row and a single judge line (no per-row drawer)', () => {

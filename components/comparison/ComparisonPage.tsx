@@ -258,7 +258,7 @@ export const ComparisonPage: React.FC = () => {
           // Scoped: resolve this benchmark; its runs are the pool.
           const bench = bms.find(b => b.id === benchmarkId) ?? await asyncBenchmarkStorage.getById(benchmarkId);
           if (!bench) {
-            navigate('/benchmarks');
+            navigate('/evaluations/benchmarks');
             return;
           }
           setBenchmark(bench);

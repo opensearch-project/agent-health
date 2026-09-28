@@ -25,7 +25,7 @@ export const ReadyToRun: React.FC = () => (
           Your benchmark or test case definitions are imported. Run a benchmark to generate the first results for this Overview.
         </p>
         <Button asChild className="mt-6">
-          <Link to="/benchmarks">
+          <Link to="/evaluations/benchmarks">
             Run a benchmark
             <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Link>

@@ -183,8 +183,8 @@ test.describe('Benchmark-free comparison (test-level primitive)', () => {
     // testid and assert its href — `a[href=…]` alone now resolves to both.
     const openRunLink = rowA.locator(`[data-testid="open-run-${RUN_A}"]`);
     await expect(openRunLink).toBeVisible();
-    await expect(openRunLink).toHaveAttribute('href', `/evaluations/runs/${RUN_A}`);
-    await expect(rowA.locator(`[data-testid="run-name-link-${RUN_A}"]`)).toHaveAttribute('href', `/evaluations/runs/${RUN_A}`);
+    await expect(openRunLink).toHaveAttribute('href', `/evaluations/runs/${RUN_A}/inspect`);
+    await expect(rowA.locator(`[data-testid="run-name-link-${RUN_A}"]`)).toHaveAttribute('href', `/evaluations/runs/${RUN_A}/inspect`);
 
     // Judge info renders exactly once for the whole scoreboard, not per row.
     // These fixtures record no judge at all → honest "not recorded", never the agent model.

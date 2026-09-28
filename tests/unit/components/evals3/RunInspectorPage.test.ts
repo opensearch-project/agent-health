@@ -70,6 +70,19 @@ jest.mock('@/services/client', () => ({
   updateEvaluationRun: jest.fn(),
   cancelEvaluationRun: jest.fn(),
   deleteEvaluationRun: jest.fn(),
+  promoteEvaluationRun: jest.fn(),
+}));
+
+// Radix Dialog needs portals/pointer events; render the promote dialog inline.
+jest.mock('@/components/ui/dialog', () => ({
+  Dialog: ({ open, children }: any) => (open ? React.createElement('div', { 'data-testid': 'dialog' }, children) : null),
+  DialogContent: ({ children, ...props }: any) => React.createElement('div', props, children),
+  DialogHeader: ({ children }: any) => React.createElement('div', null, children),
+  DialogTitle: ({ children }: any) => React.createElement('h3', null, children),
+  DialogFooter: ({ children }: any) => React.createElement('div', null, children),
+}));
+jest.mock('@/components/ui/input', () => ({
+  Input: (props: any) => React.createElement('input', props),
 }));
 
 const mockEnsurePolling = jest.fn();
@@ -1132,7 +1145,8 @@ describe('RunInspectorPage — Re-run button (isEvaluationRun-keyed)', () => {
     await waitFor(() => expect(screen.getByText(/re-run of Original Run/)).toBeTruthy());
 
     fireEvent.click(screen.getByTestId('rerun-provenance-chip'));
-    expect(mockNavigate).toHaveBeenCalledWith('/evaluations/runs/eval-run-0');
+    // The source run opens in the inspector (the older detail page is retired).
+    expect(mockNavigate).toHaveBeenCalledWith('/evaluations/runs/eval-run-0/inspect');
   });
 
   it('opens the Re-run confirm dialog for a dual-written evaluation-run reached via the benchmark-scoped route', async () => {
@@ -1252,12 +1266,16 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
     expect(screen.queryByText(/^Compare$/)).toBeNull();
   };
 
-  const kebabHasExactlyFourKinds = (expectCancel: boolean) => {
+  // Lifecycle kinds in menu order. "Customize before re-running…" is always
+  // offered for an evaluation-run doc; "Convert to Benchmark" (promote) only
+  // for an ad-hoc (no benchmarkId) COMPLETED one — both moved here from the
+  // retired eval-run detail page.
+  const kebabHasExactlyTheseKinds = ({ cancel, promote }: { cancel: boolean; promote: boolean }) => {
     const items = screen.getAllByRole('menuitem');
-    const kinds = items.map(el => (el.getAttribute('data-testid') || '').replace(/^run-action-/, '').replace(/-run-1$|-eval-run-1$/, ''));
-    const expected = expectCancel
-      ? ['rerun', 'cancel', 'retry-judgement', 'delete']
-      : ['rerun', 'retry-judgement', 'delete'];
+    const kinds = items.map(el => (el.getAttribute('data-testid') || '')
+      .replace(/^rerun-customize-btn$/, 'customize')
+      .replace(/^run-action-/, '').replace(/-run-1$|-eval-run-1$/, ''));
+    const expected = ['rerun', 'customize', ...(promote ? ['promote'] : []), ...(cancel ? ['cancel'] : []), 'retry-judgement', 'delete'];
     expect(kinds).toEqual(expected);
     expect(kinds).not.toContain('compare');
   };
@@ -1273,7 +1291,7 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
 
     await waitFor(() => expect(rerunItem()).toBeTruthy());
     headerButtonsAbsent();
-    kebabHasExactlyFourKinds(true);
+    kebabHasExactlyTheseKinds({ cancel: true, promote: false });
     expect(rerunItem().disabled).toBe(false);
     expect(cancelItem()).not.toBeNull();
     expect(retryJudgementItem().disabled).toBe(true);
@@ -1294,7 +1312,7 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
 
     await waitFor(() => expect(rerunItem()).toBeTruthy());
     headerButtonsAbsent();
-    kebabHasExactlyFourKinds(false);
+    kebabHasExactlyTheseKinds({ cancel: false, promote: true });
     expect(rerunItem().disabled).toBe(false);
     expect(cancelItem()).toBeNull();
     expect(retryJudgementItem().disabled).toBe(false);
@@ -1312,7 +1330,7 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
 
     await waitFor(() => expect(rerunItem()).toBeTruthy());
     headerButtonsAbsent();
-    kebabHasExactlyFourKinds(false);
+    kebabHasExactlyTheseKinds({ cancel: false, promote: true });
     expect(rerunItem().disabled).toBe(false);
     expect(cancelItem()).toBeNull();
     expect(retryJudgementItem().disabled).toBe(true);
@@ -1428,5 +1446,201 @@ describe('RunInspectorPage — kebab Delete dispatches on the run kind, not the 
 
     await waitFor(() => expect(deleteEvaluationRun).toHaveBeenCalledWith('eval-run-1'));
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/evaluations/runs'));
+  });
+});
+
+describe('RunInspectorPage — features moved here from the retired eval-run detail page', () => {
+  const promoteItem = () => screen.queryByTestId('run-action-promote-eval-run-1') as HTMLButtonElement | null;
+  const customizeItem = () => screen.queryByTestId('rerun-customize-btn') as HTMLButtonElement | null;
+
+  beforeEach(() => {
+    mockParams = { runId: 'eval-run-1' };
+    mockNavigate.mockReset();
+  });
+
+  it('offers "Convert to Benchmark" only for an ad-hoc COMPLETED evaluation run', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 1));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+    renderPage();
+    await waitFor(() => expect(promoteItem()).toBeTruthy());
+  });
+
+  it('hides "Convert to Benchmark" for a benchmark-linked run and for a still-running one', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue({ ...makeEvaluationRunFixture('eval-run-1', 1), benchmarkId: 'bench-1' });
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+    const { unmount } = renderPage();
+    await waitFor(() => expect(screen.getByTestId('run-action-rerun-eval-run-1')).toBeTruthy());
+    expect(promoteItem()).toBeNull();
+    unmount();
+
+    getEvaluationRun.mockResolvedValue({ ...makeEvaluationRunFixture('eval-run-1', 1), status: 'running' });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('run-action-rerun-eval-run-1')).toBeTruthy());
+    expect(promoteItem()).toBeNull();
+  });
+
+  it('promote dialog: submit is disabled until a name is typed; success lands on the new benchmark-scoped inspector URL', async () => {
+    const { getEvaluationRun, promoteEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 1));
+    promoteEvaluationRun.mockResolvedValue({ benchmark: { id: 'new-bm' }, run: {} });
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+    renderPage();
+    await waitFor(() => expect(promoteItem()).toBeTruthy());
+
+    fireEvent.click(promoteItem()!);
+    const submit = screen.getByTestId('promote-run-submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('promote-run-name-input'), { target: { value: '  My Bench  ' } });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(promoteEvaluationRun).toHaveBeenCalledWith('eval-run-1', 'My Bench'));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/evaluations/benchmarks/new-bm/runs/eval-run-1/inspect', { replace: true }));
+  });
+
+  it('promote dialog: a failed promotion shows the error inline and keeps the dialog open', async () => {
+    const { getEvaluationRun, promoteEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 1));
+    promoteEvaluationRun.mockRejectedValue(new Error('already associated'));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+    renderPage();
+    await waitFor(() => expect(promoteItem()).toBeTruthy());
+
+    fireEvent.click(promoteItem()!);
+    fireEvent.change(screen.getByTestId('promote-run-name-input'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByTestId('promote-run-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('promote-run-error').textContent).toContain('already associated'));
+    expect(screen.getByTestId('promote-run-dialog')).toBeTruthy();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('"Customize before re-running…" opens the New-Run composer pre-filled from this run', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue({
+      ...makeEvaluationRunFixture('eval-run-1', 1),
+      sources: [{ type: 'test-case-ids', ids: ['tc-0'] }],
+      evaluatorId: 'ev-1',
+      judgeModelId: 'judge-1',
+    });
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+    renderPage();
+    await waitFor(() => expect(customizeItem()).toBeTruthy());
+
+    fireEvent.click(customizeItem()!);
+    expect(mockNavigate).toHaveBeenCalledWith('/evaluations/runs/new', {
+      state: {
+        restartFrom: {
+          name: 'Eval Run',
+          sources: [{ type: 'test-case-ids', ids: ['tc-0'] }],
+          agentKey: 'demo',
+          evaluatorId: 'ev-1',
+          judgeModelId: 'judge-1',
+          benchmarkId: undefined,
+        },
+      },
+    });
+  });
+
+  it('does not offer Customize / Convert for a legacy benchmark-embedded run (no evaluation-run doc)', async () => {
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(1));
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockRejectedValue(new Error('404 not found'));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('run-action-rerun-run-1')).toBeTruthy());
+    expect(customizeItem()).toBeNull();
+    expect(screen.queryByTestId('run-action-promote-run-1')).toBeNull();
+  });
+});
+
+describe('RunInspectorPage — "not run" tally is planned-aware on terminal runs', () => {
+  it('counts planned cases that never got a results entry as not run on a CANCELLED run (34 executed of 62 → 28 not run, 50% over executed)', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    const executed = 34;
+    const planned = 62;
+    const results: Record<string, { reportId: string; status: string }> = {};
+    for (let i = 0; i < executed; i++) results[`tc-${i}`] = { reportId: `rep-${i}`, status: 'completed' };
+    getEvaluationRun.mockResolvedValue({
+      ...makeEvaluationRunFixture('eval-run-1', 0),
+      status: 'cancelled',
+      results,
+      testCaseSnapshots: Array.from({ length: planned }, (_, i) => ({ id: `tc-${i}`, version: 1, name: `Case ${i}` })),
+    });
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(executed));
+    const summaries: Record<string, any> = {};
+    for (let i = 0; i < executed; i++) summaries[`rep-${i}`] = { id: `rep-${i}`, passFailStatus: i % 2 === 0 ? 'passed' : 'failed', metricsStatus: 'ready' };
+    mockGetReportSummariesByIds.mockResolvedValue(summaries);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('run-inspector-not-run')).toBeTruthy());
+    expect(screen.getByTestId('run-inspector-not-run').textContent).toContain('28 not run');
+    expect(screen.getByText('/ 62')).toBeTruthy();
+    expect(screen.getByText('50%')).toBeTruthy();
+  });
+
+  it('does NOT count the shortfall while the run is still running (those cases are pending, not "not run")', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue({
+      ...makeEvaluationRunFixture('eval-run-1', 1),
+      status: 'running',
+      testCaseSnapshots: Array.from({ length: 5 }, (_, i) => ({ id: `tc-${i}`, version: 1, name: `Case ${i}` })),
+    });
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(1));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(1));
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('run-action-rerun-eval-run-1')).toBeTruthy());
+    expect(screen.queryByTestId('run-inspector-not-run')).toBeNull();
+    expect(screen.getByText('/ 1')).toBeTruthy();
+  });
+});
+
+describe('RunInspectorPage — legacy `?testCase=<id>` selector (redirected /benchmarks/:id/runs/:runId?testCase= links)', () => {
+  it('preselects the row for the given TEST CASE id when no ?reportId is present', async () => {
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
+    mockSearchParams = new URLSearchParams('testCase=tc-2');
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(3));
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockRejectedValue(new Error('404 not found'));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(3));
+    mockGetReportById.mockResolvedValue({ id: 'rep-2', testCaseId: 'tc-2', trajectory: [] });
+    mockTestCaseGetById.mockResolvedValue({ id: 'tc-2', name: 'Case 2' });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-id')).toBe('tc-2'));
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it('?reportId wins over ?testCase when both are present', async () => {
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
+    mockSearchParams = new URLSearchParams('reportId=rep-1&testCase=tc-2');
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(3));
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockRejectedValue(new Error('404 not found'));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(3));
+    mockGetReportById.mockResolvedValue({ id: 'rep-1', testCaseId: 'tc-1', trajectory: [] });
+    mockTestCaseGetById.mockResolvedValue({ id: 'tc-1', name: 'Case 1' });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('inspector-panel').getAttribute('data-tc-id')).toBe('tc-1'));
+    mockSearchParams = new URLSearchParams();
   });
 });

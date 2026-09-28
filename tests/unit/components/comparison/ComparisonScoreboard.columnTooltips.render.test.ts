@@ -165,11 +165,11 @@ describe('ComparisonScoreboard — run name is a link with the full name on hove
     );
     const a = screen.getByTestId('run-name-link-run-a');
     expect(a.tagName).toBe('A');
-    expect(a.getAttribute('href')).toBe('/evaluations/benchmarks/bench-1/runs/run-a');
+    expect(a.getAttribute('href')).toBe('/evaluations/benchmarks/bench-1/runs/run-a/inspect');
     expect(a.getAttribute('title')).toBe(LONG_NAME);
     expect(a.textContent).toBe(LONG_NAME);
     // The icon deep link agrees with the name link.
-    expect(screen.getByTestId('open-run-run-a').getAttribute('href')).toBe('/evaluations/benchmarks/bench-1/runs/run-a');
+    expect(screen.getByTestId('open-run-run-a').getAttribute('href')).toBe('/evaluations/benchmarks/bench-1/runs/run-a/inspect');
   });
 
   it('ad-hoc eval run (no benchmarkId): anchor to the bare eval-run route', () => {
@@ -178,9 +178,9 @@ describe('ComparisonScoreboard — run name is a link with the full name on hove
       new Map([['run-a', 'bench-1'], ['run-b', undefined]]),
     );
     const b = screen.getByTestId('run-name-link-run-b');
-    expect(b.getAttribute('href')).toBe('/evaluations/runs/run-b');
+    expect(b.getAttribute('href')).toBe('/evaluations/runs/run-b/inspect');
     expect(b.getAttribute('title')).toBe('Run B');
-    expect(screen.getByTestId('open-run-run-b').getAttribute('href')).toBe('/evaluations/runs/run-b');
+    expect(screen.getByTestId('open-run-run-b').getAttribute('href')).toBe('/evaluations/runs/run-b/inspect');
   });
 
   it('falls back to the agent name for both text and title when runName is missing', () => {
@@ -199,11 +199,11 @@ describe('ComparisonScoreboard — run name is a link with the full name on hove
 
 describe('runReportPath', () => {
   it('routes benchmark runs to the benchmark-scoped page and everything else to the bare eval-run page', () => {
-    expect(runReportPath('r1', 'b1')).toBe('/evaluations/benchmarks/b1/runs/r1');
-    expect(runReportPath('r1', undefined)).toBe('/evaluations/runs/r1');
-    expect(runReportPath('r1', '')).toBe('/evaluations/runs/r1');
+    expect(runReportPath('r1', 'b1')).toBe('/evaluations/benchmarks/b1/runs/r1/inspect');
+    expect(runReportPath('r1', undefined)).toBe('/evaluations/runs/r1/inspect');
+    expect(runReportPath('r1', '')).toBe('/evaluations/runs/r1/inspect');
     // Ids are path-segment encoded so a stray '/' or '?' can't break the route.
-    expect(runReportPath('r/1', 'b?1')).toBe('/evaluations/benchmarks/b%3F1/runs/r%2F1');
+    expect(runReportPath('r/1', 'b?1')).toBe('/evaluations/benchmarks/b%3F1/runs/r%2F1/inspect');
   });
 });
 
@@ -235,10 +235,10 @@ describe('UseCaseComparisonTable — run headers link to the run report', () => 
     );
     const a = screen.getByTestId('case-table-run-link-run-a');
     expect(a.tagName).toBe('A');
-    expect(a.getAttribute('href')).toBe('/evaluations/benchmarks/bench-1/runs/run-a');
+    expect(a.getAttribute('href')).toBe('/evaluations/benchmarks/bench-1/runs/run-a/inspect');
     expect(a.getAttribute('title')).toBe(LONG_NAME);
     const b = screen.getByTestId('case-table-run-link-run-b');
-    expect(b.getAttribute('href')).toBe('/evaluations/runs/run-b');
+    expect(b.getAttribute('href')).toBe('/evaluations/runs/run-b/inspect');
     expect(b.getAttribute('title')).toBe('Run B');
   });
 });

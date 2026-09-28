@@ -13,16 +13,38 @@ import { test, expect } from './fixtures/test-fixtures';
  * `buildEvaluatorErrorPatch('agent_failed', …)` persists, then assert the UI.
  */
 test.describe('#335 — agent failure renders as a labelled errored run', () => {
-  const reportId = `e2e-agent-failed-${Date.now()}`;
+  const stamp = Date.now();
+  const reportId = `e2e-agent-failed-${stamp}`;
+  const runId = `eval-run-e2e-agent-failed-${stamp}`;
+  const testCaseId = `e2e-agent-failed-tc-${stamp}`;
 
   test.beforeAll(async ({ request }) => {
+    // The run-report surface is the run inspector: seed a one-case
+    // evaluation run whose report carries the agent-failure error shape.
+    await request.put(`/api/storage/evaluation-runs/${runId}`, {
+      data: {
+        id: runId,
+        docType: 'evaluation-run',
+        name: `E2E agent-failed run ${stamp}`,
+        createdAt: new Date().toISOString(),
+        status: 'completed',
+        agentKey: 'plain-agent',
+        modelId: 'claude-sonnet',
+        sources: [],
+        trigger: 'api',
+        testCaseSnapshots: [],
+        results: { [testCaseId]: { reportId, status: 'completed' } },
+        stats: { passed: 0, failed: 0, pending: 0, errored: 1, total: 1 },
+      },
+    });
     await request.post('/api/storage/runs', {
       data: {
         id: reportId,
         timestamp: new Date().toISOString(),
         agentKey: 'plain-agent',
         modelId: 'claude-sonnet',
-        testCaseId: 'e2e-agent-failed-tc',
+        testCaseId,
+        experimentRunId: runId,
         trajectory: [],
         status: 'completed',
         evaluationType: 'deterministic',
@@ -41,10 +63,11 @@ test.describe('#335 — agent failure renders as a labelled errored run', () => 
 
   test.afterAll(async ({ request }) => {
     await request.delete(`/api/storage/runs/${encodeURIComponent(reportId)}`).catch(() => {});
+    await request.delete(`/api/storage/evaluation-runs/${encodeURIComponent(runId)}`).catch(() => {});
   });
 
   test('run-detail shows the agent-failure label + message (not "Failed to fetch traces", not a pass)', async ({ page }) => {
-    await page.goto(`/runs/${reportId}`);
+    await page.goto(`/evaluations/runs/${runId}/inspect?reportId=${reportId}`);
     await expect(page.locator('body')).toBeVisible();
 
     // The error-card title is derived from the error-kind label.

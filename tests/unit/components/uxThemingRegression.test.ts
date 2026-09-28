@@ -172,21 +172,7 @@ describe('Scope B theming regressions', () => {
     });
   });
 
-  describe('Fix #11 — ReportsPage difficulty badges have light variants', () => {
-    const src = read('components/ReportsPage.tsx');
-
-    it('does not use dark-only difficulty badge classes', () => {
-      // bg-yellow-900/30 text-yellow-400 etc. are pure dark variants.
-      expect(src).not.toMatch(/bg-yellow-900\/30 text-yellow-400 border-yellow-800/);
-      expect(src).not.toMatch(/bg-blue-900\/30 text-blue-400 border-blue-800/);
-      expect(src).not.toMatch(/bg-red-900\/30 text-red-400 border-red-800/);
-    });
-
-    it('difficulty badges include both light and dark token sets', () => {
-      expect(src).toMatch(/bg-yellow-50 text-yellow-800 border-yellow-200 dark:bg-yellow-500\/15/);
-      expect(src).toMatch(/bg-red-50 text-red-700 border-red-200 dark:bg-red-500\/15/);
-    });
-  });
+  // Fix #11 (ReportsPage difficulty badges) — the page was retired; nothing left to pin.
 
   describe('Fix #12 — CodingAgentsPage active search highlight not screaming', () => {
     const src = read('components/codingAgents/CodingAgentsPage.tsx');

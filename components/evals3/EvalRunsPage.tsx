@@ -1303,7 +1303,7 @@ export const EvalRunsPage: React.FC = () => {
         sourceRun={rerunTarget}
         open={rerunDialogOpen}
         onOpenChange={open => { setRerunDialogOpen(open); if (!open) setRerunTarget(null); }}
-        onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}`)}
+        onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}/inspect`)}
       />
     </div>
   );

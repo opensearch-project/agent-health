@@ -99,32 +99,8 @@ test.describe('Run inspector — compact re-run provenance chip', () => {
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('chip stays single-line and the title is not squeezed by a long source name -- EvalRunDetailPage (/evaluations/runs/:id)', async ({ page }) => {
-    test.skip(!seeded, 'Could not seed source/child run (storage not configured?)');
-
-    await page.goto(`/evaluations/runs/${childRunId}`);
-    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30_000 });
-
-    const chip = page.locator('[data-testid="rerun-provenance-chip"]');
-    await expect(chip).toBeVisible({ timeout: 15_000 });
-    await expect(chip).toContainText('re-run of');
-
-    // Single-line: a wrapped multi-line pill would be roughly 2x this tall.
-    // text-xs (~16px line-height) + py-0.5 (2px top/bottom) + border (~2px)
-    // is comfortably under 30px for one line; a wrap would push this past 40.
-    const box = await chip.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.height).toBeLessThan(30);
-
-    // The full source name is available via the tooltip, not the visible
-    // (truncated) label.
-    await expect(chip).toHaveAttribute('title', new RegExp(LONG_SOURCE_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-
-    // The run's own title keeps a tooltip with the full name too.
-    const title = page.getByRole('heading', { level: 1, name: 'Full Regression Retrieval Agent Evaluation Run' });
-    await expect(title).toBeVisible();
-    await expect(title).toHaveAttribute('title', 'Full Regression Retrieval Agent Evaluation Run');
-  });
+  // (An EvalRunDetailPage variant of the next test was removed with that page;
+  // /evaluations/runs/:id now redirects to the inspector.)
 
   test('chip stays single-line and the title is not squeezed by a long source name -- RunInspectorPage (/evaluations/runs/:id/inspect)', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source/child run (storage not configured?)');
@@ -156,13 +132,14 @@ test.describe('Run inspector — compact re-run provenance chip', () => {
   test('chip click still navigates to the source run', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source/child run (storage not configured?)');
 
-    await page.goto(`/evaluations/runs/${childRunId}`);
+    await page.goto(`/evaluations/runs/${childRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30_000 });
 
     const chip = page.locator('[data-testid="rerun-provenance-chip"]');
     await expect(chip).toBeVisible({ timeout: 15_000 });
     await chip.click();
 
-    await expect(page).toHaveURL(new RegExp(`/evaluations/runs/${sourceRunId}$`), { timeout: 10_000 });
+    // The source run opens in its inspector (the older detail page is retired).
+    await expect(page).toHaveURL(new RegExp(`/evaluations/runs/${sourceRunId}/inspect$`), { timeout: 10_000 });
   });
 });
