@@ -85,7 +85,9 @@ describe('API contract hardening (F4/F7/F8/F9/F11/F12 regressions)', () => {
     }
   });
 
-  // ── F11: unknown agentKey must fast-400, never persist a run ───────────
+  // ── F11: the legacy execute route never persists a run ─────────────────
+  // (It used to fast-400 an unknown agentKey; the legacy runner is now removed
+  // and the route answers 410 for EVERY body, still without touching storage.)
   describe('F11: POST /api/storage/benchmarks/:id/execute with unknown agentKey', () => {
     let benchmarkId: string;
 
@@ -116,7 +118,7 @@ describe('API contract hardening (F4/F7/F8/F9/F11/F12 regressions)', () => {
       createdBenchmarkIds.push(benchmarkId);
     }, TEST_TIMEOUT);
 
-    it('rejects a bogus agentKey with 400 and leaves benchmark.runs[] unchanged', async () => {
+    it('answers 410 Gone (legacy runner removed) and leaves benchmark.runs[] unchanged', async () => {
       if (!backendAvailable) return;
 
       const before = await fetch(`${BASE_URL}/api/storage/benchmarks/${benchmarkId}`).then((r) => r.json());
@@ -128,10 +130,11 @@ describe('API contract hardening (F4/F7/F8/F9/F11/F12 regressions)', () => {
         body: JSON.stringify({ name: 'bogus-agent-run', agentKey: `nonexistent-agent-${NAME_MARKER}` }),
       });
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(410);
       expect(response.headers.get('content-type')).toMatch(/json/);
       const body = await response.json();
-      expect(body.error.toLowerCase()).toContain('agentkey');
+      expect(body.code).toBe('LEGACY_EXECUTE_REMOVED');
+      expect(body.replacement).toBe('POST /api/storage/evaluation-runs');
 
       const after = await fetch(`${BASE_URL}/api/storage/benchmarks/${benchmarkId}`).then((r) => r.json());
       expect((after.runs ?? []).length).toBe(runsBefore);

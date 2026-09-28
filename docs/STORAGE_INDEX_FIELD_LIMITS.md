@@ -105,7 +105,7 @@ beyond the four legacy names, which stay mapped:
 | `OpenSearchRunOperations.countsByTestCase()` | `terms` agg | `testCaseId` | No |
 | `asyncRunStorage.ts` `SearchQuery.minAccuracy` | **application-level** `Array.filter()`, not an OpenSearch query (`reports.filter(r => r.metrics.accuracy >= ...)`) | `metrics.accuracy` (read from `_source` in JS) | No — reads the value out of `_source`, which is unaffected by `dynamic: false`. If this were ever converted to a server-side `range` query, it would still work: `accuracy` stays an explicitly mapped, queryable field. |
 | UI (`MatcherResultsPanel.tsx`, `JudgeSection.tsx`, `RunDetailsContent.tsx`) | none — reads `matcherResults`/`judgeMetrics` out of the fetched JSON document, never issues its own OpenSearch query | n/a | No |
-| `services/evaluation/index.ts`, `services/benchmarkRunner.ts`, `services/hookOrchestrator.ts` | none — same, in-process consumption of the already-fetched report | n/a | No |
+| `services/evaluation/index.ts`, `services/evaluation/runSingleUseCase.ts`, `services/hookOrchestrator.ts` | none — same, in-process consumption of the already-fetched report | n/a | No |
 
 Conclusion: **no consumer anywhere issues an OpenSearch-side query against a
 non-legacy `metrics.*` or `judgeMetrics.*` name.** Both are read back via

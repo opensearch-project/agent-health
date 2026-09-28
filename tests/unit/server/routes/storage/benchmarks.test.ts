@@ -5,8 +5,11 @@
 
 import { Request, Response } from 'express';
 import benchmarksRoutes from '@/server/routes/storage/benchmarks';
+import { LEGACY_EXECUTE_REMOVED } from '@/lib/legacyExecuteRemoved';
 
-// Mock client methods (used ONLY by execute/cancel endpoints which use raw OpenSearch client)
+// Mock raw OpenSearch client methods. No route in this file uses the raw
+// client any more (the legacy /execute runner was removed); the mock stays so
+// the tests can assert that nothing reaches for it.
 const mockSearch = jest.fn();
 const mockIndex = jest.fn();
 const mockGet = jest.fn();
@@ -14,7 +17,7 @@ const mockUpdate = jest.fn();
 const mockDelete = jest.fn();
 const mockBulk = jest.fn();
 
-// Create mock raw client (for execute/cancel paths only)
+// Create mock raw client
 const mockClient = {
   search: mockSearch,
   index: mockIndex,
@@ -76,7 +79,8 @@ jest.mock('@/server/adapters/index', () => ({
   getStorageModule: jest.fn(() => mockStorage),
 }));
 
-// Mock the storageClient middleware (still needed for execute/cancel endpoints)
+// Mock the storageClient middleware (the route no longer imports it; kept so
+// the request fixture shape matches the rest of the storage routes)
 jest.mock('@/server/middleware/storageClient', () => ({
   isStorageAvailable: jest.fn(),
   requireStorageClient: jest.fn(),
@@ -106,9 +110,8 @@ import {
   requireStorageClient,
 } from '@/server/middleware/storageClient';
 
-// Mock agent config resolution (used by the agentKey-exists check on
-// POST /execute). Tests below use agentKey: 'agent', so register it as
-// a known configured agent.
+// Mock agent config resolution. Tests below use agentKey: 'agent', so
+// register it as a known configured agent.
 jest.mock('@/lib/config/index', () => ({
   loadConfigSync: jest.fn(() => ({ agents: [{ key: 'agent' }, { key: 'test-agent' }] })),
 }));
@@ -162,18 +165,6 @@ jest.mock('@/cli/demo/sampleTestCases', () => ({
       updatedAt: '2024-01-01T00:00:00Z',
     },
   ],
-}));
-
-// Mock benchmarkRunner
-const mockExecuteRun = jest.fn();
-const mockCreateCancellationToken = jest.fn(() => ({
-  isCancelled: false,
-  cancel: jest.fn(),
-}));
-
-jest.mock('@/services/benchmarkRunner', () => ({
-  executeRun: (...args: any[]) => mockExecuteRun(...args),
-  createCancellationToken: () => mockCreateCancellationToken(),
 }));
 
 // Silence console output
@@ -318,6 +309,59 @@ describe('Experiments Storage Routes', () => {
       expect(mockBenchmarksGetById).toHaveBeenCalledWith('exp-123');
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'exp-123' })
+      );
+    });
+
+    it('legacy data: a historical /execute-era run embedded in benchmark.runs[] (run-<ts>-<rand> id, no version fields) is still returned, normalized and stats-backfilled by report id', async () => {
+      // Shape the removed legacy runner persisted: embedded directly in the
+      // benchmark document, no evaluation-run doc, oldest docs without
+      // benchmarkVersion / testCaseSnapshots; reports referenced by id.
+      const legacyRun = {
+        id: 'run-1700000000000-abc123def',
+        name: 'Legacy run',
+        agentKey: 'agent',
+        modelId: 'model',
+        status: 'completed',
+        createdAt: '2024-01-01T00:00:00Z',
+        results: {
+          'tc-1': { reportId: 'rep-1', status: 'completed' },
+          'tc-2': { reportId: 'rep-2', status: 'completed' },
+        },
+      };
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-legacy',
+        name: 'Benchmark with legacy run',
+        testCaseIds: ['tc-1', 'tc-2'],
+        createdAt: '2023-12-31T00:00:00Z',
+        runs: [legacyRun],
+      });
+      mockRunsGetById.mockImplementation(async (id: string) => ({
+        'rep-1': { id, passFailStatus: 'passed', metricsStatus: 'completed' },
+        'rep-2': { id, passFailStatus: 'failed', metricsStatus: 'completed' },
+      } as any)[id]);
+      mockBenchmarksUpdateRun.mockResolvedValue(true);
+
+      const { req, res } = createMocks({ id: 'exp-legacy' });
+      const handler = getRouteHandler(benchmarksRoutes, 'get', '/api/storage/benchmarks/:id');
+
+      await handler(req, res);
+
+      expect(res.status).not.toHaveBeenCalledWith(404);
+      const body = (res.json as jest.Mock).mock.calls[0][0];
+      expect(body.currentVersion).toBe(1);
+      expect(body.runs).toHaveLength(1);
+      expect(body.runs[0]).toEqual(expect.objectContaining({
+        id: 'run-1700000000000-abc123def',
+        benchmarkVersion: 1,
+        testCaseSnapshots: [],
+        results: legacyRun.results,
+        stats: { passed: 1, failed: 1, pending: 0, errored: 0, total: 2 },
+      }));
+      // The backfilled stats are persisted for the embedded run (by id).
+      expect(mockBenchmarksUpdateRun).toHaveBeenCalledWith(
+        'exp-legacy',
+        'run-1700000000000-abc123def',
+        expect.objectContaining({ stats: { passed: 1, failed: 1, pending: 0, errored: 0, total: 2 } })
       );
     });
 
@@ -1031,364 +1075,70 @@ describe('Experiments Storage Routes', () => {
     });
   });
 
-  describe('POST /api/storage/benchmarks/:id/execute', () => {
-    it('should reject executing sample benchmarks', async () => {
-      const { req, res } = createMocks(
-        { id: 'demo-experiment-1' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model' }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
+  describe('POST /api/storage/benchmarks/:id/execute — legacy runner removed', () => {
+    const handler = () => getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
-      await handler(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('sample benchmarks'),
-        })
-      );
+    it('is still registered so old clients get an explicit error, not a 404', () => {
+      expect(handler()).toEqual(expect.any(Function));
     });
 
-    it('should validate run configuration - missing name', async () => {
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { agentKey: 'agent', modelId: 'model' }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
+    it('answers 410 Gone with the documented body (code, replacement, docs)', async () => {
+      const { req, res } = createMocks({ id: 'exp-123' }, { name: 'Run', agentKey: 'agent' });
 
-      await handler(req, res);
+      await handler()(req, res);
 
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('name is required'),
-        })
-      );
-    });
-
-    it('should validate run configuration - missing agentKey', async () => {
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', modelId: 'model' }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('agentKey is required'),
-        })
-      );
-    });
-
-    it('should NOT require modelId — the agent owns its model', async () => {
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent' }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      // modelId is no longer required: the agent's LLM comes from its own
-      // agent-health.config.ts connectorConfig. validateRunConfig must not
-      // reject a missing modelId (the handler may 400 for other reasons,
-      // never 'modelId is required').
-      for (const [arg] of (res.json as jest.Mock).mock.calls) {
-        if (arg && typeof (arg as any).error === 'string') {
-          expect((arg as any).error).not.toContain('modelId is required');
-        }
-      }
-    });
-
-    it('should validate run configuration - concurrency below 1', async () => {
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model', concurrency: 0 }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('concurrency must be an integer between 1 and 20'),
-        })
-      );
-    });
-
-    it('should validate run configuration - concurrency above 20', async () => {
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model', concurrency: 21 }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('concurrency must be an integer between 1 and 20'),
-        })
-      );
-    });
-
-    it('should validate run configuration - non-integer concurrency', async () => {
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model', concurrency: 2.5 }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('concurrency must be an integer between 1 and 20'),
-        })
-      );
-    });
-
-    it('should accept valid concurrency values', async () => {
-      (isStorageAvailable as jest.Mock).mockReturnValue(false);
-
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model', concurrency: 5 }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      // Should pass validation and reach storage check
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: expect.stringContaining('OpenSearch not configured'),
-        })
-      );
-    });
-
-    it('should return 404 when experiment not found', async () => {
-      const error: any = new Error('Not found');
-      error.meta = { statusCode: 404 };
-      mockGet.mockRejectedValue(error);
-
-      const { req, res } = createMocks(
-        { id: 'exp-nonexistent' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model' }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(404);
-    });
-
-    it('should setup SSE and execute run', async () => {
-      // Execute endpoint uses raw client, not adapter
-      mockGet.mockResolvedValue({
-        body: {
-          found: true,
-          _source: {
-            id: 'exp-123',
-            name: 'Test Benchmark',
-            testCaseIds: ['demo-test-case-1'],
-            runs: [],
-          },
-        },
+      expect(res.status).toHaveBeenCalledWith(410);
+      expect(res.json).toHaveBeenCalledWith({
+        error: expect.stringContaining('has been removed'),
+        code: 'LEGACY_EXECUTE_REMOVED',
+        replacement: 'POST /api/storage/evaluation-runs',
+        docs: 'docs/CLI.md#benchmark-execution-path',
       });
-      mockUpdate.mockResolvedValue({ body: {} });
-      // getAllTestCases calls the adapter for real test cases
-      mockTestCasesGetAll.mockResolvedValue({ items: [], total: 0 });
-      mockSearch.mockResolvedValue({
-        body: { hits: { hits: [] } },
+      expect(res.json).toHaveBeenCalledWith({
+        error: LEGACY_EXECUTE_REMOVED.error,
+        code: LEGACY_EXECUTE_REMOVED.code,
+        replacement: LEGACY_EXECUTE_REMOVED.replacement,
+        docs: LEGACY_EXECUTE_REMOVED.docs,
       });
-
-      const completedRun = {
-        id: 'run-123',
-        name: 'Run',
-        agentKey: 'agent',
-        modelId: 'model',
-        status: 'completed',
-        results: { 'demo-test-case-1': { reportId: 'report-1', status: 'completed' } },
-        createdAt: '2024-01-01T00:00:00Z',
-      };
-      mockExecuteRun.mockResolvedValue(completedRun);
-
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model' }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'text/event-stream');
-      expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-cache');
-      expect(res.setHeader).toHaveBeenCalledWith('Connection', 'keep-alive');
-      expect(res.flushHeaders).toHaveBeenCalled();
-      expect(res.write).toHaveBeenCalled();
-      expect(res.end).toHaveBeenCalled();
     });
 
-    it('stamps imageDigest on the run + find-or-creates the benchmark image (legacy execute path parity with evaluation-runs)', async () => {
-      mockGet.mockResolvedValue({
-        body: {
-          found: true,
-          _source: {
-            id: 'exp-123',
-            name: 'Test Benchmark',
-            testCaseIds: ['tc-1'],
-            runs: [],
-          },
-        },
-      });
-      mockUpdate.mockResolvedValue({ body: {} });
-      // getAllTestCases() (progress-display lookups) AND the route's own
-      // full-fetch both call testCases.getAll — return the same full record
-      // both times so the digest is computed from real content, not names.
-      const fullTestCase = {
-        id: 'tc-1',
-        name: 'TC One',
-        initialPrompt: 'do the thing',
-        context: [],
-        expectedOutcomes: ['ok'],
-      };
-      mockTestCasesGetAll.mockResolvedValue({ items: [fullTestCase], total: 1 });
-      mockImagesCreate.mockResolvedValue({ digest: 'sha256:whatever-create-returns' });
+    it('sets Deprecation and Sunset headers and never opens an SSE stream', async () => {
+      const { req, res } = createMocks({ id: 'exp-123' }, { name: 'Run', agentKey: 'agent' });
 
-      const completedRun = {
-        id: 'run-123',
-        name: 'Run',
-        agentKey: 'agent',
-        modelId: 'model',
-        status: 'completed',
-        results: { 'tc-1': { reportId: 'report-1', status: 'completed' } },
-        createdAt: '2024-01-01T00:00:00Z',
-      };
-      mockExecuteRun.mockResolvedValue(completedRun);
+      await handler()(req, res);
 
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model', evaluatorId: 'ev-1' }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      // images.create was called with a doc built from the full test case
-      // content (buildImageDoc's shape), not just an id/name summary.
-      expect(mockImagesCreate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          docType: 'benchmark-image',
-          testCaseCount: 1,
-          evalConditions: expect.objectContaining({ evaluatorId: 'ev-1' }),
-        })
-      );
-      expect(mockImagesUpdate).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ lastRunAt: expect.any(String) })
-      );
-
-      // The FIRST persisted run doc (the immediate "save so it survives a
-      // refresh" write, before SSE/execution) already carries imageDigest —
-      // not just something patched in after the fact.
-      const firstUpdateCall = mockUpdate.mock.calls[0][0];
-      const persistedRun = firstUpdateCall.body.doc.runs[0];
-      expect(persistedRun.imageDigest).toBeTruthy();
-      expect(typeof persistedRun.imageDigest).toBe('string');
+      expect(res.setHeader).toHaveBeenCalledWith('Deprecation', LEGACY_EXECUTE_REMOVED.deprecationHeader);
+      expect(res.setHeader).toHaveBeenCalledWith('Sunset', LEGACY_EXECUTE_REMOVED.sunsetHeader);
+      expect(res.setHeader).toHaveBeenCalledWith('Link', `<${LEGACY_EXECUTE_REMOVED.docsUrl}>; rel="deprecation"`);
+      expect(res.setHeader).not.toHaveBeenCalledWith('Content-Type', 'text/event-stream');
+      expect(res.write).not.toHaveBeenCalled();
     });
 
-    it('refuses to stamp a digest computed from a PARTIAL test-case set (codex_review finding: a partial digest is a wrong identity, not a harmless skip)', async () => {
-      mockGet.mockResolvedValue({
-        body: {
-          found: true,
-          _source: { id: 'exp-123', name: 'Test Benchmark', testCaseIds: ['tc-1', 'tc-2'], runs: [] },
-        },
-      });
-      mockUpdate.mockResolvedValue({ body: {} });
-      // Only tc-1 resolves -- tc-2 is missing (deleted, corpus paging gap, etc).
-      mockTestCasesGetAll.mockResolvedValue({
-        items: [{ id: 'tc-1', name: 'TC One', initialPrompt: 'do the thing' }],
-        total: 1,
-      });
-
-      const completedRun = {
-        id: 'run-123',
-        name: 'Run',
-        agentKey: 'agent',
-        modelId: 'model',
-        status: 'completed',
-        results: {
-          'tc-1': { reportId: 'report-1', status: 'completed' },
-          'tc-2': { reportId: 'report-2', status: 'completed' },
-        },
-        createdAt: '2024-01-01T00:00:00Z',
-      };
-      mockExecuteRun.mockResolvedValue(completedRun);
-
+    it('never touches storage — no run is created or persisted for any body, even a valid legacy run config', async () => {
+      mockBenchmarksGetById.mockResolvedValue({ id: 'exp-123', name: 'B', testCaseIds: ['tc-1'], runs: [] });
       const { req, res } = createMocks(
         { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model' }
+        { name: 'Legacy Run', agentKey: 'agent', modelId: 'model', concurrency: 2 }
       );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
 
-      await handler(req, res);
+      await handler()(req, res);
 
+      expect(res.status).toHaveBeenCalledWith(410);
+      expect(mockBenchmarksGetById).not.toHaveBeenCalled();
+      expect(mockBenchmarksUpdate).not.toHaveBeenCalled();
+      expect(mockBenchmarksUpdateRun).not.toHaveBeenCalled();
       expect(mockImagesCreate).not.toHaveBeenCalled();
-      const firstUpdateCall = mockUpdate.mock.calls[0][0];
-      const persistedRun = firstUpdateCall.body.doc.runs[0];
-      expect(persistedRun.imageDigest).toBeUndefined();
+      expect(mockGet).not.toHaveBeenCalled();
+      expect(mockUpdate).not.toHaveBeenCalled();
     });
 
-    it('never blocks execution when the image doc write fails (images.create throws) — mirrors evaluationRuns.ts: the digest itself is a pure computation and is kept on the run even though the image side-effect failed', async () => {
-      mockGet.mockResolvedValue({
-        body: {
-          found: true,
-          _source: { id: 'exp-123', name: 'Test Benchmark', testCaseIds: ['tc-1'], runs: [] },
-        },
-      });
-      mockUpdate.mockResolvedValue({ body: {} });
-      mockTestCasesGetAll.mockResolvedValue({
-        items: [{ id: 'tc-1', name: 'TC One', initialPrompt: 'do the thing' }],
-        total: 1,
-      });
-      mockImagesCreate.mockRejectedValue(new Error('images index down'));
-
-      const completedRun = {
-        id: 'run-123',
-        name: 'Run',
-        agentKey: 'agent',
-        modelId: 'model',
-        status: 'completed',
-        results: { 'tc-1': { reportId: 'report-1', status: 'completed' } },
-        createdAt: '2024-01-01T00:00:00Z',
-      };
-      mockExecuteRun.mockResolvedValue(completedRun);
-
-      const { req, res } = createMocks(
-        { id: 'exp-123' },
-        { name: 'Run', agentKey: 'agent', modelId: 'model' }
-      );
-      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-      await handler(req, res);
-
-      // The image write was attempted (and failed) — but execution still
-      // proceeds normally despite the image-bookkeeping failure.
-      expect(mockImagesCreate).toHaveBeenCalled();
-      expect(res.flushHeaders).toHaveBeenCalled();
-      expect(res.write).toHaveBeenCalled();
-      expect(res.end).toHaveBeenCalled();
-      const firstUpdateCall = mockUpdate.mock.calls[0][0];
-      const persistedRun = firstUpdateCall.body.doc.runs[0];
-      expect(persistedRun.imageDigest).toBeTruthy();
+    it('answers 410 for sample benchmarks and unknown ids alike (the removal is unconditional)', async () => {
+      for (const id of ['demo-experiment-1', 'does-not-exist']) {
+        const { req, res } = createMocks({ id }, {});
+        await handler()(req, res);
+        expect(res.status).toHaveBeenCalledWith(410);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'LEGACY_EXECUTE_REMOVED' }));
+      }
     });
   });
 
@@ -1403,7 +1153,7 @@ describe('Experiments Storage Routes', () => {
       expect(res.json).toHaveBeenCalledWith({ error: 'runId is required' });
     });
 
-    it('should return 404 when run not found in active runs', async () => {
+    it('should return 404 when the run is not embedded in the benchmark', async () => {
       const { req, res } = createMocks(
         { id: 'exp-123' },
         { runId: 'nonexistent-run' }
@@ -1415,6 +1165,7 @@ describe('Experiments Storage Routes', () => {
       expect(res.status).toHaveBeenCalledWith(404);
       expect(res.json).toHaveBeenCalledWith({
         error: 'Run not found or already completed',
+        hint: expect.stringContaining('/api/storage/evaluation-runs/nonexistent-run/cancel'),
       });
     });
 
@@ -1454,8 +1205,23 @@ describe('Experiments Storage Routes', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ cancelled: true, runId: 'run-1', viaFallback: true })
       );
-      // The happy-path OpenSearch script update (raw client) must NOT also fire.
+      // The route no longer talks to the raw OpenSearch client at all.
       expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it('500s when the cancelled-status write fails', async () => {
+      mockBenchmarksGetById.mockResolvedValue({
+        id: 'exp-123',
+        runs: [{ id: 'run-1', status: 'running', createdAt: new Date(Date.now() - 10 * 60_000).toISOString() }],
+      });
+      mockBenchmarksUpdateRun.mockRejectedValue(new Error('write failed'));
+      const { req, res } = createMocks({ id: 'exp-123' }, { runId: 'run-1' });
+      const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/cancel');
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ error: 'write failed' });
     });
 
     it('409s (retryable) instead of taking the zombie fallback when the run was created moments ago', async () => {
@@ -1528,7 +1294,7 @@ describe('Experiments Storage Routes - Storage not configured', () => {
     expect(res.json).toHaveBeenCalledWith({ error: 'Benchmark not found' });
   });
 
-  it('POST /api/storage/benchmarks/:id/execute should return error when not configured', async () => {
+  it('POST /api/storage/benchmarks/:id/execute answers 410 even when storage is not configured', async () => {
     const { req, res } = createMocks(
       { id: 'exp-123' },
       { name: 'Run', agentKey: 'agent', modelId: 'model' }
@@ -1537,12 +1303,8 @@ describe('Experiments Storage Routes - Storage not configured', () => {
 
     await handler(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.stringContaining('not configured'),
-      })
-    );
+    expect(res.status).toHaveBeenCalledWith(410);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'LEGACY_EXECUTE_REMOVED' }));
   });
 });
 
@@ -1662,259 +1424,6 @@ describe('Experiments Storage Routes - Error Handling', () => {
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith({ error: 'Bulk insert failed' });
     });
-  });
-});
-
-describe('Experiments Storage Routes - Execute Error Handling', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockIsConfigured.mockReturnValue(true);
-    (isStorageAvailable as jest.Mock).mockReturnValue(true);
-    (requireStorageClient as jest.Mock).mockReturnValue(mockClient);
-  });
-
-  it('should handle 404 when experiment not found during execute', async () => {
-    const error: any = new Error('Not found');
-    error.meta = { statusCode: 404 };
-    mockGet.mockRejectedValue(error);
-
-    const { req, res } = createMocks(
-      { id: 'exp-nonexistent' },
-      { name: 'Run', agentKey: 'agent', modelId: 'model' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Benchmark not found' });
-  });
-
-  it('should handle unexpected errors during execute', async () => {
-    mockGet.mockRejectedValue(new Error('Connection timeout'));
-
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: 'Run', agentKey: 'agent', modelId: 'model' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Connection timeout' });
-  });
-
-  it('should handle execution errors during run', async () => {
-    mockGet.mockResolvedValue({
-      body: {
-        found: true,
-        _source: {
-          id: 'exp-123',
-          name: 'Test Benchmark',
-          testCaseIds: ['tc-1'],
-          runs: [],
-        },
-      },
-    });
-    mockUpdate.mockResolvedValue({ body: {} });
-    mockTestCasesGetAll.mockResolvedValue({ items: [], total: 0 });
-    mockSearch.mockResolvedValue({ body: { hits: { hits: [] } } });
-    mockExecuteRun.mockRejectedValue(new Error('Agent execution failed'));
-
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: 'Run', agentKey: 'agent', modelId: 'model' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    // Should have sent error event
-    expect(res.write).toHaveBeenCalledWith(
-      expect.stringContaining('"type":"error"')
-    );
-    expect(res.end).toHaveBeenCalled();
-  });
-
-  it('should handle cancellation during run execution', async () => {
-    mockGet.mockResolvedValue({
-      body: {
-        found: true,
-        _source: {
-          id: 'exp-123',
-          name: 'Test Benchmark',
-          testCaseIds: ['tc-1', 'tc-2'],
-          runs: [],
-        },
-      },
-    });
-    mockUpdate.mockResolvedValue({ body: {} });
-    mockTestCasesGetAll.mockResolvedValue({ items: [], total: 0 });
-    mockSearch.mockResolvedValue({ body: { hits: { hits: [] } } });
-
-    // Mock cancellation token that's already cancelled
-    mockCreateCancellationToken.mockReturnValue({
-      isCancelled: true,
-      cancel: jest.fn(),
-    });
-
-    mockExecuteRun.mockResolvedValue({
-      id: 'run-123',
-      name: 'Run',
-      agentKey: 'agent',
-      modelId: 'model',
-      status: 'running',
-      results: {
-        'tc-1': { reportId: 'report-1', status: 'completed' },
-        'tc-2': { reportId: '', status: 'pending' },
-      },
-    });
-
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: 'Run', agentKey: 'agent', modelId: 'model' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    // Should have sent cancelled event
-    expect(res.write).toHaveBeenCalledWith(
-      expect.stringContaining('"type":"cancelled"')
-    );
-
-    // Reset mock
-    mockCreateCancellationToken.mockReturnValue({
-      isCancelled: false,
-      cancel: jest.fn(),
-    });
-  });
-});
-
-describe('Experiments Storage Routes - Validation', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockIsConfigured.mockReturnValue(true);
-    (isStorageAvailable as jest.Mock).mockReturnValue(true);
-    (requireStorageClient as jest.Mock).mockReturnValue(mockClient);
-  });
-
-  it('should reject execute with invalid config (not an object)', async () => {
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      null // null body
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      error: 'Request body must be a valid run configuration object',
-    });
-  });
-
-  it('should reject execute with empty name', async () => {
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: '   ', agentKey: 'agent', modelId: 'model' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      error: 'name is required and must be a non-empty string',
-    });
-  });
-
-  it('should reject execute with missing agentKey', async () => {
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: 'Run', modelId: 'model' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      error: 'agentKey is required and must be a string',
-    });
-  });
-
-  it('should NOT reject execute with missing modelId (agent owns its model)', async () => {
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: 'Run', agentKey: 'agent' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    // modelId is optional now — must never be rejected as required.
-    for (const [arg] of (res.json as jest.Mock).mock.calls) {
-      if (arg && typeof (arg as any).error === 'string') {
-        expect((arg as any).error).not.toContain('modelId is required');
-      }
-    }
-  });
-
-  it('should reject execute with an unknown agentKey with a fast 400, before touching storage (regression: F11 — previously started a real 30s+ run and persisted a junk run entry)', async () => {
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: 'Run', agentKey: 'totally-bogus-agent-key' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith({
-      error: expect.stringContaining('totally-bogus-agent-key'),
-    });
-    // Must never reach the OpenSearch-required check, benchmark lookup, or run creation.
-    expect(isStorageAvailable).not.toHaveBeenCalled();
-    expect(mockBenchmarksGetById).not.toHaveBeenCalled();
-    expect(mockGet).not.toHaveBeenCalled();
-  });
-
-  it('should accept execute with a known built-in agentKey', async () => {
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: 'Run', agentKey: 'agent' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    // Must NOT be rejected for agentKey — falls through to the next check instead.
-    for (const [arg] of (res.json as jest.Mock).mock.calls) {
-      if (arg && typeof (arg as any).error === 'string') {
-        expect((arg as any).error).not.toMatch(/unknown agentkey/i);
-      }
-    }
-  });
-
-  it('should accept execute with a known custom agentKey', async () => {
-    const { getCustomAgents } = require('@/server/services/customAgentStore');
-    (getCustomAgents as jest.Mock).mockReturnValueOnce([{ key: 'my-custom-agent' }]);
-
-    const { req, res } = createMocks(
-      { id: 'exp-123' },
-      { name: 'Run', agentKey: 'my-custom-agent' }
-    );
-    const handler = getRouteHandler(benchmarksRoutes, 'post', '/api/storage/benchmarks/:id/execute');
-
-    await handler(req, res);
-
-    for (const [arg] of (res.json as jest.Mock).mock.calls) {
-      if (arg && typeof (arg as any).error === 'string') {
-        expect((arg as any).error).not.toMatch(/unknown agentkey/i);
-      }
-    }
   });
 });
 

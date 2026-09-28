@@ -107,6 +107,16 @@ export const ATTR_AGENT_HEALTH_CONNECTOR_PROTOCOL = 'agent_health.connector.prot
  */
 export const ATTR_AGENT_HEALTH_AGENT_RUN_ID = 'agent_health.run.id' as const;
 
+/**
+ * Span-link attribute naming the relationship a `test_case` span has to the
+ * span it links to. Every `test_case` span is the ROOT of its own trace (so
+ * an agent that adopts the propagated `traceparent` lands in a per-case
+ * trace, never in one shared benchmark-wide trace) and points back at the
+ * `test_suite_run` span with a span link carrying this attribute.
+ */
+export const ATTR_AGENT_HEALTH_LINK_TYPE = 'agent_health.link.type' as const;
+export const LINK_TYPE_VALUE_TEST_SUITE_RUN = 'test_suite_run' as const;
+
 // =============================================================================
 // Constants
 // =============================================================================

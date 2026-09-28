@@ -32,7 +32,7 @@
 
 import type { IStorageModule } from '../adapters/types.js';
 import type { EvaluationReport, TestCase } from '../../types/index.js';
-import { startTracePollingForReportWithModule } from '../../services/benchmarkRunner.js';
+import { startTracePollingForReportWithModule } from '../../services/evaluation/tracePolling.js';
 
 /** Maximum age (ms since report.timestamp) for which we will re-attempt polling. */
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -199,7 +199,7 @@ export async function resumePendingTracePolls(storage: IStorageModule): Promise<
       }
 
       // Re-attach polling. Fire-and-forget \u2014 startPollingAsync's promise
-      // is consumed inside benchmarkRunner; here we don't need to await.
+      // is consumed inside services/evaluation/tracePolling; here we don't need to await.
       try {
         startTracePollingForReportWithModule(report, testCase, storage).catch(err => {
           // The poller already writes metricsStatus=error on terminal

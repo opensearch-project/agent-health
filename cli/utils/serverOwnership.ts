@@ -83,3 +83,40 @@ export function foreignServerError(params: {
     `other server, or set AH_REUSE_FOREIGN_SERVER=1 to override intentionally.`
   );
 }
+
+/**
+ * What to do about a server that is ALREADY running on the configured port
+ * once ownership has been established (see `decideServerOwnership`).
+ *
+ *  - `reuse`                 dev default (`reuseExistingServer: true`), versions match.
+ *  - `restart`               dev default, versions differ → kill + start a matching one.
+ *  - `reuse-explicit-port`   CI mode (`reuseExistingServer: false`) BUT the port was
+ *                            given explicitly (`AH_PORT` / `server.port`) and a
+ *                            healthy, version-matching server answers on it. The
+ *                            CI guard exists so a CLI never talks to a stray
+ *                            server *by accident*; an explicit port is explicit
+ *                            intent (the canonical case: a CI job that already
+ *                            started the server — e.g. Playwright's webServer —
+ *                            and then drives the CLI against it).
+ *  - `error-version`         CI mode, versions differ → never reuse, never kill.
+ *  - `error-running`         CI mode, implicit (defaulted) port → the existing error.
+ *
+ * Pure so the decision table is unit-testable.
+ */
+export type ExistingServerAction =
+  | 'reuse'
+  | 'restart'
+  | 'reuse-explicit-port'
+  | 'error-version'
+  | 'error-running';
+
+export function decideExistingServerAction(input: {
+  reuseExistingServer: boolean;
+  portExplicit: boolean;
+  versionMatches: boolean;
+}): ExistingServerAction {
+  const { reuseExistingServer, portExplicit, versionMatches } = input;
+  if (reuseExistingServer) return versionMatches ? 'reuse' : 'restart';
+  if (!versionMatches) return 'error-version';
+  return portExplicit ? 'reuse-explicit-port' : 'error-running';
+}

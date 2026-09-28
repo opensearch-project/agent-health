@@ -114,7 +114,7 @@ const deleteTestCase = async (testCaseId: string): Promise<void> => {
 /**
  * Every per-test-case report a benchmark run creates is stamped with
  * `experimentRunId` = the run's own id at creation time
- * (services/benchmarkRunner.ts's `saveReportWithClient`). `POST
+ * (services/evaluationRunner.ts). `POST
  * .../cancel` only flips the run's top-level `status` immediately —
  * cancellation is cooperative, not a hard abort, so whichever test case was
  * already executing keeps running in the background and only produces its
@@ -166,19 +166,24 @@ const harvestReportIdsForRun = async (
 };
 
 /**
- * Start a benchmark execution and return the run ID from the 'started' event.
- * Uses the demo agent for simulated responses to avoid external dependencies.
+ * Start a benchmark run through the evaluation-runs API (the only benchmark
+ * execution path — the legacy `/execute` runner was removed) and return the
+ * run ID from the 'started' event. Uses the demo agent for simulated
+ * responses to avoid external dependencies.
  */
 const startExecutionAndGetRunId = async (benchmarkId: string): Promise<string> => {
   const controller = new AbortController();
 
-  const response = await fetch(`${BASE_URL}/api/storage/benchmarks/${benchmarkId}/execute`, {
+  const response = await fetch(`${BASE_URL}/api/storage/evaluation-runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name: `Hook Cancel Test Run ${Date.now()}`,
+      name: uniqueTestName('hook-cancel-run'),
+      sources: [{ type: 'benchmark', benchmarkId }],
+      benchmarkId,
       agentKey: 'demo',
       modelId: 'demo-model',
+      trigger: 'manual',
     }),
     signal: controller.signal,
   });
@@ -206,25 +211,25 @@ const startExecutionAndGetRunId = async (benchmarkId: string): Promise<string> =
     buffer = events.pop() || '';
 
     for (const event of events) {
-      const lines = event.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === 'started' && data.runId) {
-              runId = data.runId;
-              break;
-            }
-          } catch {
-            // Ignore parse errors
-          }
+      let eventType = '';
+      let eventData = '';
+      for (const line of event.split('\n')) {
+        if (line.startsWith('event: ')) eventType = line.slice(7);
+        else if (line.startsWith('data: ')) eventData = line.slice(6);
+      }
+      if (eventType === 'started' && eventData) {
+        try {
+          const data = JSON.parse(eventData);
+          if (data.runId) runId = data.runId;
+        } catch {
+          // Ignore parse errors
         }
       }
       if (runId) break;
     }
   }
 
-  // Abort the SSE connection
+  // Abort the SSE connection — the server keeps executing in the background.
   controller.abort();
 
   if (!runId) {
@@ -232,6 +237,26 @@ const startExecutionAndGetRunId = async (benchmarkId: string): Promise<string> =
   }
 
   return runId;
+};
+
+/**
+ * Cancellation is cooperative: `POST .../cancel` stamps `cancelRequestedAt`
+ * and the executor writes the terminal `cancelled` status once it drains.
+ * Poll the evaluation-run document until it is terminal.
+ */
+const waitForTerminalRun = async (runId: string, timeoutMs = 30000): Promise<any> => {
+  const deadline = Date.now() + timeoutMs;
+  let last: any = null;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${encodeURIComponent(runId)}`);
+    if (res.ok) {
+      const body = await res.json();
+      last = body.evaluationRun ?? body;
+      if (last && last.status !== 'running' && last.status !== 'pending') return last;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return last;
 };
 
 describe('useBenchmarkCancellation Integration Tests', () => {
@@ -242,6 +267,9 @@ describe('useBenchmarkCancellation Integration Tests', () => {
   // harvested inside each test (see harvestReportIdsForRun) and deleted
   // here in afterAll — DELETE .../benchmarks/:id does not cascade to them.
   let leakedReportIds: string[] = [];
+  // Evaluation-run documents started by the tests (the benchmark delete does
+  // not cascade to them either).
+  const startedRunIds: string[] = [];
 
   beforeAll(async () => {
     backendAvailable = await checkBackend();
@@ -262,6 +290,10 @@ describe('useBenchmarkCancellation Integration Tests', () => {
     // Delete the per-test-case report doc(s) harvested by the tests above
     // BEFORE deleting the benchmark/test case — DELETE .../benchmarks/:id
     // does not cascade to them.
+    for (const id of startedRunIds) {
+      await waitForTerminalRun(id, 15000).catch(() => null);
+      await fetch(`${BASE_URL}/api/storage/evaluation-runs/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+    }
     for (const id of leakedReportIds) {
       await fetch(`${BASE_URL}/api/storage/runs/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
     }
@@ -286,9 +318,10 @@ describe('useBenchmarkCancellation Integration Tests', () => {
 
     // Step 1: Start the benchmark execution
     const runId = await startExecutionAndGetRunId(benchmarkId);
+    startedRunIds.push(runId);
     expect(runId).toBeDefined();
 
-    // Small delay to ensure run is registered in activeRuns
+    // Small delay to ensure the run is registered with its executor
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Step 2: Use the hook to cancel
@@ -315,10 +348,19 @@ describe('useBenchmarkCancellation Integration Tests', () => {
     // Verify state is cleared after cancellation
     expect(result.current.cancellingRunId).toBeNull();
 
-    // Step 3: Verify the run is cancelled in the database
-    const benchmark = await getBenchmark(benchmarkId);
-    const run = benchmark.runs?.find((r: any) => r.id === runId);
-
+    // Step 3: Verify the run reaches `cancelled` once the executor drains,
+    // and that the terminal run is linked into the benchmark's runs.
+    const terminalRun = await waitForTerminalRun(runId);
+    expect(terminalRun).toBeDefined();
+    expect(terminalRun.status).toBe('cancelled');
+    // The projection is linked into the benchmark right AFTER the terminal
+    // doc write — poll for it instead of a single GET.
+    let run: any;
+    for (let i = 0; i < 40 && !run; i++) {
+      const benchmark = await getBenchmark(benchmarkId);
+      run = benchmark.runs?.find((r: any) => r.id === runId);
+      if (!run) await new Promise((r) => setTimeout(r, 500));
+    }
     expect(run).toBeDefined();
     expect(run.status).toBe('cancelled');
 
@@ -336,6 +378,7 @@ describe('useBenchmarkCancellation Integration Tests', () => {
 
     // Step 1: Start the benchmark execution
     const runId = await startExecutionAndGetRunId(benchmarkId);
+    startedRunIds.push(runId);
     expect(runId).toBeDefined();
 
     // Small delay to ensure run is registered
@@ -431,6 +474,7 @@ describe('useBenchmarkCancellation Integration Tests', () => {
 
     // Step 1: Start the benchmark execution
     const runId = await startExecutionAndGetRunId(benchmarkId);
+    startedRunIds.push(runId);
     expect(runId).toBeDefined();
 
     await new Promise((resolve) => setTimeout(resolve, 100));

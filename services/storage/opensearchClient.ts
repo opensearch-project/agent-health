@@ -159,7 +159,12 @@ export interface StorageRun {
   createdAt: string;
   status: 'running' | 'completed' | 'failed';
   passFailStatus?: 'passed' | 'failed';
+  /** Connector/hook-provided agent run id (Strategy B trace correlator). */
+  runId?: string;
+  /** OTel W3C trace id of the eval `test_case` span (Strategy A) — never a connector id. */
   traceId?: string;
+  /** Agent-emitted session id (Strategy D, e.g. Claude Code `session.id`). */
+  sessionId?: string;
   tags?: string[];
   actualOutcomes?: unknown[];
   llmJudgeReasoning?: string;

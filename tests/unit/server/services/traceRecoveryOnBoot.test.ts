@@ -4,22 +4,22 @@
  */
 
 import { resumePendingTracePolls, resumePendingTracePollsSafely } from '@/server/services/traceRecoveryOnBoot';
-import * as benchmarkRunner from '@/services/benchmarkRunner';
+import * as tracePolling from '@/services/evaluation/tracePolling';
 import type { IStorageModule } from '@/server/adapters/types';
 import type { EvaluationReport, TestCase } from '@/types';
 
 // Spy on the trace polling restart \u2014 we don't want a real polling loop
 // kicking off during tests.
-jest.mock('@/services/benchmarkRunner', () => {
-  const actual = jest.requireActual('@/services/benchmarkRunner');
+jest.mock('@/services/evaluation/tracePolling', () => {
+  const actual = jest.requireActual('@/services/evaluation/tracePolling');
   return {
     ...actual,
     startTracePollingForReportWithModule: jest.fn().mockResolvedValue(undefined),
   };
 });
 
-const startPollingMock = benchmarkRunner.startTracePollingForReportWithModule as jest.MockedFunction<
-  typeof benchmarkRunner.startTracePollingForReportWithModule
+const startPollingMock = tracePolling.startTracePollingForReportWithModule as jest.MockedFunction<
+  typeof tracePolling.startTracePollingForReportWithModule
 >;
 
 function makeReport(overrides: Partial<EvaluationReport>): EvaluationReport {

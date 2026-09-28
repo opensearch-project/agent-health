@@ -71,14 +71,6 @@ jest.mock('@/lib/benchmarkExport', () => ({
   generateExportFilename: jest.fn(),
 }));
 
-jest.mock('@/services/benchmarkRunner', () => ({
-  executeRun: jest.fn(),
-  createCancellationToken: jest.fn(() => ({
-    isCancelled: false,
-    cancel: jest.fn(),
-  })),
-}));
-
 import type { Application } from 'express';
 import type { BenchmarkRun, RunStats } from '@/types';
 

@@ -448,7 +448,7 @@ describe('executeEvaluationRun — issue #230 traces fixture pre-loading', () =>
     mockFetchTraces.mockResolvedValue({
       spans: [
         {
-          spanId: 'a', traceId: 'trace-xyz', name: 'invoke_agent',
+          spanId: 'a', traceId: '0123456789abcdef0123456789abcdef' /* real W3C id: non-hex candidates are dropped (lib/traceIdentity.ts) */, name: 'invoke_agent',
           startTime: '2024-01-01T00:00:00Z', endTime: '2024-01-01T00:00:01Z',
           status: 'OK', attributes: {},
         },
@@ -471,7 +471,7 @@ describe('executeEvaluationRun — issue #230 traces fixture pre-loading', () =>
     expect(saved.passFailStatus).toBe('passed');
     // Pre-fix the deterministic path left these unset → empty Traces tab. Now it
     // reuses the spans the pre-poll already fetched from OpenSearch.
-    expect(saved.traceId).toBe('trace-xyz');
+    expect(saved.traceId).toBe('0123456789abcdef0123456789abcdef');
     expect(saved.spans).toHaveLength(1);
   });
 

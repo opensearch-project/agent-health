@@ -7,6 +7,10 @@
  * Integration tests for apiClient fixes:
  * 1. Null check for res.body before calling getReader()
  * 2. SSE reader cleanup on error (reader.cancel() in finally block)
+ *
+ * Benchmark execution goes through `executeBenchmarkAsEvaluationRun`
+ * (`POST /api/storage/evaluation-runs`); the legacy `/execute` client method
+ * was removed together with the route.
  */
 
 import { ApiClient } from '@/cli/utils/apiClient';
@@ -23,7 +27,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
     global.fetch = originalFetch;
   });
 
-  describe('executeBenchmark - null body check', () => {
+  describe('executeBenchmarkAsEvaluationRun - null body check', () => {
     it('should throw error when response body is null', async () => {
       // Mock fetch to return response with null body
       global.fetch = jest.fn().mockResolvedValue({
@@ -35,7 +39,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
       const client = new ApiClient(getTestBackendUrl());
 
       await expect(
-        client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' })
+        client.executeBenchmarkAsEvaluationRun('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' })
       ).rejects.toThrow('Response body is missing');
     });
 
@@ -50,7 +54,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
       const client = new ApiClient(getTestBackendUrl());
 
       await expect(
-        client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' })
+        client.executeBenchmarkAsEvaluationRun('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' })
       ).rejects.toThrow('Response body is missing');
     });
   });
@@ -71,17 +75,17 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
     });
   });
 
-  describe('executeBenchmark - SSE reader cleanup', () => {
+  describe('executeBenchmarkAsEvaluationRun - SSE reader cleanup', () => {
     it('should cancel reader when stream completes normally', async () => {
       const mockCancel = jest.fn().mockResolvedValue(undefined);
       const mockRead = jest.fn()
         .mockResolvedValueOnce({
           done: false,
-          value: new TextEncoder().encode('data: {"type":"started","runId":"run-1","testCases":[]}\n\n'),
+          value: new TextEncoder().encode('event: started\ndata: {"runId":"run-1","testCases":[]}\n\n'),
         })
         .mockResolvedValueOnce({
           done: false,
-          value: new TextEncoder().encode('data: {"type":"completed","run":{"id":"run-1","status":"completed"}}\n\n'),
+          value: new TextEncoder().encode('event: completed\ndata: {"id":"run-1","status":"completed","results":{},"createdAt":"2024-01-01T00:00:00Z"}\n\n'),
         })
         .mockResolvedValueOnce({ done: true, value: undefined });
 
@@ -102,7 +106,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
       });
 
       const client = new ApiClient(getTestBackendUrl());
-      await client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' });
+      await client.executeBenchmarkAsEvaluationRun('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' });
 
       // Reader should be cancelled in finally block
       expect(mockCancel).toHaveBeenCalled();
@@ -134,7 +138,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
 
       // Should throw, but reader should still be cancelled
       await expect(
-        client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' })
+        client.executeBenchmarkAsEvaluationRun('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' })
       ).rejects.toThrow('Stream connection lost');
 
       // Reader should be cancelled even on error
@@ -146,11 +150,11 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
       const mockRead = jest.fn()
         .mockResolvedValueOnce({
           done: false,
-          value: new TextEncoder().encode('data: {"type":"started","runId":"run-1","testCases":[]}\n\n'),
+          value: new TextEncoder().encode('event: started\ndata: {"runId":"run-1","testCases":[]}\n\n'),
         })
         .mockResolvedValueOnce({
           done: false,
-          value: new TextEncoder().encode('data: {"type":"completed","run":{"id":"run-1","status":"completed"}}\n\n'),
+          value: new TextEncoder().encode('event: completed\ndata: {"id":"run-1","status":"completed","results":{},"createdAt":"2024-01-01T00:00:00Z"}\n\n'),
         })
         .mockResolvedValueOnce({ done: true, value: undefined });
 
@@ -173,7 +177,7 @@ describe('ApiClient - Null Body and SSE Cleanup Fixes', () => {
       const client = new ApiClient(getTestBackendUrl());
 
       // Should not throw even if cancel fails
-      const result = await client.executeBenchmark('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' });
+      const result = await client.executeBenchmarkAsEvaluationRun('bench-123', { name: 'test', agentKey: 'demo', modelId: 'test' });
 
       expect(result).toBeDefined();
       expect(mockCancel).toHaveBeenCalled();

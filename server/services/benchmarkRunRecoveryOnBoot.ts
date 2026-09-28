@@ -10,21 +10,27 @@
  * trace-polling state, this one fixes orphan *benchmark execution* state —
  * a separate failure mode hit by users when:
  *
- *   - A benchmark is mid-flight (executeRun has scheduled some test cases,
- *     completed a few, started others)
+ *   - A benchmark run is mid-flight (the evaluation-runs runner has scheduled
+ *     some test cases, completed a few, started others — its projection in
+ *     `benchmark.runs[]` says `running`)
  *   - The server is killed (deploy / OOM / SIGKILL / uncaught rejection that
- *     bypasses the executeRun catch block)
+ *     bypasses the runner's catch block)
  *   - On restart, `BenchmarkRun.status` is still `'running'`, and any test
  *     case that hadn't completed has `runResult.status: 'pending'` with no
  *     `reportId`. Nothing on the server moves these forward — the in-memory
- *     `activeRuns` cancellation registry was lost with the dead process, and
- *     the next `executeRun` won't re-pick the same run id.
+ *     cancellation registry was lost with the dead process, and a new run
+ *     never re-picks the same run id. Legacy runs created by the removed
+ *     `POST .../execute` runner (`run-<ts>-<rand>` ids) are handled the same
+ *     way — they share the embedded-run shape.
  *
  * On boot, scan benchmarks for runs that are:
  *   - `status === 'running'` AND
- *   - older than `BENCHMARK_RUN_STALE_AFTER_MS` (default 1h) AND
- *   - not in the *current* process's `activeRuns` map (so we don't kill an
- *     in-flight resumption from another concurrent boot path)
+ *   - older than `BENCHMARK_RUN_STALE_AFTER_MS` (default 1h)
+ *
+ * No "is it active in this process" guard: recovery runs before any executor
+ * exists in this process, and the evaluation-runs runner only links a run into
+ * `benchmark.runs[]` once it is terminal, so an embedded `running` run can only
+ * ever be a legacy-runner orphan (or a projection whose process died).
  *
  * For each such run:
  *   - Mark every `runResult` whose `status` is still `'running'` or `'pending'`
@@ -37,7 +43,6 @@
 
 import type { IStorageModule } from '../adapters/types.js';
 import type { Benchmark, BenchmarkRun } from '../../types/index.js';
-import { isRunActiveInThisProcess } from '../routes/storage/benchmarks.js';
 import { refreshBenchmarkRunStatsByRunId } from './benchmarkRunStats.js';
 
 function envInt(name: string, fallback: number): number {
@@ -124,12 +129,6 @@ export async function recoverOrphanBenchmarkRuns(storage: IStorageModule): Promi
         const runStart = new Date(run.createdAt || 0).getTime();
         const ageMs = Number.isFinite(runStart) && runStart > 0 ? now - runStart : Infinity;
         if (ageMs < staleAfterMs) {
-          updatedRuns.push(run);
-          continue;
-        }
-
-        if (isRunActiveInThisProcess(run.id)) {
-          // Resumed in the current process — leave alone.
           updatedRuns.push(run);
           continue;
         }

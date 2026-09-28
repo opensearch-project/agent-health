@@ -142,6 +142,16 @@ export interface ResolvedServerConfig {
   reuseExistingServer: boolean;
   startTimeout: number;
   readOnly?: boolean;
+  /**
+   * Whether `port` was chosen EXPLICITLY (`server.port` in agent-health.config.ts,
+   * or `AH_PORT` / `AGENT_HEALTH_PORT` in the environment) rather than
+   * defaulted to 4001. An explicit port is explicit intent: a healthy
+   * agent-health server answering on it is reused even in CI mode
+   * (`reuseExistingServer: false`), where the guard against talking to a
+   * stray server *by accident* would otherwise refuse. Resolved by the config
+   * loader; `ensureServer` falls back to the env check when absent.
+   */
+  portExplicit?: boolean;
 }
 
 /**

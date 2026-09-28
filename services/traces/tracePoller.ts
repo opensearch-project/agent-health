@@ -19,6 +19,8 @@ import { executeBuildTrajectoryHook } from '@/lib/hooks';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { spansToTrajectory } from './spansToTrajectory';
 import { mergeSpanTrajectory } from './trajectoryMerge';
+import { filterSpansByPreciseCorrelators } from './preciseSpanFilter';
+import { isW3CTraceId } from '@/lib/traceIdentity';
 
 // Polling configuration. Defaults are overridable via env vars so that
 // CI / E2E runs without a real OpenSearch trace backend can fail fast
@@ -326,7 +328,10 @@ class TracePollingManager {
       // runners at case start. Agents that adopt the propagated traceparent
       // (REST via header, pi via TRACEPARENT env — both verified) emit their
       // spans under this exact traceId (Strategy A).
-      const evalTraceId = currentReport?.traceId;
+      // Pre-fix documents may carry a connector run id here (see
+      // lib/traceIdentity.ts); such a value can never match a span and must
+      // not count as a correlator.
+      const evalTraceId = isW3CTraceId(currentReport?.traceId) ? currentReport!.traceId : undefined;
 
       if (!state.runId && !sessionId && !evalTraceId && windowAgents.length === 0) {
         // No correlator at all this attempt (report fetch may have failed
@@ -362,18 +367,20 @@ class TracePollingManager {
       // discovery fallback and can return spans from CONCURRENT runs of the
       // same agent — or from unrelated emitters sharing the service name
       // (observed live: a pi-web session's spans were fetched for a pi eval
-      // run). When the report carries a precise correlator, judge ONLY spans
-      // matching it — and if none match yet, treat the attempt as "traces
-      // not available" and keep polling rather than judging foreign spans:
-      //   session.id (Claude Code)  >  eval traceId (traceparent adopters).
+      // run). When the report carries a strict correlator — session.id (D)
+      // or a valid W3C eval traceId (A) — judge ONLY spans matching one of
+      // them (or carrying the report's run id, Strategy B), and if none match
+      // yet treat the attempt as "traces not available" and keep polling
+      // rather than judging foreign spans. A non-W3C `traceId` is ignored (it
+      // can never match a real span), so a mis-stamped report cannot
+      // black-hole the spans the other strategies found — see
+      // services/traces/preciseSpanFilter.ts.
       let spans = result.spans || [];
       if (spans.length > 0) {
-        if (sessionId) {
-          spans = spans.filter(sp => (sp.attributes as any)?.['session.id'] === sessionId);
-          if (spans.length === 0) debug('TracePoller', `Fetched ${result.spans!.length} spans but none match session ${sessionId} — waiting`);
-        } else if (evalTraceId) {
-          spans = spans.filter(sp => sp.traceId === evalTraceId);
-          if (spans.length === 0) debug('TracePoller', `Fetched ${result.spans!.length} spans but none match eval traceId ${evalTraceId} — waiting`);
+        const filtered = filterSpansByPreciseCorrelators(spans, { sessionId, evalTraceId, runId: state.runId });
+        spans = filtered.spans;
+        if (spans.length === 0) {
+          debug('TracePoller', `Fetched ${result.spans!.length} spans but none match the report's strict correlators (${filtered.strict.join(', ')}: session=${sessionId ?? '-'} traceId=${evalTraceId ?? '-'} runId=${state.runId ?? '-'}) — waiting`);
         }
       }
       const filteredResult = { ...result, spans };

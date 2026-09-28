@@ -12,26 +12,17 @@
 
 import { Router, Request, Response } from 'express';
 import { debug } from '@/lib/debug';
-import { isStorageAvailable, requireStorageClient, INDEXES } from '../../middleware/storageClient.js';
 import { getStorageModule } from '../../adapters/index.js';
 import { SAMPLE_BENCHMARKS, isSampleBenchmarkId } from '../../../cli/demo/sampleBenchmarks.js';
 import { SAMPLE_TEST_CASES } from '../../../cli/demo/sampleTestCases.js';
-import { Benchmark, BenchmarkRun, BenchmarkProgress, RunConfigInput, TestCase, BenchmarkVersion, TestCaseSnapshot, StorageMetadata, RunStats, EvaluationReport } from '../../../types/index.js';
+import { Benchmark, BenchmarkRun, TestCase, BenchmarkVersion, StorageMetadata, RunStats, EvaluationReport } from '../../../types/index.js';
 import { linkTestCaseIdsToBenchmark } from '../../../services/benchmarkPromotion.js';
 import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
-import {
-  executeRun,
-  createCancellationToken,
-  CancellationToken,
-} from '../../../services/benchmarkRunner.js';
 import { convertTestCasesToExportFormat, generateExportFilename } from '../../../lib/benchmarkExport.js';
-import { resolveCodeFnMapForStoredTestCases } from '../../../services/sourceResolver.js';
-import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.js';
-import { loadConfigSync } from '../../../lib/config/index.js';
-import { getCustomAgents } from '../../services/customAgentStore.js';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '../../../lib/judgeFailureSummary.js';
 import { deleteRunEverywhere } from '../../services/runDelete.js';
-import { registerRunCanceller, cancelActiveRun } from '../../services/runCancellation.js';
+import { cancelActiveRun } from '../../services/runCancellation.js';
+import { LEGACY_EXECUTE_REMOVED } from '../../../lib/legacyExecuteRemoved.js';
 
 /**
  * Normalize benchmark data for legacy documents without version fields.
@@ -72,7 +63,6 @@ function normalizeBenchmarkRun(run: any): BenchmarkRun {
 }
 
 const router = Router();
-const INDEX = INDEXES.benchmarks;
 
 /**
  * Lazy backfill stats for completed runs that are missing them or have stale stats.
@@ -132,13 +122,11 @@ async function backfillRunStats(
 }
 
 /**
- * Compute stats for a benchmark run by fetching its reports.
- * Accepts an optional raw OpenSearch client for use during execution (Painless script paths).
- * Falls back to storage adapter when no client provided.
+ * Compute stats for a benchmark run by fetching its reports through the
+ * storage adapter (works for both file and OpenSearch backends).
  */
 async function computeStatsForRun(
-  run: BenchmarkRun,
-  client?: any
+  run: BenchmarkRun
 ): Promise<RunStats & { judgeFailureSummary?: string }> {
   // Collect report IDs from run results
   const reportIds = Object.values(run.results || {})
@@ -162,28 +150,12 @@ async function computeStatsForRun(
     try {
       const reportsMap = new Map<string, any>();
 
-      if (client) {
-        // Use raw client during execution (OpenSearch path)
-        const reportsResult = await client.search({
-          index: INDEXES.runs,
-          body: {
-            size: reportIds.length,
-            query: { terms: { 'id': reportIds } },
-            _source: ['id', 'passFailStatus', 'metricsStatus', 'status', 'traceError', 'llmJudgeReasoning'],
-          },
-        });
-        (reportsResult.body.hits?.hits || []).forEach((hit: any) => {
-          reportsMap.set(hit._source.id, hit._source);
-        });
-      } else {
-        // Use storage adapter
-        const storage = getStorageModule();
-        for (const reportId of reportIds) {
-          try {
-            const report = await storage.runs.getById(reportId);
-            if (report) reportsMap.set(report.id, report);
-          } catch { /* skip */ }
-        }
+      const storage = getStorageModule();
+      for (const reportId of reportIds) {
+        try {
+          const report = await storage.runs.getById(reportId);
+          if (report) reportsMap.set(report.id, report);
+        } catch { /* skip */ }
       }
 
       // Count stats based on result status and report passFailStatus
@@ -259,68 +231,6 @@ async function computeStatsForRun(
   return { passed, failed, pending, errored, total, ...(judgeFailureSummary ? { judgeFailureSummary } : {}) };
 }
 
-/**
- * Atomically update a single test case result within a benchmark run.
- * Used for persisting intermediate progress during benchmark execution.
- */
-async function updateTestCaseResult(
-  client: any,
-  benchmarkId: string,
-  runId: string,
-  testCaseId: string,
-  result: { reportId: string; status: string }
-): Promise<void> {
-  await client.update({
-    index: INDEX,
-    id: benchmarkId,
-    retry_on_conflict: 3,
-    body: {
-      script: {
-        source: `
-          for (int i = 0; i < ctx._source.runs.size(); i++) {
-            if (ctx._source.runs[i].id == params.runId) {
-              if (ctx._source.runs[i].results == null) {
-                ctx._source.runs[i].results = new HashMap();
-              }
-              ctx._source.runs[i].results[params.testCaseId] = params.result;
-              break;
-            }
-          }
-        `,
-        params: { runId, testCaseId, result },
-      },
-    },
-    refresh: false, // Don't wait for refresh on intermediate updates
-  });
-}
-
-// Registry of active cancellation tokens for in-progress runs
-const activeRuns = new Map<string, CancellationToken>();
-
-/**
- * Read-only accessor for the in-memory active-run registry. Used by
- * `server/services/benchmarkRunRecoveryOnBoot.ts` to distinguish runs that
- * are *actually* in-flight in this process from runs whose `status: 'running'`
- * was orphaned by a previous restart.
- */
-export function isRunActiveInThisProcess(runId: string): boolean {
-  return activeRuns.has(runId);
-}
-
-/**
- * Signal the executor of a legacy benchmark run (`POST .../execute`) started
- * by THIS process to stop. Returns false when no live token is registered.
- * Used by the delete paths (this file's nested-run DELETE and the
- * evaluation-runs DELETE) so a run removed while running stops executing.
- */
-export function cancelActiveBenchmarkRun(runId: string): boolean {
-  const token = activeRuns.get(runId);
-  if (!token) return false;
-  token.cancel();
-  return true;
-}
-registerRunCanceller(cancelActiveBenchmarkRun);
-
 function generateId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
@@ -336,10 +246,9 @@ function isSampleId(id: string): boolean {
  * Validate a benchmark create body.
  *
  * Minimal required contract: `name` is a non-empty string, and `testCaseIds`
- * (when present) is an array of strings. This mirrors validateRunConfig()
- * below, which validates the `/execute` config, but guards the create route
- * itself — previously an empty `{}` body silently persisted a nameless
- * benchmark to the shared cluster.
+ * (when present) is an array of strings. Guards the create route itself —
+ * previously an empty `{}` body silently persisted a nameless benchmark to
+ * the shared cluster.
  */
 function validateBenchmarkCreate(body: any): string | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -354,101 +263,6 @@ function validateBenchmarkCreate(body: any): string | null {
     }
   }
   return null;
-}
-
-/**
- * Validate run configuration input
- * Returns error message if invalid, null if valid
- */
-function validateRunConfig(config: any): string | null {
-  if (!config || typeof config !== 'object') {
-    return 'Request body must be a valid run configuration object';
-  }
-  if (!config.name || typeof config.name !== 'string' || !config.name.trim()) {
-    return 'name is required and must be a non-empty string';
-  }
-  if (!config.agentKey || typeof config.agentKey !== 'string') {
-    return 'agentKey is required and must be a string';
-  }
-  // No `modelId` requirement: the agent's LLM comes from the agent's own
-  // connectorConfig (agent-health.config.ts), resolved by the runner.
-  if (config.modelId !== undefined && typeof config.modelId !== 'string') {
-    return 'modelId must be a string when provided';
-  }
-  if (config.concurrency !== undefined) {
-    const c = Number(config.concurrency);
-    if (!Number.isInteger(c) || c < 1 || c > 20) {
-      return 'concurrency must be an integer between 1 and 20';
-    }
-  }
-  return null;
-}
-
-/**
- * Resolve whether an agentKey refers to a configured agent (built-in from
- * agent-health.config.ts/.js/env defaults, or a custom agent added via the
- * Settings UI). Mirrors the EXACT resolution source both GET /api/agents
- * AND services/benchmarkRunner.ts's buildAgentConfigForRun() use --
- * `[...config.agents, ...getCustomAgents()].find(a => a.key === agentKey)`
- * -- verified by reading buildAgentConfigForRun() directly: it is the one
- * and only place executeRun() resolves an agentKey to a connector, and it
- * does not consult remote servers, aliases, or any other source. So
- * "known" here means exactly what would actually be executable, not an
- * approximation.
- *
- * Also mirrors buildAgentConfigForRun()'s own defensive fallback
- * (services/benchmarkRunner.ts's local getConfig() helper): loadConfigSync()
- * is called OUTSIDE this route's try/catch (deliberately, so the check
- * runs before any storage/benchmark lookup), so a config-load failure here
- * must not throw an uncaught rejection out of an async Express 4 handler
- * (which would hang the request rather than reach setupFinalErrorHandler).
- * Fail closed to "not configured" instead, matching what executeRun()
- * would do a moment later anyway.
- *
- * Regression guard for an API KPI probe finding: POST .../execute with a
- * bogus agentKey used to sail past validateRunConfig() (which only checked
- * the field was a non-empty string), start a real 30s+ run against a
- * connector that would immediately fail, and persist a junk run entry on
- * the benchmark before failing. Callers must check this BEFORE creating or
- * persisting a run.
- */
-function isKnownAgentKey(agentKey: string): boolean {
-  let config;
-  try {
-    config = loadConfigSync();
-  } catch {
-    return false;
-  }
-  if (config.agents.some(a => a.key === agentKey)) return true;
-  try {
-    return getCustomAgents().some(a => a.key === agentKey);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Get all test cases (sample + real) for lookups
- */
-async function getAllTestCases(): Promise<TestCase[]> {
-  const sampleTestCases = SAMPLE_TEST_CASES.map(s => ({
-    id: s.id,
-    name: s.name,
-  })) as TestCase[];
-
-  const storage = getStorageModule();
-  if (!storage.isConfigured()) {
-    return sampleTestCases;
-  }
-
-  try {
-    const result = await storage.testCases.getAll({ size: 10000 });
-    // Only need id and name for lookups
-    const realTestCases = result.items.map(tc => ({ id: tc.id, name: tc.name })) as TestCase[];
-    return [...sampleTestCases, ...realTestCases];
-  } catch {
-    return sampleTestCases;
-  }
 }
 
 // GET /api/storage/benchmarks - List all
@@ -1078,331 +892,25 @@ router.post('/api/storage/benchmarks/bulk', async (req: Request, res: Response) 
   }
 });
 
-// POST /api/storage/benchmarks/:id/execute - Execute benchmark and stream progress via SSE
-router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Response) => {
-  debug('StorageAPI', '========== BENCHMARK EXECUTION STARTED ==========');
-  debug('StorageAPI', 'Execute request params:', req.params);
-  debug('StorageAPI', 'Execute request body:', JSON.stringify(req.body, null, 2));
-
-  const { id } = req.params;
-  const runConfig: RunConfigInput = req.body;
-
-  // Reject executing sample benchmarks (they're pre-completed)
-  if (isSampleId(id)) {
-    return res.status(400).json({
-      error: 'Cannot execute sample benchmarks. Sample data is read-only with pre-completed runs.',
-    });
-  }
-
-  // Validate run configuration
-  const validationError = validateRunConfig(runConfig);
-  if (validationError) {
-    return res.status(400).json({ error: validationError });
-  }
-
-  // Resolve agentKey against configured agents (same source as GET /api/agents)
-  // BEFORE doing anything else. An unknown agentKey previously sailed through
-  // to executeRun(), which started a real 30s+ run and persisted a junk run
-  // entry before the connector eventually failed.
-  if (!isKnownAgentKey(runConfig.agentKey)) {
-    return res.status(400).json({ error: `Unknown agentKey: ${runConfig.agentKey}` });
-  }
-
-  // Require OpenSearch for execution
-  if (!isStorageAvailable(req)) {
-    return res.status(400).json({ error: 'OpenSearch not configured. Cannot execute benchmarks in sample-only mode.' });
-  }
-
-  try {
-    const client = requireStorageClient(req);
-
-    // Get benchmark
-    const getResult = await client.get({ index: INDEX, id });
-    if (!getResult.body.found) {
-      return res.status(404).json({ error: 'Benchmark not found' });
-    }
-
-    const benchmark = normalizeBenchmark(getResult.body._source);
-    debug('StorageAPI', 'Benchmark loaded:', benchmark.id, benchmark.name);
-    debug('StorageAPI', 'Test case IDs:', benchmark.testCaseIds);
-
-    // Fetch test cases for progress display and version snapshots
-    debug('StorageAPI', 'Fetching test cases...');
-    const allTestCases = await getAllTestCases();
-    debug('StorageAPI', 'Found', allTestCases.length, 'test cases');
-    const storage = getStorageModule();
-    const testCaseMap = new Map(allTestCases.map((tc: any) => [tc.id, tc]));
-
-    // Capture test case snapshots at execution time (for reproducibility)
-    const testCaseSnapshots: TestCaseSnapshot[] = benchmark.testCaseIds.map(tcId => {
-      const tc = testCaseMap.get(tcId);
-      return {
-        id: tcId,
-        version: (tc as any)?.currentVersion ?? 1,
-        name: tc?.name || tcId,
-      };
-    });
-
-    // Create new run with 'running' status and version tracking
-    const run: BenchmarkRun = {
-      ...runConfig,
-      id: generateId('run'),
-      createdAt: new Date().toISOString(),
-      status: 'running',
-      benchmarkVersion: benchmark.currentVersion,
-      testCaseSnapshots,
-      results: {},
-    };
-
-    // Initialize pending status for all test cases
-    benchmark.testCaseIds.forEach(testCaseId => {
-      run.results[testCaseId] = { reportId: '', status: 'pending' };
-    });
-
-    // Full test-case bodies (content) for this benchmark's ids — needed for
-    // both the image-digest stamp below and the SDK code-import
-    // re-materialization further down. `allTestCases`/`testCaseMap` above
-    // only carry (id, name) for cheap progress-display lookups.
-    let fullTestCases: TestCase[] = [];
-    try {
-      const allFull = await getStorageModule().testCases.getAll({ size: 10000 });
-      const requested = new Set(benchmark.testCaseIds);
-      fullTestCases = allFull.items.filter(tc => requested.has(tc.id));
-    } catch (err: any) {
-      console.warn(`[StorageAPI] Full test-case fetch failed (non-fatal, image digest/SDK re-materialization skipped): ${err.message}`);
-    }
-
-    // Stamp the content digest of this run's evaluation conditions and
-    // find-or-create the corresponding benchmark image — same
-    // content-addressed identity as the unified evaluation-runs path
-    // (server/routes/storage/evaluationRuns.ts), so legacy
-    // `benchmark -f test-cases.json` / `benchmark -n "Existing Benchmark"`
-    // runs also converge on images by digest instead of silently having no
-    // imageDigest at all (a gap the images/doctor dedup feature otherwise
-    // misses for this path). Requires the full-fetch above to have resolved
-    // EVERY id in benchmark.testCaseIds — a PARTIAL set (deleted test case,
-    // a >10000-item corpus, a transient read gap) would silently compute a
-    // digest for less content than the run actually covers, which is a
-    // wrong identity, not a harmless skip (codex_review finding: don't
-    // stamp on partial data). Failure-safe: image bookkeeping must never
-    // block run execution.
-    if (fullTestCases.length > 0 && fullTestCases.length === benchmark.testCaseIds.length) {
-      try {
-        const evalConditions = {
-          evaluatorId: run.evaluatorId || undefined,
-          judgeModelId: run.judgeModelId || undefined,
-        };
-        const digest = computeImageDigest({ testCases: fullTestCases, evalConditions });
-        run.imageDigest = digest;
-        await storage.images.create(buildImageDoc({ testCases: fullTestCases, evalConditions }));
-        await storage.images.update(digest, { lastRunAt: run.createdAt }).catch(() => {});
-      } catch (imageErr: any) {
-        console.warn('[StorageAPI] Image digest stamping failed (run continues):', imageErr?.message);
-      }
-    } else if (fullTestCases.length > 0) {
-      console.warn(
-        `[StorageAPI] Image digest stamping skipped for run ${run.id}: resolved ${fullTestCases.length}/${benchmark.testCaseIds.length} test cases (partial content -- refusing to stamp a digest for less content than the run covers).`
-      );
-    }
-
-    // Setup SSE
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    // Save run to benchmark immediately so it persists across page refreshes
-    // Also update updatedAt so benchmark appears at top of list (sorted by recent activity)
-    const initialRuns = [...(benchmark.runs || []), run];
-    await client.update({
-      index: INDEX,
-      id,
-      body: { doc: { runs: initialRuns, updatedAt: run.createdAt } },
-      refresh: true,
-    });
-
-    // Build test case list for progress display
-    const testCasesForProgress = benchmark.testCaseIds.map(tcId => {
-      const tc = testCaseMap.get(tcId);
-      return { id: tcId, name: tc?.name || tcId, status: 'pending' as const };
-    });
-
-    // Send initial event with run ID and test cases
-    res.write(`data: ${JSON.stringify({
-      type: 'started',
-      runId: run.id,
-      testCases: testCasesForProgress,
-    })}\n\n`);
-
-    // Create cancellation token
-    const cancellationToken = createCancellationToken();
-    activeRuns.set(run.id, cancellationToken);
-
-    // Handle client disconnect - execution continues in background
-    req.on('close', () => {});
-
-    // SDK code-import: re-materialize the code test bodies (+ hooks/scopes)
-    // for any of this benchmark's test cases that came from a .eval.js/.ts
-    // file. Centralized in sourceResolver (#245/#246) so this route and the
-    // evaluation-runs route share one code-import resolution path.
-    let evaluateFnMap: Map<string, (fixtures: any) => Promise<void> | void> | undefined;
-    let hooksByFile: Map<string, import('../../../lib/testCases/types.js').RegisteredHook[]> | undefined;
-    let testHookScopes: Map<string, { sourceFile?: string; describePath?: string }> | undefined;
-    try {
-      // Reuses the `fullTestCases` fetched above for image-digest stamping
-      // — one full-corpus fetch instead of two.
-      const resolved = await resolveCodeFnMapForStoredTestCases(fullTestCases);
-      if (resolved.evaluateFnMap.size > 0) {
-        evaluateFnMap = resolved.evaluateFnMap;
-        console.log(`[StorageAPI] SDK fnMap built with ${resolved.evaluateFnMap.size} entries`);
-      }
-      if (resolved.hooksByFile.size > 0) hooksByFile = resolved.hooksByFile;
-      if (resolved.testHookScopes.size > 0) testHookScopes = resolved.testHookScopes;
-    } catch (err: any) {
-      console.warn(`[StorageAPI] SDK fn-map re-resolution failed (non-fatal): ${err.message}`);
-    }
-
-    try {
-      // Execute the run
-      debug('StorageAPI', 'Starting executeRun for run:', run.id);
-      debug('StorageAPI', 'Run config:', { agentKey: run.agentKey, modelId: run.modelId });
-      const completedRun = await executeRun(
-        benchmark,
-        run,
-        (progress: BenchmarkProgress) => {
-          // Stream progress to client
-          debug('StorageAPI', 'Execute progress:', progress.currentTestCaseIndex + 1, '/', progress.totalTestCases, 'status:', progress.status);
-          res.write(`data: ${JSON.stringify({ type: 'progress', ...progress })}\n\n`);
-        },
-        {
-          cancellationToken,
-          client,
-          storageModule: storage,
-          evaluateFnMap,
-          hooksByFile,
-          testHookScopes,
-          onTestCaseComplete: async (testCaseId, result) => {
-            // Stream per-test-case result to the client
-            const tc = testCaseMap.get(testCaseId);
-            const completedCount = Object.values(run.results).filter(
-              r => r.status === 'completed' || r.status === 'failed'
-            ).length;
-            res.write(`data: ${JSON.stringify({
-              type: 'progress',
-              currentTestCaseIndex: completedCount - 1,
-              completedCount,
-              totalTestCases: benchmark.testCaseIds.length,
-              currentTestCase: { id: testCaseId, name: tc?.name || testCaseId },
-              result: { status: result.status, error: result.error },
-            })}\n\n`);
-
-            // Persist intermediate progress to OpenSearch for real-time polling
-            try {
-              await updateTestCaseResult(client, id, run.id, testCaseId, result);
-            } catch (err: any) {
-              console.warn(`[Execute] Failed to persist ${testCaseId}:`, err.message);
-            }
-          },
-        }
-      );
-      debug('StorageAPI', 'executeRun completed');
-
-      // Determine final status - check if cancelled
-      const wasCancelled = cancellationToken.isCancelled;
-
-      // Mark remaining pending results as failed if cancelled
-      if (wasCancelled) {
-        Object.entries(completedRun.results).forEach(([testCaseId, result]) => {
-          if (result.status === 'pending') {
-            completedRun.results[testCaseId] = { ...result, status: 'failed' };
-          }
-        });
-      }
-
-      // Compute final stats from reports
-      debug('StorageAPI', '[StatsUpdate] Computing final stats for completed run:', run.id);
-      const { judgeFailureSummary, ...stats } = await computeStatsForRun(completedRun, client);
-      debug('StorageAPI', `[StatsUpdate] Final stats for run ${run.id}: passed=${stats.passed}, failed=${stats.failed}, pending=${stats.pending}, total=${stats.total}`);
-
-      const finalRun = {
-        ...completedRun,
-        status: wasCancelled ? 'cancelled' as const : 'completed' as const,
-        stats,
-        ...(judgeFailureSummary ? { judgeFailureSummary } : {}),
-      };
-
-      // Update benchmark with final run results
-      await client.update({
-        index: INDEX,
-        id,
-        retry_on_conflict: 3,
-        body: {
-          script: {
-            source: `
-              for (int i = 0; i < ctx._source.runs.size(); i++) {
-                if (ctx._source.runs[i].id == params.runId) {
-                  ctx._source.runs[i] = params.finalRun;
-                  break;
-                }
-              }
-            `,
-            params: { runId: run.id, finalRun },
-          },
-        },
-        refresh: true,
-      });
-
-      // Send completion event with final status
-      const eventType = wasCancelled ? 'cancelled' : 'completed';
-      res.write(`data: ${JSON.stringify({ type: eventType, run: finalRun })}\n\n`);
-    } catch (error: any) {
-      console.error(`[StorageAPI] Benchmark run failed: ${run.id}`, error.message);
-
-      // Update benchmark to mark run as failed
-      try {
-        const failedRun = { ...run, status: 'failed', error: error.message };
-        await client.update({
-          index: INDEX,
-          id,
-          retry_on_conflict: 3,
-          body: {
-            script: {
-              source: `
-                for (int i = 0; i < ctx._source.runs.size(); i++) {
-                  if (ctx._source.runs[i].id == params.runId) {
-                    ctx._source.runs[i] = params.failedRun;
-                    break;
-                  }
-                }
-              `,
-              params: { runId: run.id, failedRun },
-            },
-          },
-          refresh: true,
-        });
-      } catch (updateError: any) {
-        console.error(`[StorageAPI] Failed to update benchmark with failed run: ${updateError.message}`);
-      }
-
-      res.write(`data: ${JSON.stringify({ type: 'error', error: error.message, runId: run.id })}\n\n`);
-    } finally {
-      // Cleanup
-      activeRuns.delete(run.id);
-      res.end();
-    }
-  } catch (error: any) {
-    // Handle 404 from OpenSearch client.get()
-    if (error.meta?.statusCode === 404) {
-      if (!res.headersSent) {
-        return res.status(404).json({ error: 'Benchmark not found' });
-      }
-      return;
-    }
-    console.error('[StorageAPI] Execute benchmark failed:', error.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: error.message });
-    }
-  }
+// POST /api/storage/benchmarks/:id/execute — REMOVED (410 Gone).
+//
+// The legacy per-benchmark runner behind this route (services/benchmarkRunner.ts)
+// executed every test case of a run under one `test_suite_run` trace and
+// streamed progress over SSE. It has been removed: every first-party caller
+// (UI, CLI, SDK) already runs through the unified evaluation-runs API, which
+// also embeds a projection of each run into `benchmark.runs[]`, so nothing is
+// lost for readers. The route stays registered so any remaining API client
+// gets an explicit, actionable error instead of a 404.
+router.post('/api/storage/benchmarks/:id/execute', (_req: Request, res: Response) => {
+  res.setHeader('Deprecation', LEGACY_EXECUTE_REMOVED.deprecationHeader);
+  res.setHeader('Sunset', LEGACY_EXECUTE_REMOVED.sunsetHeader);
+  res.setHeader('Link', `<${LEGACY_EXECUTE_REMOVED.docsUrl}>; rel="deprecation"`);
+  res.status(410).json({
+    error: LEGACY_EXECUTE_REMOVED.error,
+    code: LEGACY_EXECUTE_REMOVED.code,
+    replacement: LEGACY_EXECUTE_REMOVED.replacement,
+    docs: LEGACY_EXECUTE_REMOVED.docs,
+  });
 });
 
 // DELETE /api/storage/benchmarks/:id/runs/:runId - Delete a specific run
@@ -1489,7 +997,15 @@ router.patch('/api/storage/benchmarks/:id/runs/:runId/stats', async (req: Reques
   }
 });
 
-// POST /api/storage/benchmarks/:id/cancel - Cancel an in-progress run
+// POST /api/storage/benchmarks/:id/cancel - Cancel a run embedded in benchmark.runs[]
+//
+// EMBEDDED RUNS ONLY. Runs execute through the evaluation-runs API and are
+// linked into `benchmark.runs[]` only once terminal, so an in-flight run is
+// never found here — cancel those with `POST /api/storage/evaluation-runs/:id/cancel`
+// (what the UI and CLI do). What this route still handles is the "zombie"
+// left behind by the removed legacy runner (or a dead process): an embedded
+// run whose doc still says `running` with no executor anywhere. It is marked
+// cancelled directly once old enough that an executor cannot still be starting.
 router.post('/api/storage/benchmarks/:id/cancel', async (req: Request, res: Response) => {
   const { id } = req.params;
   const { runId } = req.body;
@@ -1498,75 +1014,37 @@ router.post('/api/storage/benchmarks/:id/cancel', async (req: Request, res: Resp
     return res.status(400).json({ error: 'runId is required' });
   }
 
-  const cancellationToken = activeRuns.get(runId);
-  if (!cancellationToken) {
-    // No in-memory cancellation token for this run id — either the run
-    // already finished, or the executor that was running it is gone while
-    // the run doc is still marked 'running' (server process restarted or
-    // crashed; "zombie" run — the "Not able to cancel this run" bug report
-    // this fixes). Distinguish the two by checking the persisted status:
-    // only fall back to a doc-status-only cancel when it's still 'running'.
-    const storage = getStorageModule();
-    const benchmark = await storage.benchmarks.getById(id);
-    const run = benchmark?.runs?.find(r => r.id === runId);
-    if (!run) {
-      return res.status(404).json({ error: 'Run not found or already completed' });
-    }
-    if (run.status !== 'running') {
-      return res.status(400).json({ error: `Run is not currently running (status: ${run.status})` });
-    }
-    if (!isOldEnoughForZombieCancel(run.createdAt)) {
-      return res.status(409).json({
-        error: `Run was created less than ${ZOMBIE_CANCEL_MIN_AGE_MS / 1000}s ago; its executor may not have started yet. Try cancelling again in a moment.`,
-      });
-    }
-
-    const cancelNote = 'Cancelled: no active executor found for this run (process restarted or crashed) — marked cancelled directly.';
-    try {
-      await storage.benchmarks.updateRun(id, runId, {
-        status: 'cancelled',
-        completedAt: new Date().toISOString(),
-        cancelNote,
-      } as any);
-    } catch (error: any) {
-      console.error('[StorageAPI] Zombie-cancel doc update failed:', error.message);
-      return res.status(500).json({ error: error.message });
-    }
-
-    return res.json({ cancelled: true, runId, viaFallback: true, note: cancelNote });
-  }
-
-  // Set cancellation flag
-  cancellationToken.cancel();
-
-  // Immediately update run status in DB to 'cancelled'
-  // This fixes race condition where client refreshes before execute loop updates DB
-  const client = requireStorageClient(req);
-  try {
-    await client.update({
-      index: INDEX,
-      id,
-      body: {
-        script: {
-          source: `
-            for (int i = 0; i < ctx._source.runs.size(); i++) {
-              if (ctx._source.runs[i].id == params.runId) {
-                ctx._source.runs[i].status = 'cancelled';
-                break;
-              }
-            }
-          `,
-          params: { runId },
-        },
-      },
-      refresh: true,
+  const storage = getStorageModule();
+  const benchmark = await storage.benchmarks.getById(id);
+  const run = benchmark?.runs?.find(r => r.id === runId);
+  if (!run) {
+    return res.status(404).json({
+      error: 'Run not found or already completed',
+      hint: `In-flight runs are not embedded in the benchmark until they finish; cancel them with POST /api/storage/evaluation-runs/${encodeURIComponent(runId)}/cancel`,
     });
-  } catch (error: any) {
-    console.error('[StorageAPI] Failed to update cancelled status:', error.message);
-    // Continue anyway - the execute loop will also try to update
+  }
+  if (run.status !== 'running') {
+    return res.status(400).json({ error: `Run is not currently running (status: ${run.status})` });
+  }
+  if (!isOldEnoughForZombieCancel(run.createdAt)) {
+    return res.status(409).json({
+      error: `Run was created less than ${ZOMBIE_CANCEL_MIN_AGE_MS / 1000}s ago; its executor may not have started yet. Try cancelling again in a moment.`,
+    });
   }
 
-  res.json({ cancelled: true, runId });
+  const cancelNote = 'Cancelled: no active executor found for this run (process restarted or crashed) — marked cancelled directly.';
+  try {
+    await storage.benchmarks.updateRun(id, runId, {
+      status: 'cancelled',
+      completedAt: new Date().toISOString(),
+      cancelNote,
+    } as any);
+  } catch (error: any) {
+    console.error('[StorageAPI] Zombie-cancel doc update failed:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+
+  return res.json({ cancelled: true, runId, viaFallback: true, note: cancelNote });
 });
 
 // POST /api/storage/benchmarks/:id/refresh-all-stats - Force recompute stats for all runs

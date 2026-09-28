@@ -450,7 +450,7 @@ primitive returns `llmJudgeReasoning`.
 | PUT | `/api/storage/benchmarks/:id` | Update |
 | PATCH | `/api/storage/benchmarks/:id/metadata` | Update metadata |
 | DELETE | `/api/storage/benchmarks/:id` | Delete |
-| POST | `/api/storage/benchmarks/:id/execute` | Execute benchmark (SSE) → `{ runConfig: RunConfigInput }` |
+| POST | `/api/storage/benchmarks/:id/execute` | **Removed** — `410 Gone` (`code: LEGACY_EXECUTE_REMOVED`). Use `POST /api/storage/evaluation-runs` with `sources: [{ type: 'benchmark', benchmarkId }]` |
 | DELETE | `/api/storage/benchmarks/:id/runs/:runId` | Delete specific run |
 | POST | `/api/storage/benchmarks/:id/cancel` | Cancel execution |
 | POST | `/api/storage/benchmarks/:id/refresh-all-stats` | Recompute all run stats |

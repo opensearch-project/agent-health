@@ -71,6 +71,7 @@
     "test:integration:tracePoller": "jest --testPathPatterns=tracePoller",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "test:e2e:cli": "playwright test tests/e2e/cli",
     "test:e2e:report": "playwright show-report",
     "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
     "build:cli": "esbuild cli/index.ts --bundle --platform=node --format=esm --outdir=cli/dist --packages=external --external:inquirer",

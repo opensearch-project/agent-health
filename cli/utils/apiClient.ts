@@ -11,6 +11,7 @@
  */
 
 import type { Benchmark, BenchmarkRun, BenchmarkProgress, BenchmarkImage, RunConfigInput, TestCaseRun, StorageMetadata, AgentConfig, ModelConfig, TestCase, Evaluator, EvaluationRun, TestCaseSource } from '@/types/index.js';
+import { projectEvaluationRunToBenchmarkRun } from '@/lib/benchmarkRunProjection.js';
 
 /**
  * Error thrown when the server sends an explicit error event via SSE.
@@ -222,46 +223,92 @@ export class ApiClient {
   }
 
   /**
-   * Execute benchmark run (SSE stream)
+   * Execute an existing benchmark against one agent through the unified
+   * evaluation-runs API (`POST /api/storage/evaluation-runs` with a single
+   * `{ type: 'benchmark' }` source), streaming progress as the same
+   * {@link BenchmarkExecutionEvent}s the removed legacy `/execute` stream
+   * produced so callers' progress handling is unchanged.
    *
-   * Streams progress events and returns the completed run.
-   * If the SSE stream disconnects, falls back to polling for status.
+   * The legacy route (`POST /api/storage/benchmarks/:id/execute`) ran every
+   * test case of the run under ONE OTel trace and now answers `410 Gone`; this
+   * is the only benchmark execution path.
+   *
+   * The server links the completed run into `benchmark.runs[]` (same id), so
+   * `getRun(benchmarkId, runId)` and the `/report?runIds=` export work exactly
+   * as before. If the SSE stream drops mid-run the server keeps executing; we
+   * recover the true terminal state by polling the evaluation-run document.
    */
-  async executeBenchmark(
+  async executeBenchmarkAsEvaluationRun(
     benchmarkId: string,
     runConfig: RunConfigInput,
     onProgress?: ProgressCallback
   ): Promise<BenchmarkRun> {
-    const res = await fetch(
-      `${this.baseUrl}/api/storage/benchmarks/${encodeURIComponent(benchmarkId)}/execute`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(runConfig),
-      }
-    );
+    const res = await fetch(`${this.baseUrl}/api/storage/evaluation-runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: runConfig.name,
+        ...(runConfig.description ? { description: runConfig.description } : {}),
+        sources: [{ type: 'benchmark', benchmarkId }],
+        agentKey: runConfig.agentKey,
+        modelId: runConfig.modelId,
+        ...(runConfig.judgeModelId ? { judgeModelId: runConfig.judgeModelId } : {}),
+        ...(runConfig.evaluatorId ? { evaluatorId: runConfig.evaluatorId } : {}),
+        ...(runConfig.concurrency ? { concurrency: runConfig.concurrency } : {}),
+        ...(runConfig.headers ? { headers: runConfig.headers } : {}),
+        benchmarkId,
+        trigger: 'cli',
+      }),
+    });
 
     if (!res.ok) {
       const errorBody = await res.text();
       let errorMessage: string;
       try {
-        const parsed = JSON.parse(errorBody);
-        errorMessage = parsed.error || errorBody;
+        errorMessage = JSON.parse(errorBody).error || errorBody;
       } catch {
         errorMessage = errorBody;
       }
       throw new Error(`Failed to execute benchmark: ${errorMessage}`);
     }
-
-    // Parse SSE stream
     if (!res.body) {
       throw new Error('Response body is missing');
     }
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let finalRun: BenchmarkRun | null = null;
     let runId: string | null = null;
+    let finalRun: BenchmarkRun | null = null;
+    let totalTestCases = 0;
+    // `testCaseComplete` events carry only `{ testCaseId, result }` — count
+    // terminal cases here so progress callbacks see a running total.
+    const terminalIds = new Set<string>();
+    const nameById = new Map<string, string>();
+
+    const emitProgress = (testCaseId: string, completedCount: number, result?: any) => {
+      onProgress?.({
+        type: 'progress',
+        currentTestCaseIndex: Math.max(0, completedCount - (result ? 1 : 0)),
+        totalTestCases,
+        currentTestCase: { id: testCaseId, name: nameById.get(testCaseId) || testCaseId },
+        completedCount,
+        ...(result ? { result } : {}),
+      });
+    };
+
+    const recover = async (): Promise<BenchmarkRun> => {
+      if (!runId) throw new Error('No final run received from server');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const polled = await this.pollEvaluationRunStatus(runId, (run) => {
+        const completedCount = Object.values(run.results || {}).filter(
+          r => r.status !== 'pending' && r.status !== 'running'
+        ).length;
+        emitProgress('polling', completedCount);
+      });
+      if (!polled) throw new Error(`Evaluation run ${runId} did not reach a terminal state`);
+      return projectEvaluationRunToBenchmarkRun(polled);
+    };
 
     try {
       while (true) {
@@ -269,67 +316,56 @@ export class ApiClient {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event: BenchmarkExecutionEvent = JSON.parse(line.slice(6));
-              onProgress?.(event);
+        for (const raw of events) {
+          let eventType = '';
+          let eventData = '';
+          for (const line of raw.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7);
+            else if (line.startsWith('data: ')) eventData = line.slice(6);
+          }
+          if (!eventData) continue;
 
-              // Capture runId from started event for fallback polling
-              if (event.type === 'started') {
-                runId = event.runId;
-              } else if (event.type === 'completed' || event.type === 'cancelled') {
-                finalRun = event.run;
-              } else if (event.type === 'error') {
-                throw new ServerError(event.error);
-              }
-            } catch (e) {
-              // Skip non-JSON lines (incomplete chunks)
-              if (e instanceof SyntaxError) continue;
-              throw e;
-            }
+          let data: any;
+          try {
+            data = JSON.parse(eventData);
+          } catch {
+            continue; // incomplete chunk
+          }
+
+          if (eventType === 'started') {
+            runId = data.runId;
+            const testCases: Array<{ id: string; name: string }> = data.testCases || [];
+            totalTestCases = testCases.length;
+            for (const tc of testCases) nameById.set(tc.id, tc.name);
+            onProgress?.({
+              type: 'started',
+              runId: data.runId,
+              testCases: testCases.map(tc => ({ id: tc.id, name: tc.name, status: 'pending' })),
+            });
+          } else if (eventType === 'progress') {
+            if (typeof data.totalTestCases === 'number') totalTestCases = data.totalTestCases;
+            emitProgress(data.testCaseId, typeof data.completedCount === 'number' ? data.completedCount : terminalIds.size);
+          } else if (eventType === 'testCaseComplete') {
+            terminalIds.add(data.testCaseId);
+            emitProgress(data.testCaseId, terminalIds.size, data.result);
+          } else if (eventType === 'completed') {
+            finalRun = projectEvaluationRunToBenchmarkRun(data as EvaluationRun);
+            onProgress?.({ type: finalRun.status === 'cancelled' ? 'cancelled' : 'completed', run: finalRun });
+          } else if (eventType === 'error') {
+            throw new ServerError(data.error || 'Evaluation run failed');
           }
         }
       }
     } catch (streamError) {
-      // Server-sent error events are explicit failures - don't attempt recovery
-      if (streamError instanceof ServerError) {
-        throw streamError;
-      }
-
-      // Stream disconnected - check if we can recover by polling
+      if (streamError instanceof ServerError) throw streamError;
       if (runId) {
         console.warn(`[ApiClient] SSE stream disconnected: ${streamError instanceof Error ? streamError.message : streamError}`);
         console.warn(`[ApiClient] Falling back to polling for run ${runId}...`);
-
-        // Wait a moment for any in-flight operations to settle
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Poll for final status
-        const polledRun = await this.pollRunStatus(benchmarkId, runId, (run) => {
-          // Create a progress event from the polled run state
-          const completedCount = Object.values(run.results || {}).filter(
-            r => r.status === 'completed' || r.status === 'failed'
-          ).length;
-          const totalCount = Object.keys(run.results || {}).length;
-
-          onProgress?.({
-            type: 'progress',
-            currentTestCaseIndex: completedCount - 1,
-            totalTestCases: totalCount,
-            currentTestCase: { id: 'polling', name: 'Polling for status...' },
-          });
-        });
-
-        if (polledRun) {
-          return polledRun;
-        }
+        return recover();
       }
-
-      // Re-throw if we couldn't recover
       throw streamError;
     } finally {
       try {
@@ -340,17 +376,12 @@ export class ApiClient {
     }
 
     if (!finalRun) {
-      // Stream ended without final event - try polling
       if (runId) {
         console.warn('[ApiClient] SSE stream ended without completion event, polling for status...');
-        const polledRun = await this.pollRunStatus(benchmarkId, runId);
-        if (polledRun) {
-          return polledRun;
-        }
+        return recover();
       }
       throw new Error('No final run received from server');
     }
-
     return finalRun;
   }
 

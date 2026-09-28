@@ -219,6 +219,25 @@ describe('loadConfig', () => {
     expect(config.server.port).toBe(4001);
   });
 
+  it('marks server.portExplicit only when AH_PORT names the port (no config file)', async () => {
+    const mockFs = require('fs');
+    mockFs.existsSync.mockReturnValue(false);
+
+    const { loadConfig, clearConfigCache } = require('@/lib/config/loader');
+    clearConfigCache();
+    expect((await loadConfig('/nonexistent', true)).server.portExplicit).toBe(false);
+
+    // DEFAULT_SERVER_CONFIG.port is read at module load — re-require with the env set.
+    process.env.AH_PORT = '4990';
+    jest.resetModules();
+    require('fs').existsSync.mockReturnValue(false);
+    const fresh = require('@/lib/config/loader');
+    fresh.clearConfigCache();
+    const explicit = await fresh.loadConfig('/nonexistent', true);
+    expect(explicit.server.port).toBe(4990);
+    expect(explicit.server.portExplicit).toBe(true);
+  });
+
   it('should return cached config on second call', async () => {
     const mockFs = require('fs');
     mockFs.existsSync.mockReturnValue(false);

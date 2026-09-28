@@ -21,14 +21,14 @@ import type { Request, Response } from 'express';
 
 import evaluationRoutes from '@/server/routes/evaluation';
 import { getStorageModule } from '@/server/adapters';
-import { runSingleUseCase } from '@/services/benchmarkRunner';
+import { runSingleUseCase } from '@/services/evaluation/runSingleUseCase';
 import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 
 jest.mock('@/server/adapters', () => ({
   getStorageModule: jest.fn(),
 }));
-jest.mock('@/services/benchmarkRunner', () => ({
+jest.mock('@/services/evaluation/runSingleUseCase', () => ({
   runSingleUseCase: jest.fn(),
 }));
 jest.mock('@/lib/config/index', () => ({

@@ -139,9 +139,8 @@ const cancelRun = async (benchmarkId: string, runId: string): Promise<boolean> =
 /**
  * Every per-test-case report a benchmark run creates is stamped with
  * `experimentRunId` = the run's own id at creation time
- * (services/benchmarkRunner.ts's `saveReportWithClient`). `POST
- * .../benchmarks/:id/cancel` only flips the run's top-level `status` to
- * 'cancelled' immediately — cancellation is cooperative, not a hard abort,
+ * (services/evaluationRunner.ts). `POST
+ * .../evaluation-runs/:id/cancel` only requests cancellation — cancellation is cooperative, not a hard abort,
  * so whichever test case was already executing (already invoking the agent)
  * keeps running in the background and only produces its report a few
  * seconds later (the mock/demo connector sleeps through a synthetic
@@ -192,19 +191,23 @@ const harvestReportIdsForRun = async (
 };
 
 /**
- * Start a benchmark execution and return the run ID from the 'started' event.
- * Uses the demo agent for simulated responses to avoid external dependencies.
+ * Start a benchmark run through the evaluation-runs API (the only benchmark
+ * execution path — the legacy `/execute` runner was removed) and return the
+ * run ID from the 'started' event. Uses the demo agent for simulated responses.
  */
 const startExecutionAndGetRunId = async (benchmarkId: string): Promise<string> => {
   const controller = new AbortController();
 
-  const response = await fetch(`${BASE_URL}/api/storage/benchmarks/${benchmarkId}/execute`, {
+  const response = await fetch(`${BASE_URL}/api/storage/evaluation-runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name: 'Cancel Test Run',
+      name: uniqueTestName('cancel-test-run'),
+      sources: [{ type: 'benchmark', benchmarkId }],
+      benchmarkId,
       agentKey: 'demo',  // Use demo agent for simulated responses
       modelId: 'demo-model',
+      trigger: 'manual',
     }),
     signal: controller.signal,
   });
@@ -232,27 +235,25 @@ const startExecutionAndGetRunId = async (benchmarkId: string): Promise<string> =
     buffer = events.pop() || '';
 
     for (const event of events) {
-      const lines = event.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === 'started' && data.runId) {
-              runId = data.runId;
-              // Don't abort yet - we need the run to be in activeRuns map
-              break;
-            }
-          } catch {
-            // Ignore parse errors
-          }
+      let eventType = '';
+      let eventData = '';
+      for (const line of event.split('\n')) {
+        if (line.startsWith('event: ')) eventType = line.slice(7);
+        else if (line.startsWith('data: ')) eventData = line.slice(6);
+      }
+      if (eventType === 'started' && eventData) {
+        try {
+          const data = JSON.parse(eventData);
+          if (data.runId) runId = data.runId;
+        } catch {
+          // Ignore parse errors
         }
       }
       if (runId) break;
     }
   }
 
-  // Abort the SSE connection (simulating client disconnect)
-  // The server will continue executing in the background
+  // Abort the SSE connection — the server keeps executing in the background.
   controller.abort();
 
   if (!runId) {
@@ -262,10 +263,68 @@ const startExecutionAndGetRunId = async (benchmarkId: string): Promise<string> =
   return runId;
 };
 
+/**
+ * Poll `benchmark.runs[]` until the run's projection is embedded. The runner
+ * writes the terminal evaluation-run doc FIRST and links the projection into
+ * the benchmark right after (two writes, plus index refresh on OpenSearch), so
+ * a single GET straight after the doc turns terminal can miss it.
+ */
+const waitForEmbeddedRun = async (benchmarkId: string, runId: string, timeoutMs = 20000): Promise<any> => {
+  const deadline = Date.now() + timeoutMs;
+  let run: any = undefined;
+  while (Date.now() < deadline) {
+    const benchmark = await getBenchmark(benchmarkId);
+    run = benchmark.runs?.find((r: any) => r.id === runId);
+    if (run) return run;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return run;
+};
+
+/** Poll the evaluation-run document until it leaves `running`. */
+const waitForTerminalRun = async (runId: string, timeoutMs = 30000): Promise<any> => {
+  const deadline = Date.now() + timeoutMs;
+  let last: any = null;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${encodeURIComponent(runId)}`);
+    if (res.ok) {
+      const body = await res.json();
+      last = body.evaluationRun ?? body;
+      if (last && last.status !== 'running' && last.status !== 'pending') return last;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return last;
+};
+
+/** Seed a benchmark whose `runs[]` already embeds a legacy-shape run (`run-<ts>-<rand>`). */
+const createBenchmarkWithLegacyRun = async (
+  testCaseId: string,
+  run: Record<string, unknown>,
+): Promise<string> => {
+  const response = await fetch(`${BASE_URL}/api/storage/benchmarks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: uniqueTestName('legacy-run-benchmark'),
+      description: 'Benchmark embedding a legacy /execute-era run',
+      testCaseIds: [testCaseId],
+      runs: [run],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to create benchmark: ${response.statusText}`);
+  }
+  const benchmark = await response.json();
+  return benchmark.id;
+};
+
 describe('Benchmark Cancel Integration Tests', () => {
   let backendAvailable = false;
   let testCaseId: string | null = null;
   let benchmarkId: string | null = null;
+  let legacyBenchmarkId: string | null = null;
+  const startedRunIds: string[] = [];
   // Per-test-case report doc(s) the executed-then-cancelled run created.
   // Harvested inside the test itself (see harvestReportIdsForRun) and
   // deleted here in afterAll — DELETE .../benchmarks/:id does not cascade
@@ -288,6 +347,10 @@ describe('Benchmark Cancel Integration Tests', () => {
   afterAll(async () => {
     if (!backendAvailable) return;
 
+    for (const id of startedRunIds) {
+      await waitForTerminalRun(id, 15000).catch(() => null);
+      await fetch(`${BASE_URL}/api/storage/evaluation-runs/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+    }
     // Delete the per-test-case report doc(s) harvested by the test above
     // BEFORE deleting the benchmark/test case — DELETE .../benchmarks/:id
     // does not cascade to them.
@@ -299,42 +362,82 @@ describe('Benchmark Cancel Integration Tests', () => {
     if (benchmarkId) {
       await deleteBenchmark(benchmarkId);
     }
+    if (legacyBenchmarkId) {
+      await deleteBenchmark(legacyBenchmarkId);
+    }
     if (testCaseId) {
       await deleteTestCase(testCaseId);
     }
   }, 30000);
 
-  it('should immediately update DB status to cancelled when cancel is called', async () => {
+  it('cancels an in-flight benchmark run through the evaluation-runs cancel route and links the cancelled run into the benchmark', async () => {
     if (!backendAvailable || !benchmarkId) {
       console.warn('Skipping test - backend not available or benchmark not created');
       return;
     }
 
-    // Step 1: Start the benchmark execution
+    // Step 1: Start the benchmark run (unified path)
     const runId = await startExecutionAndGetRunId(benchmarkId);
+    startedRunIds.push(runId);
     expect(runId).toBeDefined();
 
-    // Small delay to ensure run is registered in activeRuns
+    // Small delay to ensure the run is registered with its executor
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // Step 2: Cancel the run
-    const cancelled = await cancelRun(benchmarkId, runId);
-    expect(cancelled).toBe(true);
+    // Step 2: Cancel the run (the route the UI and CLI use)
+    const cancelRes = await fetch(`${BASE_URL}/api/storage/evaluation-runs/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST',
+    });
+    expect(cancelRes.status).toBe(200);
+    expect((await cancelRes.json()).success).toBe(true);
 
-    // Step 3: IMMEDIATELY fetch the benchmark from DB
-    // This is the key assertion - the DB should already have 'cancelled' status
-    // even though the execute loop may still be processing
-    const benchmark = await getBenchmark(benchmarkId);
-    const run = benchmark.runs?.find((r: any) => r.id === runId);
+    // Step 3: cancellation is cooperative — the executor drains, then writes
+    // the terminal status and links the projection into the benchmark.
+    const terminal = await waitForTerminalRun(runId);
+    expect(terminal?.status).toBe('cancelled');
 
+    const run = await waitForEmbeddedRun(benchmarkId, runId);
     expect(run).toBeDefined();
     expect(run.status).toBe('cancelled');
 
-    // Harvest any per-test-case report the (possibly still in-flight)
-    // background execution created for this run — DELETE .../benchmarks/:id
-    // in afterAll will NOT cascade to it (see harvestReportIdsForRun above).
+    // Harvest any per-test-case report the background execution created for
+    // this run — DELETE .../benchmarks/:id in afterAll will NOT cascade to it.
     leakedReportIds = await harvestReportIdsForRun(runId);
-  }, 45000);
+  }, 60000);
+
+  it('legacy data: a historical /execute-era run embedded in benchmark.runs[] with a stale `running` status is still cancellable through POST .../benchmarks/:id/cancel (zombie fallback)', async () => {
+    if (!backendAvailable || !testCaseId) {
+      console.warn('Skipping test - backend not available');
+      return;
+    }
+
+    // The removed legacy runner minted `run-<ts>-<rand>` ids and embedded the
+    // run directly in the benchmark document. A process that died mid-run
+    // left such runs `running` forever; the cancel route must still resolve
+    // them without any in-process executor.
+    const legacyRunId = `run-${Date.now() - 120_000}-legacy01`;
+    legacyBenchmarkId = await createBenchmarkWithLegacyRun(testCaseId, {
+      id: legacyRunId,
+      name: 'Legacy running run',
+      agentKey: 'demo',
+      modelId: 'demo-model',
+      status: 'running',
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      results: { [testCaseId]: { reportId: '', status: 'running' } },
+    });
+
+    const listed = await getBenchmark(legacyBenchmarkId);
+    expect(listed.runs?.map((r: any) => r.id)).toContain(legacyRunId);
+
+    const cancelled = await cancelRun(legacyBenchmarkId, legacyRunId);
+    expect(cancelled).toBe(true);
+
+    const after = await getBenchmark(legacyBenchmarkId);
+    const run = after.runs?.find((r: any) => r.id === legacyRunId);
+    expect(run).toBeDefined();
+    expect(run.status).toBe('cancelled');
+    expect(run.cancelNote).toMatch(/no active executor/);
+  }, 30000);
 
   it('should return 404 when trying to cancel a non-existent run', async () => {
     if (!backendAvailable || !benchmarkId) {

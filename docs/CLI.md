@@ -128,6 +128,44 @@ agent-health benchmark [options]
 - **Named mode** (`-n <name>`): Runs a specific existing benchmark
 - **File mode** (`-f <path>`): Imports test cases from a JSON file **or runs a code SDK file** (`.eval.js` / `.eval.ts` — see [SDK.md](./SDK.md)), creates a benchmark, and runs it. `.eval.ts` is executed as synthetic CJS (like `.eval.js`) and works from anywhere on disk; only `.eval.mjs` resolves `@opensearch-project/agent-health` through normal Node module resolution, so an `.eval.mjs` file needs the package reachable as a real dependency from its location (see the note in [SDK.md](./SDK.md#migrating-v1--v2))
 
+<a id="benchmark-execution-path"></a>
+**Execution path (all modes):** every mode above executes through the
+evaluation-runs API (`POST /api/storage/evaluation-runs`, the same runner the
+UI uses). Named mode and JSON file mode used to go through the legacy
+`POST /api/storage/benchmarks/:id/execute` route; that route ran every test
+case of a run under **one** OpenTelemetry trace (each `test_case` eval span was
+a child of the run's `test_suite_run` span), so agents that honour the
+propagated `traceparent` — any `rest` connector agent with a standards-compliant
+OTel SDK — put *all* cases' spans into a single trace, and `useTraces` runs came
+back `0/N passed (N errored — evaluator could not run)`. The CLI prints a
+one-line notice when it runs a mode that used to take the legacy route.
+
+The legacy runner has been **removed**. `POST /api/storage/benchmarks/:id/execute`
+stays registered but answers `410 Gone` with
+`{ error, code: 'LEGACY_EXECUTE_REMOVED', replacement: 'POST /api/storage/evaluation-runs', docs }`
+plus `Deprecation` / `Sunset` headers, so an old API client gets an actionable
+error instead of a 404. Migrating a direct API caller:
+
+```bash
+# before (removed)
+curl -X POST :4001/api/storage/benchmarks/<benchmarkId>/execute \
+  -d '{ "name": "nightly", "agentKey": "my-agent" }'
+# after — same benchmark, same agent, one trace per test case
+curl -X POST :4001/api/storage/evaluation-runs \
+  -d '{ "name": "nightly", "sources": [{ "type": "benchmark", "benchmarkId": "<benchmarkId>" }],
+        "benchmarkId": "<benchmarkId>", "agentKey": "my-agent" }'
+```
+
+The response is the same `event:`-prefixed SSE stream the UI consumes
+(`started` → `progress` / `testCaseComplete` → `completed`), and the finished
+run is linked into `benchmark.runs[]` exactly as before, so every reader of
+historical runs (Runs tab, inspector, comparison, delete) keeps working for both
+legacy `run-<ts>-<rand>` runs and new `eval-run-…` runs.
+
+`-a <key>` accepts any agent the **server** knows — the agents in
+`agent-health.config.ts` *and* custom endpoints added in the Settings UI — not
+only agents present in the CLI's local config.
+
 Every evaluation run is stamped with an **image digest** — a content hash of
 its test-case contents + eval conditions (evaluator, judge model). Runs with
 the same digest ran under identical conditions and are directly comparable;
@@ -426,10 +464,37 @@ agent-health kill <target>      # target: sample-agent
 
 ---
 
+## Server lifecycle: reusing an already-running server
+
+Commands that need the backend (`benchmark`, `run`, `list`, `export`, …) call
+`ensureServer()`: if nothing listens on the configured port they start a server;
+if one is already running they decide whether to reuse it.
+
+| `reuseExistingServer` | Port | Versions | Result |
+|---|---|---|---|
+| `true` (dev default) | any | match | reuse (`Reusing existing server`) |
+| `true` (dev default) | any | differ | stop it, start a matching one |
+| `false` (**CI default**, `CI=true`) | **explicit** (`AH_PORT` / `server.port`) | match | reuse — prints `Using existing server on :PORT (explicit port)` |
+| `false` (CI default) | implicit (defaulted 4001) | match | error: `Server already running on port … In CI mode …` |
+| `false` (CI default) | any | differ | error (never reused, never killed) |
+
+The CI-mode guard exists so a CLI never talks to a stray server *by accident*.
+A port you named explicitly is explicit intent — the canonical case is a CI
+job that already started the server (e.g. Playwright's `webServer`) and then
+drives `agent-health benchmark …` against it with `AH_PORT` set. To force the
+old behaviour in that situation, unset `AH_PORT` or set
+`server.reuseExistingServer` in `agent-health.config.ts`. A server that
+belongs to a *different checkout* is refused regardless (see
+`AH_REUSE_FOREIGN_SERVER`).
+
+---
+
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
+| `AH_PORT` | Backend port (default `4001`). Also marks the port as *explicit* for CI-mode reuse — see "Server lifecycle" above |
+| `CI` | Set by CI runners; flips `server.reuseExistingServer` to `false` and makes the CLI stop servers it started |
 | `AWS_PROFILE` | AWS profile for Bedrock judge |
 | `AWS_REGION` | AWS region |
 | `DEBUG` | Enable verbose debug logging (`true`/`false`) |

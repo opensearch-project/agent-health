@@ -41,7 +41,7 @@ jest.mock('@/lib/debug', () => ({
   debug: jest.fn(),
 }));
 
-jest.mock('@/services/benchmarkRunner', () => ({
+jest.mock('@/services/evaluation/cancellation', () => ({
   createCancellationToken: jest.fn(() => ({
     isCancelled: false,
     cancel() { this.isCancelled = true; },

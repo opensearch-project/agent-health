@@ -156,12 +156,22 @@ User selects agent + test case
     → Report stored (localStorage or OpenSearch)
 ```
 
+There is ONE batch runner: `services/evaluationRunner.ts` behind
+`POST /api/storage/evaluation-runs` (UI, CLI and SDK all use it; a run with a
+`benchmarkId` is also linked into `benchmark.runs[]`). Single test cases run
+through `services/evaluation/runSingleUseCase.ts` behind `POST /api/evaluate`.
+The legacy per-benchmark runner (`services/benchmarkRunner.ts`,
+`POST /api/storage/benchmarks/:id/execute`) was removed; the route answers
+`410 Gone`. Historical runs it created (`run-<ts>-<rand>` ids embedded in
+`benchmark.runs[]`, reports keyed by `experimentRunId`) are still read by every
+benchmark-scoped surface.
+
 ### Services Layer (`services/`)
 
 | Directory     | Purpose                                                                                                                                |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent/`      | AG-UI protocol handling: SSE streaming (`sseStream.ts`), event conversion (`aguiConverter.ts`), payload building (`payloadBuilder.ts`) |
-| `evaluation/` | Orchestrates evaluation runs (`index.ts`), Bedrock judge client with retry (`bedrockJudge.ts`)                                         |
+| `evaluation/` | Orchestrates evaluation runs (`index.ts`), Bedrock judge client with retry (`bedrockJudge.ts`), the single-test-case runner behind `/api/evaluate` (`runSingleUseCase.ts`), trace-mode polled judge (`tracePolling.ts`), run agent/model resolution (`runAgentConfig.ts`), cancellation tokens (`cancellation.ts`) |
 | `storage/`    | Async storage with OpenSearch backend (`asyncRunStorage.ts`, `asyncTestCaseStorage.ts`, `asyncExperimentStorage.ts`)                   |
 | `traces/`     | Trace transformations: Flow view, Timeline view, comparison alignment, tool similarity grouping                                        |
 | `opensearch/` | Log fetching from OpenSearch clusters                                                                                                  |
@@ -286,7 +296,19 @@ one unified trace tree), agents and connectors follow this layered convention.
 ### Strategy A — W3C trace context (preferred, single trace tree)
 
 The `test_case` span is started **before** the connector invokes the agent and is
-made the active OTel context. Connectors then propagate the context to the agent:
+made the active OTel context. It is the **root of its own trace** — one trace per
+test case (`startIsolatedTestCaseSpan`, parent `ROOT_CONTEXT`), in both the
+evaluation-runs runner (`services/evaluationRunner.ts`) and the single-case
+runner behind `/api/evaluate` (`services/evaluation/runSingleUseCase.ts`). If a
+run-wide span is ever emitted again, each `test_case` span must point at it with
+a span **link** (`agent_health.link.type = test_suite_run`,
+`buildTestCaseSpanLinks`) — never as its child: every case's agent invocation
+would then adopt the same trace id and Strategy A returns the whole run for each
+report (this is what broke `benchmark -n … -a <rest-agent>` for all `useTraces`
+REST agents on the since-removed legacy `/execute` runner). Likewise
+`report.traceId` is only ever this span's 32-hex W3C trace id
+(`lib/traceIdentity.ts`); connector/hook ids go to `report.runId` /
+`report.sessionId`. Connectors then propagate the context to the agent:
 
 - **Subprocess agents** (Claude Code, Kiro, Pi, anything via `SubprocessConnector`)
   set `traceContext.propagateEnv = true`. The base class injects a W3C

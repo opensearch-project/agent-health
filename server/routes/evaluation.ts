@@ -14,7 +14,7 @@
 import { Router, Request, Response } from 'express';
 import { getStorageModule } from '@/server/adapters';
 import { SAMPLE_TEST_CASES } from '../../cli/demo/sampleTestCases';
-import { runSingleUseCase } from '@/services/benchmarkRunner';
+import { runSingleUseCase } from '@/services/evaluation/runSingleUseCase';
 import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { debug } from '@/lib/debug';

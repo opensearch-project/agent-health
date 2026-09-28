@@ -129,7 +129,7 @@ test.describe('Evals3 Benchmark Runs Page', () => {
   // judge-model selection. Pre-PR the dialog only had Agent + a mislabelled
   // "Judge Model" wired to `modelId` (the agent's LLM), so users had no UI
   // way to drive the run-level evaluatorId / judgeModelId that the server
-  // already accepted on POST /api/storage/benchmarks/:id/execute.
+  // already accepted on POST /api/storage/evaluation-runs.
 
   test('Configure Run dialog renders Agent, Evaluator, Judge Model and Concurrency fields', async ({ page }) => {
     test.skip(!benchmarkId, 'No benchmark created');

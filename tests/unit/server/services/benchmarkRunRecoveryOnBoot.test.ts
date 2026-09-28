@@ -7,21 +7,13 @@ import {
   recoverOrphanBenchmarkRuns,
   recoverOrphanBenchmarkRunsSafely,
 } from '@/server/services/benchmarkRunRecoveryOnBoot';
-import * as benchmarksRoute from '@/server/routes/storage/benchmarks';
 import * as statsModule from '@/server/services/benchmarkRunStats';
 import type { IStorageModule } from '@/server/adapters/types';
-
-jest.mock('@/server/routes/storage/benchmarks', () => ({
-  isRunActiveInThisProcess: jest.fn().mockReturnValue(false),
-}));
 
 jest.mock('@/server/services/benchmarkRunStats', () => ({
   refreshBenchmarkRunStatsByRunId: jest.fn().mockResolvedValue(undefined),
 }));
 
-const mockIsActive = benchmarksRoute.isRunActiveInThisProcess as jest.MockedFunction<
-  typeof benchmarksRoute.isRunActiveInThisProcess
->;
 const mockRefresh = statsModule.refreshBenchmarkRunStatsByRunId as jest.MockedFunction<
   typeof statsModule.refreshBenchmarkRunStatsByRunId
 >;
@@ -75,7 +67,6 @@ function run(overrides: any) {
 describe('recoverOrphanBenchmarkRuns', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockIsActive.mockReturnValue(false);
     delete process.env.BENCHMARK_RUN_RECOVERY_DISABLED;
     delete process.env.BENCHMARK_RUN_STALE_AFTER_MS;
     delete process.env.BENCHMARK_RUN_RECOVERY_PAGE_SIZE;
@@ -134,17 +125,6 @@ describe('recoverOrphanBenchmarkRuns', () => {
     const benchmarks = [bm({
       runs: [run({ createdAt: recently, results: { tcA: { reportId: '', status: 'pending' } } })],
     })];
-    const { storage, updateCalls } = mockStorage({ benchmarks });
-
-    const stat = await recoverOrphanBenchmarkRuns(storage);
-
-    expect(stat.staleRuns).toBe(0);
-    expect(updateCalls).toHaveLength(0);
-  });
-
-  it('skips runs that are still active in the current process', async () => {
-    mockIsActive.mockImplementation((id) => id === 'run-1');
-    const benchmarks = [bm({ runs: [run({ id: 'run-1' })] })];
     const { storage, updateCalls } = mockStorage({ benchmarks });
 
     const stat = await recoverOrphanBenchmarkRuns(storage);

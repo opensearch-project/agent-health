@@ -20,6 +20,8 @@ jest.mock('@/lib/telemetry/provider', () => ({
 import {
   startTestSuiteRunSpan,
   startTestCaseSpan,
+  startIsolatedTestCaseSpan,
+  buildTestCaseSpanLinks,
   addEvaluationResultEvents,
   finalizeTestCaseSpan,
   finalizeTestSuiteRunSpan,
@@ -208,6 +210,55 @@ describe('Evaluation Span Helpers', () => {
         }),
         expect.anything()
       );
+    });
+  });
+
+  describe('buildTestCaseSpanLinks / startIsolatedTestCaseSpan (one trace per test case)', () => {
+    const SUITE_CTX = { traceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', spanId: '0123456789abcdef', traceFlags: 1 };
+
+    it('builds a single link to the suite span, tagged as the test_suite_run relationship', () => {
+      const suiteSpan = { ...createMockSpan(), spanContext: jest.fn().mockReturnValue(SUITE_CTX) };
+      expect(buildTestCaseSpanLinks(suiteSpan as any)).toEqual([
+        { context: SUITE_CTX, attributes: { 'agent_health.link.type': 'test_suite_run' } },
+      ]);
+    });
+
+    it('returns no links without a suite span or with an invalid span context', () => {
+      expect(buildTestCaseSpanLinks(undefined)).toBeUndefined();
+      expect(buildTestCaseSpanLinks(null)).toBeUndefined();
+      const invalid = { ...createMockSpan(), spanContext: jest.fn().mockReturnValue({ traceId: 'nope', spanId: 'x', traceFlags: 1 }) };
+      expect(buildTestCaseSpanLinks(invalid as any)).toBeUndefined();
+    });
+
+    it('starts the test_case span from ROOT_CONTEXT (its own trace) with the suite link — never as a child of the suite', () => {
+      const { ROOT_CONTEXT, context, trace } = require('@opentelemetry/api');
+      const suiteSpan = { ...createMockSpan(), spanContext: jest.fn().mockReturnValue(SUITE_CTX) };
+      // Make some other span active to prove it is NOT used as the parent.
+      const ambient = trace.setSpan(context.active(), createMockSpan() as any);
+      context.with(ambient, () => {
+        startIsolatedTestCaseSpan(createTestCase(), createTestBenchmark(), createTestRun(), { suiteSpan: suiteSpan as any });
+      });
+
+      expect(mockTracer.startSpan).toHaveBeenCalledWith(
+        'test_case',
+        expect.objectContaining({
+          links: [{ context: SUITE_CTX, attributes: { 'agent_health.link.type': 'test_suite_run' } }],
+        }),
+        ROOT_CONTEXT
+      );
+    });
+
+    it('still starts from ROOT_CONTEXT with no links when there is no suite span (evaluation-runs / single-case paths)', () => {
+      const { ROOT_CONTEXT } = require('@opentelemetry/api');
+      startIsolatedTestCaseSpan(createTestCase(), createTestBenchmark(), createTestRun());
+      const [, options, parent] = mockTracer.startSpan.mock.calls[0];
+      expect(parent).toBe(ROOT_CONTEXT);
+      expect(options.links).toBeUndefined();
+    });
+
+    it('returns null when telemetry is disabled', () => {
+      mockIsEnabled.mockReturnValue(false);
+      expect(startIsolatedTestCaseSpan(createTestCase(), createTestBenchmark(), createTestRun())).toBeNull();
     });
   });
 
