@@ -334,6 +334,118 @@ This pattern means:
 - **Swapping backends is a one-line change** at startup via `setStorageModule()`
 - **Testing is simple** - inject a mock `IStorageModule` for unit tests
 
+## Trace Span Categorization
+
+Every span the Traces UI renders is bucketed into one `SpanCategory` by
+[`services/traces/spanCategorization.ts`](../services/traces/spanCategorization.ts)
+(`getSpanCategory`). The rules are standards-first — OTel semantic conventions
+decide; span-name patterns are only a fallback for legacy agents — and are
+applied in this order:
+
+| Order | Rule | Category |
+|-------|------|----------|
+| 0 | `status === 'ERROR'` | `ERROR` |
+| 1 | OTel **GenAI** `gen_ai.operation.name` is a **known** value: `evaluation` / `create_agent`,`invoke_agent` / `chat`,`text_completion`,`generate_content`,`embeddings` / `execute_tool` | `EVAL` / `AGENT` / `LLM` / `TOOL` |
+| 2 | OTel **DB** semconv: `db.system.name` (or legacy `db.system`) present | `RETRIEVAL` |
+| 3 | Unknown (framework-specific) `gen_ai.operation.name` **with** GenAI context (`gen_ai.provider.name`, `gen_ai.system` or `gen_ai.agent.name`): reporting `gen_ai.request.model` or token usage ⇒ a model call; otherwise orchestration (e.g. an agent-loop iteration span) | `LLM` / `AGENT` |
+| 4 | HTTP **SERVER** span (`http.request.method` / legacy `http.method`, `spanKind` exactly `SPAN_KIND_SERVER` / `SERVER` / `2`) — the agent service's inbound request boundary. The **outermost** such span in the tree is additionally flagged `isEntrypoint: true` on the `CategorizedSpan` so time attribution can use self time; nested server spans are not entrypoints. | `AGENT` |
+| 5 | Span-name patterns (`bedrock`, `converse`, `llm`, `executetool`, `test_case`, `agent.run`, …) for legacy / un-instrumented agents | `LLM` / `TOOL` / `EVAL` / `AGENT` |
+| 6 | Anything else — the explicit "we do not know" bucket | `OTHER` |
+
+**Precedence when a span carries both `gen_ai.*` and `db.*`:** a *known* GenAI
+operation is authoritative — an `execute_tool` span that also carries `db.*`
+stays `TOOL` (it keeps its place in tool stats and tool-similarity grouping;
+its DB details are still surfaced in the span detail views). Only when no known
+GenAI operation claims the span do the `db.*` attributes — the span's own leaf
+semantic — make it `RETRIEVAL`, including over an unknown framework-specific
+operation name. Outbound HTTP **CLIENT** spans with no `db.*` are not retrieval
+and stay `OTHER` unless a name pattern matches.
+
+| Category | Colour | Icon | Compliance expectation (`checkOTelCompliance`) |
+|----------|--------|------|-----------------------------------------------|
+| `AGENT` | indigo | Bot | `gen_ai.operation.name`, `gen_ai.agent.name` |
+| `LLM` | purple | Zap | `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.system` |
+| `TOOL` | amber | Wrench | `gen_ai.operation.name`, `gen_ai.tool.name` |
+| `RETRIEVAL` | cyan | Database | `db.system.name`, and `db.query.text` **or** `db.operation.name` |
+| `AGENT` (entrypoint) | indigo | Bot | HTTP server-span semconv instead of GenAI: `http.request.method`\|`http.method`, `http.route`\|`url.path`\|`http.target`, `http.response.status_code`\|`http.status_code` |
+| `EVAL` | emerald | ClipboardCheck | `gen_ai.operation.name` |
+| `ERROR` | red | AlertCircle | — |
+| `OTHER` | slate | Circle | — |
+
+### RETRIEVAL span display
+
+[`services/traces/retrievalSpan.ts`](../services/traces/retrievalSpan.ts)
+(`extractRetrievalIO`) turns a DB-semconv span into what the span-detail
+surfaces show:
+
+- **Input** — `db.query.text` (legacy `db.statement`), pretty-printed when it
+  is JSON, captioned `{db.operation.name} {db.collection.name | db.namespace} ({db.system.name})`.
+- **Output** — `db.response.returned_rows`, `db.response.status_code`, and any
+  retrieved-id list (below).
+- **Display name** — `{db.operation.name} {collection}` per the DB span-name
+  convention (falls back to the span name).
+
+**Retrieved-id convention.** The DB conventions have no attribute for *which*
+documents came back, which is exactly what a retrieval-quality judge needs.
+Agents can expose it with any attribute whose key ends in `.hit_ids` or
+`.result_ids`, or the neutral key `retrieval.ids` (e.g.
+`myagent.search.hit_ids`). The value should be an OTel string array or a JSON
+array serialised to text (a Python-style single-quoted list literal is accepted
+too). Agent Health renders each such attribute as an id list in the span's
+output; a value that is not list-shaped is shown verbatim rather than guessed
+at (no comma-splitting of arbitrary strings). Nothing about it is specific to
+one agent.
+
+**Retrieved vs returned (labelled pair).** A root / agent span frequently
+carries *two* id lists: the union of everything the agent looked at, and the
+subset it actually handed back. Readers mistake the former for the answer, so
+Agent Health labels the two key families and shows them side by side (span
+drawer and details panel, `RetrievedReturnedLists`), each with its attribute
+name(s), a distinct-id count and the ids:
+
+| Key family (any prefix) | Label | Meaning |
+|-------------------------|-------|---------|
+| `*.retrieved.*` — a `retrieved` key segment (`myagent.retrieved.doc_ids`), or `…_retrieved` / `retrieved_…ids` (`docs_retrieved`, `retrieved_ids`) | **Retrieved (seen)** | candidates pulled in from any source (search hits, graph traversals, …) |
+| `*.results*` / `*.returned.*` / `*.recommended.*` — a segment that is exactly `results`, `returned` or `recommended`, or one of those followed by `_…ids` (`myagent.results`, `myagent.results.ids`, `x.returned_ids`) | **Returned (recommended)** | what the agent surfaced to the caller |
+
+Only list-shaped values (OTel string array / JSON or Python-style list text of
+scalars) join the pair; a scalar, a list of result *objects*, or an unparseable
+blob under one of these keys stays in the plain attribute table — as do
+siblings such as `x.results_count` / `x.results.source`, whose keys do not
+match. When a span carries both sides, the overlap over distinct ids is
+reported ("12 of 20 retrieved were returned", plus a note when a returned id
+was never retrieved). The neutral `*.hit_ids` / `*.result_ids` /
+`retrieval.ids` keys are NOT part of the pair — on a search span they are
+simply that call's hits.
+
+**Canonical names for new instrumentation:** `retrieval.retrieved.ids` (seen)
+and `retrieval.results.ids` (returned), both OTel string arrays, on the span
+that represents the whole request (the HTTP entrypoint or `invoke_agent`
+span). Any prefix matching the families above is recognised, so existing
+agents need not rename.
+
+### Trace row ordering and absolute time
+
+Every span list the UI renders — tree roots, children at each depth, the
+flattened visible list, and the execution-order flow's siblings — is sorted by
+`startTime` ascending with `spanId` as the tie-break
+([`services/traces/spanTime.ts`](../services/traces/spanTime.ts),
+`compareSpansByStartTime`; spans with an unparseable `startTime` sort last), so
+two views never disagree about the order and same-millisecond spans never swap
+between renders. The list header states "sorted by start time".
+
+Each row shows the span's absolute start (`HH:MM:SS.mmm`, viewer's local zone;
+the full ISO timestamp is in the tooltip) and its offset from the trace root
+(`+1.234 s`). `t=0` is the earliest **root** span's start (a window fetch can
+return several roots); a child whose clock ran ahead of its root shows a
+negative offset rather than moving `t=0`. The timeline axis stays relative and
+the header pins `t=0` to that wall-clock time. The span name on a row is a
+button (click / Enter / Space) that opens the details drawer — as does the row
+background — always carries the full name in `title`, and the drawer header
+shows the full name un-truncated. The name column starts at a width estimated
+from the longest name in the trace (capped) and is resizable by dragging the
+header handle or with ← / → on the focused handle (double-click / Home resets).
+
 ## Claude Code Judge
 
 The Claude Code judge is an alternative evaluation provider that spawns the `claude` CLI to evaluate agent trajectories, giving the judge access to full tool use and the AGENT_HEALTH.md skill context.

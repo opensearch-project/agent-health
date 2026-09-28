@@ -31,6 +31,7 @@ import {
   GitBranch,
   Info,
   ClipboardCheck,
+  Database,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -57,7 +58,7 @@ import {
   calculateCategoryStats,
   extractToolStats,
 } from '@/services/traces/traceStats';
-import { categorizeSpanTree } from '@/services/traces/spanCategorization';
+import { categorizeSpanTree, isDbSpan } from '@/services/traces/spanCategorization';
 import { cn } from '@/lib/utils';
 
 interface TraceTableRow {
@@ -211,6 +212,7 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
       if (category === 'llm') return name.includes('llm') || name.includes('bedrock') || name.includes('converse');
       if (category === 'tool') return name.includes('tool') || span.attributes?.['gen_ai.tool.name'];
       if (category === 'eval') return span.attributes?.['gen_ai.operation.name'] === 'evaluation' || name.includes('test_case') || name.includes('test_suite_run');
+      if (category === 'retrieval') return isDbSpan(span);
       if (category === 'error') return span.status === 'ERROR';
       return false;
     });
@@ -266,6 +268,10 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
         return isDarkMode
           ? { backgroundColor: 'rgba(245, 158, 11, 0.15)', color: 'rgb(251, 191, 36)', border: '1px solid rgba(245, 158, 11, 0.4)' }
           : { backgroundColor: 'rgb(254, 243, 199)', color: 'rgb(146, 64, 14)', border: '1px solid rgb(252, 211, 77)' };
+      case 'retrieval':
+        return isDarkMode
+          ? { backgroundColor: 'rgba(6, 182, 212, 0.15)', color: 'rgb(103, 232, 249)', border: '1px solid rgba(6, 182, 212, 0.4)' }
+          : { backgroundColor: 'rgb(207, 250, 254)', color: 'rgb(21, 94, 117)', border: '1px solid rgb(103, 232, 249)' };
       case 'eval':
         return isDarkMode
           ? { backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'rgb(110, 231, 183)', border: '1px solid rgba(16, 185, 129, 0.4)' }
@@ -591,6 +597,48 @@ export const TraceFlyoutContent: React.FC<TraceFlyoutContentProps> = ({
                   <span className="font-normal">Eval</span>
                   <span className="text-[10px] opacity-70 ml-auto">{formatDuration(spanStats.byCategory.eval.duration)}</span>
                   {expandedSummary === 'eval' ? (
+                    <ChevronDown size={11} />
+                  ) : (
+                    <ChevronRight size={11} />
+                  )}
+                </button>
+              )}
+              {spanStats.byCategory.retrieval?.count > 0 && (
+                <button
+                  data-testid="span-category-pill-retrieval"
+                  onClick={() => handleSummaryClick('retrieval')}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border-2 transition-all cursor-pointer flex-1"
+                  style={
+                    expandedSummary === 'retrieval'
+                      ? document.documentElement.classList.contains('dark')
+                        ? { backgroundColor: 'rgba(6, 182, 212, 0.25)', color: 'rgb(165, 243, 252)', border: '2px solid rgba(6, 182, 212, 0.6)' }
+                        : { backgroundColor: 'rgb(207, 250, 254)', color: 'rgb(22, 78, 99)', border: '2px solid rgb(34, 211, 238)' }
+                      : document.documentElement.classList.contains('dark')
+                        ? { backgroundColor: 'rgba(6, 182, 212, 0.12)', color: 'rgb(103, 232, 249)', border: '2px solid rgba(6, 182, 212, 0.35)' }
+                        : { backgroundColor: 'rgb(236, 254, 255)', color: 'rgb(21, 94, 117)', border: '2px solid rgb(103, 232, 249)' }
+                  }
+                  onMouseEnter={(e) => {
+                    if (expandedSummary !== 'retrieval') {
+                      const isDark = document.documentElement.classList.contains('dark');
+                      e.currentTarget.style.backgroundColor = isDark ? 'rgba(6, 182, 212, 0.2)' : 'rgb(207, 250, 254)';
+                      e.currentTarget.style.borderColor = isDark ? 'rgba(6, 182, 212, 0.5)' : 'rgb(34, 211, 238)';
+                      e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.1)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (expandedSummary !== 'retrieval') {
+                      const isDark = document.documentElement.classList.contains('dark');
+                      e.currentTarget.style.backgroundColor = isDark ? 'rgba(6, 182, 212, 0.12)' : 'rgb(236, 254, 255)';
+                      e.currentTarget.style.borderColor = isDark ? 'rgba(6, 182, 212, 0.35)' : 'rgb(103, 232, 249)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }
+                  }}
+                >
+                  <Database size={11} className="flex-shrink-0" />
+                  <span className="font-medium">{spanStats.byCategory.retrieval.count}</span>
+                  <span className="font-normal">Retrieval</span>
+                  <span className="text-[10px] opacity-70 ml-auto">{formatDuration(spanStats.byCategory.retrieval.duration)}</span>
+                  {expandedSummary === 'retrieval' ? (
                     <ChevronDown size={11} />
                   ) : (
                     <ChevronRight size={11} />
