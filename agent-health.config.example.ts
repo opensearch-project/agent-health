@@ -97,7 +97,30 @@ export default {
     //   },
     // },
 
-    // Example 7: Claude Code with MCP servers (competitive evaluation)
+    // Example 7: REST agent behind an AWS-authenticated endpoint (API Gateway,
+    // Lambda function URL, Bedrock AgentCore, ALB+IAM). Every request is signed
+    // with AWS Signature V4 over the exact method/URL/body/headers sent.
+    // Credentials: explicit awsAccessKeyId/awsSecretAccessKey(/awsSessionToken)
+    // if given, otherwise the AWS default credential chain for `awsProfile`
+    // (→ $AWS_PROFILE → default). See docs/CONNECTORS.md → "AWS SigV4 Authentication".
+    // {
+    //   key: "gateway-agent",
+    //   name: "Agent behind API Gateway",
+    //   endpoint: "https://<api-id>.execute-api.us-west-2.amazonaws.com/prod/invoke",
+    //   connectorType: "rest",
+    //   useTraces: true,
+    //   auth: {
+    //     type: "aws-sigv4",
+    //     awsRegion: "us-west-2",        // signing region — the API's region
+    //     awsService: "execute-api",     // signing service: execute-api | lambda | bedrock-agentcore | …
+    //     awsProfile: process.env.AWS_PROFILE, // optional named profile
+    //     // awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID,        // optional static creds
+    //     // awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    //     // awsSessionToken: process.env.AWS_SESSION_TOKEN,
+    //   },
+    // },
+
+    // Example 8: Claude Code with MCP servers (competitive evaluation)
     // Uses a standard MCP config JSON file (same format as ~/.claude.json mcpServers)
     // {
     //   key: "claude-code-eval",

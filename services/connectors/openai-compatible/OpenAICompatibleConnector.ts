@@ -17,6 +17,7 @@
 
 import type { TrajectoryStep, ToolCallStatus } from '@/types';
 import { BaseConnector } from '@/services/connectors/base/BaseConnector';
+import { withDefaultHeaders } from '@/lib/httpHeaders';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -129,19 +130,24 @@ export class OpenAICompatibleConnector extends BaseConnector {
     onRawEvent?: ConnectorRawEventCallback
   ): Promise<ConnectorResponse> {
     const payload = request.payload || this.buildPayload(request);
-    const headers = this.buildAuthHeaders(auth);
-    this.injectTraceparentHeaders(headers);
+    // Body fixed before header preparation so an aws-sigv4 signature covers
+    // exactly the bytes sent.
+    const body = JSON.stringify(payload);
+    const defaultHeaders = { 'Content-Type': 'application/json' };
+    const { url, headers } = await this.prepareRequest(auth, {
+      method: 'POST',
+      url: endpoint,
+      body,
+      defaultHeaders,
+    });
     this.debug('Executing OpenAI-compatible request');
-    this.debug('Endpoint:', endpoint);
+    this.debug('Endpoint:', url);
     this.debug('Model:', payload.model);
 
-    const response = await fetch(endpoint, {
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: JSON.stringify(payload),
+      headers: withDefaultHeaders(defaultHeaders, headers),
+      body,
     });
 
     if (!response.ok) {

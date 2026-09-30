@@ -10,11 +10,23 @@
 
 import { AGUIEvent, AGUIEventType } from '@/types/agui';
 import { debug, isDebugEnabled } from '@/lib/debug';
+import { withDefaultHeaders } from '@/lib/httpHeaders';
+
+/**
+ * Headers `SSEClient.consume` adds to every request unless the caller already
+ * supplies them (case-insensitively). Exported so connectors that sign
+ * requests (aws-sigv4) can include exactly these in the signed header set.
+ */
+export const SSE_DEFAULT_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'Content-Type': 'application/json',
+  Accept: 'text/event-stream',
+});
 
 export interface SSEClientOptions {
   url: string;
   method?: 'GET' | 'POST';
   headers?: Record<string, string>;
+  /** Request body. A string is sent verbatim (already serialised — e.g. the exact bytes a SigV4 signature covers); anything else is JSON.stringify'd. */
   body?: any;
   timeoutMs?: number;
   onEvent: (event: AGUIEvent) => void;
@@ -50,18 +62,18 @@ export class SSEClient {
     debug('SSE', 'Connecting to', url);
     debug('SSE', 'Method:', method);
     debug('SSE', 'Headers:', headers);
-    debug('SSE', 'Payload:', body ? JSON.stringify(body, null, 2).substring(0, 500) : 'none');
+    const serializedBody = body === undefined || body === null ? undefined : typeof body === 'string' ? body : JSON.stringify(body);
+    debug('SSE', 'Payload:', serializedBody ? serializedBody.substring(0, 500) : 'none');
     debug('SSE', 'Timeout:', idleTimeoutMs, 'ms');
 
     try {
       const requestConfig = {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          ...headers,
-        },
-        body: body ? JSON.stringify(body) : undefined,
+        // Case-insensitive merge: a caller that already supplies
+        // `content-type`/`accept` (e.g. a SigV4-signed header set) must not
+        // end up with a duplicate `Content-Type`/`Accept` pair on the wire.
+        headers: withDefaultHeaders(SSE_DEFAULT_HEADERS, headers),
+        body: serializedBody,
         signal: this.abortController.signal,
       };
       debug('SSE', 'Request config:', JSON.stringify(requestConfig, null, 2).substring(0, 500));
@@ -258,6 +270,7 @@ export class SSEClient {
  */
 export async function consumeSSEStream(
   url: string,
+  /** Object (JSON.stringify'd here) or an already-serialised string sent verbatim. */
   payload: any,
   onEvent: (event: AGUIEvent) => void,
   headers?: Record<string, string>,

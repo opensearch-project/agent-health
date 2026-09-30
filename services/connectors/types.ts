@@ -41,12 +41,23 @@ export interface ConnectorAuth {
   // Bearer token / API key
   token?: string;
 
-  // AWS SigV4
+  // AWS SigV4 — HTTP connectors sign each request with Signature V4
+  // (services/connectors/base/awsSigV4.ts); subprocess connectors export the
+  // static keys as AWS_* env vars (buildAuthEnv).
+  /** Signing region, e.g. `us-west-2`. Required. */
   awsRegion?: string;
+  /** Signing service name, e.g. `execute-api`, `lambda`, `bedrock-agentcore`. Required. */
   awsService?: string;
+  /** Explicit static credentials. When set (with awsSecretAccessKey) they win over the provider chain. */
   awsAccessKeyId?: string;
   awsSecretAccessKey?: string;
   awsSessionToken?: string;
+  /**
+   * Named profile for the AWS default credential provider chain, used when no
+   * explicit keys are given. Defaults to `$AWS_PROFILE`, then the chain's own
+   * default (env vars → `default` profile → SSO → container/instance role).
+   */
+  awsProfile?: string;
 
   // Custom headers (always applied)
   headers?: Record<string, string>;

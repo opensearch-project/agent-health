@@ -10,6 +10,7 @@
 
 import type { TrajectoryStep, ToolCallStatus } from '@/types';
 import { BaseConnector } from '@/services/connectors/base/BaseConnector';
+import { withDefaultHeaders } from '@/lib/httpHeaders';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -54,20 +55,26 @@ export class RESTConnector extends BaseConnector {
   ): Promise<ConnectorResponse> {
     // Use pre-built payload from hook if available, otherwise build fresh
     const payload = request.payload || this.buildPayload(request);
-    const headers = this.buildAuthHeaders(auth);
-    this.injectTraceparentHeaders(headers);
+    // The body string is fixed BEFORE header preparation: for aws-sigv4 the
+    // signature covers exactly these bytes (and the final endpoint/payload
+    // after any beforeRequest hook, which ran before execute()).
+    const body = JSON.stringify(payload);
+    const defaultHeaders = { 'Content-Type': 'application/json' };
+    const { url, headers } = await this.prepareRequest(auth, {
+      method: 'POST',
+      url: endpoint,
+      body,
+      defaultHeaders,
+    });
 
     this.debug('Executing REST request');
-    this.debug('Endpoint:', endpoint);
-    this.debug('Payload:', JSON.stringify(payload).substring(0, 500));
+    this.debug('Endpoint:', url);
+    this.debug('Payload:', body.substring(0, 500));
 
-    const response = await fetch(endpoint, {
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: JSON.stringify(payload),
+      headers: withDefaultHeaders(defaultHeaders, headers),
+      body,
     });
 
     if (!response.ok) {

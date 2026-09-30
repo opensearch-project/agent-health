@@ -40,6 +40,7 @@ import type {
   ConnectorRawEventCallback,
 } from '@/services/connectors/types';
 import type { TrajectoryStep } from '@/types';
+import { withDefaultHeaders } from '@/lib/httpHeaders';
 
 export class MyConnector extends BaseConnector {
   // Unique connector type identifier
@@ -73,17 +74,23 @@ export class MyConnector extends BaseConnector {
     onRawEvent?: ConnectorRawEventCallback
   ): Promise<ConnectorResponse> {
     const payload = this.buildPayload(request);
-    const headers = this.buildAuthHeaders(auth);
+    // Fix the body first, then let the base class produce the auth headers
+    // for exactly this request (adds an AWS SigV4 signature for aws-sigv4).
+    const body = JSON.stringify(payload);
+    const defaultHeaders = { 'Content-Type': 'application/json' };
+    const { url, headers } = await this.prepareRequest(auth, {
+      method: 'POST',
+      url: endpoint,
+      body,
+      defaultHeaders,
+    });
     const trajectory: TrajectoryStep[] = [];
 
     // Make your API call here
-    const response = await fetch(endpoint, {
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: JSON.stringify(payload),
+      headers: withDefaultHeaders(defaultHeaders, headers),
+      body,
     });
 
     const data = await response.json();
@@ -215,11 +222,33 @@ const step = this.createStep('action', 'Querying database', {
 
 #### `buildAuthHeaders(auth: ConnectorAuth)`
 
-Builds HTTP headers from authentication configuration.
+Builds HTTP headers from authentication configuration (`basic`, `bearer`,
+`api-key`, plus `auth.headers`). It cannot produce an `aws-sigv4` signature —
+that is a function of the whole request, see `prepareRequest`.
 
 ```typescript
 const headers = this.buildAuthHeaders(auth);
 // Returns: { 'Authorization': 'Bearer xxx' } or similar
+```
+
+#### `prepareRequest(auth, { method, url, body?, defaultHeaders? })` → `{ url, headers }`
+
+What HTTP connectors call right before `fetch`, once endpoint, payload and
+custom headers are final. Returns the URL to fetch and `buildAuthHeaders(auth)`
+plus W3C trace context (`traceparent`) — and for `auth.type: 'aws-sigv4'` the
+AWS Signature V4 headers computed over exactly this request, with the query
+string of the returned `url` re-serialised in the canonical RFC 3986 form that
+was signed (always fetch the returned `url`, not your input). Pass the body
+string you will send and the defaults your transport adds (e.g. `Content-Type`)
+so they are part of the signature; then merge with `withDefaultHeaders()` from
+`lib/httpHeaders.ts` so no duplicate `Content-Type`/`content-type` pair reaches
+the wire.
+
+```typescript
+const body = JSON.stringify(payload);
+const defaultHeaders = { 'Content-Type': 'application/json' };
+const { url, headers } = await this.prepareRequest(auth, { method: 'POST', url: endpoint, body, defaultHeaders });
+await fetch(url, { method: 'POST', headers: withDefaultHeaders(defaultHeaders, headers), body });
 ```
 
 #### `buildAuthEnv(auth: ConnectorAuth)`
@@ -234,22 +263,78 @@ Builds environment variables for subprocess connectors.
 | `basic` | HTTP Basic Auth | `username`, `password` or `token` |
 | `bearer` | Bearer token | `token` |
 | `api-key` | API key header | `token`, `headerName` |
-| `aws-sigv4` | AWS Signature V4 | `awsRegion`, `awsService`, `awsAccessKeyId`, `awsSecretAccessKey`, `awsSessionToken` |
+| `aws-sigv4` | AWS Signature V4 (request signing) | `awsRegion`, `awsService`, optional `awsAccessKeyId`, `awsSecretAccessKey`, `awsSessionToken`, `awsProfile` |
 
 ### AWS SigV4 Authentication
 
 AWS SigV4 is used in two contexts:
 
-1. **OpenSearch cluster connections** (storage and observability) — handled by the `opensearchClientFactory.ts` using `@opensearch-project/opensearch/aws-v3` and the AWS credential provider chain. Configure via environment variables (`OPENSEARCH_STORAGE_AUTH_TYPE=sigv4`) or the Settings UI.
+1. **OpenSearch cluster connections** (storage and observability) — handled by `opensearchClientFactory.ts` using `@opensearch-project/opensearch/aws-v3` and the AWS credential provider chain. Configure via environment variables (`OPENSEARCH_STORAGE_AUTH_TYPE=sigv4`) or the Settings UI. Set `awsService` to `es` for managed OpenSearch domains or `aoss` for OpenSearch Serverless collections.
 
-2. **Connector-level auth** (agent endpoints) — handled by `BaseConnector.buildAuthHeaders()` and `buildAuthEnv()`. When `auth.type` is `aws-sigv4`, the connector passes AWS credentials as environment variables for subprocess connectors or headers for HTTP connectors.
+2. **Connector-level auth** (agent endpoints) — `auth: { type: 'aws-sigv4', … }` on an agent. What happens depends on the connector family:
+   - **HTTP connectors** (`rest`, `agui-streaming`, `langgraph`, `openai-compatible`) **sign every request with AWS Signature V4** (`services/connectors/base/awsSigV4.ts`, invoked through `BaseConnector.prepareRequest()`). This is what you need for agents behind API Gateway (`execute-api`), Lambda function URLs (`lambda`), Bedrock AgentCore (`bedrock-agentcore`), App Runner, or an ALB with IAM auth.
+   - **Subprocess connectors** export the static keys as `AWS_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` into the child's environment (`buildAuthEnv()`); the child does its own signing.
 
-For OpenSearch clusters, SigV4 supports the full AWS credential chain:
-- AWS profile (`awsProfile` / `OPENSEARCH_STORAGE_AWS_PROFILE`)
-- Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`)
-- IAM roles (EC2 instance profile, ECS task role, etc.)
+```typescript
+{
+  key: "my-gateway-agent",
+  name: "Agent behind API Gateway",
+  endpoint: "https://<api-id>.execute-api.us-west-2.amazonaws.com/prod/invoke",
+  connectorType: "rest",
+  auth: {
+    type: "aws-sigv4",
+    awsRegion: "us-west-2",       // required — signing region
+    awsService: "execute-api",    // required — signing service name
+    awsProfile: "eval",           // optional — named profile for the credential chain
+    // awsAccessKeyId / awsSecretAccessKey / awsSessionToken — optional static credentials
+  },
+}
+```
 
-Set `awsService` to `es` for managed OpenSearch domains or `aoss` for OpenSearch Serverless collections.
+#### Credential precedence
+
+1. **Explicit static credentials** — `awsAccessKeyId` + `awsSecretAccessKey` (+ `awsSessionToken` for temporary credentials). Both key fields must be set together. Read them from `process.env` in `agent-health.config.ts`; never commit them.
+2. **AWS default credential provider chain** (`fromNodeProviderChain`) for the profile `awsProfile` → `$AWS_PROFILE` → the chain's default: environment variables, `~/.aws/credentials` / `~/.aws/config` (incl. SSO and `credential_process`), web identity, ECS/EC2 instance roles.
+
+The provider is memoised per profile; the credentials it yields are re-resolved per request (the chain refreshes on expiry and the ini files are re-read), so rotated profile / STS credentials are picked up without restarting the server.
+
+#### What is signed
+
+The signature covers the request exactly as it goes over the wire:
+
+- method and the full URL — path **and** query string (the `beforeRequest` hook's final `endpoint`). The query is parsed from the raw URL without form-decoding (`+` stays a literal plus, `%2B`/`%20` decode to `+`/space) and is re-serialised in canonical RFC 3986 form on the wire, so the bytes sent and the canonical request can never disagree — the fetched URL may therefore differ from the configured one only in percent-encoding (same parameters, same order);
+- the exact body bytes: `JSON.stringify(payload)` → `x-amz-content-sha256`;
+- the headers: `host`, `content-type` (and `accept` for SSE), `x-amz-date`, `x-amz-security-token` (when the credentials carry a session token), `x-amz-content-sha256`, every `auth.headers` / `agent.headers` entry and every header returned by a `beforeRequest` hook. They appear in `SignedHeaders=…` of the `Authorization: AWS4-HMAC-SHA256 …` header.
+
+Header names are lowercase-normalised before signing and the transport applies its `Content-Type`/`Accept` defaults case-insensitively. Caller-supplied values for signer/transport-owned headers (`authorization`, `host`, `content-length`, `x-amz-date`, `x-amz-content-sha256`, `x-amz-security-token`) are dropped rather than signed. This matters: Node's `fetch` folds a `Content-Type` + `content-type` pair into one header valued `"application/json, application/json"`, which no longer matches what was signed. `host` is signed but not passed to `fetch` (the runtime sets it from the URL).
+
+**Not signed by design:** the W3C `traceparent` / `tracestate` headers (`traceContext.propagateHeader`) are injected **after** signing and are therefore not in `SignedHeaders`. SigV4 allows unsigned extra headers, and keeping trace headers out of the signature means a proxy that rewrites them cannot cause `SignatureDoesNotMatch`.
+
+#### Hook ordering
+
+`beforeRequest` hooks run in `invokeAgent` **before** `connector.execute()`; signing happens inside `execute()` on the hook's final endpoint, payload and headers. A hook may therefore rewrite the URL, add query parameters, mutate the payload or add headers freely — all of it is covered by the signature. A hook must **not** set `Authorization` itself for an `aws-sigv4` agent (the signer owns that header).
+
+#### Failure modes
+
+A signing or credential problem never sends an unsigned request. It fails the agent step with
+
+```
+SigV4 signing failed: <reason> (profile <p> / region <r> / service <s>)
+```
+
+e.g. `auth.awsRegion is required`, `auth.awsService is required`, `awsAccessKeyId and awsSecretAccessKey must be provided together`, or the credential chain's own message (`Could not load credentials from any providers`). The report is `status: 'failed'` with that message as the reason.
+
+#### Troubleshooting `403` from the endpoint
+
+| Response | Meaning | Check |
+|----------|---------|-------|
+| `MissingAuthenticationToken` | No `Authorization` header reached the service | `auth.type` is really `aws-sigv4` (not inferred from `headers`); you are on a version with request signing (≥ 0.8.0) |
+| `InvalidClientTokenId` / `UnrecognizedClientException` | Access key unknown to AWS | wrong profile / expired temporary credentials — `aws sts get-caller-identity --profile <p>` |
+| `SignatureDoesNotMatch` | Signature computed over a different request than the one received | `awsService` / `awsRegion` match the endpoint (`execute-api` + the API's region, not the caller's); nothing between agent-health and AWS rewrites the path, query or body (gzip, a proxy re-encoding JSON, a hook adding `Authorization`); custom headers in `auth.headers` are not being modified by a proxy — move such headers into the `beforeRequest` hook's returned `headers` only if they are stable |
+| `ExpiredTokenException` | Session token expired | refresh the profile / rotate the static token; the connector re-resolves credentials per request, no restart needed |
+| `AccessDeniedException` / `User … is not authorized` | Signature accepted, IAM policy denies | the resource policy / IAM policy for `execute-api:Invoke`, `lambda:InvokeFunctionUrl`, etc. |
+
+A quick self-check that does not need your own endpoint: point a `rest` agent at `https://sts.us-east-1.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15` with `awsService: 'sts'`, `awsRegion: 'us-east-1'`. A valid signature yields HTTP 200 (`GetCallerIdentityResult`); a bad one yields 403 `InvalidClientTokenId` / `SignatureDoesNotMatch`.
 
 ## Streaming Support
 
@@ -395,12 +480,14 @@ export class PERAgentConnector extends BaseConnector {
 
   async execute(endpoint, request, auth, onProgress, onRawEvent) {
     const payload = this.buildPayload(request);
-    const headers = this.buildAuthHeaders(auth);
+    const body = JSON.stringify(payload);
+    const defaultHeaders = { 'Content-Type': 'application/json' };
+    const { url, headers } = await this.prepareRequest(auth, { method: 'POST', url: endpoint, body, defaultHeaders });
 
-    const response = await fetch(endpoint, {
+    const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify(payload),
+      headers: withDefaultHeaders(defaultHeaders, headers),
+      body,
     });
 
     const data = await response.json();

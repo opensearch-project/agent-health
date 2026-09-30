@@ -101,12 +101,16 @@ describe('AGUIStreamingConnector', () => {
 
       await connector.execute('http://localhost:8080/stream', request, mockAuth);
 
+      // The payload is serialised ONCE in the connector and passed as the exact
+      // string to send (so an aws-sigv4 signature covers the same bytes).
       expect(consumeSSEStream).toHaveBeenCalledWith(
         'http://localhost:8080/stream',
-        expect.any(Object),
+        expect.any(String),
         expect.any(Function),
         {}
       );
+      const sentBody = (consumeSSEStream as jest.Mock).mock.calls[0][1];
+      expect(JSON.parse(sentBody)).toEqual(connector.buildPayload(request));
     });
 
     it('should include auth headers', async () => {
@@ -125,7 +129,7 @@ describe('AGUIStreamingConnector', () => {
 
       expect(consumeSSEStream).toHaveBeenCalledWith(
         expect.any(String),
-        expect.any(Object),
+        expect.any(String),
         expect.any(Function),
         expect.objectContaining({ 'Authorization': 'Bearer my-token' })
       );

@@ -208,8 +208,13 @@ export interface ConnectorAuthConfig {
   username?: string;
   password?: string;
   token?: string;
+  // aws-sigv4 (see docs/CONNECTORS.md → "AWS SigV4 Authentication")
   awsRegion?: string;
   awsService?: string;
+  awsAccessKeyId?: string;
+  awsSecretAccessKey?: string;
+  awsSessionToken?: string;
+  awsProfile?: string;
   headers?: Record<string, string>;
 }
 

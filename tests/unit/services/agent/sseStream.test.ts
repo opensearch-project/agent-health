@@ -54,6 +54,40 @@ describe('SSEClient', () => {
   });
 
   describe('consume', () => {
+    it('sends a string body verbatim and applies default headers case-insensitively (signed-request contract)', async () => {
+      const mockStream = createMockReadableStream([
+        sseData({ type: AGUIEventType.RUN_FINISHED, runId: 'run-1', threadId: 'thread-1' }),
+      ]);
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'text/event-stream' }),
+        body: mockStream,
+      });
+
+      const client = new SSEClient();
+      const body = '{"prompt":"exact bytes","n":1}';
+      const consumePromise = client.consume({
+        url: 'http://test.com/stream',
+        body,
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream', authorization: 'AWS4-HMAC-SHA256 …' },
+        onEvent: jest.fn(),
+        onComplete: jest.fn(),
+        completeOnRunEnd: true,
+      });
+      await jest.runAllTimersAsync();
+      await consumePromise;
+
+      const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+      expect(init.body).toBe(body); // not re-stringified
+      expect(init.headers).toEqual({
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+        authorization: 'AWS4-HMAC-SHA256 …',
+      }); // no 'Content-Type' / 'Accept' duplicates
+    });
+
     it('should connect and receive SSE events', async () => {
       const events: AGUIEvent[] = [];
       const mockStream = createMockReadableStream([
