@@ -18,7 +18,6 @@ import { TestCasesPage } from './components/TestCasesPage';
 import { TestCaseRunsPage } from './components/TestCaseRunsPage';
 import { ComparisonPage } from './components/comparison/ComparisonPage';
 import { AgentTracesPage } from './components/traces/AgentTracesPage';
-import { PerformanceOverlay } from './components/PerformanceOverlay';
 import { CodingAgentsPage } from './components/codingAgents/CodingAgentsPage';
 import { EvaluatorsPage } from './components/EvaluatorsPage';
 import { EvaluatorEditPage } from './components/EvaluatorEditPage';
@@ -96,76 +95,73 @@ function App() {
   }, []);
 
   return (
-    <>
-      <Router>
-        <DebugStateSync />
-        <Layout>
-          <Routes>
-            {/* Primary routes */}
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/test-cases" element={<TestCasesPage />} />
-            <Route path="/test-cases/:testCaseId/runs" element={<TestCaseRunsPage />} />
-            <Route path="/benchmarks" element={<BenchmarksPage />} />
-            <Route path="/benchmarks/:benchmarkId/runs" element={<BenchmarkRunsPage />} />
-            <Route path="/evaluators" element={<EvaluatorsPage />} />
-            <Route path="/evaluators/new" element={<EvaluatorEditPage />} />
-            <Route path="/evaluators/:evaluatorId" element={<EvaluatorEditPage />} />
-            <Route path="/evaluators/:evaluatorId/edit" element={<EvaluatorEditPage />} />
+    <Router>
+      <DebugStateSync />
+      <Layout>
+        <Routes>
+          {/* Primary routes */}
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/test-cases" element={<TestCasesPage />} />
+          <Route path="/test-cases/:testCaseId/runs" element={<TestCaseRunsPage />} />
+          <Route path="/benchmarks" element={<BenchmarksPage />} />
+          <Route path="/benchmarks/:benchmarkId/runs" element={<BenchmarkRunsPage />} />
+          <Route path="/evaluators" element={<EvaluatorsPage />} />
+          <Route path="/evaluators/new" element={<EvaluatorEditPage />} />
+          <Route path="/evaluators/:evaluatorId" element={<EvaluatorEditPage />} />
+          <Route path="/evaluators/:evaluatorId/edit" element={<EvaluatorEditPage />} />
 
-            {/* Unified run details page - works for both test case and benchmark runs */}
-            <Route path="/runs/:runId" element={<RunDetailsPage />} />
+          {/* Unified run details page - works for both test case and benchmark runs */}
+          <Route path="/runs/:runId" element={<RunDetailsPage />} />
 
-            {/* Backwards compatibility - redirect old benchmark run route to new unified route */}
-            <Route path="/benchmarks/:benchmarkId/runs/:runId" element={<RunDetailsPage />} />
+          {/* Backwards compatibility - redirect old benchmark run route to new unified route */}
+          <Route path="/benchmarks/:benchmarkId/runs/:runId" element={<RunDetailsPage />} />
 
-            {/* Settings */}
-            <Route path="/settings" element={<SettingsPage />} />
+          {/* Settings */}
+          <Route path="/settings" element={<SettingsPage />} />
 
-            {/* Comparison */}
-            <Route path="/compare" element={<ComparisonPage />} />
-            <Route path="/compare/:benchmarkId" element={<ComparisonPage />} />
+          {/* Comparison */}
+          <Route path="/compare" element={<ComparisonPage />} />
+          <Route path="/compare/:benchmarkId" element={<ComparisonPage />} />
 
-            {/* Agent Traces - Table View */}
-            <Route path="/agent-traces" element={<AgentTracesPage />} />
+          {/* Agent Traces - Table View */}
+          <Route path="/agent-traces" element={<AgentTracesPage />} />
 
-            {/* Evals 3 → Evaluations */}
-            <Route path="/evaluations/benchmarks" element={<Evals3Benchmarks />} />
-            <Route path="/evaluations/test-cases" element={<Evals3TestCases />} />
-            <Route path="/evaluations/test-cases/:testCaseId" element={<Evals3TestCaseDetail />} />
-            <Route path="/evaluations/runs" element={<Evals3EvalRuns />} />
-            <Route path="/evaluations/runs/new" element={<Evals3NewRun />} />
-            <Route path="/evaluations/runs/:runId" element={<Evals3EvalRunDetail />} />
-            <Route path="/evaluations/runs/:runId/inspect" element={<Evals3RunInspector />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId" element={<Evals3BenchmarkRuns />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId/cases/:caseId" element={<Evals3BenchmarkRuns />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId/runs" element={<Evals3BenchmarkRuns />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId" element={<Navigate to="inspect" replace />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId/inspect" element={<Evals3RunInspector />} />
+          {/* Evals 3 → Evaluations */}
+          <Route path="/evaluations/benchmarks" element={<Evals3Benchmarks />} />
+          <Route path="/evaluations/test-cases" element={<Evals3TestCases />} />
+          <Route path="/evaluations/test-cases/:testCaseId" element={<Evals3TestCaseDetail />} />
+          <Route path="/evaluations/runs" element={<Evals3EvalRuns />} />
+          <Route path="/evaluations/runs/new" element={<Evals3NewRun />} />
+          <Route path="/evaluations/runs/:runId" element={<Evals3EvalRunDetail />} />
+          <Route path="/evaluations/runs/:runId/inspect" element={<Evals3RunInspector />} />
+          <Route path="/evaluations/benchmarks/:benchmarkId" element={<Evals3BenchmarkRuns />} />
+          <Route path="/evaluations/benchmarks/:benchmarkId/cases/:caseId" element={<Evals3BenchmarkRuns />} />
+          <Route path="/evaluations/benchmarks/:benchmarkId/runs" element={<Evals3BenchmarkRuns />} />
+          <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId" element={<Navigate to="inspect" replace />} />
+          <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId/inspect" element={<Evals3RunInspector />} />
 
-            {/* Skills Evaluator */}
-            <Route path="/skills" element={<SkillsPage />} />
+          {/* Skills Evaluator */}
+          <Route path="/skills" element={<SkillsPage />} />
 
-            {/* Coding Agent Analytics */}
-            <Route path="/coding-agents" element={<CodingAgentsPage />} />
+          {/* Coding Agent Analytics */}
+          <Route path="/coding-agents" element={<CodingAgentsPage />} />
 
-            {/* AI Assistant */}
-            <Route path="/assistant" element={<AssistantChat />} />
-            {/* Redirects for deprecated routes */}
-            <Route path="/evals" element={<Navigate to="/test-cases" replace />} />
-            <Route path="/run" element={<Navigate to="/test-cases" replace />} />
-            <Route path="/reports" element={<Navigate to="/benchmarks" replace />} />
-            <Route path="/experiments" element={<Navigate to="/benchmarks" replace />} />
-            <Route path="/experiments/:experimentId/runs" element={<ExperimentRunsRedirect />} />
+          {/* AI Assistant */}
+          <Route path="/assistant" element={<AssistantChat />} />
+          {/* Redirects for deprecated routes */}
+          <Route path="/evals" element={<Navigate to="/test-cases" replace />} />
+          <Route path="/run" element={<Navigate to="/test-cases" replace />} />
+          <Route path="/reports" element={<Navigate to="/benchmarks" replace />} />
+          <Route path="/experiments" element={<Navigate to="/benchmarks" replace />} />
+          <Route path="/experiments/:experimentId/runs" element={<ExperimentRunsRedirect />} />
 
-            {/* Catch-all: redirect unknown sub-paths to their parent list pages */}
-            <Route path="/benchmarks/*" element={<Navigate to="/benchmarks" replace />} />
-            <Route path="/test-cases/*" element={<Navigate to="/test-cases" replace />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Layout>
-      </Router>
-      <PerformanceOverlay />
-    </>
+          {/* Catch-all: redirect unknown sub-paths to their parent list pages */}
+          <Route path="/benchmarks/*" element={<Navigate to="/benchmarks" replace />} />
+          <Route path="/test-cases/*" element={<Navigate to="/test-cases" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
+    </Router>
   );
 }
 

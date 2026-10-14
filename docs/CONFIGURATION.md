@@ -262,6 +262,32 @@ To configure additional agents (LangGraph, ML-Commons, HolmesGPT, Claude Code, e
 
 Debug logging can also be toggled at runtime via the Settings page "Verbose Logging" toggle or the `POST /api/debug` endpoint. When enabled, structured debug output appears in both the browser console and server terminal.
 
+**Page latency HUD:** with debug mode enabled (or in a local dev build,
+`import.meta.env.DEV`, or with the legacy `localStorage.DEBUG_PERFORMANCE =
+'true'` flag set from the browser console), a one-line pill in the bottom-right
+corner shows the CURRENT page and one number — time-to-ready, i.e. route change
+→ the page's data settled and its content rendered — with a colour dot (green
+< 1 s, amber < 3 s, red otherwise), e.g. `● benchmark-runs · 13.6 s`. The six
+heaviest evals3/comparison/traces pages (Benchmarks, Benchmark Runs, Evaluation
+Runs, Run Inspector, Comparison, Agent Traces) report readiness themselves; for
+every other page it is estimated (first paint + last `/api/*` response + 1 s of
+quiet, marked `~`). Click the pill to pin it open (hover or hold ⌥ to peek):
+still the current page only — `Page ready`, `First paint` (the new page's first
+frame, before any data), `API N requests · X wall` (wall-clock span from the
+first request start to the last response end; requests overlap, so durations
+are never summed) followed by the 5 slowest requests as method + path template
+(`GET /api/storage/evaluation-runs/:id 4.2 s`), a `Slow steps on this page`
+section only when the page recorded `lib/performance.ts` step timings
+(`startMeasure` / `endMeasure`, e.g. the trace flow transform). Everything
+resets on every route change; nothing is kept about earlier pages, and there
+is no legend. A `hide` control dismisses it until
+the next page load. While active, `window.__agentHealthPerf` exposes
+`startMeasure` / `endMeasure` / `getMetrics` / `getOperationStats` /
+`getCurrentRecord` / `clearMetrics` / `logSummary` for ad-hoc timings from
+DevTools. It's a zero-cost no-op otherwise: no timers, no `fetch` wrapping,
+nothing rendered. See `lib/pageLatency.ts` and
+[PERFORMANCE-MONITORING.md](PERFORMANCE-MONITORING.md).
+
 ### Advanced Settings
 
 | Variable | Description | Default |

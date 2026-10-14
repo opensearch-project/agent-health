@@ -34,6 +34,7 @@ import { ResultStatus, getResultStatus, StatusIcon, StatusLabel } from './Result
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
 import { getRunActionVisibility } from '@/lib/runActions';
+import { markPageReady } from '@/lib/pageLatency';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
 import { InlineRenameField } from './InlineRenameField';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -293,6 +294,7 @@ export const RunInspectorPage: React.FC = () => {
       setLoadError(true);
     } finally {
       setLoading(false);
+      markPageReady('run-inspector');
     }
   }, [benchmarkId, runId, mode, navigate, targetReportId]);
 

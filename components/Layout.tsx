@@ -47,6 +47,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { AssistantProvider } from "@/components/assistant-ui/AssistantProvider";
 import { AssistantModal } from "@/components/assistant-ui/AssistantModal";
+import { DebugLatencyHud, PageLatencyNavigationBoundary } from "@/components/DebugLatencyHud";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -529,10 +530,13 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
           <span className="text-sm font-semibold">AgentHealth</span>
           <span className="w-10" aria-hidden="true" />
         </div>
+        {/* Must stay BEFORE {children}: see PageLatencyNavigationBoundary. */}
+        <PageLatencyNavigationBoundary />
         <AssistantProvider>
           {children}
           <AssistantModal />
         </AssistantProvider>
+        <DebugLatencyHud />
       </SidebarInset>
       </SidebarProvider>
     </SidebarCollapseContext.Provider>

@@ -12,37 +12,70 @@ The traces page has been optimized with several key improvements:
 
 ## Enabling Performance Monitoring
 
-### In the Browser
+Operation timings are recorded and shown in the **debug latency HUD**
+(`components/DebugLatencyHud.tsx`, data in `lib/pageLatency.ts` +
+`lib/performance.ts`), which is active when any of these is true:
 
-Open the browser console and run:
+- Debug mode is on (Settings → "Verbose Logging", or `POST /api/debug`)
+- This is a local dev build (`npm run dev`, `import.meta.env.DEV`)
+- The legacy flag is set from the browser console:
 
-```javascript
-localStorage.setItem('DEBUG_PERFORMANCE', 'true')
-```
+  ```javascript
+  localStorage.setItem('DEBUG_PERFORMANCE', 'true')
+  ```
 
-Refresh the page to see the performance overlay appear in the bottom-right corner.
+The HUD appears in the bottom-right corner on the next navigation (no hard
+refresh needed — the activation rule is re-checked once a second).
 
 ### Disable Performance Monitoring
+
+Turn debug mode off in Settings, or:
 
 ```javascript
 localStorage.removeItem('DEBUG_PERFORMANCE')
 ```
 
-Or click the ❌ button in the performance overlay.
+To hide the HUD for the rest of the current page load only (e.g. in a dev
+build, where it is always active), expand it and click **hide**.
 
-## Using the Performance Overlay
+## Using the Latency HUD
 
-Once enabled, the overlay shows:
+Collapsed, the HUD is a pill for the **current page only** — a colour dot and
+one number, the time from route change until the page's data settled and its
+content rendered:
 
-1. **Real-time metrics** - Updated every 500ms
-2. **Color-coded performance**:
-   - 🟢 Green: < 50ms (Fast)
-   - 🟡 Yellow: 50-200ms (OK)
-   - 🔴 Red: > 200ms (Slow)
-3. **Statistics per operation**:
-   - Average duration
-   - Min/Max range
-   - Call count
+```
+● benchmark-runs · 13.6 s
+```
+
+Green < 1 s, amber < 3 s, red otherwise. Click it to pin it open (hover or hold
+⌥/Alt to peek). The expanded view is still the current page only:
+
+```
+Page ready     13.6 s
+First paint    9 ms
+API            37 requests · 13.2 s wall
+  GET /api/storage/evaluation-runs/:id   4.2 s
+  POST /api/storage/runs/search          4.0 s
+  …(5 slowest)
+Slow steps on this page                  (only if the page recorded any)
+  ● flowTransform · TraceFlowView        120 ms
+```
+
+- **Page ready** — reported by the page itself on the instrumented pages;
+  estimated (marked `~`) elsewhere from first paint + the last `/api/*`
+  response + 1 s of quiet.
+- **First paint** — the new page's first frame on screen, before any data.
+- **API** — every `/api/*` request the page made while loading, with the
+  wall-clock span from the first request start to the last response end
+  (requests overlap, so durations are deliberately not summed), and the 5
+  slowest as method + path template (ids collapsed to `:id`).
+- **Slow steps on this page** — `startMeasure`/`endMeasure` timings recorded
+  since this navigation started, slowest first, at most 3 rows, colour-coded
+  (green < 50 ms, amber < 200 ms, red otherwise). Rendered only when there
+  are any.
+
+Everything resets on every route change. Nothing is kept about earlier pages, and there is no legend.
 
 ## Key Metrics to Monitor
 
@@ -82,7 +115,7 @@ Once enabled, the overlay shows:
 
 1. Enable performance monitoring
 2. Navigate to `/traces`
-3. Check the overlay for:
+3. Expand the HUD and check for:
    - `TracesPage.fetchTraces` - should be < 200ms
    - `TraceFlowView.preprocessing` - should be < 50ms
 
@@ -90,7 +123,7 @@ Once enabled, the overlay shows:
 
 1. Enable performance monitoring
 2. Go to `/traces` and wait for 2-3 auto-refreshes
-3. Observe metrics in the overlay
+3. Observe metrics in the HUD
 4. Check console for performance logs:
    ```
    [Performance] 🟢 TracesPage.fetchTraces: 187.45ms
@@ -109,36 +142,30 @@ Once enabled, the overlay shows:
 
 ## Console API
 
-The performance library exposes a global API for programmatic access:
+While the HUD is active, `window.__agentHealthPerf` exposes the measurement API
+so ad-hoc timings can be taken from DevTools and show up in the HUD:
 
 ```javascript
-// Import in code
-import { enable, disable, getMetrics, logSummary, clearMetrics } from '@/lib/performance';
+__agentHealthPerf.startMeasure('myFeature.step')
+// ... do the thing ...
+__agentHealthPerf.endMeasure('myFeature.step')
 
-// Or use in browser console
-// Enable
-localStorage.setItem('DEBUG_PERFORMANCE', 'true')
-
-// Get all metrics
-performance.getMetrics()
-
-// Get average for specific metric
-performance.getAverageDuration('TraceFlowView.preprocessing')
-
-// Log summary
-performance.logSummary()
-
-// Clear metrics
-performance.clearMetrics()
+__agentHealthPerf.getMetrics()          // raw samples
+__agentHealthPerf.getOperationStats()   // grouped avg / min / max / count
+__agentHealthPerf.getCurrentRecord()    // the current page's record incl. every request
+__agentHealthPerf.logSummary()          // console.group summary
+__agentHealthPerf.clearMetrics()
 ```
+
+In code, import the same functions from `@/lib/performance`.
 
 ## Troubleshooting
 
-### Overlay Not Appearing
+### HUD Not Appearing
 
-1. Check localStorage: `localStorage.getItem('DEBUG_PERFORMANCE')`
-2. Should return `"true"`
-3. Refresh the page after setting
+1. Check debug mode: `localStorage.getItem('agenteval_debug')` (or the legacy
+   `localStorage.getItem('DEBUG_PERFORMANCE')`) should return `"true"`
+2. Navigate to another page — the HUD starts on the next route change
 
 ### No Metrics Showing
 
@@ -151,7 +178,7 @@ performance.clearMetrics()
 If performance seems slower after changes:
 
 1. Check if you have many traces (>100 spans)
-2. Look for red (🔴) metrics in the overlay
+2. Look for red (🔴) metrics in the HUD's Operations list
 3. Check browser console for errors
 4. Try clearing browser cache and rebuilding:
    ```bash
@@ -178,7 +205,7 @@ If performance seems slower after changes:
    - Manual refresh button always available
 
 4. **Performance Instrumentation**
-   - Real-time metrics overlay
+   - Live operation timings in the debug latency HUD
    - Detailed timing for each operation
    - Color-coded performance indicators
 
@@ -195,6 +222,6 @@ With 100-200 spans in the traces view:
 
 If you have questions or notice performance issues, please:
 
-1. Capture metrics from the performance overlay
+1. Capture metrics from the latency HUD
 2. Check browser console for any errors
 3. Report with specific metric values and operation names
