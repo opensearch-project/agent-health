@@ -116,8 +116,37 @@ export const LEGACY_SCORING_LABEL = 'legacy scoring';
 /** Δ-row text when the coverage gate blocks the aggregate comparison. */
 export const NOT_COMPARABLE_LABEL = 'Not comparable — different scoring';
 
-/** Tooltip on the delta footer's row label. */
+/** Tooltip on the delta footer's row label (two-run compare). */
 export const DELTA_ROW_TOOLTIP = 'A minus B per column; blue/green when A is better on that metric, red when worse';
+
+/**
+ * Tooltip on a per-run delta row of a 3+-run compare: every row is baseline A
+ * minus that run, so the sign/colour convention matches the two-run Δ row.
+ */
+export const deltaRowTooltipFor = (letter: string): string =>
+  `A minus ${letter} per column; blue/green when A is better on that metric, red when worse`;
+
+// ─── Run lettering / colours ─────────────────────────────────────────────────
+
+/**
+ * Rows are lettered in selection order: A, B, C, … The compare page puts no
+ * cap on how many runs may be selected, so past Z the label falls back to a
+ * number ("R27") rather than wrapping — the scoreboard must show EVERY
+ * selected run (it used to hard-cap to A/B and silently drop the third run).
+ */
+export const runLetter = (idx: number): string =>
+  idx < 26 ? String.fromCharCode(65 + idx) : `R${idx + 1}`;
+
+/** Badge + pass-rate bar colour per row; cycles once the palette runs out. */
+const RUN_COLORS: ReadonlyArray<{ badge: string; bar: string }> = [
+  { badge: 'bg-blue-500/20 text-blue-300 border-blue-500/50', bar: 'rgb(59,130,246)' },
+  { badge: 'bg-purple-500/18 text-purple-300 border-purple-400/50', bar: 'rgb(168,85,247)' },
+  { badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50', bar: 'rgb(16,185,129)' },
+  { badge: 'bg-amber-500/20 text-amber-300 border-amber-400/50', bar: 'rgb(245,158,11)' },
+  { badge: 'bg-pink-500/20 text-pink-300 border-pink-400/50', bar: 'rgb(236,72,153)' },
+  { badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50', bar: 'rgb(6,182,212)' },
+];
+const runColor = (idx: number) => RUN_COLORS[idx % RUN_COLORS.length];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -177,31 +206,47 @@ const formatDelta = (a: number | undefined, b: number | undefined, suffix = ''):
 /**
  * Coverage cell label — owner feedback: "how many tests are tested in both
  * — Coverage column is confusing". Reworded from "N shared / M total" to a
- * plain statement of overlap, naming WHICH side carries the extra cases (the
+ * plain statement of overlap, naming WHICH run carries the extra cases (the
  * common real-world shape: a small smoke run vs. a full benchmark run), e.g.
- * "6 in both · 56 only in A". Falls back to just "N in both" if, unusually,
- * neither side has any test cases the other lacks (shouldn't happen once
- * `fullyOverlapping` is false, but stay defensive).
+ * "6 in both · 56 only in A". With three or more runs a case can also sit in
+ * SOME runs without being unique to one (in B and C but not A) — those are
+ * neither "in all N" nor "only in X", so they get their own "K in some runs"
+ * part (always 0 for two runs, where every non-shared case is unique to one
+ * side). Letters are looked up by run id, not array position, so the label
+ * cannot mis-attribute counts if `perRun` is ever ordered differently from
+ * the rows.
  */
-const formatCoverageLabel = (overlap: TestCaseOverlap): string => {
-  const parts = [`${overlap.sharedTestCases} in both`];
-  overlap.perRun.slice(0, 2).forEach((r, i) => {
-    if (r.uniqueCount > 0) parts.push(`${r.uniqueCount} only in ${i === 0 ? 'A' : 'B'}`);
+const formatCoverageLabel = (
+  overlap: TestCaseOverlap,
+  runs: ReadonlyArray<Pick<RunAggregateMetrics, 'runId'>>
+): string => {
+  const parts = [`${overlap.sharedTestCases} ${inAllLabel(runs.length)}`];
+  let uniqueTotal = 0;
+  overlap.perRun.forEach((r, i) => {
+    if (r.uniqueCount <= 0) return;
+    uniqueTotal += r.uniqueCount;
+    const idx = runs.findIndex(run => run.runId === r.runId);
+    parts.push(`${r.uniqueCount} only in ${runLetter(idx >= 0 ? idx : i)}`);
   });
+  const inSome = overlap.partialTestCases - uniqueTotal;
+  if (inSome > 0) parts.push(`${inSome} in some runs`);
   return parts.join(' · ');
 };
 
-// ─── Badge sub-components ────────────────────────────────────────────────────
+/** "in both" for a two-run compare, "in all N" once a third run joins. */
+export const inAllLabel = (runCount: number): string => (runCount > 2 ? `in all ${runCount}` : 'in both');
 
-const RunBadgeA: React.FC = () => (
-  <span className="inline-flex items-center justify-center w-[14px] h-[14px] rounded bg-blue-500/20 text-blue-300 border border-blue-500/50 text-[9.5px] font-extrabold leading-none">
-    A
-  </span>
-);
+// ─── Badge sub-component ─────────────────────────────────────────────────────
 
-const RunBadgeB: React.FC = () => (
-  <span className="inline-flex items-center justify-center w-[14px] h-[14px] rounded bg-purple-500/18 text-purple-300 border border-purple-400/50 text-[9.5px] font-extrabold leading-none">
-    B
+const RunBadge: React.FC<{ idx: number }> = ({ idx }) => (
+  <span
+    className={cn(
+      'inline-flex items-center justify-center w-[14px] h-[14px] rounded border text-[9.5px] font-extrabold leading-none',
+      runColor(idx).badge
+    )}
+    data-testid={`run-badge-${runLetter(idx)}`}
+  >
+    {runLetter(idx)}
   </span>
 );
 
@@ -227,39 +272,43 @@ interface CondensedBandProps {
 
 const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentName, onScrollTop }) => {
   if (runs.length === 0) return null;
-  const [a, b] = runs;
-  const delta = b ? a.passRatePercent - b.passRatePercent : 0;
-  const deltaStr = delta === 0 ? '—' : `${delta > 0 ? '+' : ''}${Math.round(delta)}pp`;
+  const [a, ...others] = runs;
 
   return (
     <div className="flex items-center gap-3 px-4 py-2 text-xs" data-testid="scoreboard-condensed">
       <span className="inline-flex items-center gap-1">
-        <RunBadgeA /> <span className="font-medium">{getAgentName(a.agentKey)}</span>
+        <RunBadge idx={0} /> <span className="font-medium">{getAgentName(a.agentKey)}</span>
         <span className="tabular-nums">{formatPercent(a.passRatePercent)}</span>
       </span>
-      {b && (
-        <>
-          <span className="text-muted-foreground">vs</span>
-          <span className="inline-flex items-center gap-1">
-            <RunBadgeB /> <span className="font-medium">{getAgentName(b.agentKey)}</span>
-            <span className="tabular-nums">{formatPercent(b.passRatePercent)}</span>
-          </span>
-          <span
-            className={cn(
-              'font-medium tabular-nums',
-              delta > 0 ? 'text-blue-400' : delta < 0 ? 'text-red-400' : 'text-muted-foreground'
-            )}
-            title={delta === 0 ? 'No change' : undefined}
-          >
-            {deltaStr}
-          </span>
-        </>
-      )}
+      {/* One "vs <run> <pass rate> <Δ vs A>" group per further run — the band
+          used to show only B, so a third run vanished when condensed too. */}
+      {others.map((b, i) => {
+        const delta = a.passRatePercent - b.passRatePercent;
+        const deltaStr = delta === 0 ? '—' : `${delta > 0 ? '+' : ''}${Math.round(delta)}pp`;
+        return (
+          <React.Fragment key={b.runId}>
+            <span className="text-muted-foreground">vs</span>
+            <span className="inline-flex items-center gap-1">
+              <RunBadge idx={i + 1} /> <span className="font-medium">{getAgentName(b.agentKey)}</span>
+              <span className="tabular-nums">{formatPercent(b.passRatePercent)}</span>
+            </span>
+            <span
+              className={cn(
+                'font-medium tabular-nums',
+                delta > 0 ? 'text-blue-400' : delta < 0 ? 'text-red-400' : 'text-muted-foreground'
+              )}
+              title={delta === 0 ? 'No change' : undefined}
+            >
+              {deltaStr}
+            </span>
+          </React.Fragment>
+        );
+      })}
       <span className="text-muted-foreground">
-        {formatCostSafe(a.totalCostUsd)}{b ? ` vs ${formatCostSafe(b.totalCostUsd)}` : ''}
+        {runs.map(r => formatCostSafe(r.totalCostUsd)).join(' vs ')}
       </span>
       <span className="text-muted-foreground">
-        {formatDurationSafe(a.avgDurationMs)}{b ? ` vs ${formatDurationSafe(b.avgDurationMs)}` : ''}
+        {runs.map(r => formatDurationSafe(r.avgDurationMs)).join(' vs ')}
       </span>
       <span className="text-muted-foreground">
         {overlap.sharedTestCases} shared
@@ -282,8 +331,8 @@ const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentNa
  * `llmJudgeResponse.modelId` → `judgeModelId` → run.judgeModelId; see
  * lib/comparison/scoringDisplay.ts), never the agent model under test — the
  * old caption read `run.modelId` and labelled the agent as the judge. Same
- * judge across all runs collapses to one name; differing judges show both,
- * labelled A/B. A run whose reports resolved to several judges reads
+ * judge across all runs collapses to one name; differing judges list every
+ * run, labelled A/B/C/…. A run whose reports resolved to several judges reads
  * "mixed (a · b)"; runs with no judge information at all read "not recorded"
  * — an honest blank, never the agent model standing in.
  */
@@ -318,7 +367,7 @@ const JudgeEntryView: React.FC<{ entry: JudgeEntry }> = ({ entry }) =>
 
 const JudgeLine: React.FC<{ runs: RunAggregateMetrics[]; selectedRuns: BenchmarkRun[] }> = ({ runs, selectedRuns }) => {
   const selectedById = new Map(selectedRuns.map(r => [r.id, r]));
-  const entries = runs.slice(0, 2).map(r => judgeEntryFor(r, selectedById.get(r.runId)));
+  const entries = runs.map(r => judgeEntryFor(r, selectedById.get(r.runId)));
   if (entries.length === 0) return null;
   const allSame = entries.every(e => e.text === entries[0].text);
 
@@ -328,8 +377,11 @@ const JudgeLine: React.FC<{ runs: RunAggregateMetrics[]; selectedRuns: Benchmark
         <span className="inline-flex items-baseline gap-1">Judge: <JudgeEntryView entry={entries[0]} /></span>
       ) : (
         <span className="inline-flex items-baseline gap-1 flex-wrap">
-          Judge: A <JudgeEntryView entry={entries[0]} />
-          {entries.length > 1 && <> · B <JudgeEntryView entry={entries[1]} /></>}
+          Judge: {entries.map((entry, i) => (
+            <React.Fragment key={runs[i].runId}>
+              {i > 0 && ' · '}{runLetter(i)} <JudgeEntryView entry={entry} />
+            </React.Fragment>
+          ))}
         </span>
       )}
     </div>
@@ -412,32 +464,25 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
   // footer / swap / judge-vs-judge line).
   if (runs.length === 0) return null;
 
-  const [runA, runB] = runs;
+  const [runA, ...comparedRuns] = runs;
+  const multiRun = comparedRuns.length > 0;
   const columns = buildScoreboardColumns(runs);
-  const passRateDelta = runB ? runA.passRatePercent - runB.passRatePercent : 0;
-  // Only defined when BOTH runs are snapshot-scored; a legacy run has no
-  // score to diff against (and the coverage gate below blocks the row when
-  // the two snapshots differ).
-  const avgScoreDelta = (runB && runA.avgScore !== undefined && runB.avgScore !== undefined)
-    ? runA.avgScore - runB.avgScore
-    : undefined;
-  const costDelta = (runB && runA.totalCostUsd !== undefined && runB.totalCostUsd !== undefined)
-    ? runA.totalCostUsd - runB.totalCostUsd
-    : undefined;
-  const durationDelta = (runB && runA.avgDurationMs !== undefined && runB.avgDurationMs !== undefined)
-    ? runA.avgDurationMs - runB.avgDurationMs
-    : undefined;
-  const tokensDelta = (runB && runA.totalTokens !== undefined && runB.totalTokens !== undefined)
-    ? runA.totalTokens - runB.totalTokens
-    : undefined;
-  const deltaBlocked = !!runB && !comparability.comparable && !compareAnyway;
+  // Every non-baseline run gets its own Δ row: baseline A minus that run, so
+  // a 3+-run compare reads "Δ A−B", "Δ A−C", … with the same sign/colour
+  // convention as the single "Delta" row of a two-run compare. A Δ is only
+  // defined when BOTH sides carry the metric (a legacy run has no score to
+  // diff against; the coverage gate below blocks the rows when the runs were
+  // scored differently).
+  const diff = (a: number | undefined, b: number | undefined): number | undefined =>
+    a !== undefined && b !== undefined ? a - b : undefined;
+  const deltaBlocked = multiRun && !comparability.comparable && !compareAnyway;
   // Tooltip caveat on the Δ cells: why an overridden comparison is shaky, or
-  // that two legacy runs carry no scoring provenance at all.
-  const bothLegacy = !!runB && runs.slice(0, 2).every(r => scoringOf(r).source === 'legacy');
+  // that the legacy runs carry no scoring provenance at all.
+  const allLegacy = multiRun && runs.every(r => scoringOf(r).source === 'legacy');
   const deltaCaveat = compareAnyway && !comparability.comparable
     ? `Compared anyway — ${comparability.reasons.join(' · ')}`
-    : bothLegacy
-      ? 'Both runs are legacy-scored: evaluator version and verdict policy were not recorded, so this Δ compares two opaque judge-verdict streams.'
+    : allLegacy
+      ? `${runs.length > 2 ? 'All' : 'Both'} runs are legacy-scored: evaluator version and verdict policy were not recorded, so this Δ compares ${runs.length > 2 ? 'opaque' : 'two opaque'} judge-verdict streams.`
       : undefined;
   const primaryMean = (run: RunAggregateMetrics, name: string) => {
     const scoring = scoringOf(run);
@@ -447,7 +492,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
   // prove. Only when the scoring snapshots AND test-case versions also match
   // may the cell claim "same cases, same scoring".
   const sameScoring = overlap.fullyOverlapping && comparability.comparable
-    && runs.slice(0, 2).every(r => scoringOf(r).source === 'snapshot');
+    && runs.every(r => scoringOf(r).source === 'snapshot');
 
   return (
     <>
@@ -493,10 +538,9 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.slice(0, 2).map((run, idx) => {
-                    const label = idx === 0 ? 'A' : 'B';
-                    const Badge = idx === 0 ? RunBadgeA : RunBadgeB;
-                    const barColor = idx === 0 ? 'rgb(59,130,246)' : 'rgb(168,85,247)';
+                  {runs.map((run, idx) => {
+                    const label = runLetter(idx);
+                    const barColor = runColor(idx).bar;
                     const benchmarkId = runBenchmarkIdById?.get(run.runId);
 
                     return (
@@ -507,7 +551,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                       >
                         <td className="px-4 py-2">
                           <div className="flex items-center gap-2 min-w-0">
-                            <Badge />
+                            <RunBadge idx={idx} />
                             <div className="min-w-0">
                               {/* Run name leads (owner: "runs info should be
                                   communicated — what are we comparing here?") —
@@ -608,17 +652,17 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                                       .join(' · ')
                               }
                             >
-                              {!runB ? (
+                              {!multiRun ? (
                                 <span>
                                   {overlap.totalTestCases} case{overlap.totalTestCases === 1 ? '' : 's'}
                                 </span>
                               ) : overlap.fullyOverlapping ? (
                                 <span className={sameScoring ? 'text-green-400' : 'text-muted-foreground'}>
-                                  {overlap.sharedTestCases} in both, {sameScoring ? 'same cases, same scoring' : 'same case IDs'}
+                                  {overlap.sharedTestCases} {inAllLabel(runs.length)}, {sameScoring ? 'same cases, same scoring' : 'same case IDs'}
                                 </span>
                               ) : (
                                 <span className="text-amber-400">
-                                  {formatCoverageLabel(overlap)}
+                                  {formatCoverageLabel(overlap, runs)}
                                 </span>
                               )}
                             </span>
@@ -647,39 +691,58 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                     );
                   })}
                 </tbody>
-                {/* Delta footer row — only meaningful for a two-run compare */}
-                {runB && (
+                {/* Delta footer — one row per compared run (A minus B, A minus C, …).
+                    A two-run compare keeps its single "Delta" row verbatim. */}
+                {multiRun && (
                 <tfoot>
-                  <tr className="border-t border-border/50 bg-muted/20">
+                  {comparedRuns.map((runB, i) => {
+                    const letter = runLetter(i + 1);
+                    const first = i === 0;
+                    // The first Δ row keeps the historical un-suffixed test ids
+                    // (two-run specs pin them); further rows are suffixed by letter.
+                    const tid = (base: string) => (first ? base : `${base}-${letter}`);
+                    const passRateDelta = runA.passRatePercent - runB.passRatePercent;
+                    const avgScoreDelta = diff(runA.avgScore, runB.avgScore);
+                    const costDelta = diff(runA.totalCostUsd, runB.totalCostUsd);
+                    const durationDelta = diff(runA.avgDurationMs, runB.avgDurationMs);
+                    const tokensDelta = diff(runA.totalTokens, runB.totalTokens);
+                    return (
+                  <tr
+                    key={runB.runId}
+                    className={first ? 'border-t border-border/50 bg-muted/20' : 'border-t border-border/30 bg-muted/20'}
+                    data-testid={`scoreboard-delta-row-${letter}`}
+                  >
                     <td className="px-4 py-1.5">
                       <div className="flex items-center gap-2">
                         <span
                           className="text-[10px] uppercase tracking-wide text-muted-foreground cursor-help"
-                          data-testid="scoreboard-delta-label"
-                          title={DELTA_ROW_TOOLTIP}
+                          data-testid={tid('scoreboard-delta-label')}
+                          title={runs.length > 2 ? deltaRowTooltipFor(letter) : DELTA_ROW_TOOLTIP}
                         >
-                          Delta
+                          {runs.length > 2 ? `Δ A−${letter}` : 'Delta'}
                         </span>
-                        <button
-                          onClick={onSwapRuns}
-                          className="text-muted-foreground hover:text-foreground transition-colors"
-                          title="Swap A/B"
-                        >
-                          <ArrowUpDown size={11} />
-                        </button>
+                        {first && (
+                          <button
+                            onClick={onSwapRuns}
+                            className="text-muted-foreground hover:text-foreground transition-colors"
+                            title="Swap A/B"
+                          >
+                            <ArrowUpDown size={11} />
+                          </button>
+                        )}
                       </div>
                     </td>
                     {deltaBlocked ? (
                       <td className="px-3 py-1.5 text-left" colSpan={columns.length}>
                         <span className="inline-flex items-center gap-2 text-[11px]">
                           <span
-                            data-testid="scoreboard-delta-blocked"
+                            data-testid={tid('scoreboard-delta-blocked')}
                             className="text-amber-400 cursor-help"
                             title={comparability.reasons.join(' · ')}
                           >
                             {NOT_COMPARABLE_LABEL}
                           </span>
-                          {onCompareAnyway && (
+                          {first && onCompareAnyway && (
                             <button
                               type="button"
                               data-testid="scoreboard-compare-anyway"
@@ -696,7 +759,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                       <>
                     <td className="px-3 py-1.5 text-right">
                       <span
-                        data-testid="scoreboard-delta-passrate"
+                        data-testid={tid('scoreboard-delta-passrate')}
                         className={cn(
                           'font-semibold tabular-nums text-[11px]',
                           passRateDelta > 0 ? 'text-blue-400' : passRateDelta < 0 ? 'text-red-400' : 'text-muted-foreground'
@@ -708,10 +771,10 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                     </td>
                     <td className="px-3 py-1.5 text-right">
                       <DeltaCell
-                        testId="scoreboard-delta-avgscore"
+                        testId={tid('scoreboard-delta-avgscore')}
                         delta={avgScoreDelta}
                         text={formatDelta(runA.avgScore, runB.avgScore)}
-                        title={deltaCaveat ?? 'A minus B, both from scoring snapshots'}
+                        title={deltaCaveat ?? `A minus ${letter}, both from scoring snapshots`}
                       />
                     </td>
                     {columns.filter(c => c.primaryMetric).map(col => {
@@ -721,7 +784,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                       return (
                         <td key={col.key} className="px-3 py-1.5 text-right">
                           <DeltaCell
-                            testId={`scoreboard-delta-primary-${col.primaryMetric}`}
+                            testId={tid(`scoreboard-delta-primary-${col.primaryMetric}`)}
                             delta={d}
                             text={d === undefined ? '' : d === 0 ? '—' : `${d > 0 ? '+' : ''}${formatMetricInScale(d, a!.scale).replace(/^—$/, '')}`}
                           />
@@ -730,7 +793,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                     })}
                     <td className="px-3 py-1.5 text-right">
                       <DeltaCell
-                        testId="scoreboard-delta-cost"
+                        testId={tid('scoreboard-delta-cost')}
                         delta={costDelta}
                         betterWhenLower
                         text={costDelta === undefined ? '' : costDelta === 0 ? '—' : (costDelta > 0 ? '+' : '') + formatCost(costDelta)}
@@ -738,7 +801,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                     </td>
                     <td className="px-3 py-1.5 text-right">
                       <DeltaCell
-                        testId="scoreboard-delta-duration"
+                        testId={tid('scoreboard-delta-duration')}
                         delta={durationDelta}
                         betterWhenLower
                         text={durationDelta === undefined ? '' : durationDelta === 0 ? '—' : (durationDelta > 0 ? '+' : '-') + formatDuration(Math.abs(durationDelta))}
@@ -746,7 +809,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                     </td>
                     <td className="px-3 py-1.5 text-right">
                       <DeltaCell
-                        testId="scoreboard-delta-tokens"
+                        testId={tid('scoreboard-delta-tokens')}
                         delta={tokensDelta}
                         betterWhenLower
                         text={tokensDelta === undefined ? '' : tokensDelta === 0 ? '—' : (tokensDelta > 0 ? '+' : '-') + formatTokens(Math.abs(tokensDelta))}
@@ -759,6 +822,8 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                       </>
                     )}
                   </tr>
+                    );
+                  })}
                 </tfoot>
                 )}
               </table>

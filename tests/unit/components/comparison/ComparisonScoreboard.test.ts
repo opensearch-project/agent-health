@@ -51,9 +51,11 @@ describe('ComparisonScoreboard structure', () => {
   let src: string;
   beforeAll(() => { src = read('components/comparison/ComparisonScoreboard.tsx'); });
 
-  it('renders both run rows with A/B badges', () => {
-    expect(src).toContain('RunBadgeA');
-    expect(src).toContain('RunBadgeB');
+  it('renders one lettered row per selected run (no A/B hard cap)', () => {
+    // One generic badge keyed by row index — the old RunBadgeA/RunBadgeB pair
+    // went with a `runs.slice(0, 2)` that silently dropped the third run.
+    expect(src).toContain('<RunBadge idx={idx} />');
+    expect(src).not.toContain('runs.slice(0, 2)');
     // data-testid uses a template literal: `scoreboard-row-${label}`
     expect(src).toContain('scoreboard-row-${label}');
   });
@@ -75,8 +77,8 @@ describe('ComparisonScoreboard structure', () => {
     expect(src).toContain("durationDelta === 0 ? '\u2014'");
     // The shared DeltaCell renders the "No change" tooltip for every zero delta.
     expect(src).toContain("title={delta === 0 ? 'No change' : title}");
-    expect(src).toContain('testId="scoreboard-delta-cost"');
-    expect(src).toContain('testId="scoreboard-delta-duration"');
+    expect(src).toContain("testId={tid('scoreboard-delta-cost')}");
+    expect(src).toContain("testId={tid('scoreboard-delta-duration')}");
   });
 
   it('formatDelta returns an em dash (not "=") when there is no difference', () => {
