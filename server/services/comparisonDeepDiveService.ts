@@ -55,6 +55,7 @@ import { readEnv } from '@/lib/envCompat';
 import { debug } from '@/lib/debug';
 import { regionInferencePrefix } from '@/lib/bedrockCompat';
 import { DEFAULT_JOB_TTL_MS } from './comparisonDeepDiveJobStore';
+import { formatDeepDiveFactsForPrompt, type DeepDiveFacts } from '@/lib/comparison/deepDiveFacts';
 
 /** One run participating in the comparison (the DEFAULT/fallback case for that side). */
 export interface ComparisonRunInput {
@@ -288,6 +289,7 @@ OUTPUT — a tight markdown deep-dive of the A-VS-B COMPARISON AS A WHOLE. Struc
   - 3–6 bullets of the concrete, material differences — SELECTED from the results table (disagreements, score gaps, category patterns), each grounded in real spans/logs from the specific case(s) it's about wherever you traced one. Lead each bullet with the dimension in **bold**.
   - An **Errors** bullet that is ALWAYS present: call out every error/failure found in the case(s) you traced, on side A, side B, or both — name the case, what failed, which side, and how that agent handled it (recovered / retried / ignored / failed) — each backed by a span or log citation. If the case(s) you traced had no errors, state "no errors observed" explicitly; never silently omit this bullet.
   - Be specific with numbers: pass counts / score gaps / how many cases show a pattern from the results table, and tool counts / durations / tokens / error counts from whichever cases' real spans you queried.
+  - When an "Authoritative tallies" section is present, every pass count, pass rate (passed/evaluated) and disagreement count you state MUST be copied from it verbatim — never recount the results table yourself, and never quote a denominator other than the tallies' "evaluated" figure (errored cases are excluded from it, exactly as the page's scoreboard shows).
   - Judge score wording: whenever you state a judge score, ALWAYS write it unambiguously as "N/100 judge score" (e.g. "a 92/100 judge score") — NEVER a bare "N/N", which misreads as a case count rather than a score in a page that may show hundreds of cases.
 
 SPAN CITATIONS (important): when a claim is backed by a specific span, cite it inline as a markdown link of EXACTLY this form:
@@ -309,9 +311,15 @@ function formatRowSummaryLine(row: ComparisonRowSummary): string {
 export function buildUserPrompt(
   runs: ComparisonRunInput[],
   rows?: ComparisonRowSummary[],
-  defaultCaseId?: string
+  defaultCaseId?: string,
+  facts?: DeepDiveFacts
 ): string {
   const lines: string[] = [];
+
+  // Authoritative numbers FIRST — computed by the page from the same data its
+  // scoreboard renders, so the narrative's headline can no longer contradict
+  // the scoreboard ("31 vs 26 passes out of 62" under a 29/62 vs 24/59 board).
+  if (facts) lines.push(...formatDeepDiveFactsForPrompt(facts));
 
   if (rows && rows.length > 0) {
     lines.push(
@@ -371,6 +379,8 @@ export async function generateComparisonDeepDive(opts: {
   systemPrompt?: string;
   /** Full A-vs-B results table across every compared case (see {@link ComparisonRowSummary}). */
   rows?: ComparisonRowSummary[];
+  /** Deterministic pass/fail/disagreement tallies for the pair, injected as authoritative facts (see lib/comparison/deepDiveFacts.ts). */
+  facts?: DeepDiveFacts;
 }): Promise<ComparisonDeepDiveResult> {
   const { runs, defaultCaseId, caseReports, getReport } = opts;
   const effectiveSystemPrompt = opts.systemPrompt?.trim() ? opts.systemPrompt : SYSTEM_PROMPT;
@@ -441,7 +451,7 @@ export async function generateComparisonDeepDive(opts: {
   });
 
   await withDeadline(
-    session.prompt(buildUserPrompt(runs, opts.rows, defaultCaseId)),
+    session.prompt(buildUserPrompt(runs, opts.rows, defaultCaseId, opts.facts)),
     DEEP_DIVE_DEADLINE_MS,
     (elapsedMs) => buildDeadlineErrorMessage(elapsedMs, `${model.provider}/${model.id}`),
     () => session.abort?.()

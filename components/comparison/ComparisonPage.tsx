@@ -22,6 +22,9 @@ import { ComparisonScoreboard } from './ComparisonScoreboard';
 import { ComparisonInsightsBand, type CategorySelection } from './ComparisonInsightsBand';
 import { bucketRow, extractRowCategoryEffective, categoryLabelIsUsableFallback, type AgreementBucket } from '@/lib/comparisonInsights';
 import { ComparisonDeepDive, DeepDiveRunMeta } from './ComparisonDeepDive';
+import { DEEP_DIVE_PAIR_PARAM, DeepDivePair, resolveDeepDivePair, retainDeepDivePairForSelection, serializeDeepDivePair, sortRunsChronologically } from '@/lib/comparison/deepDivePair';
+import { computeDeepDiveFacts } from '@/lib/comparison/deepDiveFacts';
+import { orderSelectedRuns } from '@/lib/comparison/selectedRuns';
 import { FailureClusterPanel } from './FailureClusterPanel';
 import { extractFirstDivergence } from '@/services/trajectoryDiffService';
 import type { FailureCluster, FailureCaseEvidenceInput } from '@/services/client/comparisonClusterApi';
@@ -109,6 +112,15 @@ export const ComparisonPage: React.FC = () => {
   // the PREVIOUS selection is still in flight; that response (success or
   // error) must be discarded, not applied on top of the new selection.
   const reportsRequestIdRef = useRef(0);
+  // Report ids whose batch fetch has COMPLETED (found or not, success or
+  // failure). A report that is absent from `reports` but settled is known to
+  // be unavailable, so nothing downstream keeps waiting for it.
+  const [settledReportIds, setSettledReportIds] = useState<Set<string>>(() => new Set());
+  // Same idea for the test-case metadata fetch below: ids whose lookup has
+  // COMPLETED (found or not). The comparison rows take their names and
+  // categories from this metadata, so anything briefed on the rows (the
+  // deep-dive's per-row summary + per-category tallies) waits for it.
+  const [settledTestCaseIds, setSettledTestCaseIds] = useState<Set<string>>(() => new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [traceMetricsMap, setTraceMetricsMap] = useState<Map<string, TraceMetrics>>(new Map());
 
@@ -219,6 +231,10 @@ export const ComparisonPage: React.FC = () => {
       } catch (err) {
         if (requestId !== testCaseMetaRequestIdRef.current) return; // superseded — discard
         console.error('[ComparisonPage] Failed to load test case metadata:', err);
+      } finally {
+        if (requestId === testCaseMetaRequestIdRef.current) {
+          setSettledTestCaseIds(prev => { const next = new Set(prev); missing.forEach(id => next.add(id)); return next; });
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -381,7 +397,10 @@ export const ComparisonPage: React.FC = () => {
         console.error('[ComparisonPage] Failed to load reports:', err);
         setReportsError('Failed to load test case reports. Please retry.');
       } finally {
-        if (requestId === reportsRequestIdRef.current) setReportsLoading(false);
+        if (requestId === reportsRequestIdRef.current) {
+          setReportsLoading(false);
+          setSettledReportIds(prev => { const next = new Set(prev); missing.forEach(id => next.add(id)); return next; });
+        }
       }
     };
     loadReports();
@@ -413,24 +432,23 @@ export const ComparisonPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runPool, selectedRunIds, reports]);
 
-  // Update URL when selection changes.
-  //   - scoped:   drop the `runs` param when the whole benchmark is selected
-  //               (keeps the URL clean / matches prior behavior).
-  //   - unscoped: runs ARE the source of truth, so always serialize them.
+  // Update URL when selection changes. An explicit selection is ALWAYS
+  // serialized, in order — the order IS the A/B assignment, so a swap must
+  // round-trip through the URL. (Benchmark-scoped mode used to drop the
+  // `runs` param whenever every run was selected, so a swap vanished from the
+  // URL and a reload re-derived "latest two, newest first" — a different
+  // pair as soon as a new run landed.) Only a URL with no `runs` at all
+  // means "the page's default pick", and the page never writes that state.
+  // A pinned deep-dive pair (`deepDive=a,b`) survives only while both of its
+  // runs stay selected; otherwise the panel falls back to its default pair.
   const updateSelection = (runIds: string[]) => {
     setSelectedRunIds(runIds);
-    if (benchmarkId) {
-      if (runIds.length > 0 && runIds.length < allRuns.length) {
-        setSearchParams({ runs: runIds.join(',') }, { replace: true });
-      } else if (runIds.length === allRuns.length) {
-        setSearchParams({}, { replace: true });
-      }
-    } else {
-      if (runIds.length > 0) {
-        setSearchParams({ runs: runIds.join(',') }, { replace: true });
-      } else {
-        setSearchParams({}, { replace: true });
-      }
+    const deepDive = retainDeepDivePairForSelection(searchParams.get(DEEP_DIVE_PAIR_PARAM), runIds);
+    const withPair = (params: Record<string, string>) => (deepDive ? { ...params, [DEEP_DIVE_PAIR_PARAM]: deepDive } : params);
+    if (runIds.length > 0) {
+      setSearchParams(withPair({ runs: runIds.join(',') }), { replace: true });
+    } else if (!benchmarkId) {
+      setSearchParams({}, { replace: true });
     }
   };
 
@@ -471,7 +489,58 @@ export const ComparisonPage: React.FC = () => {
     setShowRunPairSelector(false);
   };
 
-  const selectedRuns = useMemo((): BenchmarkRun[] => allRuns.filter(r => selectedRunIds.includes(r.id)), [allRuns, selectedRunIds]);
+  // The selected runs IN URL ORDER (`?runs=X,Y` → A = X, B = Y). This used to
+  // be `allRuns.filter(selected)`, i.e. the run POOL's order (the benchmark's
+  // `runs[]` / the eval-run listing, typically newest first) — so the page
+  // labelled A/B the other way round from the URL the user was looking at,
+  // and the scoreboard's "Swap A↔B" control (which reorders `selectedRunIds`)
+  // changed the URL but nothing on the page. Every A/B surface — scoreboard
+  // rows, table columns, deep-dive header and narrative, the POST's report
+  // order — derives from this list, so they always agree with each other and
+  // with the URL. Surfaces that want a chronological baseline (`referenceRunId`,
+  // the 3+-run default deep-dive pair) sort for themselves.
+  const selectedRuns = useMemo((): BenchmarkRun[] => orderSelectedRuns(allRuns, selectedRunIds), [allRuns, selectedRunIds]);
+
+  // Whether some selected run's report docs — or some compared case's
+  // test-case metadata — are still being fetched. Derived
+  // from the data (not from the async `reportsLoading` flag) so it is true
+  // from the very first render that shows the runs and never flaps: the
+  // deep-dive panel uses it to hold its auto-start until the per-row verdict
+  // summary it sends along is complete. A report the fetch did not return
+  // (deleted, or the batch failed) counts as settled, never as pending.
+  const reportsPending = useMemo((): boolean => selectedRuns.some(run =>
+    Object.values(run.results || {}).some(r => r.reportId && !reports[r.reportId] && !settledReportIds.has(r.reportId))
+  ), [selectedRuns, reports, settledReportIds]);
+  const testCaseMetaPending = useMemo((): boolean => selectedRuns.some(run =>
+    Object.keys(run.results || {}).some(id => !testCaseMetaById[id] && !settledTestCaseIds.has(id))
+  ), [selectedRuns, testCaseMetaById, settledTestCaseIds]);
+
+  // Which two runs the trace-grounded deep-dive compares. The server contract
+  // is pairwise, so with exactly 2 runs it is simply the selection (A = first,
+  // B = second — the URL order); with 3+ runs the page resolves a pair
+  // (URL `deepDive=a,b` if valid, else oldest-vs-newest) and the panel shows
+  // a picker. Only the default pair auto-starts the LLM job.
+  const deepDiveParam = searchParams.get(DEEP_DIVE_PAIR_PARAM);
+  const deepDive = useMemo((): { runs: [BenchmarkRun, BenchmarkRun]; autoStart: boolean; pickerOptions?: BenchmarkRun[] } | null => {
+    if (selectedRuns.length < 2) return null;
+    if (selectedRuns.length === 2) return { runs: [selectedRuns[0], selectedRuns[1]], autoStart: true };
+    const resolved = resolveDeepDivePair(selectedRuns, deepDiveParam);
+    if (!resolved) return null;
+    const byId = new Map(selectedRuns.map(r => [r.id, r] as const));
+    const a = byId.get(resolved.pair[0]);
+    const b = byId.get(resolved.pair[1]);
+    if (!a || !b) return null;
+    // The picker lists the runs oldest → newest (a list to choose from), not
+    // in the URL's A/B order.
+    return { runs: [a, b], autoStart: resolved.isDefault, pickerOptions: sortRunsChronologically(selectedRuns) };
+  }, [selectedRuns, deepDiveParam]);
+  const handleDeepDivePairChange = useCallback((pair: DeepDivePair) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set(DEEP_DIVE_PAIR_PARAM, serializeDeepDivePair(pair));
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   // Test-level overlap across the selected runs — the honesty surface for
   // benchmark-free comparison (which cases overlap, which don't).
@@ -522,6 +591,22 @@ export const ComparisonPage: React.FC = () => {
   // is there, so the table's click-to-filter and the matrix always agree
   // on which raw category values a click actually means.
   const categoryFallbackEnabled = useMemo(() => categoryLabelIsUsableFallback(allComparisonRows), [allComparisonRows]);
+
+  // Headline numbers for the deep-dive pair, from the SAME aggregates the
+  // scoreboard rows render plus the rows' verdicts — the model is told to use
+  // them verbatim and the panel prints them above the narrative, so the
+  // narrative's counts can no longer disagree with the scoreboard.
+  const deepDiveFacts = useMemo(() => {
+    if (!deepDive) return undefined;
+    const [a, b] = deepDive.runs;
+    const aggA = runAggregates.find(r => r.runId === a.id);
+    const aggB = runAggregates.find(r => r.runId === b.id);
+    if (!aggA || !aggB) return undefined;
+    return computeDeepDiveFacts({
+      aggA, aggB, runIdA: a.id, runIdB: b.id, rows: allComparisonRows,
+      categoryOf: (row) => extractRowCategoryEffective(row, categoryFallbackEnabled),
+    });
+  }, [deepDive, runAggregates, allComparisonRows, categoryFallbackEnabled]);
 
   // ── Re-run comparison ───────────────────────────────────────────────
   // Re-execute every compared run's config on the SAME test cases, then open
@@ -917,13 +1002,20 @@ export const ComparisonPage: React.FC = () => {
               />
             )}
 
-            {/* What's actually different — agentic, trace-grounded deep-dive */}
-            {selectedRuns.length === 2 && runAggregates.length === 2 && (
+            {/* What's actually different — agentic, trace-grounded deep-dive.
+                Always rendered for 2+ runs; the server job stays pairwise, so
+                3+ runs get a pair picker inside the panel. */}
+            {deepDive && runAggregates.length === selectedRuns.length && (
               <ComparisonDeepDive
-                runs={selectedRuns}
+                runs={deepDive.runs}
                 rows={allComparisonRows}
                 reports={reports}
                 getAgentName={getAgentName}
+                autoStart={deepDive.autoStart}
+                reportsLoading={reportsPending || testCaseMetaPending}
+                reportsFailed={!!reportsError}
+                facts={deepDiveFacts}
+                pairPicker={deepDive.pickerOptions ? { options: deepDive.pickerOptions, onChange: handleDeepDivePairChange } : undefined}
                 onWindowAgents={(metaRuns: DeepDiveRunMeta[]) => {
                   const m = new Map<string, { serviceName?: string; startedAt: number; endedAt: number }>();
                   metaRuns.forEach((r) => {

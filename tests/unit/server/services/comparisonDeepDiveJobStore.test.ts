@@ -275,6 +275,16 @@ describe('computeDeepDiveDedupeKey', () => {
     expect(computeDeepDiveDedupeKey(['rep-b', 'rep-a'], undefined, undefined, 'us.anthropic.claude-fable-5-1')).toBe(fable);
   });
 
+  it('differs when the facts differ, and a request without facts hashes like the pre-facts payload', () => {
+    const base = computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined, 'm');
+    expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined, 'm', undefined)).toBe(base);
+    const facts = { a: { passed: 1, failed: 0, errored: 0, pending: 0, evaluated: 1, total: 1 }, b: { passed: 0, failed: 1, errored: 0, pending: 0, evaluated: 1, total: 1 }, disagreements: 1, aWins: 1, bWins: 0, bothPassed: 0, bothFailed: 0, uncovered: 0 };
+    const withFacts = computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined, 'm', facts);
+    expect(withFacts).not.toBe(base);
+    expect(computeDeepDiveDedupeKey(['rep-b', 'rep-a'], undefined, undefined, 'm', { ...facts })).toBe(withFacts);
+    expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], undefined, undefined, 'm', { ...facts, aWins: 0, bWins: 1 })).not.toBe(withFacts);
+  });
+
   it('differs when systemPrompt differs', () => {
     expect(computeDeepDiveDedupeKey(['rep-a', 'rep-b'], 'prompt one')).not.toBe(
       computeDeepDiveDedupeKey(['rep-a', 'rep-b'], 'prompt two')

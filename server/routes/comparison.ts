@@ -15,7 +15,10 @@
  * returns immediately; the client polls a job-status endpoint.
  *
  * POST /api/comparison/deep-dive
- *   body: { reportIds: [defaultReportIdA, defaultReportIdB], modelId?, systemPrompt?, rows? }
+ *   body: { reportIds: [defaultReportIdA, defaultReportIdB], modelId?, systemPrompt?, rows?, facts? }
+ *   `facts` (optional) are the client's deterministic tallies for the pair
+ *   (lib/comparison/deepDiveFacts.ts) — validated and injected into the
+ *   prompt as authoritative numbers; a malformed object is ignored.
  *   Validates synchronously (400s) and resolves the two default reports
  *   synchronously (404 if either is missing) — exactly as before. On success,
  *   starts (or dedupes onto) a background job and returns immediately:
@@ -48,6 +51,7 @@ import {
 import { SYSTEM_PROMPT } from '@/server/services/comparisonDeepDiveService';
 import type { CaseReportRef } from '@/server/services/comparisonTraceTools';
 import { resolveReportTraceContext, extractToolNames, extractFinalOutput } from '@/server/services/comparisonCaseResolver';
+import { sanitizeDeepDiveFacts } from '@/lib/comparison/deepDiveFacts';
 import {
   DeepDiveJobStore,
   DeepDiveJobCapacityError,
@@ -175,11 +179,12 @@ router.get('/api/comparison/deep-dive/models', async (_req: Request, res: Respon
 });
 
 router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => {
-  const { reportIds, modelId, systemPrompt, rows } = (req.body || {}) as {
+  const { reportIds, modelId, systemPrompt, rows, facts } = (req.body || {}) as {
     reportIds?: unknown;
     modelId?: unknown;
     systemPrompt?: unknown;
     rows?: unknown;
+    facts?: unknown;
   };
   if (!Array.isArray(reportIds) || reportIds.length !== 2 || !reportIds.every((x) => typeof x === 'string')) {
     return res.status(400).json({ error: 'reportIds must be an array of exactly 2 report id strings' });
@@ -220,6 +225,13 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
       return res.status(400).json({ error: `rows payload too large (${rowsPayloadBytes} bytes, max ${MAX_ROWS_PAYLOAD_BYTES})` });
     }
     rowsSummary = rows.map(sanitizeRow).filter((r): r is ComparisonRowSummary => r !== undefined);
+  }
+  // Best-effort like `rows`: a malformed facts object drops the section, it
+  // never fails the request — but it is logged, because a dropped section
+  // silently hands the counting back to the model (the very bug the facts fix).
+  const factsSummary = facts === undefined ? undefined : sanitizeDeepDiveFacts(facts);
+  if (facts !== undefined && !factsSummary) {
+    debug('CompareDeepDiveAPI', 'facts rejected as malformed — the authoritative-tallies section is omitted from this brief');
   }
 
   try {
@@ -293,7 +305,7 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
     // modelId is part of the de-dupe key: switching the selector to Fable
     // while a Sonnet generation is running must start a NEW job, not attach
     // to the in-flight one and hand back a result from the wrong model.
-    const dedupeKey = computeDeepDiveDedupeKey(reportIds as string[], trimmedSystemPrompt, rowsSummary, trimmedModelId);
+    const dedupeKey = computeDeepDiveDedupeKey(reportIds as string[], trimmedSystemPrompt, rowsSummary, trimmedModelId, factsSummary);
 
     let jobId: string;
     let deduped: boolean;
@@ -307,6 +319,7 @@ router.post('/api/comparison/deep-dive', async (req: Request, res: Response) => 
           modelId: trimmedModelId,
           systemPrompt: trimmedSystemPrompt,
           rows: rowsSummary,
+          facts: factsSummary,
         });
         // runs[] meta: only the (case, side) pairs the agent actually
         // queried — each already carries the window-agent hints the Traces

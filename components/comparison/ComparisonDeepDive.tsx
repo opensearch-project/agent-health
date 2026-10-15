@@ -17,6 +17,14 @@
  *
  * The agent run is ~30-60s and costs tokens, so results are cached in-memory by
  * report-id pair; the panel auto-runs once per pair and offers a regenerate.
+ *
+ * With THREE OR MORE runs selected on the compare page the server contract
+ * stays pairwise: the page resolves which two runs to compare (see
+ * lib/comparison/deepDivePair.ts) and renders this panel with a compact
+ * `pairPicker` (two selects, A ≠ B) in the header. Only the DEFAULT pair
+ * (oldest vs newest) auto-starts — any other pair waits for an explicit
+ * "Generate" click unless its narrative is already cached, so toggling the
+ * picker never launches surprise LLM work.
  */
 
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
@@ -25,6 +33,9 @@ import remarkGfm from 'remark-gfm';
 import { Sparkles, Loader2, RefreshCw, ArrowUpRight, AlertTriangle, Lightbulb, ChevronRight, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { BenchmarkRun, EvaluationReport, TestCaseComparisonRow } from '@/types';
+import { formatDate } from '@/lib/utils';
+import { changeDeepDivePairSide, DeepDivePair, resolveDeepDiveCasePair } from '@/lib/comparison/deepDivePair';
+import { DeepDiveFacts, formatDeepDiveFactsLine } from '@/lib/comparison/deepDiveFacts';
 import { sanitizeMarkdownUrl } from './sanitizeMarkdownUrl';
 
 export interface DeepDiveRunMeta {
@@ -115,7 +126,12 @@ interface CacheEntry { markdown: string; meta: DeepDiveResponse; }
 // with (`<a>|<b>|<modelId>`), so switching the selector never serves a
 // narrative produced by a different model, and v3 entries (all generated on
 // the old implicit Sonnet 4.x default) are never mistaken for Fable output.
-const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:v4:';
+//
+// v5: the job is now briefed with deterministic headline tallies (`facts`,
+// lib/comparison/deepDiveFacts.ts) it must quote verbatim. A v4 narrative
+// recounted the rows itself and could contradict the scoreboard, so it is
+// never served as if it had been generated under the new contract.
+const DEEPDIVE_CACHE_PREFIX = 'agent-health:deepdive:v5:';
 const deepDiveMemCache = new Map<string, CacheEntry>();
 
 // Model selector (browser-cache-only, same pattern as the system prompt):
@@ -182,6 +198,53 @@ interface ComparisonDeepDiveProps {
   onSpanLink: (testCaseId: string, runId: string, spanId: string) => void;
   /** Resolved window-agent hints (serviceName + window) so the Traces tab can render spans. */
   onWindowAgents: (meta: DeepDiveRunMeta[]) => void;
+  /**
+   * Whether a pair with no cached narrative starts generating on its own
+   * (default true — the 2-run page's behaviour). The 3+-run page passes
+   * false for any non-default pair so a picker toggle never launches an LLM
+   * job without a click; a cached pair is always served regardless.
+   */
+  autoStart?: boolean;
+  /**
+   * Present only on a 3+-run compare page: the selectable runs and the
+   * callback that moves the pair (the page persists it in the URL). `runs`
+   * is then the resolved [A, B] pair, always a subset of `options`.
+   */
+  pairPicker?: {
+    options: BenchmarkRun[];
+    onChange: (pair: DeepDivePair) => void;
+  };
+  /**
+   * True while the page is still fetching the data the per-row summary is
+   * built from (the compared runs' report docs and the test-case metadata
+   * that names/categorises the rows). The panel stays mounted (its pair
+   * comes from the run docs' report ids) but shows a "loading reports" line
+   * and defers the auto-start until that summary is complete.
+   */
+  reportsLoading?: boolean;
+  /**
+   * True when the page's report fetch FAILED. The panel stays mounted (the
+   * pair still resolves from the run docs) but does not launch the LLM job on
+   * its own — the per-row verdict summary it would send is empty — and offers
+   * an explicit "Generate anyway" instead.
+   */
+  reportsFailed?: boolean;
+  /**
+   * Deterministic headline numbers for this pair, computed by the page from
+   * the SAME aggregates the scoreboard renders (see lib/comparison/
+   * deepDiveFacts.ts). Sent with the job as authoritative facts and rendered
+   * as a data line above the narrative so the reader never depends on the
+   * model's arithmetic.
+   */
+  facts?: DeepDiveFacts;
+}
+
+/** "<run name> · <date>" — the picker's option label (name falls back to the agent). Exported for tests. */
+export function deepDiveRunLabel(run: BenchmarkRun, getAgentName: (key: string) => string, withDate = true): string {
+  const name = run.name || getAgentName(run.agentKey) || run.id;
+  if (!withDate) return name;
+  const t = Date.parse(run.createdAt ?? '');
+  return Number.isFinite(t) ? `${name} · ${formatDate(run.createdAt, 'datetime')}` : name;
 }
 
 export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
@@ -191,25 +254,19 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   getAgentName,
   onSpanLink,
   onWindowAgents,
+  autoStart = true,
+  pairPicker,
+  reportsLoading = false,
+  reportsFailed = false,
+  facts,
 }) => {
-  // Representative pair: the first test case both runs executed.
-  const pair = useMemo(() => {
-    if (runs.length !== 2) return null;
-    for (const row of rows) {
-      const a = row.results[runs[0].id]?.reportId;
-      const b = row.results[runs[1].id]?.reportId;
-      if (a && b) {
-        return {
-          testCaseId: row.testCaseId,
-          testCaseName: row.testCaseName,
-          reportIdA: a,
-          reportIdB: b,
-          cacheKey: `${a}|${b}`,
-        };
-      }
-    }
-    return null;
-  }, [runs, rows]);
+  // Representative pair: the lowest-id test case with a report on both sides
+  // (a STABLE choice — table order changes as metadata loads, and a changing
+  // pair re-keyed the cache and launched a second job; see
+  // resolveDeepDiveCasePair). Report ids come from the rows when they carry
+  // them and from the run docs otherwise, so the pair resolves as soon as the
+  // runs are known — not only after every report doc has been downloaded.
+  const pair = useMemo(() => resolveDeepDiveCasePair(runs, rows), [runs, rows]);
 
   const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [markdown, setMarkdown] = useState<string>('');
@@ -321,7 +378,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   // Each generate() call owns its own token object; the poll loop checks
   // `token.cancelled` before every state update and before scheduling the
   // next poll.
-  const activeGenerationRef = useRef<{ cancelled: boolean } | null>(null);
+  const activeGenerationRef = useRef<{ cancelled: boolean; key: string } | null>(null);
   useEffect(() => {
     return () => {
       if (activeGenerationRef.current) activeGenerationRef.current.cancelled = true;
@@ -343,7 +400,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
       // Supersede any in-flight poll loop (a previous Regenerate, or a pair
       // switch) before starting this one.
       if (activeGenerationRef.current) activeGenerationRef.current.cancelled = true;
-      const token = { cancelled: false };
+      const token = { cancelled: false, key: cacheKey };
       activeGenerationRef.current = token;
 
       setStatus('loading');
@@ -369,6 +426,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
             reportIds: [pair.reportIdA, pair.reportIdB],
             ...(modelId ? { modelId } : {}),
             ...(rowsSummary.length > 0 ? { rows: rowsSummary } : {}),
+            ...(facts ? { facts } : {}),
             ...(customSystemPrompt ? { systemPrompt: customSystemPrompt } : {}),
           }),
         });
@@ -415,7 +473,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
         setStatus('error');
       }
     },
-    [pair, cacheKey, modelId, onWindowAgents, systemPromptText, defaultSystemPrompt, rowsSummary]
+    [pair, cacheKey, modelId, onWindowAgents, systemPromptText, defaultSystemPrompt, rowsSummary, facts]
   );
 
   // Elapsed-time indicator while generating — owner bug report: the panel
@@ -440,10 +498,43 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   // has resolved, so the first request already carries the right modelId.
   // A model change re-keys the cache: a previously generated narrative for
   // that model is served instantly, otherwise a fresh generation starts.
+  //
+  // With `autoStart === false` (a non-default pair picked on a 3+-run page)
+  // a CACHED narrative is still served instantly, but an uncached pair parks
+  // in 'idle' with a Generate button instead of launching the LLM job — and
+  // any poll loop still running for the previous pair is superseded so it
+  // can't paint that pair's result under this one.
+  //
+  // While the page is still downloading the report docs (`reportsLoading`)
+  // a cached narrative is served, but a fresh generation waits: the request
+  // carries a per-row verdict summary that is empty until the reports are in,
+  // and the LLM would otherwise be briefed on a comparison with no verdicts.
   useEffect(() => {
-    if (pair && modelsLoaded) generate(false);
+    if (!modelsLoaded) return;
+    if (pair && cacheKey) {
+      if (deepDiveCache.has(cacheKey)) {
+        generate(false);
+        return;
+      }
+      // Already generating (or generated) THIS pair: leave it alone. A
+      // reports (re)load flipping `reportsLoading` must not cancel an LLM job
+      // in flight and then launch it a second time.
+      const active = activeGenerationRef.current;
+      if (active && !active.cancelled && active.key === cacheKey) return;
+      if (autoStart && !reportsLoading && !reportsFailed) {
+        generate(false);
+        return;
+      }
+    }
+    // An uncached non-default pair, reports still loading or failed to load,
+    // or no shared case at all: show nothing from the previous pair.
+    if (activeGenerationRef.current) activeGenerationRef.current.cancelled = true;
+    setStatus('idle');
+    setMarkdown('');
+    setMeta(null);
+    setError('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cacheKey, modelsLoaded]);
+  }, [cacheKey, modelsLoaded, autoStart, reportsLoading, reportsFailed]);
 
   // Map a cited runId → which agent label (for nicer pill titles). Each
   // meta.runs entry now carries `key` ('A'|'B') directly — comparison-wide
@@ -460,10 +551,16 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
     return m;
   }, [meta, runs, getAgentName]);
 
-  if (!pair) return null;
+  // No test case with a report on both sides → nothing to deep-dive on this
+  // pair. The panel still renders and SAYS so (with a picker the user can
+  // move to another pair) — it used to return null here, which made the
+  // section silently vanish for the exact two runs the user asked about.
 
   const nameA = getAgentName(runs[0].agentKey);
   const nameB = getAgentName(runs[1].agentKey);
+  const pickerLabelA = deepDiveRunLabel(runs[0], getAgentName, false);
+  const pickerLabelB = deepDiveRunLabel(runs[1], getAgentName, false);
+  const currentPair: DeepDivePair = [runs[0].id, runs[1].id];
 
   // A = runs[0], B = runs[1] (the URL order). Surface the A/B mapping
   // everywhere — header + span-citation pills — so a `span:<caseId>:<runId>:...`
@@ -482,7 +579,7 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
   const SpanAnchor = ({ href, children }: { href?: string; children?: React.ReactNode }) => {
     const m3 = /^span:([^:]+):([^:]+):(.+)$/.exec(href || '');
     const m2 = !m3 ? /^span:([^:]+):(.+)$/.exec(href || '') : null;
-    if (m3 || m2) {
+    if ((m3 || m2) && pair) {
       const caseId = m3 ? m3[1] : pair.testCaseId;
       const runId = m3 ? m3[2] : m2![1];
       const spanId = m3 ? m3[3] : m2![2];
@@ -523,10 +620,23 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
         <div className="flex items-center gap-2 min-w-0">
           <Sparkles size={16} className="text-opensearch-blue flex-shrink-0" />
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">What's actually different</h3>
-            <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
-              <AbBadge ab="A" /> {nameA} <span className="opacity-60">vs</span> <AbBadge ab="B" /> {nameB} <span className="opacity-60">· grounded in both runs' traces</span>
-            </p>
+            {pairPicker ? (
+              <>
+                <h3 className="text-sm font-semibold text-foreground truncate" data-testid="deep-dive-heading">
+                  What's actually different <span className="opacity-60">—</span> {pickerLabelA} <span className="opacity-60">vs</span> {pickerLabelB}
+                </h3>
+                <p className="text-xs text-muted-foreground truncate" data-testid="deep-dive-pair-hint">
+                  The trace-grounded deep-dive compares two runs at a time; pick the pair.
+                </p>
+              </>
+            ) : (
+              <>
+                <h3 className="text-sm font-semibold text-foreground" data-testid="deep-dive-heading">What's actually different</h3>
+                <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+                  <AbBadge ab="A" /> {nameA} <span className="opacity-60">vs</span> <AbBadge ab="B" /> {nameB} <span className="opacity-60">· grounded in both runs' traces</span>
+                </p>
+              </>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -552,6 +662,32 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
           )}
         </div>
       </div>
+
+      {pairPicker && (
+        <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="deep-dive-pair-picker">
+          {(['A', 'B'] as const).map((side) => {
+            const value = side === 'A' ? currentPair[0] : currentPair[1];
+            return (
+              <label key={side} className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+                <AbBadge ab={side} />
+                <span className="sr-only">Run {side}</span>
+                <select
+                  value={value}
+                  onChange={(e) => pairPicker.onChange(changeDeepDivePairSide(currentPair, side, e.target.value))}
+                  disabled={status === 'loading'}
+                  aria-label={`Run ${side}`}
+                  data-testid={`deep-dive-pair-select-${side.toLowerCase()}`}
+                  className="h-7 max-w-[18rem] truncate rounded border border-border bg-background px-1.5 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-opensearch-blue disabled:opacity-60"
+                >
+                  {pairPicker.options.map((run) => (
+                    <option key={run.id} value={run.id}>{deepDiveRunLabel(run, getAgentName)}</option>
+                  ))}
+                </select>
+              </label>
+            );
+          })}
+        </div>
+      )}
 
       {/* Change 4 — editable system prompt (browser-cache only, nothing
           persisted server-side). Collapsed by default; edits are saved to
@@ -595,6 +731,44 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
           </div>
         )}
       </div>
+
+      {!pair && (
+        <p className="py-3 text-sm text-muted-foreground" data-testid="deep-dive-no-shared-case">
+          The deep-dive needs at least one test case that both runs completed — none found.
+          {pairPicker ? ' Pick a different pair.' : ''}
+        </p>
+      )}
+
+      {/* Same geometry as the generating block below (py-6, one spinner row)
+          so the reports-loading → generating hand-off never moves the table
+          (the panel sits above the results table; any height change here
+          shifts every row under it — and swallows a hover in flight, see
+          comparison-hover-prompt-preview.spec.ts). */}
+      {pair && status === 'idle' && reportsLoading && (
+        <div className="flex flex-col items-center gap-1 py-6 justify-center text-sm text-muted-foreground" data-testid="deep-dive-reports-loading">
+          <div className="flex items-center gap-2 flex-wrap justify-center">
+            <Loader2 size={15} className="animate-spin" /> Loading both runs' test case reports…
+          </div>
+        </div>
+      )}
+
+      {pair && status === 'idle' && !reportsLoading && reportsFailed && (
+        <div className="flex flex-col items-center gap-2 py-5 text-sm text-muted-foreground" data-testid="deep-dive-reports-failed">
+          <p>The test case reports could not be loaded, so the deep-dive was not started — it would be briefed without the per-case verdicts.</p>
+          <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => generate(false)} data-testid="deep-dive-generate-anyway">
+            <Sparkles size={12} /> Generate anyway
+          </Button>
+        </div>
+      )}
+
+      {pair && status === 'idle' && !reportsLoading && !reportsFailed && !autoStart && (
+        <div className="flex flex-col items-center gap-2 py-5 text-sm text-muted-foreground" data-testid="deep-dive-idle">
+          <p>Not generated yet for this pair — the deep-dive runs an LLM over both runs' traces, so it only starts on request.</p>
+          <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => generate(false)} data-testid="deep-dive-generate">
+            <Sparkles size={12} /> Generate deep-dive
+          </Button>
+        </div>
+      )}
 
       {status === 'loading' && (
         <div className="flex flex-col items-center gap-1 py-6 justify-center text-sm text-muted-foreground" data-testid="deep-dive-loading">
@@ -642,6 +816,16 @@ export const ComparisonDeepDive: React.FC<ComparisonDeepDiveProps> = ({
 
       {status === 'done' && (
         <>
+          {/* Data-derived headline numbers ABOVE the narrative — the
+              scoreboard's own tallies, never the model's recount, so the
+              reader never depends on the LLM's arithmetic. Rendered with the
+              narrative (not earlier) so the panel's height is unchanged in
+              every pre-'done' state. */}
+          {facts && (
+            <p className="mb-2 text-xs text-muted-foreground tabular-nums" data-testid="deep-dive-facts" title="Computed from the scoreboard data (passed / evaluated per side; disagreements = cases both runs judged with different verdicts)">
+              {formatDeepDiveFactsLine(facts)}
+            </p>
+          )}
           <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed [&_p]:my-1.5 [&_ul]:my-1.5 [&_li]:my-0.5 [&_strong]:text-foreground">
             <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={sanitizeMarkdownUrl} components={{ a: SpanAnchor }}>
               {markdown}

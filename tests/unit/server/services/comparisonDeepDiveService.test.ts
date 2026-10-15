@@ -25,6 +25,7 @@ import {
   type ComparisonRunInput,
   type ComparisonRowSummary,
 } from '@/server/services/comparisonDeepDiveService';
+import type { DeepDiveFacts } from '@/lib/comparison/deepDiveFacts';
 
 describe('comparisonDeepDiveService — SYSTEM_PROMPT', () => {
   it('instructs the agent to hunt for errors on EACH side of whichever case(s) it traces', () => {
@@ -84,6 +85,15 @@ describe('comparisonDeepDiveService — SYSTEM_PROMPT', () => {
     expect(SYSTEM_PROMPT).toMatch(/a 92\/100 judge score/);
     expect(SYSTEM_PROMPT).toMatch(/NEVER a bare "N\/N"/);
     expect(SYSTEM_PROMPT).toMatch(/misreads as a case count/i);
+  });
+});
+
+describe('comparisonDeepDiveService — SYSTEM_PROMPT authoritative tallies rule', () => {
+  it('tells the agent to copy pass counts / pass rates / disagreement counts from the Authoritative tallies section verbatim and never recount', () => {
+    expect(SYSTEM_PROMPT).toContain('"Authoritative tallies" section is present');
+    expect(SYSTEM_PROMPT).toMatch(/MUST be copied from it verbatim/);
+    expect(SYSTEM_PROMPT).toMatch(/never recount the results table yourself/);
+    expect(SYSTEM_PROMPT).toMatch(/errored cases are excluded from it/);
   });
 });
 
@@ -156,6 +166,31 @@ describe('comparisonDeepDiveService — buildUserPrompt', () => {
     expect(prompt.indexOf('Full results table')).toBeLessThan(prompt.indexOf('## A — aos-oncall'));
     // Tells the agent to pass testCaseId as caseId — the wide-tracing contract.
     expect(prompt).toMatch(/pass that exact string as `caseId`/);
+  });
+
+  it('injects the authoritative tallies FIRST (before the results table) when facts are supplied, and omits the section otherwise', () => {
+    const rows: ComparisonRowSummary[] = [
+      { testCaseId: 'tc-1', testCaseName: 'Disagreement case', a: { passFailStatus: 'passed', score: 92 }, b: { passFailStatus: 'failed', score: 41 } },
+    ];
+    const facts: DeepDiveFacts = {
+      a: { passed: 29, failed: 33, errored: 0, pending: 0, evaluated: 62, total: 62 },
+      b: { passed: 24, failed: 35, errored: 3, pending: 0, evaluated: 59, total: 62 },
+      disagreements: 15, aWins: 10, bWins: 5, bothPassed: 40, bothFailed: 4, uncovered: 3,
+      categories: [{ category: 'rca', cases: 10, aPassed: 7, bPassed: 4, aWins: 3, bWins: 0 }, { category: 'search', cases: 52, aPassed: 22, bPassed: 20, aWins: 7, bWins: 5 }],
+    };
+    const prompt = buildUserPrompt(runs, rows, 'tc-default', facts);
+    expect(prompt).toMatch(/^## Authoritative tallies/);
+    expect(prompt).toContain('use these numbers VERBATIM');
+    expect(prompt).toContain('- A: 29 passed, 33 failed → 29/62 evaluated (62 cases total)');
+    expect(prompt).toContain('- B: 24 passed, 35 failed → 24/59 evaluated; 3 errored (judge produced no verdict — excluded from the denominator) (62 cases total)');
+    expect(prompt).toContain('Disagreements (both sides judged, verdicts differ): 15 — A passed where B failed: 10; B passed where A failed: 5');
+    expect(prompt).toContain('  - "rca": 10 · 7 · 4 · 3 · 0');
+    expect(prompt).toContain('  - "search": 52 · 22 · 20 · 7 · 5');
+    expect(prompt.indexOf('Authoritative tallies')).toBeLessThan(prompt.indexOf('Full results table'));
+    expect(prompt.indexOf('Full results table')).toBeLessThan(prompt.indexOf('## A — '));
+
+    expect(buildUserPrompt(runs, rows, 'tc-default')).not.toContain('Authoritative tallies');
+    expect(buildUserPrompt(runs, rows, 'tc-default', undefined)).not.toContain('Authoritative tallies');
   });
 
   it('pluralizes "case" correctly for exactly 1 row', () => {
@@ -281,6 +316,20 @@ describe('comparisonDeepDiveService — optional systemPrompt override (browser-
     const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
     await generate({ runs, modelId: mockModel.id, ...baseOpts });
     expect(capturedPrompt).not.toContain('Full results table');
+    expect(capturedPrompt).not.toContain('Authoritative tallies');
+  });
+
+  it('threads the optional facts into the user prompt sent to the agent (ahead of everything else)', async () => {
+    const { generateComparisonDeepDive: generate } = require('@/server/services/comparisonDeepDiveService');
+    const facts: DeepDiveFacts = {
+      a: { passed: 2, failed: 1, errored: 0, pending: 0, evaluated: 3, total: 3 },
+      b: { passed: 1, failed: 2, errored: 0, pending: 0, evaluated: 3, total: 3 },
+      disagreements: 1, aWins: 1, bWins: 0, bothPassed: 1, bothFailed: 1, uncovered: 0,
+    };
+    await generate({ runs, modelId: mockModel.id, facts, ...baseOpts });
+    expect(capturedPrompt).toMatch(/^## Authoritative tallies/);
+    expect(capturedPrompt).toContain('- A: 2 passed, 1 failed → 2/3 evaluated (3 cases total)');
+    expect(capturedPrompt).toContain('A passed where B failed: 1; B passed where A failed: 0');
   });
 
   it('registers exactly one extensionFactory (the comparison-wide trace tools)', () => {

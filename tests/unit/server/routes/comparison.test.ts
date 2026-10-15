@@ -318,6 +318,56 @@ describe('Comparison routes', () => {
     expect(mockGenerateComparisonDeepDive).not.toHaveBeenCalled();
   });
 
+  describe('facts (deterministic tallies, PR #567)', () => {
+    const facts = {
+      a: { passed: 29, failed: 33, errored: 0, pending: 0, evaluated: 62, total: 62 },
+      b: { passed: 24, failed: 35, errored: 3, pending: 0, evaluated: 59, total: 62 },
+      disagreements: 15, aWins: 10, bWins: 5, bothPassed: 40, bothFailed: 4, uncovered: 3,
+    };
+    beforeEach(() => {
+      mockLoadConfigSync.mockReturnValue({ agents: [] });
+      mockRunsGetById.mockResolvedValue({ id: 'report-a', timestamp: '2024-01-01T00:00:00.000Z' });
+      mockGenerateComparisonDeepDive.mockResolvedValue({ markdown: 'ok', modelId: 'm', durationMs: 1, visitedCases: [] });
+    });
+
+    it('validates and forwards a well-formed facts object to the generator (unknown keys stripped)', async () => {
+      const res = await request(app)
+        .post('/api/comparison/deep-dive')
+        .send({ reportIds: ['report-a', 'report-b'], facts: { ...facts, extra: 'ignored' } });
+      expect(res.status).toBe(202);
+      expect(mockGenerateComparisonDeepDive.mock.calls[0][0].facts).toEqual(facts);
+    });
+
+    it('drops a malformed facts object silently (the section is omitted; the request still runs)', async () => {
+      const res = await request(app)
+        .post('/api/comparison/deep-dive')
+        .send({ reportIds: ['report-a', 'report-b'], facts: { a: { passed: 'many' } } });
+      expect(res.status).toBe(202);
+      expect(mockGenerateComparisonDeepDive.mock.calls[0][0].facts).toBeUndefined();
+      // …but not silently: a dropped section hands the counting back to the model.
+      expect(mockDebug).toHaveBeenCalledWith('CompareDeepDiveAPI', expect.stringContaining('facts rejected as malformed'));
+    });
+
+    it('omits facts when the request carries none', async () => {
+      const res = await request(app).post('/api/comparison/deep-dive').send({ reportIds: ['report-a', 'report-b'] });
+      expect(res.status).toBe(202);
+      expect(mockGenerateComparisonDeepDive.mock.calls[0][0].facts).toBeUndefined();
+    });
+
+    it('two identical POSTs (same pair, model, rows and facts) while the first job is running share ONE job id', async () => {
+      let finish: (v: unknown) => void = () => {};
+      mockGenerateComparisonDeepDive.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+      const body = { reportIds: ['report-a', 'report-b'], modelId: 'm', rows: [{ testCaseId: 'tc-1', testCaseName: 'Case 1' }], facts };
+      const first = await request(app).post('/api/comparison/deep-dive').send(body);
+      const second = await request(app).post('/api/comparison/deep-dive').send(body);
+      expect(first.status).toBe(202);
+      expect(second.status).toBe(202);
+      expect(second.body.jobId).toBe(first.body.jobId);
+      expect(mockGenerateComparisonDeepDive).toHaveBeenCalledTimes(1);
+      finish({ markdown: 'ok', modelId: 'm', durationMs: 1, visitedCases: [] });
+    });
+  });
+
   describe('rows[] input caps (hardening round, codex review of PR #460)', () => {
     beforeEach(() => {
       mockLoadConfigSync.mockReturnValue({ agents: [] });

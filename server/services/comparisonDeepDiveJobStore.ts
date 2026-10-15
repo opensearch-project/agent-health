@@ -206,13 +206,23 @@ export function computeDeepDiveDedupeKey(
   reportIds: string[],
   systemPrompt?: string,
   rows?: unknown,
-  modelId?: string
+  modelId?: string,
+  facts?: unknown
 ): string {
   const sortedIds = [...reportIds].sort();
   const rowsHash = crypto.createHash('sha256').update(canonicalizeRowsForHash(rows)).digest('hex');
   // `modelId` participates so a different model is a different job (a
   // request without one hashes identically to the pre-selector payload).
-  const payload = JSON.stringify({ ids: sortedIds, systemPrompt: systemPrompt || null, rowsHash, ...(modelId ? { modelId } : {}) });
+  // `facts` (the already-sanitized tallies, a plain object of integers)
+  // participate the same way: different authoritative numbers = a different
+  // brief; a request without them hashes identically to the pre-facts payload.
+  const payload = JSON.stringify({
+    ids: sortedIds,
+    systemPrompt: systemPrompt || null,
+    rowsHash,
+    ...(modelId ? { modelId } : {}),
+    ...(facts !== undefined ? { facts } : {}),
+  });
   return crypto.createHash('sha256').update(payload).digest('hex');
 }
 
