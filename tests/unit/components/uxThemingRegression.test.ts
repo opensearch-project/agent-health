@@ -211,8 +211,8 @@ describe('Scope B theming regressions', () => {
       // theme-aware rule.
       expect(src).not.toMatch(/background: isDarkMode \? '[^']*' : '#FFFFFF'/);
       expect(src).not.toMatch(/borderRight: isDarkMode \? '1px solid #343741' : '1px solid #D3DAE6'/);
-      expect(src).toMatch(/background: 'hsl\(var\(--background\)\)'/);
-      expect(src).toMatch(/borderRight: '1px solid hsl\(var\(--border\)\)'/);
+      expect(src).toMatch(/background: ["']hsl\(var\(--background\)\)["']/);
+      expect(src).toMatch(/borderRight: ["']1px solid hsl\(var\(--border\)\)["']/);
     });
   });
 });
