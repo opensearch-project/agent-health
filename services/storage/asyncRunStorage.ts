@@ -25,6 +25,7 @@ import type {
   ImprovementStrategy,
   OpenSearchLog,
   ConnectorProtocol,
+  RetryAttemptRecord,
 } from '@/types';
 import { fetchChunked } from '@/lib/chunkedFetch';
 import { copyReportFailureFields } from '@/lib/reportFailureFields';
@@ -103,6 +104,8 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     spans?: unknown[];
     connectorProtocol?: string;
     judgeMode?: 'trajectory-only' | 'trace-tools';
+    output?: unknown;
+    lastRetryAttempt?: RetryAttemptRecord | null;
   };
 
   return {
@@ -184,6 +187,8 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     traceId: (stored as any).traceId,
     sessionId: (stored as any).sessionId,
     rawEvents: stored.rawEvents as any[] | undefined,
+    output: storedAny.output,
+    lastRetryAttempt: storedAny.lastRetryAttempt,
     logs: (stored.logs || []) as OpenSearchLog[],
     improvementStrategies: stored.improvementStrategies as any[] | undefined,
     // The judge's full persisted response (raw model text, token counts,
@@ -249,6 +254,8 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
     metrics: report.metrics as StorageRun['metrics'],
     trajectory: report.trajectory,
     rawEvents: report.rawEvents,
+    ...(report.output !== undefined ? { output: report.output } : {}),
+    ...(report.lastRetryAttempt !== undefined ? { lastRetryAttempt: report.lastRetryAttempt } : {}),
     logs: report.logs || report.openSearchLogs,
     improvementStrategies: report.improvementStrategies,
   };
@@ -517,6 +524,7 @@ class AsyncRunStorage {
     if (updates.llmVerdict !== undefined) storageUpdates.llmVerdict = updates.llmVerdict;
     if (updates.verdictConflict !== undefined) storageUpdates.verdictConflict = updates.verdictConflict;
     if (updates.score !== undefined) storageUpdates.score = updates.score;
+    if (updates.lastRetryAttempt !== undefined) storageUpdates.lastRetryAttempt = updates.lastRetryAttempt;
     if (updates.spans !== undefined) storageUpdates.spans = updates.spans;
 
     const updated = await opensearchRuns.partialUpdate(reportId, storageUpdates);
