@@ -380,8 +380,14 @@ type JudgeEntry =
  * re-judged with K resolving to M1: the reports say M1, so the caption must.
  */
 function reportJudgeMatchesRun(reportJudge: string, run: { judgeModel?: string; judgeModelId?: string }): boolean {
-  if (reportJudge === run.judgeModel || reportJudge === run.judgeModelId) return true;
-  if (run.judgeModel) return false;
+  // An explicit resolved model on the run is THE comparison: a report model
+  // that differs from it is a different judge, even when it equals the run's
+  // configured id (report M1, run `{ judgeModelId: M1, judgeModel: M2 }`
+  // means the reports were re-judged back to M1 — the caption must say M1).
+  if (run.judgeModel) return reportJudge === run.judgeModel;
+  // No resolved model recorded: the configured id, or the catalog
+  // `model_id` behind that key, is all the run can be compared against.
+  if (reportJudge === run.judgeModelId) return true;
   const configured = run.judgeModelId ? DEFAULT_CONFIG.models[run.judgeModelId]?.model_id : undefined;
   return !!configured && reportJudge === configured;
 }

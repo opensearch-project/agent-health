@@ -320,6 +320,17 @@ describe('ComparisonScoreboard — judge caption over all runs', () => {
       expect(line).not.toContain('override-llm-m2');
     });
 
+    it('report model equal to the run\'s CONFIGURED id but not its RESOLVED model → the reports win (resolved model is compared first)', () => {
+      // Reviewer probe: reports resolved to M1; the run is configured as M1
+      // but recorded judgeModel M2 (an override). Direct equality with the
+      // configured id must not short-circuit past the resolved-model check.
+      const runs = [makeRun('a', { judgeModelId: 'judge-m1', judgeModelIds: ['judge-m1'] })];
+      renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'judge-m1', judgeModel: 'judge-m2' } as any }) });
+      const line = screen.getByTestId('scoreboard-judge-line').textContent ?? '';
+      expect(line).toContain('judge-m1');
+      expect(line).not.toContain('judge-m2');
+    });
+
     it('reports re-scored by a deterministic evaluator (judgeProvider none) → "No LLM judge", not the run\'s LLM', () => {
       const runs = [makeRun('a', { judgeModelId: 'none', judgeModelIds: ['none'] })];
       renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'judge-x', judgeModel: 'judge-x' } as any }) });
