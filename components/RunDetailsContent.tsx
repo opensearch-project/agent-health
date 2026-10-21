@@ -1130,7 +1130,9 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 Re-judged {formatRelativeTime(liveReport.judgementRetriedAt)} with{' '}
                 {evaluator?.name ?? liveReport.evaluatorId ?? 'the default evaluator'}
                 {' · '}
-                {liveReport.judgeModelId ? getModelName(liveReport.judgeModelId) : 'default judge model'}
+                {liveReport.judgeMode === 'deterministic'
+                  ? 'no LLM judge (scored in code)'
+                  : liveReport.judgeModelId ? getModelName(liveReport.judgeModelId) : 'default judge model'}
                 {(liveReport.judgementRetryCount ?? 0) > 1 ? ` (retry #${liveReport.judgementRetryCount})` : ''}
               </p>
             )}

@@ -380,11 +380,17 @@ function reportJudgeMatchesRun(reportJudge: string, run: { judgeModel?: string; 
   return !!configured && reportJudge === configured;
 }
 
-/** Identity shape for a report-resolved judge id: the no-LLM marker, a provider kind, or an LLM. */
+/**
+ * Identity shape for a report-resolved judge id: the no-LLM marker, a provider
+ * kind, or an LLM — paired with its catalog key when the id is a configured
+ * model's `model_id`, so the label reads the display name ("Demo Model")
+ * exactly as it would for a run that recorded that judge.
+ */
 function identityForReportJudge(reportJudge: string): JudgeIdentityLike {
   if (reportJudge === JUDGE_PROVIDER_NONE) return { judgeProvider: JUDGE_PROVIDER_NONE };
   if (isJudgeProviderPseudoModelId(reportJudge)) return { judgeModelId: reportJudge };
-  return { judgeModel: reportJudge };
+  const catalogKey = Object.keys(DEFAULT_CONFIG.models).find(k => k === reportJudge || DEFAULT_CONFIG.models[k]?.model_id === reportJudge);
+  return catalogKey ? { judgeModelId: catalogKey, judgeModel: reportJudge } : { judgeModel: reportJudge };
 }
 
 function judgeEntryFor(run: RunAggregateMetrics, selected: BenchmarkRun | undefined): JudgeEntry {
