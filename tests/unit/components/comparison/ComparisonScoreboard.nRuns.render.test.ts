@@ -308,6 +308,18 @@ describe('ComparisonScoreboard — judge caption over all runs', () => {
       expect(line).not.toContain('mock://');
     });
 
+    it('the key alias is only a fallback: a run with an explicit resolved judgeModel that DISAGREES with the reports shows the reports\' model', () => {
+      // Run key `demo-model` (catalog default `mock://demo-model`) ran with an
+      // evaluator override, so the run recorded judgeModel = another LLM; a
+      // later retry resolved the key to its default. The reports say the
+      // default — the caption must not keep naming the override.
+      const runs = [makeRun('a', { judgeModelId: 'mock://demo-model', judgeModelIds: ['mock://demo-model'] })];
+      renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'demo-model', judgeModel: 'override-llm-m2' } as any }) });
+      const line = screen.getByTestId('scoreboard-judge-line').textContent ?? '';
+      expect(line).toContain('Demo Model');
+      expect(line).not.toContain('override-llm-m2');
+    });
+
     it('reports re-scored by a deterministic evaluator (judgeProvider none) → "No LLM judge", not the run\'s LLM', () => {
       const runs = [makeRun('a', { judgeModelId: 'none', judgeModelIds: ['none'] })];
       renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'judge-x', judgeModel: 'judge-x' } as any }) });

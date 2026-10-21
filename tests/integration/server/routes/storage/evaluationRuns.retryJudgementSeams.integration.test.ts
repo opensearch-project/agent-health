@@ -123,11 +123,28 @@ const agentFailedFields = {
 describe('Retry judgement — seams with failure surfacing, the result mirror and the judge identity', () => {
   let backendAvailable = false;
 
-  beforeAll(async () => { backendAvailable = await checkBackend(); });
-  afterAll(async () => { if (backendAvailable) await tracker.cleanup(); });
+  // Repo pattern (tests/integration/services/storage/*): warn loudly in
+  // beforeAll and bail per test — but ALSO count the skips, so a run where the
+  // backend was down cannot read as "3 passed" without a trace in the log.
+  let skipped = 0;
+  const skipIfNoBackend = (name: string): boolean => {
+    if (backendAvailable) return false;
+    skipped++;
+    console.warn(`[retryJudgementSeams] SKIPPED (backend ${BASE_URL} not available): ${name}`);
+    return true;
+  };
+  beforeAll(async () => {
+    backendAvailable = await checkBackend();
+    if (!backendAvailable) console.warn(`[retryJudgementSeams] Backend ${BASE_URL} not available - skipping retry-judgement seam integration tests`);
+    else console.log(`[retryJudgementSeams] backend ${BASE_URL} available - assertions will execute`);
+  });
+  afterAll(async () => {
+    if (backendAvailable) await tracker.cleanup();
+    if (skipped > 0) console.warn(`[retryJudgementSeams] ${skipped} test(s) skipped - no assertions ran`);
+  });
 
   it('a judge-failed report re-judged successfully comes back with NO failure fields (failureStage / error / judgeError cleared, verdict present)', async () => {
-    if (!backendAvailable) return;
+    if (skipIfNoBackend(expect.getState().currentTestName ?? 'test')) return;
     const tc = await createTestCase();
     const reportId = await createReport(tc, judgeFailedFields);
     const runId = await seedEvalRun({ [tc]: { reportId, status: 'completed' } });
@@ -160,7 +177,7 @@ describe('Retry judgement — seams with failure surfacing, the result mirror an
   }, 30000);
 
   it("scope 'all' re-judges judged-FAILED cases (results status 'failed' + a failed verdict) and skips agent-stage failures", async () => {
-    if (!backendAvailable) return;
+    if (skipIfNoBackend(expect.getState().currentTestName ?? 'test')) return;
     const tcFailed = await createTestCase();
     const tcAgent = await createTestCase();
     const tcPassed = await createTestCase();
@@ -193,7 +210,7 @@ describe('Retry judgement — seams with failure surfacing, the result mirror an
   }, 30000);
 
   it('a deterministic re-score clears the resolved LLM identity: judgeModel gone, judgeProvider "none"', async () => {
-    if (!backendAvailable) return;
+    if (skipIfNoBackend(expect.getState().currentTestName ?? 'test')) return;
     const evaluator = await postJson('/api/storage/evaluators', {
       name: uniqueTestName('retry-seams-det'), description: 'generic deterministic evaluator fixture', kind: 'deterministic',
       metrics: [{ name: 'hit@1', compute: { type: 'ranked-hit', k: 1 }, weight: 1, primary: true }],

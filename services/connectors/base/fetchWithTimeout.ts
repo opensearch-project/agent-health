@@ -36,6 +36,12 @@
  * semantics in `services/agent/sseStream.ts`; do not route a long-lived
  * stream through this helper, the total deadline would cut it off.
  *
+ * Contract of the returned `Response`: `status` / `statusText` / `headers` /
+ * `ok`, `url` / `redirected` / `type` (copied from the original) and every
+ * body accessor (`text()`, `json()`, `arrayBuffer()`, `clone()`, `body`,
+ * `body.cancel()`). It is a fresh `Response` object, not the one undici
+ * produced — identity comparisons against the underlying response do not hold.
+ *
  * Mechanism: undici honours per-request `headersTimeout` / `bodyTimeout`
  * dispatch options. We wrap the process-global dispatcher (looked up via the
  * documented `Symbol.for('undici.globalDispatcher.1')`) so the override is
@@ -119,29 +125,36 @@ function isTimeoutLike(err: unknown): boolean {
 export async function fetchWithTimeout(url: string, options: FetchWithTimeoutOptions = {}): Promise<Response> {
   const { timeoutMs = DEFAULT_HTTP_CONNECTOR_TIMEOUT_MS, connectorType = 'http', signal: callerSignal, ...init } = options;
   const controller = new AbortController();
-  const onCallerAbort = () => controller.abort((callerSignal as AbortSignal).reason);
+  // Runs exactly once, on whichever path settles the exchange: the deadline
+  // or the caller's abort firing, a pre-headers failure, a body-less
+  // response, the body's last chunk, a body-read error, or the consumer
+  // cancelling the body. Declared before the abort wiring so that wiring can
+  // finalise itself the moment it fires — a response the caller never reads
+  // must not keep the caller's abort listener alive past the deadline.
+  let settled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const onCallerAbort = () => { controller.abort((callerSignal as AbortSignal).reason); settle(); };
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    if (callerSignal) callerSignal.removeEventListener('abort', onCallerAbort);
+  };
   if (callerSignal) {
     if (callerSignal.aborted) controller.abort(callerSignal.reason);
     else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
   }
   const startedAt = Date.now();
   let timedOut = false;
-  const timer = setTimeout(() => {
+  timer = setTimeout(() => {
     timedOut = true;
     controller.abort(new Error(`request timeout of ${timeoutMs}ms exceeded`));
+    // Bookkeeping is final now; the aborted read still surfaces through
+    // `wrapError` (the `timedOut` flag outlives the timer).
+    settle();
   }, timeoutMs);
   // Belt-and-braces: never let the timer keep the event loop alive.
   (timer as any).unref?.();
-  // Runs exactly once, on whichever path settles the exchange: a pre-headers
-  // failure, a body-less response, the body's last chunk, a body-read error,
-  // or the consumer cancelling the body.
-  let settled = false;
-  const settle = () => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    if (callerSignal) callerSignal.removeEventListener('abort', onCallerAbort);
-  };
   const method = (init.method || 'GET').toUpperCase();
   const wrapError = (err: any, phase: 'headers' | 'body'): AgentRequestError => {
     const elapsedMs = Date.now() - startedAt;
@@ -205,5 +218,11 @@ export async function fetchWithTimeout(url: string, options: FetchWithTimeoutOpt
       return reader.cancel(reason).catch(() => {});
     },
   });
-  return new Response(guardedBody, { status: response.status, statusText: response.statusText, headers: response.headers });
+  const guarded = new Response(guardedBody, { status: response.status, statusText: response.statusText, headers: response.headers });
+  // `new Response()` cannot be given these; carry the originals so callers
+  // that look at the final URL / redirect state see what fetch saw.
+  for (const key of ['url', 'redirected', 'type'] as const) {
+    Object.defineProperty(guarded, key, { value: response[key], configurable: true, enumerable: false });
+  }
+  return guarded;
 }

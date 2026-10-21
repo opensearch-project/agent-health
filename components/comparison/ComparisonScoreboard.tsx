@@ -369,13 +369,19 @@ type JudgeEntry =
 
 /**
  * Does the judge the reports resolved to (lib/comparison/scoringDisplay
- * `resolveJudgeModelId`) name the same judge the run recorded? Equal to the
- * run's resolved LLM or its configured id, or to the catalog `model_id`
- * behind that configured key (`claude-sonnet-4.6` → `us.anthropic.claude-
- * sonnet-4-6`) — the same alias rule `getJudgeModelDisplay` applies.
+ * `resolveJudgeModelId`) name the same judge the run recorded?
+ *   - equal to the run's resolved LLM (`judgeModel`) or its configured id;
+ *   - when the run recorded NO resolved model, the catalog `model_id` behind
+ *     its configured key also counts (`claude-sonnet-4.6` → `us.anthropic.
+ *     claude-sonnet-4-6`, the alias rule `getJudgeModelDisplay` applies).
+ * When the run DOES carry a resolved `judgeModel`, a different report model is
+ * a different judge even if it is the key's catalog default — e.g. run key K
+ * (default M1) with an evaluator override to M2 (`judgeModel: M2`), later
+ * re-judged with K resolving to M1: the reports say M1, so the caption must.
  */
 function reportJudgeMatchesRun(reportJudge: string, run: { judgeModel?: string; judgeModelId?: string }): boolean {
   if (reportJudge === run.judgeModel || reportJudge === run.judgeModelId) return true;
+  if (run.judgeModel) return false;
   const configured = run.judgeModelId ? DEFAULT_CONFIG.models[run.judgeModelId]?.model_id : undefined;
   return !!configured && reportJudge === configured;
 }

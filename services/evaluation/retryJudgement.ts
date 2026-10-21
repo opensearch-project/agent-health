@@ -271,7 +271,12 @@ export function selectRetryableCases(
     const report = reportsById[result.reportId];
     const eligible = scope === 'all'
       ? isRejudgeableResult(result, report) && hasRejudgeableOutput(report)
-      : isJudgeFailedCase(report, result) || (!!report?.lastRetryAttempt && result.status === 'completed' && hasRejudgeableOutput(report));
+      // A preserved unsuccessful attempt is reachable whatever the case's
+      // current verdict — including a judged FAILURE (`results[tc].status:
+      // 'failed'`), which is exactly what "Retry again" after a not-evaluable
+      // / errored attempt on such a case needs; a plain judged failure with
+      // no attempt stays out of this scope (that is `scope: 'all'`).
+      : isJudgeFailedCase(report, result) || (!!report?.lastRetryAttempt && isRejudgeableResult(result, report) && hasRejudgeableOutput(report));
     if (eligible) ids.push(testCaseId);
   }
   return ids;

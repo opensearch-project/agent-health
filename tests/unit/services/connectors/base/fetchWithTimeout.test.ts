@@ -225,6 +225,41 @@ describe('fetchWithTimeout (real http server)', () => {
       expect(caught).toBeInstanceOf(AgentRequestError);
     });
 
+    // Review of #571: with the body left UNREAD, the caller's abort listener
+    // (and timer bookkeeping) stayed registered after the deadline because
+    // settle() only ran from a later reader.read() pull. The deadline firing
+    // must finalise the wiring on its own — and the body must still fail
+    // with the timeout AgentRequestError when it is read afterwards.
+    it('a response left unread settles its bookkeeping when the deadline fires: caller-abort listener gone, body read still a timeout error', async () => {
+      mode = 'trickle';
+      const removeSpy = jest.spyOn(AbortSignal.prototype, 'removeEventListener');
+      const addSpy = jest.spyOn(AbortSignal.prototype, 'addEventListener');
+      const ac = new AbortController();
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 80, signal: ac.signal });
+      expect(res.status).toBe(200);
+      // Do NOT read the body. Wait past the deadline.
+      await new Promise(r => setTimeout(r, 200));
+      const added = addSpy.mock.contexts.filter((ctx, i) => ctx === ac.signal && addSpy.mock.calls[i][0] === 'abort').length;
+      const removed = removeSpy.mock.contexts.filter((ctx, i) => ctx === ac.signal && removeSpy.mock.calls[i][0] === 'abort').length;
+      expect(added).toBe(1);
+      expect(removed).toBe(1); // listener count on the caller's signal is back to 0
+      // The body's failure is not lost by the early settle.
+      let caught: unknown;
+      try { await res.text(); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(AgentRequestError);
+      expect((caught as Error).message).toMatch(/timed out .*body did not complete/);
+      removeSpy.mockRestore(); addSpy.mockRestore();
+    });
+
+    it('the guarded Response carries url / redirected / type from the original', async () => {
+      mode = 'slow-ok';
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 5_000 });
+      expect(res.url).toBe(`${baseUrl}/ask`);
+      expect(res.redirected).toBe(false);
+      expect(res.type).toBe('basic');
+      await res.text();
+    });
+
     it('clone() + a discarded body (the sigv4 rejection classifier pattern) and cancel() both settle the deadline', async () => {
       const clearSpy = jest.spyOn(global, 'clearTimeout');
       mode = 'slow-ok';

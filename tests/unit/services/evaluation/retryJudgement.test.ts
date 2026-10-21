@@ -190,6 +190,26 @@ describe('selectRetryableCases', () => {
     expect(selectRetryableCases(run, reportsById, 'errored')).toEqual(['tc-preserved']);
   });
 
+  // Review of #571: the preserved-attempt branch still required
+  // `results[tc].status === 'completed'`, so a judged FAILURE whose retry
+  // attempt produced no judgement (lastRetryAttempt recorded) was reachable by
+  // scope 'all' but dropped out of scope 'errored' ("Retry again" did nothing).
+  it("scope=errored selects a judged-FAILED case carrying a preserved unsuccessful attempt, but not a plain judged failure", () => {
+    const run = makeRun({
+      results: {
+        'tc': { reportId: 'r-attempt', status: 'failed', passFailStatus: 'failed' } as any,
+        'tc-plain-failed': { reportId: 'r-plain', status: 'failed', passFailStatus: 'failed' } as any,
+      },
+    });
+    const attempt = { at: '2026-01-01T00:00:00Z', evaluatorId: 'e', scope: 'errored', outcome: 'judge-error', reason: 'x' } as any;
+    const reportsById = {
+      'r-attempt': makeReport({ id: 'r-attempt', metricsStatus: 'ready' as any, passFailStatus: 'failed', lastRetryAttempt: attempt }),
+      'r-plain': makeReport({ id: 'r-plain', metricsStatus: 'ready' as any, passFailStatus: 'failed' }),
+    };
+    expect(selectRetryableCases(run, reportsById, 'errored')).toEqual(['tc']);
+    expect(selectRetryableCases(run, reportsById, 'all').sort()).toEqual(['tc', 'tc-plain-failed']);
+  });
+
   it('scope=all selects every completed case with rejudgeable output, regardless of current verdict', () => {
     const run = makeRun({
       results: {
