@@ -41,7 +41,9 @@ import type { IStorageModule } from '@/server/adapters/types';
 import { callBedrockJudge } from '@/services/evaluation';
 import { buildJudgeAgentsHints } from '@/services/traces/judgeAgentsHints';
 import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/index';
-import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity } from '@/lib/judgeIdentity';
+import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity, JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
+import { CLEARED_REPORT_FAILURE_FIELDS } from '@/lib/reportFailureFields';
+import { isRejudgeableResult } from '@/lib/runActions';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { scoringFieldsFromJudgment } from '@/lib/scoring/verdictEngine';
 import { spansToTrajectory } from '@/services/traces/spansToTrajectory';
@@ -250,7 +252,12 @@ export function hasRejudgeableOutput(report: EvaluationReport | null | undefined
  *              them (codex_review) — that is what the banner's "Retry
  *              again" does.
  *              'all' — every case with rejudgeable agent output, regardless
- *              of its current verdict.
+ *              of its current verdict. That INCLUDES cases the judge FAILED
+ *              (the runner mirrors a failed verdict as `results[tc].status:
+ *              'failed'` + `passFailStatus: 'failed'`): they have stored
+ *              output and are exactly the cases a second opinion is wanted
+ *              on. The same predicate (`isRejudgeableResult`, lib/runActions)
+ *              drives the inspector's count/enablement so both agree.
  */
 export function selectRetryableCases(
   run: Pick<EvaluationRun, 'results'>,
@@ -263,7 +270,7 @@ export function selectRetryableCases(
     if (!result?.reportId) continue;
     const report = reportsById[result.reportId];
     const eligible = scope === 'all'
-      ? result.status === 'completed' && hasRejudgeableOutput(report)
+      ? isRejudgeableResult(result, report) && hasRejudgeableOutput(report)
       : isJudgeFailedCase(report, result) || (!!report?.lastRetryAttempt && result.status === 'completed' && hasRejudgeableOutput(report));
     if (eligible) ids.push(testCaseId);
   }
@@ -430,6 +437,12 @@ export async function retryJudgementForCase(
       // is a plain top-level key on the SAME update call, so `undefined`
       // is enough to drop it from the JSON body).
       traceError: undefined,
+      // A verdict now exists, so the stage-failure detail the original judge
+      // step recorded (`failureStage` / `error` / `judgeError`, agent-error
+      // surfacing) is cleared with it — otherwise the run-detail failure card
+      // ("Judge could not produce a verdict", keyed on `failureStage`) would
+      // outlive the failure it described and sit next to the new verdict.
+      ...CLEARED_REPORT_FAILURE_FIELDS,
       // A successful re-judgement supersedes any recorded failed attempt.
       lastRetryAttempt: null,
     } as any);
@@ -512,7 +525,15 @@ async function applyDeterministicJudgement(
       evaluatorId: evaluator.id,
       // No judge model was involved — clear the one a previous LLM judgement
       // may have stamped so the report never names a judge it did not use.
+      // That includes the RESOLVED identity (`judgeModel` / `judgeProvider`,
+      // lib/judgeIdentity): the compare page's judge caption prefers
+      // `report.judgeModel`, so leaving it would keep naming the previous
+      // LLM as the judge of code-computed metrics. `judgeProvider: 'none'`
+      // is the existing "no LLM judge call was made" marker (the code-SDK
+      // path persists the same one) — the UI renders it as "No LLM judge".
       judgeModelId: null,
+      judgeModel: null,
+      judgeProvider: JUDGE_PROVIDER_NONE,
       judgeMode: 'deterministic' as const,
       scoringSnapshot: result.snapshot,
       matcherResults: result.matcherResults,
@@ -540,6 +561,8 @@ async function applyDeterministicJudgement(
       metrics: result.metrics,
       metricsStatus: 'completed',
       traceError: undefined,
+      // See the LLM path: a verdict supersedes the recorded stage failure.
+      ...CLEARED_REPORT_FAILURE_FIELDS,
       // Same re-judgement stamp the LLM path writes (#509) — the Judge tab's
       // "Re-judged <when> with <evaluator>" line reads it.
       judgementRetriedAt: new Date().toISOString(),

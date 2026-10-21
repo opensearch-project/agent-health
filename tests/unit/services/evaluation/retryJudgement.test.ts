@@ -206,6 +206,33 @@ describe('selectRetryableCases', () => {
     expect(selectRetryableCases(run, reportsById, 'all').sort()).toEqual(['tc-errored', 'tc-passed']);
   });
 
+  // Seam between the runner's result mirror and scope=all: a FAILED verdict is
+  // persisted as `results[tc].status: 'failed'` + `passFailStatus: 'failed'`
+  // (services/evaluationRunner.ts), so "all cases" used to skip exactly the
+  // cases a second opinion is wanted on (owner: "Retry judgement (29)" on a
+  // 62-case run with 33 judged failures). An executor crash is ALSO
+  // `status: 'failed'` — but with no verdict and a placeholder report — and
+  // an agent-request failure carries `failureStage: 'agent'`; neither is selected.
+  it('scope=all selects judged-FAILED cases (status failed + a failed verdict) but not crashes or agent-stage failures', () => {
+    const run = makeRun({
+      results: {
+        'tc-judged-failed': { reportId: 'r-judged-failed', status: 'failed', passFailStatus: 'failed' } as any,
+        'tc-crash': { reportId: 'r-crash', status: 'failed', error: 'executor exploded' } as any,
+        'tc-agent-failed': { reportId: 'r-agent-failed', status: 'completed' } as any,
+        'tc-passed': { reportId: 'r-passed', status: 'completed', passFailStatus: 'passed' } as any,
+      },
+    });
+    const reportsById = {
+      'r-judged-failed': makeReport({ id: 'r-judged-failed', metricsStatus: 'ready' as any, passFailStatus: 'failed' }),
+      'r-crash': makeReport({ id: 'r-crash', status: 'failed', metricsStatus: 'error' as any, trajectory: [], llmJudgeReasoning: 'Evaluation error: executor exploded' }),
+      'r-agent-failed': makeReport({ id: 'r-agent-failed', metricsStatus: 'error' as any, failureStage: 'agent', error: 'timeout' } as any),
+      'r-passed': makeReport({ id: 'r-passed', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
+    };
+    expect(selectRetryableCases(run, reportsById, 'all').sort()).toEqual(['tc-judged-failed', 'tc-passed']);
+    // Unchanged: scope=errored never touches a judged case.
+    expect(selectRetryableCases(run, reportsById, 'errored')).toEqual([]);
+  });
+
   it('skips results with no reportId', () => {
     const run = makeRun({ results: { 'tc-nope': { status: 'completed' } as any } });
     expect(selectRetryableCases(run, {}, 'errored')).toEqual([]);
@@ -657,6 +684,63 @@ describe('retryJudgementForRun', () => {
     expect(summary.retried).toBe(1);
     expect(mockedCallBedrockJudge).toHaveBeenCalledTimes(1);
     expect(reports['r-passed'].passFailStatus).toBe('failed');
+  });
+
+  // Seam between agent-step failure surfacing (failureStage / error /
+  // judgeError on the report) and retry judgement: the success path cleared
+  // only the legacy `traceError`, so a judge failure re-judged to PASSED kept
+  // `failureStage: 'judge'` — and the run-detail failure card (keyed on it)
+  // kept saying "Judge could not produce a verdict" next to the verdict.
+  it('a SUCCESSFUL re-judgement clears the stage-failure fields (failureStage / error / judgeError) the judge failure had recorded', async () => {
+    mockedCallBedrockJudge.mockResolvedValue({
+      passFailStatus: 'passed',
+      metrics: { accuracy: 90, faithfulness: 90, latency_score: 90, trajectory_alignment_score: 90 },
+      llmJudgeReasoning: 'fine now',
+      improvementStrategies: [],
+    });
+    const reports: Record<string, EvaluationReport> = {
+      'r-judge-failed': makeReport({
+        id: 'r-judge-failed', testCaseId: 'tc-1', metricsStatus: 'error' as any, passFailStatus: null as any,
+        traceError: 'Judge evaluation failed (kind=judge_failed): judge returned no JSON',
+        failureStage: 'judge', error: 'judge returned no JSON',
+        judgeError: { message: 'judge returned no JSON', rawResponse: '', attempts: 3 },
+      } as any),
+    };
+    const storage = makeStorage(reports);
+    const run = makeRun({ results: { 'tc-1': { reportId: 'r-judge-failed', status: 'completed' } as any } });
+
+    const summary = await retryJudgementForRun(run, storage as any);
+
+    expect(summary.succeeded).toBe(1);
+    const after = reports['r-judge-failed'] as any;
+    expect(after.passFailStatus).toBe('passed');
+    expect(after.metricsStatus).toBe('completed');
+    // Every failure field is cleared (null — survives the storage merge); traceError is dropped.
+    expect(after.failureStage ?? null).toBeNull();
+    expect(after.error ?? null).toBeNull();
+    expect(after.judgeError ?? null).toBeNull();
+    expect(after.agentError ?? null).toBeNull();
+    expect(after.traceError ?? null).toBeNull();
+  });
+
+  it('a FAILED re-judgement leaves the stage-failure fields exactly as they were (owner rule: only success replaces)', async () => {
+    mockedCallBedrockJudge.mockRejectedValue(new Error('still broken'));
+    const judgeError = { message: 'judge returned no JSON', rawResponse: '', attempts: 3 };
+    const reports: Record<string, EvaluationReport> = {
+      'r-judge-failed': makeReport({
+        id: 'r-judge-failed', testCaseId: 'tc-1', metricsStatus: 'error' as any, passFailStatus: null as any,
+        failureStage: 'judge', error: 'judge returned no JSON', judgeError,
+      } as any),
+    };
+    const storage = makeStorage(reports);
+    const run = makeRun({ results: { 'tc-1': { reportId: 'r-judge-failed', status: 'completed' } as any } });
+
+    await retryJudgementForRun(run, storage as any);
+
+    const after = reports['r-judge-failed'] as any;
+    expect(after.failureStage).toBe('judge');
+    expect(after.error).toBe('judge returned no JSON');
+    expect(after.judgeError).toEqual(judgeError);
   });
 
   it('records a failure when the test case backing a selected result no longer exists', async () => {

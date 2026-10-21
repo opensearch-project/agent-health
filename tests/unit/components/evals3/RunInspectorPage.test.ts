@@ -1431,6 +1431,76 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
     expect(retryJudgementItem().textContent).toContain('Retry judgement (0)');
   });
 
+  // Seam between agent-step failure surfacing (#496) and the always-available
+  // Retry judgement (#509): the runner writes an agent-request failure as
+  // `results[tc].status: 'completed'` (like any finished case), so the
+  // run-doc-only count enabled "Retry judgement (N)" for a run whose every
+  // case died at the agent — and the backend then rejected all N (nothing to
+  // judge). Enablement + count must come from the loaded reports.
+  it('COMPLETED eval-run whose cases ALL failed at the agent request: Retry judgement (0) DISABLED with the agent-failure reason', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue({
+      'rep-0': { id: 'rep-0', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'agent', error: 'Agent request timed out after 300000ms', trajectory: [] },
+      'rep-1': { id: 'rep-1', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'agent', error: 'connect ECONNREFUSED', trajectory: [] },
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    expect(retryJudgementItem().disabled).toBe(true);
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (0)');
+    expect(retryJudgementItem().getAttribute('title')).toBe(
+      'No completed test cases to re-judge — 2 cases failed at the agent request (nothing to judge); use Re-run'
+    );
+  });
+
+  it('mixed run: agent failures are excluded from the count, judge failures and judged cases are not', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 3));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue({
+      'rep-0': { id: 'rep-0', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'agent', error: 'timeout', trajectory: [] },
+      'rep-1': { id: 'rep-1', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'judge', error: 'judge 400', trajectory: [{ type: 'assistant', content: 'x' }] },
+      'rep-2': { id: 'rep-2', status: 'completed', passFailStatus: 'passed', metricsStatus: 'ready', trajectory: [] },
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    expect(retryJudgementItem().disabled).toBe(false);
+    // Default scope = the 1 judge-failed case (agent failure excluded).
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (1)');
+    // The dialog's "All cases" count is report-derived too: 2, not the run doc's 3.
+    fireEvent.click(retryJudgementItem());
+    await waitFor(() => expect(screen.getByTestId('retry-judgement-confirm-dialog')).toBeTruthy());
+    expect(screen.getByTestId('retry-judgement-confirm-dialog').textContent).toContain('(1/2)');
+  });
+
+  // Owner report: "Retry judgement (29)" on a 62-case run whose 33 non-passing
+  // cases are judged FAILED (`results[tc].status: 'failed'` + a real verdict).
+  // Those cases have stored output — they are exactly the ones a second
+  // opinion is wanted on — so "All cases" counts them.
+  it('judged-FAILED cases (results status failed + passFailStatus failed) count as re-judgeable', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    const fixture = makeEvaluationRunFixture('eval-run-1', 3) as any;
+    fixture.results['tc-1'] = { reportId: 'rep-1', status: 'failed', passFailStatus: 'failed' };
+    fixture.results['tc-2'] = { reportId: 'rep-2', status: 'failed', passFailStatus: 'failed' };
+    getEvaluationRun.mockResolvedValue(fixture);
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(3, [1, 2]));
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    expect(retryJudgementItem().disabled).toBe(false);
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (3)');
+  });
+
   it('kebab Retry judgement opens the SAME RetryJudgementConfirmDialog with the count (one pipeline, not a second fire-and-forget path)', async () => {
     mockParams = { runId: 'eval-run-1' };
     const { getEvaluationRun } = require('@/services/client');

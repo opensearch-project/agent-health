@@ -21,6 +21,23 @@ export const REPORT_FAILURE_FIELDS = ['error', 'failureStage', 'agentError', 'ju
 export type ReportFailureField = (typeof REPORT_FAILURE_FIELDS)[number];
 
 /**
+ * Patch that CLEARS every failure field — spread into the `runs.update()` a
+ * successful re-judgement writes (services/evaluation/retryJudgement.ts, both
+ * the LLM and the deterministic path). A judge/trace-stage failure that was
+ * since re-judged to a verdict must not keep rendering the "Judge could not
+ * produce a verdict" card next to that verdict (`getFailureStage()` keys on
+ * `failureStage` first). `null`, not `undefined`: `null` survives object
+ * spreads and is what {@link copyReportFailureFields} copies through on a
+ * partial update, so the clear reaches every storage seam.
+ */
+export const CLEARED_REPORT_FAILURE_FIELDS: Readonly<Record<ReportFailureField, null>> = Object.freeze({
+  error: null,
+  failureStage: null,
+  agentError: null,
+  judgeError: null,
+});
+
+/**
  * Copy every defined failure field from `source` onto `target` (mutates and
  * returns `target`). `null` is copied as-is so a caller can clear a stale
  * value on a partial update.

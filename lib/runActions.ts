@@ -95,16 +95,69 @@ export function countJudgeFailed(run: RunLike | null | undefined): number {
 }
 
 /**
- * Count test cases whose AGENT execution completed (`status === 'completed'`)
- * — every one of them has stored output the judge can be re-run against,
- * regardless of the current verdict. This is what `scope=all` re-judges and
- * what gates the Retry-judgement item.
+ * Minimal shape of one `run.results[tc]` entry these predicates read. Wider
+ * than the declared `EvaluationRun['results'][string]` type: the runner
+ * persists `passFailStatus` on this map at runtime.
+ */
+export interface RunResultEntryLike {
+  reportId?: string;
+  status?: string;
+  passFailStatus?: string | null;
+}
+
+/** The report-summary fields {@link isRejudgeableResult} reads (all present on the inspector's lightweight summaries). */
+export type RejudgeableReportLike = { failureStage?: string | null; passFailStatus?: string | null };
+
+/**
+ * Does this case have stored agent output the judge can be re-run against
+ * (`scope=all`)? ONE predicate shared by the server-side selection
+ * (services/evaluation/retryJudgement.ts `selectRetryableCases`) and the run
+ * inspector's Retry-judgement enablement + count, so the item is never
+ * enabled for a set the backend then rejects in full.
+ *
+ *   - no report loaded → false (nothing to judge against);
+ *   - `report.failureStage === 'agent'` → false: the agent request failed
+ *     (timeout / connection / non-2xx), nothing was ever judged — the runner
+ *     still writes these as `results[tc].status: 'completed'`, which is why
+ *     the run doc alone over-counts; Re-run is the remedy;
+ *   - `results[tc].status === 'completed'` → true: the agent finished
+ *     (passed, judge-failed, trace-failed — all re-judgeable);
+ *   - `results[tc].status === 'failed'` → true only for a judged FAILURE
+ *     (`report.passFailStatus === 'failed'`): the runner mirrors a failed
+ *     verdict as `status: 'failed'`, so these cases DO have output and are
+ *     exactly the ones a second opinion is wanted on; a `status: 'failed'`
+ *     entry with no verdict is an executor crash / legacy agent failure
+ *     (placeholder report, nothing stored) and is not counted.
+ *
+ * The backend additionally requires a non-empty stored trajectory
+ * (`hasRejudgeableOutput`), which the inspector's summaries cannot see.
+ */
+export function isRejudgeableResult(
+  result: RunResultEntryLike | null | undefined,
+  report: RejudgeableReportLike | null | undefined
+): boolean {
+  if (!result || !report) return false;
+  if (report.failureStage === 'agent') return false;
+  if (result.status === 'completed') return true;
+  return result.status === 'failed' && report.passFailStatus === 'failed';
+}
+
+/**
+ * Count test cases with stored output the judge can be re-run against,
+ * regardless of the current verdict, from the RUN DOC alone (no reports
+ * loaded — the runs list / detail page). Mirrors {@link isRejudgeableResult}
+ * as far as the run doc allows: completed cases plus judged failures
+ * (`status: 'failed'` carrying the runner's `passFailStatus: 'failed'`
+ * mirror). Agent-request failures look like plain completed cases here, so
+ * this may over-count; surfaces that have the reports loaded (the inspector)
+ * use `isRejudgeableResult` instead.
  */
 export function countRejudgeable(run: RunLike | null | undefined): number {
   if (!run?.results) return 0;
   let count = 0;
   for (const r of Object.values(run.results)) {
-    if ((r as { status?: string }).status === 'completed') count++;
+    const result = r as RunResultEntryLike;
+    if (result.status === 'completed' || (result.status === 'failed' && result.passFailStatus === 'failed')) count++;
   }
   return count;
 }

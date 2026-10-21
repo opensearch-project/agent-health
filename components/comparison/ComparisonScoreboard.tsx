@@ -19,7 +19,9 @@ import {
   runPassPolicyLabel,
   type ScoringComparability,
 } from '@/lib/comparison/scoringDisplay';
-import { JudgeModelLabel, judgeModelText } from '@/components/JudgeModelLabel';
+import { JudgeModelLabel, judgeModelText, type JudgeIdentityLike } from '@/components/JudgeModelLabel';
+import { DEFAULT_CONFIG } from '@/lib/constants';
+import { JUDGE_PROVIDER_NONE, isJudgeProviderPseudoModelId } from '@/lib/judgeIdentity';
 import { AgentFingerprintChip, AgentConfigChangedBadge } from '@/components/evals3/AgentFingerprintChip';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -351,23 +353,53 @@ const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentNa
  *   1. The run's reports resolved to SEVERAL judges → the plain "mixed (a · b)"
  *      caption (per-report resolution, lib/comparison/scoringDisplay.ts).
  *   2. The run recorded its judge identity (`judgeModel` = underlying LLM,
- *      `judgeModelId` = configured judge kind; lib/judgeIdentity) → the shared
+ *      `judgeModelId` = configured judge kind; lib/judgeIdentity) AND the
+ *      reports agree with it (or carry no judge of their own) → the shared
  *      <JudgeModelLabel> ("agent-trace-judge · claude-sonnet-4-5", or a
  *      "model not recorded" hint for old agent-judge runs).
- *   3. Otherwise the single per-report judge, or "not recorded".
+ *   3. The reports resolved to ONE judge that is NOT the run's — a
+ *      judge-changing Retry judgement (#509) re-judged every case with another
+ *      model / evaluator; the run's original `judgeModelId` is deliberately
+ *      immutable, so the reports are the current truth → label that judge.
+ *   4. Otherwise the single per-report judge, or "not recorded".
  */
 type JudgeEntry =
-  | { kind: 'label'; run: { judgeModel?: string; judgeModelId?: string }; text: string }
+  | { kind: 'label'; run: JudgeIdentityLike; text: string }
   | { kind: 'text'; text: string };
+
+/**
+ * Does the judge the reports resolved to (lib/comparison/scoringDisplay
+ * `resolveJudgeModelId`) name the same judge the run recorded? Equal to the
+ * run's resolved LLM or its configured id, or to the catalog `model_id`
+ * behind that configured key (`claude-sonnet-4.6` → `us.anthropic.claude-
+ * sonnet-4-6`) — the same alias rule `getJudgeModelDisplay` applies.
+ */
+function reportJudgeMatchesRun(reportJudge: string, run: { judgeModel?: string; judgeModelId?: string }): boolean {
+  if (reportJudge === run.judgeModel || reportJudge === run.judgeModelId) return true;
+  const configured = run.judgeModelId ? DEFAULT_CONFIG.models[run.judgeModelId]?.model_id : undefined;
+  return !!configured && reportJudge === configured;
+}
+
+/** Identity shape for a report-resolved judge id: the no-LLM marker, a provider kind, or an LLM. */
+function identityForReportJudge(reportJudge: string): JudgeIdentityLike {
+  if (reportJudge === JUDGE_PROVIDER_NONE) return { judgeProvider: JUDGE_PROVIDER_NONE };
+  if (isJudgeProviderPseudoModelId(reportJudge)) return { judgeModelId: reportJudge };
+  return { judgeModel: reportJudge };
+}
 
 function judgeEntryFor(run: RunAggregateMetrics, selected: BenchmarkRun | undefined): JudgeEntry {
   const ids = run.judgeModelIds && run.judgeModelIds.length > 0
     ? run.judgeModelIds
     : (run.judgeModelId ? [run.judgeModelId] : []);
   if (ids.length > 1) return { kind: 'text', text: judgeCaption(run, getModelName) };
+  const reportJudge: string | undefined = ids[0];
   if (selected && (selected.judgeModel || selected.judgeModelId)) {
     const identity = { judgeModel: selected.judgeModel, judgeModelId: selected.judgeModelId };
-    return { kind: 'label', run: identity, text: judgeModelText(identity) };
+    if (!reportJudge || reportJudgeMatchesRun(reportJudge, identity)) {
+      return { kind: 'label', run: identity, text: judgeModelText(identity) };
+    }
+    const current = identityForReportJudge(reportJudge);
+    return { kind: 'label', run: current, text: judgeModelText(current) };
   }
   return { kind: 'text', text: judgeCaption(run, getModelName) };
 }
@@ -788,7 +820,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                             testId={tid(`scoreboard-delta-primary-${col.primaryMetric}`)}
                             delta={d}
                             text={d === undefined ? '' : d === 0 ? '—' : `${d > 0 ? '+' : ''}${formatMetricInScale(d, a!.scale).replace(/^—$/, '')}`}
-                            title={deltaCaveat ?? `A minus B, mean ${col.primaryMetric} from both scoring snapshots`}
+                            title={deltaCaveat ?? `A minus ${letter}, mean ${col.primaryMetric} from both scoring snapshots`}
                           />
                         </td>
                       );
