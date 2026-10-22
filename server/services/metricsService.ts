@@ -377,20 +377,25 @@ export function groupAndCompute(
   });
 }
 
+/** The `size` cap of the batch query; results are flagged `partial` when hit. */
+const BATCH_QUERY_SIZE = 10000;
+
 /**
  * The per-key result for a chunk whose trace-store query FAILED (timeout,
- * 5xx, throttle, rejected query). Deliberately NOT `computeMetricsFromSpans(runId, [])`:
+ * 5xx, rejected query). Deliberately NOT `computeMetricsFromSpans(runId, [])`:
  * that shape (`status: 'pending', hasSpans: false`) means "we looked and
- * found nothing" and renders as "no spans" — a transient store failure must
- * instead say the truth: unknown, retry.
+ * found nothing", and every consumer renders it as "no spans" — so a 30 s
+ * OpenSearch timeout on a busy cluster used to surface on the benchmark
+ * Runs tab as every row claiming its agent was never traced (2026-10-22,
+ * 61 timed-out chunks in one page visit, all rendered "— / No spans found").
+ * `status: 'error'` + `error` says the truth: unknown, retry. Exported for
+ * the non-OpenSearch observability backends (CloudWatch), whose store
+ * failures must render the same way.
  */
 export function failedMetricsResult(runId: string, error: string): MetricsResult {
   const { hasSpans: _unknown, ...empty } = computeMetricsFromSpans(runId, []);
   return { ...empty, status: 'error', error: error || 'trace-store query failed' };
 }
-
-/** The `size` cap of the batch query; results are flagged `partial` when hit. */
-const BATCH_QUERY_SIZE = 10000;
 
 function totalHitsOf(hits: any, fallback: number): number {
   const total = hits?.total;
@@ -763,7 +768,7 @@ export async function computeBatchMetrics(
         console.warn(
           `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ${e.message}`
         );
-        return chunk.map(runId => computeMetricsFromSpans(runId, []));
+        return chunk.map(runId => failedMetricsResult(runId, e?.message));
       }
     }));
 
@@ -814,7 +819,7 @@ export async function computeBatchMetrics(
         `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ` +
         `${response.status} ${response.statusText}. Response body: ${responseBody}`
       );
-      return chunk.map(runId => computeMetricsFromSpans(runId, []));
+      return chunk.map(runId => failedMetricsResult(runId, `OpenSearch query failed: ${response.status} ${response.statusText}`));
     }
 
     const data: OpenSearchResponse = await response.json();

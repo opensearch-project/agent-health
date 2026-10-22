@@ -2319,7 +2319,12 @@ export interface MetricsResult {
   partial?: boolean;
   /** See TraceMetrics.correlatedBy. */
   correlatedBy?: 'ids' | 'window' | 'mixed';
-  /** Why `status` is 'error' (trace-store query failed) — the numbers are unknown, not zero. */
+  /**
+   * Set (with `status: 'error'`) when the trace-store query for this key
+   * FAILED — timeout, 5xx, rejected query. The key's spans are then UNKNOWN,
+   * not absent: `hasSpans` is left undefined so consumers render
+   * "unavailable" (and offer a retry) rather than "no spans".
+   */
   error?: string;
   /** Composite backend: the configured source these metrics were taken from. */
   source?: string;

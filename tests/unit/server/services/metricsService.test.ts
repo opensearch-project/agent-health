@@ -940,18 +940,58 @@ describe('metricsService', () => {
       expect(result[0].status).toBe('pending');
     });
 
-    it('should handle OpenSearch failure gracefully', async () => {
+    it('reports a FAILED chunk per key as status "error" (spans unknown), never as "pending / hasSpans:false" (spans absent)', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
+        statusText: 'Internal Server Error',
         text: () => Promise.resolve('Internal error'),
       });
 
       const result = await computeBatchMetrics(['run-1', 'run-2'], defaultConfig);
 
       expect(result).toHaveLength(2);
-      expect(result[0].status).toBe('pending');
-      expect(result[1].status).toBe('pending');
+      for (const r of result) {
+        expect(r.status).toBe('error');
+        expect(r.error).toMatch(/500 Internal Server Error/);
+        // Unknown, not false: a consumer that keys "no spans" off hasSpans === false must not fire.
+        expect(r.hasSpans).toBeUndefined();
+        expect(r.totalTokens).toBe(0);
+      }
+    });
+
+    it('SDK-client transport: an OpenSearch request timeout on one chunk yields error entries for THAT chunk only; the other chunk still computes', async () => {
+      // 51 keys => two server-side chunks (50 + 1). The first search times out
+      // (opensearch-js TimeoutError shape: "Request timed out"), the second
+      // returns one span for key run-50.
+      const keys = Array.from({ length: 51 }, (_, i) => `run-${i}`);
+      const timeoutErr = Object.assign(new Error('Request timed out'), { name: 'TimeoutError' });
+      const search = jest.fn()
+        .mockRejectedValueOnce(timeoutErr)
+        .mockResolvedValueOnce({ body: { hits: { total: { value: 1 }, hits: [{ _source: {
+          traceId: 'abc', spanId: 's1', name: 'chat', startTime: '2026-10-22T20:00:00.000Z', endTime: '2026-10-22T20:00:01.000Z',
+          attributes: { 'agent_health.run.id': 'run-50', 'gen_ai.usage.input_tokens': 10, 'gen_ai.usage.output_tokens': 5, 'gen_ai.operation.name': 'chat' },
+        } }] } } });
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await computeBatchMetrics(keys, { client: { search } as any });
+        expect(search).toHaveBeenCalledTimes(2);
+        const byKey = new Map(result.map(r => [r.runId, r]));
+        for (let i = 0; i < 50; i++) {
+          const r = byKey.get(`run-${i}`)!;
+          expect(r.status).toBe('error');
+          expect(r.error).toBe('Request timed out');
+          expect(r.hasSpans).toBeUndefined();
+        }
+        const ok = byKey.get('run-50')!;
+        expect(ok.status).toBe('success');
+        expect(ok.hasSpans).toBe(true);
+        expect(ok.totalTokens).toBe(15);
+        expect(ok.error).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('Request timed out'));
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('ORs in Strategy-D session.id terms (one per runId) when sessionIdByRunId is supplied', async () => {
