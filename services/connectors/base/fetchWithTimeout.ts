@@ -67,13 +67,9 @@ export interface FetchWithTimeoutOptions extends RequestInit {
   connectorType?: string;
 }
 
-/**
- * Resolve `connectorConfig.timeoutMs` (or legacy `connectorConfig.timeout`,
- * the subprocess connectors' key) into a positive finite number, else the
- * default.
- */
+/** Resolve `connectorConfig.timeoutMs` into a positive finite number, else the default. */
 export function resolveConnectorTimeoutMs(connectorConfig: Record<string, any> | undefined, fallback = DEFAULT_HTTP_CONNECTOR_TIMEOUT_MS): number {
-  const raw = connectorConfig?.timeoutMs ?? connectorConfig?.timeout;
+  const raw = connectorConfig?.timeoutMs;
   const n = typeof raw === 'string' ? Number(raw) : raw;
   return typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }

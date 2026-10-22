@@ -24,10 +24,10 @@ describe('resolveConnectorTimeoutMs', () => {
     expect(resolveConnectorTimeoutMs(undefined)).toBe(300_000);
     expect(resolveConnectorTimeoutMs({})).toBe(300_000);
   });
-  it('honours connectorConfig.timeoutMs (number or numeric string) and legacy `timeout`', () => {
+  it('honours connectorConfig.timeoutMs (number or numeric string); ignores other keys', () => {
     expect(resolveConnectorTimeoutMs({ timeoutMs: 900_000 })).toBe(900_000);
     expect(resolveConnectorTimeoutMs({ timeoutMs: '12000' })).toBe(12_000);
-    expect(resolveConnectorTimeoutMs({ timeout: 45_000 })).toBe(45_000);
+    expect(resolveConnectorTimeoutMs({ timeout: 45_000 })).toBe(300_000);
   });
   it('rejects non-positive / non-finite values', () => {
     expect(resolveConnectorTimeoutMs({ timeoutMs: 0 })).toBe(300_000);

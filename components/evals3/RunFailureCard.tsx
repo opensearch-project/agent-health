@@ -21,7 +21,7 @@
  */
 
 import React, { useState } from 'react';
-import { AlertCircle, PlugZap, Scale, Activity, ChevronDown, ChevronRight } from 'lucide-react';
+import { PlugZap, Scale, Activity, ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import type { EvaluationReport } from '@/types';
 import {
@@ -178,13 +178,4 @@ export const RunFailureCard: React.FC<RunFailureCardProps> = ({ report, classNam
       </CardContent>
     </Card>
   );
-};
-
-/** Small inline icon for headers. */
-export const RunFailureIcon: React.FC<{ report: EvaluationReport; size?: number }> = ({ report, size = 14 }) => {
-  const stage = getFailureStage(report);
-  if (!stage) return null;
-  return stage === 'agent'
-    ? <PlugZap size={size} className="text-orange-500" />
-    : <AlertCircle size={size} className="text-amber-500" />;
 };

@@ -17,7 +17,7 @@
  * the corrected chain.
  */
 
-import { buildEvaluatorErrorPatch, failureStageForKind } from '@/services/evaluation/evaluatorError';
+import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
 import { describeAgentError } from '@/services/evaluation/agentFailure';
 import { parseJudgeResponse, JudgeParseError, isJudgeParseError } from '@/server/services/judgeResponseParser';
 import { parsePiError } from '@/server/services/piJudgeService';
@@ -34,13 +34,13 @@ function undiciHeadersTimeout(): Error {
 
 describe('buildEvaluatorErrorPatch — failureStage + structured detail', () => {
   it('maps every kind to a stage', () => {
-    expect(failureStageForKind('agent_failed')).toBe('agent');
-    expect(failureStageForKind('judge_failed')).toBe('judge');
-    expect(failureStageForKind('trace_timeout')).toBe('trace');
-    expect(failureStageForKind('trace_incomplete')).toBe('trace');
-    expect(failureStageForKind('trace_callback_failed')).toBe('trace');
-    expect(failureStageForKind('trace_fetch_failed')).toBe('trace');
-    expect(failureStageForKind('unknown')).toBe('judge');
+    expect(buildEvaluatorErrorPatch('agent_failed', 'x').failureStage).toBe('agent');
+    expect(buildEvaluatorErrorPatch('judge_failed', 'x').failureStage).toBe('judge');
+    expect(buildEvaluatorErrorPatch('trace_timeout', 'x').failureStage).toBe('trace');
+    expect(buildEvaluatorErrorPatch('trace_incomplete', 'x').failureStage).toBe('trace');
+    expect(buildEvaluatorErrorPatch('trace_callback_failed', 'x').failureStage).toBe('trace');
+    expect(buildEvaluatorErrorPatch('trace_fetch_failed', 'x').failureStage).toBe('trace');
+    expect(buildEvaluatorErrorPatch('unknown', 'x').failureStage).toBe('judge');
   });
 
   it('agent_failed: stamps failureStage:"agent", the unwrapped cause as `error`, agentError, and agent-stage prose', () => {
