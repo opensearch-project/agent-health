@@ -57,11 +57,21 @@ export interface RunTelemetry {
   /** Reports whose metrics request failed (per-key error entry). */
   errorCases: number;
   /**
-   * True when EVERY report's metrics request failed — nothing at all is
-   * known about this run's spans. Renders "—" with "Metrics unavailable".
-   * A partial failure (some keys errored, others answered) is NOT
-   * unavailable: the sums cover the answered keys and the tooltip's
-   * "spans found for N of M" tells the rest.
+   * Reports whose metrics request has not answered yet (no result cached
+   * for the key). While > 0 the trace-derived cells are LOADING, not empty:
+   * the roll-up is provisional and must not be read as "no spans".
+   */
+  pendingCases: number;
+  /** The first per-key error message, for the "unavailable" tooltip. */
+  errorMessage?: string;
+  /**
+   * True once every key has answered, at least one report's metrics request
+   * failed AND no report had spans — nothing trustworthy is known about this
+   * run's spans, so the cells read "unavailable" (Retry) rather than "no traces". A partial
+   * failure where OTHER keys did find spans is NOT unavailable: the sums
+   * cover the answered keys and the tooltip's "spans found for N of M"
+   * tells the rest. (Pre-fix this required EVERY key to fail, so one
+   * timed-out chunk out of two read as "this agent was never traced".)
    */
   unavailable: boolean;
   /** True when at least one report had spans. Drives the "—" rendering. */
@@ -210,7 +220,8 @@ export function aggregateRunTelemetry(
   metricsByKey: Record<string, TelemetryMetricsResult | undefined>,
 ): RunTelemetry | undefined {
   let totalTokens = 0, costUsd = 0, llmCalls = 0, toolCalls = 0;
-  let spansCases = 0, totalCases = 0, errorCases = 0, partial = false;
+  let spansCases = 0, totalCases = 0, errorCases = 0, pendingCases = 0, partial = false;
+  let errorMessage: string | undefined;
   const durations: number[] = [];
 
   for (const result of Object.values(run.results || {})) {
@@ -223,8 +234,12 @@ export function aggregateRunTelemetry(
     if (typeof d === 'number' && Number.isFinite(d) && d > 0) durations.push(d);
 
     const m = metricsByKey[key];
-    if (m?.error) { errorCases++; continue; }
-    if (!m || m.status === 'pending' || m.hasSpans === false) continue;
+    if (m?.error) { errorCases++; errorMessage ??= m.error; continue; }
+    if (!m) { pendingCases++; continue; }
+    // The server's `status: 'pending'` is its "queried, found nothing" shape
+    // (computeMetricsFromSpans on zero spans) — that IS "no spans", not
+    // "still loading"; only a key with no result at all is pending here.
+    if (m.status === 'pending' || m.hasSpans === false) continue;
     spansCases++;
     totalTokens += m.totalTokens || 0;
     costUsd += m.costUsd || 0;
@@ -237,8 +252,8 @@ export function aggregateRunTelemetry(
   return {
     totalTokens, costUsd, llmCalls, toolCalls,
     medianDurationMs: median(durations),
-    spansCases, totalCases, errorCases,
-    unavailable: errorCases === totalCases,
+    spansCases, totalCases, errorCases, pendingCases, errorMessage,
+    unavailable: pendingCases === 0 && errorCases > 0 && spansCases === 0,
     hasSpans: spansCases > 0,
     partial,
   };

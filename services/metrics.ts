@@ -59,6 +59,8 @@ export interface MetricsAgentHint {
  *   service.name + run window, optional session.id) so a report with no
  *   correlation id at all is still matched by the spans its agent emitted in
  *   that window — the same correlation the Traces tab / trace judge use
+ * @param options.signal - Optional AbortSignal (callers that must bound the
+ *   wait, e.g. the Runs tab behind a proxy with its own request timeout)
  * @returns Object containing individual metrics and aggregate statistics
  */
 export async function fetchBatchMetrics(
@@ -66,6 +68,7 @@ export async function fetchBatchMetrics(
   sessionIdByRunId?: Record<string, string>,
   traceIdByRunId?: Record<string, string>,
   agentsByRunId?: Record<string, MetricsAgentHint[]>,
+  options?: { signal?: AbortSignal },
 ): Promise<{
   metrics: TraceMetrics[];
   aggregate: {
@@ -88,6 +91,7 @@ export async function fetchBatchMetrics(
     headers: {
       'Content-Type': 'application/json',
     },
+    ...(options?.signal ? { signal: options.signal } : {}),
     body: JSON.stringify({
       runIds,
       ...(sessionIdByRunId ? { sessionIds: sessionIdByRunId } : {}),

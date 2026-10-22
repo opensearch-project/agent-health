@@ -126,17 +126,42 @@ describe('aggregateRunTelemetry', () => {
     expect(t.partial).toBe(false);
   });
 
-  it('unavailable only when EVERY report\'s metrics request failed; wall-clock median survives', () => {
+  it('unavailable when the keys have all answered, some failed and NONE found spans; wall-clock median survives', () => {
     const t = aggregateRunTelemetry(run('run-a', ['r1', 'r2']), reports, {
-      k1: { runId: 'k1', error: '500', status: 'error' },
+      k1: { runId: 'k1', error: 'Request timed out', status: 'error' },
       k2: { runId: 'k2', error: '500', status: 'error' },
     })!;
     expect(t.unavailable).toBe(true);
     expect(t.errorCases).toBe(2);
+    expect(t.errorMessage).toBe('Request timed out');   // first error, for the tooltip
     expect(t.hasSpans).toBe(false);
+    expect(t.pendingCases).toBe(0);
     expect(t.medianDurationMs).toBe(41_000);
-    // one key not fetched yet + one errored → not (yet) unavailable
-    expect(aggregateRunTelemetry(run('run-a', ['r1', 'r2']), reports, { k1: { runId: 'k1', error: '500', status: 'error' } })!.unavailable).toBe(false);
+    // one key not fetched yet + one errored → still loading, not (yet) unavailable
+    const loading = aggregateRunTelemetry(run('run-a', ['r1', 'r2']), reports, { k1: { runId: 'k1', error: '500', status: 'error' } })!;
+    expect(loading.unavailable).toBe(false);
+    expect(loading.pendingCases).toBe(1);
+  });
+
+  it('regression: ONE failed key + the rest "no spans" is UNAVAILABLE, not "no traces" (a timed-out chunk must not read as "never traced")', () => {
+    const t = aggregateRunTelemetry(run('run-a', ['r1', 'r2', 'r3']), reports, {
+      k1: { runId: 'k1', error: 'Request timed out', status: 'error' },
+      k2: ok('k2', { hasSpans: false, totalTokens: 0, costUsd: 0, llmCalls: 0 }),
+      k3: ok('k3', { hasSpans: false, totalTokens: 0, costUsd: 0, llmCalls: 0 }),
+    })!;
+    expect(t.unavailable).toBe(true);
+    expect(t.hasSpans).toBe(false);
+    expect(t.errorCases).toBe(1);
+  });
+
+  it('the server\'s "pending" result shape (queried, zero spans) counts as NO SPANS, not as still loading', () => {
+    const t = aggregateRunTelemetry(run('run-a', ['r1']), reports, {
+      k1: { runId: 'k1', status: 'pending', hasSpans: false },
+    })!;
+    expect(t.pendingCases).toBe(0);
+    expect(t.spansCases).toBe(0);
+    expect(t.hasSpans).toBe(false);
+    expect(t.unavailable).toBe(false);
   });
 
   it('hasSpans:false for every report → zero sums, hasSpans false, duration still populated', () => {
