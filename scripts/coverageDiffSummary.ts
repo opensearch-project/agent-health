@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /*
  * Copyright OpenSearch Contributors
  * SPDX-License-Identifier: Apache-2.0
@@ -6,17 +5,19 @@
 
 /**
  * coverage-diff-summary — a Markdown table of coverage for the source files a
- * PR touched, computed from one or more lcov reports.
+ * PR touched, computed from one or more lcov reports. Library half: every
+ * function here is imported by its unit test (so jest measures it); the thin
+ * CLI entry is scripts/coverage-diff-summary.ts.
  *
  * CI appends the output to `$GITHUB_STEP_SUMMARY` so a reviewer can see, per
  * changed file, line %, branch % and the exact uncovered line ranges without
  * leaving the Actions run (Codecov's PR comment shows per-file patch %, not the
  * missing line ranges).
  *
- *   node scripts/coverage-diff-summary.mjs --lcov coverage/lcov.info \
+ *   npx tsx scripts/coverage-diff-summary.ts --lcov coverage/lcov.info \
  *        --base <sha-or-ref> --title "Unit coverage — changed files"
  *
- *   node scripts/coverage-diff-summary.mjs --lcov a.info --lcov b.info \
+ *   npx tsx scripts/coverage-diff-summary.ts --lcov a.info --lcov b.info \
  *        --files cli/commands/run.ts,lib/config.ts
  *
  * Options
@@ -27,37 +28,64 @@
  *   --title <text>     heading above the table.
  *   --root <dir>       repo root used to relativise absolute SF: paths (default: cwd).
  *
- * The tool never fails the build: it exits 0 and prints a note when there is
- * nothing to show. Visibility is the point; gating is Codecov's job.
+ * Exit code 0 with a table (or a one-line note when there is nothing to show);
+ * 2 on a usage error. CI runs it with `continue-on-error` — visibility is the
+ * point; gating is Codecov's job.
  */
 
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { isAbsolute, relative, sep } from 'node:path';
 
+export interface FileCoverage {
+  lines: Map<number, number>;
+  branches: Map<string, boolean>;
+}
+
+export interface FileSummary {
+  linesTotal: number;
+  linesHit: number;
+  uncovered: number[];
+  branchesTotal: number;
+  branchesHit: number;
+}
+
+export interface Options {
+  lcov: string[];
+  files: string[] | null;
+  base: string | null;
+  title: string;
+  root: string;
+}
+
 /** Source files we report on. Tests, type-only files and non-code never make a row. */
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const NOT_SOURCE = /(^|\/)(tests?|__tests__|__mocks__|e2e|dist|node_modules|coverage[^/]*)\//;
 const NOT_SOURCE_FILE = /(\.test\.(ts|tsx|js)|\.spec\.(ts|tsx|js)|\.d\.ts|\.config\.(ts|js|cjs|mjs))$/;
 
-export function isReportableSource(file) {
+export function isReportableSource(file: string): boolean {
   return SOURCE_EXT.test(file) && !NOT_SOURCE.test(file) && !NOT_SOURCE_FILE.test(file);
 }
 
+export function normalizePath(p: string, root: string): string {
+  let out = p.trim();
+  if (isAbsolute(out)) out = relative(root, out);
+  return out.split(sep).join('/');
+}
+
 /**
- * Parse one or more lcov documents into
- *   Map<relativePath, { lines: Map<lineNo, hits>, branches: Map<key, taken> }>
+ * Parse one or more lcov documents into Map<relativePath, FileCoverage>.
  * Paths are made relative to `root` (lcov from jest/c8 may be absolute).
  */
-export function parseLcov(texts, root = process.cwd()) {
-  const files = new Map();
+export function parseLcov(texts: string | string[], root: string = process.cwd()): Map<string, FileCoverage> {
+  const files = new Map<string, FileCoverage>();
   for (const text of Array.isArray(texts) ? texts : [texts]) {
-    let cur = null;
+    let cur: FileCoverage | null = null;
     for (const raw of text.split(/\r?\n/)) {
       const line = raw.trim();
       if (line.startsWith('SF:')) {
         const key = normalizePath(line.slice(3), root);
-        cur = files.get(key);
+        cur = files.get(key) ?? null;
         if (!cur) {
           cur = { lines: new Map(), branches: new Map() };
           files.set(key, cur);
@@ -82,16 +110,10 @@ export function parseLcov(texts, root = process.cwd()) {
   return files;
 }
 
-export function normalizePath(p, root) {
-  let out = p.trim();
-  if (isAbsolute(out)) out = relative(root, out);
-  return out.split(sep).join('/');
-}
-
-/** Compact a sorted list of line numbers into "1-3, 7, 10-12". */
-export function compactRanges(lines, { maxRanges = 8 } = {}) {
+/** Compact a list of line numbers into "1-3, 7, 10-12", capped at `maxRanges`. */
+export function compactRanges(lines: number[], { maxRanges = 8 }: { maxRanges?: number } = {}): string {
   const sorted = [...new Set(lines)].sort((a, b) => a - b);
-  const ranges = [];
+  const ranges: Array<[number, number]> = [];
   for (const n of sorted) {
     const last = ranges[ranges.length - 1];
     if (last && n === last[1] + 1) last[1] = n;
@@ -102,7 +124,7 @@ export function compactRanges(lines, { maxRanges = 8 } = {}) {
   return shown.join(', ') + (rest > 0 ? `, +${rest} more` : '');
 }
 
-export function summarizeFile(cov) {
+export function summarizeFile(cov: FileCoverage): FileSummary {
   const total = cov.lines.size;
   const uncovered = [...cov.lines.entries()].filter(([, h]) => h === 0).map(([n]) => n);
   const bTotal = cov.branches.size;
@@ -116,12 +138,12 @@ export function summarizeFile(cov) {
   };
 }
 
-export function pct(hit, total) {
+export function pct(hit: number, total: number): string {
   if (total === 0) return '—';
   return `${((hit / total) * 100).toFixed(1)}%`;
 }
 
-export function changedFilesFromGit(base, cwd = process.cwd()) {
+export function changedFilesFromGit(base: string, cwd: string = process.cwd()): string[] {
   const out = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', base, 'HEAD'], {
     cwd,
     encoding: 'utf8',
@@ -129,17 +151,22 @@ export function changedFilesFromGit(base, cwd = process.cwd()) {
   return out.split('\n').map((s) => s.trim()).filter(Boolean);
 }
 
-/**
- * Build the Markdown. `changed` is the raw changed-file list; `coverage` is
- * the parsed lcov map. Returns a string (always non-empty).
- */
-export function renderSummary({ title, changed, coverage }) {
+/** Build the Markdown. Always returns a non-empty string. */
+export function renderSummary({
+  title,
+  changed,
+  coverage,
+}: {
+  title: string;
+  changed: string[];
+  coverage: Map<string, FileCoverage>;
+}): string {
   const files = changed.filter(isReportableSource).sort();
   const head = title ? `### ${title}\n\n` : '';
   if (files.length === 0) {
     return `${head}_No changed source files in this suite's scope._\n`;
   }
-  const rows = [];
+  const rows: string[] = [];
   let tl = 0;
   let th = 0;
   let tb = 0;
@@ -174,11 +201,11 @@ export function renderSummary({ title, changed, coverage }) {
   return lines.join('\n').replace(/^\n/, '');
 }
 
-export function parseArgs(argv) {
-  const opts = { lcov: [], files: null, base: null, title: '', root: process.cwd() };
+export function parseArgs(argv: string[]): Options {
+  const opts: Options = { lcov: [], files: null, base: null, title: '', root: process.cwd() };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    const next = () => {
+    const next = (): string => {
       i += 1;
       if (i >= argv.length) throw new Error(`missing value for ${a}`);
       return argv[i];
@@ -195,27 +222,23 @@ export function parseArgs(argv) {
   return opts;
 }
 
-export function main(argv = process.argv.slice(2)) {
+/**
+ * Whole program as a function: parse args, read the lcov files (an unreadable
+ * file is reported on `warnings` and treated as empty), diff, render.
+ * Throws on usage errors (the entry maps that to exit code 2).
+ */
+export function run(argv: string[]): { markdown: string; warnings: string[] } {
   const opts = parseArgs(argv);
+  const warnings: string[] = [];
   const texts = opts.lcov.map((f) => {
     try {
       return readFileSync(f, 'utf8');
     } catch (err) {
-      process.stderr.write(`coverage-diff-summary: cannot read ${f}: ${err.message}\n`);
+      warnings.push(`cannot read ${f}: ${(err as Error).message}`);
       return '';
     }
   });
   const coverage = parseLcov(texts, opts.root);
-  const changed = opts.files ?? changedFilesFromGit(opts.base, opts.root);
-  process.stdout.write(renderSummary({ title: opts.title, changed, coverage }));
-  return 0;
-}
-
-if (process.argv[1] && /coverage-diff-summary\.mjs$/.test(process.argv[1])) {
-  try {
-    process.exitCode = main();
-  } catch (err) {
-    process.stderr.write(`coverage-diff-summary: ${err.message}\n`);
-    process.exitCode = 2;
-  }
+  const changed = opts.files ?? changedFilesFromGit(opts.base as string, opts.root);
+  return { markdown: renderSummary({ title: opts.title, changed, coverage }), warnings };
 }

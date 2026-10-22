@@ -477,7 +477,7 @@ On PRs, Codecov adds `codecov/patch` (>= 80% of new/changed lines, across the
 `unit`, `integration`, `e2e` and `cli` flags) and `codecov/project` (no drop
 > 1% vs base), annotates uncovered changed lines in the diff, and each test job
 writes a changed-files coverage table to its job summary
-(`scripts/coverage-diff-summary.mjs`). `cli/**` is measured from the real CLI
+(`scripts/coverage-diff-summary.ts`). `cli/**` is measured from the real CLI
 processes the integration tests spawn (`NODE_V8_COVERAGE` → `npm run
 coverage:cli`); tests that spawn the CLI must wrap the child env in
 `withCliCoverage()` from `tests/helpers/cliCoverage.ts` or their run is
