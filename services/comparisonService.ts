@@ -246,7 +246,7 @@ export function mergeTraceMetrics(
       const tm = traceMetricsMap.get(key);
       if (tm && tm.status !== 'pending') {
         if (tm.partial) anyPartial = true;
-        if (tm.correlatedBy === 'window' || tm.correlatedBy === 'mixed') anyWindow = true;
+        if (tm.correlatedBy === 'window') anyWindow = true;
         totalTokens += tm.totalTokens || 0;
         totalInputTokens += tm.inputTokens || 0;
         totalOutputTokens += tm.outputTokens || 0;

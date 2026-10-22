@@ -1319,9 +1319,10 @@ export interface TraceMetrics {
    * Which correlation strategy attributed this key's spans: precise ids
    * (`traceId` / run-id attributes / `session.id`) or the service.name +
    * time-window fallback (`window`), which can pick up unrelated traffic of
-   * the same service. `mixed` when spans came in through more than one.
+   * the same service. Precise-first: the window is consulted only when the
+   * ids found none of the agent's spans, so a key is one or the other.
    */
-  correlatedBy?: 'ids' | 'window' | 'mixed';
+  correlatedBy?: 'ids' | 'window';
 }
 
 // ============ Trace Types ============
@@ -2318,7 +2319,7 @@ export interface MetricsResult {
   /** See TraceMetrics.partial -- query hit its size cap; counts are a lower bound. */
   partial?: boolean;
   /** See TraceMetrics.correlatedBy. */
-  correlatedBy?: 'ids' | 'window' | 'mixed';
+  correlatedBy?: 'ids' | 'window';
   /**
    * Set (with `status: 'error'`) when the trace-store query for this key
    * FAILED — timeout, 5xx, rejected query. The key's spans are then UNKNOWN,

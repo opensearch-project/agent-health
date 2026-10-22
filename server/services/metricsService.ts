@@ -153,7 +153,7 @@ export function isEvalOrJudgeSpan(attrs: Record<string, any>, spanName?: string)
 }
 
 /**
- * Correlation `should` clauses for a single runId — Strategy B
+ * Correlation `should` clauses for a chunk of keys — Strategy B
  * (`agent_health.run.id` / the OTEL-standard `gen_ai.conversation.id`, under
  * BOTH index schemas via the shared {@link buildRunIdShouldClauses}) OR'd
  * with Strategy A (`traceId`, the eval span's own OTel trace id, propagated
@@ -186,22 +186,20 @@ export function isEvalOrJudgeSpan(attrs: Record<string, any>, spanName?: string)
  * spans, possible when Strategy A pulls in the whole trace) are excluded
  * via {@link isEvalOrJudgeSpan} above so they can't inflate the agent's own
  * token/LLM-call count.
+ *
+ * Also OR'd: Strategy D (`session.id`, the precise per-run correlator real
+ * closed-source connectors like Claude Code actually stamp on every span;
+ * `.keyword` + raw + flat-@ paths via the shared
+ * {@link buildSessionIdShouldClauses}, mirroring tracesService.ts) and
+ * Strategy C (one `service.name` + run-window clause per hint, via the shared
+ * {@link buildAgentHintClause} — the exact clause `/api/traces` / the trace
+ * judge use, so a run whose report carries NO correlation id at all still gets
+ * metrics from the spans its agent emitted in that window). ONE query returns
+ * every candidate span; which key each span counts for — and whether the
+ * window counts at all — is decided afterwards by
+ * {@link attributeSpansPreciseFirst}. The single-run path delegates here with
+ * one-element arrays — a `terms` clause with one value is functionally a `term`.
  */
-function buildCorrelationShouldClauses(runId: string, sessionId?: string, traceId?: string, agents?: ServiceWindowHint[]): Record<string, unknown>[] {
-  return buildBatchCorrelationShouldClauses([runId], sessionId ? [sessionId] : [], traceId ? [traceId] : [], agents ?? []);
-}
-
-/** Batch (terms) form of {@link buildCorrelationShouldClauses} — Strategy B OR
- *  Strategy D (`session.id`, the precise per-run correlator real
- *  closed-source connectors like Claude Code actually stamp on every span;
- *  `.keyword` + raw + flat-@ paths via the shared
- *  {@link buildSessionIdShouldClauses}, mirroring tracesService.ts)
- *  OR Strategy A (`traceId`) OR Strategy C (one `service.name` + run-window
- *  clause per hint, via the shared {@link buildAgentHintClause} — the exact
- *  clause `/api/traces` / the trace judge use, so a run whose report carries
- *  NO correlation id at all still gets metrics from the spans its agent
- *  emitted in that window). The single-run path delegates here with
- *  one-element arrays — a `terms` clause with one value is functionally a `term`. */
 function buildBatchCorrelationShouldClauses(
   runIds: string[],
   sessionIds: string[],
@@ -262,39 +260,147 @@ function resolveSpanKeyByServiceWindow(
 }
 
 /**
- * Resolve which requested key a span actually matched (and via which
- * strategy), for grouping spans back to their key in the batch path. Tries Strategy B by either
- * attribute, then Strategy D (session.id), then Strategy A via the traceId ->
- * runId reverse lookup, and finally Strategy C (service.name + window) via
- * {@link resolveSpanKeyByServiceWindow}. Precise strategies win over the
- * window on purpose: a span that names its run can't be mis-attributed to a
- * neighbouring run whose window happens to overlap.
+ * Resolve which requested key a span matched by an EXACT correlator: Strategy
+ * B by either run-id attribute, then Strategy D (`session.id`), then Strategy
+ * A via the traceId -> runId reverse lookup. `undefined` when the span names
+ * none of the chunk's keys (it came in through a window clause, or is noise).
  *
  * Pre-fix this only ever checked `agent_health.run.id`, silently dropping any
  * span that matched the OR'd `gen_ai.conversation.id` clause from grouping
  * (it was still fetched, just never attributed to a runId).
  */
-function resolveSpanAttribution(
+function resolveSpanKeyByIds(
   span: OpenSearchSpanSource,
   idSet: Set<string>,
   sessionIdToRunId: Map<string, string>,
-  traceIdToRunId: Map<string, string>,
-  hintsByServiceName: Map<string, Array<{ key: string; hint: ServiceWindowHint }>>
-): { key: string; via: 'ids' | 'window' } | undefined {
+  traceIdToRunId: Map<string, string>
+): string | undefined {
   const attrs = readAttrs(span);
   const byRunIdAttr = attrs['agent_health.run.id'] as string | undefined;
-  if (byRunIdAttr && idSet.has(byRunIdAttr)) return { key: byRunIdAttr, via: 'ids' };
+  if (byRunIdAttr && idSet.has(byRunIdAttr)) return byRunIdAttr;
   const byConversationId = attrs['gen_ai.conversation.id'] as string | undefined;
-  if (byConversationId && idSet.has(byConversationId)) return { key: byConversationId, via: 'ids' };
+  if (byConversationId && idSet.has(byConversationId)) return byConversationId;
   if (sessionIdToRunId.size > 0) {
     const sessionId = (attrs['session.id'] as string | undefined) ?? (attrs['session@id'] as string | undefined);
-    if (sessionId && sessionIdToRunId.has(sessionId)) return { key: sessionIdToRunId.get(sessionId)!, via: 'ids' };
+    if (sessionId && sessionIdToRunId.has(sessionId)) return sessionIdToRunId.get(sessionId)!;
   }
   if (traceIdToRunId.size > 0 && span.traceId && traceIdToRunId.has(span.traceId)) {
-    return { key: traceIdToRunId.get(span.traceId)!, via: 'ids' };
+    return traceIdToRunId.get(span.traceId)!;
   }
-  const byWindow = resolveSpanKeyByServiceWindow(span, hintsByServiceName);
-  return byWindow ? { key: byWindow, via: 'window' } : undefined;
+  return undefined;
+}
+
+/** Agent Health's OWN run-id attribute — the only one safe to use as negative evidence. */
+const OWN_RUN_ID_ATTRIBUTE = 'agent_health.run.id';
+
+function ownRunId(span: OpenSearchSpanSource): string | undefined {
+  const v = readAttrs(span)[OWN_RUN_ID_ATTRIBUTE];
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/** The spans attributed to one requested key, and how they were found. */
+export interface KeySpanAttribution {
+  spans: OpenSearchSpanSource[];
+  /** `ids` when exact correlators found the agent; `window` when only the service-name window did; unset when nothing matched. */
+  via?: 'ids' | 'window';
+}
+
+/**
+ * Own run identity per TRACE, over every span the query returned: a run's
+ * root usually carries `agent_health.run.id` while its LLM/HTTP children
+ * don't, and the children must follow their root (measured live: 13 of 72
+ * window spans were identity-less children of other runs' roots). Only Agent
+ * Health's own attribute counts — `gen_ai.conversation.id` / `session.id` are
+ * OTEL-standard ids a third-party agent may fill with its own thread id.
+ */
+function ownRunIdsByTrace(spans: readonly OpenSearchSpanSource[]): Map<string, Set<string>> {
+  const byTrace = new Map<string, Set<string>>();
+  for (const span of spans) {
+    const own = ownRunId(span);
+    if (!own || !span.traceId) continue;
+    const set = byTrace.get(span.traceId) ?? new Set<string>();
+    set.add(own);
+    byTrace.set(span.traceId, set);
+  }
+  return byTrace;
+}
+
+/**
+ * Attribute a chunk's returned spans to the requested keys, PRECISE-FIRST —
+ * the same rule `/api/traces` follows (AGENTS.md → "Strategy C — FALLBACK,
+ * not a peer"), applied per key:
+ *
+ *   1. Exact correlators first (B run-id attributes, D `session.id`, A
+ *      `traceId` — {@link resolveSpanKeyByIds}); an identity-less span whose
+ *      trace is claimed by exactly one requested key (its root carries that
+ *      key's `agent_health.run.id`) follows its root. A key whose exact spans
+ *      include at least one of the AGENT's own spans is done: its result is
+ *      exactly those spans and the window is never consulted for it. Agent
+ *      Health's own eval/judge spans do not count as a hit — the eval
+ *      `test_case` span carries the run id itself, so for an agent that emits
+ *      none of A/B/D the exact match is just that one span, and it must not
+ *      suppress the only strategy that can find the agent.
+ *   2. Every other key falls back to its service-name + window hints
+ *      ({@link resolveSpanKeyByServiceWindow}, nearest window midpoint among
+ *      the FALLBACK keys only), post-filtered by run identity resolved per
+ *      TRACE: when the span's trace carries Agent Health's own
+ *      `agent_health.run.id` and none of those values is this key, the span is
+ *      dropped. Identity-less traces are kept — that is the population
+ *      Strategy C exists for.
+ *
+ * Pre-fix the window clause was a PEER of the exact ones: every span the union
+ * query returned was handed to the nearest overlapping window when no id
+ * claimed it, so at concurrency > 1 a case's totals absorbed its neighbours'
+ * identity-less spans and spans of other runs of the same agent (measured on
+ * a 62-case run at concurrency 5: 9.36M tokens / 364 LLM calls by ids alone
+ * vs 16.4M / 640 with the window unioned in — +75%).
+ */
+export function attributeSpansPreciseFirst(
+  chunk: readonly string[],
+  allSpans: readonly OpenSearchSpanSource[],
+  lookups: Pick<ReturnType<typeof buildChunkLookups>, 'runIdCorrelators' | 'sessionIdToRunId' | 'traceIdToRunId' | 'hintsByServiceName'>
+): Map<string, KeySpanAttribution> {
+  const idSet = new Set(lookups.runIdCorrelators);
+  const out = new Map<string, KeySpanAttribution>();
+  for (const key of chunk) out.set(key, { spans: [] });
+  const ownIdsByTrace = ownRunIdsByTrace(allSpans);
+  const identityOf = (span: OpenSearchSpanSource): Set<string> =>
+    (span.traceId && ownIdsByTrace.get(span.traceId)) || new Set([ownRunId(span)].filter((v): v is string => !!v));
+
+  // Phase 1 — exact correlators; identity-less spans follow their trace's root.
+  const unattributed: OpenSearchSpanSource[] = [];
+  const keysWithAgentSpans = new Set<string>();
+  for (const span of allSpans) {
+    let key = resolveSpanKeyByIds(span, idSet, lookups.sessionIdToRunId, lookups.traceIdToRunId);
+    if (!key) {
+      const claimed = [...identityOf(span)].filter((id) => idSet.has(id));
+      if (claimed.length === 1) key = claimed[0];
+    }
+    const entry = key ? out.get(key) : undefined;
+    if (!entry) { unattributed.push(span); continue; }
+    entry.spans.push(span);
+    entry.via = 'ids';
+    if (!isEvalOrJudgeSpan(readAttrs(span), span.name)) keysWithAgentSpans.add(key!);
+  }
+
+  // Phase 2 — the window, only for keys the exact phase did not find the agent for.
+  const fallbackHints = new Map<string, Array<{ key: string; hint: ServiceWindowHint }>>();
+  for (const [serviceName, list] of lookups.hintsByServiceName) {
+    const kept = list.filter(({ key }) => !keysWithAgentSpans.has(key));
+    if (kept.length > 0) fallbackHints.set(serviceName, kept);
+  }
+  if (fallbackHints.size === 0) return out;
+
+  for (const span of unattributed) {
+    const key = resolveSpanKeyByServiceWindow(span, fallbackHints);
+    if (!key) continue;
+    const identity = identityOf(span);
+    if (identity.size > 0 && !identity.has(key)) continue; // the trace says it is another run's
+    const entry = out.get(key)!;
+    entry.spans.push(span);
+    entry.via = 'window';
+  }
+  return out;
 }
 
 /**
@@ -345,11 +451,11 @@ export function buildChunkLookups(
 }
 
 /**
- * Group a chunk's returned spans back to their keys and compute one
- * MetricsResult per key, stamping `correlatedBy` (ids / window / mixed) and
- * `partial` (the query hit its size cap, so every key's counts are a lower
- * bound — we cannot know which keys lost spans). Shared by both transport
- * branches.
+ * Group a chunk's returned spans back to their keys (precise-first, see
+ * {@link attributeSpansPreciseFirst}) and compute one MetricsResult per key,
+ * stamping `correlatedBy` (ids / window) and `partial` (the query hit its
+ * size cap, so every key's counts are a lower bound — we cannot know which
+ * keys lost spans). Shared by both transport branches and the single-run path.
  */
 export function groupAndCompute(
   chunk: string[],
@@ -357,21 +463,11 @@ export function groupAndCompute(
   lookups: ReturnType<typeof buildChunkLookups>,
   truncated: boolean
 ): MetricsResult[] {
-  const idSet = new Set(lookups.runIdCorrelators);
-  const spansByRunId = new Map<string, OpenSearchSpanSource[]>();
-  const viaByRunId = new Map<string, Set<'ids' | 'window'>>();
-  for (const rid of chunk) { spansByRunId.set(rid, []); viaByRunId.set(rid, new Set()); }
-  for (const span of allSpans) {
-    const hit = resolveSpanAttribution(span, idSet, lookups.sessionIdToRunId, lookups.traceIdToRunId, lookups.hintsByServiceName);
-    if (hit && spansByRunId.has(hit.key)) {
-      spansByRunId.get(hit.key)!.push(span);
-      viaByRunId.get(hit.key)!.add(hit.via);
-    }
-  }
+  const attributed = attributeSpansPreciseFirst(chunk, allSpans, lookups);
   return chunk.map((runId) => {
-    const m = computeMetricsFromSpans(runId, spansByRunId.get(runId) || []);
-    const via = viaByRunId.get(runId)!;
-    if (via.size > 0) m.correlatedBy = via.size === 2 ? 'mixed' : (via.has('window') ? 'window' : 'ids');
+    const { spans, via } = attributed.get(runId)!;
+    const m = computeMetricsFromSpans(runId, spans);
+    if (via) m.correlatedBy = via;
     if (truncated) m.partial = true;
     return m;
   });
@@ -631,11 +727,14 @@ export function computeMetricsFromSpans(
  *   `session.id`) to OR into the query alongside Strategy B, for agents that
  *   never stamp our own `agent_health.run.id` / `gen_ai.conversation.id`.
  * @param traceId - Optional Strategy-A correlator (the eval span's own OTel
- *   trace id) — see {@link buildCorrelationShouldClauses}.
+ *   trace id) — see {@link buildBatchCorrelationShouldClauses}.
  * @param agents - Optional Strategy-C/D hints (`service.name` + run window,
  *   optional `session.id`) — the same `agents[]` the Traces tab / trace judge
  *   send to `/api/traces`, so a report with NO correlation id still gets
- *   metrics from the spans its agent emitted in that window.
+ *   metrics from the spans its agent emitted in that window. Precise-first,
+ *   exactly as the batch path: the window only counts when the exact
+ *   correlators found none of the agent's spans
+ *   ({@link attributeSpansPreciseFirst}).
  */
 export async function computeMetrics(
   runId: string,
@@ -646,11 +745,18 @@ export async function computeMetrics(
 ): Promise<MetricsResult> {
   // Same surrogate-key rule as the batch path (see buildChunkLookups): a key
   // that has ONLY a window hint is not a run id and must not be queried as one.
-  const hints = agents ?? [];
-  const isSurrogate = hints.length > 0 && !sessionId && !traceId && !hints.some((h) => !!h.sessionId);
-  const should = isSurrogate
-    ? buildBatchCorrelationShouldClauses([], [], [], hints)
-    : buildCorrelationShouldClauses(runId, sessionId, traceId, hints);
+  const lookups = buildChunkLookups(
+    [runId],
+    sessionId ? { [runId]: sessionId } : undefined,
+    traceId ? { [runId]: traceId } : undefined,
+    agents && agents.length > 0 ? { [runId]: agents } : undefined
+  );
+  const should = buildBatchCorrelationShouldClauses(
+    lookups.runIdCorrelators,
+    Array.from(lookups.sessionIdToRunId.keys()),
+    Array.from(lookups.traceIdToRunId.keys()),
+    lookups.agentHints
+  );
   const body = {
     size: SINGLE_QUERY_SIZE,
     sort: [{ startTime: { order: 'asc' as const } }],
@@ -686,9 +792,16 @@ export async function computeMetrics(
     totalHits = totalHitsOf(data.hits, spans.length);
   }
 
+  const truncated = totalHits > SINGLE_QUERY_SIZE || spans.length >= SINGLE_QUERY_SIZE;
+  if (lookups.agentHints.length > 0) {
+    // Union query (exact ∪ window): decide per span, precise-first.
+    const [m] = groupAndCompute([runId], spans, lookups, truncated);
+    return m;
+  }
+  // Exact correlators only: every span the query returned names this run.
   const m = computeMetricsFromSpans(runId, spans);
-  if (spans.length > 0) m.correlatedBy = isSurrogate ? 'window' : (hints.length > 0 ? 'mixed' : 'ids');
-  if (totalHits > SINGLE_QUERY_SIZE || spans.length >= SINGLE_QUERY_SIZE) m.partial = true;
+  if (spans.length > 0) m.correlatedBy = 'ids';
+  if (truncated) m.partial = true;
   return m;
 }
 
@@ -701,7 +814,7 @@ const SINGLE_QUERY_SIZE = 500;
  *
  * @param sessionIdByRunId - Optional Strategy-D correlator map (runId ->
  *   agent-emitted session.id), OR'd into each chunk's query alongside
- *   Strategy B — see {@link buildCorrelationShouldClauses}.
+ *   Strategy B — see {@link buildBatchCorrelationShouldClauses}.
  * @param agentsByRunId - Optional Strategy-C/D hints per key (runId ->
  *   `[{serviceName, startedAt, endedAt, sessionId?}]`). Keys here need not be
  *   real run ids: a caller whose report carries no correlation id at all may
