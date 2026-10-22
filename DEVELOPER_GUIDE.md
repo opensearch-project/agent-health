@@ -288,9 +288,14 @@ AH_CLI_V8_COVERAGE_DIR=$PWD/coverage-cli/v8 AH_PORT=4001 npm run test:integratio
 npm run coverage:cli            # table on stdout, lcov + HTML in coverage-cli/
 ```
 
-Known limits: re-export-only barrels (`cli/commands/index.ts`) and files the
-bundle never loads (`cli/demo/*`) report 0% because esbuild emits no code for
-them; `.c8rc.json` explains why its `include` pattern is `**/cli/**` (a
+Known limits: c8 counts **physical** lines (blank, comment and data-literal
+lines included) where istanbul counts statements, so a file measured by both
+flags shows more lines on Codecov than jest alone reports; files for which the
+bundle carries no executable code — re-export-only barrels
+(`cli/commands/index.ts`), type-only modules, and files the CLI never loads
+(`cli/demo/*`) — do not appear in the `cli` report at all and keep their
+unit-flag numbers.
+`.c8rc.json` explains why its `include` pattern is `**/cli/**` (a
 `c8 --exclude-after-remap` path-matching quirk otherwise reports a bogus 100%).
 `tests/integration/cli/cliCoverage.integration.test.ts` runs the whole pipeline
 with the real tools and fails if the numbers come back fake.
