@@ -77,8 +77,10 @@ export interface RunTelemetry {
   /** True when at least one report had spans. Drives the "—" rendering. */
   hasSpans: boolean;
   /**
-   * True when at least one contributing result was flagged `partial` (its
-   * OpenSearch query hit the size cap) — the sums above are a lower bound.
+   * True when the sums above are a LOWER BOUND: a contributing result was
+   * flagged `partial` (its OpenSearch query hit the size cap), or some of the
+   * run's keys failed while others found spans (the failed cases' spans are
+   * unknown). Rendered as a "≥" prefix.
    */
   partial: boolean;
 }
@@ -255,7 +257,7 @@ export function aggregateRunTelemetry(
     spansCases, totalCases, errorCases, pendingCases, errorMessage,
     unavailable: pendingCases === 0 && errorCases > 0 && spansCases === 0,
     hasSpans: spansCases > 0,
-    partial,
+    partial: partial || (errorCases > 0 && spansCases > 0),
   };
 }
 

@@ -123,7 +123,7 @@ describe('aggregateRunTelemetry', () => {
     expect(t.errorCases).toBe(1);        // k4 errored → counted, but a partial failure is NOT "unavailable"
     expect(t.unavailable).toBe(false);
     expect(t.hasSpans).toBe(true);
-    expect(t.partial).toBe(false);
+    expect(t.partial).toBe(true);        // ...it IS a lower bound: k4's spans are unknown → rendered "≥"
   });
 
   it('unavailable when the keys have all answered, some failed and NONE found spans; wall-clock median survives', () => {

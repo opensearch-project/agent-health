@@ -101,8 +101,11 @@ export async function fetchBatchMetrics(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `Failed to fetch batch metrics: ${response.status}`);
+    // A proxy/tunnel timeout answers with a text body (e.g. 524 "local target
+    // did not respond in 50s"), not our JSON error shape — keep the status
+    // code in the message either way so the UI's tooltip says what happened.
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error?.error || `Failed to fetch batch metrics: HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`);
   }
 
   return response.json();
