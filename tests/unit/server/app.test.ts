@@ -254,4 +254,49 @@ describe('createApp', () => {
       if (server.listening) await new Promise((r) => server.close(() => r(undefined)));
     }
   });
+
+  it('installAppShutdown with no options still flushes telemetry, then exits via the defaults', async () => {
+    const server = createServer((_req, res) => res.end('ok'));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    (shutdownEvalTracer as jest.Mock).mockClear();
+    const consoleLog = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const processExit = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const handle = installAppShutdown(server);
+    try {
+      await handle.shutdown('SIGINT');
+      await new Promise((r) => setTimeout(r, 20));
+      // The telemetry flush is wired in even when the caller passes no cleanup.
+      expect(shutdownEvalTracer).toHaveBeenCalledTimes(1);
+      expect(server.listening).toBe(false);
+      expect(processExit).toHaveBeenCalledTimes(1);
+      expect(processExit).toHaveBeenCalledWith(0);
+      const logged = consoleLog.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logged).toContain('Received SIGINT');
+      expect(logged).toContain('Server closed.');
+    } finally {
+      consoleLog.mockRestore();
+      processExit.mockRestore();
+      handle.dispose();
+      if (server.listening) await new Promise((r) => server.close(() => r(undefined)));
+    }
+  });
+
+  it('installAppShutdown with options but no cleanup list runs only the telemetry flush', async () => {
+    const server = createServer((_req, res) => res.end('ok'));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    (shutdownEvalTracer as jest.Mock).mockClear();
+    const exit = jest.fn();
+    const logs: string[] = [];
+    const handle = installAppShutdown(server, { log: (m) => logs.push(m), exit });
+    try {
+      await handle.shutdown('SIGTERM');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(shutdownEvalTracer).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+      expect(logs.join('\n')).toContain('Server closed.');
+    } finally {
+      handle.dispose();
+      if (server.listening) await new Promise((r) => server.close(() => r(undefined)));
+    }
+  });
 });

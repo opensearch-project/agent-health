@@ -136,6 +136,41 @@ describe('installGracefulShutdown (real http.Server)', () => {
     expect(exits).toEqual([0]);
   });
 
+  it('a hook rejecting with a non-Error value is logged via String(reason)', async () => {
+    await listen(server);
+    const h = install({ cleanup: [() => Promise.reject('plain string reason'), () => Promise.reject({ code: 'EOBJ' })] });
+    await h.shutdown('SIGTERM');
+    await sleep(20);
+    const joined = logs.join('\n');
+    expect(joined).toContain('Shutdown cleanup step failed: plain string reason');
+    expect(joined).toContain('Shutdown cleanup step failed: [object Object]');
+    expect(server.listening).toBe(false);
+    expect(exits).toEqual([0]);
+  });
+
+  it('with no options at all, the defaults log through console.log and exit through process.exit(0)', async () => {
+    await listen(server);
+    const consoleLog = jest.spyOn(console, 'log').mockImplementation(() => {});
+    // process.exit would end the jest worker; observe it instead. The real
+    // termination claim is proven by gracefulShutdown.realProcess.test.ts.
+    const processExit = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      handle = installGracefulShutdown(server);
+      await handle.shutdown('SIGTERM');
+      await sleep(20);
+      expect(server.listening).toBe(false);
+      expect(processExit).toHaveBeenCalledTimes(1);
+      expect(processExit).toHaveBeenCalledWith(0);
+      const logged = consoleLog.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logged).toContain('Received SIGTERM, shutting down gracefully...');
+      expect(logged).toContain('Server closed.');
+      expect(exits).toEqual([]); // nothing injected, nothing else called
+    } finally {
+      consoleLog.mockRestore();
+      processExit.mockRestore();
+    }
+  });
+
   it('closes idle keep-alive connections so close() does not wait for keepAliveTimeout', async () => {
     const port = await listen(server);
     // Node 18's global agent does not retain idle sockets; a Connection header
