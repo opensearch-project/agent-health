@@ -148,12 +148,21 @@ jobs:
       # leave the Actions run. Visibility only; Codecov owns the gate.
       - name: Changed-files coverage table (PR summary)
         if: matrix.node-version == '20' && github.event_name == 'pull_request'
+        # Visibility only — a fetch hiccup or script error must never fail CI.
+        continue-on-error: true
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          node scripts/coverage-diff-summary.mjs --lcov coverage/lcov.info \
+          npx tsx scripts/coverage-diff-summary.ts --lcov coverage/lcov.info \
             --base "$BASE_SHA" --title "Unit coverage — files changed in this PR" >> "$GITHUB_STEP_SUMMARY"
+
+      # The cli/** coverage pipeline (real CLI child + NODE_V8_COVERAGE + c8 +
+      # source map) on EVERY Node version in the matrix, so the tooling minimum
+      # is proven rather than assumed (c8 ^10 supports Node >= 18). Needs no
+      # server: the test spawns `list connectors`.
+      - name: CLI coverage pipeline check (Node ${{ matrix.node-version }})
+        run: npx jest tests/integration/cli/cliCoverage.integration.test.ts
 
       - name: Upload unit test badge data
         if: matrix.node-version == '24'
@@ -353,6 +362,7 @@ jobs:
           exit 1
 
       - name: Run integration tests with coverage
+        id: integration-tests
         # lcov+json -> coverage-integration/ (uploaded below); threshold off (unit-only ratchet)
         run: npm run test:integration -- --coverage --coverageThreshold='{}' --coverageReporters=json-summary --coverageReporters=json --coverageReporters=lcov --coverageDirectory=coverage-integration 2>&1 | tee integration-test-output.txt
         env:
@@ -391,14 +401,27 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+      # STRICT when the tests passed: a green integration run that produced no
+      # V8 dumps, or an lcov with no cli/** records or zero hits, means the
+      # collection is silently broken (e.g. a misspelled AH_CLI_V8_COVERAGE_DIR)
+      # — fail instead of uploading nothing. Best-effort after a test failure.
       - name: CLI coverage report (c8 over the CLI children's V8 dumps)
         if: always()
+        env:
+          TESTS_PASSED: ${{ steps.integration-tests.outcome == 'success' }}
         run: |
-          if [ -d coverage-cli/v8 ] && [ "$(ls -A coverage-cli/v8 2>/dev/null)" ]; then
-            npm run coverage:cli
-          else
-            echo "No V8 coverage dumps from CLI processes were collected"
+          fail() { if [ "$TESTS_PASSED" = "true" ]; then echo "::error::$1"; exit 1; else echo "$1 (tests already failed; not enforcing)"; exit 0; fi; }
+          if [ ! -d coverage-cli/v8 ] || [ -z "$(ls -A coverage-cli/v8 2>/dev/null)" ]; then
+            fail "No V8 coverage dumps from CLI processes were collected in coverage-cli/v8"
           fi
+          echo "V8 dumps: $(ls coverage-cli/v8 | wc -l)"
+          npm run coverage:cli
+          [ -s coverage-cli/lcov.info ] || fail "coverage:cli produced no lcov"
+          CLI_FILES=$(grep -c '^SF:cli/' coverage-cli/lcov.info || true)
+          CLI_LH=$(grep -h '^LH:' coverage-cli/lcov.info | cut -d: -f2 | paste -sd+ | bc || true)
+          echo "cli/** files in lcov: $CLI_FILES, lines hit: ${CLI_LH:-0}"
+          [ "$CLI_FILES" -gt 0 ] || fail "coverage:cli lcov has no cli/** records (source map not applied?)"
+          [ "${CLI_LH:-0}" -gt 0 ] || fail "coverage:cli lcov has zero hit lines"
 
       - name: Upload CLI coverage to Codecov
         if: always() && hashFiles('coverage-cli/lcov.info') != ''
@@ -407,20 +430,31 @@ jobs:
           files: coverage-cli/lcov.info
           flags: cli
           name: cli-integration
-          fail_ci_if_error: true
+          # Dependabot PRs cannot read CODECOV_TOKEN (same rule as the other uploads).
+          fail_ci_if_error: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Upload CLI coverage artifact
+        if: always() && hashFiles('coverage-cli/lcov.info') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cli-coverage-report
+          path: coverage-cli/lcov.info
+          retention-days: 30
+
       - name: Changed-files coverage table (PR summary)
         if: always() && github.event_name == 'pull_request'
+        # Visibility only — a fetch hiccup or script error must never fail CI.
+        continue-on-error: true
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          node scripts/coverage-diff-summary.mjs --lcov coverage-integration/lcov.info \
+          npx tsx scripts/coverage-diff-summary.ts --lcov coverage-integration/lcov.info \
             --base "$BASE_SHA" --title "Integration coverage — files changed in this PR" >> "$GITHUB_STEP_SUMMARY"
           if [ -f coverage-cli/lcov.info ]; then
-            node scripts/coverage-diff-summary.mjs --lcov coverage-cli/lcov.info \
+            npx tsx scripts/coverage-diff-summary.ts --lcov coverage-cli/lcov.info \
               --base "$BASE_SHA" --title "CLI coverage (real CLI processes, c8) — files changed in this PR" >> "$GITHUB_STEP_SUMMARY"
           fi
 
