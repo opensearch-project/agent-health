@@ -30,6 +30,7 @@
 import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { withCliCoverage } from '../../helpers/cliCoverage';
 
 const TEST_TIMEOUT = 120_000;
 const REPO_ROOT = join(__dirname, '..', '..', '..');
@@ -47,7 +48,11 @@ function ensureCliBundle(): void {
 }
 
 function runCli(args: string[]) {
-  return spawnSync(process.execPath, [CLI_BUNDLE, ...args], { cwd: REPO_ROOT, encoding: 'utf8' });
+  return spawnSync(process.execPath, [CLI_BUNDLE, ...args], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: withCliCoverage(process.env),
+  });
 }
 
 describe('CLI stdout machine-readable contract — diagnostics never corrupt stdout', () => {

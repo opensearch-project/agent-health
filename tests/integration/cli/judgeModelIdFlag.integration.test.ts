@@ -40,6 +40,7 @@
  */
 
 import { spawnSync } from 'child_process';
+import { withCliCoverage } from '../../helpers/cliCoverage';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { request as httpRequest } from 'http';
@@ -185,7 +186,7 @@ describe('CLI --judge-model flag — end-to-end', () => {
           '-o', 'json',
         ],
         {
-          env: { ...process.env, AH_PORT: port },
+          env: withCliCoverage({ ...process.env, AH_PORT: port }),
           encoding: 'utf-8',
           timeout: TEST_TIMEOUT - 10_000,
         }
@@ -254,7 +255,7 @@ describe('CLI --judge-model flag — end-to-end', () => {
           '-o', 'json',
         ],
         {
-          env: { ...process.env, AH_PORT: port },
+          env: withCliCoverage({ ...process.env, AH_PORT: port }),
           encoding: 'utf-8',
           timeout: TEST_TIMEOUT - 10_000,
         }

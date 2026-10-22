@@ -32,6 +32,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
+import { withCliCoverage } from '../../helpers/cliCoverage';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { request as httpRequest } from 'http';
 import { tmpdir } from 'os';
@@ -139,7 +140,7 @@ function cleanEnv(extra: Record<string, string>): Record<string, string> {
     if (typeof v !== 'string') continue;
     if (k === 'PATH' || k === 'HOME' || k === 'USER' || k === 'TMPDIR' || k === 'NODE_OPTIONS') env[k] = v;
   }
-  return Object.assign(env, {
+  return withCliCoverage(Object.assign(env, {
     HOST: '127.0.0.1',
     AH_HEADLESS: '1',
     AGENT_HEALTH_STORAGE: 'file',
@@ -148,7 +149,7 @@ function cleanEnv(extra: Record<string, string>): Record<string, string> {
     AH_SUPPRESS_EXPERIMENTAL: '1',
     AH_QUIET_DEPRECATIONS: '1',
     NODE_ENV: 'test',
-  }, extra);
+  }, extra));
 }
 
 function startServer(cwd: string, port: number, extraEnv: Record<string, string>): ChildProcess {
