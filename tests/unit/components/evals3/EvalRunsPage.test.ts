@@ -521,6 +521,44 @@ describe('EvalRunsPage — in-flight (running) run indication (bug #5, 2026-09-0
     }
   });
 
+  it('polls SILENTLY: a slow poll response never replaces the mounted table with the full-page spinner (owner 2026-10-22: "runs list is refreshing constantly")', async () => {
+    // Real-shaped: the second (poll) response is HELD so the in-flight window
+    // is observable. Before the fix the poll called loadData() non-silently,
+    // which set `loading=true` and returned the page-level spinner instead of
+    // the table for the whole request — every 5 s, as long as a run was running.
+    const running = makeRunningEvalRun();
+    let releasePoll: (() => void) | undefined;
+    mockListEvaluationRuns
+      .mockResolvedValueOnce({ evaluationRuns: [running] })
+      .mockImplementation(() => new Promise(resolve => {
+        releasePoll = () => resolve({ evaluationRuns: [running] });
+      }));
+    jest.useFakeTimers();
+    try {
+      await act(async () => { render(React.createElement(EvalRunsPage)); });
+      const rowBefore = screen.getByText('Claude-code with traces').closest('tr') as HTMLElement;
+      expect(rowBefore).toBeTruthy();
+      const callsAfterMount = mockListEvaluationRuns.mock.calls.length;
+
+      // Tick the poll; the response is still pending.
+      await act(async () => { jest.advanceTimersByTime(5000); });
+      expect(mockListEvaluationRuns.mock.calls.length).toBe(callsAfterMount + 1);
+      // The table must still be there, with the SAME row element (no unmount/remount).
+      expect(document.querySelector('table')).toBeTruthy();
+      expect(screen.getByText('Claude-code with traces').closest('tr')).toBe(rowBefore);
+      // The in-row "Running" badge has its own tiny spinner; the PAGE-level
+      // loader is the one outside the table.
+      const pageSpinner = [...document.querySelectorAll('.animate-spin')].filter(el => !el.closest('table') && !el.closest('button'));
+      expect(pageSpinner).toHaveLength(0);
+
+      // Release the poll; still the same row.
+      await act(async () => { releasePoll?.(); });
+      expect(screen.getByText('Claude-code with traces').closest('tr')).toBe(rowBefore);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('does NOT poll when every known run has reached a terminal status (no wasted background requests)', async () => {
     mockListEvaluationRuns.mockResolvedValue({
       evaluationRuns: [makeRunningEvalRun({ id: 'eval-run-done-2', name: 'Finished Run 2', status: 'completed', testCaseSnapshots: [{}], results: { 'tc-0': { reportId: 'r-0', status: 'completed', passFailStatus: 'passed' } } })],

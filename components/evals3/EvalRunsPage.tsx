@@ -383,9 +383,18 @@ export const EvalRunsPage: React.FC = () => {
     () => allRunRows.some(rr => rr.status === 'running'),
     [allRunRows]
   );
+  //
+  // The poll is a BACKGROUND refresh (`silent`): the non-silent path flips
+  // `loading` and the page body is replaced by the full-page spinner for as
+  // long as the three list requests take (seconds on a cluster with hundreds
+  // of runs) — every 5 s, for as long as any run is `running`. To the owner
+  // that read as "the runs list is refreshing constantly" (2026-10-22): rows
+  // flashed in and out, scroll position reset, and anything mounted per row
+  // (retry-judgement pill adoption requests) re-fired on every tick. Rows
+  // are keyed by run id, so a silent state swap re-renders in place.
   useEffect(() => {
     if (!hasInProgressRuns) return;
-    const interval = setInterval(() => { loadData(); }, 5000);
+    const interval = setInterval(() => { void loadData(true); }, 5000);
     return () => clearInterval(interval);
   }, [hasInProgressRuns, loadData]);
 
