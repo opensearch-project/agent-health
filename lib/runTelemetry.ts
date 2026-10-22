@@ -270,6 +270,41 @@ export function aggregateAllRunTelemetry(
   return out;
 }
 
+// ─── Empty states ────────────────────────────────────────────────────────────
+//
+// The trace-derived cells (Tokens · Cost · LLM calls · Tool calls) have three
+// honest empty states, and each must SAY WHICH (owner, 2026-10-22: a page of
+// bare "—" told him nothing — were the agents untraced, or did the query
+// fail?). Shared by the Runs table and the run inspector strip.
+
+/** Short cell text per empty state. */
+export const TELEMETRY_EMPTY_LABEL = {
+  /** Every key answered; no case had spans — the agent was not traced. */
+  noTraces: 'no traces',
+  /** The trace-store query failed for some key and none found spans. */
+  unavailable: 'unavailable',
+  /** Nothing to correlate / the metric is not recorded. */
+  none: '—',
+} as const;
+
+export const TELEMETRY_NO_SPANS_TITLE = 'No traces for this run';
+export const TELEMETRY_UNAVAILABLE_TITLE = 'Metrics unavailable';
+
+/** Tooltip for the "no traces" state: what it means and how to fix it. */
+export function describeNoTraces(t: Pick<RunTelemetry, 'totalCases'>): string {
+  const cases = t.totalCases === 1 ? '1 case' : `${t.totalCases} cases`;
+  return `${TELEMETRY_NO_SPANS_TITLE} — no spans were found for any of its ${cases}, so this agent's runs were not traced. ` +
+    'Enable trace mode on the agent (useTraces: true) and OTel instrumentation that propagates the eval trace context or stamps session.id / agent_health.run.id ' +
+    '(set traceServiceName to the agent\'s OTel service.name for the time-window fallback) to populate Tokens · Cost · LLM calls.';
+}
+
+/** Tooltip for the "unavailable" state: the failure, its scope, the way out. */
+export function describeUnavailable(t: Pick<RunTelemetry, 'totalCases' | 'errorCases' | 'errorMessage'>): string {
+  const scope = t.totalCases > 0 ? ` for ${t.errorCases} of ${t.totalCases} cases` : '';
+  const why = t.errorMessage ? ` (${t.errorMessage})` : '';
+  return `${TELEMETRY_UNAVAILABLE_TITLE} — the trace-store query failed${scope}${why}. Spans may well exist; use Retry.`;
+}
+
 // ─── Formatting ──────────────────────────────────────────────────────────────
 
 /** 5900000 → "5.9M", 12345 → "12.3K", 312 → "312". */

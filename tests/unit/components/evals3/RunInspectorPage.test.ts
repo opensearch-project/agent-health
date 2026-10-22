@@ -1656,7 +1656,7 @@ describe('RunInspectorPage — telemetry strip (tokens · cost · LLM calls · t
     warn.mockRestore();
   });
 
-  it('batch endpoint failure → strip reads "—" (Metrics unavailable) and the page still renders its rows', async () => {
+  it('batch endpoint failure → strip reads "unavailable" (tooltip carries the failure) and the page still renders its rows', async () => {
     mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
     mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
     mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
@@ -1665,7 +1665,8 @@ describe('RunInspectorPage — telemetry strip (tokens · cost · LLM calls · t
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
     await waitFor(() => expect(screen.getByTestId('run-telemetry-strip').getAttribute('data-state')).toBe('empty'));
-    expect(screen.getByTestId('strip-tokens').getAttribute('title')).toBe('Metrics unavailable');
+    expect(screen.getByTestId('strip-tokens').textContent).toBe('Tokensunavailable');
+    expect(screen.getByTestId('strip-tokens').getAttribute('title')).toBe('Metrics unavailable — the trace-store query failed for 2 of 2 cases (500). Spans may well exist; use Retry.');
     expect(screen.queryByTestId('run-inspector-error')).toBeNull();
     // Retry is wired to the hook's refetch: one more request, then values.
     expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1);

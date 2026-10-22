@@ -17,10 +17,13 @@ import React from 'react';
 import { Activity } from 'lucide-react';
 import {
   RunTelemetry, formatTokensCompact, formatCostUsd, formatDurationCompact,
+  TELEMETRY_EMPTY_LABEL,
+  describeNoTraces,
+  describeUnavailable,
 } from '@/lib/runTelemetry';
 
-export const STRIP_NO_SPANS_TITLE = 'No spans found for this run yet';
-export const STRIP_UNAVAILABLE_TITLE = 'Metrics unavailable';
+/** Leading phrases of the empty-state tooltips (full text: describeNoTraces / describeUnavailable). */
+export { TELEMETRY_NO_SPANS_TITLE as STRIP_NO_SPANS_TITLE, TELEMETRY_UNAVAILABLE_TITLE as STRIP_UNAVAILABLE_TITLE } from '@/lib/runTelemetry';
 
 export interface RunTelemetryStripProps {
   telemetry: RunTelemetry | undefined;
@@ -62,24 +65,35 @@ export const RunTelemetryStrip: React.FC<RunTelemetryStripProps> = ({ telemetry,
   if (!telemetry) return null;
 
   const unavailable = telemetry.unavailable;
-  const dashTitle = unavailable ? STRIP_UNAVAILABLE_TITLE : STRIP_NO_SPANS_TITLE;
   const hasSpans = telemetry.hasSpans;
+  // Trace metrics still in flight with nothing reported yet: a skeleton for
+  // the trace-derived stats, never a premature "no traces" (the roll-up
+  // exists as soon as the reports load, before any metrics answer).
+  const settling = !hasSpans && telemetry.pendingCases > 0;
+  // The empty state SAYS WHY: "no traces" (agent not traced — tooltip tells
+  // how to enable it) vs "unavailable" (query failed — Retry).
+  const emptyLabel = unavailable ? TELEMETRY_EMPTY_LABEL.unavailable : TELEMETRY_EMPTY_LABEL.noTraces;
+  const dashTitle = unavailable ? describeUnavailable(telemetry) : describeNoTraces(telemetry);
   const prefix = telemetry.partial ? '≥' : '';
   const cost = formatCostUsd(telemetry.costUsd);
+  const skeleton = <span className="inline-block h-3 w-10 rounded bg-muted animate-pulse" aria-label="Loading" />;
+  const traceStat = (label: string, testId: string, value: string, title?: string, muted?: boolean) => settling
+    ? <span className="inline-flex items-baseline gap-1" data-testid={testId} data-state="loading"><span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>{skeleton}</span>
+    : <Stat label={label} testId={testId} muted={muted} value={value} title={title} />;
 
   return (
-    <div className={wrap} data-testid="run-telemetry-strip" data-state={hasSpans ? 'value' : 'empty'}>
+    <div className={wrap} data-testid="run-telemetry-strip" data-state={hasSpans ? 'value' : (settling ? 'loading' : 'empty')} data-empty-kind={hasSpans || settling ? undefined : (unavailable ? 'unavailable' : 'no-traces')}>
       <Activity size={11} className="text-muted-foreground shrink-0" />
-      <Stat label="Tokens" testId="strip-tokens" muted={!hasSpans}
-        value={hasSpans ? `${prefix}${formatTokensCompact(telemetry.totalTokens)}` : '—'}
-        title={hasSpans ? `${telemetry.totalTokens.toLocaleString()} tokens` : dashTitle} />
-      <Stat label="Cost" testId="strip-cost" muted={!hasSpans || cost === null}
-        value={hasSpans && cost ? `${prefix}${cost}` : '—'}
-        title={hasSpans ? (cost ? `$${telemetry.costUsd.toFixed(4)}` : 'Spans carried no cost') : dashTitle} />
-      <Stat label="LLM calls" testId="strip-llmcalls" muted={!hasSpans}
-        value={hasSpans ? `${prefix}${telemetry.llmCalls}` : '—'} title={hasSpans ? undefined : dashTitle} />
-      <Stat label="Tool calls" testId="strip-toolcalls" muted={!hasSpans}
-        value={hasSpans ? `${prefix}${telemetry.toolCalls}` : '—'} title={hasSpans ? undefined : dashTitle} />
+      {traceStat('Tokens', 'strip-tokens',
+        hasSpans ? `${prefix}${formatTokensCompact(telemetry.totalTokens)}` : emptyLabel,
+        hasSpans ? `${telemetry.totalTokens.toLocaleString()} tokens` : dashTitle, !hasSpans)}
+      {traceStat('Cost', 'strip-cost',
+        hasSpans && cost ? `${prefix}${cost}` : (hasSpans ? '—' : emptyLabel),
+        hasSpans ? (cost ? `$${telemetry.costUsd.toFixed(4)}` : 'Spans carried no cost') : dashTitle, !hasSpans || cost === null)}
+      {traceStat('LLM calls', 'strip-llmcalls',
+        hasSpans ? `${prefix}${telemetry.llmCalls}` : emptyLabel, hasSpans ? undefined : dashTitle, !hasSpans)}
+      {traceStat('Tool calls', 'strip-toolcalls',
+        hasSpans ? `${prefix}${telemetry.toolCalls}` : emptyLabel, hasSpans ? undefined : dashTitle, !hasSpans)}
       {/* Wall-clock comes from the reports, not the trace store — valid even
           when spans were not found or the metrics request failed. */}
       <Stat label="Time/case" testId="strip-timepercase" muted={telemetry.medianDurationMs === null}
@@ -88,9 +102,9 @@ export const RunTelemetryStrip: React.FC<RunTelemetryStripProps> = ({ telemetry,
       <span
         className="text-[10px] text-muted-foreground whitespace-nowrap"
         data-testid="strip-spans"
-        title={unavailable ? STRIP_UNAVAILABLE_TITLE : (hasSpans ? 'Cases whose agent spans were found in the trace store' : STRIP_NO_SPANS_TITLE)}
+        title={unavailable ? dashTitle : (hasSpans ? 'Cases whose agent spans were found in the trace store' : (settling ? 'Trace metrics still loading' : dashTitle))}
       >
-        spans: {unavailable ? '—' : `${telemetry.spansCases}/${telemetry.totalCases}`} cases
+        spans: {unavailable ? '—' : `${telemetry.spansCases}/${telemetry.totalCases}`} cases{settling ? ' (loading…)' : ''}
       </span>
       {unavailable && onRetry && (
         <button

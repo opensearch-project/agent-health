@@ -260,14 +260,14 @@ describe('formatRunDate', () => {
 // states (value / "—" + reason tooltip / loading skeleton) and that the new
 // columns are sortable.
 import { sortRunRows } from '@/lib/benchmarkRunsTable';
-import type { RunTelemetry } from '@/lib/runTelemetry';
+import { describeNoTraces, describeUnavailable, type RunTelemetry } from '@/lib/runTelemetry';
 import {
-  TELEMETRY_NO_SPANS_TITLE, TELEMETRY_UNAVAILABLE_TITLE, TELEMETRY_NO_REPORTS_TITLE, telemetryDashTitle,
+  TELEMETRY_NO_SPANS_TITLE, TELEMETRY_UNAVAILABLE_TITLE, TELEMETRY_NO_REPORTS_TITLE, TELEMETRY_NOT_RECORDED_TITLE, telemetryDashTitle, telemetryEmptyState,
 } from '@/components/evals3/BenchmarkRunsTable';
 
 const tel = (over: Partial<RunTelemetry> = {}): RunTelemetry => ({
   totalTokens: 5_900_000, costUsd: 20.19, llmCalls: 312, toolCalls: 118,
-  medianDurationMs: 44_000, spansCases: 4, totalCases: 4, errorCases: 0, unavailable: false, hasSpans: true, partial: false, ...over,
+  medianDurationMs: 44_000, spansCases: 4, totalCases: 4, errorCases: 0, pendingCases: 0, unavailable: false, hasSpans: true, partial: false, ...over,
 });
 const unavailableTel = (over: Partial<RunTelemetry> = {}): RunTelemetry =>
   tel({ hasSpans: false, spansCases: 0, errorCases: 4, unavailable: true, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0, ...over });
@@ -303,16 +303,21 @@ describe('BenchmarkRunsTable — telemetry columns', () => {
     expect(screen.getByTestId('run-llmcalls-cell').textContent).toBe('≥312');
   });
 
-  it('hasSpans:false → "—" with the no-spans tooltip on span-derived cells; Time/case still shows the wall-clock', () => {
+  it('hasSpans:false → "no traces" (not a bare "—") on span-derived cells, tooltip says the agent was not traced + how to enable it; Time/case still shows the wall-clock', () => {
     const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
-    renderTable({ rows: [row], telemetryByRunId: { r1: tel({ hasSpans: false, spansCases: 0, totalTokens: 0, costUsd: 0, llmCalls: 0, medianDurationMs: 22_000 }) } });
+    const t = tel({ hasSpans: false, spansCases: 0, totalTokens: 0, costUsd: 0, llmCalls: 0, medianDurationMs: 22_000 });
+    renderTable({ rows: [row], telemetryByRunId: { r1: t } });
     for (const id of ['run-tokens-cell', 'run-cost-cell', 'run-llmcalls-cell']) {
       const cell = screen.getByTestId(id);
-      expect(cell.textContent).toBe('—');
+      expect(cell.textContent).toBe('no traces');
       expect(cell.getAttribute('data-state')).toBe('empty');
-      expect(within(cell).getByText('—').getAttribute('title')).toBe(TELEMETRY_NO_SPANS_TITLE);
+      expect(cell.getAttribute('data-empty-kind')).toBe('no-traces');
+      expect(within(cell).getByText('no traces').getAttribute('title')).toBe(describeNoTraces(t));
     }
+    expect(describeNoTraces(t)).toMatch(new RegExp(`^${TELEMETRY_NO_SPANS_TITLE} — no spans were found for any of its 4 cases, so this agent's runs were not traced`));
+    expect(describeNoTraces(t)).toMatch(/useTraces: true/);
     expect(screen.getByTestId('run-timepercase-cell').textContent).toBe('22 s');
+    expect(screen.getByTestId('run-timepercase-cell').getAttribute('data-state')).toBe('value');
   });
 
   it('spans present but zero cost → Cost reads "—" (not $0.00) while Tokens keeps its value', () => {
@@ -332,14 +337,40 @@ describe('BenchmarkRunsTable — telemetry columns', () => {
     expect(cell.textContent).toBe('');
   });
 
-  it('a run whose metrics request failed → span cells read "—" with the unavailable tooltip; Time/case (from reports) and the rest of the row still render', () => {
+  it('regression: a roll-up with keys still PENDING (reports loaded, metrics not answered) shows skeletons on the span cells — not "no traces" — while Time/case already shows', () => {
+    // Pre-fix the skeleton only ever showed when the roll-up was undefined; the
+    // roll-up exists as soon as the reports load, so for the whole 2-minute
+    // request the cells claimed "No spans found".
     const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
-    renderTable({ rows: [row], telemetryByRunId: { r1: unavailableTel({ medianDurationMs: 44_000 }) } });
+    const t = tel({ hasSpans: false, spansCases: 0, pendingCases: 4, totalTokens: 0, costUsd: 0, llmCalls: 0, medianDurationMs: 22_000 });
+    renderTable({ rows: [row], telemetryByRunId: { r1: t }, telemetryLoadingRunIds: new Set(['r1']) });
+    for (const id of ['run-tokens-cell', 'run-cost-cell', 'run-llmcalls-cell']) {
+      expect(screen.getByTestId(id).getAttribute('data-state')).toBe('loading');
+      expect(screen.getByTestId(id).textContent).toBe('');
+    }
+    expect(screen.queryByText('no traces')).toBeNull();
+    expect(screen.getByTestId('run-timepercase-cell').textContent).toBe('22 s');
+    expect(screen.getByTestId('run-timepercase-cell').getAttribute('data-state')).toBe('value');
+  });
+
+  it('a live run with SOME keys answered with spans and others pending shows the growing values (no flicker back to a skeleton)', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    renderTable({ rows: [row], telemetryByRunId: { r1: tel({ spansCases: 2, pendingCases: 2, totalTokens: 1_000 }) }, telemetryLoadingRunIds: new Set(['r1']) });
+    expect(screen.getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('value');
+    expect(screen.getByTestId('run-tokens-cell').textContent).toContain('1.0K');
+  });
+
+  it('a run whose metrics request failed → span cells read "unavailable" with the failure in the tooltip; Time/case (from reports) and the rest of the row still render', () => {
+    const row = buildRunTableRow(mkRun({ id: 'r1' }), resolvers);
+    const t = unavailableTel({ medianDurationMs: 44_000, errorMessage: 'metrics request timed out after 45 s' });
+    renderTable({ rows: [row], telemetryByRunId: { r1: t } });
     for (const id of ['run-tokens-cell', 'run-cost-cell', 'run-llmcalls-cell']) {
       const cell = screen.getByTestId(id);
-      expect(cell.textContent).toBe('—');
-      expect(within(cell).getByText('—').getAttribute('title')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
+      expect(cell.textContent).toBe('unavailable');
+      expect(cell.getAttribute('data-empty-kind')).toBe('unavailable');
+      expect(within(cell).getByText('unavailable').getAttribute('title')).toBe(describeUnavailable(t));
     }
+    expect(describeUnavailable(t)).toBe(`${TELEMETRY_UNAVAILABLE_TITLE} — the trace-store query failed for 4 of 4 cases (metrics request timed out after 45 s). Spans may well exist; use Retry.`);
     expect(screen.getByTestId('run-timepercase-cell').textContent).toBe('44 s');
     expect(screen.getByTestId('run-size-cell').textContent).toBe('1');
   });
@@ -351,7 +382,7 @@ describe('BenchmarkRunsTable — telemetry columns', () => {
     const [rowGood, rowBad] = screen.getAllByTestId('run-row');
     expect(within(rowGood).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('value');
     expect(within(rowBad).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('empty');
-    expect(within(within(rowBad).getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
+    expect(within(rowBad).getByTestId('run-tokens-cell').textContent).toBe('unavailable');
   });
 
   it('a run with no roll-up at all (no reports) reads "—" with the no-reports tooltip', () => {
@@ -360,13 +391,16 @@ describe('BenchmarkRunsTable — telemetry columns', () => {
     expect(within(screen.getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe(TELEMETRY_NO_REPORTS_TITLE);
   });
 
-  it('telemetryDashTitle precedence: no reports > unavailable (per run) > no spans > not recorded > value', () => {
-    expect(telemetryDashTitle({ telemetry: undefined, loading: false }, true, '1')).toBe(TELEMETRY_NO_REPORTS_TITLE);
-    expect(telemetryDashTitle({ telemetry: unavailableTel(), loading: false }, true, '1')).toBe(TELEMETRY_UNAVAILABLE_TITLE);
-    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false }, true, '1')).toBe(TELEMETRY_NO_SPANS_TITLE);
-    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false }, false, '22 s')).toBe('');
-    expect(telemetryDashTitle({ telemetry: unavailableTel(), loading: false }, false, '22 s')).toBe('');   // wall-clock still valid
-    expect(telemetryDashTitle({ telemetry: tel(), loading: false }, true, null)).toBe('Not recorded for this run');
+  it('empty-state precedence: no reports > unavailable (per run) > no traces > not recorded > value', () => {
+    expect(telemetryEmptyState({ telemetry: undefined, loading: false }, true, '1')).toMatchObject({ kind: 'no-reports', label: '—', title: TELEMETRY_NO_REPORTS_TITLE });
+    expect(telemetryEmptyState({ telemetry: unavailableTel(), loading: false }, true, '1')).toMatchObject({ kind: 'unavailable', label: 'unavailable' });
+    expect(telemetryEmptyState({ telemetry: tel({ hasSpans: false }), loading: false }, true, '1')).toMatchObject({ kind: 'no-traces', label: 'no traces' });
+    expect(telemetryEmptyState({ telemetry: tel({ hasSpans: false }), loading: false }, false, '22 s')).toBeNull();
+    expect(telemetryEmptyState({ telemetry: unavailableTel(), loading: false }, false, '22 s')).toBeNull();   // wall-clock still valid
+    expect(telemetryEmptyState({ telemetry: tel(), loading: false }, true, null)).toMatchObject({ kind: 'not-recorded', label: '—', title: TELEMETRY_NOT_RECORDED_TITLE });
+    expect(telemetryEmptyState({ telemetry: tel(), loading: false }, true, '1')).toBeNull();
+    // telemetryDashTitle = the tooltip of the empty state ('' for a value)
+    expect(telemetryDashTitle({ telemetry: tel({ hasSpans: false }), loading: false }, true, '1')).toMatch(new RegExp(`^${TELEMETRY_NO_SPANS_TITLE}`));
     expect(telemetryDashTitle({ telemetry: tel(), loading: false }, true, '1')).toBe('');
   });
 
