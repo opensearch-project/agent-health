@@ -10,37 +10,39 @@ const MOBILE = { width: 390, height: 844 };
 test.describe('Mobile responsive shell', () => {
   test.use({ viewport: MOBILE });
 
-  test('opens and dismisses the off-canvas navigation without covering content', async ({ page }) => {
+  test('uses an accessible modal navigation drawer', async ({ page }) => {
     await page.goto('/evaluations/runs');
 
-    // The off-canvas drawer's fixed positioning + slide transform live on the
-    // wrapping "sidebar-hover-zone" element (it also reserves the desktop
-    // rail/flyout width — see sidebar-hover-flyout.spec.ts); the inner
-    // "sidebar" element is absolutely positioned within it.
-    const sidebarZone = page.getByTestId('sidebar-hover-zone');
     const open = page.getByRole('button', { name: 'Open navigation' });
     await expect(open).toBeVisible();
     await expect(open).toHaveAttribute('aria-expanded', 'false');
-    await expect(sidebarZone).toHaveClass(/-translate-x-full/);
+    // Radix unmounts the closed Sheet, so none of its links can receive focus.
+    await expect(page.getByTestId('mobile-navigation')).toHaveCount(0);
+    await expect(page.getByTestId('nav-overview')).toBeHidden();
 
     await open.click();
-    const close = page.locator('button[aria-label="Close navigation"][aria-expanded="true"]');
-    await expect(close).toBeVisible();
-    await expect(sidebarZone).toHaveClass(/translate-x-0/);
+    const drawer = page.getByTestId('mobile-navigation');
+    await expect(drawer).toBeVisible();
+    await expect(drawer).toHaveAttribute('role', 'dialog');
+    await expect(page.locator('body')).toHaveCSS('pointer-events', 'none');
 
-    // The backdrop is a separate accessible close target for touch users.
-    await page.locator('button.fixed.inset-0[aria-label="Close navigation"]').click({ position: { x: 380, y: 400 } });
-    await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible();
-    await expect(sidebarZone).toHaveClass(/-translate-x-full/);
+    // Tab repeatedly: focus must remain within the modal navigation.
+    for (let i = 0; i < 20; i += 1) await page.keyboard.press('Tab');
+    await expect(drawer).toContainText('Overview');
+    expect(await drawer.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveCount(0);
+    await expect(open).toHaveAttribute('aria-expanded', 'false');
   });
 
   test('closes the drawer after mobile navigation and keeps page width bounded', async ({ page }) => {
     await page.goto('/evaluations/runs');
     await page.getByRole('button', { name: 'Open navigation' }).click();
 
-    await page.getByTestId('nav-evals3-benchmarks').click();
+    await page.getByTestId('mobile-navigation').getByTestId('nav-evals3-benchmarks').click();
     await expect(page).toHaveURL(/\/evaluations\/benchmarks$/);
-    await expect(page.getByRole('button', { name: 'Open navigation' })).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByTestId('mobile-navigation')).toHaveCount(0);
 
     const dimensions = await page.evaluate(() => ({
       viewport: document.documentElement.clientWidth,
@@ -55,10 +57,6 @@ test('desktop keeps the persistent sidebar and hides the mobile toolbar', async 
   await page.goto('/evaluations/runs');
 
   await expect(page.getByRole('button', { name: 'Open navigation' })).toBeHidden();
-  const sidebarZone = page.getByTestId('sidebar-hover-zone');
-  await expect(sidebarZone).toHaveClass(/lg:relative/);
-  // transform (translate) is fully reset at desktop — an active translate
-  // value (even translate-x-0) creates a stacking context that traps the
-  // sidebar's z-index above <main>, see components/Layout.tsx.
-  await expect(sidebarZone).toHaveClass(/lg:transform-none/);
+  await expect(page.getByTestId('sidebar-hover-zone')).toBeVisible();
+  await expect(page.getByTestId('mobile-navigation')).toHaveCount(0);
 });
