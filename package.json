@@ -202,7 +202,7 @@
     "picomatch": ">=4.0.4",
     "uuid": "$uuid",
     "protobufjs": ">=8.5.1",
-    "undici": ">=8.9.0",
+    "undici": ">=8.12.3",
     "@google/genai": {
       "protobufjs": ">=7.6.3"
     },
