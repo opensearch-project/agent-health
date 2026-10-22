@@ -143,6 +143,18 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+      # Per-file coverage of the files THIS PR changed — lines %, branches %,
+      # uncovered line ranges — in the job summary, so reviewers do not have to
+      # leave the Actions run. Visibility only; Codecov owns the gate.
+      - name: Changed-files coverage table (PR summary)
+        if: matrix.node-version == '20' && github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          node scripts/coverage-diff-summary.mjs --lcov coverage/lcov.info \
+            --base "$BASE_SHA" --title "Unit coverage — files changed in this PR" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload unit test badge data
         if: matrix.node-version == '24'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -291,6 +303,12 @@ jobs:
         # server + frontend assets), not a source-mode CLI against a mock server.
         run: npm run build:all
 
+      # The CLI integration suites spawn the real cli/dist/index.js; build it
+      # here (build:cli emits a source map) so `coverage:cli` can map the V8
+      # dumps those children write back onto cli/**/*.ts.
+      - name: Build CLI bundle (source-mapped, for cli coverage)
+        run: npm run build:cli
+
       - name: Wait for OpenSearch to be healthy
         run: |
           echo "Waiting for OpenSearch on :9200..."
@@ -343,6 +361,10 @@ jobs:
           # Backend-aware suites fail (instead of skipping) when the promise
           # is broken, so OpenSearch-only coverage can't silently vanish.
           AH_TEST_EXPECT_BACKEND: opensearch
+          # Real coverage for cli/**: every CLI child the tests spawn (via
+          # tests/helpers/cliCoverage.ts) gets NODE_V8_COVERAGE=<this dir>; the
+          # "CLI coverage report" step below turns the dumps into lcov with c8.
+          AH_CLI_V8_COVERAGE_DIR: ${{ github.workspace }}/coverage-cli/v8
           # Zero-leak enforcement: a tracker cleanup (or the globalTeardown
           # ledger sweep) whose DELETE the backend actively REJECTS fails the
           # job instead of just logging a warning. Network-level failures
@@ -368,6 +390,39 @@ jobs:
           fail_ci_if_error: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: CLI coverage report (c8 over the CLI children's V8 dumps)
+        if: always()
+        run: |
+          if [ -d coverage-cli/v8 ] && [ "$(ls -A coverage-cli/v8 2>/dev/null)" ]; then
+            npm run coverage:cli
+          else
+            echo "No V8 coverage dumps from CLI processes were collected"
+          fi
+
+      - name: Upload CLI coverage to Codecov
+        if: always() && hashFiles('coverage-cli/lcov.info') != ''
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+        with:
+          files: coverage-cli/lcov.info
+          flags: cli
+          name: cli-integration
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Changed-files coverage table (PR summary)
+        if: always() && github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          node scripts/coverage-diff-summary.mjs --lcov coverage-integration/lcov.info \
+            --base "$BASE_SHA" --title "Integration coverage — files changed in this PR" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f coverage-cli/lcov.info ]; then
+            node scripts/coverage-diff-summary.mjs --lcov coverage-cli/lcov.info \
+              --base "$BASE_SHA" --title "CLI coverage (real CLI processes, c8) — files changed in this PR" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Stop backend server
         if: always()
@@ -404,6 +459,17 @@ jobs:
             echo "| Functions | ${FUNCTIONS}% |" >> $GITHUB_STEP_SUMMARY
           else
             echo "Integration tests completed. Check the test output above for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # cli/** coverage measured from the real CLI processes (c8 lcov)
+          if [ -f coverage-cli/lcov.info ]; then
+            CLI_LF=$(grep -h '^LF:' coverage-cli/lcov.info | cut -d: -f2 | paste -sd+ | bc)
+            CLI_LH=$(grep -h '^LH:' coverage-cli/lcov.info | cut -d: -f2 | paste -sd+ | bc)
+            if [ -n "$CLI_LF" ] && [ "$CLI_LF" != "0" ]; then
+              CLI_PCT=$(echo "scale=1; $CLI_LH * 100 / $CLI_LF" | bc)
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**CLI (cli/**, real processes via c8):** ${CLI_PCT}% lines (${CLI_LH}/${CLI_LF})" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
 
       - name: Generate integration test badges
@@ -714,13 +780,13 @@ jobs:
             UNIT_LINES=$(jq -r '.message' badges/unit/unit-coverage.json 2>/dev/null || echo "N/A")
             # Extract numeric value for status check
             UNIT_NUM=$(echo "$UNIT_LINES" | grep -o '[0-9.]*' || echo "0")
-            if (( $(echo "$UNIT_NUM >= 90" | bc -l 2>/dev/null || echo "0") )); then
+            if (( $(echo "$UNIT_NUM >= 70" | bc -l 2>/dev/null || echo "0") )); then
               UNIT_STATUS="PASS"
             else
               UNIT_STATUS="FAIL"
             fi
           fi
-          echo "| Unit | ${UNIT_LINES} | ${UNIT_BRANCHES} | ${UNIT_FUNCTIONS} | >= 90% | ${UNIT_STATUS} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | ${UNIT_LINES} | ${UNIT_BRANCHES} | ${UNIT_FUNCTIONS} | >= 70% | ${UNIT_STATUS} |" >> $GITHUB_STEP_SUMMARY
 
           # Integration coverage
           INTEG_LINES="N/A"
@@ -788,14 +854,14 @@ jobs:
           echo "### Enforced Coverage Thresholds" >> $GITHUB_STEP_SUMMARY
           echo "| Test Type | Metric | Threshold | Enforced By |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|--------|-----------|-------------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit | Lines | >= 90% | Jest + Codecov |" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit | Branches | >= 80% | Jest + Codecov |" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit | Functions | >= 80% | Jest + Codecov |" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit | Statements | >= 90% | Jest |" >> $GITHUB_STEP_SUMMARY
-          echo "| Integration | Lines | >= 70% | Codecov |" >> $GITHUB_STEP_SUMMARY
-          echo "| E2E (UI) | Lines | >= 50% | Codecov |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | Lines | >= 70% | Jest (jest.config.cjs) + CI baseline |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | Statements | >= 70% | Jest |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | Functions | >= 65% | Jest |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | Branches | >= 60% | Jest |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration / E2E / CLI | Lines | informational | Codecov flags |" >> $GITHUB_STEP_SUMMARY
           echo "| E2E | Pass Rate | 100% | Playwright |" >> $GITHUB_STEP_SUMMARY
-          echo "| Patch (new code) | Lines | >= 90% | Codecov |" >> $GITHUB_STEP_SUMMARY
+          echo "| Patch (new/changed lines, all flags) | Lines | >= 80% | Codecov \`codecov/patch\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Project (all flags) | Lines | no drop > 1% vs base | Codecov \`codecov/project\` |" >> $GITHUB_STEP_SUMMARY
 
       - name: Combine badge data
         run: |

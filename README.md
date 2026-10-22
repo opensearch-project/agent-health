@@ -19,6 +19,7 @@ Agent Health helps you evaluate, monitor, and optimize AI agents of any kind —
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.txt)
 [![npm version](https://img.shields.io/npm/v/@opensearch-project/agent-health.svg)](https://www.npmjs.com/package/@opensearch-project/agent-health)
 [![Build](https://github.com/opensearch-project/agent-health/actions/workflows/ci.yml/badge.svg)](https://github.com/opensearch-project/agent-health/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/opensearch-project/agent-health/branch/main/graph/badge.svg)](https://codecov.io/gh/opensearch-project/agent-health)
 [![SDK Status](https://img.shields.io/badge/Code--Based%20SDK-Experimental-orange.svg)](docs/SDK.md)
 
 </div>
