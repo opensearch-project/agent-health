@@ -635,7 +635,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                                   prompt/config change, not just the agent. */}
                               {(run.agentFingerprint || (idx === 0 && comparedRuns.length > 0) || idx > 1) && (
                                 <div className="mt-0.5 flex items-center gap-1.5 flex-wrap" data-testid={`scoreboard-provenance-${label}`}>
-                                  <AgentFingerprintChip run={run} compact data-testid={`scoreboard-fingerprint-${run.runId}`} />
+                                  <AgentFingerprintChip run={run} data-testid={`scoreboard-fingerprint-${run.runId}`} />
                                   {/* Row A carries the A-vs-B badge (the primary comparison); with
                                       3+ runs every further row carries its own A-vs-this badge. */}
                                   {idx === 0 && comparedRuns.length > 0 && (

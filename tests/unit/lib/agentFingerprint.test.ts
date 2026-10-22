@@ -26,7 +26,7 @@ import {
   isSecretKey,
   AGENT_FINGERPRINT_SHORT_LENGTH,
 } from '@/lib/agentFingerprint';
-import { classifyFingerprintDiff, describeFingerprintDiff, formatFingerprintTooltip } from '@/lib/agentFingerprintDiff';
+import { classifyFingerprintDiff, describeFingerprintDiff, formatFingerprintTooltip, FINGERPRINT_INPUT_FIELDS } from '@/lib/agentFingerprintDiff';
 import type { AgentConfig } from '@/types';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -446,5 +446,24 @@ describe('classifyFingerprintDiff / describe / tooltip', () => {
     expect(t).toContain(A.agentPromptHash);
     expect(t).toContain('/x/agent-health.config.ts @ abcdef123456 (uncommitted edits)');
     expect(formatFingerprintTooltip({ agentFingerprint: 'a' })).toContain('no system prompt recorded');
+  });
+});
+
+describe('FINGERPRINT_INPUT_FIELDS (the popover\'s "what was hashed" catalogue) stays in lock-step with the real payload', () => {
+  it('documents every top-level payload key, and documents nothing the payload does not carry', () => {
+    // A fully-populated agent so every optional key is present in the payload.
+    const payload = buildFingerprintPayload(baseAgent({
+      auth: { type: 'sigv4', awsRegion: 'us-east-1', awsService: 'es' } as AgentConfig['auth'],
+      traceServiceName: 'svc',
+      tracePolling: { intervalMs: 1000 } as AgentConfig['tracePolling'],
+      hooks: { beforeRequest: (x: unknown) => x } as AgentConfig['hooks'],
+    }), { agentEndpoint: 'http://override' });
+    const payloadKeys = Object.keys(payload).filter(k => payload[k] !== undefined).sort();
+    const documented = FINGERPRINT_INPUT_FIELDS.map(f => f.key).sort();
+    expect(documented).toEqual(payloadKeys);
+    for (const f of FINGERPRINT_INPUT_FIELDS) {
+      expect(f.label.length).toBeGreaterThan(0);
+      expect(f.detail.length).toBeGreaterThan(0);
+    }
   });
 });

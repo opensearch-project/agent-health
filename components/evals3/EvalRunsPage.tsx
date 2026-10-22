@@ -840,7 +840,7 @@ export const EvalRunsPage: React.FC = () => {
           <div>{rr.agentName}</div>
           {/* Agent-configuration provenance: WHICH version of this agent's
               config produced these numbers. Renders nothing for legacy runs. */}
-          <AgentFingerprintChip run={rr.run} compact className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
+          <AgentFingerprintChip run={rr.run} className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
         </td>
         <td className="px-2 py-1.5 align-middle text-[11px]">{getModelName(rr.run.modelId)}</td>
         <td className="px-2 py-1.5 align-middle text-right text-[11px] text-muted-foreground" data-testid="run-concurrency-cell" title="Concurrency — parallel test cases">

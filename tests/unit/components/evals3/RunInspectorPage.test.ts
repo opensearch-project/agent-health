@@ -821,7 +821,7 @@ describe('RunInspectorPage — agent-configuration provenance (lib/agentFingerpr
     expect(chip.getAttribute('title')).toContain('/cfg/agent-health.config.ts @ cafe0000cafe');
   });
 
-  it('legacy run without a fingerprint renders no chip (no empty chip)', async () => {
+  it('legacy run without a fingerprint renders an explicit "config · not recorded" chip in the header (not silence)', async () => {
     const { getEvaluationRun } = require('@/services/client');
     getEvaluationRun.mockResolvedValue(evalRun({}));
     renderPage();
@@ -829,6 +829,17 @@ describe('RunInspectorPage — agent-configuration provenance (lib/agentFingerpr
     // than on an action button whose testid other in-flight PRs rename.
     await waitFor(() => expect(screen.getByText('demo')).toBeTruthy());
     expect(screen.queryByTestId('inspector-fingerprint-chip')).toBeNull();
+    const missing = screen.getByTestId('inspector-fingerprint-chip-missing');
+    expect(missing.textContent).toContain('not recorded');
+    expect(missing.getAttribute('title')).toMatch(/created before/i);
+  });
+
+  it('header chip carries the "config" label, so the hash cannot be mistaken for a commit SHA', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(evalRun({ agentFingerprint: FP_NEW, agentFingerprintShort: 'bbbbbbbbbbbb' }));
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('inspector-fingerprint-chip')).toBeTruthy());
+    expect(screen.getByTestId('inspector-fingerprint-chip').textContent).toMatch(/config\s*bbbbbbbbbbbb/);
   });
 
   it('re-run whose fingerprint differs from the source run shows "config changed since source run" (prompt kind)', async () => {

@@ -656,7 +656,7 @@ export const RunInspectorPage: React.FC = () => {
             <span className="flex items-center gap-1"><Calendar size={11} /> {formatDate(run.createdAt)}</span>
             <span className="flex items-center gap-1.5">
               {agentName}
-              <AgentFingerprintChip run={run} compact data-testid="inspector-fingerprint-chip" />
+              <AgentFingerprintChip run={run} showMissing data-testid="inspector-fingerprint-chip" />
             </span>
             <span>{modelName}</span>
             {run.concurrency !== undefined && (
