@@ -1,0 +1,22 @@
+{
+  "//": [
+    "c8 config for `npm run coverage:cli` — turns the raw NODE_V8_COVERAGE dumps the",
+    "CLI integration tests collect from real `cli/dist/index.js` processes into lcov",
+    "mapped back onto cli/**/*.ts (the bundle is built with --sourcemap).",
+    "Kept in its own file ON PURPOSE: with no --config, c8 silently picks up .nycrc.json",
+    "(the e2e/nyc config, which EXCLUDES cli/**) and reports nothing.",
+    "include is `**/cli/**` rather than `cli/**` because, when Node caches the source",
+    "map, v8-to-istanbul checks exclude-after-remap against `file://` URLs; a root-",
+    "anchored pattern never matches those, no ranges get applied, and every file is",
+    "reported as a bogus 100%. The `**/` prefix matches both the URL and the real path.",
+    "`all` + `src: cli` lists cli/**/*.ts files the bundle never loaded at 0%."
+  ],
+  "include": ["**/cli/**"],
+  "exclude": ["**/cli/dist/**"],
+  "exclude-after-remap": true,
+  "all": true,
+  "src": ["cli"],
+  "temp-directory": "coverage-cli/v8",
+  "reports-dir": "coverage-cli",
+  "reporter": ["text", "lcov"]
+}
