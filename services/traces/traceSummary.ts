@@ -23,6 +23,8 @@ export interface TraceSummary {
   llm: number;
   tool: number;
   agent: number;
+  /** DB-semconv (search / database) spans — see SpanCategory RETRIEVAL. */
+  retrieval: number;
   evalCount: number;
   errors: number;
   inputTokens: number;
@@ -74,6 +76,7 @@ export function computeTraceSummary(spanTree: Span[]): TraceSummary {
     llm: counts.LLM,
     tool: counts.TOOL,
     agent: counts.AGENT,
+    retrieval: counts.RETRIEVAL,
     evalCount: counts.EVAL,
     errors: counts.ERROR,
     inputTokens,

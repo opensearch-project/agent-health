@@ -18,6 +18,7 @@
 
 import { Node, Edge, MarkerType } from '@xyflow/react';
 import dagre from 'dagre';
+import { sortSpansByStartTime } from './spanTime';
 import {
   CategorizedSpan,
   SpanNodeData,
@@ -125,9 +126,8 @@ function findMainFlowSpans(spanTree: CategorizedSpan[]): CategorizedSpan[] {
  * Sort spans by startTime for execution order
  */
 function sortByStartTime(spans: CategorizedSpan[]): CategorizedSpan[] {
-  return [...spans].sort(
-    (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
-  );
+  // Same total order as processSpansIntoTree (startTime, then spanId).
+  return sortSpansByStartTime(spans);
 }
 
 /**
