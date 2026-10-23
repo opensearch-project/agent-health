@@ -147,7 +147,7 @@ jobs:
       # uncovered line ranges — in the job summary, so reviewers do not have to
       # leave the Actions run. Visibility only; Codecov owns the gate.
       - name: Changed-files coverage table (PR summary)
-        if: matrix.node-version == '20' && github.event_name == 'pull_request'
+        if: matrix.node-version == '24' && github.event_name == 'pull_request'
         # Visibility only — a fetch hiccup or script error must never fail CI.
         continue-on-error: true
         env:
@@ -159,8 +159,8 @@ jobs:
 
       # The cli/** coverage pipeline (real CLI child + NODE_V8_COVERAGE + c8 +
       # source map) on EVERY Node version in the matrix, so the tooling minimum
-      # is proven rather than assumed (c8 ^10 supports Node >= 18). Needs no
-      # server: the test spawns `list connectors`.
+      # is proven rather than assumed. Needs no server: the test spawns
+      # `list connectors`.
       - name: CLI coverage pipeline check (Node ${{ matrix.node-version }})
         run: npx jest tests/integration/cli/cliCoverage.integration.test.ts
 
