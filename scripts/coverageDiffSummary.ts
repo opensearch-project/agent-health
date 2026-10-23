@@ -10,9 +10,18 @@
  * CLI entry is scripts/coverage-diff-summary.ts.
  *
  * CI appends the output to `$GITHUB_STEP_SUMMARY` so a reviewer can see, per
- * changed file, line %, branch % and the exact uncovered line ranges without
- * leaving the Actions run (Codecov's PR comment shows per-file patch %, not the
- * missing line ranges).
+ * changed file, line %, branch % and the exact uncovered / partial line ranges
+ * without leaving the Actions run (Codecov's PR comment shows per-file patch %,
+ * not the missing line ranges).
+ *
+ * Line status follows Codecov's lcov semantics so the numbers here match the
+ * `codecov/patch` status and the Codecov comment for the same lcov (see
+ * codecov/worker services/report/languages/lcov.py): a line that carries
+ * BRDA records is classified by its branches — all untaken = uncovered, some
+ * untaken = partial, all taken = covered — regardless of its DA hit count,
+ * and only fully covered lines count towards "Lines". Lines without branch
+ * records are covered iff DA > 0. BRDA records on line 1 of a .ts file are
+ * ignored (Codecov does the same; istanbul emits spurious ones there).
  *
  *   npx tsx scripts/coverage-diff-summary.ts --lcov coverage/lcov.info \
  *        --base <sha-or-ref> --title "Unit coverage — changed files"
@@ -44,8 +53,11 @@ export interface FileCoverage {
 
 export interface FileSummary {
   linesTotal: number;
+  /** Fully covered lines (partials excluded, as Codecov counts them). */
   linesHit: number;
   uncovered: number[];
+  /** Lines with branch records of which some, but not all, were taken. */
+  partial: number[];
   branchesTotal: number;
   branchesHit: number;
 }
@@ -81,10 +93,12 @@ export function parseLcov(texts: string | string[], root: string = process.cwd()
   const files = new Map<string, FileCoverage>();
   for (const text of Array.isArray(texts) ? texts : [texts]) {
     let cur: FileCoverage | null = null;
+    let curPath = '';
     for (const raw of text.split(/\r?\n/)) {
       const line = raw.trim();
       if (line.startsWith('SF:')) {
         const key = normalizePath(line.slice(3), root);
+        curPath = key;
         cur = files.get(key) ?? null;
         if (!cur) {
           cur = { lines: new Map(), branches: new Map() };
@@ -99,6 +113,9 @@ export function parseLcov(texts: string | string[], root: string = process.cwd()
       } else if (line.startsWith('BRDA:')) {
         // BRDA:<line>,<block>,<branch>,<taken|->
         const [ln, block, br, taken] = line.slice(5).split(',');
+        // Codecov skips branch records on line 1 of .ts files (istanbul emits
+        // spurious ones there); mirror it so the two never disagree on line 1.
+        if (ln === '1' && curPath.endsWith('.ts')) continue;
         const key = `${ln}:${block}:${br}`;
         const hit = taken !== '-' && Number(taken) > 0;
         cur.branches.set(key, (cur.branches.get(key) ?? false) || hit);
@@ -124,15 +141,40 @@ export function compactRanges(lines: number[], { maxRanges = 8 }: { maxRanges?: 
   return shown.join(', ') + (rest > 0 ? `, +${rest} more` : '');
 }
 
+/**
+ * Classify every line the way Codecov's lcov parser does (see the file header):
+ * branch-carrying lines by taken/total branches, the rest by DA hits.
+ */
 export function summarizeFile(cov: FileCoverage): FileSummary {
-  const total = cov.lines.size;
-  const uncovered = [...cov.lines.entries()].filter(([, h]) => h === 0).map(([n]) => n);
+  const branchesByLine = new Map<number, { taken: number; total: number }>();
+  for (const [key, hit] of cov.branches) {
+    const ln = Number(key.split(':')[0]);
+    const b = branchesByLine.get(ln) ?? { taken: 0, total: 0 };
+    b.total += 1;
+    if (hit) b.taken += 1;
+    branchesByLine.set(ln, b);
+  }
+  // Codecov creates a line for every BRDA line even without a DA record.
+  const lineNumbers = new Set<number>([...cov.lines.keys(), ...branchesByLine.keys()]);
+  const uncovered: number[] = [];
+  const partial: number[] = [];
+  for (const ln of [...lineNumbers].sort((a, b) => a - b)) {
+    const b = branchesByLine.get(ln);
+    if (b) {
+      if (b.taken === 0) uncovered.push(ln);
+      else if (b.taken < b.total) partial.push(ln);
+    } else if (cov.lines.get(ln) === 0) {
+      uncovered.push(ln);
+    }
+  }
+  const total = lineNumbers.size;
   const bTotal = cov.branches.size;
   const bHit = [...cov.branches.values()].filter(Boolean).length;
   return {
     linesTotal: total,
-    linesHit: total - uncovered.length,
+    linesHit: total - uncovered.length - partial.length,
     uncovered,
+    partial,
     branchesTotal: bTotal,
     branchesHit: bHit,
   };
@@ -174,28 +216,33 @@ export function renderSummary({
   let measured = 0;
   for (const f of files) {
     const cov = coverage.get(f);
-    if (!cov || cov.lines.size === 0) {
-      rows.push(`| \`${f}\` | n/a | n/a | _not measured by this suite_ |`);
+    const s = cov ? summarizeFile(cov) : null;
+    if (!s || s.linesTotal === 0) {
+      rows.push(`| \`${f}\` | n/a | n/a | _not measured by this suite_ | |`);
       continue;
     }
     measured += 1;
-    const s = summarizeFile(cov);
     tl += s.linesTotal;
     th += s.linesHit;
     tb += s.branchesTotal;
     tbh += s.branchesHit;
     const unc = s.uncovered.length === 0 ? '—' : compactRanges(s.uncovered);
-    rows.push(`| \`${f}\` | ${pct(s.linesHit, s.linesTotal)} (${s.linesHit}/${s.linesTotal}) | ${pct(s.branchesHit, s.branchesTotal)} | ${unc} |`);
+    const part = s.partial.length === 0 ? '—' : compactRanges(s.partial);
+    rows.push(`| \`${f}\` | ${pct(s.linesHit, s.linesTotal)} (${s.linesHit}/${s.linesTotal}) | ${pct(s.branchesHit, s.branchesTotal)} | ${unc} | ${part} |`);
   }
   const lines = [
     head.trimEnd(),
     '',
-    '| File | Lines | Branches | Uncovered lines |',
-    '|------|-------|----------|-----------------|',
+    '| File | Lines | Branches | Uncovered lines | Partial lines |',
+    '|------|-------|----------|-----------------|---------------|',
     ...rows,
   ];
   if (measured > 0) {
-    lines.push(`| **Total (${measured} measured)** | **${pct(th, tl)}** (${th}/${tl}) | **${pct(tbh, tb)}** | |`);
+    lines.push(`| **Total (${measured} measured)** | **${pct(th, tl)}** (${th}/${tl}) | **${pct(tbh, tb)}** | | |`);
+    lines.push('');
+    lines.push(
+      '_Line status as Codecov counts it: a line whose branches were all untaken is uncovered, one with some untaken branches is partial; only fully covered lines count towards Lines %, so these numbers match `codecov/patch` for the same report._',
+    );
   }
   lines.push('');
   return lines.join('\n').replace(/^\n/, '');
