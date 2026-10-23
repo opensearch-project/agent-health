@@ -34,16 +34,21 @@
 import express from 'express';
 import request from 'supertest';
 
+// The route reaches the trace store only through the sealed IObservabilityModule
+// (getObservabilityModule); hand it the REAL OpenSearch module over the fake client
+// so route → module → metricsService → DSL all run unmocked.
 jest.mock('@/server/services/observabilityClient', () => ({
-  getObservabilityClient: jest.fn(),
+  getObservabilityModule: jest.fn(),
 }));
 jest.mock('@/lib/debug', () => ({ debug: jest.fn() }));
 
 import metricsRoutes from '@/server/routes/metrics';
-import { getObservabilityClient } from '@/server/services/observabilityClient';
+import { getObservabilityModule } from '@/server/services/observabilityClient';
+import { OpenSearchObservabilityModule } from '@/server/adapters/observability/OpenSearchObservabilityModule';
 import { createFakeTraceClient, flatAttrs, type FakeSpanDoc } from '@/tests/helpers/fakeTraceStore';
 
-const mockGetObservabilityClient = getObservabilityClient as jest.MockedFunction<typeof getObservabilityClient>;
+const mockGetObservabilityModule = getObservabilityModule as jest.MockedFunction<typeof getObservabilityModule>;
+const OTEL_INDEXES = { traces: 'otel-v1-apm-span-*', logs: 'ml-commons-logs-*', metrics: 'otel-v1-apm-service-map*' };
 
 const SVC = 'example-agent';
 const T0 = Date.parse('2026-03-01T10:00:00.000Z');
@@ -99,7 +104,7 @@ describe('POST /api/metrics/batch — precise-first correlation (real route + re
   let client: ReturnType<typeof createFakeTraceClient>;
   beforeEach(() => {
     client = createFakeTraceClient(INDEX);
-    mockGetObservabilityClient.mockReturnValue({ client: client as any, indexes: { traces: 'otel-v1-apm-span-*' } } as any);
+    mockGetObservabilityModule.mockReturnValue(new OpenSearchObservabilityModule(client as any, OTEL_INDEXES));
   });
   afterEach(() => jest.clearAllMocks());
 

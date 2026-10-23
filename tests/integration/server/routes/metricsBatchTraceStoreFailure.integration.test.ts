@@ -23,15 +23,20 @@
 import express from 'express';
 import request from 'supertest';
 
+// The route reaches the trace store only through the sealed IObservabilityModule
+// (getObservabilityModule); hand it the REAL OpenSearch module over the fake client
+// so route → module → metricsService → DSL all run unmocked.
 jest.mock('@/server/services/observabilityClient', () => ({
-  getObservabilityClient: jest.fn(),
+  getObservabilityModule: jest.fn(),
 }));
 jest.mock('@/lib/debug', () => ({ debug: jest.fn() }));
 
 import metricsRoutes from '@/server/routes/metrics';
-import { getObservabilityClient } from '@/server/services/observabilityClient';
+import { getObservabilityModule } from '@/server/services/observabilityClient';
+import { OpenSearchObservabilityModule } from '@/server/adapters/observability/OpenSearchObservabilityModule';
 
-const mockGetObservabilityClient = getObservabilityClient as jest.MockedFunction<typeof getObservabilityClient>;
+const mockGetObservabilityModule = getObservabilityModule as jest.MockedFunction<typeof getObservabilityModule>;
+const OTEL_INDEXES = { traces: 'otel-v1-apm-span-*', logs: 'ml-commons-logs-*', metrics: 'otel-v1-apm-service-map*' };
 
 const span = (runId: string, inTok: number, outTok: number) => ({
   _source: {
@@ -66,7 +71,7 @@ describe('POST /api/metrics/batch — trace-store failure on one chunk (real rou
       }
       return { body: { hits: { total: { value: 2 }, hits: [span('run-50', 100, 10), span('run-51', 200, 20)] } } };
     });
-    mockGetObservabilityClient.mockReturnValue({ client: { search } as any, indexes: { traces: 'otel-v1-apm-span-*' } } as any);
+    mockGetObservabilityModule.mockReturnValue(new OpenSearchObservabilityModule({ search } as any, OTEL_INDEXES));
     warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   });
   afterEach(() => { warn.mockRestore(); jest.clearAllMocks(); });
