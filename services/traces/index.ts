@@ -267,6 +267,7 @@ export function getSpanColor(span: Span): string {
     AGENT: '#6366f1',  // indigo
     LLM: '#a855f7',    // purple
     TOOL: '#f59e0b',   // amber
+    RETRIEVAL: '#06b6d4', // cyan
     EVAL: '#10b981',   // emerald
     ERROR: '#ef4444',  // red
     OTHER: '#64748b',  // slate
