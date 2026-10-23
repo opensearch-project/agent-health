@@ -17,6 +17,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
+  changedFilesFromGit,
   compactRanges,
   isReportableSource,
   normalizePath,
@@ -140,11 +141,68 @@ describe('scripts/coverageDiffSummary.ts', () => {
       expect(compactRanges(odd, { maxRanges: 2 })).toBe('1, 3, +38 more');
     });
 
-    it('summarizeFile and pct', () => {
+    it('summarizeFile classifies lines the way Codecov does, and pct', () => {
+      // line 2: DA hit but branches 1/2 → partial; line 9: branches 0/1 → uncovered
       const s = summarizeFile(parseLcov(LCOV_A, '/repo').get('lib/alpha.ts')!);
-      expect(s).toEqual({ linesTotal: 7, linesHit: 3, uncovered: [3, 4, 5, 9], branchesTotal: 3, branchesHit: 1 });
+      expect(s).toEqual({
+        linesTotal: 7,
+        linesHit: 2,
+        uncovered: [3, 4, 5, 9],
+        partial: [2],
+        branchesTotal: 3,
+        branchesHit: 1,
+      });
       expect(pct(3, 7)).toBe('42.9%');
       expect(pct(0, 0)).toBe('—');
+    });
+
+    it('matches Codecov on a line that executed but whose only branch arm was never taken (the #580 discrepancy)', () => {
+      // Real excerpt from scripts/coverageDiffSummary.ts in #580's unit lcov:
+      // line 146 `cwd: string = process.cwd()` ran once (DA:146,1) but the
+      // default-parameter branch was never taken; line 187 took 1 of 2 arms.
+      // Codecov reported "98.29% — 1 Missing and 1 partial" where a DA-only
+      // count says 117/117. Both lines must be classified by their branches.
+      const lcov = [
+        'SF:scripts/lib.ts',
+        'DA:146,1',
+        'DA:187,5',
+        'DA:188,5',
+        'BRDA:146,21,0,0',
+        'BRDA:187,26,0,0',
+        'BRDA:187,26,1,5',
+        'end_of_record',
+        '',
+      ].join('\n');
+      const s = summarizeFile(parseLcov(lcov, '/repo').get('scripts/lib.ts')!);
+      expect(s.linesTotal).toBe(3);
+      expect(s.linesHit).toBe(1);
+      expect(s.uncovered).toEqual([146]);
+      expect(s.partial).toEqual([187]);
+      const md = renderSummary({ title: '', changed: ['scripts/lib.ts'], coverage: parseLcov(lcov, '/repo') });
+      expect(md).toContain('| `scripts/lib.ts` | 33.3% (1/3) | 33.3% | 146 | 187 |');
+    });
+
+    it('ignores BRDA records on line 1 of a .ts file (as Codecov does) and counts a BRDA-only line', () => {
+      const lcov = [
+        'SF:lib/one.ts',
+        'DA:1,1',
+        'DA:2,1',
+        'BRDA:1,0,0,0',
+        'BRDA:1,0,1,0',
+        'BRDA:7,1,0,-',
+        'end_of_record',
+        'SF:lib/one.js',
+        'DA:1,1',
+        'BRDA:1,0,0,0',
+        'end_of_record',
+        '',
+      ].join('\n');
+      const cov = parseLcov(lcov, '/repo');
+      const ts = summarizeFile(cov.get('lib/one.ts')!);
+      // line 1 stays covered; line 7 exists only via BRDA and is uncovered (0/1)
+      expect(ts).toEqual({ linesTotal: 3, linesHit: 2, uncovered: [7], partial: [], branchesTotal: 1, branchesHit: 0 });
+      const js = summarizeFile(cov.get('lib/one.js')!);
+      expect(js.uncovered).toEqual([1]);
     });
   });
 
@@ -156,10 +214,11 @@ describe('scripts/coverageDiffSummary.ts', () => {
         coverage: parseLcov(LCOV_A, '/repo'),
       });
       expect(md).toContain('### Unit coverage — changed files');
-      expect(md).toContain('| File | Lines | Branches | Uncovered lines |');
-      expect(md).toContain('| `lib/alpha.ts` | 42.9% (3/7) | 33.3% | 3-5, 9 |');
-      expect(md).toContain('| `cli/commands/beta.ts` | 0.0% (0/2) | — | 1-2 |');
-      expect(md).toContain('| **Total (2 measured)** | **33.3%** (3/9) | **33.3%** | |');
+      expect(md).toContain('| File | Lines | Branches | Uncovered lines | Partial lines |');
+      expect(md).toContain('| `lib/alpha.ts` | 28.6% (2/7) | 33.3% | 3-5, 9 | 2 |');
+      expect(md).toContain('| `cli/commands/beta.ts` | 0.0% (0/2) | — | 1-2 | — |');
+      expect(md).toContain('| **Total (2 measured)** | **22.2%** (2/9) | **33.3%** | | |');
+      expect(md).toContain('_Line status as Codecov counts it');
     });
 
     it('marks changed source files absent from the report as not measured, skips non-source files, omits the heading without a title', () => {
@@ -168,12 +227,19 @@ describe('scripts/coverageDiffSummary.ts', () => {
         changed: ['lib/alpha.ts', 'server/routes/gamma.ts', 'README.md', 'tests/unit/x.test.ts', 'lib/types.d.ts'],
         coverage: parseLcov(LCOV_A, '/repo'),
       });
-      expect(md).toContain('| `server/routes/gamma.ts` | n/a | n/a | _not measured by this suite_ |');
+      expect(md).toContain('| `server/routes/gamma.ts` | n/a | n/a | _not measured by this suite_ | |');
       expect(md).not.toContain('README.md');
       expect(md).not.toContain('x.test.ts');
       expect(md).not.toContain('types.d.ts');
       expect(md).not.toContain('### ');
       expect(md).toContain('**Total (1 measured)**');
+    });
+
+    it('renders a fully covered file with dashes in both line columns', () => {
+      const cov = parseLcov(['SF:lib/full.ts', 'DA:1,1', 'DA:2,3', 'BRDA:2,0,0,1', 'BRDA:2,0,1,2', 'end_of_record', ''].join('\n'), '/repo');
+      expect(renderSummary({ title: '', changed: ['lib/full.ts'], coverage: cov })).toContain(
+        '| `lib/full.ts` | 100.0% (2/2) | 100.0% | — | — |',
+      );
     });
 
     it('prints a one-line note when the change touches no source files', () => {
@@ -209,8 +275,8 @@ describe('scripts/coverageDiffSummary.ts', () => {
         '--lcov', join(dir, 'a.info'), '--lcov', join(dir, 'b.info'), '--files', 'lib/alpha.ts', '--root', dir,
       ]);
       expect(warnings).toEqual([]);
-      // line 3 now hit (0+5), branch 2/0/1 now taken → 4/7 lines, 2/3 branches, uncovered 4,5,9
-      expect(markdown).toContain('| `lib/alpha.ts` | 57.1% (4/7) | 66.7% | 4-5, 9 |');
+      // line 3 now hit (0+5), branch 2/0/1 now taken → line 2 fully covered: 4/7 lines, 2/3 branches, uncovered 4,5,9, no partials
+      expect(markdown).toContain('| `lib/alpha.ts` | 57.1% (4/7) | 66.7% | 4-5, 9 | — |');
     });
 
     it('warns about an unreadable lcov file instead of throwing, and treats it as empty', () => {
@@ -218,6 +284,10 @@ describe('scripts/coverageDiffSummary.ts', () => {
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toMatch(/cannot read .*missing\.info/);
       expect(markdown).toContain('_not measured by this suite_');
+    });
+
+    it('changedFilesFromGit defaults to the current directory (this repo): HEAD vs HEAD is empty', () => {
+      expect(changedFilesFromGit('HEAD')).toEqual([]);
     });
 
     it('derives the changed-file list from `git diff <base> HEAD` when --base is given', () => {
@@ -248,7 +318,7 @@ describe('scripts/coverageDiffSummary.ts', () => {
       writeFileSync(join(repo, 'cov.info'), LCOV_A);
 
       const { markdown } = run(['--lcov', join(repo, 'cov.info'), '--base', base, '--title', 'Git', '--root', repo]);
-      expect(markdown).toContain('| `lib/alpha.ts` | 42.9% (3/7) | 33.3% | 3-5, 9 |');
+      expect(markdown).toContain('| `lib/alpha.ts` | 28.6% (2/7) | 33.3% | 3-5, 9 | 2 |');
       expect(markdown).not.toContain('untouched.ts');
       expect(markdown).not.toContain('README');
     });
@@ -259,7 +329,7 @@ describe('scripts/coverageDiffSummary.ts', () => {
       const r = await runEntry(['--lcov', join(dir, 'a.info'), '--files', 'lib/alpha.ts', '--root', dir, '--title', 'E']);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('### E');
-      expect(r.stdout).toContain('| `lib/alpha.ts` | 42.9% (3/7) | 33.3% | 3-5, 9 |');
+      expect(r.stdout).toContain('| `lib/alpha.ts` | 28.6% (2/7) | 33.3% | 3-5, 9 | 2 |');
     }, 60_000);
 
     it('exits 2 with a usage error on stderr when neither --base nor --files is given', async () => {
