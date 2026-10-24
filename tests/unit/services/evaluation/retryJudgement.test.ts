@@ -465,6 +465,22 @@ describe('retryJudgementForRun', () => {
       expect(reports['r-a'].judgementRetryCount).toBeUndefined();
     });
 
+    it('back-fills only SETTLED verdicts: a report whose judge step is pending/calculating or errored keeps no mirror even if it carries a stale passFailStatus', async () => {
+      mockedCallBedrockJudge.mockResolvedValue(passedJudgment);
+      const reports: Record<string, EvaluationReport> = {
+        'r-a': makeReport({ id: 'r-a', testCaseId: 'tc-a', metricsStatus: 'pending' as any, passFailStatus: 'passed' }),
+        'r-b': makeReport({ id: 'r-b', testCaseId: 'tc-b', metricsStatus: 'error' as any, passFailStatus: 'passed', trajectory: [] }),
+        'r-c': makeReport({ id: 'r-c', testCaseId: 'tc-c', metricsStatus: 'error' as any }),
+      };
+      const storage = makeStorage(reports);
+      const persistRun = jest.fn(async () => true);
+      await retryJudgementForRun(makeLegacyRun(), storage as any, { persistRun });
+      const final = persistRun.mock.calls[1][0] as any;
+      expect(final.results['tc-a'].passFailStatus).toBeUndefined();
+      expect(final.results['tc-b'].passFailStatus).toBeUndefined();
+      expect(final.results['tc-c'].passFailStatus).toBe('passed'); // the one actually re-judged
+    });
+
     it('does not invent a verdict for a case that still has none (judge failed again) — it stays errored', async () => {
       mockedCallBedrockJudge.mockRejectedValue(new Error('judge 400'));
       const reports: Record<string, EvaluationReport> = {

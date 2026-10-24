@@ -46,6 +46,7 @@ import { isEvaluationRun as isEvaluationRunDoc } from '@/types';
 /** Minimal shape both BenchmarkRun and EvaluationRun satisfy for these checks. */
 export type RunLike = Pick<BenchmarkRun | EvaluationRun, 'status' | 'results'> & {
   docType?: string;
+  stats?: BenchmarkRun['stats'] | null;
 };
 
 /**
@@ -72,10 +73,15 @@ export function isRunRunning(run: RunLike | null | undefined): boolean {
  * True once a run has reached any terminal state (not running/pending). A
  * run with NO status is legacy data persisted before the field existed
  * (`BenchmarkRun.status` doc: "undefined = legacy data, treat as completed")
- * and is terminal too.
+ * — terminal unless one of its own results is still running/pending (the
+ * same reading `lib/runStats` `getEffectiveRunStatus` gives such a run).
  */
 export function isRunTerminal(run: RunLike | null | undefined): boolean {
-  return !!run && (run.status === undefined || run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled');
+  if (!run) return false;
+  if (run.status === undefined) {
+    return !Object.values(run.results || {}).some(r => r?.status === 'running' || r?.status === 'pending');
+  }
+  return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
 }
 
 /**
@@ -251,8 +257,22 @@ export function getRunActionVisibility(run: RunLike | null | undefined): RunActi
   const terminal = isRunTerminal(run);
   // Both shapes carry `results[tc].status` (+ the runner's `passFailStatus`
   // mirror on newer docs), so the counts apply to legacy embedded runs too.
-  const judgeFailedCount = countJudgeFailed(run);
   const rejudgeableCount = countRejudgeable(run);
+  let judgeFailedCount = countJudgeFailed(run);
+  // Classic-shape docs (every legacy benchmark-embedded run, older eval-run
+  // docs) carry NO `passFailStatus` mirror on any result, so every completed
+  // case reads as judge-failed above — the kebab would say "Retry judgement
+  // (5)" for a run whose dialog pre-flight then finds 1. When no result has a
+  // mirror but the denormalized `stats` show real verdicts, those stats are
+  // the honest judge-failed count (same signature `lib/runStats`
+  // `computeRunStats` trusts for the same reason).
+  if (run?.results && judgeFailedCount > 0) {
+    const anyMirror = Object.values(run.results).some(r => (r as RunResultEntryLike)?.passFailStatus === 'passed' || (r as RunResultEntryLike)?.passFailStatus === 'failed');
+    const stats = run.stats;
+    if (!anyMirror && stats && ((stats.passed ?? 0) > 0 || (stats.failed ?? 0) > 0)) {
+      judgeFailedCount = Math.min(judgeFailedCount, stats.errored ?? 0);
+    }
+  }
 
   const canRetryJudgement = terminal && rejudgeableCount > 0;
   let retryJudgementDisabledReason: string | undefined;

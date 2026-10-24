@@ -157,7 +157,8 @@ jest.mock('@/components/evals3/RunConfigDialog', () => {
           'data-mode': mode,
           'data-benchmark-id': benchmark?.id ?? '',
           'data-initial-values': JSON.stringify(initialValues ?? {}),
-          onClick: () => onStart({ ...initialValues, agentKey: 'demo' }),
+          onClick: () => { void onStart({ ...initialValues, agentKey: 'demo' }).catch(() => {}); },
+          ref: (el: any) => { if (el) el.__onStart = () => onStart({ ...initialValues, agentKey: 'demo' }); },
         },
         `Create dialog for ${benchmark?.id}`,
       );
@@ -1088,10 +1089,31 @@ describe('RunInspectorPage — Re-run button (benchmark mode)', () => {
     const dialog = await screen.findByTestId('run-config-dialog');
     expect(dialog.getAttribute('data-mode')).toBe('create');
     expect(dialog.getAttribute('data-benchmark-id')).toBe('bench-1');
-    expect(JSON.parse(dialog.getAttribute('data-initial-values')!)).toMatchObject({
+    const seed = JSON.parse(dialog.getAttribute('data-initial-values')!);
+    expect(seed).toMatchObject({
       name: 'Run 1 (re-run)',
+      description: 'Re-run of legacy run "Run 1" (run-1)',
       agentKey: 'demo',
       modelId: 'demo-model',
+    });
+    // The retired agent's per-run connection overrides are NOT carried into a
+    // run the user may point at another agent (codex_review finding).
+    expect(seed).not.toHaveProperty('agentEndpoint');
+    expect(seed).not.toHaveProperty('headers');
+  });
+
+  it('legacyRerunValues drops agentEndpoint/headers and replaces the old description with a provenance line', () => {
+    const { legacyRerunValues } = require('@/components/evals3/RunInspectorPage');
+    const seed = legacyRerunValues({
+      id: 'run-1700000000000-legacy1', name: 'legacy', createdAt: 'x', status: 'completed', results: {},
+      agentKey: 'retired-prod-agent', modelId: 'prod-agent', judgeModelId: 'demo-model', evaluatorId: 'eval-1', concurrency: 2,
+      description: 'Only change since the previous run: app context applied',
+      agentEndpoint: 'https://retired.example.internal/agent', headers: { Authorization: 'Bearer secret' },
+    });
+    expect(seed).toEqual({
+      name: 'legacy (re-run)',
+      description: 'Re-run of legacy run "legacy" (run-1700000000000-legacy1)',
+      agentKey: 'retired-prod-agent', modelId: 'prod-agent', judgeModelId: 'demo-model', evaluatorId: 'eval-1', concurrency: 2,
     });
   });
 
@@ -1113,6 +1135,28 @@ describe('RunInspectorPage — Re-run button (benchmark mode)', () => {
     expect(mockExecuteBenchmarkRun.mock.calls[0][0]).toBe('bench-1');
     expect(mockExecuteBenchmarkRun.mock.calls[0][1]).toMatchObject({ name: 'Run 1 (re-run)', agentKey: 'demo' });
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/evaluations/benchmarks/bench-1/runs/eval-run-new/inspect'));
+    // Closed on `started`, not before.
+    await waitFor(() => expect(screen.queryByTestId('run-config-dialog')).toBeNull());
+  });
+
+  it('legacy Re-run that fails BEFORE the run starts rejects to the dialog (stays open) instead of escaping as an unhandled rejection', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+    mockExecuteBenchmarkRun.mockRejectedValue(new Error('Test case "x" references source file "y" which is not resolvable'));
+
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
+    fireEvent.click(rerunItem());
+    const dialog = await screen.findByTestId('run-config-dialog');
+    let rejected: unknown = null;
+    // The stub dialog hands onStart's promise back via the click handler's return value — await it like the real dialog does.
+    await act(async () => {
+      try { await (dialog as any).__onStart?.(); } catch (e) { rejected = e; }
+    });
+    expect((rejected as Error | null)?.message).toMatch(/not resolvable/);
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining('/runs/eval-run'));
+    expect(screen.queryByTestId('run-config-dialog')).not.toBeNull();
   });
 })
 

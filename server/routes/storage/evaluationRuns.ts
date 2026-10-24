@@ -127,26 +127,26 @@ function pruneRetryJudgementJobs(now = Date.now()): void {
  *    server's config could neither re-run (legitimately — needs an agent)
  *    nor retry judgement (not legitimate — the agent is never invoked).
  *
- * `null` when neither exists.
+ * `null` when neither exists. A storage failure while looking up the
+ * benchmark propagates (→ the route's 500), it is not folded into "not found".
  */
 async function resolveRunForJudgementRetry(
   storage: ReturnType<typeof getStorageModule>,
   runId: string,
   benchmarkId: string | undefined,
-): Promise<{ run: RetryableRun; persistRun: PersistRunPatch; legacy: boolean } | null> {
+): Promise<{ run: RetryableRun; persistRun: PersistRunPatch } | null> {
   const doc = await storage.evaluationRuns.getById(runId);
   if (doc) {
-    return { run: doc, legacy: false, persistRun: (patch) => storage.evaluationRuns.update(runId, patch as Partial<EvaluationRun>) };
+    return { run: doc, persistRun: (patch) => storage.evaluationRuns.update(runId, patch) };
   }
   if (!benchmarkId) return null;
-  const benchmark = await storage.benchmarks.getById(benchmarkId).catch(() => null);
+  const benchmark = await storage.benchmarks.getById(benchmarkId);
   const embedded = benchmark?.runs?.find((r) => r.id === runId);
   if (!embedded) return null;
   return {
     run: embedded,
-    legacy: true,
     persistRun: async (patch) => {
-      const ok = await storage.benchmarks.updateRun(benchmarkId, runId, patch as Partial<BenchmarkRun>);
+      const ok = await storage.benchmarks.updateRun(benchmarkId, runId, patch);
       if (!ok) throw new Error(`Run ${runId} is no longer embedded in benchmark ${benchmarkId}`);
     },
   };

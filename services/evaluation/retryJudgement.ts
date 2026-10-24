@@ -126,10 +126,8 @@ export type RetryJudgementOutcome = 'succeeded' | 'not-evaluable' | 'failed';
  * field read here; the caller says where to persist the run-level patch via
  * {@link RetryJudgementRunOptions.persistRun}.
  */
-export type RetryableRun = Pick<
-  EvaluationRun,
-  'id' | 'results' | 'stats' | 'evaluatorId' | 'judgeModelId' | 'agentKey' | 'testCaseSnapshots'
-> & Pick<BenchmarkRun, 'status'>;
+export type RetryableRun = Pick<EvaluationRun, 'id' | 'results' | 'stats' | 'evaluatorId' | 'judgeModelId' | 'agentKey'>
+  & Pick<BenchmarkRun, 'status' | 'testCaseSnapshots'>;
 
 /**
  * Where {@link retryJudgementForRun} writes its run-level patch
@@ -141,7 +139,10 @@ export type RetryableRun = Pick<
  * report-level writes are identical either way (reports are first-class docs
  * in both worlds).
  */
-export type PersistRunPatch = (patch: Record<string, unknown>) => Promise<unknown>;
+export type RetryJudgementRunPatch = Partial<
+  Pick<EvaluationRun, 'results' | 'stats' | 'judgeFailureSummary' | 'lastRetryAttempt' | 'lastJudgementRetry'>
+>;
+export type PersistRunPatch = (patch: RetryJudgementRunPatch) => Promise<unknown>;
 
 export interface RetryJudgementCaseResult {
   testCaseId: string;
@@ -711,7 +712,7 @@ export async function retryJudgementForRun(
   const overrides = options?.overrides ?? {};
   const concurrency = Math.max(1, Math.min(options?.concurrency ?? MAX_RETRY_CONCURRENCY, MAX_RETRY_CONCURRENCY));
   const persistRun: PersistRunPatch = options?.persistRun
-    ?? ((patch) => storage.evaluationRuns.update(run.id, patch as Partial<EvaluationRun>));
+    ?? ((patch) => storage.evaluationRuns.update(run.id, patch));
 
   const reportsById = await fetchReportsById(run, storage);
 
@@ -819,13 +820,18 @@ export async function retryJudgementForRun(
   // ERRORED (no verdict). Re-judging one case of such a run used to rewrite
   // its stats from e.g. 4 passed / 1 errored to 1 passed / 4 errored: the
   // untouched cases' real verdicts were invisible to the run doc. Only a
-  // missing mirror is filled, only from a real verdict, and only for a case
-  // whose agent execution completed — nothing a retry did not touch changes
-  // meaning, the run doc just stops lying about it.
+  // missing mirror is filled, only from a SETTLED verdict (a report whose
+  // judge step is still pending/calculating or ended in error is not a
+  // verdict, whatever stale `passFailStatus` it may carry — the same rule
+  // `isJudgeFailedCase` applies), and only for a case whose agent execution
+  // completed — nothing a retry did not touch changes meaning, the run doc
+  // just stops lying about it. An existing mirror is never rewritten here.
   for (const [testCaseId, resultRaw] of Object.entries(updatedResults)) {
     const result = resultRaw as RunResultLike;
     if (!result?.reportId || result.status !== 'completed' || result.passFailStatus) continue;
-    const verdict = freshReports[result.reportId]?.passFailStatus;
+    const report = freshReports[result.reportId];
+    if (!report || report.metricsStatus === 'error' || report.metricsStatus === 'pending' || report.metricsStatus === 'calculating') continue;
+    const verdict = report.passFailStatus;
     if (verdict === 'passed' || verdict === 'failed') updatedResults[testCaseId] = { ...result, passFailStatus: verdict };
   }
   const stats = computeRunStats(updatedRun);
@@ -861,7 +867,7 @@ export async function retryJudgementForRun(
     : null;
   await persistRun({
     results: updatedResults,
-    stats: { ...(run.stats || {}), ...stats },
+    stats: { ...(run.stats || {}), ...stats } as EvaluationRun['stats'],
     judgeFailureSummary,
     lastRetryAttempt,
     // The run's ORIGINAL evaluatorId / judgeModelId are NOT rewritten (#509
@@ -891,7 +897,7 @@ export async function retryJudgementForRun(
  * to the current doc only for legacy runs that recorded no snapshot version.
  */
 async function resolveSnapshottedTestCase(
-  run: Pick<EvaluationRun, 'testCaseSnapshots'>,
+  run: Pick<RetryableRun, 'testCaseSnapshots'>,
   testCaseId: string,
   storage: IStorageModule
 ): Promise<{ testCase: TestCase | null; snapshotVersion: number | undefined }> {

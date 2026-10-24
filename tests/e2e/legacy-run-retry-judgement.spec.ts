@@ -173,13 +173,30 @@ test.describe('Legacy benchmark-embedded run — Retry judgement works without t
     await expect(page.locator('[data-testid="run-config-agent-missing-hint"]')).toContainText(`Agent "${UNCONFIGURED_AGENT}" is no longer configured — pick another agent to continue.`);
     await expect(page.locator('[data-testid="run-config-concurrency-input"]')).toHaveValue('2');
     await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeDisabled();
-    // The picker offers the configured agents; choosing one unblocks Start Run (not clicked — no run is started).
+    // The description is an honest provenance line, not the old run's narrative.
+    await expect(page.locator('[data-testid="run-config-description-input"]')).toHaveValue(`Re-run of legacy run "legacy · AFTER" (${runB})`);
+    // The picker offers the configured agents; choosing one unblocks Start Run.
     await page.locator('[data-testid="run-config-agent-trigger"]').click();
     await page.getByRole('option', { name: 'Demo Agent' }).click();
     await expect(page.locator('[data-testid="run-config-agent-missing-hint"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeEnabled();
-    await page.getByRole('button', { name: 'Cancel' }).click();
+    // Start it for real (the built-in demo agent): the dialog closes once the
+    // server reports the run STARTED and the page follows the NEW run to its
+    // inspector under this benchmark — a first-class run, no rerun endpoint involved.
+    let rerunPosts = 0;
+    page.on('request', req => { if (req.method() === 'POST' && req.url().includes('/rerun')) rerunPosts += 1; });
+    await page.locator('[data-testid="run-config-submit-btn"]').click();
+    await expect(page).toHaveURL(new RegExp(`/evaluations/benchmarks/${benchmarkId}/runs/(eval-run-[^/]+)/inspect$`), { timeout: 30000 });
     await expect(runDialog).not.toBeVisible();
+    const newRunId = page.url().match(/\/runs\/(eval-run-[^/]+)\/inspect$/)![1];
+    testData.evaluationRun(newRunId);
+    expect(rerunPosts).toBe(0);
+    const newRun = await (await request.get(`/api/storage/evaluation-runs/${newRunId}`)).json();
+    expect(newRun).toMatchObject({ agentKey: 'demo', evaluatorId, judgeModelId: 'demo-model', concurrency: 2, benchmarkId, name: 'legacy · AFTER (re-run)' });
+    expect(newRun.rerunOf).toBeUndefined();
+    // Let the demo run settle so its reports can be cleaned up by id, then go back to the legacy run for the list check.
+    await expect.poll(async () => (await (await request.get(`/api/storage/evaluation-runs/${newRunId}`)).json()).status, { timeout: 60000 }).not.toBe('running');
+    for (const r of Object.values((await (await request.get(`/api/storage/evaluation-runs/${newRunId}`)).json()).results ?? {}) as any[]) if (r.reportId) testData.run(r.reportId);
 
     // ── Evaluation Runs list: the legacy row's kebab offers Retry judgement too, and the dialog carries the benchmarkId hint.
     await page.goto('/evaluations/runs');
@@ -190,10 +207,11 @@ test.describe('Legacy benchmark-embedded run — Retry judgement works without t
     page.on('request', req => { if (req.method() === 'POST' && req.url().includes(`/evaluation-runs/${runA}/retry-judgement/preflight`)) preflightBodies.push(req.postDataJSON()); });
     await page.locator(`[data-testid="run-actions-menu-trigger-${runA}"]`).click();
     const rowItem = page.locator(`[data-testid="run-action-retry-judgement-${runA}"]`);
-    // The list only has the run doc: classic results carry no passFailStatus
-    // mirror, so the label's count is the documented over-count (3); the
-    // dialog's server pre-flight below is the truth (1).
-    await expect(rowItem).toContainText('Retry judgement (3)');
+    // The list only has the run doc; classic results carry no passFailStatus
+    // mirror, so the honest judge-failed count comes from the run's stats (1,
+    // not "every completed case" = 3) — and the dialog's server pre-flight
+    // below agrees.
+    await expect(rowItem).toContainText('Retry judgement (1)');
     await expect(rowItem).not.toHaveAttribute('aria-disabled', 'true');
     await rowItem.click();
     await expect(dialog).toBeVisible({ timeout: 10000 });

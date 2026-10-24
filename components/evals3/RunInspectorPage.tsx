@@ -63,13 +63,30 @@ const ROWS_PER_PAGE = 100;
 
 /**
  * Seed the create-mode run dialog from a legacy benchmark-embedded run for
- * Re-run: the same fields rerun mode prefills from an EvaluationRun
- * (`valuesFromRun`), minus the benchmark source swap (the run's benchmark is
- * the fixed source here). Exported for unit tests.
+ * Re-run: the fields the Runs tab's Add Run seeds from the latest run (agent,
+ * agent model, evaluator, judge model, concurrency) plus rerun mode's
+ * "<name> (re-run)" name. Deliberately NOT carried, unlike `valuesFromRun`
+ * (whose source is a run the user is duplicating faithfully):
+ *   - `agentEndpoint` / `headers` — per-run connection overrides of the OLD
+ *     agent; the user is typically here because that agent is gone and is
+ *     about to pick another one, which must not inherit the retired
+ *     endpoint or its credentials (codex_review finding);
+ *   - the old description — replaced by an honest provenance line, since a
+ *     legacy run has no first-class doc for the rerun endpoint's `rerunOf`
+ *     link to point at.
+ * Exported for unit tests.
  */
 export function legacyRerunValues(run: BenchmarkRun): Partial<RunConfigValues> {
-  const { benchmarkId: _benchmarkId, ...values } = valuesFromRun(run as unknown as EvaluationRun);
-  return values;
+  const { name, agentKey, modelId, judgeModelId, evaluatorId, concurrency } = valuesFromRun(run as unknown as EvaluationRun);
+  return {
+    name,
+    description: `Re-run of legacy run "${run.name}" (${run.id})`,
+    agentKey,
+    modelId,
+    judgeModelId,
+    evaluatorId,
+    concurrency,
+  };
 }
 
 export const RunInspectorPage: React.FC = () => {
@@ -358,22 +375,31 @@ export const RunInspectorPage: React.FC = () => {
 
   // Re-run of a LEGACY benchmark-embedded run: no rerun endpoint exists for
   // it, so start a NEW run on the benchmark with the dialog's values (same
-  // call as the Runs tab's Add Run) and follow it to its inspector as soon as
-  // the server reports it started. The stream keeps running server-side
-  // after this page unmounts (durable run; the HTTP stream is an observer).
-  const handleLegacyRerun = async (values: RunConfigValues) => {
-    if (!benchmarkId) return;
-    setRerunDialogOpen(false);
-    let navigated = false;
-    try {
-      await executeBenchmarkRun(benchmarkId, values, () => {}, started => {
-        navigated = true;
-        navigate(`/evaluations/benchmarks/${benchmarkId}/runs/${started.runId}/inspect`);
-      });
-    } catch (err) {
-      if (!navigated) throw err;
-      console.error('[RunInspectorPage] legacy re-run stream ended with an error:', err);
-    }
+  // call as the Runs tab's Add Run). Resolves — and the dialog closes — only
+  // once the server reports the run STARTED, then follows it to its
+  // inspector; a failure before that (409 unresolvable sources, 400, network)
+  // rejects, which the dialog shows inline with the pickers still there
+  // (codex_review: closing first turned a pre-start failure into an unhandled
+  // rejection with no feedback). The run itself is durable server-side; the
+  // SSE stream this page opened is only an observer and is left to drain in
+  // the background after navigation (same as the Runs tab's Add Run).
+  const handleLegacyRerun = (values: RunConfigValues): Promise<void> => {
+    if (!benchmarkId) return Promise.reject(new Error('This run is not scoped to a benchmark'));
+    return new Promise<void>((resolve, reject) => {
+      let started = false;
+      executeBenchmarkRun(benchmarkId, values, () => {}, event => {
+        started = true;
+        setRerunDialogOpen(false);
+        navigate(`/evaluations/benchmarks/${benchmarkId}/runs/${event.runId}/inspect`);
+        resolve();
+      }).then(
+        () => { if (!started) resolve(); },
+        err => {
+          if (!started) reject(err);
+          else console.error('[RunInspectorPage] legacy re-run stream ended with an error:', err);
+        },
+      );
+    });
   };
 
   // Retry judgement from the kebab opens the RetryJudgementConfirmDialog —

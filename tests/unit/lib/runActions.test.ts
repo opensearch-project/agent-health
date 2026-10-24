@@ -189,11 +189,32 @@ describe('getRunActionVisibility — full matrix', () => {
     expect(empty.retryJudgementDisabledReason).toBe('No completed test cases to re-judge');
   });
 
-  it('a legacy run with NO status (pre-status data, "treat as completed") is terminal and retryable', () => {
+  it('a legacy run with NO status (pre-status data, "treat as completed") is terminal and retryable — unless one of its results is still running/pending', () => {
     const run = benchmarkRun({ status: undefined, results: { tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' } } });
     expect(isRunTerminal(run)).toBe(true);
     expect(isRunRunning(run)).toBe(false);
     expect(getRunActionVisibility(run).canRetryJudgement).toBe(true);
+    const inFlight = benchmarkRun({ status: undefined, results: { tc1: { status: 'completed', reportId: 'r1' }, tc2: { status: 'running', reportId: 'r2' } } });
+    expect(isRunTerminal(inFlight)).toBe(false);
+    expect(getRunActionVisibility(inFlight).canRetryJudgement).toBe(false);
+  });
+
+  // The runs list only has the run doc. A classic-shape run (no passFailStatus
+  // mirror on ANY result) would read every completed case as judge-failed —
+  // "Retry judgement (5)" for a run whose pre-flight finds 1 — so when the
+  // denormalized stats show real verdicts, they are the honest count.
+  it('judge-failed count falls back to stats.errored for a classic-shape run with no verdict mirror at all', () => {
+    const results = { a: { status: 'completed', reportId: 'r1' }, b: { status: 'completed', reportId: 'r2' }, c: { status: 'completed', reportId: 'r3' } };
+    const withStats = getRunActionVisibility(benchmarkRun({ results, stats: { total: 3, passed: 2, failed: 0, errored: 1, pending: 0 } }));
+    expect(withStats.judgeFailedCount).toBe(1);
+    expect(withStats.rejudgeableCount).toBe(3);
+    expect(withStats.retryJudgementCount).toBe(1);
+    // No stats, or stats with no real verdicts (genuinely all-errored): the result-derived count stands.
+    expect(getRunActionVisibility(benchmarkRun({ results })).judgeFailedCount).toBe(3);
+    expect(getRunActionVisibility(benchmarkRun({ results, stats: { total: 3, passed: 0, failed: 0, errored: 3, pending: 0 } })).judgeFailedCount).toBe(3);
+    // Any mirror present → the results are authoritative, stats are ignored.
+    const mirrored = { ...results, a: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' } };
+    expect(getRunActionVisibility(benchmarkRun({ results: mirrored, stats: { total: 3, passed: 3, failed: 0, errored: 0, pending: 0 } })).judgeFailedCount).toBe(2);
   });
 
   it('retry judgement is false while an EvaluationRun is still running, even with judge-failed cases', () => {

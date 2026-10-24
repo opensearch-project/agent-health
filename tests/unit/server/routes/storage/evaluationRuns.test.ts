@@ -923,6 +923,13 @@ describe('Evaluation Runs API', () => {
         expect(noBench.status).toBe(404);
       });
 
+      it('a storage failure while looking up the benchmark is a 500, not a dishonest 404', async () => {
+        mockBenchmarksGetById.mockRejectedValueOnce(new Error('cluster unavailable'));
+        const res = await request(app).post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement`).send({ scope: 'all', benchmarkId: 'bench-legacy' });
+        expect(res.status).toBe(500);
+        expect(res.body.error).toMatch(/cluster unavailable/);
+      });
+
       it('a first-class doc WINS over the hint (dual-written #399 runs keep writing to the evaluation-runs collection)', async () => {
         const doc = { id: 'run-dual', docType: 'evaluation-run', status: 'completed', results: { tc1: { status: 'completed', reportId: 'r1' } } };
         mockEvaluationRunsGetById.mockResolvedValueOnce(doc);

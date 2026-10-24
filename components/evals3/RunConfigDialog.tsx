@@ -252,8 +252,29 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = (props) => {
       judgeModelId: values.judgeModelId || undefined,
       concurrency: values.concurrency ?? undefined,
     };
-    if (props.mode === 'create') await props.onStart(out);
+    if (props.mode === 'create') {
+      // `onStart` may take a while (the inspector's legacy re-run resolves
+      // only once the server reports the run started) and may reject before
+      // anything started — keep Start Run disabled meanwhile and show the
+      // failure inline instead of letting it escape as an unhandled
+      // rejection (codex_review). Parents that close the dialog themselves
+      // right away (the Runs tab) are unaffected: the close resets
+      // `submitting` below.
+      setSubmitting(true);
+      try {
+        await props.onStart(out);
+      } catch (err: any) {
+        setError(err?.message || 'Failed to start run');
+      } finally {
+        setSubmitting(false);
+      }
+    }
   };
+
+  // A parent that closes the dialog by its own state while `onStart` is still
+  // pending (the Runs tab awaits the whole run stream) must not leave the
+  // next open stuck on "submitting".
+  useEffect(() => { if (!open) setSubmitting(false); }, [open]);
 
   if (isRerun && !sourceRun) return null;
 
