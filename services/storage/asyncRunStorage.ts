@@ -214,6 +214,9 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     // Frozen scoring provenance — the compare page's "Avg score" reads ONLY
     // this + `metrics`; absent on pre-snapshot reports (legacy scoring).
     scoringSnapshot: stored.scoringSnapshot,
+    llmVerdict: stored.llmVerdict,
+    verdictConflict: stored.verdictConflict,
+    score: stored.score,
   };
 }
 
@@ -278,6 +281,9 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
   // SDK matcher verdicts: persist alongside the report
   if (report.matcherResults !== undefined) (base as any).matcherResults = report.matcherResults;
   if (report.scoringSnapshot !== undefined) base.scoringSnapshot = report.scoringSnapshot;
+  if (report.llmVerdict !== undefined) base.llmVerdict = report.llmVerdict;
+  if (report.verdictConflict !== undefined) base.verdictConflict = report.verdictConflict;
+  if (report.score !== undefined) base.score = report.score;
 
   return base;
 }
@@ -419,7 +425,7 @@ class AsyncRunStorage {
       'status', 'passFailStatus', 'metricsStatus', 'traceId', 'runId', 'sessionId',
       'judgeModelId', 'judgeModel', 'judgeProvider', 'modelId', 'agentId', 'testCaseId', 'createdAt', 'annotations', 'metrics',
       'connectorProtocol', 'performanceMetrics',
-      'scoringSnapshot',
+      'scoringSnapshot', 'llmVerdict', 'verdictConflict', 'score',
       // Failure stage so list rows can badge 'Agent error' vs 'Judge error'
       // without loading the full report (tiny keyword field).
       'failureStage',
@@ -489,14 +495,12 @@ class AsyncRunStorage {
     if (updates.improvementStrategies !== undefined) storageUpdates.improvementStrategies = updates.improvementStrategies;
     if ((updates as any).matcherResults !== undefined) (storageUpdates as any).matcherResults = (updates as any).matcherResults;
 
-    // Map metrics
+    // Map metrics — pass the evaluator's rubric keys through verbatim. This
+    // used to project onto the four legacy RCA keys only, which silently
+    // dropped every custom-evaluator rubric on update (and re-introduced the
+    // legacy key names as `undefined`).
     if (updates.metrics) {
-      storageUpdates.metrics = {
-        accuracy: updates.metrics.accuracy,
-        faithfulness: updates.metrics.faithfulness,
-        latency_score: updates.metrics.latency_score,
-        trajectory_alignment_score: updates.metrics.trajectory_alignment_score,
-      };
+      storageUpdates.metrics = { ...updates.metrics } as StorageRun['metrics'];
     }
 
     // Pass through trace-mode specific fields directly
@@ -510,6 +514,9 @@ class AsyncRunStorage {
     if (updates.judgeModel !== undefined) storageUpdates.judgeModel = updates.judgeModel;
     if (updates.judgeProvider !== undefined) storageUpdates.judgeProvider = updates.judgeProvider;
     if (updates.llmJudgeResponse !== undefined) storageUpdates.llmJudgeResponse = updates.llmJudgeResponse;
+    if (updates.llmVerdict !== undefined) storageUpdates.llmVerdict = updates.llmVerdict;
+    if (updates.verdictConflict !== undefined) storageUpdates.verdictConflict = updates.verdictConflict;
+    if (updates.score !== undefined) storageUpdates.score = updates.score;
     if (updates.spans !== undefined) storageUpdates.spans = updates.spans;
 
     const updated = await opensearchRuns.partialUpdate(reportId, storageUpdates);

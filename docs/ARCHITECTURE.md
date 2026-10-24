@@ -547,6 +547,87 @@ Related compare-page surfaces built on the same data
   combination of rubrics.
 
 R1 (this section) adds the type, storage mapping and read model; the snapshot
-WRITE path (a canonical verdict engine that computes the verdict from the
-policy) is R2, and deterministic retrieval metrics on structured
-`expected.ids` / ranked `predicted.ids[]` are R3.
+WRITE path is the verdict engine below (R2); deterministic retrieval metrics on
+structured `expected.ids` / ranked `predicted.ids[]` are R3.
+
+## Verdict engine: how `passFailStatus` is decided (write path)
+
+Every new judgement is scored by ONE pure module,
+[`lib/scoring/verdictEngine.ts`](../lib/scoring/verdictEngine.ts), wrapped by
+[`lib/scoring/applyScoring.ts`](../lib/scoring/applyScoring.ts), which also
+freezes the evaluator **as used** into the report's `scoringSnapshot`. The
+call site is the single exit of `POST /api/judge`
+(`server/routes/judge.ts` `finalizeJudgeResponse`) — every judgement
+producer (classic judge in `services/evaluation/index.ts`, the trace-mode
+judge in `evaluationRunner.ts` / `benchmarkRunner.ts`, retry-judgement,
+browser recovery, and the SDK `judge()` matcher) funnels through that route
+and persists the engine's fields with `scoringFieldsFromJudgment()` — never by
+copying `passFailStatus` / `metrics` by hand.
+
+Inputs: the parsed rubric values (`metrics`), the evaluator's
+`scoringConfig` (rubric names are free-form; `weight` > 0, `scale` = max of a
+0–N range, default 100; `passPolicy`, default `{ kind: 'llm-verdict' }`;
+optional `primaryMetrics`) and, when an LLM judged, its `pass_fail_status`.
+`applyScoring(metrics, evaluator, llmVerdict?)` is callable WITHOUT an LLM
+verdict. `kind: 'deterministic'` evaluators (see
+[EVALUATORS.md](EVALUATORS.md)) currently score through
+[`lib/scoring/deterministicScoring.ts`](../lib/scoring/deterministicScoring.ts),
+which builds the same `ScoringSnapshot` shape and writes the same report
+fields (`score`, `llmVerdict: null`, `verdictConflict: null`) but keeps its
+own verdict pass — its unevaluable rule is stricter (ANY unevaluable metric
+fails the verdict under `gates` too, and an all-unevaluable report is "not
+evaluable" rather than `failed`). Folding it onto `computeVerdict` is a
+follow-up once those semantics are reconciled.
+
+Truth table (`passPolicy.kind`):
+
+| policy | `passFailStatus` | `verdictConflict` |
+|---|---|---|
+| `llm-verdict` (default; every pre-existing evaluator) | the judge's own verdict — frozen historical behaviour; a missing verdict reads `failed` (`reason: no-llm-verdict`) | always `false` |
+| `threshold { minScore }` | `passed` iff weighted score ≥ `minScore` **and** no weighted rubric is unevaluable (`reason: unevaluable:<metric>` / `score x < min`) | `llmVerdict ≠ passFailStatus` |
+| `gates [{ metric, min }]` | `passed` iff every gate metric (normalized by its scale) ≥ its normalized `min`; an unevaluable gate metric fails (`reason: unevaluable:<metric>`); an empty gate list never passes | `llmVerdict ≠ passFailStatus` |
+
+Score (all policies, also under `llm-verdict`, for display): the
+weight-normalized mean over the rubrics that produced a finite, normalizable
+value (`snapshotScore.ts`). A rubric the judge did not return, returned
+non-numeric, or with an invalid scale is **unevaluable**: recorded on
+`scoringSnapshot.unevaluable`, excluded from the mean, and **never coerced to
+0** — the Judge tab shows it as "not evaluable". Under `threshold` an
+unevaluable rubric fails the verdict rather than silently passing on a partial
+mean.
+
+`verdictConflict` is recorded, never acted on: under a computed policy the
+computed verdict wins and the LLM's is kept as `report.llmVerdict`; the Judge
+tab renders "Verdict: failed (policy: score ≥ 0.7) · LLM said: passed ⚠
+conflict".
+
+**Snapshot identity = `evaluatorId` + `contentHash`.** The hash
+(`evaluatorContentHash`, sha256 over the canonical prompt + rubric
+names/weights/scales + policy + primary metrics) changes whenever anything that
+affects scoring changes; cosmetic reorderings and metadata (name, description)
+do not. `evaluatorVersion` is copied from the evaluator document's own
+`currentVersion` purely as a hint. Snapshots are written once per judgement
+and REPLACED by an explicit re-judge (no judgement history is kept — #509
+stays narrow); editing an evaluator never touches already-persisted reports.
+
+**Judge failure ⇒ no measurement.** A judge that fails (parse failure, 4xx/5xx,
+timeout) produces `metricsStatus: 'error'`, `metrics: {}`, `passFailStatus:
+null` and cleared scoring fields
+(`services/evaluation/evaluatorError.ts`) — never default rubric keys as
+zeros. Run stats count such reports as `errored` (excluded from the pass
+rate), never `failed`.
+
+**Evaluator validation** (`lib/scoring/validateScoringConfig.ts`, enforced by
+the evaluator POST/PUT routes and mirrored in the editor): metric names
+unique and non-empty, weights > 0, scales > 0, threshold `minScore` in
+[0, 1], gate metrics / primary metrics must be declared, gate `min` within the
+metric's scale. `kind: 'deterministic'` evaluators are validated by
+`lib/evaluators/deterministic.ts` instead (their `scoringConfig` is a
+server-synthesized mirror) — that validator is the one that rejects
+`llm-verdict`, since a deterministic evaluator has no LLM verdict to defer to.
+
+**SDK matcher-session runs** keep the matcher session's gate outcome as the
+report verdict (every `expect()` / `judge()` gate must pass); the evaluator's
+policy is applied per `judge()` call by `/api/judge`, and the runner lifts the
+shared snapshot + report-level weighted score onto the report
+(`sdkSessionScoring`) so SDK runs are snapshot-scored on the compare page.

@@ -170,6 +170,12 @@ interface RawJudgeResponse {
   judgeModel?: string;
   /** Judge kind that executed the call (`'agent' | 'bedrock' | 'pi' | …`). */
   judgeProvider?: string;
+  /** Verdict-engine outputs (lib/scoring/applyScoring.ts); absent from pre-R2 servers. */
+  llmVerdict?: 'passed' | 'failed';
+  verdictConflict?: boolean;
+  /** Normalized weighted mean in [0,1]. */
+  score?: number;
+  scoringSnapshot?: import('../../types/index.js').ScoringSnapshot;
 }
 const verdictCache = new Map<string, RawJudgeResponse>();
 
@@ -369,7 +375,9 @@ async function runJudge(
         ? raw.metrics.accuracy
         : typeof raw.overallScore === 'number'
           ? raw.overallScore
-          : undefined;
+          : typeof raw.score === 'number'
+            ? raw.score * 100 // verdict-engine normalized weighted mean
+            : undefined;
     const verdict = makeVerdict({
       passFailStatus: raw.passFailStatus ?? 'failed',
       accuracy: headline ?? 0,
@@ -413,6 +421,10 @@ async function runJudge(
       ...(raw.extraFields && typeof raw.extraFields === 'object' && Object.keys(raw.extraFields).length > 0
         ? { judgeExtraFields: raw.extraFields }
         : {}),
+      // Verdict-engine provenance (see MatcherResult.scoringSnapshot).
+      ...(raw.llmVerdict === 'passed' || raw.llmVerdict === 'failed' ? { llmVerdict: raw.llmVerdict } : {}),
+      ...(typeof raw.verdictConflict === 'boolean' ? { verdictConflict: raw.verdictConflict } : {}),
+      ...(raw.scoringSnapshot && typeof raw.scoringSnapshot === 'object' ? { scoringSnapshot: raw.scoringSnapshot } : {}),
     });
     return verdict;
   };

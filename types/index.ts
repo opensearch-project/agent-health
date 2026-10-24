@@ -295,8 +295,23 @@ export interface ScoringMetric {
  */
 export interface ScoringConfig {
   metrics: ScoringMetric[];  // Metrics to evaluate
-  passThreshold: number;     // Minimum score to pass (0-100)
+  passThreshold: number;     // Minimum score to pass (0-100) — display hint; the enforced rule is `passPolicy`
   scale: number;             // Overall scale (typically 100)
+  /**
+   * How the pass/fail verdict is decided for reports judged with this
+   * evaluator (see {@link ScoringPassPolicy}). Absent == `{ kind: 'llm-verdict' }`:
+   * the judge's own `pass_fail_status` is authoritative, which is the frozen
+   * historical behaviour every pre-existing evaluator keeps. Opting into a
+   * computed policy (`threshold` / `gates`) is an evaluator change and
+   * therefore a new evaluator version + content hash.
+   */
+  passPolicy?: ScoringPassPolicy;
+  /**
+   * Metric names this evaluator declares as headline metrics. Copied verbatim
+   * onto each report's {@link ScoringSnapshot.primaryMetrics}; the compare
+   * page renders each as its own column. Every name must exist in `metrics`.
+   */
+  primaryMetrics?: string[];
 }
 
 /**
@@ -318,6 +333,67 @@ export interface InferenceConfig {
   agentJudgeModelId?: string;
 }
 
+// ============ Deterministic evaluators (typed metric registry, no LLM) ============
+
+/**
+ * How an evaluator judges: `llm` (the default and the historical behaviour —
+ * a system prompt sent to a judge model) or `deterministic` (metrics computed
+ * in code from the test case's gold ids and the report's stored output; no
+ * LLM is ever called).
+ */
+export type EvaluatorKind = 'llm' | 'deterministic';
+
+/**
+ * One metric of a deterministic evaluator. `name` is FREE-FORM data (the
+ * evaluator author picks "Hit@5", "recall_at_20", …); Agent Health only
+ * interprets `compute.type`, which must be one of the typed registry entries
+ * in `lib/metrics` (`ranked-hit` | `ranked-recall` | `mrr`).
+ */
+export interface DeterministicMetricSpec {
+  name: string;
+  compute: import('../lib/metrics/index.js').MetricCompute;
+  /** Weight in the weighted-mean score (finite, > 0). */
+  weight: number;
+  /** Raw scale the value is reported in on `report.metrics` (default 0–1). */
+  scale?: { min: number; max: number };
+  /** Declared headline metric — the compare page renders it as its own column. */
+  primary?: boolean;
+}
+
+/**
+ * Where a deterministic evaluator reads its inputs from. Everything
+ * benchmark-specific (patterns, tool names, field names) is DATA here —
+ * nothing in Agent Health code knows any particular agent's vocabulary.
+ */
+export interface DeterministicEvaluatorInputs {
+  gold:
+    | { source: 'testCase.expected.ids' }
+    | {
+        /**
+         * Gold ids from the FIRST `expectedOutcomes` line matching `pattern`
+         * (a JS regex with exactly one capture group; the captured text is
+         * split on `,` `;` and whitespace). `testCase.expected.ids` still
+         * wins when present.
+         */
+        source: 'expectedOutcomes-pattern';
+        pattern: string;
+      };
+  prediction: {
+    /**
+     * Labelled LEGACY extractor over the report's stored trajectory — see
+     * `lib/scoring/prediction/toolHitsOrdered.ts` for the exact rule. A
+     * native connector output mapping is the follow-up.
+     */
+    source: 'tool-hits-ordered';
+    /** Keys that carry an item's id inside a hit object (default `['id', '_id']`). */
+    idFields?: string[];
+    /** Dotted paths (relative to the parsed tool result) whose value is an array of hits (default `['hits', 'results']`). */
+    hitsPaths?: string[];
+    /** Tool calls whose `toolArgs[argKey]` (string or string[]) names ids to EXCLUDE from the candidates (the query's own anchors). */
+    anchorTools?: Array<{ tool: string; argKey: string }>;
+  };
+}
+
 /**
  * Evaluator version - immutable snapshot of evaluator configuration
  */
@@ -329,6 +405,12 @@ export interface EvaluatorVersion {
   systemPrompt: string;
   scoringConfig: ScoringConfig;
   inferenceConfig: InferenceConfig;
+
+  // Deterministic evaluators (kind: 'deterministic') — see the `Evaluator` doc.
+  kind?: EvaluatorKind;
+  metrics?: DeterministicMetricSpec[];
+  passPolicy?: ScoringPassPolicy;
+  inputs?: DeterministicEvaluatorInputs;
 }
 
 /**
@@ -359,6 +441,21 @@ export interface Evaluator {
   systemPrompt: string;
   scoringConfig: ScoringConfig;
   inferenceConfig: InferenceConfig;
+
+  /**
+   * `'deterministic'` evaluators never call an LLM: `metrics[]` are computed
+   * by the typed registry (`lib/metrics`) from `inputs`, scored by
+   * `lib/scoring/deterministicScoring.ts`, and the verdict follows
+   * `passPolicy` (`threshold` | `gates`; `llm-verdict` is rejected). For
+   * them `systemPrompt` is ignored (stored as `''`) and `scoringConfig` is a
+   * server-synthesized mirror of `metrics` kept so every legacy consumer of
+   * `scoringConfig.metrics` keeps rendering. Absent / `'llm'` = the
+   * historical LLM-judge evaluator.
+   */
+  kind?: EvaluatorKind;
+  metrics?: DeterministicMetricSpec[];
+  passPolicy?: ScoringPassPolicy;
+  inputs?: DeterministicEvaluatorInputs;
 }
 
 export type PassFailStatus = 'passed' | 'failed';
@@ -471,8 +568,11 @@ export type MetricsStatus = 'pending' | 'calculating' | 'ready' | 'error';
  *
  *  - `threshold`   — pass iff the weighted score (normalized to [0,1]) is
  *                    >= `minScore`.
- *  - `gates`       — pass iff every listed metric (in its own raw scale) is
- *                    >= its `min`.
+ *  - `gates`       — pass iff every listed metric is >= its `min`. `min` is
+ *                    expressed in the metric's own raw scale (e.g. 80 on a
+ *                    0–100 rubric); the engine compares after normalizing
+ *                    both sides, so out-of-range values are clamped the same
+ *                    way the score is.
  *  - `llm-verdict` — the judge's own `pass_fail_status` is authoritative
  *                    (the historical behaviour; every pre-snapshot report is
  *                    implicitly this).
@@ -491,8 +591,9 @@ export type ScoringPassPolicy =
  * and render as "legacy scoring": their rubric values are shown by name but
  * are never aggregated into a single score (see `lib/scoring/snapshotScore.ts`).
  *
- * This PR (R1) adds the type, storage mapping and the read model only; the
- * write path (R2, canonical verdict engine) populates it for new judgements.
+ * This object is written by the canonical verdict engine
+ * (`lib/scoring/applyScoring.ts`) on every new judgement and never rewritten
+ * afterwards except by an explicit re-judge, which REPLACES it.
  */
 export interface ScoringSnapshot {
   /** Evaluator document id at judge time. */
@@ -522,8 +623,12 @@ export interface ScoringSnapshot {
   judgeModelId?: string;
   /** Structured gold ids the deterministic rubrics were computed against (R3). */
   goldIdsUsed?: string[];
+  /** Which gold source produced `goldIdsUsed` (R3). */
+  goldRule?: 'expected.ids' | 'expected-outcomes-pattern';
   /** Identifier of the rule used to extract the prediction from the agent output (R3). */
   extractionRule?: string;
+  /** Extraction statistics for the labelled legacy extractor (R3). */
+  extraction?: { candidateCount: number; citedCount: number; anchorsRemoved: number };
   /**
    * Rubrics that could not be computed for this report (input missing, judge
    * omitted the key, …). Excluded from the weighted mean — never scored as 0 —
@@ -643,7 +748,29 @@ export interface TestCaseRun {
 
   // Results
   status: 'running' | 'completed' | 'failed';
-  passFailStatus?: PassFailStatus; // LLM judge determination of pass/fail
+  /**
+   * The report's verdict. Decided by the canonical verdict engine
+   * (`lib/scoring/verdictEngine.ts`) from the evaluator's `passPolicy`:
+   * the judge's own verdict under `llm-verdict` (historical behaviour), or
+   * computed from the rubric values under `threshold` / `gates`. Absent when
+   * the judge never produced a verdict (`metricsStatus: 'error'`).
+   */
+  passFailStatus?: PassFailStatus;
+  /**
+   * What the LLM judge itself said (`pass_fail_status`), preserved verbatim
+   * so a computed verdict can be audited against it. Equal to
+   * `passFailStatus` under the `llm-verdict` policy.
+   */
+  llmVerdict?: PassFailStatus;
+  /** `true` when `llmVerdict` disagrees with the computed `passFailStatus`. Recorded, never overriding. */
+  verdictConflict?: boolean;
+  /**
+   * Weighted mean of the evaluator's rubrics, normalized to [0,1] via each
+   * rubric's scale (see `lib/scoring/snapshotScore.ts`). Rubrics the judge
+   * did not return are excluded, never scored 0. Absent when nothing could
+   * be scored or the report predates scoring snapshots.
+   */
+  score?: number;
   trajectory: TrajectoryStep[];
   metrics: EvaluationMetrics;
   /**
@@ -724,7 +851,7 @@ export interface TestCaseRun {
    * provider, and for agent-trace-judge reports persisted before this field
    * existed. See server/services/piAgenticJudgeService.ts.
    */
-  judgeMode?: 'trajectory-only' | 'trace-tools';
+  judgeMode?: 'trajectory-only' | 'trace-tools' | 'deterministic';
   /**
    * Frozen scoring provenance for this report (see {@link ScoringSnapshot}).
    * Absent on every report judged before snapshots existed → "legacy scoring".
@@ -787,6 +914,8 @@ export interface TestCaseVersion {
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
   expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
+  /** Structured expectations (deterministic evaluators read `ids`). */
+  expected?: TestCaseExpected;
   expectedTrajectory?: {  // Keep for backwards compat
     step: number;
     description: string;
@@ -797,6 +926,17 @@ export interface TestCaseVersion {
     question: string;
     businessValue: string;
   }[];
+}
+
+/**
+ * Structured expectations on a test case, alongside the prose
+ * `expectedOutcomes`. `ids` is the gold id set a deterministic retrieval
+ * evaluator scores against (`inputs.gold.source: 'testCase.expected.ids'`).
+ * Import/export and UI editing of this field are a follow-up; today it is
+ * settable via the storage API.
+ */
+export interface TestCaseExpected {
+  ids?: string[];
 }
 
 /**
@@ -892,6 +1032,8 @@ export interface TestCase {
   tools?: AgentToolDefinition[]; // Tools available to the agent (client-provided)
   expectedPPL?: string; // Expected PPL query for validation
   expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
+  /** Structured expectations (mirrors the latest version; see {@link TestCaseExpected}). */
+  expected?: TestCaseExpected;
   expectedTrajectory?: {  // Keep for backwards compat
     step: number;
     description: string;
