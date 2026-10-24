@@ -212,6 +212,26 @@ describe('traceCorrelation — precise-first', () => {
       expect(res.correlation).toEqual({ strategy: 'traceId', windowFiltered: 0 });
     });
 
+    it('an INCOMPLETE eval-only exact page (hasMore) is not evidence: no fallback, the caller pages on in the exact phase', async () => {
+      // size 1, newest-first: the judge span comes before the agent's spans. Falling
+      // back here would hand page 2 to the window and skip the exact spans for good.
+      const query = jest.fn(async (opts: TracesQueryOptions) => ({ spans: [aEval], total: 3, nextCursor: 'c1', hasMore: true, agents: opts.agents }));
+      const res = await queryTracesPreciseFirst(query as any, { traceId: A_TRACE, runIds: [A_RUN], agents: WINDOW, size: 1 });
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(res.spans.map((s) => s.spanId)).toEqual(['a-eval']);
+      expect(res.hasMore).toBe(true);
+      expect(res.correlation.strategy).toBe('traceId');
+      expect(JSON.parse(decodeURIComponent(res.nextCursor!))).toEqual({ phase: 'direct', cursor: 'c1' });
+    });
+
+    it('a TRUNCATED eval-only exact result (capped backend scan) is not evidence either: the partial exact result is returned, never a fuzzy substitute', async () => {
+      const query = jest.fn(async () => ({ spans: [aEval], total: 1, nextCursor: null, hasMore: false, truncated: true }));
+      const res = await queryTracesPreciseFirst(query as any, { traceId: A_TRACE, runIds: [A_RUN], agents: WINDOW });
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(res.truncated).toBe(true);
+      expect(res.correlation.strategy).toBe('traceId');
+    });
+
     it('de-duplicates a span present in both the exact and the window result', async () => {
       const be = fakeBackend([aEval], [aEval, untagged]);
       const res = await queryTracesPreciseFirst(be.query, { runIds: [A_RUN], agents: WINDOW });
