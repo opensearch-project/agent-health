@@ -224,12 +224,16 @@ describe('traceCorrelation — precise-first', () => {
       expect(JSON.parse(decodeURIComponent(res.nextCursor!))).toEqual({ phase: 'direct', cursor: 'c1' });
     });
 
-    it('a TRUNCATED eval-only exact result (capped backend scan) is not evidence either: the partial exact result is returned, never a fuzzy substitute', async () => {
-      const query = jest.fn(async () => ({ spans: [aEval], total: 1, nextCursor: null, hasMore: false, truncated: true }));
+    it('a TRUNCATED eval-only exact result (capped backend scan, no next page) still falls back, and the result stays flagged partial', async () => {
+      const query = jest.fn(async (opts: TracesQueryOptions) =>
+        (opts.agents?.length ?? 0) > 0
+          ? { spans: [untagged], total: 1, nextCursor: null, hasMore: false }
+          : { spans: [aEval], total: 1, nextCursor: null, hasMore: false, truncated: true });
       const res = await queryTracesPreciseFirst(query as any, { traceId: A_TRACE, runIds: [A_RUN], agents: WINDOW });
-      expect(query).toHaveBeenCalledTimes(1);
-      expect(res.truncated).toBe(true);
-      expect(res.correlation.strategy).toBe('traceId');
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(res.spans.map((s) => s.spanId)).toEqual(['a-eval', 'c-untagged']);
+      expect(res.correlation.strategy).toBe('window');
+      expect(res.truncated).toBe(true); // the exact phase's cap is not hidden by a clean window page
     });
 
     it('de-duplicates a span present in both the exact and the window result', async () => {
@@ -284,7 +288,18 @@ describe('traceCorrelation — precise-first', () => {
       const query = jest.fn(async () => ({ spans: [aRoot], total: 1, truncated: true, warnings }));
       const res = await queryTracesPreciseFirst(query, { traceId: A_TRACE, agents: WINDOW });
       expect(res.truncated).toBe(true);
-      expect(res.warnings).toBe(warnings);
+      expect(res.warnings).toEqual(warnings);
+    });
+
+    it('a merged fallback page carries the partial-result flags of BOTH phases (a failed composite source in the exact phase is not hidden by a clean window)', async () => {
+      const query = jest.fn(async (opts: TracesQueryOptions) =>
+        (opts.agents?.length ?? 0) > 0
+          ? { spans: [untagged], total: 1, truncated: true }
+          : { spans: [aEval], total: 1, warnings: [{ source: 'cw-prod', message: 'ThrottlingException' }] });
+      const res = await queryTracesPreciseFirst(query as any, { traceId: A_TRACE, runIds: [A_RUN], agents: WINDOW });
+      expect(res.spans.map((s) => s.spanId)).toEqual(['a-eval', 'c-untagged']);
+      expect(res.truncated).toBe(true);
+      expect(res.warnings).toEqual([{ source: 'cw-prod', message: 'ThrottlingException' }]);
     });
 
     describe('scan hint for scanning backends (CloudWatch)', () => {
