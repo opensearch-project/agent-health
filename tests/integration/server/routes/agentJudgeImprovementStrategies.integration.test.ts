@@ -140,7 +140,9 @@ describe('POST /api/evaluate — agent trace judge keeps improvement strategies 
           name: 'ahtest-agent-trace-strategies-eval',
           description: 'Integration test evaluator for the agent trace judge',
           systemPrompt: 'You are an RCA judge. Emit improvement_strategies for any failed run.',
-          scoringConfig: { metrics: ['accuracy'], weights: { accuracy: 1 } },
+          // Metrics are objects (name/weight/scale) — POST validates the shape
+          // (lib/scoring/validateScoringConfig).
+          scoringConfig: { metrics: [{ name: 'accuracy', description: 'RCA accuracy', weight: 1, scale: 100 }], passThreshold: 70, scale: 100 },
           inferenceConfig: { provider: 'agent' },
         });
       expect(evalRes.status).toBe(201);

@@ -32,6 +32,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { listEvaluationRuns, updateEvaluationRun, deleteEvaluationRun, cancelEvaluationRun } from '@/services/client';
+import { RetryJudgementJobPill } from './RetryJudgementJobs';
+import { useOnRetryJudgementFinished } from '@/hooks/useRetryJudgementJob';
 import { cancelBenchmarkRun } from '@/services/client/benchmarkApi';
 import { Benchmark, TestCase, BenchmarkRun, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -210,7 +212,10 @@ export const EvalRunsPage: React.FC = () => {
   // benchmark-embedded runs aren't supported — see renderRunRow).
   const [rerunTarget, setRerunTarget] = useState<EvaluationRun | null>(null);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
-  const [retryJudgementTarget, setRetryJudgementTarget] = useState<EvaluationRun | null>(null);
+  // The row whose Retry judgement picker is open. Legacy benchmark-embedded
+  // rows (no evaluation-run doc) are retried too — the dialog sends the
+  // row's `benchmarkId` so the server can find the run in `benchmark.runs[]`.
+  const [retryJudgementTarget, setRetryJudgementTarget] = useState<{ run: BenchmarkRun; benchmarkId: string } | null>(null);
 
   // Annotation counts: runId → { totalAnnotations, testCasesWithAnnotations, firstTestCaseId }
   const [annotationMap, setAnnotationMap] = useState<Map<string, { total: number; tcCount: number; firstTcId: string }>>(new Map());
@@ -220,8 +225,10 @@ export const EvalRunsPage: React.FC = () => {
   const [visibleRunCount, setVisibleRunCount] = useState(RUNS_PER_PAGE);
   const loadMoreSentinelRef = useRef<HTMLTableRowElement | null>(null);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  // `silent` re-fetches without the page-level spinner — a background
+  // retry-judgement refresh must not unmount the list (and the open dialog).
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       // Fetch both run models in parallel (see RunRow convergence note). The
       // eval-runs fetch is best-effort so a failure there still shows
@@ -379,9 +386,18 @@ export const EvalRunsPage: React.FC = () => {
     () => allRunRows.some(rr => rr.status === 'running'),
     [allRunRows]
   );
+  //
+  // The poll is a BACKGROUND refresh (`silent`): the non-silent path flips
+  // `loading` and the page body is replaced by the full-page spinner for as
+  // long as the three list requests take (seconds on a cluster with hundreds
+  // of runs) — every 5 s, for as long as any run is `running`. To the owner
+  // that read as "the runs list is refreshing constantly" (2026-10-22): rows
+  // flashed in and out, scroll position reset, and anything mounted per row
+  // (retry-judgement pill adoption requests) re-fired on every tick. Rows
+  // are keyed by run id, so a silent state swap re-renders in place.
   useEffect(() => {
     if (!hasInProgressRuns) return;
-    const interval = setInterval(() => { loadData(); }, 5000);
+    const interval = setInterval(() => { void loadData(true); }, 5000);
     return () => clearInterval(interval);
   }, [hasInProgressRuns, loadData]);
 
@@ -513,11 +529,15 @@ export const EvalRunsPage: React.FC = () => {
     await loadData();
   };
 
-  // Opens the evaluator / judge-model / scope picker for this row's run;
-  // the dialog owns the POST + polling, we refresh once it's dismissed.
+  // Opens the evaluator / judge-model / scope picker (#509) for this row's
+  // run; Confirm hands the 202 job to the client job store, the row shows a
+  // "Re-judging n/N…" pill meanwhile and the list refreshes when the job
+  // finishes (useOnRetryJudgementFinished below) — the dialog may be closed
+  // long before that.
   const handleRetryJudgementRow = (rr: RunRow) => {
-    setRetryJudgementTarget(rr.run as unknown as EvaluationRun);
+    setRetryJudgementTarget({ run: rr.run, benchmarkId: rr.benchmarkId });
   };
+  useOnRetryJudgementFinished(() => { void loadData(true); });
 
   const toggleGroup = (id: string) => {
     setCollapsedGroups(prev => {
@@ -765,6 +785,7 @@ export const EvalRunsPage: React.FC = () => {
             ) : (
               <span className="text-xs font-medium truncate max-w-[220px]">{rr.run.name}</span>
             )}
+            {rr.kind === 'eval-run' && <RetryJudgementJobPill runId={rr.run.id} runName={rr.run.name} lastRetryAttempt={(rr.run as EvaluationRun).lastRetryAttempt} />}
             {rr.status === 'running' && !(rr.run as { cancelRequestedAt?: string }).cancelRequestedAt && (
               <span
                 data-testid="run-row-status-running"
@@ -822,7 +843,7 @@ export const EvalRunsPage: React.FC = () => {
           <div>{rr.agentName}</div>
           {/* Agent-configuration provenance: WHICH version of this agent's
               config produced these numbers. Renders nothing for legacy runs. */}
-          <AgentFingerprintChip run={rr.run} compact className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
+          <AgentFingerprintChip run={rr.run} className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
         </td>
         <td className="px-2 py-1.5 align-middle text-[11px]">{getModelName(rr.run.modelId)}</td>
         <td className="px-2 py-1.5 align-middle text-right text-[11px] text-muted-foreground" data-testid="run-concurrency-cell" title="Concurrency — parallel test cases">
@@ -905,7 +926,7 @@ export const EvalRunsPage: React.FC = () => {
               <RotateCcw size={13} />
             </button>
           ) : (
-            <span className="text-[10px] text-muted-foreground" title="Re-run isn't available for legacy benchmark-embedded runs">—</span>
+            <span className="text-[10px] text-muted-foreground" title="Legacy benchmark run — re-run it from its inspector page (opens the run dialog prefilled from this run)">—</span>
           )}
         </td>
         <td className="relative px-2 py-1.5 align-middle text-center w-8" onClick={e => e.stopPropagation()}>
@@ -1069,7 +1090,7 @@ export const EvalRunsPage: React.FC = () => {
               <List size={11} /> Flat
             </button>
           </div>
-          <Button variant="outline" size="sm" onClick={loadData} disabled={loading} className="h-7">
+          <Button variant="outline" size="sm" onClick={() => loadData()} disabled={loading} className="h-7">
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
           </Button>
           {(() => {
@@ -1318,12 +1339,13 @@ export const EvalRunsPage: React.FC = () => {
 
       {/* Retry judgement picker (evaluator / judge model / scope) — shared with the run pages */}
       <RetryJudgementConfirmDialog
-        run={retryJudgementTarget}
-        judgeFailedCount={getRunActionVisibility(retryJudgementTarget).judgeFailedCount}
-        rejudgeableCount={getRunActionVisibility(retryJudgementTarget).rejudgeableCount}
+        run={retryJudgementTarget?.run ?? null}
+        benchmarkId={retryJudgementTarget?.benchmarkId}
+        judgeFailedCount={getRunActionVisibility(retryJudgementTarget?.run).judgeFailedCount}
+        rejudgeableCount={getRunActionVisibility(retryJudgementTarget?.run).rejudgeableCount}
         open={retryJudgementTarget !== null}
         onOpenChange={open => { if (!open) setRetryJudgementTarget(null); }}
-        onComplete={() => { loadData(); }}
+        onComplete={() => { loadData(true); }}
       />
     </div>
   );

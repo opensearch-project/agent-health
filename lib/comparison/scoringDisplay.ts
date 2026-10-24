@@ -11,6 +11,7 @@
  */
 
 import type { EvaluationReport, RunAggregateMetrics, RunScoringSummary, ScoringPassPolicy } from '@/types';
+import { JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
 
 // ─── Judge identity ──────────────────────────────────────────────────────────
 
@@ -18,9 +19,14 @@ import type { EvaluationReport, RunAggregateMetrics, RunScoringSummary, ScoringP
  * The judge that actually produced a report's verdict, in precedence order:
  *   1. `report.judgeModel` — the resolved underlying LLM (PR #494; read via
  *      feature detection so this compiles with or without that field).
- *   2. `report.llmJudgeResponse.modelId` — what the judge response recorded.
- *   3. `report.judgeModelId` — the judge configured on the report.
- *   4. `run.judgeModelId` — the judge configured on the run.
+ *   2. `report.judgeProvider === 'none'` — the report records that NO LLM
+ *      judge call was made (a code-SDK body with no `judge()`, or a report
+ *      re-scored by a deterministic evaluator): returns the `'none'` marker
+ *      itself so the caption can say "No LLM judge" instead of falling
+ *      through to the run's configured judge, which did not judge it.
+ *   3. `report.llmJudgeResponse.modelId` — what the judge response recorded.
+ *   4. `report.judgeModelId` — the judge configured on the report.
+ *   5. `run.judgeModelId` — the judge configured on the run.
  * NEVER `modelId` — that is the agent under test.
  */
 export function resolveJudgeModelId(
@@ -29,6 +35,7 @@ export function resolveJudgeModelId(
 ): string | undefined {
   const judgeModel = (report as { judgeModel?: unknown } | undefined | null)?.judgeModel;
   if (typeof judgeModel === 'string' && judgeModel.trim()) return judgeModel;
+  if ((report as { judgeProvider?: unknown } | undefined | null)?.judgeProvider === JUDGE_PROVIDER_NONE) return JUDGE_PROVIDER_NONE;
   const responseModel = report?.llmJudgeResponse?.modelId;
   if (typeof responseModel === 'string' && responseModel.trim()) return responseModel;
   if (typeof report?.judgeModelId === 'string' && report.judgeModelId.trim()) return report.judgeModelId;
@@ -95,6 +102,9 @@ export function formatPassRateDetail(
   return notes.length > 0 ? `${base} (${notes.join(', ')})` : base;
 }
 
+/** Human text for one resolved judge id (`'none'` is the no-LLM-judge marker, never a model name). */
+export const NO_LLM_JUDGE_LABEL = 'No LLM judge';
+
 /**
  * Judge caption text for one run: the single resolved judge, "mixed (a · b)"
  * when its reports resolved to several, or "not recorded".
@@ -106,24 +116,10 @@ export function judgeCaption(
   const ids = run.judgeModelIds && run.judgeModelIds.length > 0
     ? run.judgeModelIds
     : (run.judgeModelId ? [run.judgeModelId] : []);
+  const name = (id: string) => (id === JUDGE_PROVIDER_NONE ? NO_LLM_JUDGE_LABEL : displayName(id));
   if (ids.length === 0) return 'not recorded';
-  if (ids.length === 1) return displayName(ids[0]);
-  return `mixed (${ids.map(displayName).join(' · ')})`;
-}
-
-// ─── Avg score hover ─────────────────────────────────────────────────────────
-
-/** Tooltip body for the "Avg score" cell — evaluator, version, weights, coverage. */
-export function avgScoreTooltip(scoring: RunScoringSummary | undefined): string {
-  if (!scoring || scoring.source !== 'snapshot') {
-    return 'This run was judged before scoring snapshots existed; its rubric values are shown by name below and are not aggregated into a score.';
-  }
-  const weights = Object.entries(scoring.weights)
-    .filter(([, w]) => Number.isFinite(w) && w > 0)
-    .map(([name, w]) => `${name} ${Math.round(w * 100) / 100}`)
-    .join(', ');
-  const evaluator = scoring.evaluatorName || scoring.evaluatorId;
-  return `Evaluator ${evaluator} v${scoring.evaluatorVersion} · weights: ${weights} · scored ${scoring.scoredRubrics} / ${scoring.totalRubrics} rubrics over ${scoring.scoredReports} case${scoring.scoredReports === 1 ? '' : 's'}`;
+  if (ids.length === 1) return name(ids[0]);
+  return `mixed (${ids.map(name).join(' · ')})`;
 }
 
 // ─── Coverage gate ───────────────────────────────────────────────────────────

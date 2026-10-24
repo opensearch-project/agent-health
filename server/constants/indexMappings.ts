@@ -56,6 +56,9 @@ export function getIndexMappings(): IndexMappings {
           context: { type: 'object', enabled: false },
           forwardedProps: { type: 'object', enabled: false },
           expectedOutcome: { type: 'text' },
+          // Structured expectations (`expected.ids` = gold ids for
+          // deterministic evaluators). Display/scoring data, never queried.
+          expected: { type: 'object', enabled: false },
           expectedTrajectory: { type: 'object', enabled: false },
           // Per-test SDK definition capture (resolved test() options + the
           // evaluate body text). Stored for display only — never queried —
@@ -138,6 +141,22 @@ export function getIndexMappings(): IndexMappings {
           agentFingerprintShort: { type: 'keyword' },
           agentPromptHash: { type: 'keyword' },
           agentConfigSource: { type: 'object', enabled: false },
+          // EvaluationRun: last retry-judgement attempt in which ≥1 case
+          // produced no judgement (RunRetryAttemptSummary). `reasons` is keyed
+          // by free-text reason strings → never mapped.
+          lastRetryAttempt: {
+            properties: {
+              at: { type: 'date' },
+              evaluatorId: { type: 'keyword' },
+              evaluatorName: { type: 'keyword' },
+              scope: { type: 'keyword' },
+              retried: { type: 'integer' },
+              succeeded: { type: 'integer' },
+              notEvaluable: { type: 'integer' },
+              failed: { type: 'integer' },
+              reasons: { type: 'object', enabled: false },
+            },
+          },
           // EvaluationRun only: what the last "Retry judgement" was launched
           // with (seeds the dialog's defaults). Explicit so `at` is a date
           // and the ids stay keyword, matching the neighbouring id fields.
@@ -175,6 +194,32 @@ export function getIndexMappings(): IndexMappings {
               agentFingerprintShort: { type: 'keyword' },
               agentPromptHash: { type: 'keyword' },
               agentConfigSource: { type: 'object', enabled: false },
+              // Retry-judgement bookkeeping written onto a LEGACY embedded
+              // run (no evaluation-run doc) by POST
+              // /api/storage/evaluation-runs/:id/retry-judgement — same
+              // shapes as the root-level fields above; `reasons` is keyed by
+              // free-text reason strings → never mapped (mapping explosion).
+              lastRetryAttempt: {
+                properties: {
+                  at: { type: 'date' },
+                  evaluatorId: { type: 'keyword' },
+                  evaluatorName: { type: 'keyword' },
+                  scope: { type: 'keyword' },
+                  retried: { type: 'integer' },
+                  succeeded: { type: 'integer' },
+                  notEvaluable: { type: 'integer' },
+                  failed: { type: 'integer' },
+                  reasons: { type: 'object', enabled: false },
+                },
+              },
+              lastJudgementRetry: {
+                properties: {
+                  evaluatorId: { type: 'keyword' },
+                  judgeModelId: { type: 'keyword' },
+                  scope: { type: 'keyword' },
+                  at: { type: 'date' },
+                },
+              },
             },
           },
         },
@@ -265,6 +310,23 @@ export function getIndexMappings(): IndexMappings {
           trajectory: { type: 'object', enabled: false },
           logs: { type: 'object', enabled: false },
           rawEvents: { type: 'object', enabled: false },
+          // Connector-declared typed output (optional); read, never queried.
+          output: { type: 'object', enabled: false },
+          // Last retry-judgement attempt that produced NO judgement
+          // (RetryAttemptRecord) — the judgement fields above are the
+          // preserved previous judgement.
+          lastRetryAttempt: {
+            properties: {
+              at: { type: 'date' },
+              evaluatorId: { type: 'keyword' },
+              evaluatorName: { type: 'keyword' },
+              judgeModelId: { type: 'keyword' },
+              scope: { type: 'keyword' },
+              outcome: { type: 'keyword' },
+              reason: { type: 'text' },
+              diagnostics: { type: 'object', enabled: false },
+            },
+          },
           improvementStrategies: { type: 'object', enabled: false },
           // Per-matcher verdicts captured by the SDK during the test body.
           // Stored as a nested array so we can filter / aggregate by
@@ -335,8 +397,23 @@ export function getIndexMappings(): IndexMappings {
               judgeModelId: { type: 'keyword' },
               primaryMetrics: { type: 'keyword' },
               unevaluable: { type: 'keyword' },
+              notApplicable: { type: 'keyword' },
+              implicitMetrics: { type: 'keyword' },
               extractionRule: { type: 'keyword' },
               goldIdsUsed: { type: 'keyword' },
+              goldRule: { type: 'keyword' },
+              extraction: {
+                properties: {
+                  candidateCount: { type: 'integer' },
+                  citedCount: { type: 'integer' },
+                  anchorsRemoved: { type: 'integer' },
+                  parsedFrom: { type: 'keyword' },
+                  sourceUsed: { type: 'keyword' },
+                  weak: { type: 'boolean' },
+                },
+              },
+              // Free-form provenance for humans (source attempts, tool names) — not queried.
+              diagnostics: { type: 'object', enabled: false },
               passPolicy: {
                 dynamic: false,
                 properties: { kind: { type: 'keyword' }, minScore: { type: 'float' } },
@@ -356,6 +433,11 @@ export function getIndexMappings(): IndexMappings {
           // Retry-judgement stamp (services/evaluation/retryJudgement.ts).
           judgementRetriedAt: { type: 'date' },
           judgementRetryCount: { type: 'integer' },
+          // Verdict-engine outputs written alongside the snapshot on every
+          // new judgement (lib/scoring/verdictEngine.ts).
+          llmVerdict: { type: 'keyword' },
+          verdictConflict: { type: 'boolean' },
+          score: { type: 'float' },
         },
       },
     },
@@ -416,6 +498,14 @@ export function getIndexMappings(): IndexMappings {
           createdAt: { type: 'date' },
           updatedAt: { type: 'date' },
           systemPrompt: { type: 'text' },
+          // Deterministic evaluators (kind: 'deterministic'). `metrics[]` /
+          // `passPolicy` / `inputs` are author-shaped scoring DATA (free-form
+          // metric names, regex patterns, tool/field names) — stored
+          // verbatim, never queried, so kept out of dynamic mapping.
+          kind: { type: 'keyword' },
+          metrics: { type: 'object', enabled: false },
+          passPolicy: { type: 'object', enabled: false },
+          inputs: { type: 'object', enabled: false },
           scoringConfig: {
             properties: {
               metrics: {
@@ -447,6 +537,10 @@ export function getIndexMappings(): IndexMappings {
               systemPrompt: { type: 'text' },
               scoringConfig: { type: 'object', enabled: false },
               inferenceConfig: { type: 'object', enabled: false },
+              kind: { type: 'keyword' },
+              metrics: { type: 'object', enabled: false },
+              passPolicy: { type: 'object', enabled: false },
+              inputs: { type: 'object', enabled: false },
             },
           },
         },

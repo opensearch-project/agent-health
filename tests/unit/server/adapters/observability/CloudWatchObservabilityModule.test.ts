@@ -560,7 +560,7 @@ describe('CloudWatchObservabilityModule', () => {
       expect(reader.calls.insights[1].query).toContain(SERVICE);
       expect(m.inputTokens).toBe(42952);
       expect(m.llmCalls).toBe(4);
-      expect(m.correlatedBy).toBe('mixed'); // eval span by id + agent spans by window
+      expect(m.correlatedBy).toBe('window'); // precise-first: the agent was found ONLY by the window (the eval span by id does not count as an agent hit)
     });
 
     it('one key\'s id hit does not suppress a sibling key\'s window fallback (per-key decision)', async () => {

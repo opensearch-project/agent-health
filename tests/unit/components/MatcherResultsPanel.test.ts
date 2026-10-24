@@ -316,3 +316,52 @@ describe('MatcherResultsPanel — not-reached rendering', () => {
     expect(screen.queryByText('Full judge reasoning')).toBeNull();
   });
 });
+
+describe('MatcherResultsPanel — deterministic rows: response-results provenance and not-applicable metrics', () => {
+  const detRow = (over: Partial<MatcherResult> & { details?: Record<string, unknown> }): MatcherResult => ({
+    description: 'hit@5 (ranked-hit@5) ≥ 1',
+    pass: true,
+    method: 'code-assertion',
+    role: 'primary',
+    actual: 1,
+    expected: 1,
+    score: 1,
+    details: { gold: ['g1', 'g2'], goldTotal: 2, predicted: ['x', 'g2'], predictedTotal: 2, k: 5, extractionRule: 'response-results', parsedFrom: 'json' },
+    ...over,
+  });
+
+  it('shows the extraction rule with the parsed-from form for response-results rows', () => {
+    const { container } = panel([detRow({})]);
+    fireEvent.click(screen.getByText('hit@5 (ranked-hit@5) ≥ 1'));
+    const rule = screen.getByTestId('matcher-extraction-rule');
+    expect(rule.textContent).toContain('extraction rule: response-results');
+    expect(rule.textContent).toContain('parsed from json');
+    expect(screen.getByTestId('matcher-predicted-ids').textContent).toBe('xg2');
+    expect(container.querySelector('[data-testid="matcher-not-applicable"]')).toBeNull();
+  });
+
+  it('omits the parsed-from caption for tool-hits-ordered rows (no parsedFrom detail)', () => {
+    panel([detRow({ details: { gold: ['g1'], predicted: ['g1'], extractionRule: 'tool-hits-ordered' } })]);
+    fireEvent.click(screen.getByText('hit@5 (ranked-hit@5) ≥ 1'));
+    const rule = screen.getByTestId('matcher-extraction-rule');
+    expect(rule.textContent).toContain('tool-hits-ordered');
+    expect(rule.textContent).not.toContain('parsed from');
+  });
+
+  it('renders an n/a badge + reason for a not-applicable metric and EXCLUDES it from the passed/failed tally', () => {
+    const reason = 'abstain only scores cases whose gold is explicitly empty (this case has 2 gold ids)';
+    panel([
+      detRow({}),
+      detRow({
+        description: 'abstain (abstain) ≥ 1', role: 'observe', notApplicable: true, actual: undefined, expected: undefined, score: undefined,
+        details: { gold: ['g1', 'g2'], goldTotal: 2, predicted: ['x', 'g2'], predictedTotal: 2, extractionRule: 'response-results', parsedFrom: 'json', notApplicableReason: reason },
+      }),
+    ]);
+    expect(screen.getByText(/1\/1 passed, 1 n\/a/)).toBeTruthy();
+    const badge = screen.getByTestId('matcher-not-applicable');
+    expect(badge.textContent).toBe('n/a');
+    expect(badge.getAttribute('title')).toBe(reason);
+    fireEvent.click(screen.getByText('abstain (abstain) ≥ 1'));
+    expect(screen.getByTestId('matcher-not-applicable-reason').textContent).toBe(reason);
+  });
+});

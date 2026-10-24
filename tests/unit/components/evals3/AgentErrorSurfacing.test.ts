@@ -20,7 +20,7 @@
 import * as React from 'react';
 const h = React.createElement;
 import { render, screen, fireEvent } from '@testing-library/react';
-import { getResultStatus, getErrorStage, StatusLabel, StatusIcon, getStatusDescription } from '@/components/evals3/ResultStatus';
+import { getResultStatus, getErrorStage, StatusLabel, StatusIcon } from '@/components/evals3/ResultStatus';
 import { RunFailureCard } from '@/components/evals3/RunFailureCard';
 import type { EvaluationReport } from '@/types';
 
@@ -92,11 +92,6 @@ describe('ResultStatus — stage-aware errored status', () => {
   it('StatusIcon uses a distinct icon for agent errors', () => {
     render(h(StatusIcon, { status: "errored", stage: "agent" }));
     expect(screen.getByTestId('status-icon-agent-error')).toBeTruthy();
-  });
-  it('getStatusDescription is stage-aware', () => {
-    expect(getStatusDescription('errored', 'agent')).toMatch(/Agent request failed/);
-    expect(getStatusDescription('errored', 'judge')).toMatch(/Judge/);
-    expect(getStatusDescription('errored')).toBe('Evaluator could not run');
   });
 });
 

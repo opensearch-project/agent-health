@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MODEL_PRICING, getPricing, computeAggregateMetrics, computeMetrics, computeMetricsFromSpans, computeBatchMetrics } from '@/server/services/metricsService';
+import { MODEL_PRICING, getPricing, computeAggregateMetrics, computeMetrics, computeMetricsFromSpans, computeBatchMetrics, attributeSpansPreciseFirst } from '@/server/services/metricsService';
 import type { MetricsResult, OpenSearchConfig } from '@/types';
 
 // Mock fetch globally
@@ -849,6 +849,45 @@ describe('metricsService', () => {
       expect(result.inputTokens).toBe(500);
       expect(result.outputTokens).toBe(100);
       expect(result.llmCalls).toBe(1);
+      expect(result.hasSpans).toBe(true);
+      expect(result.evalOnlySpans).toBeUndefined();
+    });
+
+    it('a match made ONLY of agent-health eval/judge spans is "no spans" (hasSpans false, evalOnlySpans) — never a measured 0 tokens / 0 LLM calls', () => {
+      // Owner report 2026-10-24: a classic benchmark run whose agent exports
+      // its traces to a different store. Strategy B finds our own `test_case`
+      // span (it carries agent_health.run.id) and nothing else; pre-fix that
+      // read as hasSpans:true → the Runs tab rendered "0 · — · 0".
+      const spans = [
+        {
+          name: 'test_case', traceId: 'd0f1ebf73205fd48ddcd1a7e4a2db94b', durationInNanos: 76_089_000_000,
+          startTime: '2026-10-23T21:20:33.000Z', endTime: '2026-10-23T21:21:49.000Z', status: { code: 1 },
+          attributes: { 'gen_ai.operation.name': 'evaluation', 'agent_health.run.id': 'run-1' },
+        },
+        {
+          name: 'chat', traceId: 'd0f1ebf73205fd48ddcd1a7e4a2db94b',
+          attributes: { 'gen_ai.operation.name': 'evaluation', 'gen_ai.request.model': 'judge-model', 'gen_ai.usage.input_tokens': 4000, 'gen_ai.usage.output_tokens': 300 },
+        },
+      ];
+
+      const result = computeMetricsFromSpans('run-1', spans);
+
+      expect(result).toMatchObject({
+        runId: 'run-1', hasSpans: false, status: 'pending', evalOnlySpans: 2,
+        inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0, durationMs: 0,
+      });
+      // The eval trace is real — keep its id so a consumer can still open it.
+      expect(result.traceId).toBe('d0f1ebf73205fd48ddcd1a7e4a2db94b');
+    });
+
+    it('a trace with the agent\'s own spans alongside ours is NOT eval-only', () => {
+      const result = computeMetricsFromSpans('run-1', [
+        { name: 'test_case', attributes: { 'gen_ai.operation.name': 'evaluation' } },
+        { name: 'execute_tool search_index', attributes: { 'gen_ai.tool.name': 'search_index' } },
+      ]);
+      expect(result.hasSpans).toBe(true);
+      expect(result.evalOnlySpans).toBeUndefined();
+      expect(result.toolCalls).toBe(1);
     });
   });
 
@@ -940,18 +979,58 @@ describe('metricsService', () => {
       expect(result[0].status).toBe('pending');
     });
 
-    it('should handle OpenSearch failure gracefully', async () => {
+    it('reports a FAILED chunk per key as status "error" (spans unknown), never as "pending / hasSpans:false" (spans absent)', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
+        statusText: 'Internal Server Error',
         text: () => Promise.resolve('Internal error'),
       });
 
       const result = await computeBatchMetrics(['run-1', 'run-2'], defaultConfig);
 
       expect(result).toHaveLength(2);
-      expect(result[0].status).toBe('pending');
-      expect(result[1].status).toBe('pending');
+      for (const r of result) {
+        expect(r.status).toBe('error');
+        expect(r.error).toMatch(/500 Internal Server Error/);
+        // Unknown, not false: a consumer that keys "no spans" off hasSpans === false must not fire.
+        expect(r.hasSpans).toBeUndefined();
+        expect(r.totalTokens).toBe(0);
+      }
+    });
+
+    it('SDK-client transport: an OpenSearch request timeout on one chunk yields error entries for THAT chunk only; the other chunk still computes', async () => {
+      // 51 keys => two server-side chunks (50 + 1). The first search times out
+      // (opensearch-js TimeoutError shape: "Request timed out"), the second
+      // returns one span for key run-50.
+      const keys = Array.from({ length: 51 }, (_, i) => `run-${i}`);
+      const timeoutErr = Object.assign(new Error('Request timed out'), { name: 'TimeoutError' });
+      const search = jest.fn()
+        .mockRejectedValueOnce(timeoutErr)
+        .mockResolvedValueOnce({ body: { hits: { total: { value: 1 }, hits: [{ _source: {
+          traceId: 'abc', spanId: 's1', name: 'chat', startTime: '2026-10-22T20:00:00.000Z', endTime: '2026-10-22T20:00:01.000Z',
+          attributes: { 'agent_health.run.id': 'run-50', 'gen_ai.usage.input_tokens': 10, 'gen_ai.usage.output_tokens': 5, 'gen_ai.operation.name': 'chat' },
+        } }] } } });
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await computeBatchMetrics(keys, { client: { search } as any });
+        expect(search).toHaveBeenCalledTimes(2);
+        const byKey = new Map(result.map(r => [r.runId, r]));
+        for (let i = 0; i < 50; i++) {
+          const r = byKey.get(`run-${i}`)!;
+          expect(r.status).toBe('error');
+          expect(r.error).toBe('Request timed out');
+          expect(r.hasSpans).toBeUndefined();
+        }
+        const ok = byKey.get('run-50')!;
+        expect(ok.status).toBe('success');
+        expect(ok.hasSpans).toBe(true);
+        expect(ok.totalTokens).toBe(15);
+        expect(ok.error).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('Request timed out'));
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('ORs in Strategy-D session.id terms (one per runId) when sessionIdByRunId is supplied', async () => {
@@ -1344,10 +1423,10 @@ describe('metricsService', () => {
       expect(should).toHaveLength(1); // the window clause only
     });
 
-    it('stamps correlatedBy = ids / window / mixed per key', async () => {
+    it('stamps correlatedBy = ids / window per key — precise-first: a key the ids found is NEVER topped up from its window (no "mixed")', async () => {
       const base = Date.parse('2026-03-01T10:00:00.000Z');
-      const mk = (attrs: Record<string, unknown>, offsetS: number, serviceName = 'example-agent') => ({
-        _source: { name: 'chat', traceId: 't', serviceName, startTime: new Date(base + offsetS * 1000).toISOString(), durationInNanos: 1, status: { code: 1 },
+      const mk = (attrs: Record<string, unknown>, offsetS: number, serviceName = 'example-agent', traceId = 't-' + serviceName + '-' + offsetS) => ({
+        _source: { name: 'chat', traceId, serviceName, startTime: new Date(base + offsetS * 1000).toISOString(), durationInNanos: 1, status: { code: 1 },
           attributes: { 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 1, 'gen_ai.usage.output_tokens': 0, ...attrs } },
       });
       mockFetch.mockResolvedValue({
@@ -1355,18 +1434,19 @@ describe('metricsService', () => {
         json: () => Promise.resolve({ hits: { hits: [
           mk({ 'agent_health.run.id': 'run-ids' }, 5, 'svc-ids'),          // ids only
           mk({}, 5),                                                        // window only -> report-w
-          mk({ 'agent_health.run.id': 'run-mixed' }, 100, 'svc-mixed'),     // ids
-          mk({}, 105, 'svc-mixed'),                                         // + window for the same key -> mixed
+          mk({ 'agent_health.run.id': 'run-exact' }, 100, 'svc-exact'),    // ids
+          mk({}, 105, 'svc-exact'),                                         // identity-less span inside run-exact's window: pre-fix counted ("mixed"), now ignored
         ] } }),
       });
-      const results = await computeBatchMetrics(['run-ids', 'report-w', 'run-mixed'], defaultConfig, undefined, undefined, {
+      const results = await computeBatchMetrics(['run-ids', 'report-w', 'run-exact'], defaultConfig, undefined, undefined, {
         'report-w': [{ serviceName: 'example-agent', startedAt: base, endedAt: base + 60_000 }],
-        'run-mixed': [{ serviceName: 'svc-mixed', startedAt: base + 90_000, endedAt: base + 120_000, sessionId: 'sess-mixed' }],
+        'run-exact': [{ serviceName: 'svc-exact', startedAt: base + 90_000, endedAt: base + 120_000, sessionId: 'sess-exact' }],
       });
       const byKey = new Map(results.map(r => [r.runId, r]));
       expect(byKey.get('run-ids')!.correlatedBy).toBe('ids');
       expect(byKey.get('report-w')!.correlatedBy).toBe('window');
-      expect(byKey.get('run-mixed')!.correlatedBy).toBe('mixed');
+      expect(byKey.get('run-exact')!.correlatedBy).toBe('ids');
+      expect(byKey.get('run-exact')!.inputTokens).toBe(1); // pre-fix: 2 (window span unioned in)
       expect(byKey.get('run-ids')!.partial).toBeUndefined();
     });
 
@@ -1410,6 +1490,127 @@ describe('metricsService', () => {
       expect(results[0].inputTokens).toBe(7);
       // And the query carried the session.id clauses for it.
       expect(JSON.stringify(JSON.parse(mockFetch.mock.calls[0][1].body).query)).toContain('sess-k');
+    });
+  });
+  /**
+   * Precise-first correlation for the metrics path (same rule as /api/traces,
+   * AGENTS.md "Strategy C — FALLBACK, not a peer"). Fixture = what a benchmark
+   * at concurrency 3 really looks like on a shared cluster: three cases of the
+   * SAME agent (identical service.name) with OVERLAPPING windows, every case's
+   * eval `test_case` span, identity-less LLM/HTTP children hanging off each
+   * case's root, one case whose connector never echoed an id (window-only
+   * surrogate key), and a fourth run of the same agent nobody asked for.
+   */
+  describe('precise-first attribution (attributeSpansPreciseFirst / computeBatchMetrics)', () => {
+    const defaultConfig: OpenSearchConfig = { endpoint: 'http://localhost:9200', username: 'admin', password: 'admin', indexPattern: 'otel-v1-apm-span-*' };
+    const T0 = Date.parse('2026-03-01T10:00:00.000Z');
+    const SVC = 'example-agent';
+    const at = (offsetS: number) => new Date(T0 + offsetS * 1000).toISOString();
+    const llm = (traceId: string, offsetS: number, inTok: number, attrs: Record<string, unknown> = {}) => ({
+      name: 'chat', traceId, spanId: `${traceId}-${offsetS}`, serviceName: SVC, startTime: at(offsetS), endTime: at(offsetS + 1), durationInNanos: 1_000_000_000, status: { code: 1 },
+      attributes: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': inTok, 'gen_ai.usage.output_tokens': 0, ...attrs },
+    });
+    const root = (traceId: string, offsetS: number, runId: string) => ({
+      name: 'invoke_agent', traceId, spanId: `${traceId}-root`, serviceName: SVC, startTime: at(offsetS), endTime: at(offsetS + 40), durationInNanos: 40_000_000_000, status: { code: 1 },
+      attributes: { 'gen_ai.operation.name': 'invoke_agent', 'agent_health.run.id': runId },
+    });
+    const evalSpan = (traceId: string, offsetS: number, runId: string) => ({
+      name: 'test_case', traceId, spanId: `${traceId}-eval`, serviceName: 'agent-health', startTime: at(offsetS), endTime: at(offsetS + 45), durationInNanos: 45_000_000_000, status: { code: 1 },
+      attributes: { 'gen_ai.operation.name': 'evaluation', 'agent_health.run.id': runId },
+    });
+    // Three concurrent cases, roots at +0 / +5 / +10 s, each ~40 s → windows (±60 s slack) all overlap.
+    const win = (startS: number) => ({ serviceName: SVC, startedAt: T0 + (startS - 60) * 1000, endedAt: T0 + (startS + 100) * 1000 });
+    const spans = [
+      // case 1 — root carries run-1; LLM children carry NOTHING (follow the root).
+      evalSpan('t1', 0, 'run-1'), root('t1', 0, 'run-1'), llm('t1', 2, 100), llm('t1', 20, 100),
+      // case 2 — every span carries run-2.
+      evalSpan('t2', 5, 'run-2'), root('t2', 5, 'run-2'), llm('t2', 7, 1000, { 'agent_health.run.id': 'run-2' }), llm('t2', 30, 1000, { 'agent_health.run.id': 'run-2' }),
+      // case 3 — no TRACEPARENT propagation and no id echoed: the eval span names run-3 on ITS trace; the agent's spans sit on their own trace, identity-less.
+      evalSpan('t3', 10, 'run-3'), llm('t3-agent', 12, 10), llm('t3-agent', 35, 10),
+      // another run of the same agent, same minute, nobody asked for it.
+      root('t9', 8, 'run-9'), llm('t9', 9, 50_000), llm('t9', 25, 50_000),
+    ];
+
+    it('ids-first: a key whose ids found the agent takes ONLY those spans; the window never tops it up', () => {
+      const out = attributeSpansPreciseFirst(['run-2'], spans, {
+        runIdCorrelators: ['run-2'], sessionIdToRunId: new Map(), traceIdToRunId: new Map(),
+        hintsByServiceName: new Map([[SVC, [{ key: 'run-2', hint: win(5) }]]]),
+      });
+      const r2 = out.get('run-2')!;
+      expect(r2.via).toBe('ids');
+      expect(r2.spans.map(s => s.spanId).sort()).toEqual(['t2-root', 't2-7', 't2-30', 't2-eval'].sort());
+    });
+
+    it('identity-less children follow their root: a root-stamped agent WITHOUT Strategy A (no traceId on the report) still gets its own LLM spans by ids, and the neighbour whose window midpoint is nearer never takes them', () => {
+      // run-1's LLM spans at +2 s / +20 s carry no id; only t1-root does. No traceId map (older report / no TRACEPARENT).
+      // run-3's window (centred on +30 s) is the nearest midpoint for the +20 s span — pre-fix that span was run-3's.
+      const out = attributeSpansPreciseFirst(['run-1', 'run-3'], spans, {
+        runIdCorrelators: ['run-1', 'run-3'], sessionIdToRunId: new Map(), traceIdToRunId: new Map(),
+        hintsByServiceName: new Map([[SVC, [{ key: 'run-1', hint: win(0) }, { key: 'run-3', hint: win(10) }]]]),
+      });
+      const r1 = out.get('run-1')!;
+      expect(r1.via).toBe('ids');
+      expect(r1.spans.map(s => s.spanId).sort()).toEqual(['t1-root', 't1-2', 't1-20', 't1-eval'].sort());
+      const r3 = out.get('run-3')!;
+      expect(r3.via).toBe('window');
+      expect(r3.spans.map(s => s.spanId).sort()).toEqual(['t3-agent-12', 't3-agent-35', 't3-eval'].sort());
+    });
+
+    it('eval/judge spans do NOT count as an exact hit: a key whose only exact match is its test_case span falls back to the window', () => {
+      const out = attributeSpansPreciseFirst(['run-3'], spans, {
+        runIdCorrelators: ['run-3'], sessionIdToRunId: new Map(), traceIdToRunId: new Map(),
+        hintsByServiceName: new Map([[SVC, [{ key: 'run-3', hint: win(10) }]]]),
+      });
+      const r3 = out.get('run-3')!;
+      expect(r3.via).toBe('window');
+      // its own eval span (exact) + its identity-less agent spans (window) — nothing else
+      expect(r3.spans.map(s => s.spanId).sort()).toEqual(['t3-agent-12', 't3-agent-35', 't3-eval'].sort());
+    });
+
+    it('window post-filter resolves identity per TRACE: identity-less children of another run\'s root are dropped, as are spans naming a run nobody asked for', () => {
+      const out = attributeSpansPreciseFirst(['run-3'], spans, {
+        runIdCorrelators: ['run-3'], sessionIdToRunId: new Map(), traceIdToRunId: new Map(),
+        hintsByServiceName: new Map([[SVC, [{ key: 'run-3', hint: win(10) }]]]),
+      });
+      const r3 = out.get('run-3')!;
+      // t1's children (root says run-1), t2's root (run-2) + children, t9 (run-9) all fall inside run-3's window but belong elsewhere.
+      expect(r3.spans.map(s => s.spanId).sort()).toEqual(['t3-agent-12', 't3-agent-35', 't3-eval'].sort());
+    });
+
+    it('computeBatchMetrics (real route shape): three concurrent cases of the same agent, overlapping windows — each key\'s totals equal its OWN spans; pre-fix the neighbours and the stray run inflated them', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ hits: { total: { value: spans.length }, hits: spans.map(_source => ({ _source })) } }) });
+      const results = await computeBatchMetrics(
+        ['run-1', 'run-2', 'run-3'],
+        defaultConfig,
+        undefined,
+        { 'run-1': 't1', 'run-2': 't2' },   // Strategy A for the two cases that propagated TRACEPARENT
+        { 'run-1': [win(0)], 'run-2': [win(5)], 'run-3': [win(10)] },
+      );
+      const byKey = new Map(results.map(r => [r.runId, r]));
+      expect(byKey.get('run-1')).toEqual(expect.objectContaining({ inputTokens: 200, llmCalls: 2, correlatedBy: 'ids', hasSpans: true }));
+      expect(byKey.get('run-2')).toEqual(expect.objectContaining({ inputTokens: 2000, llmCalls: 2, correlatedBy: 'ids', hasSpans: true }));
+      expect(byKey.get('run-3')).toEqual(expect.objectContaining({ inputTokens: 20, llmCalls: 2, correlatedBy: 'window', hasSpans: true }));
+      // Nothing from run-9 anywhere.
+      expect(results.reduce((n, r) => n + r.inputTokens, 0)).toBe(2220);
+    });
+
+    it('computeMetrics (single run) with a window hint: exact hits win; the window only fills in when the ids found no agent span', async () => {
+      // run-2: ids find the agent → neighbours in the window are ignored.
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ hits: { hits: spans.map(_source => ({ _source })) } }) });
+      const r2 = await computeMetrics('run-2', defaultConfig, undefined, 't2', [win(5)]);
+      expect(r2).toEqual(expect.objectContaining({ inputTokens: 2000, llmCalls: 2, correlatedBy: 'ids' }));
+      // run-3: only the eval span is exact → window, post-filtered.
+      const r3 = await computeMetrics('run-3', defaultConfig, undefined, undefined, [win(10)]);
+      expect(r3).toEqual(expect.objectContaining({ inputTokens: 20, llmCalls: 2, correlatedBy: 'window' }));
+    });
+
+    it('a window-only SURROGATE key (report id, no ids at all) still gets its identity-less spans and nothing that names another run', async () => {
+      // A report with no runId is keyed by its own id; its eval span was stamped `agent_health.run.id = ''`
+      // (evaluationRunner: `savedReport.runId || ''`) — an empty id is NOT an identity.
+      const surrogateSpans = spans.map(sp => sp.spanId === 't3-eval' ? { ...sp, attributes: { ...sp.attributes, 'agent_health.run.id': '' } } : sp);
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ hits: { hits: surrogateSpans.map(_source => ({ _source })) } }) });
+      const [r] = await computeBatchMetrics(['report-3'], defaultConfig, undefined, undefined, { 'report-3': [win(10)] });
+      expect(r).toEqual(expect.objectContaining({ inputTokens: 20, llmCalls: 2, correlatedBy: 'window' }));
     });
   });
 });

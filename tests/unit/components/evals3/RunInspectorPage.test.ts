@@ -72,6 +72,14 @@ jest.mock('@/services/client', () => ({
   deleteEvaluationRun: jest.fn(),
 }));
 
+// Legacy re-run starts a NEW run on the benchmark (the Runs tab's Add Run
+// call) and follows it once the server reports `started`.
+const mockExecuteBenchmarkRun = jest.fn();
+jest.mock('@/services/client/benchmarkApi', () => ({
+  cancelBenchmarkRun: jest.fn(),
+  executeBenchmarkRun: (...a: unknown[]) => mockExecuteBenchmarkRun(...a),
+}));
+
 // Telemetry strip: the inspector hands its report summaries to useRunTelemetry
 // (one POST /api/metrics/batch). Default: no spans anywhere.
 const mockFetchBatchMetrics = jest.fn();
@@ -126,22 +134,45 @@ jest.mock('@/components/evals3/Breadcrumbs', () => ({
   Breadcrumbs: () => React.createElement('nav', { 'data-testid': 'breadcrumbs' }),
 }));
 
-jest.mock('@/components/evals3/RunConfigDialog', () => ({
-  RunConfigDialog: ({ mode, sourceRun, open, onOpenChange }: any) => (
-    open && sourceRun ? React.createElement(
-      'div',
-      { 'data-testid': 'run-config-dialog', 'data-mode': mode, onClick: () => onOpenChange(false) },
-      `Dialog for ${sourceRun.id}`,
-    ) : null
-  ),
-}));
+jest.mock('@/components/evals3/RunConfigDialog', () => {
+  const actual = jest.requireActual('@/components/evals3/RunConfigDialog');
+  return {
+    // The page's `legacyRerunValues` seeds create mode through the REAL
+    // `valuesFromRun`, so that export stays real; only the dialog is stubbed.
+    valuesFromRun: actual.valuesFromRun,
+    RunConfigDialog: ({ mode, sourceRun, initialValues, benchmark, open, onOpenChange, onStart }: any) => {
+      if (!open) return null;
+      if (mode === 'rerun') {
+        return sourceRun ? React.createElement(
+          'div',
+          { 'data-testid': 'run-config-dialog', 'data-mode': mode, onClick: () => onOpenChange(false) },
+          `Dialog for ${sourceRun.id}`,
+        ) : null;
+      }
+      // create mode (legacy re-run): expose the seed + a "start" affordance.
+      return React.createElement(
+        'div',
+        {
+          'data-testid': 'run-config-dialog',
+          'data-mode': mode,
+          'data-benchmark-id': benchmark?.id ?? '',
+          'data-initial-values': JSON.stringify(initialValues ?? {}),
+          onClick: () => { void onStart({ ...initialValues, agentKey: 'demo' }).catch(() => {}); },
+          ref: (el: any) => { if (el) el.__onStart = () => onStart({ ...initialValues, agentKey: 'demo' }); },
+        },
+        `Create dialog for ${benchmark?.id}`,
+      );
+    },
+  };
+});
 
 jest.mock('@/components/evals3/RetryJudgementConfirmDialog', () => ({
-  RetryJudgementConfirmDialog: ({ run, judgeFailedCount, rejudgeableCount, open, onOpenChange, onComplete }: any) => (
+  RetryJudgementConfirmDialog: ({ run, benchmarkId, judgeFailedCount, rejudgeableCount, open, onOpenChange, onComplete }: any) => (
     open && run ? React.createElement(
       'div',
       {
         'data-testid': 'retry-judgement-confirm-dialog',
+        'data-benchmark-id': benchmarkId ?? '',
         onClick: () => {
           onComplete({ retried: judgeFailedCount, succeeded: judgeFailedCount, failed: 0, results: [] });
           onOpenChange(false);
@@ -821,7 +852,7 @@ describe('RunInspectorPage — agent-configuration provenance (lib/agentFingerpr
     expect(chip.getAttribute('title')).toContain('/cfg/agent-health.config.ts @ cafe0000cafe');
   });
 
-  it('legacy run without a fingerprint renders no chip (no empty chip)', async () => {
+  it('legacy run without a fingerprint renders an explicit "config · not recorded" chip in the header (not silence)', async () => {
     const { getEvaluationRun } = require('@/services/client');
     getEvaluationRun.mockResolvedValue(evalRun({}));
     renderPage();
@@ -829,6 +860,17 @@ describe('RunInspectorPage — agent-configuration provenance (lib/agentFingerpr
     // than on an action button whose testid other in-flight PRs rename.
     await waitFor(() => expect(screen.getByText('demo')).toBeTruthy());
     expect(screen.queryByTestId('inspector-fingerprint-chip')).toBeNull();
+    const missing = screen.getByTestId('inspector-fingerprint-chip-missing');
+    expect(missing.textContent).toContain('not recorded');
+    expect(missing.getAttribute('title')).toMatch(/created before/i);
+  });
+
+  it('header chip carries the "config" label, so the hash cannot be mistaken for a commit SHA', async () => {
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(evalRun({ agentFingerprint: FP_NEW, agentFingerprintShort: 'bbbbbbbbbbbb' }));
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('inspector-fingerprint-chip')).toBeTruthy());
+    expect(screen.getByTestId('inspector-fingerprint-chip').textContent).toMatch(/config\s*bbbbbbbbbbbb/);
   });
 
   it('re-run whose fingerprint differs from the source run shows "config changed since source run" (prompt kind)', async () => {
@@ -1015,12 +1057,21 @@ describe('RunInspectorPage — Re-run button (benchmark mode)', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
-    expect((rerunItem()).disabled).toBe(true);
+    // Fell back to the embedded projection: no provenance chip (no first-class doc), Re-run in legacy (create-mode) form.
+    expect(screen.queryByTestId('rerun-provenance-chip')).toBeNull();
+    fireEvent.click(rerunItem());
+    expect((await screen.findByTestId('run-config-dialog')).getAttribute('data-mode')).toBe('create');
     expect(warnSpy).toHaveBeenCalledTimes(1);
     warnSpy.mockRestore();
   });
 
-  it('disables Re-run button for a true benchmark-embedded run (no first-class doc)', async () => {
+  // Owner report (#509 follow-up): both runs of a classic/CLI benchmark —
+  // legacy embedded, agent key no longer in this server's config — had
+  // Re-run greyed out as "isn't available for legacy benchmark-embedded
+  // runs". There is no rerun endpoint for them, but the run dialog in create
+  // mode (the Runs tab's Add Run), prefilled from the run, is: it says the
+  // agent is gone and offers the picker instead of a dead end.
+  it('ENABLES Re-run for a true benchmark-embedded run (no first-class doc): opens the run dialog in CREATE mode, prefilled from the legacy run', async () => {
     mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
     mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
     mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
@@ -1030,11 +1081,82 @@ describe('RunInspectorPage — Re-run button (benchmark mode)', () => {
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
 
     const rerunBtn = rerunItem();
-    expect(rerunBtn.disabled).toBe(true);
-    expect(rerunBtn.getAttribute('title')).toBe(
-      "Re-run isn't available for legacy benchmark-embedded runs"
-    );
+    expect(rerunBtn.disabled).toBe(false);
+    expect(rerunBtn.getAttribute('title')).toBeNull();
     expect(screen.queryByTestId('rerun-provenance-chip')).toBeNull();
+
+    fireEvent.click(rerunBtn);
+    const dialog = await screen.findByTestId('run-config-dialog');
+    expect(dialog.getAttribute('data-mode')).toBe('create');
+    expect(dialog.getAttribute('data-benchmark-id')).toBe('bench-1');
+    const seed = JSON.parse(dialog.getAttribute('data-initial-values')!);
+    expect(seed).toMatchObject({
+      name: 'Run 1 (re-run)',
+      description: 'Re-run of legacy run "Run 1" (run-1)',
+      agentKey: 'demo',
+      modelId: 'demo-model',
+    });
+    // The retired agent's per-run connection overrides are NOT carried into a
+    // run the user may point at another agent (codex_review finding).
+    expect(seed).not.toHaveProperty('agentEndpoint');
+    expect(seed).not.toHaveProperty('headers');
+  });
+
+  it('legacyRerunValues drops agentEndpoint/headers and replaces the old description with a provenance line', () => {
+    const { legacyRerunValues } = require('@/components/evals3/RunInspectorPage');
+    const seed = legacyRerunValues({
+      id: 'run-1700000000000-legacy1', name: 'legacy', createdAt: 'x', status: 'completed', results: {},
+      agentKey: 'retired-prod-agent', modelId: 'prod-agent', judgeModelId: 'demo-model', evaluatorId: 'eval-1', concurrency: 2,
+      description: 'Only change since the previous run: app context applied',
+      agentEndpoint: 'https://retired.example.internal/agent', headers: { Authorization: 'Bearer secret' },
+    });
+    expect(seed).toEqual({
+      name: 'legacy (re-run)',
+      description: 'Re-run of legacy run "legacy" (run-1700000000000-legacy1)',
+      agentKey: 'retired-prod-agent', modelId: 'prod-agent', judgeModelId: 'demo-model', evaluatorId: 'eval-1', concurrency: 2,
+    });
+  });
+
+  it('legacy Re-run starts a NEW run on the benchmark with the dialog values and navigates to it once the server reports `started`', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+    mockExecuteBenchmarkRun.mockImplementation(async (_bmId: string, _values: unknown, _onProgress: unknown, onStarted: any) => {
+      onStarted({ runId: 'eval-run-new', testCases: [] });
+      return { id: 'eval-run-new' };
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
+    fireEvent.click(rerunItem());
+    fireEvent.click(await screen.findByTestId('run-config-dialog'));
+
+    await waitFor(() => expect(mockExecuteBenchmarkRun).toHaveBeenCalledTimes(1));
+    expect(mockExecuteBenchmarkRun.mock.calls[0][0]).toBe('bench-1');
+    expect(mockExecuteBenchmarkRun.mock.calls[0][1]).toMatchObject({ name: 'Run 1 (re-run)', agentKey: 'demo' });
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/evaluations/benchmarks/bench-1/runs/eval-run-new/inspect'));
+    // Closed on `started`, not before.
+    await waitFor(() => expect(screen.queryByTestId('run-config-dialog')).toBeNull());
+  });
+
+  it('legacy Re-run that fails BEFORE the run starts rejects to the dialog (stays open) instead of escaping as an unhandled rejection', async () => {
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+    mockExecuteBenchmarkRun.mockRejectedValue(new Error('Test case "x" references source file "y" which is not resolvable'));
+
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
+    fireEvent.click(rerunItem());
+    const dialog = await screen.findByTestId('run-config-dialog');
+    let rejected: unknown = null;
+    // The stub dialog hands onStart's promise back via the click handler's return value — await it like the real dialog does.
+    await act(async () => {
+      try { await (dialog as any).__onStart?.(); } catch (e) { rejected = e; }
+    });
+    expect((rejected as Error | null)?.message).toMatch(/not resolvable/);
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringContaining('/runs/eval-run'));
+    expect(screen.queryByTestId('run-config-dialog')).not.toBeNull();
   });
 })
 
@@ -1117,21 +1239,47 @@ describe('RunInspectorPage — Retry judgement button (docType-keyed, not route-
     await waitFor(() => expect(getEvaluationRun.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
-  it('renders Retry judgement DISABLED (with the legacy-run reason) for a true legacy BenchmarkRun (no first-class doc) via the BENCHMARK route', async () => {
+  // Owner report (#509 follow-up): Retry judgement only needs the stored
+  // reports + an evaluator — never the agent — so a legacy embedded run is
+  // as retryable as a first-class doc. The dialog gets the route's
+  // benchmarkId so the server can find the run in benchmark.runs[].
+  it('renders Retry judgement ENABLED for a true legacy BenchmarkRun (no first-class doc) via the BENCHMARK route, counts its judge-failed cases, and hands the dialog the benchmarkId', async () => {
     mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
-    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(3));
     // Default beforeEach already rejects getEvaluationRun ("not found") —
     // simulates a run that only ever exists as an embedded BenchmarkRun.
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue(makeErroredSummaries(3, [1]));
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
+    const item = retryJudgementItem();
+    expect(item.disabled).toBe(false);
+    expect(item.getAttribute('title')).toBeNull();
+    expect(item.textContent).toContain('Retry judgement (1)');
+
+    fireEvent.click(item);
+    const dialog = await screen.findByTestId('retry-judgement-confirm-dialog');
+    expect(dialog.textContent).toContain('Retry dialog for run-1 (1/3)');
+    expect(dialog.getAttribute('data-benchmark-id')).toBe('bench-1');
+  });
+
+  it('a legacy BenchmarkRun whose every case failed at the AGENT request still has nothing to re-judge (honest reason, points at Re-run)', async () => {
+    mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
+    mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
     mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
-    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
+    mockGetReportSummariesByIds.mockResolvedValue({
+      'rep-0': { id: 'rep-0', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'agent', trajectory: [] },
+      'rep-1': { id: 'rep-1', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'agent', trajectory: [] },
+    });
 
     renderPage();
 
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
     const item = retryJudgementItem();
     expect(item.disabled).toBe(true);
-    expect(item.getAttribute('title')).toBe("Retry judgement isn't available for legacy benchmark-embedded runs");
-    expect(item.textContent).toContain('Retry judgement (0)');
+    expect(item.getAttribute('title')).toMatch(/2 cases failed at the agent request .* use Re-run/);
   });
 });
 
@@ -1174,7 +1322,7 @@ describe('RunInspectorPage — Re-run button (isEvaluationRun-keyed)', () => {
     ...overrides,
   });
 
-  it('disables Re-run for a legacy BenchmarkRun (no docType) via the benchmark-scoped route', async () => {
+  it('a legacy BenchmarkRun (no docType) via the benchmark-scoped route re-runs through the CREATE-mode dialog, never the rerun endpoint', async () => {
     mockParams = { benchmarkId: 'bench-1', runId: 'run-1' };
     mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
     mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
@@ -1183,8 +1331,10 @@ describe('RunInspectorPage — Re-run button (isEvaluationRun-keyed)', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getAllByTestId('test-case-row').length).toBeGreaterThan(0));
-    expect((rerunItem()).disabled).toBe(true);
+    expect((rerunItem()).disabled).toBe(false);
     expect(screen.queryByTestId('rerun-provenance-chip')).toBeNull();
+    fireEvent.click(rerunItem());
+    expect((await screen.findByTestId('run-config-dialog')).getAttribute('data-mode')).toBe('create');
   });
 
   it('enables Re-run for a dual-written evaluation-run reached via the benchmark-scoped route (regression -- was broken)', async () => {
@@ -1431,6 +1581,76 @@ describe('RunInspectorPage — header actions live only in the kebab', () => {
     expect(retryJudgementItem().textContent).toContain('Retry judgement (0)');
   });
 
+  // Seam between agent-step failure surfacing (#496) and the always-available
+  // Retry judgement (#509): the runner writes an agent-request failure as
+  // `results[tc].status: 'completed'` (like any finished case), so the
+  // run-doc-only count enabled "Retry judgement (N)" for a run whose every
+  // case died at the agent — and the backend then rejected all N (nothing to
+  // judge). Enablement + count must come from the loaded reports.
+  it('COMPLETED eval-run whose cases ALL failed at the agent request: Retry judgement (0) DISABLED with the agent-failure reason', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 2));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
+    mockGetReportSummariesByIds.mockResolvedValue({
+      'rep-0': { id: 'rep-0', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'agent', error: 'Agent request timed out after 300000ms', trajectory: [] },
+      'rep-1': { id: 'rep-1', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'agent', error: 'connect ECONNREFUSED', trajectory: [] },
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    expect(retryJudgementItem().disabled).toBe(true);
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (0)');
+    expect(retryJudgementItem().getAttribute('title')).toBe(
+      'No completed test cases to re-judge — 2 cases failed at the agent request (nothing to judge); use Re-run'
+    );
+  });
+
+  it('mixed run: agent failures are excluded from the count, judge failures and judged cases are not', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    getEvaluationRun.mockResolvedValue(makeEvaluationRunFixture('eval-run-1', 3));
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue({
+      'rep-0': { id: 'rep-0', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'agent', error: 'timeout', trajectory: [] },
+      'rep-1': { id: 'rep-1', status: 'completed', passFailStatus: null, metricsStatus: 'error', failureStage: 'judge', error: 'judge 400', trajectory: [{ type: 'assistant', content: 'x' }] },
+      'rep-2': { id: 'rep-2', status: 'completed', passFailStatus: 'passed', metricsStatus: 'ready', trajectory: [] },
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    expect(retryJudgementItem().disabled).toBe(false);
+    // Default scope = the 1 judge-failed case (agent failure excluded).
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (1)');
+    // The dialog's "All cases" count is report-derived too: 2, not the run doc's 3.
+    fireEvent.click(retryJudgementItem());
+    await waitFor(() => expect(screen.getByTestId('retry-judgement-confirm-dialog')).toBeTruthy());
+    expect(screen.getByTestId('retry-judgement-confirm-dialog').textContent).toContain('(1/2)');
+  });
+
+  // Owner report: "Retry judgement (29)" on a 62-case run whose 33 non-passing
+  // cases are judged FAILED (`results[tc].status: 'failed'` + a real verdict).
+  // Those cases have stored output — they are exactly the ones a second
+  // opinion is wanted on — so "All cases" counts them.
+  it('judged-FAILED cases (results status failed + passFailStatus failed) count as re-judgeable', async () => {
+    mockParams = { runId: 'eval-run-1' };
+    const { getEvaluationRun } = require('@/services/client');
+    const fixture = makeEvaluationRunFixture('eval-run-1', 3) as any;
+    fixture.results['tc-1'] = { reportId: 'rep-1', status: 'failed', passFailStatus: 'failed' };
+    fixture.results['tc-2'] = { reportId: 'rep-2', status: 'failed', passFailStatus: 'failed' };
+    getEvaluationRun.mockResolvedValue(fixture);
+    mockTestCasesGetByIds.mockResolvedValue(makeTestCases(3));
+    mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(3, [1, 2]));
+
+    renderPage();
+
+    await waitFor(() => expect(rerunItem()).toBeTruthy());
+    expect(retryJudgementItem().disabled).toBe(false);
+    expect(retryJudgementItem().textContent).toContain('Retry judgement (3)');
+  });
+
   it('kebab Retry judgement opens the SAME RetryJudgementConfirmDialog with the count (one pipeline, not a second fire-and-forget path)', async () => {
     mockParams = { runId: 'eval-run-1' };
     const { getEvaluationRun } = require('@/services/client');
@@ -1575,7 +1795,7 @@ describe('RunInspectorPage — telemetry strip (tokens · cost · LLM calls · t
     warn.mockRestore();
   });
 
-  it('batch endpoint failure → strip reads "—" (Metrics unavailable) and the page still renders its rows', async () => {
+  it('batch endpoint failure → strip reads "unavailable" (tooltip carries the failure) and the page still renders its rows', async () => {
     mockBenchmarkGetById.mockResolvedValue(makeBenchmark(2));
     mockTestCasesGetByIds.mockResolvedValue(makeTestCases(2));
     mockGetReportSummariesByIds.mockResolvedValue(makeSummaries(2));
@@ -1584,7 +1804,8 @@ describe('RunInspectorPage — telemetry strip (tokens · cost · LLM calls · t
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId('test-case-row')).toHaveLength(2));
     await waitFor(() => expect(screen.getByTestId('run-telemetry-strip').getAttribute('data-state')).toBe('empty'));
-    expect(screen.getByTestId('strip-tokens').getAttribute('title')).toBe('Metrics unavailable');
+    expect(screen.getByTestId('strip-tokens').textContent).toBe('Tokensunavailable');
+    expect(screen.getByTestId('strip-tokens').getAttribute('title')).toBe('Metrics unavailable — the trace-store query failed for 2 of 2 cases (500). Spans may well exist; use Retry.');
     expect(screen.queryByTestId('run-inspector-error')).toBeNull();
     // Retry is wired to the hook's refetch: one more request, then values.
     expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1);

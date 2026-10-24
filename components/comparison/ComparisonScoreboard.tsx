@@ -12,7 +12,6 @@ import type { RunAggregateMetrics, BenchmarkRun, RunScoringSummary } from '@/typ
 import type { TestCaseOverlap } from '@/services/comparisonService';
 import { runReportPath } from '@/lib/runReportPath';
 import {
-  avgScoreTooltip,
   formatMetricInScale,
   formatPassRateDetail,
   judgeCaption,
@@ -20,7 +19,9 @@ import {
   runPassPolicyLabel,
   type ScoringComparability,
 } from '@/lib/comparison/scoringDisplay';
-import { JudgeModelLabel, judgeModelText } from '@/components/JudgeModelLabel';
+import { JudgeModelLabel, judgeModelText, type JudgeIdentityLike } from '@/components/JudgeModelLabel';
+import { DEFAULT_CONFIG } from '@/lib/constants';
+import { JUDGE_PROVIDER_NONE, isJudgeProviderPseudoModelId } from '@/lib/judgeIdentity';
 import { AgentFingerprintChip, AgentConfigChangedBadge } from '@/components/evals3/AgentFingerprintChip';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -63,11 +64,14 @@ export interface ComparisonScoreboardProps {
  * primary-metric columns come from the runs' scoring snapshots — see
  * {@link buildScoreboardColumns}. There is deliberately NO accuracy-only
  * column any more: "accuracy" is one evaluator's rubric name, not the score.
+ * Nor is there an "Avg score" column: it read "—" for every run judged
+ * before scoring snapshots existed (owner: noise), so the run-level
+ * weighted aggregate stays in the payload (`RunAggregateMetrics.avgScore`)
+ * but is not rendered here — the per-metric columns carry the score signal.
  */
 export const SCOREBOARD_COLUMNS: ReadonlyArray<{ key: string; label: string; tooltip: string }> = [
   { key: 'run', label: 'Run', tooltip: 'Run name — click to open the run report' },
   { key: 'passRate', label: 'Pass rate', tooltip: 'Passed ÷ evaluated cases (errored cases excluded); the parenthesis names the verdict policy' },
-  { key: 'avgScore', label: 'Avg score', tooltip: 'Mean of each case\'s weighted rubric score per its scoring snapshot (0–100); "—" for runs judged before scoring snapshots existed' },
   { key: 'cost', label: 'Cost', tooltip: 'Total LLM cost across all test cases in the run' },
   { key: 'avgDuration', label: 'Avg Duration', tooltip: 'Mean wall-clock duration per test case' },
   { key: 'tokens', label: 'Tokens', tooltip: 'Total tokens across all test cases' },
@@ -78,11 +82,14 @@ export const SCOREBOARD_COLUMNS: ReadonlyArray<{ key: string; label: string; too
 
 export interface ScoreboardColumn { key: string; label: string; tooltip: string; primaryMetric?: string }
 
+/** Static column the evaluator-declared primary-metric columns are inserted after. */
+export const PRIMARY_METRICS_AFTER_COLUMN = 'passRate';
+
 /**
  * Column list for a given run set: the static columns with the pass-rate
  * header labelled by policy, plus one column per primary metric any run's
- * snapshot declares (inserted after "Avg score", declaration order, names
- * passed through verbatim — nothing here knows what "Hit@1" means).
+ * snapshot declares (inserted after the pass-rate column, declaration order,
+ * names passed through verbatim — nothing here knows what "Hit@1" means).
  */
 export function buildScoreboardColumns(runs: ReadonlyArray<RunAggregateMetrics>): ScoreboardColumn[] {
   const primaryNames: string[] = [];
@@ -95,7 +102,7 @@ export function buildScoreboardColumns(runs: ReadonlyArray<RunAggregateMetrics>)
   for (const col of SCOREBOARD_COLUMNS) {
     if (col.key === 'passRate') out.push({ ...col, label: passRateHeaderLabel(runs) });
     else out.push({ ...col });
-    if (col.key === 'avgScore') {
+    if (col.key === PRIMARY_METRICS_AFTER_COLUMN) {
       for (const name of primaryNames) {
         out.push({
           key: `primary:${name}`,
@@ -112,8 +119,6 @@ export function buildScoreboardColumns(runs: ReadonlyArray<RunAggregateMetrics>)
 /** Runs built before `scoring` existed (or partial fixtures) read as legacy. */
 const scoringOf = (run: Pick<RunAggregateMetrics, 'scoring'>): RunScoringSummary => run.scoring ?? { source: 'legacy' };
 
-/** Label under the "—" of a legacy-scored run. */
-export const LEGACY_SCORING_LABEL = 'legacy scoring';
 /** Δ-row text when the coverage gate blocks the aggregate comparison. */
 export const NOT_COMPARABLE_LABEL = 'Not comparable — different scoring';
 
@@ -348,23 +353,71 @@ const CondensedBand: React.FC<CondensedBandProps> = ({ runs, overlap, getAgentNa
  *   1. The run's reports resolved to SEVERAL judges → the plain "mixed (a · b)"
  *      caption (per-report resolution, lib/comparison/scoringDisplay.ts).
  *   2. The run recorded its judge identity (`judgeModel` = underlying LLM,
- *      `judgeModelId` = configured judge kind; lib/judgeIdentity) → the shared
+ *      `judgeModelId` = configured judge kind; lib/judgeIdentity) AND the
+ *      reports agree with it (or carry no judge of their own) → the shared
  *      <JudgeModelLabel> ("agent-trace-judge · claude-sonnet-4-5", or a
  *      "model not recorded" hint for old agent-judge runs).
- *   3. Otherwise the single per-report judge, or "not recorded".
+ *   3. The reports resolved to ONE judge that is NOT the run's — a
+ *      judge-changing Retry judgement (#509) re-judged every case with another
+ *      model / evaluator; the run's original `judgeModelId` is deliberately
+ *      immutable, so the reports are the current truth → label that judge.
+ *   4. Otherwise the single per-report judge, or "not recorded".
  */
 type JudgeEntry =
-  | { kind: 'label'; run: { judgeModel?: string; judgeModelId?: string }; text: string }
+  | { kind: 'label'; run: JudgeIdentityLike; text: string }
   | { kind: 'text'; text: string };
+
+/**
+ * Does the judge the reports resolved to (lib/comparison/scoringDisplay
+ * `resolveJudgeModelId`) name the same judge the run recorded?
+ *   - equal to the run's resolved LLM (`judgeModel`) or its configured id;
+ *   - when the run recorded NO resolved model, the catalog `model_id` behind
+ *     its configured key also counts (`claude-sonnet-4.6` → `us.anthropic.
+ *     claude-sonnet-4-6`, the alias rule `getJudgeModelDisplay` applies).
+ * When the run DOES carry a resolved `judgeModel`, a different report model is
+ * a different judge even if it is the key's catalog default — e.g. run key K
+ * (default M1) with an evaluator override to M2 (`judgeModel: M2`), later
+ * re-judged with K resolving to M1: the reports say M1, so the caption must.
+ */
+function reportJudgeMatchesRun(reportJudge: string, run: { judgeModel?: string; judgeModelId?: string }): boolean {
+  // An explicit resolved model on the run is THE comparison: a report model
+  // that differs from it is a different judge, even when it equals the run's
+  // configured id (report M1, run `{ judgeModelId: M1, judgeModel: M2 }`
+  // means the reports were re-judged back to M1 — the caption must say M1).
+  if (run.judgeModel) return reportJudge === run.judgeModel;
+  // No resolved model recorded: the configured id, or the catalog
+  // `model_id` behind that key, is all the run can be compared against.
+  if (reportJudge === run.judgeModelId) return true;
+  const configured = run.judgeModelId ? DEFAULT_CONFIG.models[run.judgeModelId]?.model_id : undefined;
+  return !!configured && reportJudge === configured;
+}
+
+/**
+ * Identity shape for a report-resolved judge id: the no-LLM marker, a provider
+ * kind, or an LLM — paired with its catalog key when the id is a configured
+ * model's `model_id`, so the label reads the display name ("Demo Model")
+ * exactly as it would for a run that recorded that judge.
+ */
+function identityForReportJudge(reportJudge: string): JudgeIdentityLike {
+  if (reportJudge === JUDGE_PROVIDER_NONE) return { judgeProvider: JUDGE_PROVIDER_NONE };
+  if (isJudgeProviderPseudoModelId(reportJudge)) return { judgeModelId: reportJudge };
+  const catalogKey = Object.keys(DEFAULT_CONFIG.models).find(k => k === reportJudge || DEFAULT_CONFIG.models[k]?.model_id === reportJudge);
+  return catalogKey ? { judgeModelId: catalogKey, judgeModel: reportJudge } : { judgeModel: reportJudge };
+}
 
 function judgeEntryFor(run: RunAggregateMetrics, selected: BenchmarkRun | undefined): JudgeEntry {
   const ids = run.judgeModelIds && run.judgeModelIds.length > 0
     ? run.judgeModelIds
     : (run.judgeModelId ? [run.judgeModelId] : []);
   if (ids.length > 1) return { kind: 'text', text: judgeCaption(run, getModelName) };
+  const reportJudge: string | undefined = ids[0];
   if (selected && (selected.judgeModel || selected.judgeModelId)) {
     const identity = { judgeModel: selected.judgeModel, judgeModelId: selected.judgeModelId };
-    return { kind: 'label', run: identity, text: judgeModelText(identity) };
+    if (!reportJudge || reportJudgeMatchesRun(reportJudge, identity)) {
+      return { kind: 'label', run: identity, text: judgeModelText(identity) };
+    }
+    const current = identityForReportJudge(reportJudge);
+    return { kind: 'label', run: current, text: judgeModelText(current) };
   }
   return { kind: 'text', text: judgeCaption(run, getModelName) };
 }
@@ -582,7 +635,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                                   prompt/config change, not just the agent. */}
                               {(run.agentFingerprint || (idx === 0 && comparedRuns.length > 0) || idx > 1) && (
                                 <div className="mt-0.5 flex items-center gap-1.5 flex-wrap" data-testid={`scoreboard-provenance-${label}`}>
-                                  <AgentFingerprintChip run={run} compact data-testid={`scoreboard-fingerprint-${run.runId}`} />
+                                  <AgentFingerprintChip run={run} data-testid={`scoreboard-fingerprint-${run.runId}`} />
                                   {/* Row A carries the A-vs-B badge (the primary comparison); with
                                       3+ runs every further row carries its own A-vs-this badge. */}
                                   {idx === 0 && comparedRuns.length > 0 && (
@@ -612,25 +665,6 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                               {formatPassRateDetail(run)}
                             </div>
                           </div>
-                        </td>
-                        <td
-                          className="px-3 py-2 text-right tabular-nums cursor-help"
-                          data-testid={`run-avgscore-${run.runId}`}
-                          title={avgScoreTooltip(scoringOf(run))}
-                        >
-                          {scoringOf(run).source === 'snapshot' && run.avgScore !== undefined ? (
-                            formatPercent(run.avgScore)
-                          ) : (
-                            <span className="inline-flex flex-col items-end leading-tight">
-                              <span>—</span>
-                              <span
-                                className="text-[9px] text-muted-foreground/80 normal-case tracking-normal"
-                                data-testid={`run-avgscore-legacy-${run.runId}`}
-                              >
-                                {LEGACY_SCORING_LABEL}
-                              </span>
-                            </span>
-                          )}
                         </td>
                         {columns.filter(c => c.primaryMetric).map(col => {
                           const pm = primaryMean(run, col.primaryMetric as string);
@@ -728,7 +762,6 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                     // (two-run specs pin them); further rows are suffixed by letter.
                     const tid = (base: string) => (first ? base : `${base}-${letter}`);
                     const passRateDelta = runA.passRatePercent - runB.passRatePercent;
-                    const avgScoreDelta = diff(runA.avgScore, runB.avgScore);
                     const costDelta = diff(runA.totalCostUsd, runB.totalCostUsd);
                     const durationDelta = diff(runA.avgDurationMs, runB.avgDurationMs);
                     const tokensDelta = diff(runA.totalTokens, runB.totalTokens);
@@ -795,14 +828,6 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                         {formatDelta(runA.passRatePercent, runB.passRatePercent, 'pp')}
                       </span>
                     </td>
-                    <td className="px-3 py-1.5 text-right">
-                      <DeltaCell
-                        testId={tid('scoreboard-delta-avgscore')}
-                        delta={avgScoreDelta}
-                        text={formatDelta(runA.avgScore, runB.avgScore)}
-                        title={deltaCaveat ?? `A minus ${letter}, both from scoring snapshots`}
-                      />
-                    </td>
                     {columns.filter(c => c.primaryMetric).map(col => {
                       const a = primaryMean(runA, col.primaryMetric as string);
                       const b = primaryMean(runB, col.primaryMetric as string);
@@ -813,6 +838,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                             testId={tid(`scoreboard-delta-primary-${col.primaryMetric}`)}
                             delta={d}
                             text={d === undefined ? '' : d === 0 ? '—' : `${d > 0 ? '+' : ''}${formatMetricInScale(d, a!.scale).replace(/^—$/, '')}`}
+                            title={deltaCaveat ?? `A minus ${letter}, mean ${col.primaryMetric} from both scoring snapshots`}
                           />
                         </td>
                       );

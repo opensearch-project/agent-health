@@ -25,6 +25,7 @@ import type {
   ImprovementStrategy,
   OpenSearchLog,
   ConnectorProtocol,
+  RetryAttemptRecord,
 } from '@/types';
 import { fetchChunked } from '@/lib/chunkedFetch';
 import { copyReportFailureFields } from '@/lib/reportFailureFields';
@@ -103,6 +104,10 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     spans?: unknown[];
     connectorProtocol?: string;
     judgeMode?: 'trajectory-only' | 'trace-tools';
+    output?: unknown;
+    lastRetryAttempt?: RetryAttemptRecord | null;
+    judgeApplied?: TestCaseRun['judgeApplied'];
+    judgeSelectionConflicts?: TestCaseRun['judgeSelectionConflicts'];
   };
 
   return {
@@ -184,6 +189,8 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     traceId: (stored as any).traceId,
     sessionId: (stored as any).sessionId,
     rawEvents: stored.rawEvents as any[] | undefined,
+    output: storedAny.output,
+    lastRetryAttempt: storedAny.lastRetryAttempt,
     logs: (stored.logs || []) as OpenSearchLog[],
     improvementStrategies: stored.improvementStrategies as any[] | undefined,
     // The judge's full persisted response (raw model text, token counts,
@@ -209,11 +216,19 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     // the "Re-judged <when> with <evaluator> · <model>" line on the Judge tab.
     judgementRetriedAt: (stored as any).judgementRetriedAt,
     judgementRetryCount: (stored as any).judgementRetryCount,
+    // What the SDK judge binding actually applied + overridden body pins
+    // (see services/judgeSelection.ts). Read-through so the run-detail
+    // Judge tab can flag a body/run selection disagreement.
+    judgeApplied: storedAny.judgeApplied,
+    judgeSelectionConflicts: storedAny.judgeSelectionConflicts,
     spans: storedAny.spans as any[] | undefined,
     connectorProtocol: storedAny.connectorProtocol as ConnectorProtocol | undefined,
-    // Frozen scoring provenance — the compare page's "Avg score" reads ONLY
-    // this + `metrics`; absent on pre-snapshot reports (legacy scoring).
+    // Frozen scoring provenance — the comparison payload's run-level score
+    // reads ONLY this + `metrics`; absent on pre-snapshot reports (legacy scoring).
     scoringSnapshot: stored.scoringSnapshot,
+    llmVerdict: stored.llmVerdict,
+    verdictConflict: stored.verdictConflict,
+    score: stored.score,
   };
 }
 
@@ -246,6 +261,8 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
     metrics: report.metrics as StorageRun['metrics'],
     trajectory: report.trajectory,
     rawEvents: report.rawEvents,
+    ...(report.output !== undefined ? { output: report.output } : {}),
+    ...(report.lastRetryAttempt !== undefined ? { lastRetryAttempt: report.lastRetryAttempt } : {}),
     logs: report.logs || report.openSearchLogs,
     improvementStrategies: report.improvementStrategies,
   };
@@ -273,11 +290,16 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
   if (report.traceError !== undefined) base.traceError = report.traceError;
   copyReportFailureFields(report as Record<string, any>, base as Record<string, any>);
   if ((report as any).judgeMode !== undefined) (base as any).judgeMode = (report as any).judgeMode;
+  if (report.judgeApplied !== undefined) (base as any).judgeApplied = report.judgeApplied;
+  if (report.judgeSelectionConflicts !== undefined) (base as any).judgeSelectionConflicts = report.judgeSelectionConflicts;
   if (report.spans !== undefined) base.spans = report.spans;
   if (report.connectorProtocol !== undefined) base.connectorProtocol = report.connectorProtocol;
   // SDK matcher verdicts: persist alongside the report
   if (report.matcherResults !== undefined) (base as any).matcherResults = report.matcherResults;
   if (report.scoringSnapshot !== undefined) base.scoringSnapshot = report.scoringSnapshot;
+  if (report.llmVerdict !== undefined) base.llmVerdict = report.llmVerdict;
+  if (report.verdictConflict !== undefined) base.verdictConflict = report.verdictConflict;
+  if (report.score !== undefined) base.score = report.score;
 
   return base;
 }
@@ -419,7 +441,7 @@ class AsyncRunStorage {
       'status', 'passFailStatus', 'metricsStatus', 'traceId', 'runId', 'sessionId',
       'judgeModelId', 'judgeModel', 'judgeProvider', 'modelId', 'agentId', 'testCaseId', 'createdAt', 'annotations', 'metrics',
       'connectorProtocol', 'performanceMetrics',
-      'scoringSnapshot',
+      'scoringSnapshot', 'llmVerdict', 'verdictConflict', 'score',
       // Failure stage so list rows can badge 'Agent error' vs 'Judge error'
       // without loading the full report (tiny keyword field).
       'failureStage',
@@ -489,14 +511,12 @@ class AsyncRunStorage {
     if (updates.improvementStrategies !== undefined) storageUpdates.improvementStrategies = updates.improvementStrategies;
     if ((updates as any).matcherResults !== undefined) (storageUpdates as any).matcherResults = (updates as any).matcherResults;
 
-    // Map metrics
+    // Map metrics — pass the evaluator's rubric keys through verbatim. This
+    // used to project onto the four legacy RCA keys only, which silently
+    // dropped every custom-evaluator rubric on update (and re-introduced the
+    // legacy key names as `undefined`).
     if (updates.metrics) {
-      storageUpdates.metrics = {
-        accuracy: updates.metrics.accuracy,
-        faithfulness: updates.metrics.faithfulness,
-        latency_score: updates.metrics.latency_score,
-        trajectory_alignment_score: updates.metrics.trajectory_alignment_score,
-      };
+      storageUpdates.metrics = { ...updates.metrics } as StorageRun['metrics'];
     }
 
     // Pass through trace-mode specific fields directly
@@ -510,6 +530,10 @@ class AsyncRunStorage {
     if (updates.judgeModel !== undefined) storageUpdates.judgeModel = updates.judgeModel;
     if (updates.judgeProvider !== undefined) storageUpdates.judgeProvider = updates.judgeProvider;
     if (updates.llmJudgeResponse !== undefined) storageUpdates.llmJudgeResponse = updates.llmJudgeResponse;
+    if (updates.llmVerdict !== undefined) storageUpdates.llmVerdict = updates.llmVerdict;
+    if (updates.verdictConflict !== undefined) storageUpdates.verdictConflict = updates.verdictConflict;
+    if (updates.score !== undefined) storageUpdates.score = updates.score;
+    if (updates.lastRetryAttempt !== undefined) storageUpdates.lastRetryAttempt = updates.lastRetryAttempt;
     if (updates.spans !== undefined) storageUpdates.spans = updates.spans;
 
     const updated = await opensearchRuns.partialUpdate(reportId, storageUpdates);

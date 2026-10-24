@@ -26,7 +26,7 @@ jest.mock('@/lib/config/statePaths', () => ({ readLayeredState: jest.fn(() => ({
 import { loadTestCasesFromModule } from '@/lib/testCases/loader';
 import { debug } from '@/lib/debug';
 import { EVAL_ROOTS_ENV, __resetEvalRootsForTests, setConfiguredEvalRoots } from '@/lib/config/evalRoots';
-import { resolveCodeFnMapForStoredTestCases, resolveTestCaseSources } from '@/services/sourceResolver';
+import { resolveCodeFnMapForStoredTestCases, resolveTestCaseSources, UnresolvableSourceFilesError } from '@/services/sourceResolver';
 import type { TestCase } from '@/types';
 
 const mockLoad = loadTestCasesFromModule as jest.Mock;
@@ -91,12 +91,15 @@ describe('sourceResolver × eval roots', () => {
       expect(r.evaluateFnMap.size).toBe(1);
     });
 
-    it('with no roots configured the default root is cwd: a file that lives elsewhere is not loaded and the debug log names the roots tried', async () => {
-      const r = await resolveCodeFnMapForStoredTestCases([stored('tc-1', 'passes', REL)]);
+    it('with no roots configured the default root is cwd: a file that lives elsewhere is not loaded and the hard pre-start error names the roots tried', async () => {
+      // An unresolvable code body is a hard error (see UnresolvableSourceFilesError) — the
+      // eval-roots miss is surfaced as that error's detail, not swallowed into a debug line.
+      const p = resolveCodeFnMapForStoredTestCases([stored('tc-1', 'passes', REL)]);
+      await expect(p).rejects.toBeInstanceOf(UnresolvableSourceFilesError);
+      await expect(p).rejects.toThrow(REL);
+      await expect(p).rejects.toThrow(`not found under eval roots ${JSON.stringify(cwd)}`);
       expect(mockLoad).not.toHaveBeenCalled();
-      expect(r.evaluateFnMap.size).toBe(0);
-      const msg = mockDebug.mock.calls.map(c => String(c[1])).find(m => m.includes('Failed to re-resolve'));
-      expect(msg).toContain(REL);
+      const msg = mockDebug.mock.calls.map(c => String(c[1])).find(m => m.includes(REL));
       expect(msg).toContain(`not found under eval roots ${JSON.stringify(cwd)}`);
     });
 
@@ -105,9 +108,10 @@ describe('sourceResolver × eval roots', () => {
       mkdirSync(path.join(other, 'dist'), { recursive: true });
       writeFileSync(path.join(other, REL), '// other');
       process.env[EVAL_ROOTS_ENV] = [other, evalRepo].join(path.delimiter);
-      mockLoad.mockResolvedValue({ filePath: path.join(other, REL), testCases: [], hooks: [] });
-      await resolveCodeFnMapForStoredTestCases([stored('tc-1', 'x', REL)]);
+      mockLoad.mockResolvedValue({ filePath: path.join(other, REL), testCases: [{ name: 'x', evaluate: jest.fn() }], hooks: [] });
+      const r = await resolveCodeFnMapForStoredTestCases([stored('tc-1', 'x', REL)]);
       expect(mockLoad).toHaveBeenCalledWith(path.join(other, REL));
+      expect(r.evaluateFnMap.size).toBe(1);
     });
 
     it('absolute stored sourceFiles keep working without any root', async () => {
