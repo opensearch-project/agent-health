@@ -23,8 +23,10 @@
  * that the persisted matcherResults reflect the bound evaluator ID,
  * including the precedence rules:
  *
- *   • Per-call `judge(result, claim, { evaluatorId })` overrides the
- *     run-level binding even when the run-level value is bogus.
+ *   • The run-level `-e` selection is AUTHORITATIVE: a per-call
+ *     `judge(result, claim, { evaluatorId })` pin in the body does NOT
+ *     override it — the run's evaluator rides the request and the pin is
+ *     recorded on the report as a `judgeSelectionConflicts` entry.
  *   • A `judge(result, claim)` call with NO per-call options inherits
  *     the run-level value.
  *
@@ -42,9 +44,10 @@
  *   2. Spawn `node cli/dist/index.js benchmark -f <fixture>.eval.js
  *      -a demo -m demo-model -e definitely-does-not-exist`.
  *   3. Read back the persisted run + matcherResults via the HTTP API.
- *   4. Assert: matcher #1 PASSES (per-call override wins), matcher #2
- *      FAILS with the exact 'Evaluator not found' string (run-level
- *      binding rode on the request).
+ *   4. Assert: BOTH matchers fail with the exact 'Evaluator not found'
+ *      string (the run-level binding rode on every request, including the
+ *      one whose body pinned a different evaluator), and the report's
+ *      `judgeSelectionConflicts` names the overridden pin.
  *
  * Why the demo provider
  * ─────────────────────
@@ -143,7 +146,8 @@ test('evaluator-id-cli-binding', {
       { type: 'response', content: 'I checked, looks good.' },
     ],
   };
-  // Per-call override — must succeed even though run-level is bogus.
+  // Per-call pin — the run-level selection is authoritative, so this rides
+  // the bogus run-level id too (and is recorded as a conflict).
   await judge(fakeResult, 'per-call override', { evaluatorId: 'system-rca-default' });
   // No per-call — must use the bound run-level evaluator and fail.
   await judge(fakeResult, 'bound run-level claim');
@@ -333,18 +337,31 @@ describe('CLI: run-level evaluatorId binding (precedence rules end-to-end)', () 
     expect(judges).toHaveLength(2);
   });
 
-  it('per-call evaluatorId override wins: matcher #1 PASSES with system-rca-default', () => {
+  it('run-level -e is authoritative: matcher #1 (body pinned system-rca-default) STILL fails with the bogus run-level id, and the pin is recorded as a conflict', () => {
     if (!backendAvailable) return;
     const judges = (report.matcherResults || []).filter((m: any) => m.method === 'llm-judge');
     const override = judges.find((m: any) => /per-call override/.test(m.description));
     // eslint-disable-next-line jest/no-conditional-expect
     expect(override).toBeDefined();
+    // The body asked for a valid evaluator, but the person who launched the
+    // run picked `-e definitely-does-not-exist` — that wins. Pre-fix this
+    // matcher passed (body pin applied) while the report was labelled with
+    // the run's evaluator: verdict from one judge, label from another.
     // eslint-disable-next-line jest/no-conditional-expect
-    expect(override.pass).toBe(true);
-    // The override evaluator was valid (system-rca-default ships in
-    // every server), so no errorMessage should be present.
+    expect(override.pass).toBe(false);
     // eslint-disable-next-line jest/no-conditional-expect
-    expect(override.errorMessage).toBeFalsy();
+    expect(override.errorMessage || '').toMatch(/Evaluator not found:\s*definitely-does-not-exist/);
+    // eslint-disable-next-line jest/no-conditional-expect
+    expect(override.evaluatorId).toBe('definitely-does-not-exist');
+    // The disagreement is on the report, not swallowed.
+    // eslint-disable-next-line jest/no-conditional-expect
+    expect(report.judgeSelectionConflicts).toEqual([
+      { field: 'evaluatorId', runValue: 'definitely-does-not-exist', bodyValue: 'system-rca-default' },
+    ]);
+    // eslint-disable-next-line jest/no-conditional-expect
+    expect(report.judgeApplied?.evaluatorId).toBe('definitely-does-not-exist');
+    // eslint-disable-next-line jest/no-conditional-expect
+    expect(report.judgeApplied?.evaluatorIdSource).toBe('run');
   });
 
   it('run-level binding rode through: matcher #2 FAILS with exact "Evaluator not found" error from /api/judge', () => {

@@ -257,6 +257,111 @@ describe('ComparisonScoreboard — judge caption over all runs', () => {
     expect(line).not.toMatch(/\bA\b .*·/);
     expect(screen.getAllByTestId('judge-model-label')).toHaveLength(1);
   });
+
+  // Seam between the retry-judgement picker (#509: a retry may re-judge every
+  // case with a DIFFERENT judge; the run's original `judgeModelId` is kept
+  // immutable on purpose) and the judge caption, which preferred the run's
+  // recorded identity whenever the reports agreed on a single judge — so after
+  // retrying all cases X → Y the caption still named X.
+  describe('report-derived judge wins over the run\'s original selection when they disagree', () => {
+    it('run judged by X, every report re-judged by Y → the caption names Y, not X', () => {
+      const runs = [
+        makeRun('a', { judgeModelId: 'judge-y', judgeModelIds: ['judge-y'] }),
+        makeRun('b', { judgeModelId: 'judge-y', judgeModelIds: ['judge-y'] }),
+      ];
+      renderScoreboard(runs, {
+        selectedRuns: selected(['a', 'b'], {
+          a: { judgeModelId: 'judge-x', judgeModel: 'judge-x' } as any,
+          b: { judgeModelId: 'judge-x', judgeModel: 'judge-x' } as any,
+        }),
+      });
+      const line = screen.getByTestId('scoreboard-judge-line').textContent ?? '';
+      expect(line).toContain('judge-y');
+      expect(line).not.toContain('judge-x');
+      // Still ONE collapsed entry: both runs now agree on Y.
+      expect(screen.getAllByTestId('judge-model-label')).toHaveLength(1);
+    });
+
+    it('only run B was re-judged → A keeps the run label, B names its new judge', () => {
+      const runs = [
+        makeRun('a', { judgeModelId: 'judge-x', judgeModelIds: ['judge-x'] }),
+        makeRun('b', { judgeModelId: 'judge-y', judgeModelIds: ['judge-y'] }),
+      ];
+      renderScoreboard(runs, {
+        selectedRuns: selected(['a', 'b'], {
+          a: { judgeModelId: 'judge-x', judgeModel: 'judge-x' } as any,
+          b: { judgeModelId: 'judge-x', judgeModel: 'judge-x' } as any,
+        }),
+      });
+      const line = screen.getByTestId('scoreboard-judge-line').textContent ?? '';
+      expect(line).toMatch(/A .*judge-x/);
+      expect(line).toMatch(/B .*judge-y/);
+    });
+
+    it('the run\'s catalog key vs the reports\' resolved model_id is the SAME judge → the run label stays (no false "changed judge")', () => {
+      // `demo-model` is a catalog key whose model_id is `mock://demo-model`;
+      // reports record the resolved id, the run the key.
+      const runs = [makeRun('a', { judgeModelId: 'mock://demo-model', judgeModelIds: ['mock://demo-model'] })];
+      renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'demo-model' } as any }) });
+      const line = screen.getByTestId('scoreboard-judge-line').textContent ?? '';
+      expect(line).toContain('Demo Model');
+      expect(line).not.toContain('mock://');
+    });
+
+    it('the key alias is only a fallback: a run with an explicit resolved judgeModel that DISAGREES with the reports shows the reports\' model', () => {
+      // Run key `demo-model` (catalog default `mock://demo-model`) ran with an
+      // evaluator override, so the run recorded judgeModel = another LLM; a
+      // later retry resolved the key to its default. The reports say the
+      // default — the caption must not keep naming the override.
+      const runs = [makeRun('a', { judgeModelId: 'mock://demo-model', judgeModelIds: ['mock://demo-model'] })];
+      renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'demo-model', judgeModel: 'override-llm-m2' } as any }) });
+      const line = screen.getByTestId('scoreboard-judge-line').textContent ?? '';
+      expect(line).toContain('Demo Model');
+      expect(line).not.toContain('override-llm-m2');
+    });
+
+    it('report model equal to the run\'s CONFIGURED id but not its RESOLVED model → the reports win (resolved model is compared first)', () => {
+      // Reviewer probe: reports resolved to M1; the run is configured as M1
+      // but recorded judgeModel M2 (an override). Direct equality with the
+      // configured id must not short-circuit past the resolved-model check.
+      const runs = [makeRun('a', { judgeModelId: 'judge-m1', judgeModelIds: ['judge-m1'] })];
+      renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'judge-m1', judgeModel: 'judge-m2' } as any }) });
+      const line = screen.getByTestId('scoreboard-judge-line').textContent ?? '';
+      expect(line).toContain('judge-m1');
+      expect(line).not.toContain('judge-m2');
+    });
+
+    it('reports re-scored by a deterministic evaluator (judgeProvider none) → "No LLM judge", not the run\'s LLM', () => {
+      const runs = [makeRun('a', { judgeModelId: 'none', judgeModelIds: ['none'] })];
+      renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'judge-x', judgeModel: 'judge-x' } as any }) });
+      const line = screen.getByTestId('scoreboard-judge-line').textContent ?? '';
+      expect(line).toContain('No LLM judge');
+      expect(line).not.toContain('judge-x');
+    });
+
+    it('reports with no judge of their own fall back to the run label (unchanged)', () => {
+      const runs = [makeRun('a', { judgeModelId: undefined, judgeModelIds: [] })];
+      renderScoreboard(runs, { selectedRuns: selected(['a'], { a: { judgeModelId: 'judge-x', judgeModel: 'judge-x' } as any }) });
+      expect(screen.getByTestId('scoreboard-judge-line').textContent).toContain('judge-x');
+    });
+  });
+});
+
+describe('ComparisonScoreboard — primary-metric Δ tooltips name the compared run', () => {
+  const withPrimary = (id: string, mean: number, passRate: number) =>
+    makeRun(id, { passRatePercent: passRate, scoring: snapshotScoring({ primaryMetrics: [{ name: 'hit_at_1', mean, scale: { min: 0, max: 1 } }] }) });
+
+  it('the A−C row says "A minus C" (the A−B row still says "A minus B")', () => {
+    renderScoreboard([withPrimary('a', 1, 90), withPrimary('b', 0.5, 70), withPrimary('c', 0.25, 60)], {
+      comparability: { comparable: true, reasons: [] },
+    });
+    const ab = screen.getByTestId('scoreboard-delta-primary-hit_at_1');
+    const ac = screen.getByTestId('scoreboard-delta-primary-hit_at_1-C');
+    expect(ab.textContent).toBe('+0.50');
+    expect(ac.textContent).toBe('+0.75');
+    expect(ab.title).toBe('A minus B, mean hit_at_1 from both scoring snapshots');
+    expect(ac.title).toBe('A minus C, mean hit_at_1 from both scoring snapshots');
+  });
 });
 
 describe('ComparisonScoreboard — coverage wording for N runs', () => {

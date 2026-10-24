@@ -103,14 +103,17 @@ describe('ComparisonScoreboard structure', () => {
 
   it('shows every RunAggregateMetrics metric directly on the run row', () => {
     // Headers are data-driven (SCOREBOARD_COLUMNS) so every one carries a tooltip.
-    for (const label of ['Pass rate', 'Avg score', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage']) {
+    for (const label of ['Pass rate', 'Cost', 'Avg Duration', 'Tokens', 'LLM Calls', 'Tool Calls', 'Coverage']) {
       expect(src).toContain(`label: '${label}'`);
     }
     // No accuracy-only column: "accuracy" is one evaluator's rubric name.
     expect(src).not.toContain("label: 'Average accuracy'");
+    // No "Avg score" column either (owner: it read "—" for every pre-snapshot
+    // run — noise); the per-metric columns carry the score signal.
+    expect(src).not.toContain("label: 'Avg score'");
     expect(src).toContain('run-passrate-${run.runId}');
     expect(src).not.toContain('run-accuracy-${run.runId}');
-    expect(src).toContain('run-avgscore-${run.runId}');
+    expect(src).not.toContain('run-avgscore-${run.runId}');
   });
 
   it('renders a single judge line instead of per-row judge info', () => {
@@ -316,10 +319,11 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
 
     expect(screen.getByTestId('run-passrate-run-a').textContent).toContain('100%');
     expect(screen.getByTestId('run-passrate-detail-run-a').textContent).toBe('5 / 5');
-    // Legacy-scored fixture: no accuracy column, "—" + legacy label for Avg score.
+    // Neither an accuracy-only column nor an "Avg score" column is rendered.
     expect(screen.queryByTestId('run-accuracy-run-a')).toBeNull();
-    expect(screen.getByTestId('run-avgscore-run-a').textContent).toContain('—');
-    expect(screen.getByTestId('run-avgscore-legacy-run-a').textContent).toBe('legacy scoring');
+    expect(screen.queryByTestId('run-avgscore-run-a')).toBeNull();
+    expect(screen.queryByTestId('scoreboard-col-avgScore')).toBeNull();
+    expect(screen.queryByText('Avg score')).toBeNull();
     // Judge info renders exactly once and names the JUDGE, not the agent model.
     expect(screen.getAllByTestId('scoreboard-judge-line')).toHaveLength(1);
     expect(screen.getByTestId('scoreboard-judge-line').textContent).toContain('Judge:');
@@ -327,9 +331,10 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
   });
 
   it('judge line shows the JUDGE identity (judgeModelId · judgeModel), not the agent model, when runs carry it', () => {
-    const runA = makeRun('run-a');
-    const runB = makeRun('run-b');
     const SONNET_45 = 'amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0';
+    // The reports resolved to the same LLM the run recorded (the normal case).
+    const runA = { ...makeRun('run-a'), judgeModelId: SONNET_45 };
+    const runB = { ...makeRun('run-b'), judgeModelId: SONNET_45 };
     render(
       React.createElement(ComparisonScoreboard, {
         runs: [runA, runB],
@@ -354,8 +359,9 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
   });
 
   it('judge line labels differing judges A/B and flags an unrecorded agent-judge model on old runs', () => {
-    const runA = makeRun('run-a');
-    const runB = makeRun('run-b');
+    // Each run's reports resolved to the judge the run itself recorded.
+    const runA = { ...makeRun('run-a'), judgeModelId: 'agent-trace-judge' };
+    const runB = { ...makeRun('run-b'), judgeModelId: 'us.anthropic.claude-sonnet-4-6' };
     render(
       React.createElement(ComparisonScoreboard, {
         runs: [runA, runB],

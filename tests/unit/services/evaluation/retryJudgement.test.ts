@@ -173,6 +173,43 @@ describe('selectRetryableCases', () => {
     expect(selectRetryableCases(run, reportsById, 'errored')).toEqual(['tc-errored']);
   });
 
+  it('scope=errored ALSO selects a case whose last retry produced no judgement (preserved verdict + lastRetryAttempt) — "Retry again" must reach it', () => {
+    const run = makeRun({
+      results: {
+        'tc-preserved': { reportId: 'r-preserved', status: 'completed', passFailStatus: 'passed' } as any,
+        'tc-passed': { reportId: 'r-passed', status: 'completed', passFailStatus: 'passed' } as any,
+        'tc-preserved-no-output': { reportId: 'r-no-output', status: 'completed', passFailStatus: 'passed' } as any,
+      },
+    });
+    const attempt = { at: '2026-01-01T00:00:00Z', evaluatorId: 'e', scope: 'all', outcome: 'not-evaluable', reason: 'x' } as any;
+    const reportsById = {
+      'r-preserved': makeReport({ id: 'r-preserved', metricsStatus: 'ready' as any, passFailStatus: 'passed', lastRetryAttempt: attempt }),
+      'r-passed': makeReport({ id: 'r-passed', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
+      'r-no-output': makeReport({ id: 'r-no-output', metricsStatus: 'ready' as any, passFailStatus: 'passed', lastRetryAttempt: attempt, trajectory: [] }),
+    };
+    expect(selectRetryableCases(run, reportsById, 'errored')).toEqual(['tc-preserved']);
+  });
+
+  // Review of #571: the preserved-attempt branch still required
+  // `results[tc].status === 'completed'`, so a judged FAILURE whose retry
+  // attempt produced no judgement (lastRetryAttempt recorded) was reachable by
+  // scope 'all' but dropped out of scope 'errored' ("Retry again" did nothing).
+  it("scope=errored selects a judged-FAILED case carrying a preserved unsuccessful attempt, but not a plain judged failure", () => {
+    const run = makeRun({
+      results: {
+        'tc': { reportId: 'r-attempt', status: 'failed', passFailStatus: 'failed' } as any,
+        'tc-plain-failed': { reportId: 'r-plain', status: 'failed', passFailStatus: 'failed' } as any,
+      },
+    });
+    const attempt = { at: '2026-01-01T00:00:00Z', evaluatorId: 'e', scope: 'errored', outcome: 'judge-error', reason: 'x' } as any;
+    const reportsById = {
+      'r-attempt': makeReport({ id: 'r-attempt', metricsStatus: 'ready' as any, passFailStatus: 'failed', lastRetryAttempt: attempt }),
+      'r-plain': makeReport({ id: 'r-plain', metricsStatus: 'ready' as any, passFailStatus: 'failed' }),
+    };
+    expect(selectRetryableCases(run, reportsById, 'errored')).toEqual(['tc']);
+    expect(selectRetryableCases(run, reportsById, 'all').sort()).toEqual(['tc', 'tc-plain-failed']);
+  });
+
   it('scope=all selects every completed case with rejudgeable output, regardless of current verdict', () => {
     const run = makeRun({
       results: {
@@ -187,6 +224,33 @@ describe('selectRetryableCases', () => {
       'r-crash': makeReport({ id: 'r-crash', metricsStatus: 'error' as any, trajectory: [] }),
     };
     expect(selectRetryableCases(run, reportsById, 'all').sort()).toEqual(['tc-errored', 'tc-passed']);
+  });
+
+  // Seam between the runner's result mirror and scope=all: a FAILED verdict is
+  // persisted as `results[tc].status: 'failed'` + `passFailStatus: 'failed'`
+  // (services/evaluationRunner.ts), so "all cases" used to skip exactly the
+  // cases a second opinion is wanted on (owner: "Retry judgement (29)" on a
+  // 62-case run with 33 judged failures). An executor crash is ALSO
+  // `status: 'failed'` — but with no verdict and a placeholder report — and
+  // an agent-request failure carries `failureStage: 'agent'`; neither is selected.
+  it('scope=all selects judged-FAILED cases (status failed + a failed verdict) but not crashes or agent-stage failures', () => {
+    const run = makeRun({
+      results: {
+        'tc-judged-failed': { reportId: 'r-judged-failed', status: 'failed', passFailStatus: 'failed' } as any,
+        'tc-crash': { reportId: 'r-crash', status: 'failed', error: 'executor exploded' } as any,
+        'tc-agent-failed': { reportId: 'r-agent-failed', status: 'completed' } as any,
+        'tc-passed': { reportId: 'r-passed', status: 'completed', passFailStatus: 'passed' } as any,
+      },
+    });
+    const reportsById = {
+      'r-judged-failed': makeReport({ id: 'r-judged-failed', metricsStatus: 'ready' as any, passFailStatus: 'failed' }),
+      'r-crash': makeReport({ id: 'r-crash', status: 'failed', metricsStatus: 'error' as any, trajectory: [], llmJudgeReasoning: 'Evaluation error: executor exploded' }),
+      'r-agent-failed': makeReport({ id: 'r-agent-failed', metricsStatus: 'error' as any, failureStage: 'agent', error: 'timeout' } as any),
+      'r-passed': makeReport({ id: 'r-passed', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
+    };
+    expect(selectRetryableCases(run, reportsById, 'all').sort()).toEqual(['tc-judged-failed', 'tc-passed']);
+    // Unchanged: scope=errored never touches a judged case.
+    expect(selectRetryableCases(run, reportsById, 'errored')).toEqual([]);
   });
 
   it('skips results with no reportId', () => {
@@ -317,12 +381,13 @@ describe('retryJudgementForRun', () => {
     expect(updateCall[1].stats).toEqual({ passed: 2, failed: 0, errored: 0, pending: 0, notRun: 0, total: 2 });
   });
 
-  it('re-persists the canonical evaluator-error patch when the judge call fails again', async () => {
+  it('a judge call that fails again leaves the (errored) report as it was and records lastRetryAttempt (judge-error) on the report and the run', async () => {
     mockedCallBedrockJudge.mockRejectedValue(new Error('Bedrock validation error'));
 
     const reports: Record<string, EvaluationReport> = {
-      'r-errored': makeReport({ id: 'r-errored', testCaseId: 'tc-errored', metricsStatus: 'error' as any }),
+      'r-errored': makeReport({ id: 'r-errored', testCaseId: 'tc-errored', metricsStatus: 'error' as any, passFailStatus: null as any, traceError: 'Judge evaluation failed (kind=judge_failed): original 400' }),
     };
+    const before = JSON.parse(JSON.stringify(reports['r-errored']));
     const storage = makeStorage(reports);
     const run = makeRun({
       results: { 'tc-errored': { reportId: 'r-errored', status: 'completed' } as any },
@@ -334,17 +399,23 @@ describe('retryJudgementForRun', () => {
     expect(summary.succeeded).toBe(0);
     expect(summary.failed).toBe(1);
     expect(summary.results[0].error).toContain('Bedrock validation error');
-    expect(reports['r-errored'].metricsStatus).toBe('error');
-    expect(reports['r-errored'].passFailStatus).toBeNull();
+    // The ORIGINAL error state is untouched (not rewritten with the retry's message)…
+    const { lastRetryAttempt, ...rest } = reports['r-errored'] as any;
+    expect(rest).toEqual(before);
+    // …and the attempt is recorded.
+    // #509's resolveRetryJudgeConfig resolves an unset evaluator to the built-in default.
+    expect(lastRetryAttempt).toMatchObject({ evaluatorId: 'system-rca-default', judgeModelId: 'demo-model', scope: 'errored', outcome: 'judge-error', reason: 'Bedrock validation error' });
+    expect(lastRetryAttempt.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
     const updateCall = (storage.evaluationRuns.update as jest.Mock).mock.calls.at(-1)!;
     // Still-failed case stays out of passed/failed — bucketed errored, same as
-    // the original run.
+    // the original run — and the run carries the attempt summary.
     expect(updateCall[1].stats.errored).toBe(1);
     expect(updateCall[1].results['tc-errored'].passFailStatus).toBeUndefined();
+    expect(updateCall[1].lastRetryAttempt).toMatchObject({ scope: 'errored', retried: 1, succeeded: 0, failed: 1, notEvaluable: 0, reasons: { 'Bedrock validation error': 1 } });
   });
 
-  it('clears stale matcherResults/improvementStrategies when a scope=all retry fails on a previously-passed case (codex_review finding)', async () => {
+  it('a scope=all retry that fails on a previously-PASSED case preserves the passing judgement byte-for-byte and records the attempt (owner rule)', async () => {
     mockedCallBedrockJudge.mockRejectedValue(new Error('Bedrock 400'));
 
     const reports: Record<string, EvaluationReport> = {
@@ -353,25 +424,65 @@ describe('retryJudgementForRun', () => {
         testCaseId: 'tc-was-passing',
         metricsStatus: 'ready' as any,
         passFailStatus: 'passed',
+        metrics: { accuracy: 90, faithfulness: 80, latency_score: 70, trajectory_alignment_score: 60 },
+        llmJudgeReasoning: 'previous reasoning',
+        llmJudgeResponse: { modelId: 'judge-model', timestamp: 't', promptTokens: 1, completionTokens: 1, latencyMs: 1, rawResponse: '{}' } as any,
+        evaluatorId: 'eval-prev',
+        judgeModelId: 'judge-model',
         matcherResults: [{ description: 'judge: x', pass: true, method: 'llm-judge' } as any],
         improvementStrategies: [{ title: 'x' } as any],
       }),
     };
+    const before = JSON.parse(JSON.stringify(reports['r-was-passing']));
     const storage = makeStorage(reports);
     const run = makeRun({
       results: { 'tc-was-passing': { reportId: 'r-was-passing', status: 'completed', passFailStatus: 'passed' } as any },
     });
 
+    const summary = await retryJudgementForRun(run, storage as any, { scope: 'all' });
+
+    expect(summary).toMatchObject({ retried: 1, succeeded: 0, failed: 1 });
+    // Every judgement field is byte-identical — verdict, scores, reasoning,
+    // judge response, evaluator stamp, matcher rows, strategies.
+    const { lastRetryAttempt, ...rest } = reports['r-was-passing'] as any;
+    expect(rest).toEqual(before);
+    expect(reports['r-was-passing'].passFailStatus).toBe('passed');
+    expect(reports['r-was-passing'].metricsStatus).toBe('ready');
+    expect(lastRetryAttempt).toMatchObject({ outcome: 'judge-error', reason: 'Bedrock 400', scope: 'all', judgeModelId: 'judge-model' });
+    // Exactly ONE storage write for this report, carrying only the attempt.
+    const writes = (storage.runs.update as jest.Mock).mock.calls.filter(c => c[0] === 'r-was-passing');
+    expect(writes).toHaveLength(1);
+    expect(Object.keys(writes[0][1])).toEqual(['lastRetryAttempt']);
+    // The run's results map keeps the previous verdict; stats unchanged.
+    const runUpdate = (storage.evaluationRuns.update as jest.Mock).mock.calls.at(-1)![1]; // the final results/stats write (#509 writes lastJudgementRetry up front)
+    expect(runUpdate.results['tc-was-passing'].passFailStatus).toBe('passed');
+    expect(runUpdate.stats).toMatchObject({ passed: 1, failed: 0, errored: 0 });
+  });
+
+  it('a SUCCESSFUL re-judgement replaces the judgement wholesale and clears lastRetryAttempt (no-history rule)', async () => {
+    mockedCallBedrockJudge.mockResolvedValue({
+      passFailStatus: 'failed',
+      metrics: { accuracy: 20, faithfulness: 20, latency_score: 20, trajectory_alignment_score: 20 },
+      llmJudgeReasoning: 'new reasoning',
+      improvementStrategies: [],
+    });
+    const reports: Record<string, EvaluationReport> = {
+      'r-prev': makeReport({
+        id: 'r-prev', testCaseId: 'tc-prev', metricsStatus: 'ready' as any, passFailStatus: 'passed',
+        lastRetryAttempt: { at: '2026-01-01T00:00:00Z', evaluatorId: null, scope: 'all', outcome: 'judge-error', reason: 'earlier failure' },
+      } as any),
+    };
+    const storage = makeStorage(reports);
+    const run = makeRun({ results: { 'tc-prev': { reportId: 'r-prev', status: 'completed', passFailStatus: 'passed' } as any } });
+
     await retryJudgementForRun(run, storage as any, { scope: 'all' });
 
-    // The retry failed — the report must not keep showing the STALE passing
-    // matcher entry alongside metricsStatus:'error' (a Judge-tab inconsistency).
-    expect(reports['r-was-passing'].metricsStatus).toBe('error');
-    expect(reports['r-was-passing'].matcherResults).toEqual([]);
-    expect(reports['r-was-passing'].improvementStrategies).toEqual([]);
-    // The retry-specific message is preserved for diagnostics.
-    expect(reports['r-was-passing'].traceError).toContain('Retry judgement');
-    expect(reports['r-was-passing'].traceError).toContain('Bedrock 400');
+    expect(reports['r-prev'].passFailStatus).toBe('failed');
+    expect(reports['r-prev'].llmJudgeReasoning).toBe('new reasoning');
+    expect(reports['r-prev'].lastRetryAttempt).toBeNull();
+    const runUpdate = (storage.evaluationRuns.update as jest.Mock).mock.calls.at(-1)![1]; // the final results/stats write (#509 writes lastJudgementRetry up front)
+    expect(runUpdate.lastRetryAttempt).toBeNull();
+    expect(runUpdate.results['tc-prev'].passFailStatus).toBe('failed');
   });
 
   it('falls back to BEDROCK_MODEL_ID env before the agent\'s own modelId when no judge model is set', async () => {
@@ -564,7 +675,7 @@ describe('retryJudgementForRun', () => {
 
     const summary = await retryJudgementForRun(run, storage as any);
 
-    expect(summary).toEqual({ retried: 0, succeeded: 0, failed: 0, results: [] });
+    expect(summary).toEqual({ retried: 0, succeeded: 0, failed: 0, notEvaluable: 0, abstain: 0, results: [] });
     expect(mockedCallBedrockJudge).not.toHaveBeenCalled();
     // Run doc still gets its stats recomputed/persisted even with zero
     // retries (plus the up-front `lastJudgementRetry` stamp).
@@ -593,6 +704,63 @@ describe('retryJudgementForRun', () => {
     expect(summary.retried).toBe(1);
     expect(mockedCallBedrockJudge).toHaveBeenCalledTimes(1);
     expect(reports['r-passed'].passFailStatus).toBe('failed');
+  });
+
+  // Seam between agent-step failure surfacing (failureStage / error /
+  // judgeError on the report) and retry judgement: the success path cleared
+  // only the legacy `traceError`, so a judge failure re-judged to PASSED kept
+  // `failureStage: 'judge'` — and the run-detail failure card (keyed on it)
+  // kept saying "Judge could not produce a verdict" next to the verdict.
+  it('a SUCCESSFUL re-judgement clears the stage-failure fields (failureStage / error / judgeError) the judge failure had recorded', async () => {
+    mockedCallBedrockJudge.mockResolvedValue({
+      passFailStatus: 'passed',
+      metrics: { accuracy: 90, faithfulness: 90, latency_score: 90, trajectory_alignment_score: 90 },
+      llmJudgeReasoning: 'fine now',
+      improvementStrategies: [],
+    });
+    const reports: Record<string, EvaluationReport> = {
+      'r-judge-failed': makeReport({
+        id: 'r-judge-failed', testCaseId: 'tc-1', metricsStatus: 'error' as any, passFailStatus: null as any,
+        traceError: 'Judge evaluation failed (kind=judge_failed): judge returned no JSON',
+        failureStage: 'judge', error: 'judge returned no JSON',
+        judgeError: { message: 'judge returned no JSON', rawResponse: '', attempts: 3 },
+      } as any),
+    };
+    const storage = makeStorage(reports);
+    const run = makeRun({ results: { 'tc-1': { reportId: 'r-judge-failed', status: 'completed' } as any } });
+
+    const summary = await retryJudgementForRun(run, storage as any);
+
+    expect(summary.succeeded).toBe(1);
+    const after = reports['r-judge-failed'] as any;
+    expect(after.passFailStatus).toBe('passed');
+    expect(after.metricsStatus).toBe('completed');
+    // Every failure field is cleared (null — survives the storage merge); traceError is dropped.
+    expect(after.failureStage ?? null).toBeNull();
+    expect(after.error ?? null).toBeNull();
+    expect(after.judgeError ?? null).toBeNull();
+    expect(after.agentError ?? null).toBeNull();
+    expect(after.traceError ?? null).toBeNull();
+  });
+
+  it('a FAILED re-judgement leaves the stage-failure fields exactly as they were (owner rule: only success replaces)', async () => {
+    mockedCallBedrockJudge.mockRejectedValue(new Error('still broken'));
+    const judgeError = { message: 'judge returned no JSON', rawResponse: '', attempts: 3 };
+    const reports: Record<string, EvaluationReport> = {
+      'r-judge-failed': makeReport({
+        id: 'r-judge-failed', testCaseId: 'tc-1', metricsStatus: 'error' as any, passFailStatus: null as any,
+        failureStage: 'judge', error: 'judge returned no JSON', judgeError,
+      } as any),
+    };
+    const storage = makeStorage(reports);
+    const run = makeRun({ results: { 'tc-1': { reportId: 'r-judge-failed', status: 'completed' } as any } });
+
+    await retryJudgementForRun(run, storage as any);
+
+    const after = reports['r-judge-failed'] as any;
+    expect(after.failureStage).toBe('judge');
+    expect(after.error).toBe('judge returned no JSON');
+    expect(after.judgeError).toEqual(judgeError);
   });
 
   it('records a failure when the test case backing a selected result no longer exists', async () => {
