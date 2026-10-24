@@ -133,7 +133,11 @@ export function hasAgentSpans(spans: Span[]): boolean {
  * resolved per TRACE — a run's root usually carries the run id while its
  * HTTP/DB children don't, and those children must follow their root
  * (measured live: 13 of 72 window spans were identity-less children of
- * other runs' roots). A trace is dropped when any of its spans carries
+ * other runs' roots). Identity is resolved over the spans of the PAGE being
+ * filtered: a root that lands on another page cannot vouch against children
+ * on this one (best-effort, like the window itself; the run-report callers
+ * fetch one 1000-span page, and `total` is the backend count minus the spans
+ * dropped from this page). A trace is dropped when any of its spans carries
  * `agent_health.run.id` and none of those values is a requested run id;
  * a span without a traceId is judged on its own attributes. Nothing else is
  * negative evidence: traces without the attribute are kept whole (Strategy C
@@ -287,16 +291,25 @@ export async function queryTracesPreciseFirst(
     }
     const exact = await runDirect(query, options, true);
     if (hasAgentSpans(exact.spans)) return exact;
+    // "No agent span on this page" is only evidence when the page IS the whole
+    // exact result. A partial first page (small `size`, newest-first ordering
+    // puts the judge spans before the agent's) or a capped backend scan
+    // (`truncated`) may simply not have reached the agent's spans yet — the
+    // fuzzy window must not replace an exact result we have not finished
+    // reading; the caller pages on / sees the partial-result warning instead.
+    if (exact.hasMore || exact.truncated) return exact;
 
     const fallback = await runWindow(query, options, true);
     if (exact.spans.length === 0) return fallback;
     if (fallback.spans.length === 0) return exact; // only our own eval spans exist — say how they were found
     const seen = new Set(exact.spans.map((s) => s.spanId));
     const windowOnly = fallback.spans.filter((s) => !seen.has(s.spanId));
+    // This page may exceed `size` by the (few) eval spans put in front of it;
+    // the cursor continues the window phase, whose next pages carry no prefix.
     return {
       ...fallback,
       spans: [...exact.spans, ...windowOnly],
-      total: fallback.total + exact.spans.length,
+      total: fallback.total - (fallback.spans.length - windowOnly.length) + exact.spans.length,
     };
   }
 
