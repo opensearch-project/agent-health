@@ -416,6 +416,90 @@ Debug logging can also be toggled at runtime via the Settings page "Verbose Logg
 | `AGENT_HEALTH_EVAL_ROOTS` | Path-delimiter-separated directories a relative code-SDK `sourceFile` is resolved against (see [`evalRoots`](#where-the-server-looks-for-eval-source-files-evalroots)) | server cwd |
 | `BEDROCK_MODEL_ID` | Judge model ID | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 
+## The built-in assistant (`assistant`)
+
+Highlight any text in the web UI (a judge rationale, a trace row, a test-case
+output, a compare cell) and click **Ask**: the answer streams in a popover next
+to the selection; "Open in panel" continues the thread in a docked panel that
+also lists earlier threads. Nothing to install: the assistant is part of Agent
+Health — it runs pi's agent loop **in-process** through the pi SDK (the
+`@earendil-works/pi-coding-agent` optional dependency that `npm install` brings
+in; the pi CLI is not needed) with a fixed list of **read-only** tools over this
+server's own API (`get_report`, `get_evaluation_run`, `get_test_case`,
+`get_benchmark`, `query_spans`). It has no shell, no file access and no MCP
+servers.
+
+**Credentials.** The assistant uses whatever model pi's registry can reach with
+the credentials the server already has: with AWS credentials for Bedrock
+(`AWS_PROFILE` / keys — the same ones the LLM judge needs) it works out of the
+box and picks the newest credentialed Claude. A `~/.pi/agent/` setup is honoured
+when present but not required. Without any credentialed model the first
+question answers with a clear error. Bedrock calls sign with the profile's
+**current** keys: a rotated `~/.aws/credentials` is picked up within about a
+minute without a restart, on open threads too (the same refreshing provider as
+the rest of the server). A pinned `model` that is not in the credentialed
+registry is an error on the first question, never a silent fallback to another
+model; `provider/id` pins match that provider only.
+
+**Threads are pi sessions, stored on this server — shared by everyone using
+it.** Each thread is a standard pi session file (pi JSONL) under
+`.agent-health/ask-sessions/` on **this** server — not in the shared storage
+cluster, and not in `~/.pi/agent/sessions/` (so they don't appear in your pi
+sidebar). The panel's history is therefore per server; another laptop or server
+has its own list. A follow-up re-opens the file, so threads survive a restart.
+History is **not per user**: like the rest of the REST API there is no
+authentication, so every client of a team server can list, read and continue
+every thread, including the questions typed and the text highlighted. Treat the
+directory like the rest of the server's data — put a shared server behind your
+deployment's authentication, or run the assistant on a personal server. There
+is no automatic retention: delete files from the directory to prune history
+(each file is one thread; the panel's list reflects the directory on the next
+refresh).
+
+```ts
+export default {
+  assistant: {
+    enabled: true,                                   // false: no chip, no panel, /api/ask → 404
+    model: 'us.anthropic.claude-sonnet-4-6',         // pin the LLM (bare or provider-qualified id); default: newest credentialed Claude
+    sessionsDir: '.agent-health/ask-sessions',       // pi session files; relative to the server cwd
+    maxConcurrent: 4,                                // questions answered at once; extra requests get 429
+    toolTimeoutMs: 30_000,                           // one tool lookup against this server's API
+    turnTimeoutMs: 240_000,                          // one whole answer (model calls + lookups); then it is cut off with an error
+    maxToolCalls: 30,                                // lookups one answer may make before it is cut off
+  },
+};
+```
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AH_ASK_MODEL_ID` | Pin the assistant's LLM (overrides `assistant.model`) | newest credentialed Claude |
+| `AH_ASK_SESSIONS_DIR` | Directory for the pi session files (overrides `assistant.sessionsDir`) | `.agent-health/ask-sessions` |
+| `AH_ASK_TOOL_TIMEOUT_MS` | Deadline for one tool lookup (overrides `assistant.toolTimeoutMs`) | `30000` |
+| `AH_ASK_TURN_TIMEOUT_MS` | Wall-clock budget for one answer (overrides `assistant.turnTimeoutMs`) | `240000` |
+| `AH_ASK_MAX_TOOL_CALLS` | Most lookups per answer (overrides `assistant.maxToolCalls`) | `30` |
+
+Closing the popover / panel or clicking **Stop** aborts the turn on the server,
+including a lookup that is still waiting on the API; a turn that exhausts its
+budget ends with an error that says so, and a model call that fails mid-thread
+is reported as an error on that turn (never as a re-run of the previous answer).
+An abort is cooperative (pi waits for the provider / lookup to honour it); if a
+cancelled turn has not stopped after 15 s (`AH_ASK_ABORT_GRACE_MS`) its
+concurrency slot is reclaimed anyway, but the thread stays locked ("still
+answering") until that turn really settles — a second writer is never opened on
+a thread's file. `maxToolCalls` is enforced before a lookup is dispatched: when
+one model response asks for more lookups than the budget has left, the extra
+calls are refused with an error the model can read, and a response that asks for
+lookups once the budget is spent ends the turn.
+
+`/api/ask*` sits behind the same (absent) authentication as the rest of the
+REST API. Beyond what the API already exposes it persists the questions and
+highlights of every thread (see above), and every question is an LLM call, so it
+is rate-limited per client address (20 questions, 60 prepares and 120 history
+reads per minute; behind a reverse proxy without `trust proxy` all users share
+the proxy's address and therefore one bucket) and capped by `maxConcurrent`. Put
+the server behind your deployment's authentication like the rest of Agent
+Health, or set `assistant.enabled: false`.
+
 ## Where the server looks for eval source files (`evalRoots`)
 
 Code-SDK test cases imported from an `.eval.js` / `.eval.ts` / `.eval.mjs`

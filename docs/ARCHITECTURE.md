@@ -382,92 +382,51 @@ The Claude Code judge is an alternative evaluation provider that spawns the `cla
 - Inherits `AWS_PROFILE` and `AWS_REGION` from process environment
 - 3-minute timeout per evaluation
 
-## AI Assistant
+## AI Assistant ("highlight & ask")
 
-The AI Assistant provides conversational help powered by Claude Code CLI (with Bedrock/LiteLLM fallback). Two UI interfaces share one backend.
+The assistant is part of Agent Health itself: pi's agent loop runs **in-process**
+(pi SDK `createAgentSession`, the same pattern as the agent trace judge) with a
+fixed, code-enforced list of **read-only** tools over this server's own API —
+`get_report`, `get_evaluation_run`, `get_test_case`, `get_benchmark`,
+`query_spans` (`ASK_TOOLS` in `server/services/ask/askService.ts`, pinned by a
+unit test). No bash, no file access, no MCP passthrough, no CLI spawn.
 
-### Architecture
+### Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        Frontend (React)                                  │
-│                                                                         │
-│  ┌───────────────────┐    ┌──────────────────────┐                     │
-│  │  AssistantModal    │    │   AssistantChat       │                    │
-│  │  (floating "?")    │    │   (/assistant route)  │                    │
-│  └────────┬──────────┘    └──────────┬───────────┘                     │
-│           │                          │                                  │
-│           └──────────┬───────────────┘                                  │
-│                      ▼                                                  │
-│           ┌──────────────────┐                                         │
-│           │ AssistantProvider │                                         │
-│           │ (runtime context) │                                         │
-│           └────────┬─────────┘                                         │
-│                    ▼                                                    │
-│           ┌──────────────────┐                                         │
-│           │useAssistantRuntime│                                        │
-│           │ (ChatModelAdapter)│                                        │
-│           └────────┬─────────┘                                         │
-│                    ▼                                                    │
-│           ┌──────────────────┐                                         │
-│           │  assistantApi.ts  │  ← ReadableStream SSE consumption      │
-│           └────────┬─────────┘                                         │
-└────────────────────┼───────────────────────────────────────────────────┘
-                     │ POST /api/assistant/chat (SSE)
-                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Backend (Express)                                │
-│                                                                        │
-│  ┌──────────────────┐    ┌──────────────────────────┐                 │
-│  │ assistant.ts      │───▶│ assistantService.ts       │                │
-│  │ (SSE route)       │    │ (session mgmt + streaming)│                │
-│  └──────────────────┘    └────────────┬─────────────┘                 │
-│                                       │                                │
-│                          ┌────────────┼────────────┐                  │
-│                          ▼            ▼            ▼                   │
-│                    ┌──────────┐ ┌──────────┐ ┌──────────┐            │
-│                    │claude CLI│ │ Bedrock  │ │ LiteLLM  │            │
-│                    │(primary) │ │(fallback)│ │(fallback)│            │
-│                    └──────────┘ └──────────┘ └──────────┘            │
-└────────────────────────────────────────────────────────────────────────┘
+highlight text on any page → "Ask" chip → popover anchored to the selection
+        │  POST /api/ask/prepare   (page route → ids → storage snapshot, pi session created)
+        │  POST /api/ask           (SSE: meta → delta*/tool* → done|error)
+        └─ "Open in panel" → docked, resizable panel: context chips, follow-ups,
+           sessions list ("This page" / "All")
 ```
 
-### Streaming Pipeline
+- `components/ask/AskSurface.tsx` mounts the chip, popover and panel on every page
+  (Layout). `AskPopover`, `AskPanel`, `AskNudge`, `askState.ts` (selection
+  watcher, thread state, persisted panel width, open-panel event bus).
+- `server/services/ask/askContext.ts` — route → ids (`deriveAskRefs`), compact
+  storage snapshot (`buildAskSnapshot`: report incl. trajectory, run with per-case
+  verdicts, compare cross-tab + deterministic regressions, test case, benchmark),
+  PATH-routed links (never `/#/`), prompt assembly.
+- `server/services/ask/askService.ts` — pi SDK wiring, `prepareAsk()` (snapshot +
+  session built while the user types), `streamAsk()`.
 
-The end-to-end streaming pipeline converts Claude CLI NDJSON output to real-time UI updates:
+### Sessions are pi sessions
 
-1. **Claude CLI** outputs NDJSON lines: `{"type":"assistant","subtype":"text","content":"Hello"}`
-2. **assistantService.ts** parses NDJSON → calls `onDelta(content)` callback
-3. **assistant.ts route** converts to SSE: `data: {"type":"delta","content":"Hello"}\n\n`
-4. **assistantApi.ts** reads SSE via `ReadableStream` → buffers on `\n\n` → calls `onChunk(content)`
-5. **ChatModelAdapter** (in `useAssistantRuntime.ts`) accumulates text → yields `{ content: [{ type: "text", text }] }`
-6. **assistant-ui Thread** renders incrementally with auto-scroll and typing indicator
+Every thread is a pi session persisted by pi's own `SessionManager` in pi's JSONL
+format, in a **dedicated** directory — `<cwd>/.agent-health/ask-sessions/`
+(`AH_ASK_SESSIONS_DIR`), not `~/.pi/agent/sessions/` — so they don't appear in the
+user's pi sidebar. Agent Health metadata rides along as pi `custom` entries
+(`agent-health.ask` = page + selections, `agent-health.ask.turn` = question,
+answer, timings, tool calls); they never enter the LLM context. A follow-up
+re-opens the file (`SessionManager.open`) and pi rebuilds the model context, so
+threads survive a server restart. `server/services/ask/askSessionStore.ts`.
 
-### Session Management
+### API
 
-- In-memory `Map<sessionId, Session>` with 30-minute TTL
-- Periodic cleanup every 5 minutes (timer uses `unref()` to not block process exit)
-- Sessions persist across page navigation within the same browser session
-
-### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/assistant/chat` | POST | Stream assistant response (SSE) |
-| `/api/assistant/session/:sessionId` | DELETE | Clear session history |
-| `/api/assistant/health` | GET | Check Claude CLI availability |
-
-### UI Components
-
-| Component | Location | Library Primitive |
-|-----------|----------|-------------------|
-| `AssistantModal` | `components/assistant-ui/AssistantModal.tsx` | `AssistantModalPrimitive` |
-| `AssistantChat` | `components/assistant-ui/AssistantChat.tsx` | `ThreadPrimitive` |
-| `AssistantProvider` | `components/assistant-ui/AssistantProvider.tsx` | `AssistantRuntimeProvider` |
-
-- **AssistantModal**: Floating "?" button fixed bottom-right, opens 500x400 popup. Mobile-responsive (full viewport on small screens).
-- **AssistantChat**: Full-page chat at `/assistant` route with welcome screen and suggested prompts.
-- **AssistantProvider**: Mounted once in `Layout.tsx`, provides shared runtime context to both interfaces.
+- `POST /api/ask/prepare` `{ pageContext, selections? }` → `{ sessionId, refs, loaded, model }`
+- `POST /api/ask` `{ question, selections?, pageContext, sessionId? }` → SSE
+- `GET /api/ask/sessions[?route=]`, `GET /api/ask/sessions/:id`
 
 ## Scoring read model: `ScoringSnapshot` and "legacy scoring"
 
