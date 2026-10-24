@@ -64,7 +64,7 @@ test.describe('Legacy benchmark-embedded run — Retry judgement works without t
 
     // Reports: 2 passed + 1 judge-failed (metricsStatus 'error', no verdict).
     const seedReport = async (tcId: string, idx: number, verdict: 'passed' | null) => {
-      const id = `run-${stamp - 50000 + idx}-e2elegacy${idx}`;
+      const id = `run-${stamp - 50000 + idx}-e2elegacy${idx}${Math.random().toString(36).slice(2, 6)}`;
       const res = await request.post('/api/storage/runs', {
         data: {
           id, timestamp: new Date().toISOString(),
@@ -82,16 +82,19 @@ test.describe('Legacy benchmark-embedded run — Retry judgement works without t
       testData.run(id);
       return id;
     };
-    const reportIds = [await seedReport(testCaseIds[0], 0, 'passed'), await seedReport(testCaseIds[1], 1, 'passed'), await seedReport(testCaseIds[2], 2, null)];
+    // One report set PER RUN (real data never shares report docs between runs).
+    const seedRunReports = async () => [await seedReport(testCaseIds[0], 0, 'passed'), await seedReport(testCaseIds[1], 1, 'passed'), await seedReport(testCaseIds[2], 2, null)];
+    const reportIdsA = await seedRunReports();
+    const reportIds = await seedRunReports(); // run B — the run the inspector flow below retries
 
-    const legacyRun = (id: string, name: string, offsetMs: number) => ({
+    const legacyRun = (id: string, name: string, offsetMs: number, runReportIds: string[]) => ({
       id, name, description: 'legacy embedded run (classic/CLI path)',
       createdAt: new Date(stamp - offsetMs).toISOString(), completedAt: new Date(stamp - offsetMs + 228032).toISOString(),
       status: 'completed', agentKey: UNCONFIGURED_AGENT, modelId: 'prod-agent',
       judgeModelId: 'demo-model', judgeProvider: 'bedrock', evaluatorId, concurrency: 2, benchmarkVersion: 1,
       testCaseSnapshots: testCaseIds.map((tcId, k) => ({ id: tcId, version: 1, name: names[k] })),
       // Classic runs persisted NO passFailStatus mirror on results[tc].
-      results: Object.fromEntries(testCaseIds.map((tcId, k) => [tcId, { reportId: reportIds[k], status: 'completed', performanceMetrics: { judgeDurationMs: 5600, judgeAttempts: 1, durationMs: 20944 + k * 1000, agentDurationMs: 15301 } }])),
+      results: Object.fromEntries(testCaseIds.map((tcId, k) => [tcId, { reportId: runReportIds[k], status: 'completed', performanceMetrics: { judgeDurationMs: 5600, judgeAttempts: 1, durationMs: 20944 + k * 1000, agentDurationMs: 15301 } }])),
       stats: { total: 3, pending: 0, passed: 2, failed: 0, errored: 1 },
       performanceMetrics: { minTestCaseDurationMs: 20944, maxTestCaseDurationMs: 22944, avgTestCaseDurationMs: 21944, durationMs: 228032, concurrency: 2 },
     });
@@ -100,7 +103,7 @@ test.describe('Legacy benchmark-embedded run — Retry judgement works without t
     const bmRes = await request.post('/api/storage/benchmarks', {
       data: {
         name: `e2e-legacy-benchmark-${stamp}`, description: 'Created by Playwright. Safe to delete.', testCaseIds,
-        runs: [legacyRun(runA, 'legacy · BEFORE', 7200000), legacyRun(runB, 'legacy · AFTER', 3600000)],
+        runs: [legacyRun(runA, 'legacy · BEFORE', 7200000, reportIdsA), legacyRun(runB, 'legacy · AFTER', 3600000, reportIds)],
       },
     });
     test.skip(!bmRes.ok(), 'Could not seed benchmark');
@@ -148,10 +151,11 @@ test.describe('Legacy benchmark-embedded run — Retry judgement works without t
     const rejudged = await (await request.get(`/api/storage/runs/${reportIds[2]}`)).json();
     expect(rejudged.passFailStatus).toBe('passed');
     expect(rejudged.judgementRetryCount).toBe(1);
-    // The sibling run of the same benchmark is untouched.
+    // The sibling run of the same benchmark is untouched — its own judge-failed report still has no verdict.
     const sibling = (persistedBm.benchmark ?? persistedBm).runs.find((r: any) => r.id === runA);
     expect(sibling.lastJudgementRetry).toBeUndefined();
     expect(sibling.stats).toMatchObject({ passed: 2, errored: 1 });
+    expect((await (await request.get(`/api/storage/runs/${reportIdsA[2]}`)).json()).passFailStatus).toBeFalsy();
 
     // The page refreshed: the formerly errored case now shows PASSED; header 3 ✓.
     await expect(page.locator('[data-testid="test-case-row"]').filter({ hasText: 'PASSED' })).toHaveCount(3, { timeout: 20000 });
@@ -176,5 +180,29 @@ test.describe('Legacy benchmark-embedded run — Retry judgement works without t
     await expect(page.locator('[data-testid="run-config-submit-btn"]')).toBeEnabled();
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(runDialog).not.toBeVisible();
+
+    // ── Evaluation Runs list: the legacy row's kebab offers Retry judgement too, and the dialog carries the benchmarkId hint.
+    await page.goto('/evaluations/runs');
+    await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
+    await page.getByPlaceholder('Search runs...').fill('legacy · BEFORE');
+    await expect(page.getByText('legacy · BEFORE')).toBeVisible({ timeout: 20000 });
+    const preflightBodies: any[] = [];
+    page.on('request', req => { if (req.method() === 'POST' && req.url().includes(`/evaluation-runs/${runA}/retry-judgement/preflight`)) preflightBodies.push(req.postDataJSON()); });
+    await page.locator(`[data-testid="run-actions-menu-trigger-${runA}"]`).click();
+    const rowItem = page.locator(`[data-testid="run-action-retry-judgement-${runA}"]`);
+    // The list only has the run doc: classic results carry no passFailStatus
+    // mirror, so the label's count is the documented over-count (3); the
+    // dialog's server pre-flight below is the truth (1).
+    await expect(rowItem).toContainText('Retry judgement (3)');
+    await expect(rowItem).not.toHaveAttribute('aria-disabled', 'true');
+    await rowItem.click();
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="retry-judgement-count"]')).toHaveText('1', { timeout: 10000 });
+    // The pre-flight for the SEEDED selection (the run's own evaluator) carries the hint.
+    expect(preflightBodies.length).toBeGreaterThan(0);
+    expect(preflightBodies[preflightBodies.length - 1]).toMatchObject({ scope: 'errored', evaluatorId, benchmarkId });
+    expect(preflightBodies.every(b => b.benchmarkId === benchmarkId)).toBe(true);
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible();
   });
 });

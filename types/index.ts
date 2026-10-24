@@ -2037,7 +2037,10 @@ export interface EvaluationRun {
  * is holding can be either shape regardless of which route loaded it —
  * `docType`, not the route/URL a component happened to load from, is the
  * only reliable signal for "does this run support EvaluationRun-only
- * capabilities (rerun, provenance, retry-judgement, ...)".
+ * capabilities (the provenance-tracked rerun endpoint, `rerunOf`, rename,
+ * ...)". Retry judgement is NOT such a capability: it needs only the stored
+ * reports + an evaluator, so it works for both shapes (the route takes a
+ * `benchmarkId` hint to find a legacy embedded run).
  *
  * Use this instead of inline `(run as any).docType === 'evaluation-run'`
  * checks or route-derived `mode` flags for anything that depends on the
