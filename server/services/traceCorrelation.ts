@@ -206,9 +206,24 @@ function decodePhaseCursor(cursor?: string): { phase: Phase; cursor: string } | 
   return null;
 }
 
+/**
+ * The exact phase: the `agents[]` window clauses are stripped (they are the
+ * fuzzy Strategy C), but their time bounds are kept as an ADVISORY scan hint —
+ * every exact correlator on the request belongs to the run(s) those windows
+ * describe, so a scanning backend (CloudWatch Logs) may narrow its scan to
+ * them instead of its whole lookback. Indexed backends ignore the hint.
+ */
 function directOptions(options: TracesQueryOptions): TracesQueryOptions {
-  const { agents: _agents, ...rest } = options;
-  return rest;
+  const { agents, ...rest } = options;
+  const windows = (agents ?? []).filter((a) => Number.isFinite(a.startedAt) && Number.isFinite(a.endedAt));
+  if (windows.length === 0 || rest.scanWindow) return rest;
+  return {
+    ...rest,
+    scanWindow: {
+      startedAt: Math.min(...windows.map((a) => a.startedAt)),
+      endedAt: Math.max(...windows.map((a) => a.endedAt)),
+    },
+  };
 }
 
 function windowOptions(options: TracesQueryOptions): TracesQueryOptions {

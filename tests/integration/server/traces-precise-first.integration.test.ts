@@ -206,6 +206,41 @@ describe('precise-first trace correlation (integration, file backend)', () => {
     expect(res.body.correlation).toEqual({ strategy: 'window', windowFiltered: 3 });
   });
 
+  it('a real-shaped single trace (eval root → agent subtree with identity-less HTTP/DB leaves → judge span) comes back whole and exact, with the concurrent neighbours excluded', async () => {
+    // Run G, as the evaluation runner really writes it: the eval `test_case` span is
+    // the trace root; the agent adopted it via TRACEPARENT; the judge call follows.
+    const TRACE_G = 'gggg7777gggg7777gggg7777gggg7777'.replace(/g/g, '9');
+    const RUN_G = 'run-g-real-shape';
+    await request(app).post('/v1/traces').send({
+      resourceSpans: [
+        {
+          resource: { attributes: [{ key: 'service.name', value: { stringValue: 'agent-health' } }] },
+          scopeSpans: [{ scope: { name: 'agent-health' }, spans: [
+            { traceId: TRACE_G, spanId: '9900000000000001', name: 'test_case', kind: 1, startTimeUnixNano: NS(T0 + 500), endTimeUnixNano: NS(T0 + 40_000),
+              attributes: [{ key: 'gen_ai.operation.name', value: { stringValue: 'evaluation' } }, { key: 'agent_health.run.id', value: { stringValue: RUN_G } }], status: { code: 1 } },
+            { traceId: TRACE_G, spanId: '9900000000000007', parentSpanId: '9900000000000001', name: 'chat', kind: 3, startTimeUnixNano: NS(T0 + 30_000), endTimeUnixNano: NS(T0 + 35_000),
+              attributes: [{ key: 'gen_ai.operation.name', value: { stringValue: 'evaluation' } }, { key: 'agent_health.run.id', value: { stringValue: RUN_G } }], status: { code: 1 } },
+          ] }],
+        },
+        otlpPayload([
+          { traceId: TRACE_G, spanId: '9900000000000002', parentSpanId: '9900000000000001', name: 'POST /invoke', startMs: T0 + 600, attrs: { 'agent_health.run.id': RUN_G } },
+          { traceId: TRACE_G, spanId: '9900000000000003', parentSpanId: '9900000000000002', name: 'chat', startMs: T0 + 700, attrs: { 'agent_health.run.id': RUN_G } },
+          { traceId: TRACE_G, spanId: '9900000000000004', parentSpanId: '9900000000000002', name: 'execute_tool search', startMs: T0 + 800, attrs: { 'agent_health.run.id': RUN_G } },
+          { traceId: TRACE_G, spanId: '9900000000000005', parentSpanId: '9900000000000004', name: 'GET /search', startMs: T0 + 810 },
+          { traceId: TRACE_G, spanId: '9900000000000006', parentSpanId: '9900000000000004', name: 'opensearch.query', startMs: T0 + 820, attrs: { 'db.system': 'opensearch' } },
+        ]).resourceSpans[0],
+      ],
+    }).expect(200);
+
+    const res = await request(app).post('/api/traces')
+      .send({ traceId: TRACE_G, runIds: [RUN_G], agents: window, size: 1000 })
+      .expect(200);
+    expect(res.body.spans.map((s: any) => s.spanId).sort()).toEqual([1, 2, 3, 4, 5, 6, 7].map((n) => `990000000000000${n}`));
+    expect(roots(res.body.spans)).toHaveLength(1);
+    expect(res.body.spans.some((s: any) => s.traceId !== TRACE_G)).toBe(false); // runs A/B/C/D in the same window: excluded
+    expect(res.body.correlation).toEqual({ strategy: 'traceId', windowFiltered: 0 });
+  });
+
   it('an exact query with no window hint behaves as before (single query, labelled)', async () => {
     const res = await request(app).post('/api/traces').send({ traceId: TRACE_B }).expect(200);
     expect(res.body.spans).toHaveLength(3);

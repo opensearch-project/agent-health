@@ -410,6 +410,20 @@ it as a **fallback, not a peer** (precise-first; see
    and the Traces tab captions it ("Matched by trace id" / "Matched by
    service-name window — N spans from other runs filtered").
 
+The precise-first layer sits in the `/api/traces` route ABOVE the sealed
+`IObservabilityModule`, so every backend (OpenSearch, CloudWatch, file,
+composite) gets identical semantics from one implementation; backends keep
+answering the plain union query they are given. The exact phase strips
+`agents[]` from the backend query but hands their time bounds back as the
+advisory `TracesQueryOptions.scanWindow` hint, so a scanning backend
+(CloudWatch Logs) still narrows its scan to the run's window instead of its
+whole lookback — indexed backends ignore the hint. `/api/metrics`
+(`server/services/metricsService.ts`) attributes spans to run keys for the
+same reports and must follow the same rule — exact ids first, window only as
+a per-key fallback, `agent_health.run.id` as the only negative evidence,
+resolved per trace — so the Traces tab and the Cost/Tokens cells never
+disagree about which spans belong to a run.
+
 Why: the clauses used to be OR'd into one `bool.should`, so a run that
 correlated perfectly by trace id STILL had its concurrent neighbours' trees
 unioned in — a benchmark at concurrency 3–5 rendered three root spans / 60+
