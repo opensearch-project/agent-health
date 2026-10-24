@@ -27,19 +27,19 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { getEvaluationRun, updateEvaluationRun, cancelEvaluationRun, deleteEvaluationRun } from '@/services/client';
-import { cancelBenchmarkRun } from '@/services/client/benchmarkApi';
+import { cancelBenchmarkRun, executeBenchmarkRun } from '@/services/client/benchmarkApi';
 import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, EvaluationReport, isEvaluationRun } from '@/types';
 import { AgentFingerprintChip, AgentConfigChangedBadge } from './AgentFingerprintChip';
 import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel, getErrorStage } from './ResultStatus';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
-import { getRunActionVisibility, isRejudgeableResult, isEvaluationRun as isEvaluationRunDoc } from '@/lib/runActions';
+import { getRunActionVisibility, isRejudgeableResult } from '@/lib/runActions';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
 import { InlineRenameField } from './InlineRenameField';
 import { Breadcrumbs } from './Breadcrumbs';
 import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
-import { RunConfigDialog } from './RunConfigDialog';
+import { RunConfigDialog, valuesFromRun, type RunConfigValues } from './RunConfigDialog';
 import { RetryJudgementConfirmDialog } from './RetryJudgementConfirmDialog';
 import { RetryJudgementJobPill } from './RetryJudgementJobs';
 import { useOnRetryJudgementFinished } from '@/hooks/useRetryJudgementJob';
@@ -60,6 +60,17 @@ interface TestCaseResult {
 /** Rows revealed per infinite-scroll page in the left test-case list. */
 const ROWS_PER_PAGE = 100;
 
+
+/**
+ * Seed the create-mode run dialog from a legacy benchmark-embedded run for
+ * Re-run: the same fields rerun mode prefills from an EvaluationRun
+ * (`valuesFromRun`), minus the benchmark source swap (the run's benchmark is
+ * the fixed source here). Exported for unit tests.
+ */
+export function legacyRerunValues(run: BenchmarkRun): Partial<RunConfigValues> {
+  const { benchmarkId: _benchmarkId, ...values } = valuesFromRun(run as unknown as EvaluationRun);
+  return values;
+}
 
 export const RunInspectorPage: React.FC = () => {
   // Either route shape resolves into one of two modes. `benchmarkId` is
@@ -345,6 +356,26 @@ export const RunInspectorPage: React.FC = () => {
     await loadData();
   };
 
+  // Re-run of a LEGACY benchmark-embedded run: no rerun endpoint exists for
+  // it, so start a NEW run on the benchmark with the dialog's values (same
+  // call as the Runs tab's Add Run) and follow it to its inspector as soon as
+  // the server reports it started. The stream keeps running server-side
+  // after this page unmounts (durable run; the HTTP stream is an observer).
+  const handleLegacyRerun = async (values: RunConfigValues) => {
+    if (!benchmarkId) return;
+    setRerunDialogOpen(false);
+    let navigated = false;
+    try {
+      await executeBenchmarkRun(benchmarkId, values, () => {}, started => {
+        navigated = true;
+        navigate(`/evaluations/benchmarks/${benchmarkId}/runs/${started.runId}/inspect`);
+      });
+    } catch (err) {
+      if (!navigated) throw err;
+      console.error('[RunInspectorPage] legacy re-run stream ended with an error:', err);
+    }
+  };
+
   // Retry judgement from the kebab opens the RetryJudgementConfirmDialog —
   // one code path (dialog → background job in the client job store), not a
   // second one.
@@ -498,8 +529,10 @@ export const RunInspectorPage: React.FC = () => {
   // case failed at the agent used to offer "Retry judgement (N)" and then
   // have the backend reject all N. Same predicate as the backend's selection
   // (`isRejudgeableResult`, lib/runActions), so judged-FAILED cases count too.
-  // Legacy benchmark-embedded runs have no retry endpoint → 0, as before.
-  const rejudgeableCount = isEvaluationRunDoc(run)
+  // Applies to legacy benchmark-embedded runs too: retry judgement only
+  // needs the stored reports + an evaluator (the endpoint finds the embedded
+  // run via the `benchmarkId` hint the dialog sends) — never the agent.
+  const rejudgeableCount = run
     ? results.filter(r => isRejudgeableResult(run.results?.[r.testCaseId], r.report)).length
     : 0;
   const totalCount = results.length;
@@ -736,16 +769,14 @@ export const RunInspectorPage: React.FC = () => {
               // was ever judged for those, so only rejudgeableErroredCount
               // (errored cases minus agent-stage errors) is retryable; see
               // services/evaluation/retryJudgement.ts.
-              const canRetryJudgement = !!evalRun && runTerminal && rejudgeableCount > 0;
+              const canRetryJudgement = runTerminal && rejudgeableCount > 0;
               const retryJudgementDisabledReason = canRetryJudgement
                 ? undefined
-                : !evalRun
-                  ? visibility.retryJudgementDisabledReason
-                  : !runTerminal
-                    ? 'Retry judgement is only available once the run has finished'
-                    : agentErrorCount > 0
-                      ? `No completed test cases to re-judge — ${agentErrorCount} case${agentErrorCount === 1 ? '' : 's'} failed at the agent request (nothing to judge); use Re-run`
-                      : 'No completed test cases to re-judge';
+                : !runTerminal
+                  ? 'Retry judgement is only available once the run has finished'
+                  : agentErrorCount > 0
+                    ? `No completed test cases to re-judge — ${agentErrorCount} case${agentErrorCount === 1 ? '' : 's'} failed at the agent request (nothing to judge); use Re-run`
+                    : 'No completed test cases to re-judge';
               return (
                 <RunActionsMenu
                   runId={runId!}
@@ -791,8 +822,17 @@ export const RunInspectorPage: React.FC = () => {
         )}
       </div>
 
-      {/* Re-run Confirm Dialog (EvaluationRun only) -- doc concern, see above. */}
-      {evalRun && (
+      {/* Re-run dialog. An EvaluationRun doc goes through the provenance-
+          tracked rerun endpoint (rerun mode). A LEGACY benchmark-embedded run
+          has no such endpoint, so the SAME dialog opens in create mode,
+          prefilled from the run (agent / evaluator / judge model /
+          concurrency / "<name> (re-run)"), and starts a new run on the
+          benchmark — exactly the Runs tab's Add Run path. The dialog is where
+          an agent that is no longer configured on this server is said out
+          loud ("… (not in config) — pick another agent to continue") instead
+          of a greyed-out item: Re-run legitimately needs an agent, so the
+          user gets the picker, not a dead end. */}
+      {evalRun ? (
         <RunConfigDialog
           mode="rerun"
           sourceRun={evalRun}
@@ -800,12 +840,23 @@ export const RunInspectorPage: React.FC = () => {
           onOpenChange={setRerunDialogOpen}
           onRerun={newRunId => navigate(`/evaluations/runs/${newRunId}`)}
         />
-      )}
+      ) : run && benchmark ? (
+        <RunConfigDialog
+          mode="create"
+          open={rerunDialogOpen}
+          onOpenChange={setRerunDialogOpen}
+          initialValues={legacyRerunValues(run)}
+          benchmark={benchmark}
+          onStart={handleLegacyRerun}
+        />
+      ) : null}
 
-      {/* Retry Judgement Confirm Dialog (EvaluationRun only) */}
-      {run && isEvaluationRun(run) && (
+      {/* Retry Judgement Confirm Dialog — any run shape; `benchmarkId` lets the
+          server find a legacy embedded run in `benchmark.runs[]`. */}
+      {run && (
         <RetryJudgementConfirmDialog
-          run={run as EvaluationRun | null}
+          run={run}
+          benchmarkId={benchmarkId}
           judgeFailedCount={rejudgeableErroredCount}
           rejudgeableCount={rejudgeableCount}
           open={retryJudgementDialogOpen}

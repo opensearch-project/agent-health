@@ -212,7 +212,10 @@ export const EvalRunsPage: React.FC = () => {
   // benchmark-embedded runs aren't supported — see renderRunRow).
   const [rerunTarget, setRerunTarget] = useState<EvaluationRun | null>(null);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
-  const [retryJudgementTarget, setRetryJudgementTarget] = useState<EvaluationRun | null>(null);
+  // The row whose Retry judgement picker is open. Legacy benchmark-embedded
+  // rows (no evaluation-run doc) are retried too — the dialog sends the
+  // row's `benchmarkId` so the server can find the run in `benchmark.runs[]`.
+  const [retryJudgementTarget, setRetryJudgementTarget] = useState<{ run: BenchmarkRun; benchmarkId: string } | null>(null);
 
   // Annotation counts: runId → { totalAnnotations, testCasesWithAnnotations, firstTestCaseId }
   const [annotationMap, setAnnotationMap] = useState<Map<string, { total: number; tcCount: number; firstTcId: string }>>(new Map());
@@ -532,7 +535,7 @@ export const EvalRunsPage: React.FC = () => {
   // finishes (useOnRetryJudgementFinished below) — the dialog may be closed
   // long before that.
   const handleRetryJudgementRow = (rr: RunRow) => {
-    setRetryJudgementTarget(rr.run as unknown as EvaluationRun);
+    setRetryJudgementTarget({ run: rr.run, benchmarkId: rr.benchmarkId });
   };
   useOnRetryJudgementFinished(() => { void loadData(true); });
 
@@ -923,7 +926,7 @@ export const EvalRunsPage: React.FC = () => {
               <RotateCcw size={13} />
             </button>
           ) : (
-            <span className="text-[10px] text-muted-foreground" title="Re-run isn't available for legacy benchmark-embedded runs">—</span>
+            <span className="text-[10px] text-muted-foreground" title="Legacy benchmark run — re-run it from its inspector page (opens the run dialog prefilled from this run)">—</span>
           )}
         </td>
         <td className="relative px-2 py-1.5 align-middle text-center w-8" onClick={e => e.stopPropagation()}>
@@ -1336,9 +1339,10 @@ export const EvalRunsPage: React.FC = () => {
 
       {/* Retry judgement picker (evaluator / judge model / scope) — shared with the run pages */}
       <RetryJudgementConfirmDialog
-        run={retryJudgementTarget}
-        judgeFailedCount={getRunActionVisibility(retryJudgementTarget).judgeFailedCount}
-        rejudgeableCount={getRunActionVisibility(retryJudgementTarget).rejudgeableCount}
+        run={retryJudgementTarget?.run ?? null}
+        benchmarkId={retryJudgementTarget?.benchmarkId}
+        judgeFailedCount={getRunActionVisibility(retryJudgementTarget?.run).judgeFailedCount}
+        rejudgeableCount={getRunActionVisibility(retryJudgementTarget?.run).rejudgeableCount}
         open={retryJudgementTarget !== null}
         onOpenChange={open => { if (!open) setRetryJudgementTarget(null); }}
         onComplete={() => { loadData(true); }}

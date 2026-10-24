@@ -1759,6 +1759,17 @@ export interface BenchmarkRun {
    * like this showed only a bare warning-triangle count with no reason.
    */
   judgeFailureSummary?: string;
+  /**
+   * Retry-judgement bookkeeping — same fields and semantics as on
+   * {@link EvaluationRun} (`lastJudgementRetry`: what the last Retry
+   * judgement was launched with, seeds the dialog's defaults;
+   * `lastRetryAttempt`: the last retry in which ≥1 case produced no
+   * judgement, `null` after a fully successful one). Written onto the
+   * embedded projection by POST /api/storage/evaluation-runs/:id/retry-judgement
+   * when the run has no first-class doc (legacy classic/CLI runs).
+   */
+  lastJudgementRetry?: EvaluationRun['lastJudgementRetry'];
+  lastRetryAttempt?: RunRetryAttemptSummary | null;
 
   // Server-side performance metrics (populated after run completes)
   performanceMetrics?: RunPerformanceMetrics;

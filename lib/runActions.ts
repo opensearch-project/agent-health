@@ -13,14 +13,21 @@
  * Action matrix (see AGENTS.md / PR description for the full writeup):
  *   - Delete: any run, any status. Always available (existing endpoint).
  *   - Cancel: only while `status === 'running'`.
- *   - Re-run: only top-level EvaluationRun docs (docType === 'evaluation-run').
- *     Legacy benchmark-embedded BenchmarkRun rows don't support the
- *     provenance-tracked rerun endpoint (pre-existing constraint — see
- *     RunConfigDialog / EvalRunsPage).
- *   - Retry judgement: only EvaluationRun docs, only when the run is
- *     terminal (not running) AND it has at least one test case whose agent
- *     execution completed (`results[*].status === 'completed'`) — i.e.
- *     there is stored agent output to re-judge. Owner requirement
+ *   - Re-run: any run. A top-level EvaluationRun doc (docType ===
+ *     'evaluation-run') goes through the provenance-tracked rerun endpoint;
+ *     a legacy benchmark-embedded BenchmarkRun has no such endpoint, so its
+ *     surfaces open the same run-config dialog in create mode, prefilled
+ *     from the run, and start a NEW run on the benchmark (see
+ *     RunInspectorPage). Either way the dialog is where "the agent is no
+ *     longer configured" is said honestly — Re-run legitimately needs a
+ *     configured agent, and the picker offers the alternatives.
+ *   - Retry judgement: any run (EvaluationRun doc OR legacy
+ *     benchmark-embedded run — the endpoint takes a `benchmarkId` hint for
+ *     the latter), only when the run is terminal (not running) AND it has at
+ *     least one test case whose agent execution completed
+ *     (`results[*].status === 'completed'`) — i.e. there is stored agent
+ *     output to re-judge. Retry judgement never needs the agent: only the
+ *     stored trajectory plus an evaluator / judge model. Owner requirement
  *     (follow-up to #468): "Retry judgement should be a retryable step all
  *     the time" — so it is NOT limited to judge-failed cases anymore; the
  *     dialog lets the user pick the scope (only judge-failed cases vs. all
@@ -46,7 +53,7 @@ export type RunLike = Pick<BenchmarkRun | EvaluationRun, 'status' | 'results'> &
  * `POST /api/storage/evaluation-runs`), as opposed to a legacy
  * benchmark-embedded BenchmarkRun (`benchmark.runs[]`). The two share a lot
  * of shape but only EvaluationRun docs carry `docType: 'evaluation-run'` and
- * support the rerun/retry-judgement endpoints.
+ * support the rerun / rename endpoints (retry judgement works for both).
  *
  * Null-tolerant wrapper over the typed predicate in `types/index.ts` (the
  * single source of truth for the docType discriminator) — kept so callers
@@ -61,9 +68,14 @@ export function isRunRunning(run: RunLike | null | undefined): boolean {
   return run?.status === 'running';
 }
 
-/** True once a run has reached any terminal state (not running/pending). */
+/**
+ * True once a run has reached any terminal state (not running/pending). A
+ * run with NO status is legacy data persisted before the field existed
+ * (`BenchmarkRun.status` doc: "undefined = legacy data, treat as completed")
+ * and is terminal too.
+ */
 export function isRunTerminal(run: RunLike | null | undefined): boolean {
-  return !!run && (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled');
+  return !!run && (run.status === undefined || run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled');
 }
 
 /**
@@ -167,11 +179,11 @@ export interface RunActionVisibility {
   canDelete: boolean;
   /** Cancel is available only while the run is actively running. */
   canCancel: boolean;
-  /** Re-run is available only for top-level EvaluationRun docs. */
+  /** Re-run is available for any run (see the module comment for how legacy runs re-run). */
   canRerun: boolean;
   /** Reason to show (e.g. as a disabled-item tooltip) when canRerun is false. */
   rerunDisabledReason?: string;
-  /** Retry judgement: EvaluationRun, terminal, with >0 completed (re-judgeable) cases. */
+  /** Retry judgement: terminal run with >0 completed (re-judgeable) cases — any run shape. */
   canRetryJudgement: boolean;
   /** Reason to show when canRetryJudgement is false. */
   retryJudgementDisabledReason?: string;
@@ -187,8 +199,6 @@ export interface RunActionVisibility {
   retryJudgementCount: number;
 }
 
-const RERUN_NOT_SUPPORTED_REASON = "Re-run isn't available for legacy benchmark-embedded runs";
-const RETRY_JUDGEMENT_NOT_SUPPORTED_REASON = "Retry judgement isn't available for legacy benchmark-embedded runs";
 const RETRY_JUDGEMENT_STILL_RUNNING_REASON = 'Retry judgement is only available once the run finishes';
 const RETRY_JUDGEMENT_NOTHING_TO_REJUDGE_REASON = 'No completed test cases to re-judge';
 
@@ -237,25 +247,25 @@ export function isOldEnoughForZombieCancel(createdAt: string | undefined, now: n
  * so the two never drift.
  */
 export function getRunActionVisibility(run: RunLike | null | undefined): RunActionVisibility {
-  const evalRun = isEvaluationRun(run);
   const running = isRunRunning(run);
   const terminal = isRunTerminal(run);
-  const judgeFailedCount = evalRun ? countJudgeFailed(run) : 0;
-  const rejudgeableCount = evalRun ? countRejudgeable(run) : 0;
+  // Both shapes carry `results[tc].status` (+ the runner's `passFailStatus`
+  // mirror on newer docs), so the counts apply to legacy embedded runs too.
+  const judgeFailedCount = countJudgeFailed(run);
+  const rejudgeableCount = countRejudgeable(run);
 
-  const canRetryJudgement = evalRun && terminal && rejudgeableCount > 0;
+  const canRetryJudgement = terminal && rejudgeableCount > 0;
   let retryJudgementDisabledReason: string | undefined;
   if (!canRetryJudgement) {
-    if (!evalRun) retryJudgementDisabledReason = RETRY_JUDGEMENT_NOT_SUPPORTED_REASON;
-    else if (!terminal) retryJudgementDisabledReason = RETRY_JUDGEMENT_STILL_RUNNING_REASON;
+    if (!terminal) retryJudgementDisabledReason = RETRY_JUDGEMENT_STILL_RUNNING_REASON;
     else retryJudgementDisabledReason = RETRY_JUDGEMENT_NOTHING_TO_REJUDGE_REASON;
   }
 
   return {
     canDelete: true,
     canCancel: running,
-    canRerun: evalRun,
-    rerunDisabledReason: evalRun ? undefined : RERUN_NOT_SUPPORTED_REASON,
+    canRerun: !!run,
+    rerunDisabledReason: undefined,
     canRetryJudgement,
     retryJudgementDisabledReason,
     judgeFailedCount,

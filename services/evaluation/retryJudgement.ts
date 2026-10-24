@@ -28,6 +28,7 @@
  */
 
 import type {
+  BenchmarkRun,
   EvaluationRun,
   EvaluationReport,
   Evaluator,
@@ -113,6 +114,34 @@ export const DETERMINISTIC_SCOPE_ERROR =
  * byte-identical and writes exactly `lastRetryAttempt`.
  */
 export type RetryJudgementOutcome = 'succeeded' | 'not-evaluable' | 'failed';
+
+/**
+ * The run shape retry-judgement operates on. Retry judgement only needs the
+ * STORED agent output (each `results[tc].reportId` report's trajectory) plus
+ * an evaluator / judge model — never the agent — so it applies equally to a
+ * first-class `EvaluationRun` doc and to a legacy `BenchmarkRun` embedded in
+ * `benchmark.runs[]` (the classic/CLI path, no `evaluation-run` doc; owner
+ * report: a 2-run benchmark whose agent key is no longer configured on this
+ * server could neither re-run nor retry judgement). Both shapes carry every
+ * field read here; the caller says where to persist the run-level patch via
+ * {@link RetryJudgementRunOptions.persistRun}.
+ */
+export type RetryableRun = Pick<
+  EvaluationRun,
+  'id' | 'results' | 'stats' | 'evaluatorId' | 'judgeModelId' | 'agentKey' | 'testCaseSnapshots'
+> & Pick<BenchmarkRun, 'status'>;
+
+/**
+ * Where {@link retryJudgementForRun} writes its run-level patch
+ * (`lastJudgementRetry` up front; `results` / `stats` /
+ * `judgeFailureSummary` / `lastRetryAttempt` at the end). Default: the
+ * first-class evaluation-run doc (`storage.evaluationRuns.update(run.id, …)`).
+ * For a legacy benchmark-embedded run the route passes
+ * `storage.benchmarks.updateRun(benchmarkId, run.id, …)` instead — the
+ * report-level writes are identical either way (reports are first-class docs
+ * in both worlds).
+ */
+export type PersistRunPatch = (patch: Record<string, unknown>) => Promise<unknown>;
 
 export interface RetryJudgementCaseResult {
   testCaseId: string;
@@ -663,20 +692,26 @@ export async function countRetryableCases(
  * `options.onProgress(completed, total)` lets the caller track progress
  * for that polling without waiting on the returned promise.
  */
+export interface RetryJudgementRunOptions {
+  scope?: RetryJudgementScope;
+  concurrency?: number;
+  onProgress?: (completed: number, total: number) => void;
+  /** Per-retry judge config; see {@link RetryJudgementOverrides}. */
+  overrides?: RetryJudgementOverrides;
+  /** Run-level writer; see {@link PersistRunPatch}. Defaults to the evaluation-run doc. */
+  persistRun?: PersistRunPatch;
+}
+
 export async function retryJudgementForRun(
-  run: EvaluationRun,
+  run: RetryableRun,
   storage: IStorageModule,
-  options?: {
-    scope?: RetryJudgementScope;
-    concurrency?: number;
-    onProgress?: (completed: number, total: number) => void;
-    /** Per-retry judge config; see {@link RetryJudgementOverrides}. */
-    overrides?: RetryJudgementOverrides;
-  }
+  options?: RetryJudgementRunOptions
 ): Promise<RetryJudgementSummary> {
   const scope = options?.scope ?? 'errored';
   const overrides = options?.overrides ?? {};
   const concurrency = Math.max(1, Math.min(options?.concurrency ?? MAX_RETRY_CONCURRENCY, MAX_RETRY_CONCURRENCY));
+  const persistRun: PersistRunPatch = options?.persistRun
+    ?? ((patch) => storage.evaluationRuns.update(run.id, patch as Partial<EvaluationRun>));
 
   const reportsById = await fetchReportsById(run, storage);
 
@@ -706,7 +741,7 @@ export async function retryJudgementForRun(
     judgeModelId: overrides.judgeModelId === undefined ? (run.judgeModelId || null) : (overrides.judgeModelId || null),
     at: new Date().toISOString(),
   };
-  await storage.evaluationRuns.update(run.id, { lastJudgementRetry });
+  await persistRun({ lastJudgementRetry });
 
   const results: RetryJudgementCaseResult[] = [];
   const updatedResults: Record<string, any> = { ...run.results };
@@ -773,12 +808,31 @@ export async function retryJudgementForRun(
   });
 
   const updatedRun = { ...run, results: updatedResults };
+  // The FRESH report docs: the judge-failure summary below reads them, and so
+  // does the verdict back-fill right here.
+  const freshReports = await fetchReportsById(updatedRun, storage);
+  // Back-fill the per-result verdict mirror from each report's ACTUAL
+  // verdict before recomputing stats. Runs persisted before the runner
+  // started mirroring `passFailStatus` onto `results[tc]` — every legacy
+  // benchmark-embedded run, and older evaluation-run docs — only carry
+  // `{ reportId, status: 'completed' }`, which `computeRunStats` buckets as
+  // ERRORED (no verdict). Re-judging one case of such a run used to rewrite
+  // its stats from e.g. 4 passed / 1 errored to 1 passed / 4 errored: the
+  // untouched cases' real verdicts were invisible to the run doc. Only a
+  // missing mirror is filled, only from a real verdict, and only for a case
+  // whose agent execution completed — nothing a retry did not touch changes
+  // meaning, the run doc just stops lying about it.
+  for (const [testCaseId, resultRaw] of Object.entries(updatedResults)) {
+    const result = resultRaw as RunResultLike;
+    if (!result?.reportId || result.status !== 'completed' || result.passFailStatus) continue;
+    const verdict = freshReports[result.reportId]?.passFailStatus;
+    if (verdict === 'passed' || verdict === 'failed') updatedResults[testCaseId] = { ...result, passFailStatus: verdict };
+  }
   const stats = computeRunStats(updatedRun);
   // Recompute the run-level judge-failure summary from the FRESH report docs
   // so it clears (`null`, not omitted -- storage merges updates) once the
   // salvage resolves the cases, instead of a stale banner outliving the
   // failure it described (codex_review finding on this PR).
-  const freshReports = await fetchReportsById(updatedRun, storage);
   const reasons = Object.values(updatedResults)
     .map((r: any) => (r?.reportId ? freshReports[r.reportId] : null))
     .filter(Boolean)
@@ -805,15 +859,15 @@ export async function retryJudgementForRun(
         }, {}),
       }
     : null;
-  await storage.evaluationRuns.update(run.id, {
+  await persistRun({
     results: updatedResults,
-    stats: { ...(run.stats || {}), ...stats } as any,
+    stats: { ...(run.stats || {}), ...stats },
     judgeFailureSummary,
     lastRetryAttempt,
     // The run's ORIGINAL evaluatorId / judgeModelId are NOT rewritten (#509
     // contract): what the latest retry used lives in `lastJudgementRetry`
     // (written up front) and on each report's own evaluator stamp.
-  } as any);
+  });
 
   // Deterministic order (not insertion/completion order, which varies with
   // the concurrency fan-out) so callers/tests can rely on a stable summary.
@@ -863,7 +917,7 @@ async function resolveSnapshottedTestCase(
  * cannot be known up front: `deterministic: false`, counts = the selection.
  */
 export async function preflightRetryJudgement(
-  run: EvaluationRun,
+  run: RetryableRun,
   storage: IStorageModule,
   options?: { scope?: RetryJudgementScope; overrides?: RetryJudgementOverrides }
 ): Promise<RetryJudgementPreflight> {

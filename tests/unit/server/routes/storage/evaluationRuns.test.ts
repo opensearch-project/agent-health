@@ -859,6 +859,119 @@ describe('Evaluation Runs API', () => {
       });
     });
 
+    // Owner report (#509 follow-up): a benchmark's two LEGACY embedded runs
+    // (classic/CLI path, `run-<ts>-<rand>` inside benchmark.runs[], no
+    // evaluation-run doc) could not retry judgement — the route only ever
+    // looked up the evaluation-runs collection. With a `benchmarkId` hint
+    // the route finds the embedded run and writes the run-level patch to
+    // the projection (storage.benchmarks.updateRun) instead.
+    describe('legacy benchmark-embedded runs (`benchmarkId` hint)', () => {
+      const legacyRun = {
+        id: 'run-1700000000000-legacy1', name: 'legacy', status: 'completed', agentKey: 'retired-prod-agent', modelId: 'prod-agent',
+        judgeModelId: 'demo-model', evaluatorId: 'eval-llm',
+        results: { tc1: { status: 'completed', reportId: 'r1' }, tc2: { status: 'completed', reportId: 'r2' } },
+        stats: { total: 2, passed: 1, failed: 0, errored: 1, pending: 0 },
+      };
+      const benchmark = { id: 'bench-legacy', name: 'Bench', testCaseIds: ['tc1', 'tc2'], runs: [legacyRun, { ...legacyRun, id: 'run-1700000000001-legacy2' }] };
+
+      beforeEach(() => {
+        mockEvaluationRunsGetById.mockReset();
+        mockEvaluationRunsGetById.mockResolvedValue(null); // no first-class doc for any id here
+        mockBenchmarksGetById.mockReset();
+        mockBenchmarksGetById.mockResolvedValue(benchmark);
+        mockBenchmarksUpdateRun.mockReset();
+        mockBenchmarksUpdateRun.mockResolvedValue(true);
+        mockEvaluationRunsUpdate.mockReset();
+      });
+
+      it('404s a legacy run WITHOUT the benchmarkId hint (nothing else to look in)', async () => {
+        const res = await request(app).post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement`).send({ scope: 'all' });
+        expect(res.status).toBe(404);
+        expect(mockBenchmarksGetById).not.toHaveBeenCalled();
+      });
+
+      it('202s a legacy run WITH the hint, hands the EMBEDDED run to the pipeline, and its persistRun writes to benchmarks.updateRun — never evaluationRuns.update', async () => {
+        mockRetryJudgementForRun.mockImplementationOnce(async (_run: any, _storage: any, options: any) => {
+          await options.persistRun({ lastJudgementRetry: { scope: 'all', evaluatorId: 'eval-llm', judgeModelId: 'demo-model', at: 'now' } });
+          return summary;
+        });
+        const res = await request(app)
+          .post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement`)
+          .send({ scope: 'all', benchmarkId: 'bench-legacy', judgeModelId: 'demo-model' });
+        expect(res.status).toBe(202);
+        expect(res.body).toEqual(expect.objectContaining({ jobId: legacyRun.id, status: 'running' }));
+        expect(mockBenchmarksGetById).toHaveBeenCalledWith('bench-legacy');
+        expect(mockRetryJudgementForRun).toHaveBeenCalledWith(
+          expect.objectContaining({ id: legacyRun.id, agentKey: 'retired-prod-agent' }),
+          expect.anything(),
+          expect.objectContaining({ scope: 'all', overrides: { judgeModelId: 'demo-model' }, persistRun: expect.any(Function) }),
+        );
+        const job = await pollStatus(legacyRun.id);
+        expect(job.status).toBe('completed');
+        expect(mockBenchmarksUpdateRun).toHaveBeenCalledWith('bench-legacy', legacyRun.id, expect.objectContaining({ lastJudgementRetry: expect.anything() }));
+        expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+      });
+
+      it('the hint is honoured from the query string too, and 404s when the run is not embedded in THAT benchmark', async () => {
+        mockRetryJudgementForRun.mockResolvedValueOnce(summary);
+        const ok = await request(app).post(`/api/storage/evaluation-runs/run-1700000000001-legacy2/retry-judgement?benchmarkId=bench-legacy`).send({ scope: 'all' });
+        expect(ok.status).toBe(202);
+        const wrong = await request(app).post(`/api/storage/evaluation-runs/run-not-here/retry-judgement`).send({ scope: 'all', benchmarkId: 'bench-legacy' });
+        expect(wrong.status).toBe(404);
+        mockBenchmarksGetById.mockResolvedValueOnce(null);
+        const noBench = await request(app).post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement`).send({ scope: 'all', benchmarkId: 'bench-gone' });
+        expect(noBench.status).toBe(404);
+      });
+
+      it('a first-class doc WINS over the hint (dual-written #399 runs keep writing to the evaluation-runs collection)', async () => {
+        const doc = { id: 'run-dual', docType: 'evaluation-run', status: 'completed', results: { tc1: { status: 'completed', reportId: 'r1' } } };
+        mockEvaluationRunsGetById.mockResolvedValueOnce(doc);
+        mockRetryJudgementForRun.mockImplementationOnce(async (_run: any, _storage: any, options: any) => {
+          await options.persistRun({ lastJudgementRetry: {} });
+          return summary;
+        });
+        const res = await request(app).post('/api/storage/evaluation-runs/run-dual/retry-judgement').send({ scope: 'all', benchmarkId: 'bench-legacy' });
+        expect(res.status).toBe(202);
+        await pollStatus('run-dual');
+        expect(mockBenchmarksGetById).not.toHaveBeenCalled();
+        expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith('run-dual', expect.objectContaining({ lastJudgementRetry: expect.anything() }));
+        expect(mockBenchmarksUpdateRun).not.toHaveBeenCalled();
+      });
+
+      it('the job FAILS (not silently succeeds) when the embedded run vanished before the patch landed (updateRun → false)', async () => {
+        mockBenchmarksUpdateRun.mockResolvedValue(false);
+        mockRetryJudgementForRun.mockImplementationOnce(async (_run: any, _storage: any, options: any) => {
+          await options.persistRun({ lastJudgementRetry: {} });
+          return summary;
+        });
+        const res = await request(app).post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement`).send({ scope: 'all', benchmarkId: 'bench-legacy' });
+        expect(res.status).toBe(202);
+        const job = await pollStatus(legacyRun.id);
+        expect(job.status).toBe('failed');
+        expect(job.error).toMatch(/no longer embedded in benchmark bench-legacy/);
+      });
+
+      it('still 409s a RUNNING legacy run and still validates the body (unknown evaluator → 400)', async () => {
+        mockBenchmarksGetById.mockResolvedValueOnce({ ...benchmark, runs: [{ ...legacyRun, status: 'running' }] });
+        const running = await request(app).post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement`).send({ scope: 'all', benchmarkId: 'bench-legacy' });
+        expect(running.status).toBe(409);
+        const unknown = await request(app).post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement`).send({ scope: 'all', benchmarkId: 'bench-legacy', evaluatorId: 'eval-missing' });
+        expect(unknown.status).toBe(400);
+        expect(mockRetryJudgementForRun).not.toHaveBeenCalled();
+      });
+
+      it('preflight resolves the legacy run through the same hint (and 404s without it)', async () => {
+        mockPreflightRetryJudgement.mockReset();
+        mockPreflightRetryJudgement.mockResolvedValue({ evaluatorId: 'eval-llm', evaluatorName: 'LLM', deterministic: false, scope: 'errored', total: 1, evaluable: 1, notEvaluable: 0, abstain: 0, reasons: {}, cases: [] });
+        const without = await request(app).post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement/preflight`).send({ scope: 'errored' });
+        expect(without.status).toBe(404);
+        const res = await request(app).post(`/api/storage/evaluation-runs/${legacyRun.id}/retry-judgement/preflight`).send({ scope: 'errored', benchmarkId: 'bench-legacy' });
+        expect(res.status).toBe(200);
+        expect(res.body.total).toBe(1);
+        expect(mockPreflightRetryJudgement).toHaveBeenCalledWith(expect.objectContaining({ id: legacyRun.id }), expect.anything(), { scope: 'errored', overrides: {} });
+      });
+    });
+
     describe('POST .../retry-judgement/preflight (read-only dry run for the dialog)', () => {
       const terminalRun = (id: string) => ({ id, docType: 'evaluation-run', status: 'completed', results: { tc1: { status: 'completed', reportId: 'r1' } } });
       const preflight = { evaluatorId: 'eval-stored', evaluatorName: 'Stored', deterministic: true, scope: 'all', total: 1, evaluable: 0, notEvaluable: 1, abstain: 0, reasons: { 'no gold ids on the test case (no expected.ids, no line matching the gold pattern, no explicit NONE line)': 1 }, cases: [{ testCaseId: 'tc1', evaluable: false, reason: 'no gold ids on the test case (no expected.ids, no line matching the gold pattern, no explicit NONE line)' }] };

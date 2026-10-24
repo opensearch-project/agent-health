@@ -149,23 +149,51 @@ describe('getRunActionVisibility — full matrix', () => {
     }
   });
 
-  it('re-run is true only for EvaluationRun docs, regardless of status', () => {
+  // Owner report (#509 follow-up): a benchmark whose two LEGACY embedded runs
+  // (classic/CLI path, no evaluation-run doc) had an agent key that is no
+  // longer configured could neither re-run nor retry judgement — both
+  // greyed out as "isn't available for legacy benchmark-embedded runs".
+  // Re-run opens the run dialog (which says the agent is gone and offers the
+  // picker); retry judgement never needed the agent in the first place.
+  it('re-run is available for BOTH shapes, regardless of status (legacy runs re-run via the create-mode run dialog)', () => {
     for (const status of ['running', 'completed', 'failed', 'cancelled']) {
       expect(getRunActionVisibility(evalRun({ status })).canRerun).toBe(true);
       const bmVisibility = getRunActionVisibility(benchmarkRun({ status }));
-      expect(bmVisibility.canRerun).toBe(false);
-      expect(bmVisibility.rerunDisabledReason).toMatch(/legacy benchmark-embedded/i);
+      expect(bmVisibility.canRerun).toBe(true);
+      expect(bmVisibility.rerunDisabledReason).toBeUndefined();
     }
+    expect(getRunActionVisibility(null).canRerun).toBe(false);
   });
 
-  it('retry judgement is false for benchmark-embedded runs regardless of status/results', () => {
-    const run = benchmarkRun({
-      status: 'completed',
-      results: { tc1: { status: 'completed', reportId: 'r1' } },
-    });
-    const visibility = getRunActionVisibility(run);
-    expect(visibility.canRetryJudgement).toBe(false);
-    expect(visibility.retryJudgementDisabledReason).toMatch(/legacy benchmark-embedded/i);
+  it('retry judgement is ENABLED for a terminal legacy benchmark-embedded run with completed cases — same counts as an EvaluationRun', () => {
+    const results = {
+      tc1: { status: 'completed', reportId: 'r1' },                          // classic shape: no passFailStatus mirror → judge-failed bucket
+      tc2: { status: 'completed', passFailStatus: 'passed', reportId: 'r2' },
+    };
+    const legacy = getRunActionVisibility(benchmarkRun({ status: 'completed', results }));
+    const modern = getRunActionVisibility(evalRun({ status: 'completed', results }));
+    expect(legacy.canRetryJudgement).toBe(true);
+    expect(legacy.retryJudgementDisabledReason).toBeUndefined();
+    expect(legacy.judgeFailedCount).toBe(1);
+    expect(legacy.rejudgeableCount).toBe(2);
+    expect(legacy.retryJudgementCount).toBe(1);
+    expect(legacy).toEqual(modern);
+  });
+
+  it('retry judgement on a legacy run still obeys the running / nothing-to-re-judge gates', () => {
+    const running = getRunActionVisibility(benchmarkRun({ status: 'running', results: { tc1: { status: 'completed', reportId: 'r1' } } }));
+    expect(running.canRetryJudgement).toBe(false);
+    expect(running.retryJudgementDisabledReason).toMatch(/only available once the run finishes/i);
+    const empty = getRunActionVisibility(benchmarkRun({ status: 'completed', results: { tc1: { status: 'failed', reportId: 'r1' } } }));
+    expect(empty.canRetryJudgement).toBe(false);
+    expect(empty.retryJudgementDisabledReason).toBe('No completed test cases to re-judge');
+  });
+
+  it('a legacy run with NO status (pre-status data, "treat as completed") is terminal and retryable', () => {
+    const run = benchmarkRun({ status: undefined, results: { tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' } } });
+    expect(isRunTerminal(run)).toBe(true);
+    expect(isRunRunning(run)).toBe(false);
+    expect(getRunActionVisibility(run).canRetryJudgement).toBe(true);
   });
 
   it('retry judgement is false while an EvaluationRun is still running, even with judge-failed cases', () => {

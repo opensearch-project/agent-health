@@ -381,6 +381,122 @@ describe('retryJudgementForRun', () => {
     expect(updateCall[1].stats).toEqual({ passed: 2, failed: 0, errored: 0, pending: 0, notRun: 0, total: 2 });
   });
 
+  // Owner report (#509 follow-up): a benchmark's LEGACY embedded runs
+  // (classic/CLI path — `run-<ts>-<rand>` inside benchmark.runs[], no
+  // evaluation-run doc) could not retry judgement at all. Retry judgement
+  // never needs the agent, only the stored reports + an evaluator, so the
+  // pipeline takes any run shape and lets the caller say where the run-level
+  // patch goes (`persistRun`) — the embedded projection, for a legacy run.
+  describe('legacy benchmark-embedded runs (persistRun + classic results shape)', () => {
+    const passedJudgment = {
+      passFailStatus: 'passed' as const,
+      metrics: { accuracy: 100, faithfulness: 100, latency_score: 100, trajectory_alignment_score: 100 },
+      llmJudgeReasoning: 'Looks good',
+      improvementStrategies: [],
+    };
+
+    /** A classic embedded BenchmarkRun: no docType, results carry ONLY { reportId, status } — no passFailStatus mirror. */
+    function makeLegacyRun() {
+      return {
+        id: 'run-1700000000000-abc123def',
+        name: 'legacy run',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        status: 'completed' as const,
+        agentKey: 'retired-prod-agent',
+        modelId: 'prod-agent',
+        judgeModelId: 'demo-model',
+        evaluatorId: 'rca-default',
+        testCaseSnapshots: [{ id: 'tc-a', version: 1, name: 'a' }, { id: 'tc-b', version: 1, name: 'b' }, { id: 'tc-c', version: 1, name: 'c' }],
+        results: {
+          'tc-a': { reportId: 'r-a', status: 'completed' as const },
+          'tc-b': { reportId: 'r-b', status: 'completed' as const },
+          'tc-c': { reportId: 'r-c', status: 'completed' as const },
+        },
+        stats: { total: 3, pending: 0, passed: 2, failed: 0, errored: 1 },
+      };
+    }
+
+    it('writes BOTH run-level patches through persistRun and never touches storage.evaluationRuns', async () => {
+      mockedCallBedrockJudge.mockResolvedValue(passedJudgment);
+      const reports: Record<string, EvaluationReport> = {
+        'r-a': makeReport({ id: 'r-a', testCaseId: 'tc-a', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
+        'r-b': makeReport({ id: 'r-b', testCaseId: 'tc-b', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
+        'r-c': makeReport({ id: 'r-c', testCaseId: 'tc-c', metricsStatus: 'error' as any }),
+      };
+      const storage = makeStorage(reports);
+      const persistRun = jest.fn(async () => true);
+
+      const summary = await retryJudgementForRun(makeLegacyRun(), storage as any, { persistRun });
+
+      expect(summary).toMatchObject({ retried: 1, succeeded: 1, failed: 0 });
+      expect(storage.evaluationRuns.update).not.toHaveBeenCalled();
+      expect(persistRun).toHaveBeenCalledTimes(2);
+      expect(persistRun.mock.calls[0][0]).toEqual({
+        lastJudgementRetry: { scope: 'errored', evaluatorId: 'rca-default', judgeModelId: 'demo-model', at: expect.any(String) },
+      });
+      const final = persistRun.mock.calls[1][0] as any;
+      expect(final.results['tc-c']).toMatchObject({ reportId: 'r-c', status: 'completed', passFailStatus: 'passed' });
+      expect(final.lastRetryAttempt).toBeNull();
+      // The report itself was re-judged like any other.
+      expect(reports['r-c'].passFailStatus).toBe('passed');
+      expect(reports['r-c'].judgementRetryCount).toBe(1);
+    });
+
+    it('keeps the stats truthful for the cases it did NOT touch: back-fills the missing passFailStatus mirror from each report before recomputing (2 passed + 1 errored → 3 passed, not 1 passed + 2 errored)', async () => {
+      mockedCallBedrockJudge.mockResolvedValue(passedJudgment);
+      const reports: Record<string, EvaluationReport> = {
+        'r-a': makeReport({ id: 'r-a', testCaseId: 'tc-a', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
+        'r-b': makeReport({ id: 'r-b', testCaseId: 'tc-b', metricsStatus: 'ready' as any, passFailStatus: 'failed' }),
+        'r-c': makeReport({ id: 'r-c', testCaseId: 'tc-c', metricsStatus: 'error' as any }),
+      };
+      const storage = makeStorage(reports);
+      const persistRun = jest.fn(async () => true);
+
+      await retryJudgementForRun(makeLegacyRun(), storage as any, { persistRun });
+
+      const final = persistRun.mock.calls[1][0] as any;
+      expect(final.stats).toEqual({ total: 3, pending: 0, passed: 2, failed: 1, errored: 0, notRun: 0 });
+      // The mirror now reflects each report's REAL verdict — including the untouched ones.
+      expect(final.results['tc-a'].passFailStatus).toBe('passed');
+      expect(final.results['tc-b'].passFailStatus).toBe('failed');
+      expect(final.results['tc-c'].passFailStatus).toBe('passed');
+      // Untouched reports were not re-judged (one judge call for the one errored case).
+      expect(mockedCallBedrockJudge).toHaveBeenCalledTimes(1);
+      expect(reports['r-a'].judgementRetryCount).toBeUndefined();
+    });
+
+    it('does not invent a verdict for a case that still has none (judge failed again) — it stays errored', async () => {
+      mockedCallBedrockJudge.mockRejectedValue(new Error('judge 400'));
+      const reports: Record<string, EvaluationReport> = {
+        'r-a': makeReport({ id: 'r-a', testCaseId: 'tc-a', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
+        'r-b': makeReport({ id: 'r-b', testCaseId: 'tc-b', metricsStatus: 'ready' as any, passFailStatus: 'passed' }),
+        'r-c': makeReport({ id: 'r-c', testCaseId: 'tc-c', metricsStatus: 'error' as any }),
+      };
+      const storage = makeStorage(reports);
+      const persistRun = jest.fn(async () => true);
+
+      const summary = await retryJudgementForRun(makeLegacyRun(), storage as any, { persistRun });
+
+      expect(summary).toMatchObject({ retried: 1, succeeded: 0, failed: 1 });
+      const final = persistRun.mock.calls[1][0] as any;
+      expect(final.stats).toEqual({ total: 3, pending: 0, passed: 2, failed: 0, errored: 1, notRun: 0 });
+      expect(final.results['tc-c'].passFailStatus).toBeUndefined();
+      expect(final.lastRetryAttempt).toMatchObject({ retried: 1, succeeded: 0, failed: 1 });
+    });
+
+    it('defaults persistRun to storage.evaluationRuns.update(run.id, …) for a first-class doc (unchanged behaviour)', async () => {
+      mockedCallBedrockJudge.mockResolvedValue(passedJudgment);
+      const reports: Record<string, EvaluationReport> = {
+        'r-errored': makeReport({ id: 'r-errored', testCaseId: 'tc-errored', metricsStatus: 'error' as any }),
+      };
+      const storage = makeStorage(reports);
+      await retryJudgementForRun(makeRun({ results: { 'tc-errored': { reportId: 'r-errored', status: 'completed' } as any } }), storage as any);
+      const calls = (storage.evaluationRuns.update as jest.Mock).mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls.every(c => c[0] === 'eval-run-1')).toBe(true);
+    });
+  });
+
   it('a judge call that fails again leaves the (errored) report as it was and records lastRetryAttempt (judge-error) on the report and the run', async () => {
     mockedCallBedrockJudge.mockRejectedValue(new Error('Bedrock validation error'));
 

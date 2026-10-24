@@ -402,6 +402,37 @@ describe('RetryJudgementConfirmDialog — background job', () => {
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
   });
 
+  // Owner report (#509 follow-up): a LEGACY benchmark-embedded run has no
+  // evaluation-run doc, so the server needs the benchmark to find it. The
+  // dialog threads the parent's `benchmarkId` onto BOTH the pre-flight and
+  // the retry POST; the run itself is the embedded BenchmarkRun (no docType).
+  it('legacy embedded run: sends `benchmarkId` on the pre-flight and the POST, seeded from the BenchmarkRun\'s own evaluator / judge model', async () => {
+    const { docType: _d, ...legacyRun } = baseRun as any;
+    renderDialog({ run: { ...legacyRun, id: 'run-1700000000000-legacy1' }, benchmarkId: 'bench-legacy' });
+    await waitFor(() => expect(screen.getByTestId('retry-judgement-evaluator-system-factuality')).toBeTruthy());
+    expect(screen.getByTestId('select-native')).toHaveProperty('value', 'custom-1');
+    await waitFor(() => expect(preflightCalls().length).toBeGreaterThan(0));
+    expect(preflightCalls().at(-1)!.url).toBe('/api/storage/evaluation-runs/run-1700000000000-legacy1/retry-judgement/preflight');
+    expect(preflightCalls().at(-1)!.body).toEqual({ scope: 'errored', evaluatorId: 'custom-1', benchmarkId: 'bench-legacy' });
+    await waitFor(() => expect((screen.getByTestId('retry-judgement-confirm-btn') as HTMLButtonElement).disabled).toBe(false));
+
+    await act(async () => { fireEvent.click(screen.getByTestId('retry-judgement-confirm-btn')); });
+    await flush();
+    expect(postCalls()).toHaveLength(1);
+    expect(postCalls()[0].url).toBe('/api/storage/evaluation-runs/run-1700000000000-legacy1/retry-judgement?scope=errored');
+    expect(postCalls()[0].body).toEqual({ scope: 'errored', evaluatorId: 'custom-1', judgeModelId: 'run-model', benchmarkId: 'bench-legacy' });
+  });
+
+  it('first-class run with no benchmarkId prop: the request body carries no benchmarkId key at all', async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByTestId('retry-judgement-evaluator-system-factuality')).toBeTruthy());
+    await waitFor(() => expect((screen.getByTestId('retry-judgement-confirm-btn') as HTMLButtonElement).disabled).toBe(false));
+    expect(preflightCalls().at(-1)!.body).not.toHaveProperty('benchmarkId');
+    await act(async () => { fireEvent.click(screen.getByTestId('retry-judgement-confirm-btn')); });
+    await flush();
+    expect(postCalls()[0].body).not.toHaveProperty('benchmarkId');
+  });
+
   it('surfaces a rejected submit (e.g. 400 unknown evaluator) inline, stays open with the pickers, registers no job', async () => {
     postResponses.push(json(400, { error: 'Evaluator not found: gone' }));
     renderDialog();
