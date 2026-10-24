@@ -46,6 +46,65 @@ describe('FileStorageModule', () => {
       });
     });
 
+    describe('getAll projection', () => {
+      const heavy = () => ({
+        initialPrompt: 'Investigate the outage',
+        context: [{ description: 'runbook', value: 'x'.repeat(2_000) }],
+        expectedOutcomes: ['finds it'],
+        sourceCode: 'x'.repeat(50_000),
+        sourceFile: 'evals/a.eval.ts',
+        sourceFileName: 'a.eval.ts',
+        sourceLanguage: 'typescript' as const,
+        definition: { options: {}, evaluateSource: 'async () => {}' } as any,
+      });
+
+      // #591: the file backend must agree with the OpenSearch backend on what
+      // a summary listing carries, so the route's contract does not depend on
+      // which adapter is configured.
+      it("summary projection drops sourceCode/definition/versions/context/expectedOutcomes", async () => {
+        const created = await mod.testCases.create({ name: 'Heavy', ...heavy() });
+        await mod.testCases.update(created.id, { description: 'bumped to v2' });
+
+        const { items, total } = await mod.testCases.getAll({ projection: 'summary' });
+
+        expect(total).toBe(1);
+        const [tc] = items as any[];
+        expect(tc.id).toBe(created.id);
+        expect(tc.version).toBe(2); // latest version is still the one picked
+        for (const field of ['sourceCode', 'definition', 'versions', 'context', 'expectedOutcomes']) {
+          expect(tc).not.toHaveProperty(field);
+        }
+        expect(tc).toMatchObject({
+          name: 'Heavy',
+          description: 'bumped to v2',
+          initialPrompt: 'Investigate the outage',
+          sourceFile: 'evals/a.eval.ts',
+          sourceFileName: 'a.eval.ts',
+          sourceLanguage: 'typescript',
+        });
+      });
+
+      it('full projection (default) still returns the heavy fields', async () => {
+        await mod.testCases.create({ name: 'Heavy', ...heavy() });
+
+        const { items } = await mod.testCases.getAll();
+        const [tc] = items as any[];
+        expect(tc.sourceCode).toHaveLength(50_000);
+        expect(tc.context).toHaveLength(1);
+        expect(tc.expectedOutcomes).toEqual(['finds it']);
+      });
+
+      it('summary projection does not alter the stored document', async () => {
+        const created = await mod.testCases.create({ name: 'Heavy', ...heavy() });
+
+        await mod.testCases.getAll({ projection: 'summary' });
+
+        const stored = await mod.testCases.getById(created.id) as any;
+        expect(stored.sourceCode).toHaveLength(50_000);
+        expect(stored.definition).toBeDefined();
+      });
+    });
+
     describe('update', () => {
       it('should throw when entity does not exist', async () => {
         await expect(

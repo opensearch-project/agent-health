@@ -14,33 +14,10 @@ import { Router, Request, Response } from 'express';
 import { debug } from '@/lib/debug';
 import { getStorageModule } from '../../adapters/index.js';
 import { SAMPLE_TEST_CASES } from '../../../cli/demo/sampleTestCases.js';
+import { toTestCaseSummary as toSummary } from '../../services/testCaseSummary.js';
 import type { TestCase, StorageMetadata } from '../../../types/index.js';
 
 const router = Router();
-
-/**
- * Convert a full test case to a lightweight summary for list views.
- * Truncates initialPrompt to 200 chars and strips heavy fields.
- */
-function toSummary(doc: any): any {
-  return {
-    ...doc,
-    initialPrompt: doc.initialPrompt?.length > 200
-      ? doc.initialPrompt.slice(0, 200) + '...'
-      : doc.initialPrompt,
-    context: [],
-    expectedOutcomes: [],
-    versions: [],
-    // The full eval-file source can be many KB; list views only need to
-    // know a code-imported test case HAS a source (sourceFile / sourceHash
-    // / sourceFileName / sourceLanguage stay), not its full text. The Test
-    // Case detail page fetches the full (non-summary) record via getById.
-    sourceCode: undefined,
-    // Same reasoning for the per-test definition capture (options + evaluate
-    // body text): only the selected row's detail view needs it.
-    definition: undefined,
-  };
-}
 
 /**
  * Bounds for the additive `describePath` (describe() chain) field — it is a
@@ -154,8 +131,12 @@ router.get('/api/storage/test-cases', async (req: Request, res: Response) => {
           );
           realData = fetched.filter((tc): tc is TestCase => tc !== null);
         } else {
-          // Get all test cases (adapter returns latest versions)
-          const result = await storage.testCases.getAll();
+          // Get all test cases (adapter returns latest versions). For a
+          // summary listing the adapter leaves the heavy fields out at the
+          // storage layer; `toSummary` below only pins the response shape.
+          const result = await storage.testCases.getAll(
+            isSummary ? { projection: 'summary' } : undefined,
+          );
           let allItems = result.items;
           totalCount = result.total;
 

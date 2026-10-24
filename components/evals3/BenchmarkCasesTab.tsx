@@ -7,8 +7,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ArrowLeft, BarChart3, ChevronLeft, ChevronRight,
-  History, Search, ShieldCheck, X,
+  History, Loader2, Search, ShieldCheck, X,
 } from 'lucide-react';
+import { asyncTestCaseStorage } from '@/services/storage';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -45,6 +46,78 @@ interface BenchmarkCasesTabProps {
   onSelectCase: (testCaseId: string) => void;
   onClearCase: () => void;
   onOpenRuns: () => void;
+}
+
+/**
+ * The list this tab receives is the SUMMARY projection (#591): `initialPrompt`
+ * truncated to 200 chars, `expectedOutcomes` / `context` / `versions` pinned to
+ * `[]`, no `sourceCode`. The definition pane needs the full document, so this
+ * hook fetches the ONE selected case by id and caches it per id + version for
+ * the session (paging back and forth is free; a case edited meanwhile — new
+ * `currentVersion` on the polled row — is refetched). Responses that arrive
+ * after the selection has moved on never touch the pane: selecting three
+ * cases quickly must not leave case B's outcomes under case C's name. One
+ * request per key is in flight at a time (A → B → A reuses A's request).
+ */
+type FullCaseStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+function useFullTestCase(selectedCaseId: string | undefined, summary: TestCase | undefined): {
+  /** `summary` overlaid with the full document once `status === 'ready'`; the summary row otherwise. */
+  testCase: TestCase | undefined;
+  status: FullCaseStatus;
+  retry: () => void;
+} {
+  const cacheRef = useRef<Map<string, TestCase>>(new Map());
+  const failedRef = useRef<Set<string>>(new Set());
+  const inFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  // Bumped whenever a fetch settles so the derived values below re-render.
+  const [, setSettled] = useState(0);
+  // Bumped by `retry` so the effect below runs again for the same key.
+  const [attempt, setAttempt] = useState(0);
+
+  const key = selectedCaseId && summary ? `${selectedCaseId}@v${summary.currentVersion ?? 0}` : undefined;
+  useEffect(() => {
+    if (!key || !selectedCaseId) return;
+    if (cacheRef.current.has(key) || failedRef.current.has(key)) return;
+    let cancelled = false;
+    let request = inFlightRef.current.get(key);
+    if (!request) {
+      request = asyncTestCaseStorage.getById(selectedCaseId)
+        .then(full => {
+          // The document is valid for its key even if the selection has moved
+          // on: remember it, but only the CURRENT selection re-renders the pane.
+          if (full) cacheRef.current.set(key, full);
+          else failedRef.current.add(key);
+        })
+        .catch(error => {
+          failedRef.current.add(key);
+          console.error('Failed to load the selected test case in full:', error);
+        })
+        .finally(() => { inFlightRef.current.delete(key); });
+      inFlightRef.current.set(key, request);
+    }
+    request.then(() => { if (!cancelled) setSettled(n => n + 1); });
+    return () => { cancelled = true; };
+  }, [key, selectedCaseId, attempt]);
+
+  const retry = useCallback(() => {
+    if (!key) return;
+    failedRef.current.delete(key);
+    setAttempt(n => n + 1);
+  }, [key]);
+
+  if (!key || !summary) return { testCase: undefined, status: 'idle', retry };
+  const full = cacheRef.current.get(key);
+  if (full) {
+    // The full document wins on every field it carries (it IS the latest
+    // version of this case); the summary row only fills in anything the
+    // projection kept that the detail route might not echo back.
+    return { testCase: { ...summary, ...full }, status: 'ready', retry };
+  }
+  // Until the fetch settles the pane shows a loading row rather than a
+  // truncated prompt / empty outcomes; after a failure it shows an error note
+  // with Retry — never the summary dressed up as the full document.
+  return { testCase: summary, status: failedRef.current.has(key) ? 'error' : 'loading', retry };
 }
 
 const VERDICT_STYLE: Record<CaseVerdict, { label: string; short: string; className: string }> = {
@@ -373,6 +446,7 @@ export const BenchmarkCasesTab: React.FC<BenchmarkCasesTabProps> = ({
     'no-data': rows.filter(row => row.bucket === 'no-data').length,
   }), [rows]);
   const selectedRow = rows.find(row => row.testCase.id === selectedCaseId);
+  const { testCase: selectedCaseFull, status: selectedCaseStatus, retry: retrySelectedCase } = useFullTestCase(selectedCaseId, selectedRow?.testCase);
   const showsHistoricalVersionNotice = useMemo(() => {
     if (!selectedRow) return false;
     return hasHistoricalVersionMismatch(
@@ -772,11 +846,39 @@ export const BenchmarkCasesTab: React.FC<BenchmarkCasesTabProps> = ({
               </div>
             </div>
               <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
-                <div className="max-w-4xl mx-auto">
-                  <BenchmarkCaseDefinition
-                    testCase={selectedRow.testCase}
-                    totalRuns={allRuns.filter(run => !!run.results?.[selectedRow.testCase.id]).length}
-                  />
+                <div
+                  className="max-w-4xl mx-auto"
+                  data-testid="case-definition"
+                  data-case-id={selectedRow.testCase.id}
+                  data-status={selectedCaseStatus}
+                >
+                  {selectedCaseStatus === 'loading' && (
+                    <div
+                      className="flex items-center gap-2 text-xs text-muted-foreground py-6"
+                      data-testid="case-definition-loading"
+                      role="status"
+                    >
+                      <Loader2 size={14} className="animate-spin" />
+                      Loading full case definition…
+                    </div>
+                  )}
+                  {selectedCaseStatus === 'error' && (
+                    <div
+                      className="flex items-center gap-3 rounded-md border border-red-300/70 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
+                      data-testid="case-definition-error"
+                      role="alert"
+                    >
+                      <AlertTriangle size={14} className="shrink-0" />
+                      <span className="flex-1">Could not load the full definition of this case. Only its name and labels are available from the list.</span>
+                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={retrySelectedCase}>Retry</Button>
+                    </div>
+                  )}
+                  {selectedCaseStatus === 'ready' && selectedCaseFull && (
+                    <BenchmarkCaseDefinition
+                      testCase={selectedCaseFull}
+                      totalRuns={allRuns.filter(run => !!run.results?.[selectedRow.testCase.id]).length}
+                    />
+                  )}
                 </div>
               </div>
             </div>
