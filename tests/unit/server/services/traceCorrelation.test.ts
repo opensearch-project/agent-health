@@ -259,6 +259,44 @@ describe('traceCorrelation — precise-first', () => {
       expect(res).toMatchObject({ total: 1, nextCursor: null, hasMore: false });
     });
 
+    it('passes the backend\'s `truncated` / `warnings` through untouched (capped scans, composite source failures)', async () => {
+      const warnings = [{ source: 'cw-prod', message: 'ThrottlingException' }];
+      const query = jest.fn(async () => ({ spans: [aRoot], total: 1, truncated: true, warnings }));
+      const res = await queryTracesPreciseFirst(query, { traceId: A_TRACE, agents: WINDOW });
+      expect(res.truncated).toBe(true);
+      expect(res.warnings).toBe(warnings);
+    });
+
+    describe('scan hint for scanning backends (CloudWatch)', () => {
+      it('the exact phase strips `agents[]` but hands their union back as an advisory `scanWindow`', async () => {
+        const be = fakeBackend([aRoot], []);
+        const two = [
+          { serviceName: 'retrieval-agent', startedAt: T0 - 60_000, endedAt: T0 + 60_000 },
+          { serviceName: 'retrieval-agent', startedAt: T0 - 30_000, endedAt: T0 + 90_000 },
+        ];
+        await queryTracesPreciseFirst(be.query, { traceId: A_TRACE, agents: two });
+        expect(be.calls[0].agents).toBeUndefined();
+        expect(be.calls[0].scanWindow).toEqual({ startedAt: T0 - 60_000, endedAt: T0 + 90_000 });
+      });
+
+      it('the window phase keeps `agents[]` as the clause and adds no hint; a caller-supplied hint is left alone', async () => {
+        const be = fakeBackend([], [untagged]);
+        const mine = { startedAt: 1, endedAt: 2 };
+        await queryTracesPreciseFirst(be.query, { traceId: A_TRACE, agents: WINDOW, scanWindow: mine });
+        expect(be.calls[0].scanWindow).toBe(mine); // exact phase: caller's hint wins over the derived one
+        expect(be.calls[1].agents).toEqual(WINDOW); // window phase: the clause itself
+        expect(be.calls[1].traceId).toBeUndefined();
+      });
+
+      it('a direct-only query (no agents) carries no hint; non-finite windows are ignored', async () => {
+        const be = fakeBackend([aRoot], []);
+        await queryTracesPreciseFirst(be.query, { traceId: A_TRACE });
+        expect(be.calls[0].scanWindow).toBeUndefined();
+        await queryTracesPreciseFirst(be.query, { traceId: A_TRACE, agents: [{ serviceName: 'x', startedAt: NaN, endedAt: T0 }] });
+        expect(be.calls[1].scanWindow).toBeUndefined();
+      });
+    });
+
     describe('pagination keeps the phase', () => {
       it('wraps the direct-phase cursor and resumes the DIRECT query without re-running the fallback decision', async () => {
         const query = jest.fn(async (opts: TracesQueryOptions) => ({
