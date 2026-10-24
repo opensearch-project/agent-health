@@ -9,7 +9,7 @@
  * Handles CRUD, SSE streaming for execution, cancellation, and promotion.
  */
 
-import { EvaluationRun, TestCaseSource, TestCaseSnapshot } from '@/types';
+import { EvaluationRun, TestCaseSource, TestCaseSnapshot, type ScoringDiagnostics } from '@/types';
 import { debug } from '@/lib/debug';
 
 export interface CreateEvaluationRunRequest {
@@ -337,19 +337,113 @@ export async function updateEvaluationRun(
   return response.json();
 }
 
+/** Mirrors services/evaluation/retryJudgement.ts `RetryJudgementOutcome`. */
+export type RetryJudgementOutcome = 'succeeded' | 'not-evaluable' | 'failed';
+
 export interface RetryJudgementCaseResult {
   testCaseId: string;
   reportId: string;
-  outcome: 'succeeded' | 'failed';
+  outcome: RetryJudgementOutcome;
   passFailStatus?: 'passed' | 'failed' | null;
   error?: string;
+  /** `outcome: 'not-evaluable'` — why the deterministic evaluator's rules did not apply. */
+  reason?: string;
+  /** Deterministic: an abstain case (gold explicitly empty), judged by abstention. */
+  abstain?: boolean;
+  /** Deterministic: gold source + every candidate source tried (see types ScoringDiagnostics). */
+  diagnostics?: ScoringDiagnostics;
 }
 
 export interface RetryJudgementSummary {
   retried: number;
   succeeded: number;
   failed: number;
+  /** Older servers omit it — treat as 0 (see `notEvaluableCount`). */
+  notEvaluable?: number;
+  /** Of `succeeded`: abstain cases. Older servers omit it. */
+  abstain?: number;
   results: RetryJudgementCaseResult[];
+}
+
+/** `summary.notEvaluable`, tolerant of summaries persisted before the field existed. */
+export function notEvaluableCount(summary: Pick<RetryJudgementSummary, 'notEvaluable' | 'results'>): number {
+  return summary.notEvaluable ?? summary.results.filter(r => r.outcome === 'not-evaluable').length;
+}
+
+/** reason → count over the not-evaluable cases of a summary (stable insertion order, most frequent first). */
+export function groupNotEvaluableReasons(results: ReadonlyArray<Pick<RetryJudgementCaseResult, 'outcome' | 'reason'>>): Array<{ reason: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const r of results) {
+    if (r.outcome !== 'not-evaluable') continue;
+    const reason = r.reason || 'reason not recorded';
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return Array.from(counts, ([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count);
+}
+
+export interface RetryJudgementRequest {
+  scope?: 'errored' | 'all';
+  /** Evaluator to judge with; omitted → the run's own evaluator. */
+  evaluatorId?: string;
+  /** Judge model; `null` = evaluator default; omitted → the run's own judge model. */
+  judgeModelId?: string | null;
+}
+
+/** Mirrors services/evaluation/retryJudgement.ts `RetryJudgementPreflight`. */
+export interface RetryJudgementPreflight {
+  evaluatorId: string | null;
+  evaluatorName: string | null;
+  deterministic: boolean;
+  scope: 'errored' | 'all';
+  total: number;
+  evaluable: number;
+  notEvaluable: number;
+  abstain: number;
+  reasons: Record<string, number>;
+  cases: Array<{ testCaseId: string; evaluable: boolean; abstain?: boolean; reason?: string; diagnostics?: ScoringDiagnostics }>;
+}
+
+/**
+ * Read-only dry run of a retry (POST .../retry-judgement/preflight): the
+ * selection and, for a deterministic evaluator, how many cases it can score
+ * — so the dialog can say "n of N cases evaluable" and refuse a retry that
+ * would score nothing. Writes nothing, starts no job.
+ */
+export async function preflightRetryJudgement(id: string, request: RetryJudgementRequest = {}): Promise<RetryJudgementPreflight> {
+  const response = await fetch(`/api/storage/evaluation-runs/${id}/retry-judgement/preflight`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || 'Failed to pre-flight retry judgement');
+  }
+  return response.json();
+}
+
+/**
+ * Start a retry-judgement job (POST .../retry-judgement → 202). Resolves as
+ * soon as the server has ACCEPTED the job — it does NOT wait for the judge
+ * pipeline; poll {@link getRetryJudgementStatus} (the client-side job store
+ * in services/client/retryJudgementJobs.ts does this for every surface).
+ * Rejects on any non-2xx (409 already running / still executing, 400 bad
+ * evaluator or scope, 404).
+ */
+export async function startRetryJudgement(id: string, request: RetryJudgementRequest = {}): Promise<{ total: number }> {
+  const scope = request.scope ?? 'errored';
+  const response = await fetch(`/api/storage/evaluation-runs/${id}/retry-judgement?scope=${scope}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // Full #509 body: { scope, evaluatorId?, judgeModelId? (null = evaluator default) }.
+    body: JSON.stringify({ scope: 'errored', ...request }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || 'Failed to retry judgement');
+  }
+  const started: { total?: number } = await response.json().catch(() => ({}));
+  return { total: started.total ?? 0 };
 }
 
 export interface RetryJudgementJobStatus {
@@ -370,7 +464,8 @@ export async function getRetryJudgementStatus(id: string): Promise<RetryJudgemen
   const response = await fetch(`/api/storage/evaluation-runs/${id}/retry-judgement/status`);
   if (!response.ok) {
     const err = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(err.error || 'Failed to fetch retry-judgement status');
+    // `status` lets callers tell "no such job" (404) from a transient failure without parsing the message.
+    throw Object.assign(new Error(err.error || 'Failed to fetch retry-judgement status'), { status: response.status });
   }
   return response.json();
 }
@@ -394,32 +489,14 @@ const RETRY_JUDGEMENT_POLL_MAX_ATTEMPTS = 900;
  * the server kept working. `onProgress(completed, total)` fires after the
  * initial POST and after every poll, so callers can render live progress.
  */
-export interface RetryJudgementRequest {
-  scope?: 'errored' | 'all';
-  /** Evaluator to judge with; omitted → the run's own evaluator. */
-  evaluatorId?: string;
-  /** Judge model; `null` = evaluator default; omitted → the run's own judge model. */
-  judgeModelId?: string | null;
-}
 
 export async function retryJudgement(
   id: string,
   request: RetryJudgementRequest = {},
   onProgress?: (completed: number, total: number) => void
 ): Promise<RetryJudgementSummary> {
-  const response = await fetch(`/api/storage/evaluation-runs/${id}/retry-judgement`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: 'errored', ...request }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(err.error || 'Failed to retry judgement');
-  }
-
-  const started: { total?: number } = await response.json().catch(() => ({}));
-  onProgress?.(0, started.total ?? 0);
+  const started = await startRetryJudgement(id, request);
+  onProgress?.(0, started.total);
 
   for (let attempt = 0; attempt < RETRY_JUDGEMENT_POLL_MAX_ATTEMPTS; attempt++) {
     await new Promise(resolve => setTimeout(resolve, RETRY_JUDGEMENT_POLL_INTERVAL_MS));

@@ -295,8 +295,23 @@ export interface ScoringMetric {
  */
 export interface ScoringConfig {
   metrics: ScoringMetric[];  // Metrics to evaluate
-  passThreshold: number;     // Minimum score to pass (0-100)
+  passThreshold: number;     // Minimum score to pass (0-100) — display hint; the enforced rule is `passPolicy`
   scale: number;             // Overall scale (typically 100)
+  /**
+   * How the pass/fail verdict is decided for reports judged with this
+   * evaluator (see {@link ScoringPassPolicy}). Absent == `{ kind: 'llm-verdict' }`:
+   * the judge's own `pass_fail_status` is authoritative, which is the frozen
+   * historical behaviour every pre-existing evaluator keeps. Opting into a
+   * computed policy (`threshold` / `gates`) is an evaluator change and
+   * therefore a new evaluator version + content hash.
+   */
+  passPolicy?: ScoringPassPolicy;
+  /**
+   * Metric names this evaluator declares as headline metrics. Copied verbatim
+   * onto each report's {@link ScoringSnapshot.primaryMetrics}; the compare
+   * page renders each as its own column. Every name must exist in `metrics`.
+   */
+  primaryMetrics?: string[];
 }
 
 /**
@@ -318,6 +333,167 @@ export interface InferenceConfig {
   agentJudgeModelId?: string;
 }
 
+// ============ Deterministic evaluators (typed metric registry, no LLM) ============
+
+/**
+ * How an evaluator judges: `llm` (the default and the historical behaviour —
+ * a system prompt sent to a judge model) or `deterministic` (metrics computed
+ * in code from the test case's gold ids and the report's stored output; no
+ * LLM is ever called).
+ */
+export type EvaluatorKind = 'llm' | 'deterministic';
+
+/**
+ * One metric of a deterministic evaluator. `name` is FREE-FORM data (the
+ * evaluator author picks "Hit@5", "recall_at_20", …); Agent Health only
+ * interprets `compute.type`, which must be one of the typed registry entries
+ * in `lib/metrics` (`ranked-hit` | `ranked-recall` | `mrr` | `abstain`).
+ */
+export interface DeterministicMetricSpec {
+  name: string;
+  compute: import('../lib/metrics/index.js').MetricCompute;
+  /** Weight in the weighted-mean score (finite, > 0). */
+  weight: number;
+  /** Raw scale the value is reported in on `report.metrics` (default 0–1). */
+  scale?: { min: number; max: number };
+  /** Declared headline metric — the compare page renders it as its own column. */
+  primary?: boolean;
+}
+
+/**
+ * Where a deterministic evaluator reads its inputs from. Everything
+ * benchmark-specific (patterns, tool names, field names) is DATA here —
+ * nothing in Agent Health code knows any particular agent's vocabulary.
+ */
+export interface DeterministicEvaluatorInputs {
+  gold:
+    | { source: 'testCase.expected.ids' }
+    | {
+        /**
+         * Gold ids from the FIRST `expectedOutcomes` line matching `pattern`
+         * (a JS regex with exactly one capture group; the captured text is
+         * split on `,` `;` and whitespace). `testCase.expected.ids` still
+         * wins when present.
+         */
+        source: 'expectedOutcomes-pattern';
+        pattern: string;
+      };
+  prediction:
+    | {
+        /**
+         * Labelled LEGACY extractor over the report's stored trajectory — see
+         * `lib/scoring/prediction/toolHitsOrdered.ts` for the exact rule.
+         * Credits everything the agent RETRIEVED (every stored tool hit).
+         */
+        source: 'tool-hits-ordered';
+        /** Keys that carry an item's id inside a hit object (default `['id', '_id']`). */
+        idFields?: string[];
+        /** Dotted paths (relative to the parsed tool result) whose value is an array of hits (default `['hits', 'results']`). */
+        hitsPaths?: string[];
+        /** Tool calls whose `toolArgs[argKey]` (string or string[]) names ids to EXCLUDE from the candidates (the query's own anchors). */
+        anchorTools?: Array<{ tool: string; argKey: string }>;
+        /**
+         * Regex (case-insensitive) over tool NAMES identifying the tool whose
+         * result IS the agent's returned ranked list (candidate-chain source
+         * `results-tool`; default matches `return_results` / `final_results` /
+         * `submit_results` / `results`).
+         */
+        resultsTool?: string;
+      }
+    | {
+        /**
+         * The ranked list the agent RETURNED as its final answer — see
+         * `lib/scoring/prediction/responseResults.ts`. Read from the last
+         * `response` (else `assistant`) step: a JSON object/array, a fenced
+         * JSON block, a non-streaming connector's single raw payload, or
+         * (best-effort) list lines with an explicit `id` label. An empty or
+         * missing list is an EMPTY prediction (scorable), not unevaluable.
+         */
+        source: 'response-results';
+        /** Dotted path to the array inside the parsed JSON (default: auto-detect `results` / `hits` / `items` / first id-carrying array). */
+        path?: string;
+        /** Key carrying an item's id (default `id`). */
+        idField?: string;
+        /** Key carrying an item's 1-based rank (default `rank`); array order when absent. */
+        rankField?: string;
+      };
+}
+
+/**
+ * Why a deterministic scoring produced what it did — attached to the
+ * snapshot, the retry-judgement case result and the pre-flight so the user
+ * sees "gold 2 ids from expectedOutcomes[0]; candidates: 0 from tool 'search'
+ * hits, 3 from tool 'return_results' records (used); anchor removed 1"
+ * instead of a bare "no candidate ids found".
+ */
+export interface ScoringDiagnostics {
+  gold: {
+    /** `expected.ids` | `expectedOutcomes[<i>]` | `expectedOutcomes[<i>] (explicitly none)` | `not declared`. */
+    source: string;
+    ids: string[];
+    /** The test case explicitly declares "no gold" (abstain case). */
+    explicitlyEmpty: boolean;
+  };
+  candidates: {
+    /** Every source attempted, in chain order, with the ids it found. */
+    sourceTried: Array<{ source: string; count: number; detail: string }>;
+    sourceUsed: string;
+    /** Ids from the winning source before the anchor filter. */
+    count: number;
+    anchorRemoved: number;
+    /** Winning source is a "what the agent returned" source (empty = abstention). */
+    returned: boolean;
+    weak: boolean;
+  };
+  /** Distinct tool names whose results were inspected. */
+  toolsScanned: string[];
+}
+
+/**
+ * Why the LAST retry-judgement attempt on a report produced no judgement.
+ * Owner rule: a retry that fails (judge error, not evaluable, exception)
+ * must PRESERVE the report's existing judgement — verdict, scores, snapshot,
+ * judge response, evaluator stamp — and record the attempt here instead;
+ * only a SUCCESSFUL re-judgement replaces the judgement (and clears this,
+ * `null`). Rendered by the run report's Judge tab as a dismissible banner
+ * with a Details dialog.
+ */
+export interface RetryAttemptRecord {
+  /** ISO timestamp of the attempt. */
+  at: string;
+  /** Evaluator the retry used (override or the run's own); `null` when none. */
+  evaluatorId: string | null;
+  evaluatorName?: string;
+  /** LLM path only: the judge model that was called. */
+  judgeModelId?: string;
+  scope: 'errored' | 'all';
+  /** `not-evaluable` (deterministic rules did not apply) · `judge-error` (judge call failed) · `error` (scorer / pipeline exception). */
+  outcome: 'not-evaluable' | 'judge-error' | 'error';
+  reason: string;
+  /** Deterministic: gold source + every candidate source tried. */
+  diagnostics?: ScoringDiagnostics;
+}
+
+/**
+ * Run-level mirror of {@link RetryAttemptRecord}: set on the EvaluationRun
+ * doc when a retry finishes with at least one case that produced no
+ * judgement (the runs list / inspector header show a "re-judge failed" pill
+ * off it without loading every report); cleared (`null`) when a retry
+ * finishes with every case judged.
+ */
+export interface RunRetryAttemptSummary {
+  at: string;
+  evaluatorId: string | null;
+  evaluatorName?: string;
+  scope: 'errored' | 'all';
+  retried: number;
+  succeeded: number;
+  notEvaluable: number;
+  failed: number;
+  /** Not-evaluable / error reason → number of cases (stable wording). */
+  reasons: Record<string, number>;
+}
+
 /**
  * Evaluator version - immutable snapshot of evaluator configuration
  */
@@ -329,6 +505,12 @@ export interface EvaluatorVersion {
   systemPrompt: string;
   scoringConfig: ScoringConfig;
   inferenceConfig: InferenceConfig;
+
+  // Deterministic evaluators (kind: 'deterministic') — see the `Evaluator` doc.
+  kind?: EvaluatorKind;
+  metrics?: DeterministicMetricSpec[];
+  passPolicy?: ScoringPassPolicy;
+  inputs?: DeterministicEvaluatorInputs;
 }
 
 /**
@@ -359,6 +541,21 @@ export interface Evaluator {
   systemPrompt: string;
   scoringConfig: ScoringConfig;
   inferenceConfig: InferenceConfig;
+
+  /**
+   * `'deterministic'` evaluators never call an LLM: `metrics[]` are computed
+   * by the typed registry (`lib/metrics`) from `inputs`, scored by
+   * `lib/scoring/deterministicScoring.ts`, and the verdict follows
+   * `passPolicy` (`threshold` | `gates`; `llm-verdict` is rejected). For
+   * them `systemPrompt` is ignored (stored as `''`) and `scoringConfig` is a
+   * server-synthesized mirror of `metrics` kept so every legacy consumer of
+   * `scoringConfig.metrics` keeps rendering. Absent / `'llm'` = the
+   * historical LLM-judge evaluator.
+   */
+  kind?: EvaluatorKind;
+  metrics?: DeterministicMetricSpec[];
+  passPolicy?: ScoringPassPolicy;
+  inputs?: DeterministicEvaluatorInputs;
 }
 
 export type PassFailStatus = 'passed' | 'failed';
@@ -471,8 +668,11 @@ export type MetricsStatus = 'pending' | 'calculating' | 'ready' | 'error';
  *
  *  - `threshold`   — pass iff the weighted score (normalized to [0,1]) is
  *                    >= `minScore`.
- *  - `gates`       — pass iff every listed metric (in its own raw scale) is
- *                    >= its `min`.
+ *  - `gates`       — pass iff every listed metric is >= its `min`. `min` is
+ *                    expressed in the metric's own raw scale (e.g. 80 on a
+ *                    0–100 rubric); the engine compares after normalizing
+ *                    both sides, so out-of-range values are clamped the same
+ *                    way the score is.
  *  - `llm-verdict` — the judge's own `pass_fail_status` is authoritative
  *                    (the historical behaviour; every pre-snapshot report is
  *                    implicitly this).
@@ -484,15 +684,16 @@ export type ScoringPassPolicy =
 
 /**
  * Immutable record of HOW a report was scored, frozen onto the report at
- * judge time. Every aggregate score the UI shows for a report — the compare
- * page's "Avg score", the run inspector's overall — is derived from THIS
- * object and the report's own `metrics`, never from today's (mutable)
+ * judge time. Every aggregate score the UI shows for a report — the run
+ * inspector's overall, the comparison payload's run-level `avgScore` — is
+ * derived from THIS object and the report's own `metrics`, never from today's (mutable)
  * evaluator document. Reports persisted before snapshots existed carry none
  * and render as "legacy scoring": their rubric values are shown by name but
  * are never aggregated into a single score (see `lib/scoring/snapshotScore.ts`).
  *
- * This PR (R1) adds the type, storage mapping and the read model only; the
- * write path (R2, canonical verdict engine) populates it for new judgements.
+ * This object is written by the canonical verdict engine
+ * (`lib/scoring/applyScoring.ts`) on every new judgement and never rewritten
+ * afterwards except by an explicit re-judge, which REPLACES it.
  */
 export interface ScoringSnapshot {
   /** Evaluator document id at judge time. */
@@ -522,14 +723,46 @@ export interface ScoringSnapshot {
   judgeModelId?: string;
   /** Structured gold ids the deterministic rubrics were computed against (R3). */
   goldIdsUsed?: string[];
-  /** Identifier of the rule used to extract the prediction from the agent output (R3). */
+  /** Which gold source produced `goldIdsUsed` (R3); `expected-outcomes-none` = an explicit "NONE …" line (abstain case). */
+  goldRule?: 'expected.ids' | 'expected-outcomes-pattern' | 'expected-outcomes-none';
+  /** The evaluator's DECLARED prediction source (R3): `tool-hits-ordered` | `response-results`. The source actually used is `extraction.sourceUsed`. */
   extractionRule?: string;
+  /**
+   * Extraction statistics (R3). `sourceUsed` names the step of the ordered
+   * candidate chain (lib/scoring/prediction/candidates.ts) that produced the
+   * ranked list — `report.output` | `response-results` | `results-tool` |
+   * `tool-hits` | `generic-scan` | `none`; `weak` = the generic scan was the
+   * only source. `citedCount` / `anchorsRemoved` describe the tool-hits path;
+   * `parsedFrom` the response form (`json` | `fenced` | `raw-event` | `text`).
+   */
+  extraction?: { candidateCount: number; citedCount?: number; anchorsRemoved?: number; parsedFrom?: string; sourceUsed?: string; weak?: boolean };
+  /**
+   * Structured provenance the dialog / Judge tab render when a case scored
+   * nothing (or unexpectedly): where the gold came from and every candidate
+   * source tried, in order, with its count (R3). See
+   * `lib/scoring/deterministicScoring.ts` `ScoringDiagnostics`.
+   */
+  diagnostics?: ScoringDiagnostics;
   /**
    * Rubrics that could not be computed for this report (input missing, judge
    * omitted the key, …). Excluded from the weighted mean — never scored as 0 —
    * but still counted in the rubric total so "scored X / Y" is honest.
    */
   unevaluable?: string[];
+  /**
+   * Metrics that by definition do not speak to this case (a ranked metric on
+   * an explicitly gold-empty case, `abstain` on a case with gold). Skipped:
+   * not in the mean, not a failure reason, not an error.
+   */
+  notApplicable?: string[];
+  /**
+   * Metrics the engine ADDED because the evaluator declared none that speaks
+   * to the case (today: `abstain` on a gold-empty case scored by a ranked-only
+   * evaluator). They appear in `weights` / `scale` / `report.metrics` like a
+   * declared metric so the snapshot reproduces the score, but they were not
+   * part of the evaluator document.
+   */
+  implicitMetrics?: string[];
 }
 
 /**
@@ -643,7 +876,29 @@ export interface TestCaseRun {
 
   // Results
   status: 'running' | 'completed' | 'failed';
-  passFailStatus?: PassFailStatus; // LLM judge determination of pass/fail
+  /**
+   * The report's verdict. Decided by the canonical verdict engine
+   * (`lib/scoring/verdictEngine.ts`) from the evaluator's `passPolicy`:
+   * the judge's own verdict under `llm-verdict` (historical behaviour), or
+   * computed from the rubric values under `threshold` / `gates`. Absent when
+   * the judge never produced a verdict (`metricsStatus: 'error'`).
+   */
+  passFailStatus?: PassFailStatus;
+  /**
+   * What the LLM judge itself said (`pass_fail_status`), preserved verbatim
+   * so a computed verdict can be audited against it. Equal to
+   * `passFailStatus` under the `llm-verdict` policy.
+   */
+  llmVerdict?: PassFailStatus;
+  /** `true` when `llmVerdict` disagrees with the computed `passFailStatus`. Recorded, never overriding. */
+  verdictConflict?: boolean;
+  /**
+   * Weighted mean of the evaluator's rubrics, normalized to [0,1] via each
+   * rubric's scale (see `lib/scoring/snapshotScore.ts`). Rubrics the judge
+   * did not return are excluded, never scored 0. Absent when nothing could
+   * be scored or the report predates scoring snapshots.
+   */
+  score?: number;
   trajectory: TrajectoryStep[];
   metrics: EvaluationMetrics;
   /**
@@ -682,6 +937,15 @@ export interface TestCaseRun {
   sessionId?: string;
   logs?: OpenSearchLog[]; // OpenSearch logs for the run (master version)
   rawEvents?: any[]; // Raw AG UI events for debugging
+  /**
+   * Typed output a connector declared for the run (optional, connector-
+   * specific). Deterministic scoring reads a ranked id list from it first
+   * (`{ results: [{ id, rank? }] }`, `{ ids: [] }` or a bare array) — see
+   * lib/scoring/prediction/candidates.ts. Never interpreted otherwise.
+   */
+  output?: unknown;
+  /** Last retry-judgement attempt that produced NO judgement (the judgement above is the preserved previous one); `null`/absent after a successful re-judgement. */
+  lastRetryAttempt?: RetryAttemptRecord | null;
   connectorProtocol?: ConnectorProtocol; // Protocol used to execute this run (for trajectory parsing)
 
   // Per-matcher verdicts captured by the SDK during the test body
@@ -724,7 +988,7 @@ export interface TestCaseRun {
    * provider, and for agent-trace-judge reports persisted before this field
    * existed. See server/services/piAgenticJudgeService.ts.
    */
-  judgeMode?: 'trajectory-only' | 'trace-tools';
+  judgeMode?: 'trajectory-only' | 'trace-tools' | 'deterministic';
   /**
    * Frozen scoring provenance for this report (see {@link ScoringSnapshot}).
    * Absent on every report judged before snapshots existed → "legacy scoring".
@@ -787,6 +1051,8 @@ export interface TestCaseVersion {
   tools?: AgentToolDefinition[];
   expectedPPL?: string;
   expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
+  /** Structured expectations (deterministic evaluators read `ids`). */
+  expected?: TestCaseExpected;
   expectedTrajectory?: {  // Keep for backwards compat
     step: number;
     description: string;
@@ -797,6 +1063,17 @@ export interface TestCaseVersion {
     question: string;
     businessValue: string;
   }[];
+}
+
+/**
+ * Structured expectations on a test case, alongside the prose
+ * `expectedOutcomes`. `ids` is the gold id set a deterministic retrieval
+ * evaluator scores against (`inputs.gold.source: 'testCase.expected.ids'`).
+ * Import/export and UI editing of this field are a follow-up; today it is
+ * settable via the storage API.
+ */
+export interface TestCaseExpected {
+  ids?: string[];
 }
 
 /**
@@ -892,6 +1169,8 @@ export interface TestCase {
   tools?: AgentToolDefinition[]; // Tools available to the agent (client-provided)
   expectedPPL?: string; // Expected PPL query for validation
   expectedOutcomes?: string[];  // NEW: Simple text descriptions of expected behavior
+  /** Structured expectations (mirrors the latest version; see {@link TestCaseExpected}). */
+  expected?: TestCaseExpected;
   expectedTrajectory?: {  // Keep for backwards compat
     step: number;
     description: string;
@@ -1581,6 +1860,8 @@ export interface EvaluationRun {
    * `EvaluationRun` and `BenchmarkRun` are independent doc shapes.
    */
   judgeFailureSummary?: string;
+  /** Last retry-judgement attempt in which ≥1 case produced no judgement (see RunRetryAttemptSummary); `null` after a fully successful retry. */
+  lastRetryAttempt?: RunRetryAttemptSummary | null;
 
   // Performance metrics
   performanceMetrics?: RunPerformanceMetrics;
@@ -1700,11 +1981,13 @@ export interface RunAggregateMetrics {
    */
   avgAccuracy?: number;
   /**
-   * Run-level "Avg score" (0–100): mean of the per-report weighted scores
+   * Run-level weighted score (0–100): mean of the per-report weighted scores
    * derived from each report's {@link ScoringSnapshot} (see
    * `lib/scoring/snapshotScore.ts`). `undefined` when the run is
-   * legacy-scored (`scoring.source === 'legacy'`) — rendered as "—", never
-   * reconstructed from an arbitrary rubric.
+   * legacy-scored (`scoring.source === 'legacy'`) — never reconstructed from
+   * an arbitrary rubric. Part of the comparison payload; the compare
+   * scoreboard no longer renders it as a column (it read "—" for every
+   * pre-snapshot run), the per-metric columns carry the score signal.
    */
   avgScore?: number;
   /** Provenance behind `avgScore` (evaluator, weights, policy, coverage). */

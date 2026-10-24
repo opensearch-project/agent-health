@@ -33,12 +33,15 @@ interface TestCaseInspectorPanelProps {
    * this unset.
    */
   testCaseFullRecord?: FullRecordState;
+  /** Opens the run's retry-judgement dialog (the "Retry again" shortcut on the last-re-judgement-failed banner). */
+  onRetryJudgement?: () => void;
 }
 
 export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
   report,
   testCase,
   status,
+  onRetryJudgement,
   testCaseFullRecord,
 }) => {
   // Issue #242: an evaluator-error report has metricsStatus='error' and a
@@ -105,7 +108,7 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
 
       {/* Tabs — directly into content, no extra chrome */}
       <div className="flex-1 overflow-hidden">
-        <RunDetailsContent report={report} hideMetrics />
+        <RunDetailsContent report={report} hideMetrics onRetryJudgement={onRetryJudgement} />
       </div>
     </div>
   );

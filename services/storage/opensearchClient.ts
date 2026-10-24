@@ -11,7 +11,7 @@
  */
 
 import { ENV_CONFIG } from '@/lib/config';
-import type { ScoringSnapshot, TestCaseDefinitionCapture } from '@/types';
+import type { PassFailStatus, RetryAttemptRecord, ScoringSnapshot, TestCaseDefinitionCapture } from '@/types';
 
 const STORAGE_BASE_URL = ENV_CONFIG.storageApiUrl;
 
@@ -173,10 +173,16 @@ export interface StorageRun {
     faithfulness?: number;
     latency_score?: number;
     trajectory_alignment_score?: number;
+    /** Evaluator-declared rubric names flow through unchanged. */
+    [rubric: string]: number | undefined;
   };
   annotations?: StorageRunAnnotation[];
   trajectory?: unknown[];
   rawEvents?: unknown[];
+  /** Connector-declared typed output (see TestCaseRun.output). */
+  output?: unknown;
+  /** Last retry-judgement attempt that produced no judgement (see TestCaseRun.lastRetryAttempt). */
+  lastRetryAttempt?: RetryAttemptRecord | null;
   logs?: unknown[];
   /** Which evaluator produced this run's verdict (see EvaluationReport/BenchmarkRun.evaluatorId). */
   evaluatorId?: string;
@@ -199,6 +205,10 @@ export interface StorageRun {
   connectorProtocol?: string;
   /** Frozen scoring provenance (types/index.ts ScoringSnapshot); absent on legacy reports. */
   scoringSnapshot?: ScoringSnapshot;
+  /** Verdict-engine outputs (types/index.ts TestCaseRun); absent on legacy reports. */
+  llmVerdict?: PassFailStatus;
+  verdictConflict?: boolean;
+  score?: number;
 }
 
 export interface StorageAnalyticsRecord {

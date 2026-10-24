@@ -8,7 +8,7 @@
  * Calls backend proxy for AWS Bedrock evaluations
  */
 
-import { TrajectoryStep, EvaluationMetrics, ImprovementStrategy, OpenSearchLog, PassFailStatus } from '@/types';
+import { TrajectoryStep, EvaluationMetrics, ImprovementStrategy, OpenSearchLog, PassFailStatus, ScoringSnapshot } from '@/types';
 import { ENV_CONFIG } from '@/lib/config';
 import { getBackendUrl } from '@/lib/portConfig';
 
@@ -59,6 +59,17 @@ interface JudgeResult {
   judgeModel?: string;
   /** Provider kind that executed the call (forwarded from `/api/judge`). */
   judgeProvider?: string;
+  /**
+   * Verdict-engine outputs from `/api/judge` (lib/scoring/applyScoring.ts).
+   * `passFailStatus` above is already the engine's verdict; these carry the
+   * LLM's own verdict, the conflict flag, the normalized weighted score and
+   * the frozen evaluator snapshot. Producers persist them via
+   * `scoringFieldsFromJudgment()` — never by hand.
+   */
+  llmVerdict?: PassFailStatus;
+  verdictConflict?: boolean;
+  score?: number;
+  scoringSnapshot?: ScoringSnapshot;
 }
 
 /**
@@ -212,6 +223,11 @@ export async function callBedrockJudge(
         judgeMode: result.judgeMode,
         judgeModel: result.judgeModel,
         judgeProvider: result.judgeProvider,
+        // Verdict engine outputs (absent from pre-R2 servers → undefined).
+        llmVerdict: result.llmVerdict,
+        verdictConflict: result.verdictConflict,
+        score: typeof result.score === 'number' ? result.score : undefined,
+        scoringSnapshot: result.scoringSnapshot,
       };
     } catch (error) {
       const isLastAttempt = attempt === maxRetries;

@@ -77,8 +77,11 @@ export const MatcherResultsPanel: React.FC<Props> = ({ results }) => {
   // calls that never executed because an earlier assertion threw —
   // distinct from both "passed" and "failed", so they're excluded from
   // both counts and get their own tally in the header.
-  const reached = results.filter(r => !r.notReached);
-  const notReachedCount = results.length - reached.length;
+  // `notApplicable` rows (deterministic metrics that do not speak to this
+  // case) were skipped, not judged — excluded from both tallies likewise.
+  const reached = results.filter(r => !r.notReached && !r.notApplicable);
+  const notReachedCount = results.filter(r => r.notReached).length;
+  const notApplicableCount = results.filter(r => r.notApplicable && !r.notReached).length;
   const passed = reached.filter(r => r.pass).length;
   const failed = reached.length - passed;
 
@@ -87,7 +90,7 @@ export const MatcherResultsPanel: React.FC<Props> = ({ results }) => {
       <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
         Matchers
         <span className="text-xs font-normal text-muted-foreground">
-          ({passed}/{reached.length} passed{failed > 0 ? `, ${failed} failed` : ''}{notReachedCount > 0 ? `, ${notReachedCount} not reached` : ''})
+          ({passed}/{reached.length} passed{failed > 0 ? `, ${failed} failed` : ''}{notApplicableCount > 0 ? `, ${notApplicableCount} n/a` : ''}{notReachedCount > 0 ? `, ${notReachedCount} not reached` : ''})
         </span>
       </h3>
       <div className="border rounded-lg divide-y bg-card">
@@ -135,11 +138,64 @@ function formatValue(v: unknown): string {
 
 // ─── code-assertion / traces / evaluator rows (unchanged behaviour) ────────
 
+/** Deterministic-evaluator rows carry `details.gold` / `details.predicted` (see lib/scoring/deterministicScoring.ts). */
+interface IdListDetails {
+  gold: string[];
+  goldTotal?: number;
+  predicted: string[];
+  predictedTotal?: number;
+  k?: number;
+  extractionRule?: string;
+  /** `response-results` only: which form of the answer the list was read from. */
+  parsedFrom?: string;
+  /** The metric does not speak to this case (skipped, not judged). */
+  notApplicable?: boolean;
+  notApplicableReason?: string;
+}
+
+function idListDetails(details: Record<string, unknown> | undefined): IdListDetails | null {
+  if (!details) return null;
+  const gold = details.gold;
+  const predicted = details.predicted;
+  if (!Array.isArray(gold) || !Array.isArray(predicted)) return null;
+  return {
+    gold: gold.map(String),
+    predicted: predicted.map(String),
+    goldTotal: typeof details.goldTotal === 'number' ? details.goldTotal : undefined,
+    predictedTotal: typeof details.predictedTotal === 'number' ? details.predictedTotal : undefined,
+    k: typeof details.k === 'number' ? details.k : undefined,
+    extractionRule: typeof details.extractionRule === 'string' ? details.extractionRule : undefined,
+    parsedFrom: typeof details.parsedFrom === 'string' ? details.parsedFrom : undefined,
+    notApplicable: details.notApplicable === true, // legacy detail; the first-class `result.notApplicable` is preferred
+    notApplicableReason: typeof details.notApplicableReason === 'string' ? details.notApplicableReason : undefined,
+  };
+}
+
+const IdChips: React.FC<{ ids: string[]; total?: number; goldSet?: Set<string>; testId: string }> = ({ ids, total, goldSet, testId }) => (
+  <span className="inline-flex flex-wrap gap-1 align-middle" data-testid={testId}>
+    {ids.length === 0 && <span className="text-muted-foreground italic">none</span>}
+    {ids.map((id, i) => (
+      <code
+        key={`${id}-${i}`}
+        className={`px-1 py-0.5 rounded text-[11px] ${goldSet?.has(id) ? 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-300' : 'bg-muted'}`}
+      >
+        {id}
+      </code>
+    ))}
+    {typeof total === 'number' && total > ids.length && (
+      <span className="text-muted-foreground">… +{total - ids.length} more</span>
+    )}
+  </span>
+);
+
 const MatcherRow: React.FC<RowProps> = ({ result }) => {
+  const idListsRaw = idListDetails(result.details);
+  const idLists = idListsRaw && result.notApplicable ? { ...idListsRaw, notApplicable: true } : idListsRaw;
   const hasDetail =
     !!result.errorMessage ||
     !!result.reasoning ||
     !!result.model ||
+    !!idLists ||
     result.actual !== undefined ||
     result.expected !== undefined;
   const [open, setOpen] = useState(!result.pass && hasDetail);
@@ -180,6 +236,21 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
               {meta.icon}
               {meta.label}
             </Badge>
+            {(result.role === 'observe' || result.role === 'primary') && (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0 text-muted-foreground" data-testid={`matcher-role-${result.role}`}>
+                {result.role}
+              </Badge>
+            )}
+            {result.errored && (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0 text-amber-700 border-amber-300 dark:text-amber-300 dark:border-amber-500/40">
+                not evaluable
+              </Badge>
+            )}
+            {idLists?.notApplicable && (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0 text-muted-foreground" data-testid="matcher-not-applicable" title={idLists.notApplicableReason}>
+                n/a
+              </Badge>
+            )}
             {typeof result.score === 'number' && (
               <span className="text-[10px] text-muted-foreground shrink-0">
                 score {(result.score * 100).toFixed(0)}%
@@ -209,7 +280,36 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
           {result.reasoning && result.reasoning !== result.errorMessage && (
             <div className="text-muted-foreground whitespace-pre-wrap">{result.reasoning}</div>
           )}
-          {result.expected !== undefined && (
+          {idLists && (
+            <div className="space-y-1" data-testid="matcher-id-lists">
+              <div>
+                <span className="font-semibold">gold{typeof idLists.goldTotal === 'number' ? ` (${idLists.goldTotal})` : ''}:</span>{' '}
+                <IdChips ids={idLists.gold} total={idLists.goldTotal} testId="matcher-gold-ids" />
+              </div>
+              <div>
+                <span className="font-semibold">
+                  predicted{typeof idLists.predictedTotal === 'number' ? ` (${idLists.predictedTotal}` : ''}
+                  {typeof idLists.k === 'number' ? `${typeof idLists.predictedTotal === 'number' ? ', ' : ' ('}k=${idLists.k}` : ''}
+                  {typeof idLists.predictedTotal === 'number' || typeof idLists.k === 'number' ? ')' : ''}:
+                </span>{' '}
+                <IdChips ids={idLists.predicted} total={idLists.predictedTotal} goldSet={new Set(idLists.gold)} testId="matcher-predicted-ids" />
+              </div>
+              {idLists.notApplicable && idLists.notApplicableReason && (
+                <div className="text-muted-foreground italic" data-testid="matcher-not-applicable-reason">{idLists.notApplicableReason}</div>
+              )}
+              {idLists.extractionRule && (
+                <div className="text-muted-foreground" data-testid="matcher-extraction-rule">
+                  extraction rule: <code className="bg-muted px-1 py-0.5 rounded">{idLists.extractionRule}</code>
+                  {idLists.parsedFrom && (
+                    <>
+                      {' '}· parsed from <code className="bg-muted px-1 py-0.5 rounded">{idLists.parsedFrom}</code>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {!idLists && result.expected !== undefined && (
             <div>
               <span className="font-semibold">expected:</span>{' '}
               <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.expected)}</code>
@@ -217,8 +317,11 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
           )}
           {result.actual !== undefined && (
             <div>
-              <span className="font-semibold">actual:</span>{' '}
+              <span className="font-semibold">{idLists ? 'value' : 'actual'}:</span>{' '}
               <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.actual)}</code>
+              {idLists && result.expected !== undefined && (
+                <span className="text-muted-foreground"> (gate ≥ {formatValue(result.expected)})</span>
+              )}
             </div>
           )}
           {result.model && (
