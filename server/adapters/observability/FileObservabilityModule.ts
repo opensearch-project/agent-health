@@ -16,7 +16,10 @@
  *   A. traceId                         — W3C-propagated agents share the eval traceId
  *   B. runIds   → agent_health.run.id   — agents tag spans with the runId
  *   C. agents   → service.name / gen_ai.agent.name within a time window
- * plus must-filters: sessionId (session.id), time range, serviceName, textSearch.
+ *   D. sessionId → session.id (a correlation clause, unioned like the others —
+ *                  NOT a must-filter, mirroring tracesService.ts, so a stale
+ *                  report sessionId can't zero out a traceId/runId match)
+ * plus must-filters: time range, serviceName, textSearch.
  * 2+ correlation clauses are OR-unioned (minimum_should_match: 1); a single
  * clause is required. Sorted newest-first; offset cursor for pagination.
  */

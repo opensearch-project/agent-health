@@ -274,6 +274,9 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
   // SDK matcher verdicts: persist alongside the report
   if (report.matcherResults !== undefined) (base as any).matcherResults = report.matcherResults;
   if (report.scoringSnapshot !== undefined) base.scoringSnapshot = report.scoringSnapshot;
+  // Per-case wall-clock timing — read back by toTestCaseRun above; without
+  // this the write side dropped it (see server/services/storage/index.ts).
+  if (report.performanceMetrics !== undefined) (base as any).performanceMetrics = report.performanceMetrics;
 
   return base;
 }

@@ -236,12 +236,14 @@ class CloudWatchTracesOperations implements ITracesOperations {
 
   /**
    * Scan window: explicit bounds win; otherwise the union of the agents' run
-   * windows ±5 min (a run's spans cannot fall outside its own wall-clock
-   * window); otherwise the configured lookback. Always clamped to `maxWindowMs`
+   * windows (and/or the caller's advisory `scanWindow` — the precise-first
+   * exact phase strips `agents[]` but hands their bounds back through it)
+   * ±5 min (a run's spans cannot fall outside its own wall-clock window);
+   * otherwise the configured lookback. Always clamped to `maxWindowMs`
    * (the newest part of the range is kept).
    */
   window(
-    options: Pick<TracesQueryOptions, 'startTime' | 'endTime' | 'agents'>,
+    options: Pick<TracesQueryOptions, 'startTime' | 'endTime' | 'agents' | 'scanWindow'>,
     /** Narrow to the agents' windows. Only valid when every correlator on the request belongs to the run(s) those windows describe. */
     narrowToAgents = true
   ): { startMs: number; endMs: number; clamped: boolean } {
@@ -252,7 +254,10 @@ class CloudWatchTracesOperations implements ITracesOperations {
       endMs = options.endTime ? toMs(options.endTime) : now;
       startMs = options.startTime ? toMs(options.startTime) : endMs - this.lookbackMs;
     } else {
-      const windows = narrowToAgents ? (options.agents || []).filter((a) => Number.isFinite(a.startedAt) && Number.isFinite(a.endedAt)) : [];
+      const windows = [
+        ...(narrowToAgents ? options.agents || [] : []),
+        ...(options.scanWindow ? [options.scanWindow] : []),
+      ].filter((a) => Number.isFinite(a.startedAt) && Number.isFinite(a.endedAt));
       if (windows.length > 0) {
         startMs = Math.min(...windows.map((a) => a.startedAt)) - WINDOW_PAD_MS;
         endMs = Math.min(now, Math.max(...windows.map((a) => a.endedAt)) + WINDOW_PAD_MS);

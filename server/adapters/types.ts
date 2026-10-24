@@ -89,9 +89,18 @@ export interface TracesQueryOptions {
   serviceName?: string;
   textSearch?: string;
   cursor?: string;
-  /** Strategy C (opt-in): service.name + time-window correlation. See AGENTS.md. */
+  /** Strategy C (always-on FALLBACK, see AGENTS.md): service.name + time-window correlation. */
   /** Strategy D: per-agent `sessionId` correlates on `attributes.session.id`. */
   agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>;
+  /**
+   * Advisory time bound for backends that SCAN storage (CloudWatch Logs): the
+   * caller asserts that every correlator on the request belongs to run(s) that
+   * executed inside this window, so the scan may be narrowed to it. Never a
+   * filter — backends with indexed lookups (OpenSearch, file) ignore it. Set
+   * by the precise-first direct phase (`server/services/traceCorrelation.ts`)
+   * from the `agents[]` windows it strips off the exact query.
+   */
+  scanWindow?: { startedAt: number; endedAt: number };
 }
 
 // ============================================================================

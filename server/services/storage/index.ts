@@ -252,6 +252,12 @@ export async function saveReportWithClient(
   if (report.spans !== undefined) storageData.spans = report.spans;
   if (report.connectorProtocol !== undefined) storageData.connectorProtocol = report.connectorProtocol;
   if (report.scoringSnapshot !== undefined) storageData.scoringSnapshot = report.scoringSnapshot;
+  // Per-case wall-clock (durationMs / agentDurationMs / …). The runners stamp
+  // it on every report and the index maps it, but this writer never persisted
+  // it — so every reader (asyncRunStorage.toTestCaseRun, the comparison
+  // resolver, and the Traces tab's Strategy-C window) saw `undefined` and the
+  // tab fell back to a 30-minute lookback instead of the run's own window.
+  if (report.performanceMetrics !== undefined) storageData.performanceMetrics = report.performanceMetrics;
 
   const created = await createRunWithClient(client, storageData);
 
