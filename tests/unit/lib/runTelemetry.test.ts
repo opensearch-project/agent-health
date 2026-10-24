@@ -221,7 +221,7 @@ describe('aggregateRunTelemetry', () => {
     expect(t.pendingCases).toBe(0);
     expect(t.medianDurationMs).toBe(44_000);
     // The tooltip says WHY: our eval span is there, the agent's spans are not — so "enable tracing" is not the advice.
-    expect(describeNoTraces(t)).toMatch(/^No traces for this run — the trace store holds only Agent Health's own evaluation span for 2 of its 3 cases; no spans from the agent itself were found\./);
+    expect(describeNoTraces(t)).toMatch(/^No traces for this run — the trace store holds only Agent Health's own evaluation spans for 2 of its 3 cases; no spans from the agent itself were found\./);
     expect(describeNoTraces(t)).toMatch(/different trace store/);
     expect(describeNoTraces({ ...t, evalOnlyCases: 3 })).toMatch(/for every one of its 3 cases/);
     // Plain no-spans keeps the enable-tracing advice.
@@ -258,6 +258,10 @@ describe('aggregateRunTelemetry', () => {
     // Nothing to fall back to → still null (renders "—" / "Not recorded").
     const none = aggregateRunTelemetry({ id: 'x', results: { 'tc-0': { reportId: 'r4', status: 'completed' } } }, reports, {})!;
     expect(none.medianDurationMs).toBeNull();
+    // An unusable report value (0 / NaN) does not block the embedded fallback.
+    const zeroReport = { ...reports, r6: report('r6', { runId: 'k6', performanceMetrics: { durationMs: 0, agentDurationMs: 0 } }) };
+    const fb = aggregateRunTelemetry({ id: 'y', results: { 'tc-0': { reportId: 'r6', performanceMetrics: { durationMs: 12_000 } } } }, zeroReport, {})!;
+    expect(fb.medianDurationMs).toBe(12_000);
   });
 
   it('aggregateAllRunTelemetry keys by run id', () => {

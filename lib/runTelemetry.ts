@@ -247,8 +247,9 @@ export function aggregateRunTelemetry(
     // The report's wall-clock first; else the copy the runner embedded on the
     // run's own result entry (classic benchmark runs persisted it there only —
     // without this fallback every such run read "—" for Time/case).
-    const d = report.performanceMetrics?.durationMs ?? result.performanceMetrics?.durationMs;
-    if (typeof d === 'number' && Number.isFinite(d) && d > 0) durations.push(d);
+    const d = [report.performanceMetrics?.durationMs, result.performanceMetrics?.durationMs]
+      .find((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+    if (d !== undefined) durations.push(d);
 
     const m = metricsByKey[key];
     if (m?.error) { errorCases++; errorMessage ??= m.error; continue; }
@@ -320,8 +321,8 @@ export function describeNoTraces(t: Pick<RunTelemetry, 'totalCases'> & Partial<P
   // while this server reads OpenSearch).
   if (evalOnly > 0) {
     const scope = evalOnly === t.totalCases ? `every one of its ${cases}` : `${evalOnly} of its ${cases}`;
-    return `${TELEMETRY_NO_SPANS_TITLE} — the trace store holds only Agent Health's own evaluation span for ${scope}; no spans from the agent itself were found. ` +
-      'Either the agent is not instrumented, or it exports its traces to a different trace store than the one configured here (observability source). ' +
+    return `${TELEMETRY_NO_SPANS_TITLE} — the trace store holds only Agent Health's own evaluation spans for ${scope}; no spans from the agent itself were found. ` +
+      'Most likely the agent is not instrumented, or it exports its traces to a different trace store than the one configured here (observability source); if the run just finished, its spans may still be ingesting — use Retry. ' +
       'Point this server at the store the agent exports to, or instrument the agent to propagate the eval trace context / stamp session.id, to populate Tokens · Cost · LLM calls.';
   }
   return `${TELEMETRY_NO_SPANS_TITLE} — no spans were found for any of its ${cases}, so this agent's runs were not traced. ` +

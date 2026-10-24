@@ -172,7 +172,7 @@ test.describe('Benchmark Runs — eval-only spans read "no traces" (never 0); le
         await expect(row.getByTestId(id)).toHaveText('no traces');
         await expect(row.getByTestId(id)).toHaveAttribute('data-empty-kind', 'no-traces');
         await expect(row.getByTestId(id).locator('span')).toHaveAttribute('title',
-          /^No traces for this run — the trace store holds only Agent Health's own evaluation span for every one of its 3 cases; no spans from the agent itself were found\. Either the agent is not instrumented, or it exports its traces to a different trace store/);
+          /^No traces for this run — the trace store holds only Agent Health's own evaluation spans for every one of its 3 cases; no spans from the agent itself were found\. Most likely the agent is not instrumented, or it exports its traces to a different trace store/);
       }
       // Pass % comes from the run's own verdicts/stats — never a casualty of missing spans.
       await expect(row.getByTestId('run-passrate-cell')).toContainText('100%');
@@ -190,7 +190,7 @@ test.describe('Benchmark Runs — eval-only spans read "no traces" (never 0); le
     await expect(strip).toHaveAttribute('data-state', 'empty', { timeout: 30_000 });
     await expect(strip).toHaveAttribute('data-empty-kind', 'no-traces');
     await expect(strip.getByTestId('strip-tokens')).toContainText('no traces');
-    await expect(strip.getByTestId('strip-tokens')).toHaveAttribute('title', /holds only Agent Health's own evaluation span for every one of its 3 cases/);
+    await expect(strip.getByTestId('strip-tokens')).toHaveAttribute('title', /holds only Agent Health's own evaluation spans for every one of its 3 cases/);
     await expect(strip.getByTestId('strip-llmcalls')).toContainText('no traces');
     await expect(strip.getByTestId('strip-spans')).toHaveText('spans: 0/3 cases');
     await expect(strip.getByTestId('strip-timepercase')).toContainText('54 s');

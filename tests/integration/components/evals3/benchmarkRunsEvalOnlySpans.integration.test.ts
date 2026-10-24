@@ -260,7 +260,7 @@ describe('Benchmark Runs telemetry — eval-only spans are "no traces", never a 
       expect(t).toMatchObject({ hasSpans: false, unavailable: false, spansCases: 0, evalOnlyCases: 3, totalCases: 3, pendingCases: 0, totalTokens: 0, llmCalls: 0 });
       const sorted = [...legacyDurations[id]].sort((a, b) => a - b);
       expect(t.medianDurationMs).toBe(sorted[1]);    // from results[tc].performanceMetrics — pre-fix null ("—")
-      expect(describeNoTraces(t)).toMatch(/holds only Agent Health's own evaluation span for every one of its 3 cases; no spans from the agent itself were found/);
+      expect(describeNoTraces(t)).toMatch(/holds only Agent Health's own evaluation spans for every one of its 3 cases; no spans from the agent itself were found/);
     }
     const e = aggregateRunTelemetry(runs.find(r => r.id === EVALRUN)!, reports, metricsByKey)!;
     expect(e).toMatchObject({ hasSpans: true, spansCases: 3, evalOnlyCases: 0, totalTokens: 69_600, llmCalls: 6, toolCalls: 3, medianDurationMs: 44_000 });

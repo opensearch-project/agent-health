@@ -694,9 +694,10 @@ export function computeMetricsFromSpans(
   // backend stop at the eval-only source instead of asking the next one.
   // Answer the no-spans shape, flagged so the UI can say WHY.
   if (agentSpans === 0) {
+    const evalSpan = spans.find(s => s.name === 'test_case') ?? spans[0];
     return {
       ...computeMetricsFromSpans(runId, []),
-      traceId: spans[0]?.traceId || null,
+      traceId: evalSpan?.traceId || null,
       evalOnlySpans: spans.length,
     };
   }
