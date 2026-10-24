@@ -20,6 +20,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { PREFS_KEYS } from '@/lib/preferences';
 import { ENV_CONFIG } from '@/lib/config';
+import { markPageReady } from '@/lib/pageLatency';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   GitCompare, CheckCircle2, XCircle, Play,
@@ -274,6 +275,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
           console.error('Failed to load test cases:', error);
         }
         isInitialLoadDone.current = true;
+        markPageReady('benchmark-runs');
       }
     } catch (error) {
       console.error('Failed to load benchmark:', error);
