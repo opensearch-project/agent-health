@@ -215,7 +215,7 @@ test.describe('Test Case Detail — runs list rendering (PR #206)', () => {
     }
   });
 
-  test('Copy run URL button writes the canonical /runs/<id> share URL to the clipboard', async ({ page, request, context }) => {
+  test('Copy run URL button writes the test-case page ?run=<id> share URL to the clipboard', async ({ page, request, context }) => {
     // Some browsers gate clipboard access behind permission. Granting it up
     // front so `navigator.clipboard.writeText` resolves cleanly under the
     // copy-link click handler.
@@ -238,11 +238,13 @@ test.describe('Test Case Detail — runs list rendering (PR #206)', () => {
       await expect(copyBtn).toBeVisible();
       await copyBtn.click();
 
-      // The clipboard contents should be the canonical share URL pointing at
-      // the standalone RunDetailsPage at `/runs/<id>`. The app uses
-      // BrowserRouter (no `#` in the path) so the URL is plain `/runs/<id>`.
+      // The clipboard contents should be this page's own share URL with the
+      // run preselected: `/evaluations/test-cases/<tc>?run=<id>` (the
+      // standalone `/runs/<id>` page is retired). The app uses BrowserRouter
+      // (no `#` in the path).
       const clipboard = await page.evaluate(() => navigator.clipboard.readText());
-      expect(clipboard).toContain(`/runs/${reportId}`);
+      expect(clipboard).toContain(`/evaluations/test-cases/${tc.id}?run=${reportId}`);
+      expect(clipboard).not.toContain(`/runs/${reportId}`);
       expect(clipboard).not.toContain('#'); // never hash-routed
 
       // Visual confirmation: the icon flips to a checkmark briefly. We just

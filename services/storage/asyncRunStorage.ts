@@ -426,6 +426,12 @@ class AsyncRunStorage {
       // Agent-configuration provenance (three short strings) for case-level
       // "same agent, different config" detection in the run inspector.
       'agentFingerprint', 'agentFingerprintShort', 'agentPromptHash',
+      // Reports written before `failureStage` existed only carry the
+      // `(kind=agent_failed)` token inside `traceError` (a short error
+      // message, not trajectory bloat). Without it the run inspector's rows
+      // staged every legacy agent failure as a judge error while the
+      // selected-case panel (full report) said AGENT ERROR.
+      'traceError',
     ];
     // Chunk to keep the URL well under practical limits for large benchmarks.
     const stored = await fetchChunked(reportIds, REPORT_ID_CHUNK_SIZE, chunk => opensearchRuns.getByIds(chunk, { fields }));

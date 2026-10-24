@@ -150,6 +150,15 @@ module.exports = {
     // #428: definition-first test-case detail page hero has a focused
     // jsdom/RTL suite exercising its new rendering lines.
     'components/evals3/TestCaseDetailPage.tsx',
+    // - App.tsx, ReportRedirect.tsx, RunInspectorPage.tsx (#542, legacy-route
+    //   retirement): the real route table + the report-id redirect have jsdom
+    //   suites (appRoutes.legacyRedirects / appRoutes.legacyRedirectGuard) that
+    //   drive every redirect branch, and RunInspectorPage.test.ts covers the
+    //   promote / customize-rerun / planned-aware tally paths that moved here
+    //   from the retired eval-run detail page (95%+ lines in isolation).
+    'App.tsx',
+    'components/ReportRedirect.tsx',
+    'components/evals3/RunInspectorPage.tsx',
     '!**/__tests__/**',
     '!**/*.test.ts',
     '!**/dist/**',

@@ -499,12 +499,19 @@ The evaluation surface lives under `/evaluations/*`. The app uses
 | Run Inspector | `/evaluations/benchmarks/:id/runs/:runId/inspect` | Per-test-case results, trajectory, judge, traces |
 | Test Cases | `/evaluations/test-cases` | List / create / edit / version test cases |
 | Test Case Detail | `/evaluations/test-cases/:id` | Definition + runs with an inline live-run panel |
-| Eval Runs | `/evaluations/runs` · `/evaluations/runs/:id` | Code-import (SDK) and ad-hoc run results |
+| Eval Runs | `/evaluations/runs` · `/evaluations/runs/:id/inspect` | Code-import (SDK) and ad-hoc run results (the inspector; `/evaluations/runs/:id` redirects to it) |
 | Evaluators | `/evaluators` · `/evaluators/:id` | Manage evaluators; version history + Git-style diff |
 | Compare | `/compare/:benchmarkId?runs=a,b` | Diagnosis surface: verdict strip, first-divergence, failure clusters |
 | Agent Traces | `/agent-traces` | OpenTelemetry trace explorer (timeline / flow) |
 | Coding Agents | `/coding-agents` | Coding Agent Analytics (Claude Code / Kiro / Codex) |
 | Settings | `/settings` | Configure agents, models, storage, observability connections |
+
+Retired routes redirect to their evals3 twin (`lib/legacyRouteRedirects.ts`):
+`/benchmarks` → `/evaluations/benchmarks`, `/benchmarks/:id/runs` → `/evaluations/benchmarks/:id/runs`,
+`/benchmarks/:id/runs/:runId` → `…/inspect`, `/test-cases` → `/evaluations/test-cases`,
+`/test-cases/:id/runs` → `/evaluations/test-cases/:id`, `/evaluations/runs/:id` → `…/inspect`.
+`/runs/:reportId` (a per-test-case report id) is resolved to the owning run's inspector
+(`?reportId=`) or, for a standalone single-case report, to `/evaluations/test-cases/:id?run=<reportId>`.
 | Assistant | `/assistant` | Full-page AI chat interface for help and analysis |
 
 ---

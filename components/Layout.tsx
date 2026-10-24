@@ -85,10 +85,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const { status, version, loading, features } = useServerStatus();
 
-  // Determine if testing section should be open based on current path
-  const isTestingPath = location.pathname.startsWith("/test-cases") ||
-                      location.pathname.startsWith("/benchmarks") ||
-                      location.pathname.startsWith("/evaluators");
   // Keep testing dropdown always open
   const [testingOpen, setTestingOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");

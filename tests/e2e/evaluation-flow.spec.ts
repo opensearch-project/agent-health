@@ -27,7 +27,7 @@ test.describe('Full Evaluation Flow with Demo Mode', () => {
   test('should run evaluation on existing benchmark with Demo Agent', async ({ page }) => {
     // This test runs evaluation on existing benchmarks using Demo mode
     // It doesn't require creating new test cases/benchmarks
-    await page.goto('/benchmarks');
+    await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
 
@@ -95,7 +95,7 @@ test.describe('Full Evaluation Flow with Demo Mode', () => {
   });
 
   test('should display benchmark run configuration with agent options', async ({ page }) => {
-    await page.goto('/benchmarks');
+    await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
 
@@ -125,7 +125,7 @@ test.describe('Single Test Case Evaluation Flow', () => {
   test.setTimeout(180000);
 
   test('should run evaluation on a single test case', async ({ page }) => {
-    await page.goto('/test-cases');
+    await page.goto('/evaluations/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
 
@@ -224,7 +224,7 @@ test.describe('Demo Agent Verification', () => {
 
 test.describe('Evaluation Progress UI', () => {
   test('should display progress indicators during evaluation', async ({ page }) => {
-    await page.goto('/benchmarks');
+    await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
 
