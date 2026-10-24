@@ -19,7 +19,7 @@ import { describeNoTraces, describeUnavailable, type RunTelemetry } from '@/lib/
 
 const tel = (over: Partial<RunTelemetry> = {}): RunTelemetry => ({
   totalTokens: 5_900_000, costUsd: 20.19, llmCalls: 312, toolCalls: 118,
-  medianDurationMs: 44_000, spansCases: 4, totalCases: 4, errorCases: 0, pendingCases: 0, unavailable: false, hasSpans: true, partial: false, ...over,
+  medianDurationMs: 44_000, spansCases: 4, evalOnlyCases: 0, totalCases: 4, errorCases: 0, pendingCases: 0, unavailable: false, hasSpans: true, partial: false, ...over,
 });
 const unavailableTel = (over: Partial<RunTelemetry> = {}): RunTelemetry =>
   tel({ hasSpans: false, spansCases: 0, errorCases: 4, unavailable: true, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0, ...over });

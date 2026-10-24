@@ -849,6 +849,45 @@ describe('metricsService', () => {
       expect(result.inputTokens).toBe(500);
       expect(result.outputTokens).toBe(100);
       expect(result.llmCalls).toBe(1);
+      expect(result.hasSpans).toBe(true);
+      expect(result.evalOnlySpans).toBeUndefined();
+    });
+
+    it('a match made ONLY of agent-health eval/judge spans is "no spans" (hasSpans false, evalOnlySpans) — never a measured 0 tokens / 0 LLM calls', () => {
+      // Owner report 2026-10-24: a classic benchmark run whose agent exports
+      // its traces to a different store. Strategy B finds our own `test_case`
+      // span (it carries agent_health.run.id) and nothing else; pre-fix that
+      // read as hasSpans:true → the Runs tab rendered "0 · — · 0".
+      const spans = [
+        {
+          name: 'test_case', traceId: 'd0f1ebf73205fd48ddcd1a7e4a2db94b', durationInNanos: 76_089_000_000,
+          startTime: '2026-10-23T21:20:33.000Z', endTime: '2026-10-23T21:21:49.000Z', status: { code: 1 },
+          attributes: { 'gen_ai.operation.name': 'evaluation', 'agent_health.run.id': 'run-1' },
+        },
+        {
+          name: 'chat', traceId: 'd0f1ebf73205fd48ddcd1a7e4a2db94b',
+          attributes: { 'gen_ai.operation.name': 'evaluation', 'gen_ai.request.model': 'judge-model', 'gen_ai.usage.input_tokens': 4000, 'gen_ai.usage.output_tokens': 300 },
+        },
+      ];
+
+      const result = computeMetricsFromSpans('run-1', spans);
+
+      expect(result).toMatchObject({
+        runId: 'run-1', hasSpans: false, status: 'pending', evalOnlySpans: 2,
+        inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0, durationMs: 0,
+      });
+      // The eval trace is real — keep its id so a consumer can still open it.
+      expect(result.traceId).toBe('d0f1ebf73205fd48ddcd1a7e4a2db94b');
+    });
+
+    it('a trace with the agent\'s own spans alongside ours is NOT eval-only', () => {
+      const result = computeMetricsFromSpans('run-1', [
+        { name: 'test_case', attributes: { 'gen_ai.operation.name': 'evaluation' } },
+        { name: 'execute_tool search_index', attributes: { 'gen_ai.tool.name': 'search_index' } },
+      ]);
+      expect(result.hasSpans).toBe(true);
+      expect(result.evalOnlySpans).toBeUndefined();
+      expect(result.toolCalls).toBe(1);
     });
   });
 

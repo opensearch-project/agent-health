@@ -651,6 +651,7 @@ export function computeMetricsFromSpans(
   let inputTokens = 0;
   let outputTokens = 0;
   let llmCalls = 0;
+  let agentSpans = 0;
   const toolsUsed = new Set<string>();
   let modelId = 'default';
 
@@ -660,6 +661,7 @@ export function computeMetricsFromSpans(
     // can include agent-health's own eval/judge spans — exclude them so the
     // agent's own tokens/cost/LLM-call count aren't inflated by ours.
     if (isEvalOrJudgeSpan(attrs, span.name)) continue;
+    agentSpans++;
     const inTokens = readInputTokens(attrs);
     const outTokens = readOutputTokens(attrs);
     inputTokens += inTokens;
@@ -679,6 +681,24 @@ export function computeMetricsFromSpans(
         toolsUsed.add(toolName);
       }
     }
+  }
+
+  // Every matched span was one of Agent Health's OWN eval/judge spans (the
+  // `test_case` span carries the run id itself, so a Strategy-B/A lookup for
+  // an agent that emits nothing — or exports to a different trace store —
+  // always finds at least that one span). That is NOT "the agent has spans":
+  // reporting `hasSpans: true` here made every consumer render a measured
+  // "0 tokens · 0 LLM calls" instead of "no traces" (owner report
+  // 2026-10-24: a benchmark whose agent traces live in CloudWatch read
+  // 0-everything on an OpenSearch-only server), and made the composite
+  // backend stop at the eval-only source instead of asking the next one.
+  // Answer the no-spans shape, flagged so the UI can say WHY.
+  if (agentSpans === 0) {
+    return {
+      ...computeMetricsFromSpans(runId, []),
+      traceId: spans[0]?.traceId || null,
+      evalOnlySpans: spans.length,
+    };
   }
 
   const pricing = getPricing(modelId);

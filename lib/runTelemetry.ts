@@ -44,14 +44,24 @@ export interface RunTelemetry {
   /** Sum of `toolCalls` over every report with spans. */
   toolCalls: number;
   /**
-   * Median of `report.performanceMetrics.durationMs` over the run's reports
-   * that carry one (wall-clock per test case as measured by the runner —
-   * independent of trace ingestion, so it is populated even when no spans
-   * were found). `null` when no report has a duration.
+   * Median of the per-case wall-clock (ms) as measured by the runner —
+   * `report.performanceMetrics.durationMs`, falling back to the run's own
+   * embedded `results[testCaseId].performanceMetrics.durationMs` (the classic
+   * benchmark path persisted the timing on the run but not on the report).
+   * Independent of trace ingestion, so it is populated even when no spans
+   * were found. `null` when neither carries a duration.
    */
   medianDurationMs: number | null;
   /** Reports whose metrics result reported `hasSpans !== false`. */
   spansCases: number;
+  /**
+   * Reports whose metrics result matched ONLY Agent Health's own eval/judge
+   * spans (`evalOnlySpans > 0`, `hasSpans: false`): the trace store holds our
+   * `test_case` span for the case but nothing from the agent — it is untraced
+   * or exports to a different store. Counted under "no traces"; the tooltip
+   * says which.
+   */
+  evalOnlyCases: number;
   /** Reports considered for this run (those with a metrics key). */
   totalCases: number;
   /** Reports whose metrics request failed (per-key error entry). */
@@ -105,10 +115,10 @@ export type TelemetryReport = Pick<
   'id' | 'runId' | 'traceId' | 'sessionId' | 'agentKey' | 'connectorProtocol' | 'timestamp' | 'performanceMetrics'
 >;
 
-/** A run projected to what the roll-up needs: its id + per-case reportIds. */
+/** A run projected to what the roll-up needs: its id + per-case reportIds (+ the runner's per-case timing, when embedded). */
 export interface TelemetryRun {
   id: string;
-  results?: Record<string, { reportId?: string }>;
+  results?: Record<string, { reportId?: string; performanceMetrics?: { durationMs?: number } }>;
 }
 
 // ─── Correlation ─────────────────────────────────────────────────────────────
@@ -199,7 +209,7 @@ export function median(values: number[]): number | null {
  * existing on `TraceMetrics`.
  */
 export type TelemetryMetricsResult = Partial<Pick<TraceMetrics,
-  'totalTokens' | 'costUsd' | 'llmCalls' | 'toolCalls' | 'hasSpans' | 'status'
+  'totalTokens' | 'costUsd' | 'llmCalls' | 'toolCalls' | 'hasSpans' | 'status' | 'evalOnlySpans'
 >> & { runId: string; error?: string; partial?: boolean };
 
 /**
@@ -208,11 +218,13 @@ export type TelemetryMetricsResult = Partial<Pick<TraceMetrics,
  * Semantics:
  *   - A result counts as "has spans" when it is not an error, not `pending`,
  *     and `hasSpans !== false` (older servers omit the flag; treat present
- *     numbers as real).
+ *     numbers as real). A result that matched only our own eval/judge spans
+ *     (`evalOnlySpans`) is "no spans" and is counted in `evalOnlyCases`.
  *   - Sums are over span-bearing results only, so a run where 3/62 cases
  *     found spans reports the tokens for those 3 and `spansCases: 3`.
  *   - Duration is from the runner's `performanceMetrics.durationMs` (not the
- *     trace), so it is populated regardless of span ingestion.
+ *     trace) — the report's, else the run's embedded per-case copy — so it
+ *     is populated regardless of span ingestion.
  *   - Returns `undefined` when the run has no reports with a metrics key
  *     (nothing to say — the cell renders "—" with a "no reports" tooltip).
  */
@@ -222,7 +234,7 @@ export function aggregateRunTelemetry(
   metricsByKey: Record<string, TelemetryMetricsResult | undefined>,
 ): RunTelemetry | undefined {
   let totalTokens = 0, costUsd = 0, llmCalls = 0, toolCalls = 0;
-  let spansCases = 0, totalCases = 0, errorCases = 0, pendingCases = 0, partial = false;
+  let spansCases = 0, evalOnlyCases = 0, totalCases = 0, errorCases = 0, pendingCases = 0, partial = false;
   let errorMessage: string | undefined;
   const durations: number[] = [];
 
@@ -232,7 +244,10 @@ export function aggregateRunTelemetry(
     const key = metricsKeyForReport(report);
     if (!key) continue;
     totalCases++;
-    const d = report.performanceMetrics?.durationMs;
+    // The report's wall-clock first; else the copy the runner embedded on the
+    // run's own result entry (classic benchmark runs persisted it there only —
+    // without this fallback every such run read "—" for Time/case).
+    const d = report.performanceMetrics?.durationMs ?? result.performanceMetrics?.durationMs;
     if (typeof d === 'number' && Number.isFinite(d) && d > 0) durations.push(d);
 
     const m = metricsByKey[key];
@@ -241,7 +256,10 @@ export function aggregateRunTelemetry(
     // The server's `status: 'pending'` is its "queried, found nothing" shape
     // (computeMetricsFromSpans on zero spans) — that IS "no spans", not
     // "still loading"; only a key with no result at all is pending here.
-    if (m.status === 'pending' || m.hasSpans === false) continue;
+    if (m.status === 'pending' || m.hasSpans === false) {
+      if ((m.evalOnlySpans ?? 0) > 0) evalOnlyCases++;
+      continue;
+    }
     spansCases++;
     totalTokens += m.totalTokens || 0;
     costUsd += m.costUsd || 0;
@@ -254,7 +272,7 @@ export function aggregateRunTelemetry(
   return {
     totalTokens, costUsd, llmCalls, toolCalls,
     medianDurationMs: median(durations),
-    spansCases, totalCases, errorCases, pendingCases, errorMessage,
+    spansCases, evalOnlyCases, totalCases, errorCases, pendingCases, errorMessage,
     unavailable: pendingCases === 0 && errorCases > 0 && spansCases === 0,
     hasSpans: spansCases > 0,
     partial: partial || (errorCases > 0 && spansCases > 0),
@@ -293,8 +311,19 @@ export const TELEMETRY_NO_SPANS_TITLE = 'No traces for this run';
 export const TELEMETRY_UNAVAILABLE_TITLE = 'Metrics unavailable';
 
 /** Tooltip for the "no traces" state: what it means and how to fix it. */
-export function describeNoTraces(t: Pick<RunTelemetry, 'totalCases'>): string {
+export function describeNoTraces(t: Pick<RunTelemetry, 'totalCases'> & Partial<Pick<RunTelemetry, 'evalOnlyCases'>>): string {
   const cases = t.totalCases === 1 ? '1 case' : `${t.totalCases} cases`;
+  const evalOnly = t.evalOnlyCases ?? 0;
+  // The trace store answered with OUR eval span for the case but nothing from
+  // the agent: a different message, because "enable tracing" is not the fix
+  // when the agent IS traced but exports somewhere else (e.g. CloudWatch
+  // while this server reads OpenSearch).
+  if (evalOnly > 0) {
+    const scope = evalOnly === t.totalCases ? `every one of its ${cases}` : `${evalOnly} of its ${cases}`;
+    return `${TELEMETRY_NO_SPANS_TITLE} — the trace store holds only Agent Health's own evaluation span for ${scope}; no spans from the agent itself were found. ` +
+      'Either the agent is not instrumented, or it exports its traces to a different trace store than the one configured here (observability source). ' +
+      'Point this server at the store the agent exports to, or instrument the agent to propagate the eval trace context / stamp session.id, to populate Tokens · Cost · LLM calls.';
+  }
   return `${TELEMETRY_NO_SPANS_TITLE} — no spans were found for any of its ${cases}, so this agent's runs were not traced. ` +
     'Enable trace mode on the agent (useTraces: true) and OTel instrumentation that propagates the eval trace context or stamps session.id / agent_health.run.id ' +
     '(set traceServiceName to the agent\'s OTel service.name for the time-window fallback) to populate Tokens · Cost · LLM calls.';
