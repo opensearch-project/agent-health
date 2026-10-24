@@ -315,7 +315,6 @@ Each CI run produces these artifacts (downloadable from Actions tab):
 | `integration-coverage-report` | Integration test coverage |
 | `cli-coverage-report` | `coverage-cli/lcov.info` — coverage of `cli/**` from real CLI processes (also on Codecov as flag `cli`) |
 | `playwright-report` | E2E test report with screenshots/traces |
-| `test-badges` | Badge data JSON for coverage visualization |
 
 ---
 
