@@ -465,11 +465,23 @@ npm test -- --testNamePattern="pattern"     # By name
 
 Coverage reports are generated in the `coverage/` directory. HTML report available at `coverage/lcov-report/index.html`.
 
-CI enforces minimum coverage thresholds configured in `jest.config.cjs`:
-- **Lines**: 90%
-- **Statements**: 90%
-- **Functions**: 80%
-- **Branches**: 80%
+CI enforces the unit-coverage baseline configured in `jest.config.cjs` (an
+honest no-regression ratchet — the old 90/90/80/80 was never met and only looked
+green because jest's exit code was piped away):
+- **Lines**: 70%
+- **Statements**: 70%
+- **Functions**: 65%
+- **Branches**: 60%
+
+On PRs, Codecov adds `codecov/patch` (>= 80% of new/changed lines, across the
+`unit`, `integration`, `e2e` and `cli` flags) and `codecov/project` (no drop
+> 1% vs base), annotates uncovered changed lines in the diff, and each test job
+writes a changed-files coverage table to its job summary
+(`scripts/coverage-diff-summary.ts`). `cli/**` is measured from the real CLI
+processes the integration tests spawn (`NODE_V8_COVERAGE` → `npm run
+coverage:cli`); tests that spawn the CLI must wrap the child env in
+`withCliCoverage()` from `tests/helpers/cliCoverage.ts` or their run is
+invisible to coverage. Details: [DEVELOPER_GUIDE.md → Coverage](DEVELOPER_GUIDE.md#coverage).
 
 ### Integration / e2e Test Cleanup
 
@@ -637,7 +649,7 @@ GitHub Actions workflows are configured in `.github/workflows/`:
 
 All PRs must pass:
 1. **Build and Tests** - Builds successfully on Node 22 and 24 (18/20 are EOL and vulnerable to CVE-2026-111497; `build-and-test (22)` is the required check)
-2. **Coverage Threshold** - Minimum 90% line coverage
+2. **Coverage** - Unit line-coverage baseline (70%, `jest.config.cjs`) plus Codecov `codecov/patch` (80% of new/changed lines)
 3. **License Headers** - All source files must have SPDX headers
 4. **Security Scan** - No high/critical vulnerabilities (npm audit)
 5. **DCO Signoff** - All commits signed with DCO

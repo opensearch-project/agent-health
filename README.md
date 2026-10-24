@@ -19,6 +19,11 @@ Agent Health helps you evaluate, monitor, and optimize AI agents of any kind —
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.txt)
 [![npm version](https://img.shields.io/npm/v/@opensearch-project/agent-health.svg)](https://www.npmjs.com/package/@opensearch-project/agent-health)
 [![Build](https://github.com/opensearch-project/agent-health/actions/workflows/ci.yml/badge.svg)](https://github.com/opensearch-project/agent-health/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/opensearch-project/agent-health/branch/main/graph/badge.svg)](https://codecov.io/gh/opensearch-project/agent-health)
+[![unit coverage](https://codecov.io/gh/opensearch-project/agent-health/branch/main/graph/badge.svg?flag=unit)](https://app.codecov.io/gh/opensearch-project/agent-health?flags%5B0%5D=unit)
+[![integration coverage](https://codecov.io/gh/opensearch-project/agent-health/branch/main/graph/badge.svg?flag=integration)](https://app.codecov.io/gh/opensearch-project/agent-health?flags%5B0%5D=integration)
+[![e2e coverage](https://codecov.io/gh/opensearch-project/agent-health/branch/main/graph/badge.svg?flag=e2e)](https://app.codecov.io/gh/opensearch-project/agent-health?flags%5B0%5D=e2e)
+[![cli coverage](https://codecov.io/gh/opensearch-project/agent-health/branch/main/graph/badge.svg?flag=cli)](https://app.codecov.io/gh/opensearch-project/agent-health?flags%5B0%5D=cli)
 [![SDK Status](https://img.shields.io/badge/Code--Based%20SDK-Experimental-orange.svg)](docs/SDK.md)
 
 </div>
