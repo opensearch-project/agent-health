@@ -33,6 +33,7 @@ import { AgentFingerprintChip, AgentConfigChangedBadge } from './AgentFingerprin
 import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel, getErrorStage } from './ResultStatus';
 import { DEFAULT_CONFIG } from '@/lib/constants';
+import { toJudgeModelKey } from '@/lib/judgeModelKey';
 import { formatDate, getModelName } from '@/lib/utils';
 import { getRunActionVisibility, isRejudgeableResult } from '@/lib/runActions';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
@@ -83,7 +84,8 @@ export function legacyRerunValues(run: BenchmarkRun): Partial<RunConfigValues> {
     description: `Re-run of legacy run "${run.name}" (${run.id})`,
     agentKey,
     modelId,
-    judgeModelId,
+    // A full provider model id (classic runs) is shown as its picker key.
+    judgeModelId: toJudgeModelKey(judgeModelId, DEFAULT_CONFIG.models) || undefined,
     evaluatorId,
     concurrency,
   };

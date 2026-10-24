@@ -183,6 +183,13 @@ describe('seedRetryJudgementDefaults', () => {
     expect(seedRetryJudgementDefaults(baseRun, 2)).toEqual({ evaluatorId: 'custom-1', judgeModelId: 'run-model', scope: 'errored' });
   });
 
+  it('a run whose judgeModelId is the FULL provider model id (classic/CLI runs) seeds the picker KEY, so the select is not blank', () => {
+    const { DEFAULT_CONFIG } = require('@/lib/constants');
+    const full = Object.values(DEFAULT_CONFIG.models as Record<string, { model_id: string }>).find(m => m.model_id.startsWith('us.anthropic.'))!.model_id;
+    const key = Object.entries(DEFAULT_CONFIG.models as Record<string, { model_id: string }>).find(([, m]) => m.model_id === full)![0];
+    expect(seedRetryJudgementDefaults({ evaluatorId: 'custom-1', judgeModelId: full }, 0).judgeModelId).toBe(key);
+  });
+
   it('prefers lastJudgementRetry (the last selection) over the run\'s values', () => {
     const run = { ...baseRun, lastJudgementRetry: { evaluatorId: 'system-factuality', judgeModelId: 'picked', scope: 'all' as const, at: 'x' } };
     expect(seedRetryJudgementDefaults(run, 2)).toMatchObject({ evaluatorId: 'system-factuality', judgeModelId: 'picked' });

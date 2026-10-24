@@ -53,6 +53,8 @@ import { JudgeModelSelect } from '@/components/JudgeModelSelect';
 import { BenchmarkRun, EvaluationRun, Evaluator } from '@/types';
 import type { ScoringDiagnostics } from '@/types';
 import { ENV_CONFIG } from '@/lib/config';
+import { DEFAULT_CONFIG } from '@/lib/constants';
+import { toJudgeModelKey } from '@/lib/judgeModelKey';
 import {
   groupNotEvaluableReasons,
   notEvaluableCount,
@@ -88,7 +90,8 @@ export function seedRetryJudgementDefaults(
   const last = run.lastJudgementRetry;
   return {
     evaluatorId: (last ? last.evaluatorId : run.evaluatorId) || DEFAULT_EVALUATOR_ID,
-    judgeModelId: (last ? last.judgeModelId : run.judgeModelId) || '',
+    // A full provider model id (CLI / classic runs) is shown as its picker key.
+    judgeModelId: toJudgeModelKey(last ? last.judgeModelId : run.judgeModelId, DEFAULT_CONFIG.models),
     scope: judgeFailedCount > 0 ? 'errored' : 'all',
   };
 }
