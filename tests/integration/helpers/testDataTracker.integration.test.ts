@@ -383,7 +383,8 @@ describe('test-data cleanup harness (integration)', () => {
       body: JSON.stringify({
         name: uniqueTestName('cleanup-evaluator'),
         systemPrompt: 'cleanup harness probe',
-        scoringConfig: { passThreshold: 0.5 },
+        // A valid scoring config: POST validates metrics (lib/scoring/validateScoringConfig).
+        scoringConfig: { metrics: [{ name: 'accuracy', description: 'probe', weight: 1, scale: 100 }], passThreshold: 50, scale: 100 },
       }),
     });
     expect(response.ok).toBe(true);

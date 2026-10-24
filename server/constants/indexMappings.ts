@@ -56,6 +56,9 @@ export function getIndexMappings(): IndexMappings {
           context: { type: 'object', enabled: false },
           forwardedProps: { type: 'object', enabled: false },
           expectedOutcome: { type: 'text' },
+          // Structured expectations (`expected.ids` = gold ids for
+          // deterministic evaluators). Display/scoring data, never queried.
+          expected: { type: 'object', enabled: false },
           expectedTrajectory: { type: 'object', enabled: false },
           // Per-test SDK definition capture (resolved test() options + the
           // evaluate body text). Stored for display only — never queried —
@@ -335,8 +338,18 @@ export function getIndexMappings(): IndexMappings {
               judgeModelId: { type: 'keyword' },
               primaryMetrics: { type: 'keyword' },
               unevaluable: { type: 'keyword' },
+              notApplicable: { type: 'keyword' },
               extractionRule: { type: 'keyword' },
               goldIdsUsed: { type: 'keyword' },
+              goldRule: { type: 'keyword' },
+              extraction: {
+                properties: {
+                  candidateCount: { type: 'integer' },
+                  citedCount: { type: 'integer' },
+                  anchorsRemoved: { type: 'integer' },
+                  parsedFrom: { type: 'keyword' },
+                },
+              },
               passPolicy: {
                 dynamic: false,
                 properties: { kind: { type: 'keyword' }, minScore: { type: 'float' } },
@@ -356,6 +369,11 @@ export function getIndexMappings(): IndexMappings {
           // Retry-judgement stamp (services/evaluation/retryJudgement.ts).
           judgementRetriedAt: { type: 'date' },
           judgementRetryCount: { type: 'integer' },
+          // Verdict-engine outputs written alongside the snapshot on every
+          // new judgement (lib/scoring/verdictEngine.ts).
+          llmVerdict: { type: 'keyword' },
+          verdictConflict: { type: 'boolean' },
+          score: { type: 'float' },
         },
       },
     },
@@ -416,6 +434,14 @@ export function getIndexMappings(): IndexMappings {
           createdAt: { type: 'date' },
           updatedAt: { type: 'date' },
           systemPrompt: { type: 'text' },
+          // Deterministic evaluators (kind: 'deterministic'). `metrics[]` /
+          // `passPolicy` / `inputs` are author-shaped scoring DATA (free-form
+          // metric names, regex patterns, tool/field names) — stored
+          // verbatim, never queried, so kept out of dynamic mapping.
+          kind: { type: 'keyword' },
+          metrics: { type: 'object', enabled: false },
+          passPolicy: { type: 'object', enabled: false },
+          inputs: { type: 'object', enabled: false },
           scoringConfig: {
             properties: {
               metrics: {
@@ -447,6 +473,10 @@ export function getIndexMappings(): IndexMappings {
               systemPrompt: { type: 'text' },
               scoringConfig: { type: 'object', enabled: false },
               inferenceConfig: { type: 'object', enabled: false },
+              kind: { type: 'keyword' },
+              metrics: { type: 'object', enabled: false },
+              passPolicy: { type: 'object', enabled: false },
+              inputs: { type: 'object', enabled: false },
             },
           },
         },
