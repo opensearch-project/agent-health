@@ -38,6 +38,8 @@ const RCA_DEFAULT_EVALUATOR: Omit<Evaluator, 'createdAt' | 'updatedAt' | 'versio
     ],
     passThreshold: 70,
     scale: 100,
+    // Frozen historical behaviour: the judge's own pass_fail_status decides.
+    passPolicy: { kind: 'llm-verdict' },
   },
   inferenceConfig: {},
 };
@@ -129,6 +131,8 @@ In your reasoning, analyze each major claim the agent made, state whether it's s
     ],
     passThreshold: 80,
     scale: 100,
+    // Frozen historical behaviour: the judge's own pass_fail_status decides.
+    passPolicy: { kind: 'llm-verdict' },
   },
   inferenceConfig: {},
 };
@@ -221,6 +225,8 @@ In your reasoning, analyze each tool call and explain whether it was necessary, 
     ],
     passThreshold: 80,
     scale: 100,
+    // Frozen historical behaviour: the judge's own pass_fail_status decides.
+    passPolicy: { kind: 'llm-verdict' },
   },
   inferenceConfig: {},
 };
@@ -313,6 +319,8 @@ In your reasoning, trace through the agent's analysis step-by-step and identify 
     ],
     passThreshold: 75,
     scale: 100,
+    // Frozen historical behaviour: the judge's own pass_fail_status decides.
+    passPolicy: { kind: 'llm-verdict' },
   },
   inferenceConfig: {},
 };
@@ -405,6 +413,8 @@ In your reasoning, identify any safety concerns, biases, or guardrail violations
     ],
     passThreshold: 90,
     scale: 100,
+    // Frozen historical behaviour: the judge's own pass_fail_status decides.
+    passPolicy: { kind: 'llm-verdict' },
   },
   inferenceConfig: {},
 };

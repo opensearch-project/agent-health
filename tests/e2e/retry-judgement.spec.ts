@@ -181,12 +181,15 @@ test.describe('Run inspector — Retry judgement (kebab item)', () => {
     await page.locator('[data-testid="retry-judgement-confirm-btn"]').click();
 
     // While polling (poll interval is 2s client-side), the dialog shows a
-    // live progress row rather than sitting on a bare spinner.
+    // live progress row rather than sitting on a bare spinner. (The job runs
+    // in the client-side job store — see retry-judgement-async.spec.ts for
+    // closing the dialog mid-flight.)
     await expect(page.locator('[data-testid="retry-judgement-progress"]')).toBeVisible({ timeout: 5000 });
 
     const summary = page.locator('[data-testid="retry-judgement-summary"]');
     await expect(summary).toBeVisible({ timeout: 15000 });
-    await expect(summary).toContainText('1 succeeded');
+    await expect(page.locator('[data-testid="retry-judgement-summary-line"]')).toHaveText('Retried 1 · 1 scored');
+    await expect(summary).toContainText('1 scored');
     expect(posted).toBe(true);
     expect(statusPolled).toBeGreaterThan(0);
 

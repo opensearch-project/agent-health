@@ -228,14 +228,14 @@ describe('judgeResponseParser', () => {
         expect(out.metrics.trajectory_alignment_score).toBe(80);
       });
 
-      it('defaults accuracy to 0 when absent (legacy shape contract)', () => {
-        // Pre-fix code had `accuracy ?? 0` baked into every spawned-CLI
-        // service; preserve that fallback in the legacy-no-evaluator path
-        // so back-compat callers (the unit test that exercises
-        // parsePiJudgeJson standalone) keep getting accuracy=0.
+      it('leaves accuracy ABSENT when the judge did not emit it (never a default 0)', () => {
+        // The legacy fallback used to coerce a missing `accuracy` to 0, which
+        // persisted a fabricated zero onto reports. A rubric the judge did
+        // not return is `unevaluable` (verdict engine), not 0.
         const raw = JSON.stringify({ pass_fail_status: 'passed', reasoning: 'r' });
         const out = parseJudgeResponse(raw);
-        expect(out.metrics.accuracy).toBe(0);
+        expect(out.metrics.accuracy).toBeUndefined();
+        expect(Object.keys(out.metrics)).toEqual([]);
       });
     });
 
