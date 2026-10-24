@@ -15,6 +15,11 @@ import { debug } from '@/lib/debug';
 import { getStorageModule } from '@/server/adapters';
 import { SYSTEM_EVALUATORS, toEvaluator, isSystemEvaluatorId, getSystemEvaluatorById } from '@/server/prompts/evaluatorTemplates';
 import type { Evaluator, StorageMetadata } from '@/types';
+import {
+  isDeterministicEvaluator,
+  normalizeDeterministicEvaluator,
+  validateDeterministicEvaluator,
+} from '@/lib/evaluators/deterministic';
 
 const router = Router();
 
@@ -182,10 +187,36 @@ router.get('/api/storage/evaluators/:id/versions/:version', async (req: Request,
   }
 });
 
+/**
+ * Validate + normalize a `kind: 'deterministic'` evaluator body (see
+ * lib/evaluators/deterministic.ts). Returns the 400 error text, or the
+ * normalized body (`systemPrompt: ''`, synthesized `scoringConfig`, metric
+ * defaults filled). LLM evaluators pass through untouched.
+ */
+function prepareEvaluatorBody(body: Record<string, any>): { error?: string; evaluator: Record<string, any> } {
+  if (body.kind !== undefined && body.kind !== 'llm' && body.kind !== 'deterministic') {
+    return { error: "kind must be 'llm' or 'deterministic'", evaluator: body };
+  }
+  if (!isDeterministicEvaluator(body)) return { evaluator: body };
+  const errors = validateDeterministicEvaluator(body);
+  if (errors.length > 0) {
+    return { error: `Invalid deterministic evaluator: ${errors.join('; ')}`, evaluator: body };
+  }
+  return { evaluator: normalizeDeterministicEvaluator(body) };
+}
+
 // POST /api/storage/evaluators - Create new (version 1)
+//
+// Body: the LLM shape ({ name, systemPrompt, scoringConfig, inferenceConfig })
+// OR a deterministic evaluator ({ name, kind: 'deterministic', metrics[],
+// passPolicy, inputs }) — see docs/EVALUATORS.md "Deterministic evaluators".
 router.post('/api/storage/evaluators', async (req: Request, res: Response) => {
   try {
-    const evaluator = { ...req.body };
+    const prepared = prepareEvaluatorBody({ ...req.body });
+    if (prepared.error) {
+      return res.status(400).json({ error: prepared.error });
+    }
+    const evaluator = prepared.evaluator;
 
     // Reject creating with system evaluator IDs
     if (evaluator.id && isSystemId(evaluator.id)) {
@@ -196,7 +227,7 @@ router.post('/api/storage/evaluators', async (req: Request, res: Response) => {
     if (!evaluator.name) {
       return res.status(400).json({ error: 'Evaluator name is required' });
     }
-    if (!evaluator.systemPrompt) {
+    if (!evaluator.systemPrompt && !isDeterministicEvaluator(evaluator)) {
       return res.status(400).json({ error: 'Evaluator system prompt is required' });
     }
     if (!evaluator.scoringConfig) {
@@ -225,7 +256,28 @@ router.put('/api/storage/evaluators/:id', async (req: Request, res: Response) =>
     }
 
     const storage = getStorageModule();
-    const updated = await storage.evaluators.update(id, req.body);
+    // Validate the MERGED document: a deterministic evaluator's partial
+    // update (e.g. just `passPolicy`) must still yield a valid whole. An
+    // unknown id falls through to storage.update, which throws as before.
+    const current = await storage.evaluators.getById(id).catch(() => null);
+    const merged = { ...(current ?? {}), ...req.body };
+    const prepared = prepareEvaluatorBody(merged);
+    if (prepared.error) {
+      return res.status(400).json({ error: prepared.error });
+    }
+    const updates = isDeterministicEvaluator(merged)
+      ? {
+          ...req.body,
+          kind: 'deterministic',
+          systemPrompt: '',
+          inferenceConfig: {},
+          metrics: prepared.evaluator.metrics,
+          passPolicy: prepared.evaluator.passPolicy,
+          inputs: prepared.evaluator.inputs,
+          scoringConfig: prepared.evaluator.scoringConfig,
+        }
+      : req.body;
+    const updated = await storage.evaluators.update(id, updates);
 
     debug('StorageAPI', `Updated evaluator: ${id} → v${updated.currentVersion}`);
     res.json(updated);

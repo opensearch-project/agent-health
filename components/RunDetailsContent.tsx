@@ -593,7 +593,13 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           {evaluator ? (
             evaluator.scoringConfig.metrics.map((metric, idx) => {
               const metricValue = (liveReport.metrics as any)[metric.name];
-              const displayValue = metricValue != null ? `${metricValue}%` : '—';
+              // Format in the metric's OWN scale: 0–1 metrics (deterministic
+              // retrieval evaluators, per the report's snapshot or the
+              // evaluator's declared scale) as fractions, 0–100 as percentages.
+              const scaleMax = liveReport.scoringSnapshot?.scale?.[metric.name]?.max ?? metric.scale ?? 100;
+              const displayValue = typeof metricValue === 'number'
+                ? (scaleMax <= 1 ? (Math.round(metricValue * 100) / 100).toFixed(2) : `${Math.round(metricValue * 10) / 10}%`)
+                : '—';
               return (
                 <Card key={metric.name} className="bg-muted/50 col-span-2">
                   <CardContent className="p-2">
@@ -1136,8 +1142,14 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                         </div>
                       ))}
                     </div>
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      Pass Threshold: {evaluator.scoringConfig.passThreshold}%
+                    <div className="mt-2 text-xs text-muted-foreground" data-testid="evaluator-pass-policy">
+                      {evaluator.kind === 'deterministic' && evaluator.passPolicy
+                        ? evaluator.passPolicy.kind === 'gates'
+                          ? `Pass policy: gates (${evaluator.passPolicy.gates.map(g => `${g.metric} ≥ ${g.min}`).join(', ')}) · deterministic, no LLM`
+                          : evaluator.passPolicy.kind === 'threshold'
+                            ? `Pass policy: weighted score ≥ ${evaluator.passPolicy.minScore} · deterministic, no LLM`
+                            : 'Pass policy: judge verdict'
+                        : `Pass Threshold: ${evaluator.scoringConfig.passThreshold}%`}
                     </div>
                   </div>
                 </CardContent></Card>
