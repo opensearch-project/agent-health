@@ -13,7 +13,7 @@ import { EvaluationReport, BenchmarkRun, TrajectoryStep, ToolCallStatus } from '
 import { calculateTotalLatency } from '@/data/mockComparisonData';
 import { cn } from '@/lib/utils';
 import { Markdown } from '@/components/ui/markdown';
-import { normalizeTrajectorySteps } from '@/lib/trajectoryStepDisplay';
+import { normalizeTrajectorySteps, stepContentText } from '@/lib/trajectoryStepDisplay';
 
 interface TrajectorySectionProps {
   runs: BenchmarkRun[];
@@ -70,10 +70,10 @@ const TrajectoryStepItem: React.FC<{ step: TrajectoryStep }> = ({ step }) => {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-6 pl-4 border-l border-border py-2 space-y-2">
-          {step.content && (
+          {stepContentText(step) && (
             <div>
               <p className="text-xs text-muted-foreground mb-1">Content:</p>
-              <Markdown className="text-xs bg-muted/30 p-2 rounded">{step.content}</Markdown>
+              <Markdown className="text-xs bg-muted/30 p-2 rounded">{stepContentText(step)}</Markdown>
             </div>
           )}
           {step.toolArgs && (

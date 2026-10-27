@@ -34,10 +34,46 @@ const LEGACY_USER_PREFIX = 'User: ';
  * low and no worse than the risk already accepted for the first step.
  */
 export function normalizeLegacyUserStep(step: TrajectoryStep): TrajectoryStep {
-  if (step.type === 'thinking' && step.content.startsWith(LEGACY_USER_PREFIX)) {
+  if (step.type === 'thinking' && typeof step.content === 'string' && step.content.startsWith(LEGACY_USER_PREFIX)) {
     return { ...step, type: 'user', content: step.content.slice(LEGACY_USER_PREFIX.length) };
   }
   return step;
+}
+
+/** Shown in place of a step body when the step carries no renderable text. */
+export const NO_STEP_TEXT_PLACEHOLDER = '(no text)';
+
+/**
+ * Coerce a persisted step's `content` into a string for rendering.
+ *
+ * `TrajectoryStep.content` is typed `string`, but reports are written by many
+ * producers (connectors, the code SDK, `POST /api/storage/runs` from any
+ * client, older schema versions) and nothing on the write path enforces the
+ * type. A `tool_call`/`action` step with no text — only `toolName` +
+ * `toolArgs` — or one whose producer stuffed the arguments object straight
+ * into `content` is a real shape. Reading `.length` / `.startsWith` /
+ * `.split` on it throws inside the React render, and because the trajectory
+ * list has no error boundary that blanked the whole Run inspector.
+ *
+ * Rules:
+ * - string → as-is
+ * - `null` / `undefined` → `''` (callers render {@link NO_STEP_TEXT_PLACEHOLDER})
+ * - object / array → pretty-printed JSON (this is what producers meant: the
+ *   serialized tool arguments), falling back to `String()` on circular input
+ * - any other primitive → `String()`
+ */
+export function stepContentText(step: Pick<TrajectoryStep, 'content'>): string {
+  const content: unknown = step.content;
+  if (typeof content === 'string') return content;
+  if (content === null || content === undefined) return '';
+  if (typeof content === 'object') {
+    try {
+      return JSON.stringify(content, null, 2);
+    } catch {
+      return String(content);
+    }
+  }
+  return String(content);
 }
 
 /** Apply {@link normalizeLegacyUserStep} across a full trajectory. */

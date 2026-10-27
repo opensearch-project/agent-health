@@ -31,6 +31,7 @@ import {
 } from '@/services/trajectoryDiffService';
 import { cn } from '@/lib/utils';
 import { Markdown } from '@/components/ui/markdown';
+import { stepContentText } from '@/lib/trajectoryStepDisplay';
 
 interface TrajectoryDiffViewProps {
   runs: BenchmarkRun[];
@@ -199,8 +200,8 @@ const DiffStepRow: React.FC<{
               <p className="text-xs font-medium text-muted-foreground mb-1">
                 {aligned.type === 'added' ? comparisonRunName : baselineRunName}
               </p>
-              {step.content && (
-                <Markdown className="text-xs bg-muted/30 p-2 rounded mb-2">{step.content}</Markdown>
+              {stepContentText(step) && (
+                <Markdown className="text-xs bg-muted/30 p-2 rounded mb-2">{stepContentText(step)}</Markdown>
               )}
               {step.toolArgs && (
                 <pre className="text-xs bg-muted/30 p-2 rounded overflow-x-auto">
