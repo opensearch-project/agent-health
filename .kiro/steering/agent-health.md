@@ -475,9 +475,11 @@ primitive returns `llmJudgeReasoning`.
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/assistant/chat` | Chat with AI assistant (SSE) → `{ sessionId, message, context }` → `{ type: 'delta'\|'done', content }` |
-| DELETE | `/api/assistant/session/:sessionId` | Clear session |
-| GET | `/api/assistant/health` | Check assistant availability |
+| GET | `/api/ask/status` | Built-in assistant status → `{ enabled, model, sessionsDir, local: true }` |
+| POST | `/api/ask` | Ask the built-in assistant about highlighted text (SSE) → `{ question, selections, pageContext, sessionId? }` → `{ type: 'meta'\|'delta'\|'tool'\|'done'\|'error' }` |
+| POST | `/api/ask/prepare` | Pre-build the page snapshot + pi session → `{ sessionId }` |
+| GET | `/api/ask/sessions` | List ask threads (pi sessions, local to the server; `?route=` filters to a page) |
+| GET | `/api/ask/sessions/:id` | One ask thread with its turns |
 
 ---
 

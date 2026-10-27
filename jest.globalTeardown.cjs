@@ -79,7 +79,6 @@ const DELETE_PATHS = {
   evaluator: (id) => `/api/storage/evaluators/${encodeURIComponent(id)}`,
   'custom-agent': (id) => `/api/agents/custom/${encodeURIComponent(id)}`,
   'remote-server': (id) => `/api/remote-servers/${encodeURIComponent(id)}`,
-  'assistant-session': (id) => `/api/assistant/session/${encodeURIComponent(id)}`,
 };
 
 /**
@@ -96,7 +95,6 @@ const KIND_ORDER = [
   'evaluator',
   'custom-agent',
   'remote-server',
-  'assistant-session',
 ];
 
 /**

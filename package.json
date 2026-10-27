@@ -90,7 +90,6 @@
   },
   "dependencies": {
     "@ag-ui/core": "^0.0.41",
-    "@assistant-ui/react": "^0.14.0",
     "@aws-sdk/client-bedrock": "^3.1000.0",
     "@aws-sdk/client-bedrock-agent": "^3.1038.0",
     "@aws-sdk/client-bedrock-agent-runtime": "^3.1038.0",
