@@ -532,3 +532,62 @@ describe('TrajectoryDiffService', () => {
     });
   });
 });
+
+/**
+ * Regression: a persisted step without a string `content` (undefined / null /
+ * object) threw `TypeError: ... toLowerCase is not a function` out of
+ * `calculateStepSimilarity`, which took down every comparison surface that
+ * aligns trajectories. Same root cause as the Run inspector blank page.
+ */
+describe('TrajectoryDiffService — steps without a string content', () => {
+  const malformedShapes: Array<[string, unknown]> = [
+    ['undefined', undefined],
+    ['null', null],
+    ['object', { index: 'orders-*', size: 5 }],
+    ['number', 42],
+  ];
+
+  it.each(malformedShapes)('calculateStepSimilarity does not throw when one step has %s content', (_label, content) => {
+    const a = createStep('action', { toolName: 'search_orders', toolArgs: { index: 'orders-*' }, content: content as unknown as string });
+    const b = createStep('action', { toolName: 'search_orders', toolArgs: { index: 'orders-*' }, content: 'search_orders(index=orders-*)' });
+    expect(() => calculateStepSimilarity(a, b)).not.toThrow();
+    const score = calculateStepSimilarity(a, b);
+    expect(score).toBeGreaterThan(0);
+    expect(score).toBeLessThanOrEqual(1);
+  });
+
+  it('treats two steps whose object contents serialize identically as identical content', () => {
+    const args = { index: 'orders-*', size: 5 };
+    const a = createStep('action', { toolName: 't', toolArgs: args, content: { ...args } as unknown as string });
+    const b = createStep('action', { toolName: 't', toolArgs: args, content: { ...args } as unknown as string });
+    expect(calculateStepSimilarity(a, b)).toBe(1.0);
+  });
+
+  it.each(malformedShapes)('alignTrajectories + extractFirstDivergence survive a %s-content step mid-trajectory', (_label, content) => {
+    const baseline = [
+      createStep('user', { content: 'Why did orders fail?' }),
+      createStep('action', { toolName: 'list_indices', toolArgs: {}, content: '{}' }),
+      createStep('action', { toolName: 'search_orders', toolArgs: { index: 'orders-*' }, content: content as unknown as string }),
+      createStep('response', { content: 'Payment gateway timeout.' }),
+    ];
+    const comparison = [
+      createStep('user', { content: 'Why did orders fail?' }),
+      createStep('action', { toolName: 'list_indices', toolArgs: {}, content: '{}' }),
+      createStep('action', { toolName: 'search_payments', toolArgs: { index: 'payments-*' }, content: content as unknown as string }),
+      createStep('response', { content: 'Payment gateway timeout.' }),
+    ];
+    let aligned: AlignedStep[] = [];
+    expect(() => { aligned = alignTrajectories(baseline, comparison); }).not.toThrow();
+    expect(aligned.length).toBeGreaterThanOrEqual(4);
+    expect(() => calculateDiffStats(aligned, baseline, comparison)).not.toThrow();
+    expect(() => extractFirstDivergence(baseline, comparison)).not.toThrow();
+  });
+
+  it('extractFirstDivergence summarizes a tool-less step with object content via its serialized text', () => {
+    const baseline = [createStep('assistant', { content: 'same' })];
+    const comparison = [createStep('assistant', { content: { note: 'different-object' } as unknown as string })];
+    const divergence = extractFirstDivergence(baseline, comparison);
+    expect(divergence).not.toBeNull();
+    expect(divergence!.comparisonSummary).toContain('different-object');
+  });
+});
