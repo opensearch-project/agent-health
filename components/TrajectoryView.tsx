@@ -8,7 +8,13 @@ import { TrajectoryStep, ToolCallStatus } from '@/types';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Markdown, hasRealMarkdown } from '@/components/ui/markdown';
 import { truncate } from '@/lib/utils';
-import { normalizeLegacyUserStep, stepContentText, NO_STEP_TEXT_PLACEHOLDER } from '@/lib/trajectoryStepDisplay';
+import {
+  normalizeLegacyUserStep,
+  stepContentText,
+  stepContentIsStructured,
+  safeStringify,
+  NO_STEP_TEXT_PLACEHOLDER,
+} from '@/lib/trajectoryStepDisplay';
 import { RenderErrorBoundary } from '@/components/ui/render-error-boundary';
 
 interface TrajectoryViewProps {
@@ -38,10 +44,22 @@ const typeBgColors: Record<string, string> = {
 };
 
 const isCollapsible = (step: TrajectoryStep, text: string): boolean => {
+  // An empty body is never collapsible — a "0 chars" expander on a thinking
+  // step with no text is noise; the caller shows the "(no text)" placeholder.
+  if (text.length === 0) return false;
   return step.type === 'thinking' ||
          (step.type === 'tool_result' && text.length > 100) ||
          text.length > 200;
 };
+
+/**
+ * Stable identity for a step's expand/collapse state and React key. Persisted
+ * steps may lack an `id` or repeat one (two producers, a retried tool call);
+ * keying purely on `step.id` would make such steps share one toggle. The
+ * position is part of the key because trajectories are append-only.
+ */
+const stepKey = (step: TrajectoryStep | null | undefined, index: number): string =>
+  `${index}:${typeof step?.id === 'string' ? step.id : ''}`;
 
 const formatLabel = (step: TrajectoryStep): string => {
   if (step.type === 'action' && step.toolName) {
@@ -63,9 +81,10 @@ const formatLatency = (ms?: number): string => {
 };
 
 interface StepCardProps {
-  step: TrajectoryStep;
+  step: TrajectoryStep | null | undefined;
+  stepKey: string;
   isExpanded: boolean;
-  onToggle: (stepId: string) => void;
+  onToggle: (stepKey: string) => void;
 }
 
 /**
@@ -76,11 +95,17 @@ interface StepCardProps {
  * its render work inside the per-step `RenderErrorBoundary` in
  * {@link TrajectoryView}.
  */
-const StepCard: React.FC<StepCardProps> = ({ step: rawStep, isExpanded, onToggle }) => {
+const StepCard: React.FC<StepCardProps> = ({ step: rawStep, stepKey: key, isExpanded, onToggle }) => {
+  if (!rawStep || typeof rawStep !== 'object') {
+    // A JSON trajectory can legally contain `null`; there is nothing to show
+    // for it, so say so (the error boundary turns this into an inline card).
+    throw new Error(`malformed trajectory step: ${String(rawStep)}`);
+  }
   const step = normalizeLegacyUserStep(rawStep);
   // Never read `step.content` directly below this line — persisted reports
   // may carry a missing / null / object `content` (see stepContentText).
   const text = stepContentText(step);
+  const structured = stepContentIsStructured(step);
   const collapsible = isCollapsible(step, text);
   const latency = formatLatency(step.latencyMs);
   const failed = step.status === ToolCallStatus.FAILURE;
@@ -106,7 +131,7 @@ const StepCard: React.FC<StepCardProps> = ({ step: rawStep, isExpanded, onToggle
       {collapsible ? (
         <div>
           <button
-            onClick={() => onToggle(step.id)}
+            onClick={() => onToggle(key)}
             className="flex items-start gap-1.5 text-sm text-left w-full hover:text-foreground transition-colors"
           >
             {isExpanded ? (
@@ -129,7 +154,7 @@ const StepCard: React.FC<StepCardProps> = ({ step: rawStep, isExpanded, onToggle
                     Everything else (assistant / response / thinking)
                     renders as markdown so headings, bullets, and bold
                     come through as structure, not raw `**`/`#`. */}
-                {step.type === 'tool_result' && !hasRealMarkdown(text) ? (
+                {structured || (step.type === 'tool_result' && !hasRealMarkdown(text)) ? (
                   <pre className="font-mono text-xs overflow-x-auto whitespace-pre-wrap">{text}</pre>
                 ) : (
                   <Markdown>{text}</Markdown>
@@ -140,7 +165,7 @@ const StepCard: React.FC<StepCardProps> = ({ step: rawStep, isExpanded, onToggle
         </div>
       ) : step.type === 'action' && step.toolArgs ? (
         <pre className="text-xs font-mono text-muted-foreground overflow-x-auto">
-          {JSON.stringify(step.toolArgs, null, 2)}
+          {safeStringify(step.toolArgs)}
         </pre>
       ) : text.length === 0 ? (
         /* No body at all (e.g. a tool call persisted without `content` and
@@ -149,6 +174,10 @@ const StepCard: React.FC<StepCardProps> = ({ step: rawStep, isExpanded, onToggle
         <span className="text-sm italic text-muted-foreground/70" data-testid="trajectory-step-no-text">
           {NO_STEP_TEXT_PLACEHOLDER}
         </span>
+      ) : structured ? (
+        /* Content persisted as an object (serialized tool arguments): keep it
+           monospace — running JSON through markdown mangles it. */
+        <pre className="text-xs font-mono text-muted-foreground overflow-x-auto whitespace-pre-wrap">{text}</pre>
       ) : (
         <Markdown className="text-sm text-foreground/90">{text}</Markdown>
       )}
@@ -167,7 +196,7 @@ const StepCard: React.FC<StepCardProps> = ({ step: rawStep, isExpanded, onToggle
  * step stays visible.
  */
 export const TrajectoryView: React.FC<TrajectoryViewProps> = (props) => (
-  <RenderErrorBoundary label="the trajectory">
+  <RenderErrorBoundary label="the trajectory" resetKey={props.steps}>
     <TrajectoryViewInner {...props} />
   </RenderErrorBoundary>
 );
@@ -175,13 +204,13 @@ export const TrajectoryView: React.FC<TrajectoryViewProps> = (props) => (
 const TrajectoryViewInner: React.FC<TrajectoryViewProps> = ({ steps, loading }) => {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
 
-  const toggleStep = (stepId: string) => {
+  const toggleStep = (key: string) => {
     setExpandedSteps(prev => {
       const next = new Set(prev);
-      if (next.has(stepId)) {
-        next.delete(stepId);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(stepId);
+        next.add(key);
       }
       return next;
     });
@@ -204,11 +233,16 @@ const TrajectoryViewInner: React.FC<TrajectoryViewProps> = ({ steps, loading }) 
         </div>
       )}
 
-      {steps.map((step, index) => (
-        <RenderErrorBoundary key={step.id ?? index} label={`trajectory step ${index + 1}`}>
-          <StepCard step={step} isExpanded={expandedSteps.has(step.id)} onToggle={toggleStep} />
-        </RenderErrorBoundary>
-      ))}
+      {steps.map((step, index) => {
+        // Nothing here may touch `step.*` — a `null` entry must reach the
+        // boundary below, not throw in this (unprotected) parent render.
+        const key = stepKey(step, index);
+        return (
+          <RenderErrorBoundary key={key} label={`trajectory step ${index + 1}`} resetKey={step}>
+            <StepCard step={step} stepKey={key} isExpanded={expandedSteps.has(key)} onToggle={toggleStep} />
+          </RenderErrorBoundary>
+        );
+      })}
 
       {/* Loading indicator */}
       {loading && steps.length > 0 && (
