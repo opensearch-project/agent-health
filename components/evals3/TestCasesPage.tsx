@@ -159,7 +159,12 @@ export const TestCasesPage4: React.FC = () => {
   const loadDefinitions = useCallback(async () => {
     try {
       const [tcs, counts, bms] = await Promise.all([
-        asyncTestCaseStorage.getAll({ includeSample: showSampleData === true ? true : undefined }), asyncRunStorage.getRunCountsByTestCase(), asyncBenchmarkStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
+        // Summary projection — the list only needs names/labels/source
+        // metadata (prompt truncated to 200 chars for search). TestCaseEditor
+        // re-fetches the full record by id before editing, and the detail page
+        // fetches it via getById. The retired pre-evals3 Test Cases page
+        // already did this; the full corpus is ~168 MB on large installs.
+        asyncTestCaseStorage.getAll({ summary: true, includeSample: showSampleData === true ? true : undefined }), asyncRunStorage.getRunCountsByTestCase(), asyncBenchmarkStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
       ]);
       setTestCases(tcs as TestCase[]); setRunCounts(counts); setBenchmarks(bms);
     } catch (err) { console.error('Failed:', err); }
@@ -380,6 +385,7 @@ export const TestCasesPage4: React.FC = () => {
               <Play size={11} />
             </Button>
             <Button variant="ghost" size="icon" className="h-6 w-6" title="Edit"
+              data-testid="test-case-edit-button"
               onClick={e => { e.stopPropagation(); setEditingTestCase(tc); setShowEditor(true); }}>
               <Pencil size={11} />
             </Button>
@@ -456,7 +462,7 @@ export const TestCasesPage4: React.FC = () => {
           <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={isImporting} className="h-7 gap-1.5 text-xs font-normal">
             <Upload size={12} /> {isImporting ? 'Importing...' : 'Import JSON'}
           </Button>
-          <Button size="sm" onClick={() => { setEditingTestCase(null); setShowEditor(true); }} className="h-7 gap-1.5 text-xs">
+          <Button size="sm" data-testid="new-test-case-button" onClick={() => { setEditingTestCase(null); setShowEditor(true); }} className="h-7 gap-1.5 text-xs">
             <Plus size={12} /> New Test Case
           </Button>
           {/* Sample data toggle */}

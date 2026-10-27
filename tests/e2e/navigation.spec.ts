@@ -112,13 +112,13 @@ test.describe('URL-based Navigation', () => {
   });
 
   test('should load Test Cases from direct URL', async ({ page }) => {
-    await page.goto('/test-cases');
+    await page.goto('/evaluations/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]');
     await expect(page.locator('[data-testid="test-cases-title"]')).toBeVisible();
   });
 
   test('should load Benchmarks from direct URL', async ({ page }) => {
-    await page.goto('/benchmarks');
+    await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]');
     await expect(page.locator('[data-testid="benchmarks-title"]')).toBeVisible();
   });

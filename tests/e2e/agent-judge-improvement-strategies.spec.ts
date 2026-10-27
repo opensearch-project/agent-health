@@ -100,7 +100,7 @@ test.describe('Judge Evaluation tab — agent trace judge improvement strategies
   test('renders the Improvement Strategies section for a run judged by the agent trace judge', async ({ page }) => {
     test.skip(!testCaseId || !reportId, 'Could not seed standalone run (storage not configured?)');
 
-    await page.goto(`/runs/${reportId}`);
+    await page.goto(`/evaluations/test-cases/${testCaseId}?run=${reportId}`);
     await expect(page.getByRole('tab', { name: /Judge Evaluation/ })).toBeVisible({ timeout: 30_000 });
     await page.getByRole('tab', { name: /Judge Evaluation/ }).click();
 

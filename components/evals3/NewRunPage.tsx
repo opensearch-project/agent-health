@@ -268,7 +268,7 @@ export const NewRunPage: React.FC = () => {
         () => {}, // progress handled on detail page
       );
 
-      navigate(`/evaluations/runs/${result.id}`);
+      navigate(`/evaluations/runs/${result.id}/inspect`);
     } catch (err: any) {
       setExecuteError(err.message);
       setExecuting(false);

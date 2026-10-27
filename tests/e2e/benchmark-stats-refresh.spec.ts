@@ -304,7 +304,7 @@ test.describe('Benchmark Stats Refresh E2E', () => {
     createdBenchmarkIds.push(benchmark.id);
 
     // Navigate directly to the benchmark's runs page
-    await page.goto(`/benchmarks/${benchmark.id}/runs`);
+    await page.goto(`/evaluations/benchmarks/${benchmark.id}/runs`);
     await page.waitForLoadState('domcontentloaded');
 
     // Should show empty state, not crash

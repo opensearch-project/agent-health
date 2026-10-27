@@ -197,96 +197,61 @@ test.describe('Evaluation Runner - Run List Page with Filtering', () => {
   });
 });
 
-test.describe('Evaluation Runner - Run Detail Page', () => {
-  test('should show error or not-found for invalid run ID', async ({ page }) => {
-    await page.goto('/evaluations/runs/nonexistent-run-12345');
-    await page.waitForTimeout(3000);
-
-    const body = await page.textContent('body');
-    expect(body).toMatch(/not found|error|back|does not exist/i);
+test.describe('Evaluation Runner - Run Detail (run inspector)', () => {
+  // The older `/evaluations/runs/:runId` detail page is retired and redirects
+  // to the run inspector (`…/inspect`), which is the only run-report surface.
+  test('should land on the runs list for an invalid run ID', async ({ page }) => {
+    await page.goto('/evaluations/runs/nonexistent-run-12345/inspect');
+    await page.waitForURL(/\/evaluations\/runs\/?$/, { timeout: 15000 });
+    await expect(page.locator('[data-testid="sidebar"]')).toBeVisible();
   });
 
-  test('should display run details when a valid run exists', async ({ page }) => {
+  test('should redirect the retired detail URL to the inspector', async ({ page }) => {
     const response = await page.request.get('/api/storage/evaluation-runs');
     const data = await response.json();
 
     if (data.total > 0) {
       const runId = data.evaluationRuns[0].id;
       await page.goto(`/evaluations/runs/${runId}`);
-      await page.waitForTimeout(3000);
-
-      // Match the exact run-type badge. The responsive sidebar also contains
-      // "Evaluation Runs", so the old substring selector became ambiguous.
-      await expect(page.getByText('EVALUATION RUN', { exact: true })).toBeVisible({ timeout: 10000 });
+      await page.waitForURL(`**/evaluations/runs/${runId}/inspect`, { timeout: 15000 });
+      await expect(page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`)).toBeVisible({ timeout: 15000 });
     }
   });
 
-  test('should show status, agent, and model metadata', async ({ page }) => {
-    const response = await page.request.get('/api/storage/evaluation-runs');
-    const data = await response.json();
-
-    if (data.total > 0) {
-      const runId = data.evaluationRuns[0].id;
-      await page.goto(`/evaluations/runs/${runId}`);
-      await page.waitForTimeout(3000);
-
-      const body = await page.textContent('body');
-      // Should contain status text
-      expect(body).toMatch(/completed|running|failed|cancelled|pending/i);
-    }
-  });
-
-  test('should show test case results section', async ({ page }) => {
-    const response = await page.request.get('/api/storage/evaluation-runs');
-    const data = await response.json();
-
-    if (data.total > 0) {
-      const runId = data.evaluationRuns[0].id;
-      await page.goto(`/evaluations/runs/${runId}`);
-      await page.waitForTimeout(3000);
-
-      await expect(page.locator('text=Test Case Results')).toBeVisible({ timeout: 10000 });
-    }
-  });
-
-  test('should show pass/fail/total statistics', async ({ page }) => {
-    const response = await page.request.get('/api/storage/evaluation-runs');
-    const data = await response.json();
-
-    if (data.total > 0) {
-      const runId = data.evaluationRuns[0].id;
-      await page.goto(`/evaluations/runs/${runId}`);
-      await page.waitForTimeout(3000);
-
-      // exact: true — avoids a strict-mode collision with the StatusBadge's
-      // lowercase "failed" text when the picked run's status is 'failed'.
-      await expect(page.getByText('Passed', { exact: true })).toBeVisible({ timeout: 10000 });
-      await expect(page.getByText('Failed', { exact: true })).toBeVisible();
-      await expect(page.getByText('Total', { exact: true })).toBeVisible();
-    }
-  });
-
-  test('should show individual test case result entries', async ({ page }) => {
+  test('should show agent metadata and the pass-rate tally', async ({ page }) => {
     const response = await page.request.get('/api/storage/evaluation-runs');
     const data = await response.json();
 
     if (data.total > 0) {
       const run = data.evaluationRuns[0];
-      await page.goto(`/evaluations/runs/${run.id}`);
-      await page.waitForTimeout(3000);
+      await page.goto(`/evaluations/runs/${run.id}/inspect`);
+      await expect(page.locator(`[data-testid="run-actions-menu-trigger-${run.id}"]`)).toBeVisible({ timeout: 15000 });
 
-      // If the run has results, individual entries should be listed
+      const body = await page.textContent('body');
+      if (run.name) expect(body).toContain(run.name);
+      expect(body).toMatch(/\d+%/);
+    }
+  });
+
+  test('should list the individual test cases of the run', async ({ page }) => {
+    const response = await page.request.get('/api/storage/evaluation-runs');
+    const data = await response.json();
+
+    if (data.total > 0) {
+      const run = data.evaluationRuns[0];
+      await page.goto(`/evaluations/runs/${run.id}/inspect`);
+      await expect(page.locator('text=/Test Cases · \\d+/')).toBeVisible({ timeout: 10000 });
+
       if (run.results && Object.keys(run.results).length > 0) {
-        const resultEntries = page.locator('[data-testid*="result"], tr, [class*="result"]');
-        const count = await resultEntries.count();
-        expect(count).toBeGreaterThan(0);
+        // The left-list header tally reflects the run's case count.
+        await expect(page.locator(`text=Test Cases · ${Object.keys(run.results).length}`)).toBeVisible();
       }
     }
   });
 });
 
 test.describe('Evaluation Runner - Run Cancellation UI', () => {
-  test('should show cancel button on running evaluations', async ({ page }) => {
+  test('should show cancel in the kebab on running evaluations', async ({ page }) => {
     const response = await page.request.get('/api/storage/evaluation-runs');
     const data = await response.json();
 
@@ -294,8 +259,7 @@ test.describe('Evaluation Runner - Run Cancellation UI', () => {
     const runningRun = data.evaluationRuns?.find((r: any) => r.status === 'running');
 
     if (runningRun) {
-      await page.goto(`/evaluations/runs/${runningRun.id}`);
-      await page.waitForTimeout(3000);
+      await page.goto(`/evaluations/runs/${runningRun.id}/inspect`);
 
       // Cancel lives in the header "…" run-actions kebab (only while running).
       await page.locator(`[data-testid="run-actions-menu-trigger-${runningRun.id}"]`).click();
@@ -304,40 +268,24 @@ test.describe('Evaluation Runner - Run Cancellation UI', () => {
     }
   });
 
-  test('should show cancelled status correctly', async ({ page }) => {
-    const response = await page.request.get('/api/storage/evaluation-runs');
-    const data = await response.json();
-
-    // Find a cancelled evaluation
-    const cancelledRun = data.evaluationRuns?.find((r: any) => r.status === 'cancelled');
-
-    if (cancelledRun) {
-      await page.goto(`/evaluations/runs/${cancelledRun.id}`);
-      await page.waitForTimeout(3000);
-
-      const body = await page.textContent('body');
-      expect(body).toMatch(/cancelled/i);
-    }
-  });
-
-  test('should not show cancel button on completed runs', async ({ page }) => {
+  test('should not show cancel on completed runs', async ({ page }) => {
     const response = await page.request.get('/api/storage/evaluation-runs');
     const data = await response.json();
 
     const completedRun = data.evaluationRuns?.find((r: any) => r.status === 'completed');
 
     if (completedRun) {
-      await page.goto(`/evaluations/runs/${completedRun.id}`);
-      await page.waitForTimeout(3000);
-
-      const cancelButton = page.locator('button:has-text("Cancel"), button:has-text("Stop")');
-      await expect(cancelButton).not.toBeVisible();
+      await page.goto(`/evaluations/runs/${completedRun.id}/inspect`);
+      await page.locator(`[data-testid="run-actions-menu-trigger-${completedRun.id}"]`).click();
+      await expect(page.locator(`[data-testid="run-action-delete-${completedRun.id}"]`)).toBeVisible({ timeout: 10000 });
+      await expect(page.locator(`[data-testid="run-action-cancel-${completedRun.id}"]`)).toHaveCount(0);
+      await page.keyboard.press('Escape');
     }
   });
 });
 
 test.describe('Evaluation Runner - Run Promotion UI', () => {
-  test('should show Convert to Benchmark button for ad-hoc completed runs', async ({ page }) => {
+  test('should offer Convert to Benchmark for ad-hoc completed runs', async ({ page }) => {
     const response = await page.request.get('/api/storage/evaluation-runs');
     const data = await response.json();
 
@@ -346,10 +294,9 @@ test.describe('Evaluation Runner - Run Promotion UI', () => {
     );
 
     if (adHocRun) {
-      await page.goto(`/evaluations/runs/${adHocRun.id}`);
-      await page.waitForTimeout(3000);
-
-      await expect(page.locator('text=Convert to Benchmark')).toBeVisible({ timeout: 10000 });
+      await page.goto(`/evaluations/runs/${adHocRun.id}/inspect`);
+      await page.locator(`[data-testid="run-actions-menu-trigger-${adHocRun.id}"]`).click();
+      await expect(page.locator(`[data-testid="run-action-promote-${adHocRun.id}"]`)).toBeVisible({ timeout: 10000 });
     }
   });
 
@@ -362,11 +309,9 @@ test.describe('Evaluation Runner - Run Promotion UI', () => {
     );
 
     if (adHocRun) {
-      await page.goto(`/evaluations/runs/${adHocRun.id}`);
-      await page.waitForTimeout(3000);
-
-      await page.locator('text=Convert to Benchmark').click();
-      await page.waitForTimeout(500);
+      await page.goto(`/evaluations/runs/${adHocRun.id}/inspect`);
+      await page.locator(`[data-testid="run-actions-menu-trigger-${adHocRun.id}"]`).click();
+      await page.locator(`[data-testid="run-action-promote-${adHocRun.id}"]`).click();
 
       // Dialog should appear with name input and create button
       await expect(page.locator('input[placeholder="Benchmark name"]')).toBeVisible({ timeout: 5000 });
@@ -374,19 +319,17 @@ test.describe('Evaluation Runner - Run Promotion UI', () => {
     }
   });
 
-  test('should not show Convert to Benchmark for benchmark-linked runs', async ({ page }) => {
+  test('should not offer Convert to Benchmark for benchmark-linked runs', async ({ page }) => {
     const response = await page.request.get('/api/storage/evaluation-runs');
     const data = await response.json();
 
     const linkedRun = data.evaluationRuns?.find((r: any) => r.benchmarkId);
 
     if (linkedRun) {
-      await page.goto(`/evaluations/runs/${linkedRun.id}`);
-      await page.waitForTimeout(3000);
-
-      await expect(page.locator('text=Convert to Benchmark')).not.toBeVisible();
-      // Should show View Benchmark instead
-      await expect(page.locator('text=View Benchmark')).toBeVisible({ timeout: 10000 });
+      await page.goto(`/evaluations/runs/${linkedRun.id}/inspect`);
+      await page.locator(`[data-testid="run-actions-menu-trigger-${linkedRun.id}"]`).click();
+      await expect(page.locator(`[data-testid="run-action-delete-${linkedRun.id}"]`)).toBeVisible({ timeout: 10000 });
+      await expect(page.locator(`[data-testid="run-action-promote-${linkedRun.id}"]`)).toHaveCount(0);
     }
   });
 });
@@ -434,79 +377,5 @@ test.describe('Evaluation Runner - Empty States', () => {
 
     // At minimum, the user can navigate directly
     expect(typeof hasNewRunLink).toBe('boolean');
-  });
-});
-
-test.describe('Evaluation Runner - Run Status Badges', () => {
-  test('should render status badges with appropriate styling', async ({ page }) => {
-    const run = {
-      id: 'e2e-status-completed', name: 'Completed status fixture', status: 'completed',
-      agentKey: 'demo', modelId: 'demo', sources: [{ type: 'test-case-ids', testCaseIds: [] }],
-      createdAt: new Date().toISOString(), results: {}, stats: { passed: 0, failed: 0, total: 0, pending: 0 },
-    };
-    await page.route('**/api/storage/evaluation-runs/e2e-status-completed', route =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(run) })
-    );
-
-    await page.goto('/evaluations/runs/e2e-status-completed');
-    const badge = page.locator('span', { hasText: /^completed$/i });
-    await expect(badge).toBeVisible();
-    await expect(badge).toHaveClass(/bg-green-100/);
-    await expect(badge).toHaveClass(/text-green-800/);
-  });
-
-  test('should show correct status badge on detail page for completed run', async ({ page }) => {
-    const response = await page.request.get('/api/storage/evaluation-runs');
-    const data = await response.json();
-
-    const completedRun = data.evaluationRuns?.find((r: any) => r.status === 'completed');
-
-    if (completedRun) {
-      await page.goto(`/evaluations/runs/${completedRun.id}`);
-      await page.waitForTimeout(3000);
-
-      const body = await page.textContent('body');
-      expect(body).toMatch(/completed/i);
-    }
-  });
-
-  test('should show correct status badge on detail page for failed run', async ({ page }) => {
-    const response = await page.request.get('/api/storage/evaluation-runs');
-    const data = await response.json();
-
-    const failedRun = data.evaluationRuns?.find((r: any) => r.status === 'failed');
-
-    if (failedRun) {
-      await page.goto(`/evaluations/runs/${failedRun.id}`);
-      await page.waitForTimeout(3000);
-
-      const body = await page.textContent('body');
-      expect(body).toMatch(/failed/i);
-    }
-  });
-
-  test('should differentiate status visually via badge colors or icons', async ({ page }) => {
-    await page.route(/\/api\/storage\/evaluation-runs\/e2e-status-(completed|failed)$/, route => {
-      const status = route.request().url().endsWith('failed') ? 'failed' : 'completed';
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          id: `e2e-status-${status}`, name: `${status} fixture`, status,
-          agentKey: 'demo', modelId: 'demo', sources: [{ type: 'test-case-ids', testCaseIds: [] }],
-          createdAt: new Date().toISOString(), results: {}, stats: { passed: 0, failed: 0, total: 0, pending: 0 },
-        }),
-      });
-    });
-
-    await page.goto('/evaluations/runs/e2e-status-completed');
-    const completed = page.locator('span', { hasText: /^completed$/i });
-    await expect(completed).toHaveClass(/bg-green-100/);
-    const completedClass = await completed.getAttribute('class');
-
-    await page.goto('/evaluations/runs/e2e-status-failed');
-    const failed = page.locator('span', { hasText: /^failed$/i });
-    await expect(failed).toHaveClass(/bg-red-100/);
-    expect(await failed.getAttribute('class')).not.toBe(completedClass);
   });
 });

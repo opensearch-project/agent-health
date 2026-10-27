@@ -23,7 +23,7 @@ describe('ReadyToRun', () => {
     expect(screen.getByTestId('ready-to-run')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Ready to run' })).toBeTruthy();
     expect(screen.getByText(/definitions are imported/i)).toBeTruthy();
-    expect(screen.getByRole('link', { name: /run a benchmark/i }).getAttribute('href')).toBe('/benchmarks');
+    expect(screen.getByRole('link', { name: /run a benchmark/i }).getAttribute('href')).toBe('/evaluations/benchmarks');
     expect(screen.queryByTestId('first-run-experience')).toBeNull();
     expect(screen.queryByTestId('dashboard-page')).toBeNull();
   });
