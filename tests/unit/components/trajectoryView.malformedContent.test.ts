@@ -21,7 +21,7 @@
  */
 
 import * as React from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import { TrajectoryView } from '@/components/TrajectoryView';
 import { TrajectoryStep } from '@/types';
 import {
@@ -46,6 +46,9 @@ jest.mock('@/components/ui/markdown', () => ({
     if (typeof children !== 'string') {
       throw new Error(`Unexpected value \`${children}\` for \`children\` prop, expected \`string\``);
     }
+    // Sentinel used by the error-boundary tests to force a render-time throw
+    // *inside* a step after every data coercion has already succeeded.
+    if (children.includes('__THROW_IN_MARKDOWN__')) throw new Error('markdown renderer exploded');
     return React.createElement('div', { className, 'data-testid': 'markdown' }, children);
   },
   hasRealMarkdown: () => false,
@@ -125,28 +128,108 @@ describe('TrajectoryView — step without a string `content` (inspector blank-pa
     expect(screen.getByText('ok')).toBeTruthy();
   });
 
-  it('error boundary: a step that still throws renders an inline error card while every sibling stays visible', () => {
-    // Force a render-time throw that the content coercion cannot absorb: a
-    // `toolArgs` with a circular reference makes `JSON.stringify` throw in
-    // the action branch.
+  it('long object content expands to a monospace <pre>, not through markdown', () => {
+    const big = { query: 'x'.repeat(300), filters: { a: 1, b: [1, 2, 3] } };
+    const steps = [{ id: 's1', timestamp: 2, type: 'action', toolName: 'big_tool', content: big }];
+    renderSteps(steps);
+    fireEvent.click(screen.getByRole('button'));
+    const card = screen.getByTestId('trajectory-step');
+    const pre = card.querySelector('pre');
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toBe(JSON.stringify(big, null, 2));
+    expect(within(card).queryByTestId('markdown')).toBeNull();
+  });
+
+  it('a thinking step with no text shows "(no text)" instead of a "0 chars" expander', () => {
+    const steps = [
+      { id: 't0', timestamp: 1, type: 'thinking', content: undefined },
+      { id: 't1', timestamp: 2, type: 'thinking', content: null },
+      { id: 'r0', timestamp: 3, type: 'response', content: 'ok' },
+    ];
+    renderSteps(steps);
+    expect(screen.getAllByTestId('trajectory-step-no-text')).toHaveLength(2);
+    expect(screen.queryByText(/0 chars/)).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('a `null` entry in the trajectory array becomes one inline error card; the other 11 steps still render', () => {
+    const steps: Array<Record<string, unknown> | null> = buildRealShapedTrajectory('undefined');
+    steps[5] = null;
+    renderSteps(steps as Array<Record<string, unknown>>);
+    expect(screen.getAllByTestId('trajectory-step')).toHaveLength(REAL_SHAPED_STEP_COUNT - 1);
+    const cards = screen.getAllByTestId('render-error-boundary');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].textContent).toContain("Couldn't render trajectory step 6");
+    expect(cards[0].textContent).toContain('malformed trajectory step: null');
+    expect(screen.getByText(STEP_BEFORE_MALFORMED_TEXT)).toBeTruthy();
+    expect(screen.getByText(STEP_AFTER_MALFORMED_TEXT)).toBeTruthy();
+  });
+
+  it('circular toolArgs render as text (String() fallback), not as an error card', () => {
     const circular: Record<string, unknown> = { name: 'loop' };
     circular.self = circular;
+    const steps = [{ id: 's1', timestamp: 2, type: 'action', toolName: 'circular_tool', content: 'call', toolArgs: circular }];
+    renderSteps(steps);
+    expect(screen.getAllByTestId('trajectory-step')).toHaveLength(1);
+    expect(screen.queryAllByTestId('render-error-boundary')).toHaveLength(0);
+    expect(screen.getByText('[object Object]')).toBeTruthy();
+  });
+
+  it('steps without an `id` (and steps sharing an id) expand and collapse independently', () => {
+    const long = (n: number) => `${'word '.repeat(60)}tail-${n}`;
+    const steps = [
+      { timestamp: 1, type: 'assistant', content: long(1) },
+      { timestamp: 2, type: 'assistant', content: long(2) },
+      { id: 'dup', timestamp: 3, type: 'assistant', content: long(3) },
+      { id: 'dup', timestamp: 4, type: 'assistant', content: long(4) },
+    ];
+    renderSteps(steps);
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(4);
+
+    fireEvent.click(buttons[0]);
+    expect(screen.getAllByTestId('markdown')).toHaveLength(1);
+    expect(screen.getByTestId('markdown').textContent).toContain('tail-1');
+
+    fireEvent.click(buttons[3]);
+    const open = screen.getAllByTestId('markdown').map(el => el.textContent);
+    expect(open).toHaveLength(2);
+    expect(open.join(' ')).toContain('tail-4');
+    expect(open.join(' ')).not.toContain('tail-3');
+  });
+
+  it('error boundary: a step that still throws renders an inline error card while every sibling stays visible', () => {
     const steps = [
       { id: 's0', timestamp: 1, type: 'assistant', content: 'Before the bad step' },
-      { id: 's1', timestamp: 2, type: 'action', toolName: 'circular_tool', content: 'call', toolArgs: circular },
+      { id: 's1', timestamp: 2, type: 'response', content: '__THROW_IN_MARKDOWN__' },
       { id: 's2', timestamp: 3, type: 'response', content: 'After the bad step' },
     ];
     const { consoleError } = renderSteps(steps);
 
-    // Siblings rendered.
     expect(screen.getByText('Before the bad step')).toBeTruthy();
     expect(screen.getByText('After the bad step')).toBeTruthy();
-    // Exactly one error card, naming the step position.
     const cards = screen.getAllByTestId('render-error-boundary');
     expect(cards).toHaveLength(1);
     expect(cards[0].textContent).toContain("Couldn't render trajectory step 2");
-    expect(cards[0].textContent).toMatch(/circular/i);
+    expect(cards[0].textContent).toContain('markdown renderer exploded');
     // The boundary logged the error (so it is not swallowed silently).
     expect(consoleError).toHaveBeenCalled();
+  });
+
+  it('error boundary resets when the step data changes (a different run loaded into the same mounted view)', () => {
+    const bad = [
+      { id: 's0', timestamp: 1, type: 'assistant', content: 'Before' },
+      { id: 's1', timestamp: 2, type: 'response', content: '__THROW_IN_MARKDOWN__' },
+    ];
+    const good = [
+      { id: 's0', timestamp: 1, type: 'assistant', content: 'Before' },
+      { id: 's1', timestamp: 2, type: 'response', content: 'Now fine' },
+    ];
+    const { rerender } = renderSteps(bad);
+    expect(screen.getAllByTestId('render-error-boundary')).toHaveLength(1);
+
+    rerender(React.createElement(TrajectoryView, { steps: good as unknown as TrajectoryStep[], loading: false }));
+    expect(screen.queryAllByTestId('render-error-boundary')).toHaveLength(0);
+    expect(screen.getByText('Now fine')).toBeTruthy();
   });
 });

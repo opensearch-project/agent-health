@@ -45,6 +45,12 @@ test.describe('Run inspector — trajectory step without a string `content` must
       data: buildReportWithMalformedStep(reportIds['no-text'], 'null', { withToolArgs: false }),
     });
     expect(res.ok()).toBeTruthy();
+    // And a trajectory array with a literal `null` entry (legal JSON).
+    reportIds['null-entry'] = `e2e-trajcontent-nullentry-${runId}`;
+    const withNull = buildReportWithMalformedStep(reportIds['null-entry'], 'undefined');
+    (withNull.trajectory as unknown[])[5] = null;
+    const res2 = await request.post('/api/storage/runs', { data: withNull });
+    expect(res2.ok()).toBeTruthy();
   });
 
   test.afterAll(async ({ request }) => {
@@ -90,6 +96,21 @@ test.describe('Run inspector — trajectory step without a string `content` must
     await expect(page.getByTestId('trajectory-step')).toHaveCount(REAL_SHAPED_STEP_COUNT);
     const malformed = page.getByTestId('trajectory-step').filter({ hasText: `action · ${MALFORMED_STEP_TOOL_NAME}` });
     await expect(malformed.getByTestId('trajectory-step-no-text')).toHaveText('(no text)');
+  });
+
+  test('a `null` entry in the trajectory renders one inline error card and leaves the other 11 steps visible', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(`/runs/${reportIds['null-entry']}`);
+    await expect(page.getByRole('heading', { name: 'Test Case Output' })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('trajectory-step')).toHaveCount(REAL_SHAPED_STEP_COUNT - 1);
+    const card = page.getByTestId('render-error-boundary');
+    await expect(card).toHaveCount(1);
+    await expect(card).toContainText("Couldn't render trajectory step 6");
+    await expect(page.getByText(STEP_BEFORE_MALFORMED_TEXT)).toBeVisible();
+    await expect(page.getByText(STEP_AFTER_MALFORMED_TEXT)).toBeVisible();
+    await expect(page.getByText(FINAL_RESPONSE_TEXT)).toBeVisible();
+    expect(pageErrors, pageErrors.join('\n')).toEqual([]);
   });
 
   test('long object content is collapsible and expands to the serialized JSON', async ({ page }) => {
