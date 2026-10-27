@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { normalizeLegacyUserStep, normalizeTrajectorySteps, stepContentText, NO_STEP_TEXT_PLACEHOLDER } from '@/lib/trajectoryStepDisplay';
+import { normalizeLegacyUserStep, normalizeTrajectorySteps, stepContentText, stepContentIsStructured, safeStringify, NO_STEP_TEXT_PLACEHOLDER } from '@/lib/trajectoryStepDisplay';
 import { TrajectoryStep } from '@/types';
 
 function makeStep(overrides: Partial<TrajectoryStep> = {}): TrajectoryStep {
@@ -138,5 +138,48 @@ describe('stepContentText', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     expect(stepContentText({ content: circular as unknown as string })).toBe('[object Object]');
+  });
+
+  it('returns "" for a null / undefined step itself (a null entry in a persisted trajectory array)', () => {
+    expect(stepContentText(null)).toBe('');
+    expect(stepContentText(undefined)).toBe('');
+  });
+});
+
+describe('stepContentIsStructured', () => {
+  it('is true only for object / array content', () => {
+    expect(stepContentIsStructured({ content: { a: 1 } as unknown as string })).toBe(true);
+    expect(stepContentIsStructured({ content: [1] as unknown as string })).toBe(true);
+    expect(stepContentIsStructured({ content: 'text' })).toBe(false);
+    expect(stepContentIsStructured({ content: null as unknown as string })).toBe(false);
+    expect(stepContentIsStructured({ content: undefined as unknown as string })).toBe(false);
+    expect(stepContentIsStructured(null)).toBe(false);
+  });
+});
+
+describe('safeStringify', () => {
+  it('pretty-prints JSON-able values', () => {
+    expect(safeStringify({ a: 1 })).toBe('{\n  "a": 1\n}');
+    expect(safeStringify([1, 2], 0)).toBe('[1,2]');
+  });
+
+  it('never throws: circular → String(), hostile toJSON → String(), hostile toString → fixed marker', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(safeStringify(circular)).toBe('[object Object]');
+
+    const hostileToJson = { toJSON() { throw new Error('nope'); } };
+    expect(safeStringify(hostileToJson)).toBe('[object Object]');
+
+    const hostileBoth = {
+      toJSON() { throw new Error('nope'); },
+      toString() { throw new Error('nope'); },
+    };
+    expect(safeStringify(hostileBoth)).toBe('[unserializable value]');
+  });
+
+  it('returns a string even when JSON.stringify would return undefined', () => {
+    expect(safeStringify(undefined)).toBe('undefined');
+    expect(safeStringify(() => 1)).toMatch(/^\(\) => 1|function/);
   });
 });
