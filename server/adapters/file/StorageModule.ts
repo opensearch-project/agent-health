@@ -45,9 +45,11 @@ import type {
   IEvaluatorOperations,
   ISessionMetadataOperations,
   PaginationOptions,
+  TestCaseListOptions,
   TestCaseSearchFilters,
   RunSearchFilters,
 } from '../types.js';
+import { stripTestCaseSummaryFields } from '../../services/testCaseSummary.js';
 
 // ============================================================================
 // File Helpers
@@ -155,7 +157,7 @@ class FileTestCaseOperations implements ITestCaseOperations {
     return tc.version ?? tc.currentVersion ?? 0;
   }
 
-  async getAll(options?: PaginationOptions): Promise<{ items: TestCase[]; total: number }> {
+  async getAll(options?: TestCaseListOptions): Promise<{ items: TestCase[]; total: number }> {
     const all = readAllFromDir<TestCase>(this.dir);
     // Group by ID, return latest version of each
     const byId = new Map<string, TestCase>();
@@ -168,7 +170,13 @@ class FileTestCaseOperations implements ITestCaseOperations {
     const latest = Array.from(byId.values()).sort(
       (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
     );
-    return paginate(latest, options);
+    // Mirror the OpenSearch adapter's `_source.excludes`: a summary listing
+    // must not carry sourceCode / definition / versions / context /
+    // expectedOutcomes, whichever backend served it.
+    const projected = options?.projection === 'summary'
+      ? latest.map(tc => stripTestCaseSummaryFields(tc as unknown as Record<string, unknown>) as unknown as TestCase)
+      : latest;
+    return paginate(projected, options);
   }
 
   async getById(id: string): Promise<TestCase | null> {

@@ -30,7 +30,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage';
 import { executeBenchmarkRun } from '@/services/client';
-import { Benchmark, BenchmarkRun, TestCase } from '@/types';
+import { Benchmark, BenchmarkRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatRelativeTime, getModelName } from '@/lib/utils';
 import { BenchmarkEditor, RunConfigForExecution } from '@/components/BenchmarkEditor';
@@ -164,7 +164,6 @@ function SortHeader({ label, active, dir, onClick, className }: {
 export const BenchmarksPage4: React.FC = () => {
   const navigate = useNavigate();
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = usePersistedState<string>('benchmarks:search', '');
   const [timeRange, setTimeRange] = usePersistedState<TimeRange>(PREFS_KEYS.timeRange, 'all');
@@ -195,12 +194,15 @@ export const BenchmarksPage4: React.FC = () => {
 
   const loadData = useCallback(async () => {
     try {
-      const [bms, tcs] = await Promise.all([
-        asyncBenchmarkStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
-        asyncTestCaseStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
-      ]);
+      // Only the benchmark list is needed here. This used to ALSO fetch every
+      // test case in full (`asyncTestCaseStorage.getAll()` without `summary`)
+      // into a `tcMap` nobody read — on a corpus with a few hundred
+      // ~400 KB `sourceCode` cases that was a 200+ MB response the page's
+      // loading state waited on, so Benchmarks "never opened" over a slow
+      // link (#591). Anything that needs test-case details for a benchmark
+      // fetches them per benchmark on the detail pages.
+      const bms = await asyncBenchmarkStorage.getAll({ includeSample: showSampleData === true ? true : undefined });
       setBenchmarks(bms);
-      setTestCases(tcs as TestCase[]);
     } catch (err) {
       console.error('Failed to load:', err);
     } finally {
@@ -218,8 +220,6 @@ export const BenchmarksPage4: React.FC = () => {
     el.addEventListener('scroll', handler);
     return () => el.removeEventListener('scroll', handler);
   }, []);
-
-  const tcMap = useMemo(() => new Map(testCases.map(tc => [tc.id, tc])), [testCases]);
 
   // Agent options from config
   const agentOptions = useMemo(() => {

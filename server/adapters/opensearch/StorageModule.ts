@@ -41,6 +41,7 @@ import type {
   IEvaluatorOperations,
   ISessionMetadataOperations,
   PaginationOptions,
+  TestCaseListOptions,
   TestCaseSearchFilters,
   RunSearchFilters,
 } from '../types.js';
@@ -48,6 +49,7 @@ import { STORAGE_INDEXES } from '../../middleware/dataSourceConfig.js';
 import { assertNotMigrating } from '../../services/migrationLock.js';
 import { deterministicVersionFields } from '../evaluatorVersionFields.js';
 import { describeOpenSearchError } from '../../services/opensearchClientFactory.js';
+import { TEST_CASE_SUMMARY_EXCLUDED_FIELDS } from '../../services/testCaseSummary.js';
 
 // ============================================================================
 // Helpers
@@ -93,13 +95,16 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
 
   private get index() { return STORAGE_INDEXES.testCases; }
 
-  async getAll(options?: PaginationOptions): Promise<{ items: TestCase[]; total: number }> {
+  async getAll(options?: TestCaseListOptions): Promise<{ items: TestCase[]; total: number }> {
     const size = options?.size ?? 10000;
     const from = options?.from ?? 0;
 
     let result;
     try {
-      // Fetch all docs, then group by ID to return latest version of each
+      // Fetch all docs, then group by ID to return latest version of each.
+      // A summary projection excludes the heavy fields IN THE QUERY so they
+      // never leave the cluster — trimming them in Node after a full fetch
+      // made the 1.7 MB summary as slow as the 200+ MB full listing (#591).
       result = await this.client.search({
         index: this.index,
         body: {
@@ -107,6 +112,9 @@ class OpenSearchTestCaseOperations implements ITestCaseOperations {
           from,
           sort: [{ createdAt: { order: 'desc' } }],
           query: { match_all: {} },
+          ...(options?.projection === 'summary'
+            ? { _source: { excludes: [...TEST_CASE_SUMMARY_EXCLUDED_FIELDS] } }
+            : {}),
         },
       });
     } catch (error: any) {

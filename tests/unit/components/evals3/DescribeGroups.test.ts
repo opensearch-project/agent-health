@@ -20,6 +20,13 @@ jest.mock('@/components/ui/markdown', () => ({
   Markdown: ({ children }: { children: string }) => React.createElement('div', null, children),
 }));
 
+// The Cases tab fetches the selected case in full by id (#591); these tests
+// only look at the header chain (rendered from the summary row), so the
+// fetch simply never settles here.
+jest.mock('@/services/storage', () => ({
+  asyncTestCaseStorage: { getById: () => new Promise(() => {}) },
+}));
+
 function tc(id: string, name: string, describePath?: string[]): TestCase {
   return {
     id, name, labels: [], category: 'RCA', difficulty: 'Easy', currentVersion: 1, versions: [],

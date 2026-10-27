@@ -159,7 +159,13 @@ export const TestCasesPage4: React.FC = () => {
   const loadDefinitions = useCallback(async () => {
     try {
       const [tcs, counts, bms] = await Promise.all([
-        asyncTestCaseStorage.getAll({ includeSample: showSampleData === true ? true : undefined }), asyncRunStorage.getRunCountsByTestCase(), asyncBenchmarkStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
+        // Summary projection: the list renders name / description / labels /
+        // createdAt and searches the (truncated) prompt. The row's Edit button
+        // hands TestCaseEditor a summary record and the editor refetches the
+        // full document by id before enabling Save; Run sends only the id.
+        // Full documents here were a 200+ MB response on a corpus with large
+        // `sourceCode` fields (#591).
+        asyncTestCaseStorage.getAll({ summary: true, includeSample: showSampleData === true ? true : undefined }), asyncRunStorage.getRunCountsByTestCase(), asyncBenchmarkStorage.getAll({ includeSample: showSampleData === true ? true : undefined }),
       ]);
       setTestCases(tcs as TestCase[]); setRunCounts(counts); setBenchmarks(bms);
     } catch (err) { console.error('Failed:', err); }
@@ -174,8 +180,6 @@ export const TestCasesPage4: React.FC = () => {
     const h = () => setIsScrolled(el.scrollTop > 10);
     el.addEventListener('scroll', h); return () => el.removeEventListener('scroll', h);
   }, []);
-
-  const tcMap = useMemo(() => new Map(testCases.map(tc => [tc.id, tc])), [testCases]);
 
   // Reverse map: tcId → benchmarks
   const tcBenchmarkMap = useMemo(() => {
