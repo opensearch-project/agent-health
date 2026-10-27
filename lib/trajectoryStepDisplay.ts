@@ -44,6 +44,37 @@ export function normalizeLegacyUserStep(step: TrajectoryStep): TrajectoryStep {
 export const NO_STEP_TEXT_PLACEHOLDER = '(no text)';
 
 /**
+ * `JSON.stringify` that never throws and always returns a string: circular
+ * input, a hostile `toJSON`, or a value JSON can't represent (`undefined`,
+ * functions) all fall back to a best-effort `String()` and finally to a fixed
+ * marker. Used for every structured value a trajectory step can carry
+ * (`content` objects, `toolArgs`) so a single bad value can't take a render
+ * down.
+ */
+export function safeStringify(value: unknown, indent = 2): string {
+  try {
+    const json = JSON.stringify(value, null, indent);
+    if (typeof json === 'string') return json;
+  } catch {
+    /* circular / hostile toJSON — fall through */
+  }
+  try {
+    return String(value);
+  } catch {
+    return '[unserializable value]';
+  }
+}
+
+/**
+ * True when the persisted `content` is structured data (object / array)
+ * rather than text — callers render it monospace instead of as markdown.
+ */
+export function stepContentIsStructured(step: Pick<TrajectoryStep, 'content'> | null | undefined): boolean {
+  const content: unknown = step?.content;
+  return typeof content === 'object' && content !== null;
+}
+
+/**
  * Coerce a persisted step's `content` into a string for rendering.
  *
  * `TrajectoryStep.content` is typed `string`, but reports are written by many
@@ -57,23 +88,18 @@ export const NO_STEP_TEXT_PLACEHOLDER = '(no text)';
  *
  * Rules:
  * - string → as-is
- * - `null` / `undefined` → `''` (callers render {@link NO_STEP_TEXT_PLACEHOLDER})
- * - object / array → pretty-printed JSON (this is what producers meant: the
- *   serialized tool arguments), falling back to `String()` on circular input
+ * - `null` / `undefined` (or a null/undefined step) → `''` (callers render
+ *   {@link NO_STEP_TEXT_PLACEHOLDER})
+ * - object / array → pretty-printed JSON via {@link safeStringify} (this is
+ *   what producers meant: the serialized tool arguments)
  * - any other primitive → `String()`
  */
-export function stepContentText(step: Pick<TrajectoryStep, 'content'>): string {
-  const content: unknown = step.content;
+export function stepContentText(step: Pick<TrajectoryStep, 'content'> | null | undefined): string {
+  const content: unknown = step?.content;
   if (typeof content === 'string') return content;
   if (content === null || content === undefined) return '';
-  if (typeof content === 'object') {
-    try {
-      return JSON.stringify(content, null, 2);
-    } catch {
-      return String(content);
-    }
-  }
-  return String(content);
+  if (typeof content === 'object') return safeStringify(content);
+  return safeStringify(content);
 }
 
 /** Apply {@link normalizeLegacyUserStep} across a full trajectory. */
