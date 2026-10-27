@@ -226,14 +226,15 @@ describe('Comparison search: default run scope, all-runs universe, single search
 });
 
 describe('Consolidated metrics matrix keeps #345 pass-rate/accuracy regression hooks', () => {
-  it('ComparisonScoreboard run rows carry run-passrate / run-avgscore testids (no accuracy-only column)', () => {
+  it('ComparisonScoreboard run rows carry run-passrate testids (no accuracy-only or Avg-score column)', () => {
     const src = read('components/comparison/ComparisonScoreboard.tsx');
     expect(src).toContain('run-passrate-${run.runId}');
     expect(src).toContain('run-passrate-detail-${run.runId}');
-    expect(src).toContain('run-avgscore-${run.runId}');
     // "accuracy" is one evaluator's rubric name, not the score — the
-    // accuracy-only column was removed with the snapshot-aware Avg score.
+    // accuracy-only column was removed with the snapshot-aware scoring, and
+    // the "Avg score" column followed (it read "—" for every pre-snapshot run).
     expect(src).not.toContain('run-accuracy-${run.runId}');
+    expect(src).not.toContain('run-avgscore-${run.runId}');
   });
 });
 

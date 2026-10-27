@@ -9,7 +9,6 @@
 
 import {
   assessScoringComparability,
-  avgScoreTooltip,
   compareAnywayKey,
   countVersionMismatches,
   formatMetricInScale,
@@ -96,22 +95,6 @@ describe('pass-rate policy labels + denominators', () => {
     expect(judgeCaption({})).toBe('not recorded');
     // Older fixtures with only judgeModelId still resolve.
     expect(judgeCaption({ judgeModelId: 'only' })).toBe('only');
-  });
-});
-
-describe('avgScoreTooltip', () => {
-  it('explains legacy scoring', () => {
-    expect(avgScoreTooltip({ source: 'legacy' })).toMatch(/judged before scoring snapshots existed/);
-    expect(avgScoreTooltip(undefined)).toMatch(/legacy|before scoring snapshots/i);
-  });
-  it('lists evaluator name + version, weights and scored X / Y rubrics', () => {
-    const t = avgScoreTooltip(snapshotScoring());
-    expect(t).toContain('Evaluator Demo evaluator v2');
-    expect(t).toContain('weights: fact_precision 0.7, abstention_integrity 0.3');
-    expect(t).toContain('scored 20 / 20 rubrics over 10 cases');
-  });
-  it('falls back to the evaluator id when no name was snapshotted', () => {
-    expect(avgScoreTooltip(snapshotScoring({ evaluatorName: undefined }))).toContain('Evaluator eval-demo v2');
   });
 });
 

@@ -81,13 +81,13 @@ describe('scoreDeterministic', () => {
     expect(r.matcherResults).toHaveLength(3);
     const [hit, recall, m] = r.matcherResults;
     expect(hit).toMatchObject({ description: 'hit@1 (ranked-hit@1) ≥ 1', pass: true, method: 'code-assertion', role: 'primary', actual: 1, expected: 1, score: 1 });
-    expect(hit.details).toEqual({ gold: ['g1', 'g2'], goldTotal: 2, predicted: ['g1', 'x', 'y'], predictedTotal: 3, k: 1, extractionRule: 'tool-hits-ordered' });
+    expect(hit.details).toEqual({ gold: ['g1', 'g2'], goldTotal: 2, goldSource: 'expectedOutcomes[1]', predicted: ['g1', 'x', 'y'], predictedTotal: 3, k: 1, extractionRule: 'tool-hits-ordered', candidateSource: 'tool-hits' });
     expect(recall).toMatchObject({ description: 'recall@3 (ranked-recall@3)', pass: true, role: 'observe', actual: 0.5, score: 0.5 });
     expect(recall.expected).toBeUndefined();
     expect(m).toMatchObject({ role: 'observe', actual: 100, score: 1 });
     expect((m.details as any).k).toBeUndefined();
 
-    expect(r.summary).toMatch(/^Deterministic scoring: 1 of 2 gold ids among 3 candidates; first hit at rank 1; 1 cited in the answer\. hit@1=1, recall@3=0\.5, mrr_pct=100\. Verdict passed\.$/);
+    expect(r.summary).toMatch(/^Deterministic scoring: 1 of 2 gold ids \(expectedOutcomes\[1\]\) among 3 candidates; first hit at rank 1; candidates from tool-hits; 1 cited in the answer\. hit@1=1, recall@3=0\.5, mrr_pct=100\. Verdict passed\.$/);
   });
 
   it('a failed gate fails the verdict with a gate reason; the gate row shows pass=false', () => {
@@ -128,12 +128,12 @@ describe('scoreDeterministic', () => {
     ];
     const r = scoreDeterministic(makeEvaluator(), testCase, { trajectory });
     expect(r.prediction.ranked).toEqual(['g2', 'z']);
-    expect(r.snapshot.extraction).toEqual({ candidateCount: 3, citedCount: 0, anchorsRemoved: 1 });
+    expect(r.snapshot.extraction).toEqual({ candidateCount: 3, citedCount: 0, anchorsRemoved: 1, sourceUsed: 'tool-hits' });
     expect(r.metrics['hit@1']).toBe(1);
   });
 
   it('ALL metrics unevaluable (no gold) → not evaluable: no verdict, no metrics, errored matcher rows', () => {
-    const r = scoreDeterministic(makeEvaluator(), { expectedOutcomes: ['no gold line'] }, { trajectory: [hitsResult('a')] });
+    const r = scoreDeterministic(makeEvaluator(), { expectedOutcomes: ['plain prose, not a gold line'] }, { trajectory: [hitsResult('a')] });
     expect(r.evaluable).toBe(false);
     expect(r.passFailStatus).toBeNull();
     expect(r.score).toBeNull();
@@ -151,13 +151,19 @@ describe('scoreDeterministic', () => {
   it('ALL metrics unevaluable (no candidates) → not evaluable with an extraction-specific reason', () => {
     const none = scoreDeterministic(makeEvaluator(), testCase, { trajectory: [step({ type: 'response', content: 'I could not find anything' })] });
     expect(none.evaluable).toBe(false);
-    expect(none.matcherResults[0].errorMessage).toMatch(/no candidate ids found in the stored tool results \(rule: tool-hits-ordered\)/);
+    expect(none.kind).toBe('not-evaluable');
+    // The reason names the source chain, and the diagnostics say what was tried.
+    expect(none.notEvaluableReason).toBe('no ranked list recognised in the final response (expected a JSON object/array with a results list, a fenced JSON block, or list lines labelled `id`; an explicit empty list scores as an abstention)');
+    expect(none.matcherResults[0].errorMessage).toMatch(/no ranked list recognised in the final response .* — gold 2 ids from expectedOutcomes\[1\]; candidates: 0 from final response \(no ranked list recognised\), 0 from no tool results/);
+    expect(none.diagnostics.candidates.sourceUsed).toBe('none');
     const anchorsOnly = scoreDeterministic(makeEvaluator(), testCase, {
       trajectory: [step({ type: 'action', toolName: 'expand', toolArgs: { seed: 'g1' } }), hitsResult('g1')],
     });
     expect(anchorsOnly.evaluable).toBe(false);
-    expect(anchorsOnly.matcherResults[0].errorMessage).toMatch(/every retrieved id was an anchor \(1 removed\)/);
-    expect(anchorsOnly.summary).toMatch(/^Not evaluable: every retrieved id was an anchor/);
+    expect(anchorsOnly.notEvaluableReason).toBe('every candidate id was an anchor (removed by the anchor filter)');
+    expect(anchorsOnly.matcherResults[0].errorMessage).toMatch(/every candidate id was an anchor .* — gold 2 ids from expectedOutcomes\[1\]; candidates: .*1 from tool 'search' hits \(hits \/ results\) \(used\); anchor removed 1/);
+    expect(anchorsOnly.summary).toMatch(/^Not evaluable: every candidate id was an anchor/);
+    expect(anchorsOnly.diagnostics.candidates).toMatchObject({ sourceUsed: 'tool-hits', count: 1, anchorRemoved: 1, returned: false });
   });
 
   it('passing path carries no stray fail reasons (the unevaluable:<metric> reason is only ever emitted for unevaluable metrics)', () => {
