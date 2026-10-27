@@ -65,6 +65,7 @@
  */
 
 import { spawnSync } from 'child_process';
+import { withCliCoverage } from '../../helpers/cliCoverage';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -219,7 +220,7 @@ describe('CLI: run-level evaluatorId binding (precedence rules end-to-end)', () 
       '-n', benchmarkName,
     ], {
       cwd: REPO_ROOT,
-      env: cleanEnv,
+      env: withCliCoverage(cleanEnv),
       encoding: 'utf-8',
       timeout: TEST_TIMEOUT - 10_000,
     });

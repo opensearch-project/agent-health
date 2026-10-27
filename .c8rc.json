@@ -1,0 +1,24 @@
+{
+  "//": [
+    "c8 config for `npm run coverage:cli` — turns the raw NODE_V8_COVERAGE dumps the",
+    "CLI integration tests collect from real `cli/dist/index.js` processes into lcov",
+    "mapped back onto cli/**/*.ts (the bundle is built with --sourcemap).",
+    "Kept in its own file ON PURPOSE: with no --config, c8 silently picks up .nycrc.json",
+    "(the e2e/nyc config, which EXCLUDES cli/**) and reports nothing.",
+    "include is `**/cli/**` rather than `cli/**` because, when Node caches the source",
+    "map, v8-to-istanbul checks exclude-after-remap against `file://` URLs; a root-",
+    "anchored pattern never matches those, no ranges get applied, and every file is",
+    "reported as a bogus 100%. The `**/` prefix matches both the URL and the real path.",
+    "No `all`: c8 counts PHYSICAL lines (blank, comment and data-literal lines included),",
+    "so an `all` empty report for a file the CLI never loads (e.g. cli/demo/*.ts, pure",
+    "sample data that jest covers fully) would add thousands of 0-hit lines and drag a",
+    "100%-covered file down to ~4% once Codecov unions the flags. Files the CLI bundle",
+    "never executes simply do not appear in this report; jest's unit flag covers them."
+  ],
+  "include": ["**/cli/**"],
+  "exclude": ["**/cli/dist/**"],
+  "exclude-after-remap": true,
+  "temp-directory": "coverage-cli/v8",
+  "reports-dir": "coverage-cli",
+  "reporter": ["text", "lcov"]
+}
