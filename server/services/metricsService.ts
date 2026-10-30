@@ -605,12 +605,12 @@ export function computeMetricsFromSpans(
   // query failed", dropped the only source holding the spans, and the run
   // inspector read "Metrics unavailable" for a run with 300K measured tokens.
   // Child-span errors are counted separately in `agentErrorSpans` instead.
-  const agentSpans = spans.filter(s => !isEvalOrJudgeSpan(readAttrs(s), s.name));
-  const agentErrorSpans = agentSpans.filter(s => s.status?.code === 2).length;
-  const agentSpanIds = new Set(agentSpans.map(s => s.spanId).filter(Boolean));
+  const agentOwnSpans = spans.filter(s => !isEvalOrJudgeSpan(readAttrs(s), s.name));
+  const agentErrorSpans = agentOwnSpans.filter(s => s.status?.code === 2).length;
+  const agentOwnSpanIds = new Set(agentOwnSpans.map(s => s.spanId).filter(Boolean));
   const outcomeSpans = rootSpan
     ? [rootSpan]
-    : agentSpans.filter(s => !s.parentSpanId || !agentSpanIds.has(s.parentSpanId));
+    : agentOwnSpans.filter(s => !s.parentSpanId || !agentOwnSpanIds.has(s.parentSpanId));
   let status: 'pending' | 'success' | 'error' = 'pending';
   if (outcomeSpans.length > 0) {
     status = outcomeSpans.some(s => s.status?.code === 2) ? 'error' : 'success';
