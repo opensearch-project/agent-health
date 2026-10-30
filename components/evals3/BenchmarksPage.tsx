@@ -17,6 +17,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { PREFS_KEYS } from '@/lib/preferences';
+import { markPageReady } from '@/lib/pageLatency';
 import { useNavigate } from 'react-router-dom';
 import {
   Play, CheckCircle2, XCircle, Loader2, Clock, Search, X, RefreshCw,
@@ -205,6 +206,7 @@ export const BenchmarksPage4: React.FC = () => {
       console.error('Failed to load:', err);
     } finally {
       setLoading(false);
+      markPageReady('benchmarks');
     }
   }, [showSampleData]);
 

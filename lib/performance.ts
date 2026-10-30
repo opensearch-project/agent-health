@@ -10,12 +10,14 @@
  * in both development and production environments.
  */
 
+import { isDebugEnabled } from './debug';
+
 interface PerformanceMark {
   name: string;
   startTime: number;
 }
 
-interface PerformanceMetric {
+export interface PerformanceMetric {
   name: string;
   duration: number;
   timestamp: number;
@@ -25,10 +27,34 @@ interface PerformanceMetric {
 const marks = new Map<string, PerformanceMark>();
 const metrics: PerformanceMetric[] = [];
 
-// Performance monitoring enabled in development or when DEBUG=true
+// Listeners notified whenever a metric is recorded or the list is cleared
+// (the debug latency HUD re-renders from this instead of polling).
+type MetricsListener = () => void;
+let metricsListeners: MetricsListener[] = [];
+
+function notifyMetricsListeners(): void {
+  for (const l of metricsListeners) l();
+}
+
+/**
+ * Subscribe to metric changes (a measurement ended / metrics cleared).
+ * Returns an unsubscribe function.
+ */
+export function subscribeToMetrics(fn: MetricsListener): () => void {
+  metricsListeners.push(fn);
+  return () => {
+    metricsListeners = metricsListeners.filter(l => l !== fn);
+  };
+}
+
+// Performance monitoring enabled in development, when the app's debug mode
+// (lib/debug.ts, the Settings "Debug Mode" switch) is on, or when the
+// legacy `DEBUG_PERFORMANCE` console flag is set (recording only -- the HUD's
+// visibility follows debug mode, see lib/pageLatency.ts).
 const isEnabled = () => {
   if (typeof window !== 'undefined') {
     return localStorage.getItem('DEBUG_PERFORMANCE') === 'true' ||
+           isDebugEnabled() ||
            process.env.NODE_ENV === 'development';
   }
   return process.env.DEBUG_PERFORMANCE === 'true' ||
@@ -68,6 +94,7 @@ export function endMeasure(name: string, logToConsole = true): number | null {
 
   metrics.push(metric);
   marks.delete(name);
+  notifyMetricsListeners();
 
   if (logToConsole) {
     const color = duration < 50 ? '🟢' : duration < 200 ? '🟡' : '🔴';
@@ -142,6 +169,7 @@ export function getAverageDuration(name: string): number | null {
 export function clearMetrics(): void {
   metrics.length = 0;
   marks.clear();
+  notifyMetricsListeners();
 }
 
 /**

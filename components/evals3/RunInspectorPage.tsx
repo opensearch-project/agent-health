@@ -32,6 +32,7 @@ import { Benchmark, BenchmarkRun, EvaluationRun, TestCase, EvaluationReport, isE
 import { AgentFingerprintChip, AgentConfigChangedBadge } from './AgentFingerprintChip';
 import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel, getErrorStage } from './ResultStatus';
+import { markPageReady } from '@/lib/pageLatency';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
 import { getRunActionVisibility } from '@/lib/runActions';
@@ -300,6 +301,7 @@ export const RunInspectorPage: React.FC = () => {
       setLoadError(true);
     } finally {
       setLoading(false);
+      markPageReady('run-inspector');
     }
   }, [benchmarkId, runId, mode, navigate, targetReportId]);
 

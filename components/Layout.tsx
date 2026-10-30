@@ -39,6 +39,7 @@ import {
   SidebarProvider,
   SidebarInset,
 } from "@/components/ui/sidebar";
+import { DebugLatencyHud, PageLatencyNavigationBoundary } from "@/components/DebugLatencyHud";
 import {
   Collapsible,
   CollapsibleContent,
@@ -516,6 +517,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       </div>
 
       <SidebarInset className="overflow-y-auto dashboard-gradient-bg mobile-responsive-content">
+        {/* Must stay BEFORE {children}: see PageLatencyNavigationBoundary. */}
+        <PageLatencyNavigationBoundary />
         <div className="sticky top-0 z-30 flex h-12 shrink-0 items-center justify-between border-b bg-background/95 px-3 backdrop-blur lg:hidden">
           <button
             type="button"
@@ -535,6 +538,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         </AssistantProvider>
       </SidebarInset>
       </SidebarProvider>
+      {/* position: fixed -- lives outside the sidebar/content tree on purpose. */}
+      <DebugLatencyHud />
     </SidebarCollapseContext.Provider>
   );
 };
