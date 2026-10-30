@@ -15,7 +15,7 @@
 import type { EvaluationReport, Evaluator, TestCase } from '@/types';
 import type { IStorageModule } from '@/server/adapters/types';
 import { normalizeDeterministicEvaluator } from '@/lib/evaluators/deterministic';
-import { applyDeterministicFirstJudgement, resolveDeterministicEvaluator } from '@/services/evaluation/deterministicJudgement';
+import { applyDeterministicFirstJudgement, buildDeterministicFirstJudgement, resolveDeterministicEvaluator } from '@/services/evaluation/deterministicJudgement';
 
 const deterministic: Evaluator = {
   id: 'eval-det', name: 'Ranked retrieval', description: '', isSystem: false, currentVersion: 1, versions: [],
@@ -59,12 +59,12 @@ describe('resolveDeterministicEvaluator', () => {
     expect(await resolveDeterministicEvaluator('eval-llm', s)).toBeNull();
   });
 
-  it('is null for an unset id, an unknown id, and a storage failure (the LLM path stays the default)', async () => {
+  it('is null for an unset id and an unknown id; a storage failure propagates (never silently falls back to the LLM path)', async () => {
     const s = storage({});
     expect(await resolveDeterministicEvaluator(undefined, s)).toBeNull();
     expect(await resolveDeterministicEvaluator('nope', s)).toBeNull();
     (s.evaluators.getById as jest.Mock).mockRejectedValueOnce(new Error('storage down'));
-    expect(await resolveDeterministicEvaluator('eval-det', s)).toBeNull();
+    await expect(resolveDeterministicEvaluator('eval-det', s)).rejects.toThrow('storage down');
   });
 
   it('is null for a system (LLM) evaluator id without touching storage', async () => {
@@ -137,12 +137,18 @@ describe('applyDeterministicFirstJudgement', () => {
     expect(patch.metricsStatus).toBe('error');
     expect(patch.traceError).toContain('Deterministic scoring:');
     expect(patch.matcherResults).toEqual([]);
+    expect(patch.judgeMode).toBe('deterministic');
   });
 
-  it('a storage failure while persisting the error patch is swallowed', async () => {
+  it('a storage failure while persisting propagates (the runner records it; never a report that looks judged)', async () => {
     const s = storage();
     (s.runs.update as jest.Mock).mockRejectedValue(new Error('write failed'));
-    const broken = { ...deterministic, inputs: { ...deterministic.inputs, gold: { source: 'expectedOutcomes-pattern', pattern: '(' } } } as Evaluator;
-    await expect(applyDeterministicFirstJudgement(report(), testCase, broken, s)).resolves.toMatchObject({ passFailStatus: null });
+    await expect(applyDeterministicFirstJudgement(report(), testCase, deterministic, s)).rejects.toThrow('write failed');
+  });
+
+  it('buildDeterministicFirstJudgement is pure: same patch as apply persists, no storage touched', () => {
+    const first = buildDeterministicFirstJudgement(report(), testCase, deterministic);
+    expect(first.passFailStatus).toBe('passed');
+    expect(first.patch).toMatchObject({ passFailStatus: 'passed', metrics: { 'hit@1': 1, mrr: 1 }, judgeMode: 'deterministic', judgeModelId: null, metricsStatus: 'completed' });
   });
 });

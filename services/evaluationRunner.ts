@@ -58,7 +58,8 @@ import { bucketRunResults } from '@/lib/runStats';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
 import { describeAgentError, agentErrorContextFrom } from '@/services/evaluation/agentFailure';
 import { buildCancelledMarkers } from '@/services/evaluationRunFinalize';
-import { resolveDeterministicEvaluator, applyDeterministicFirstJudgement } from '@/services/evaluation/deterministicJudgement';
+import type { Evaluator } from '@/types';
+import { resolveDeterministicEvaluator, applyDeterministicFirstJudgement, buildDeterministicFirstJudgement } from '@/services/evaluation/deterministicJudgement';
 import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity, buildSdkJudgeIdentityPatch, assertJudgeIdentityConsistent, JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
 import { loadConfigSync } from '@/lib/config/index';
 import { getBackendUrl } from '@/lib/portConfig';
@@ -732,17 +733,19 @@ export async function executeEvaluationRun(
               ? await context.with(caseSpanContext, runEval)
               : await runEval();
 
-            if (deterministicEvaluator) {
-              // Scored from the connector-returned trajectory (same input
-              // Retry judgement uses) — no trace polling, no LLM. A trace-
-              // mode agent's `pending` would otherwise route this report
-              // into `waitForTracesAndJudge` and the judge call we are
-              // avoiding. The judge model is cleared again by the
-              // deterministic patch; stamping it here would name a model
-              // that never ran.
-              (report as any).metricsStatus = 'completed';
-              (report as any).judgeMode = 'deterministic';
-              (report as any).llmJudgeReasoning = '';
+            if (deterministicEvaluator && (report as any).metricsStatus !== 'pending' && (report as any).failureStage !== 'agent') {
+              // Non-traced agent: score the connector-returned trajectory now
+              // and merge the first judgement into the report BEFORE its one
+              // save (no LLM, no second write). Trace-mode agents keep
+              // `pending` and are scored once spans have built the
+              // trajectory (see waitForTracesAndJudge).
+              // `savedReport.passFailStatus` below then IS the verdict (null
+              // when not evaluable → bucketed `errored`, never a silent pass).
+              const first = buildDeterministicFirstJudgement(report, testCase, deterministicEvaluator);
+              Object.assign(report as any, first.patch);
+              if (first.error) {
+                console.warn(`[EvaluationRunner] [${testCaseId}] Deterministic evaluator "${deterministicEvaluator.name}" could not score this case: ${first.error}`);
+              }
             }
 
             // Classic non-trace reports carry no `metricsStatus`. Without an
@@ -778,7 +781,9 @@ export async function executeEvaluationRun(
           // Same fallback for judgeModelId — the connector return path
           // doesn't carry it, but `run.judgeModelId` is the cx input so
           // we stamp it onto the report on save.
-          (report as any).judgeModelId = (report as any).judgeModelId ?? run.judgeModelId;
+          // A deterministic first judgement already stamped `judgeModelId: null`
+          // (`??` would re-stamp the run's model — one that never ran).
+          (report as any).judgeModelId = (report as any).judgeModelId ?? (deterministicEvaluator ? null : run.judgeModelId);
           (report as any).experimentRunId = (report as any).experimentRunId ?? run.id;
           (report as any).experimentId = (report as any).experimentId ?? run.benchmarkId;
           // Provenance mirror (see `reportProvenance` above). Stamped on the
@@ -821,17 +826,7 @@ export async function executeEvaluationRun(
           // clobbers its verdict. No runId requirement: the poller correlates
           // via sessionId/service-window hints when Strategy B is unavailable
           // (REST agents never get a runId; Claude Code spans carry only session.id).
-          if (deterministicEvaluator && !hasDeterministicEval && (savedReport as any).failureStage !== 'agent') {
-            // First judgement with a deterministic evaluator: code-scored
-            // from the saved trajectory; the outcome (or `null` when not
-            // evaluable) is what the run stats bucket, not the pre-judge
-            // `savedReport`. No judge model / provider to note — none ran.
-            const outcome = await applyDeterministicFirstJudgement(savedReport, testCase, deterministicEvaluator, storageModule);
-            judgeOutcome = outcome.passFailStatus;
-            if (outcome.error) {
-              console.warn(`[EvaluationRunner] [${testCaseId}] Deterministic evaluator "${deterministicEvaluator.name}" could not score this case: ${outcome.error}`);
-            }
-          } else if (
+          if (
             !hasDeterministicEval &&
             agentConfig?.useTraces &&
             savedReport.metricsStatus === 'pending'
@@ -840,7 +835,7 @@ export async function executeEvaluationRun(
             judgeOutcome = await waitForTracesAndJudge(savedReport, testCase, storageModule, agentConfig, (judgeModel, judgeProvider) => {
               noteJudgeModel(judgeModel);
               noteJudgeProvider(judgeProvider);
-            });
+            }, deterministicEvaluator);
           } else if ((savedReport as any).failureStage === 'agent') {
             // The agent request failed (timeout / connection / non-2xx): the
             // report is already final with the real cause. Log it at the
@@ -1051,9 +1046,24 @@ async function waitForTracesAndJudge(
   testCase: TestCase,
   storage: IStorageModule,
   agentConfig: AgentConfig,
-  onJudgeModel?: (judgeModel: string | undefined, judgeProvider: string | undefined) => void
+  onJudgeModel?: (judgeModel: string | undefined, judgeProvider: string | undefined) => void,
+  deterministicEvaluator: Evaluator | null = null
 ): Promise<PassFailStatus | null> {
-  return new Promise<PassFailStatus | null>((resolve) => {
+  // Deterministic evaluator (services/evaluation/deterministicJudgement.ts):
+  // score the span-built trajectory in code once traces land; if polling
+  // fails (no spans within the budget), fall back to the connector-returned
+  // trajectory already stored on the report — the same input Retry
+  // judgement scores — instead of leaving the trace poller's error as the
+  // final word. Never calls an LLM. Storage errors propagate to the runner.
+  const scoreDeterministically = async (target: EvaluationReport, label: string): Promise<PassFailStatus | null> => {
+    const outcome = await applyDeterministicFirstJudgement(target, testCase, deterministicEvaluator!, storage);
+    if (outcome.error) {
+      console.warn(`[EvaluationRunner] [${testCase.id}] Deterministic evaluator "${deterministicEvaluator!.name}" could not score this case (${label}): ${outcome.error}`);
+    }
+    debug('EvaluationRunner', `[${testCase.id}] Deterministic judgement (${label}): ${outcome.passFailStatus}`);
+    return outcome.passFailStatus;
+  };
+  return new Promise<PassFailStatus | null>((resolve, reject) => {
     tracePollingManager.startPolling(
       report.id,
       report.runId,
@@ -1063,6 +1073,10 @@ async function waitForTracesAndJudge(
         // run's test-case worker forever.
         onStopped: () => resolve(null),
         onTracesFound: async (_spans, updatedReport) => {
+          if (deterministicEvaluator) {
+            scoreDeterministically(updatedReport, 'span-built trajectory').then(resolve, reject);
+            return;
+          }
           try {
             // Span-built trajectory (hook or default conversion — issue #320).
             const finalTrajectory = updatedReport.trajectory;
@@ -1164,6 +1178,10 @@ async function waitForTracesAndJudge(
         },
         onError: (error) => {
           console.error(`[EvaluationRunner] Trace polling failed for report ${report.id}:`, error.message);
+          if (deterministicEvaluator) {
+            scoreDeterministically(report, 'stored trajectory — trace polling failed').then(resolve, reject);
+            return;
+          }
           resolve(null); // Don't fail the whole run — report already has error status from tracePoller
         },
       },

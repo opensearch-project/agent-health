@@ -20,7 +20,7 @@
  *
  * The scoring itself is the single shared engine
  * (`lib/scoring/deterministicScoring.ts#scoreDeterministic`); this module only
- * persists its result onto a report that has NEVER been judged:
+ * turns its result into the report patch of a FIRST judgement:
  *   - evaluable      → verdict + metrics + snapshot + matcher rows,
  *                      `judgeMode: 'deterministic'`, no judge model, no LLM
  *                      fields;
@@ -31,6 +31,11 @@
  *                      fake zero (see the module comment in
  *                      lib/scoring/deterministicScoring.ts);
  *   - scorer threw   → the same error patch with the exception message.
+ *
+ * Persistence is the caller's: the non-traced runner path merges the patch
+ * into the report BEFORE its one save; the trace-mode path applies it once
+ * spans have built the trajectory. A storage failure is NOT swallowed here —
+ * the runners' outer catch already records persistence failures honestly.
  *
  * Retry judgement's copy carries retry-only concerns (the re-judgement stamp,
  * keeping a prior verdict when the retry is not evaluable); a first judgement
@@ -50,41 +55,41 @@ export interface DeterministicJudgementOutcome {
   error?: string;
 }
 
+export interface DeterministicFirstJudgement extends DeterministicJudgementOutcome {
+  /** Report fields to persist (merge into the report doc). */
+  patch: Record<string, unknown>;
+}
+
 /**
  * Resolve `evaluatorId` to its document and return it ONLY when it is a
  * deterministic evaluator; `null` for unset / unknown / LLM evaluators.
- * Lookup failures resolve to `null` so the runner falls back to the LLM
- * judge path exactly as before this module existed.
+ * A storage failure propagates — the run cannot proceed without storage
+ * anyway, and falling back to the LLM path would re-open the exact failure
+ * this module exists to close.
  */
 export async function resolveDeterministicEvaluator(
   evaluatorId: string | undefined,
   storage: IStorageModule
 ): Promise<Evaluator | null> {
   if (!evaluatorId) return null;
-  try {
-    const evaluator = isSystemEvaluatorId(evaluatorId)
-      ? getSystemEvaluatorById(evaluatorId) ?? null
-      : (await storage.evaluators.getById(evaluatorId)) ?? null;
-    return evaluator && isDeterministicEvaluator(evaluator) ? evaluator : null;
-  } catch {
-    return null;
-  }
+  const evaluator = isSystemEvaluatorId(evaluatorId)
+    ? getSystemEvaluatorById(evaluatorId) ?? null
+    : (await storage.evaluators?.getById(evaluatorId)) ?? null;
+  return evaluator && isDeterministicEvaluator(evaluator) ? evaluator : null;
 }
 
 /**
- * Score `report` (its stored trajectory, as the agent returned it) with a
- * deterministic evaluator and persist the first judgement. Never calls an
- * LLM. Returns the verdict (`null` when not evaluable) so the runner can
- * bucket the case; the storage write is the source of truth for the UI.
+ * Score `report` (its trajectory as given — the connector's, or the
+ * span-built one for trace-mode agents) with a deterministic evaluator and
+ * build the FIRST-judgement patch. Pure: never calls an LLM, never writes.
  */
-export async function applyDeterministicFirstJudgement(
-  report: EvaluationReport,
+export function buildDeterministicFirstJudgement(
+  report: Pick<EvaluationReport, 'trajectory'> & { rawEvents?: unknown[] },
   testCase: TestCase,
-  evaluator: Evaluator,
-  storage: IStorageModule
-): Promise<DeterministicJudgementOutcome> {
+  evaluator: Evaluator
+): DeterministicFirstJudgement {
   try {
-    const result = scoreDeterministic(evaluator, testCase, report);
+    const result = scoreDeterministic(evaluator, testCase, report as EvaluationReport);
     const common = {
       evaluatorId: evaluator.id,
       // No judge model was involved — never name one on the report.
@@ -102,33 +107,57 @@ export async function applyDeterministicFirstJudgement(
       score: result.score,
     };
     if (!result.evaluable) {
-      await storage.runs.update(report.id, {
-        ...common,
-        ...buildEvaluatorErrorPatch('judge_failed', `Not evaluable by ${evaluator.name}: ${result.summary}`),
-        // The generic patch clears the snapshot (an LLM judge that failed
-        // produced nothing); the deterministic scorer DID run and its
-        // snapshot records which metrics were unevaluable and why.
-        scoringSnapshot: result.snapshot,
-        // No metrics on a not-evaluable report — never the legacy zeroed keys.
-        metrics: {},
-      } as any);
-      return { passFailStatus: null, error: result.summary };
+      return {
+        passFailStatus: null,
+        error: result.summary,
+        patch: {
+          ...common,
+          ...buildEvaluatorErrorPatch('judge_failed', `Not evaluable by ${evaluator.name}: ${result.summary}`),
+          // The generic patch clears the snapshot (an LLM judge that failed
+          // produced nothing); the deterministic scorer DID run and its
+          // snapshot records which metrics were unevaluable and why.
+          scoringSnapshot: result.snapshot,
+          // No metrics on a not-evaluable report — never the legacy zeroed keys.
+          metrics: {},
+        },
+      };
     }
-    await storage.runs.update(report.id, {
-      ...common,
+    return {
       passFailStatus: result.passFailStatus,
-      metrics: result.metrics,
-      metricsStatus: 'completed',
-      traceError: undefined,
-    } as any);
-    return { passFailStatus: result.passFailStatus };
+      patch: {
+        ...common,
+        passFailStatus: result.passFailStatus,
+        metrics: result.metrics,
+        metricsStatus: 'completed',
+        traceError: undefined,
+      },
+    };
   } catch (error: any) {
     const message = error?.message ?? String(error);
-    await storage.runs.update(report.id, {
-      ...buildEvaluatorErrorPatch('judge_failed', `Deterministic scoring: ${message}`),
-      matcherResults: [],
-      improvementStrategies: [],
-    } as any).catch(() => {});
-    return { passFailStatus: null, error: message };
+    return {
+      passFailStatus: null,
+      error: message,
+      patch: {
+        ...buildEvaluatorErrorPatch('judge_failed', `Deterministic scoring: ${message}`),
+        judgeMode: 'deterministic' as const,
+        matcherResults: [],
+        improvementStrategies: [],
+      },
+    };
   }
+}
+
+/**
+ * Build the first judgement and persist it onto an already-saved report
+ * (trace-mode and benchmark paths). Storage errors propagate.
+ */
+export async function applyDeterministicFirstJudgement(
+  report: EvaluationReport,
+  testCase: TestCase,
+  evaluator: Evaluator,
+  storage: IStorageModule
+): Promise<DeterministicJudgementOutcome> {
+  const { patch, ...outcome } = buildDeterministicFirstJudgement(report, testCase, evaluator);
+  await storage.runs.update(report.id, patch as any);
+  return outcome;
 }

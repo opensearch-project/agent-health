@@ -409,14 +409,17 @@ function finalizeJudgeResponse<T extends JudgeResponse>(result: T, evaluator: Ev
 /**
  * True for an AWS SDK v3 service error that means "the request itself is
  * invalid": the modelled `ValidationException`, or any client-fault error
- * the service answered with HTTP 400. Throttling (429), access/credential
- * errors (403) and server faults (5xx) are NOT matched — those may succeed
- * on retry and keep the existing retryable 500 response.
+ * the service answered with HTTP 400 or 404 (unknown model id). Throttling
+ * (429), model timeouts/errors (408/424), access/credential errors (403) and
+ * server faults (5xx) are NOT matched — those may succeed on retry and keep
+ * the existing retryable 500 response.
  */
 export function isProviderRequestRejection(error: any): boolean {
   if (!error || typeof error !== 'object') return false;
   if (error.name === 'ValidationException') return true;
-  return error.$fault === 'client' && error.$metadata?.httpStatusCode === 400;
+  // 400 = malformed/invalid request; 404 = the model id does not exist
+  // (ResourceNotFoundException). Neither heals on retry.
+  return error.$fault === 'client' && (error.$metadata?.httpStatusCode === 400 || error.$metadata?.httpStatusCode === 404);
 }
 
 /**
