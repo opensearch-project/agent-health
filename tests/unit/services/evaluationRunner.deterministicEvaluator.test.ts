@@ -125,6 +125,10 @@ describe('executeEvaluationRun — deterministic run evaluator', () => {
     expect(completed.results['tc-empty'].passFailStatus).toBeUndefined();
     expect(completed.stats).toEqual({ passed: 1, failed: 1, errored: 1, pending: 0, notRun: 0, total: 3 });
 
+    // Non-traced: ONE storage write per report after the placeholder — the
+    // judgement is merged into the report before its save, never a second pass.
+    const hitWrites = (storage.runs.update as jest.Mock).mock.calls.filter(([id]) => id === 'placeholder-tc-hit');
+    expect(hitWrites).toHaveLength(1);
     const hit = docs['placeholder-tc-hit'];
     expect(hit).toMatchObject({
       passFailStatus: 'passed', metricsStatus: 'completed', judgeMode: 'deterministic',
@@ -140,15 +144,35 @@ describe('executeEvaluationRun — deterministic run evaluator', () => {
     expect(completed.judgeModel).toBeUndefined();
   });
 
-  it('a trace-mode agent + deterministic evaluator never enters trace polling: scored from the connector trajectory', async () => {
+  it('a trace-mode agent + deterministic evaluator is scored from the SPAN-BUILT trajectory once traces land — no LLM', async () => {
+    // The poller hands back the report with the trajectory rebuilt from spans
+    // (here: a hit the connector never saw).
+    mockStartPolling.mockImplementation((reportId: string, _runId: any, handlers: any) => {
+      setImmediate(() => handlers.onTracesFound([{ traceId: 't1' }], { ...docs[reportId], trajectory: [hits('g1', 'z')] }));
+    });
     const run = makeRun({ evaluatorId: 'eval-det', agentKey: 'traced-agent' });
-    const completed = await executeEvaluationRun(run, [tc('tc-hit')], {
+    const completed = await executeEvaluationRun(run, [tc('tc-empty')], {
       storageModule: storage, onProgress: jest.fn(), onTestCaseComplete: jest.fn(),
     } as any);
-    expect(mockStartPolling).not.toHaveBeenCalled();
+    expect(mockStartPolling).toHaveBeenCalledTimes(1);
+    expect(mockJudge).not.toHaveBeenCalled();
+    // Connector trajectory had no candidates; the span-built one scores a hit.
+    expect(completed.results['tc-empty']).toMatchObject({ status: 'completed', passFailStatus: 'passed' });
+    expect(docs['placeholder-tc-empty']).toMatchObject({ metricsStatus: 'completed', judgeMode: 'deterministic', passFailStatus: 'passed', metrics: { 'hit@1': 1 } });
+    expect(completed.stats.passed).toBe(1);
+  });
+
+  it('a trace-mode agent whose trace polling FAILS falls back to the stored connector trajectory (what Retry judgement scores)', async () => {
+    mockStartPolling.mockImplementation((_reportId: string, _runId: any, handlers: any) => {
+      setImmediate(() => handlers.onError(new Error('no spans within the budget')));
+    });
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const completed = await executeEvaluationRun(makeRun({ evaluatorId: 'eval-det', agentKey: 'traced-agent' }), [tc('tc-hit')], {
+      storageModule: storage, onProgress: jest.fn(), onTestCaseComplete: jest.fn(),
+    } as any);
     expect(mockJudge).not.toHaveBeenCalled();
     expect(completed.results['tc-hit']).toMatchObject({ status: 'completed', passFailStatus: 'passed' });
-    expect(docs['placeholder-tc-hit']).toMatchObject({ metricsStatus: 'completed', judgeMode: 'deterministic', passFailStatus: 'passed' });
+    expect(docs['placeholder-tc-hit']).toMatchObject({ judgeMode: 'deterministic', passFailStatus: 'passed' });
   });
 
   it('an LLM evaluator keeps the judge path (skipJudge: false) — no code scoring', async () => {
