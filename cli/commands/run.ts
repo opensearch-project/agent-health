@@ -23,6 +23,7 @@ import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, type EvaluationResult, type EvaluationProgressEvent } from '@/cli/utils/apiClient.js';
 import type { AgentConfig, TrajectoryStep } from '@/types/index.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
+import { flagExitCode } from '@/cli/utils/runSummary.js';
 
 // Import server connectors to ensure they're registered
 import { connectorRegistry } from '@/services/connectors/server.js';
@@ -130,20 +131,18 @@ async function runForAgent(
     );
 
     // Trace-mode reports can time out still awaiting the judge — that state
-    // is neither PASSED nor FAILED (issue #333): show it as pending.
-    const judgePending = report.metricsStatus === 'pending' || report.metricsStatus === 'calculating';
-    if (report.status === 'completed' && judgePending) {
+    // is neither PASSED nor FAILED (issue #333): show it as pending. A report
+    // with no verdict (agent request rejected, judge errored) is ERRORED —
+    // never misreported as a FAILED verdict (see verdictLabel).
+    const label = verdictLabel(report);
+    if (label === 'PENDING') {
       spinner.warn(`${agent.name}: ${chalk.yellow('PENDING')} (judge has not run yet — check the report later)`);
-    } else if (report.status === 'completed' && report.passFailStatus === 'passed') {
+    } else if (label === 'PASSED') {
       spinner.succeed(`${agent.name}: ${chalk.green('PASSED')}`);
-    } else if (report.status === 'completed' && report.passFailStatus === 'failed') {
+    } else if (label === 'FAILED') {
       spinner.fail(`${agent.name}: ${chalk.red('FAILED')}`);
-    } else if (report.status === 'completed') {
-      // Completed but no verdict recorded (e.g. judge errored) — don't
-      // misreport as FAILED.
-      spinner.warn(`${agent.name}: ${chalk.yellow('NO VERDICT')}`);
     } else {
-      spinner.fail(`${agent.name}: ${chalk.yellow(report.status)}`);
+      spinner.warn(`${agent.name}: ${chalk.yellow('ERRORED')} (not judged — ${report.status === 'completed' ? 'the evaluator produced no verdict' : `execution ${report.status}`})`);
     }
 
     return report;
@@ -154,21 +153,50 @@ async function runForAgent(
 }
 
 /**
+ * Exit code for `run`: `1` when any agent's evaluation ERRORED — the CLI got
+ * no report at all (agent threw / unreachable), or a report with no verdict
+ * and no pending judge (`metricsStatus: 'error'`, no `passFailStatus`, a `failed`
+ * execution). A `FAILED` verdict is data, not an error, and keeps exit 0; a
+ * trace-mode `PENDING` judge is not an error either. Same convention as
+ * `benchmark` (cli/utils/runSummary.ts).
+ */
+export function exitCodeForRunResults(
+  results: Array<{ report: Pick<EvaluationResult, 'status' | 'passFailStatus' | 'metricsStatus'> | null }>
+): 0 | 1 {
+  return results.some(({ report }) => !report || verdictLabel(report) === 'ERRORED') ? 1 : 0;
+}
+
+/**
  * Build rows from results (shared between table and markdown)
  */
-function buildResultRows(results: Array<{ agent: AgentConfig; report: EvaluationResult | null }>): string[][] {
+/**
+ * Verdict label for one report: PASSED / FAILED are judge verdicts on a
+ * report whose execution `completed`; PENDING is a trace-mode judge that has
+ * not run yet; ERRORED is everything else — no verdict and no pending judge
+ * (agent request rejected / execution failed / judge could not run), or a
+ * verdict left on a report whose execution did not complete. Pre-fix the
+ * no-verdict case printed the raw `report.status` (`failed`),
+ * indistinguishable at a glance from a FAILED verdict.
+ */
+export function verdictLabel(
+  report: Pick<EvaluationResult, 'status' | 'passFailStatus' | 'metricsStatus'>
+): 'PENDING' | 'PASSED' | 'FAILED' | 'ERRORED' {
+  const judgePending = report.metricsStatus === 'pending' || report.metricsStatus === 'calculating';
+  if (report.status === 'completed' && judgePending) return 'PENDING';
+  if (report.metricsStatus === 'error' || report.status !== 'completed') return 'ERRORED';
+  if (report.passFailStatus === 'passed') return 'PASSED';
+  if (report.passFailStatus === 'failed') return 'FAILED';
+  return 'ERRORED';
+}
+
+export function buildResultRows(results: Array<{ agent: AgentConfig; report: EvaluationResult | null }>): string[][] {
   return results.map(r => {
     if (!r.report) {
       return [r.agent.name, 'ERROR', '-', '-', '-'];
     }
-    const judgePending = r.report.metricsStatus === 'pending' || r.report.metricsStatus === 'calculating';
-    const status = judgePending ? 'PENDING'
-      : r.report.passFailStatus === 'passed' ? 'PASSED'
-      : r.report.passFailStatus === 'failed' ? 'FAILED'
-      : r.report.status;
     return [
       r.agent.name,
-      status,
+      verdictLabel(r.report),
       r.report.metrics?.accuracy ? `${Math.round(r.report.metrics.accuracy)}%` : '-',
       r.report.trajectorySteps.toString(),
       r.report.id?.substring(0, 27) + '...' || '-',
@@ -199,14 +227,10 @@ function displayResults(results: Array<{ agent: AgentConfig; report: EvaluationR
       table.push([r.agent.name, chalk.red('ERROR'), '-', '-', '-']);
       continue;
     }
-    const judgePending = r.report.metricsStatus === 'pending' || r.report.metricsStatus === 'calculating';
-    const statusStr = judgePending
-      ? chalk.yellow('PENDING')
-      : r.report.passFailStatus === 'passed'
-        ? chalk.green('PASSED')
-        : r.report.passFailStatus === 'failed'
-          ? chalk.red('FAILED')
-          : chalk.yellow(r.report.status);
+    const label = verdictLabel(r.report);
+    const statusStr = label === 'PASSED' ? chalk.green(label)
+      : label === 'FAILED' ? chalk.red(label)
+      : chalk.yellow(label);
     table.push([
       r.agent.name,
       statusStr,
@@ -325,7 +349,9 @@ export function createRunCommand(): Command {
           }
         }
 
-        // Output results
+        // Output results. Exit 1 when any evaluation errored (no report / no
+        // verdict); set via exitCode so the output and `finally` cleanup run.
+        flagExitCode(exitCodeForRunResults(results));
         const outputFormat = parseOutputFormat(options.output);
         if (outputFormat === 'json') {
           console.log(formatJson(results.map(r => ({
