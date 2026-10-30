@@ -907,6 +907,27 @@ describe('metricsService', () => {
         expect(errRest).toEqual(ok);
       });
 
+      it('rootless trace with two top-level agent operations, one of which failed → status error (the run\'s own outcome), agentErrorSpans counts it', () => {
+        const docs = buildAgentTraceWithErrorSpan({ runId: 'run-2tops', traceId, withErrorSpan: false }).filter(d => d.name !== 'test_case');
+        // Detach the last tool span from the agent root so it is a second top-level operation, and fail it.
+        const tool = docs.find(d => d.name === 'execute_tool submit_results')!;
+        tool.parentSpanId = 'not-in-this-result-set';
+        tool.status = { code: 2, message: 'boom' };
+        const result = computeMetricsFromSpans('run-2tops', docs as any);
+        expect(result.status).toBe('error');
+        expect(result.agentErrorSpans).toBe(1);
+        expect(result.llmCalls).toBe(AGENT_TRACE_FIXTURE.llmCalls);
+      });
+
+      it('with an agent.run root present, only the root decides status — an errored span whose parent is missing does not', () => {
+        const docs = buildAgentTraceWithErrorSpan({ runId: 'run-root', traceId });
+        docs.find(d => d.name.startsWith('invoke_agent'))!.name = 'agent.run';
+        docs.find(d => d.name === 'execute_tool search_index')!.parentSpanId = 'truncated-away';
+        const result = computeMetricsFromSpans('run-root', docs as any);
+        expect(result.status).toBe('success');
+        expect(result.agentErrorSpans).toBe(2);
+      });
+
       it('an ERROR on Agent Health\'s own eval span is not an agent error span', () => {
         const docs = buildAgentTraceWithErrorSpan({ runId: 'run-eval-err', traceId, withErrorSpan: false });
         docs.find(d => d.name === 'test_case')!.status = { code: 2, message: 'judge timed out' };

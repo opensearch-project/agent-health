@@ -148,14 +148,18 @@ class CompositeLogsOperations implements ILogsOperations {
 
 /**
  * Did this source's trace-store query FAIL for the run? True when the call
- * threw, or when the source answered the `failedMetricsResult` shape (an
- * `error` message; `hasSpans` unknown). A result that DID return spans
- * (`hasSpans: true`) is never a store failure, whatever its `status` says —
- * `status: 'error'` there is the agent run's own outcome (an errored span).
+ * threw, or when the source answered the `failedMetricsResult` shape — the
+ * `error` message is the contract (`MetricsResult.error`: set on EVERY store
+ * failure, never on a result computed from spans). `m.status` plays no part:
+ * `status: 'error'` on a span-bearing result is the agent run's own outcome.
  */
 function isStoreFailure(c: { m: MetricsResult | undefined; error: string | null }): boolean {
-  if (c.error) return true;
-  return !!c.m && c.m.error !== undefined && c.m.hasSpans !== true;
+  return c.error !== null || c.m?.error !== undefined;
+}
+
+/** The "looked, found nothing" shape (same as `computeMetricsFromSpans(runId, [])`). */
+function noSpansResult(runId: string): MetricsResult {
+  return { runId, traceId: null, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0, llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'pending', hasSpans: false };
 }
 
 class CompositeMetricsOperations implements IMetricsOperations {
@@ -202,11 +206,12 @@ class CompositeMetricsOperations implements IMetricsOperations {
       if (withSpans?.m) return { ...withSpans.m, source: withSpans.src.name } as MetricsResult;
       const errored = candidates.find(isStoreFailure);
       if (errored) {
-        const base = errored.m ?? candidates.find((c) => c.m)?.m;
+        // Every source threw → no result to base on: zero counters, flagged unknown (never a bare `{ runId }`).
+        const base = errored.m ?? candidates.find((c) => c.m)?.m ?? noSpansResult(runId);
         const message = errored.error ?? errored.m?.error ?? 'trace-store query failed';
-        return { ...(base as MetricsResult), runId, status: 'error', error: `${errored.src.name}: ${message}`, hasSpans: undefined } as MetricsResult;
+        return { ...base, runId, status: 'error', error: `${errored.src.name}: ${message}`, hasSpans: undefined } as MetricsResult;
       }
-      return (candidates.find((c) => c.m)?.m as MetricsResult) ?? ({ runId, traceId: null, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0, llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'pending', hasSpans: false } as MetricsResult);
+      return (candidates.find((c) => c.m)?.m as MetricsResult) ?? noSpansResult(runId);
     });
   }
 }
