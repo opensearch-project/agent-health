@@ -100,7 +100,7 @@ describe('POST /api/metrics/batch on a composite backend — an errored span is 
   it('the fixture is real-shaped: 59 spans incl. our eval span, 2 of them ERROR (one failing tool call + its HTTP child)', () => {
     expect(cwRecords).toHaveLength(AGENT_TRACE_FIXTURE.spanCount);
     const parsed = cwRecords.map((s) => JSON.parse(s));
-    expect(parsed.filter((r) => r.status.code === 'ERROR').map((r) => r.name)).toEqual(['execute_tool search_index', 'POST /{index}/_search']);
+    expect(parsed.filter((r) => r.status.code === 'ERROR').map((r) => r.name)).toEqual(['execute_tool search_docs', 'POST /{index}/_search']);
     expect(parsed.some((r) => r.name === 'test_case')).toBe(true);
   });
 
