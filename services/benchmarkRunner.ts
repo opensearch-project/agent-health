@@ -33,6 +33,7 @@ import {
   appendNotReachedMarker,
 } from './evaluation';
 import { buildEvaluatorErrorPatch } from './evaluation/evaluatorError';
+import { classifyCaseOutcome } from './evaluation/classifyCaseOutcome';
 import { pickReportFailureFields } from '@/lib/reportFailureFields';
 import { describeAgentError, agentErrorContextFrom } from './evaluation/agentFailure';
 import { scoringFieldsFromJudgment, sdkSessionScoring } from '@/lib/scoring/verdictEngine';
@@ -518,18 +519,19 @@ export async function executeRun(
               }
             });
 
-            // observe-role signals never gate; errored signals are bucketed
-            // separately as `errored` (excluded from pass-rate), not `failed`.
-            const erroredMatchers = matcherResults.filter(m => m.errored);
-            const anyErrored = erroredMatchers.length > 0;
-            const anyGateFailed = matcherResults.some(
-              m => !m.pass && m.role !== 'observe' && !m.errored,
-            );
-            // #335: an *agent* failure (subprocess timeout / crash — `agent.run()`
-            // rejected so `capturedResult` was never set) must surface as a clearly
-            // labelled `errored` run, not a silent `failed` with an empty card.
-            const agentFailed = evalError !== undefined && capturedResult === undefined;
-            const failed = anyGateFailed || evalError !== undefined;
+            // Verdict classification is shared with evaluationRunner (ONE
+            // decision table — see classifyCaseOutcome.ts). Pre-fix this file
+            // carried its own copy that lacked the "a recorded gate failure is
+            // FAILED, not an agent error" guard, so a body that caught the
+            // agent's non-2xx and asserted on it was bucketed `agent_failed`
+            // here but `failed` from the CLI.
+            const outcome = classifyCaseOutcome({
+              matcherResults,
+              evalError,
+              agentResultCaptured: capturedResult !== undefined,
+            });
+            const { erroredMatchers, failed } = outcome;
+            const agentFailed = outcome.kind === 'agent_failed';
             // ALWAYS-RECORD (owner-hit measurement-harness bug): mirrors the same
             // fix in evaluationRunner.ts — stamp the objective totalTokens/
             // totalCostUsd actuals (durationMs already survives a later throw,
@@ -550,7 +552,7 @@ export async function executeRun(
                 (evalError as any)?.message ?? String(evalError);
             }
 
-            if (anyErrored) {
+            if (outcome.kind === 'judge_failed') {
               // At least one judge/evaluator could not run. Bucket as `errored`
               // via the canonical #247 patch instead of a misleading score-0
               // `failed` — errored runs are excluded from pass-rate.
