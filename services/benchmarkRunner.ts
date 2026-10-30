@@ -64,6 +64,9 @@ import { loadConfigSync } from '@/lib/config/index';
 import { getBackendUrl } from '@/lib/portConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { tracePollingManager } from './traces/tracePoller';
+import { resolveDeterministicEvaluator, applyDeterministicFirstJudgement } from '@/services/evaluation/deterministicJudgement';
+import { getStorageModule } from '@/server/adapters';
+import type { Evaluator } from '@/types';
 import { fetchSpansForRun, type TraceWindowAgent } from './traces/fetchSpansForRun';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { reportProvenanceFrom } from '@/server/services/agentProvenance';
@@ -214,6 +217,15 @@ async function runWithConcurrencyLimit<T>(
  * Results are stored in the evals_runs index via asyncRunStorage.
  * Supports parallel execution via run.concurrency (default: 1 = sequential).
  */
+/** The server's initialised storage module, or null when none is (legacy client-only callers / tests). */
+function safeGetStorageModule(): IStorageModule | null {
+  try {
+    return getStorageModule();
+  } catch {
+    return null;
+  }
+}
+
 export async function executeRun(
   benchmark: Benchmark,
   run: BenchmarkRun,
@@ -297,6 +309,17 @@ export async function executeRun(
   // This ensures trace-mode runs (useTraces: true) have their judge evaluation
   // complete before the benchmark reports results (fixes #184).
   const pendingTracePolls: Promise<void>[] = [];
+
+  // A `kind: 'deterministic'` evaluator is scored in code, never by the LLM
+  // judge (see services/evaluation/deterministicJudgement.ts). Resolved once
+  // per run. Persisting the verdict needs the storage module; the legacy
+  // client-only entry point (`runBenchmark`) passes none, so fall back to
+  // the server's initialised module. Only when neither exists does the LLM
+  // path run — and /api/judge then answers one honest 400, never 10 retries.
+  const deterministicStorage = storageModule ?? safeGetStorageModule();
+  const deterministicEvaluator = deterministicStorage
+    ? await resolveDeterministicEvaluator(run.evaluatorId, deterministicStorage)
+    : null;
 
   // Shared throttle signal: when any task hits a rate-limit error,
   // subsequent task starts wait until this timestamp expires.
@@ -620,7 +643,9 @@ export async function executeRun(
               {
                 registry: connectorRegistry,
                 evaluatorId: run.evaluatorId,
-                skipJudge: false,
+                // Deterministic evaluator: the agent still runs, the verdict
+                // is computed in code after the report is saved (below).
+                skipJudge: deterministicEvaluator !== null,
                 // Forward the run-level judge model so the judge call uses what
                 // the customer picked in the run config dialog / CLI / API — not
                 // the agent's own model. Without this the benchmark-execute path
@@ -651,10 +676,26 @@ export async function executeRun(
           (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
 
           // Save the report to OpenSearch and get the actual stored ID
-          const savedReport = await saveReportWithClient(client, report, {
+          let savedReport = await saveReportWithClient(client, report, {
             experimentId: benchmark.id,
             experimentRunId: run.id,
           });
+          if (deterministicEvaluator && deterministicStorage && !hasDeterministicEval
+              && (report as any).failureStage !== 'agent' && savedReport.metricsStatus !== 'pending') {
+            // Non-traced agent: first judgement with a deterministic evaluator
+            // (code-scored from the saved trajectory, no LLM). `saveReportWithClient`
+            // copies an explicit allow-list that predates `judgeMode`, so the
+            // judgement is a second write through the storage module; re-read
+            // so the span events / results below see the verdict. Trace-mode
+            // (`pending`) reports are scored once spans land (see
+            // startTracePollingForReport). Storage errors propagate to the
+            // outer catch like any other persistence failure.
+            const outcome = await applyDeterministicFirstJudgement(savedReport, testCase, deterministicEvaluator, deterministicStorage);
+            if (outcome.error) {
+              console.warn(`[BenchmarkRunner] [${testCaseId}] Deterministic evaluator "${deterministicEvaluator.name}" could not score this case: ${outcome.error}`);
+            }
+            savedReport = (await deterministicStorage.runs.getById(savedReport.id)) ?? savedReport;
+          }
           // Run-level judge identity (BenchmarkRun.judgeModel / judgeProvider,
           // lib/judgeIdentity): first report that resolved an LLM wins; the
           // kind is the first REAL kind ('none' only while every report so far
@@ -677,7 +718,8 @@ export async function executeRun(
           // sessionId / eval traceId / service-window hints when Strategy B
           // is unavailable (REST-connector reports never carry a runId).
           if (!hasDeterministicEval && savedReport.metricsStatus === 'pending') {
-            const pollPromise = startTracePollingForReport(savedReport, testCase, client, benchmark, run);
+            const pollPromise = startTracePollingForReport(savedReport, testCase, client, benchmark, run,
+              deterministicEvaluator && deterministicStorage ? { evaluator: deterministicEvaluator, storage: deterministicStorage } : undefined);
             // Attach .catch to prevent unhandled rejection if cancelled/errored before allSettled
             pendingTracePolls.push(pollPromise.catch(() => {}));
           }
@@ -1277,12 +1319,32 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
 /**
  * Start trace polling for the batch benchmark execution path (uses raw OpenSearch client).
  */
-function startTracePollingForReport(report: EvaluationReport, testCase: TestCase, client: Client, benchmark?: Benchmark, run?: BenchmarkRun): Promise<void> {
+function startTracePollingForReport(
+  report: EvaluationReport,
+  testCase: TestCase,
+  client: Client,
+  benchmark?: Benchmark,
+  run?: BenchmarkRun,
+  deterministic?: { evaluator: Evaluator; storage: IStorageModule }
+): Promise<void> {
   // See startTracePollingForReportWithModule: no runId → the poller falls
   // back to sessionId/service-window correlation hints from the report.
   if (!report.runId) {
     debug('BenchmarkRunner', `No runId for report ${report.id} — polling via sessionId/service-window hints`);
   }
+  // Deterministic evaluator (services/evaluation/deterministicJudgement.ts):
+  // score the span-built trajectory in code once traces land; if polling
+  // fails, fall back to the connector-returned trajectory already on the
+  // report (what Retry judgement scores). Never calls an LLM.
+  const scoreDeterministically = async (target: EvaluationReport, label: string): Promise<void> => {
+    const outcome = await applyDeterministicFirstJudgement(target, testCase, deterministic!.evaluator, deterministic!.storage);
+    if (outcome.error) {
+      console.warn(`[BenchmarkRunner] [${testCase.id}] Deterministic evaluator "${deterministic!.evaluator.name}" could not score this case (${label}): ${outcome.error}`);
+    }
+    if (report.experimentId) {
+      await updateBenchmarkRunStatsForReport(client, report.experimentId, report.id);
+    }
+  };
 
   // Pass agent config to trace poller for hooks
   const config = getConfig();
@@ -1294,6 +1356,10 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
     report.runId,
     {
       onTracesFound: async (spans, updatedReport) => {
+        if (deterministic) {
+          await scoreDeterministically(updatedReport, 'span-built trajectory');
+          return;
+        }
         try {
           // Span-built trajectory (hook or default conversion — issue #320).
           const finalTrajectory = updatedReport.trajectory;
@@ -1383,8 +1449,12 @@ function startTracePollingForReport(report: EvaluationReport, testCase: TestCase
         }
       },
       onAttempt: () => {},
-      onError: (error) => {
+      onError: async (error) => {
         console.error(`[BenchmarkRunner] Trace polling failed for report ${report.id}:`, error instanceof Error ? error.message : error);
+        if (deterministic) {
+          await scoreDeterministically(report, 'stored trajectory — trace polling failed').catch(err =>
+            console.error(`[BenchmarkRunner] Deterministic judgement failed for report ${report.id}:`, err instanceof Error ? err.message : err));
+        }
       },
     },
     {
