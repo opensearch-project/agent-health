@@ -43,7 +43,13 @@ test('uncaught-500', { prompt: 'What is the status of order 42?' }, async ({ age
 });
 `;
 
-/** Read an SSE response to completion and return the parsed `data:` payloads. */
+/**
+ * POST to an SSE execution endpoint and return the parsed `data:` payloads.
+ * Both execution routes close the stream after their terminal event
+ * (`completed` / `complete` / `error`), so a plain request resolves once the
+ * run is over; the 120 s cap is well above a 2-case run against a local stub
+ * (measured ~30 s per route on a remote OpenSearch cluster).
+ */
 async function sseEvents(request: APIRequestContext, url: string, data: Record<string, unknown>): Promise<any[]> {
   const res = await request.post(url, { data, timeout: 120_000 });
   if (!res.ok()) throw new Error(`${url} → ${res.status()} ${await res.text()}`);
@@ -61,6 +67,9 @@ async function sseEvents(request: APIRequestContext, url: string, data: Record<s
       events.push(eventName && !('type' in parsed) ? { type: eventName, ...parsed } : parsed);
     } catch { /* ignore */ }
   }
+  const terminal = events.find(e => ['completed', 'complete', 'error', 'cancelled'].includes(e.type) || e.status === 'completed' || e.error);
+  if (!terminal) throw new Error(`${url}: stream ended without a terminal event; saw ${JSON.stringify(events.map(e => e.type))}`);
+  if (terminal.type === 'error' || (terminal.error && !terminal.run)) throw new Error(`${url}: run errored: ${JSON.stringify(terminal).slice(0, 300)}`);
   return events;
 }
 
@@ -146,8 +155,10 @@ test.describe('Caught agent 500 + failing expect → FAILED in the inspector (bo
   });
 
   test.afterAll(async ({ request }) => {
-    // Children before parents; every id here was created above by this spec.
-    const order = ['run', 'benchmark-run', 'evaluation-run', 'test-case', 'benchmark', 'custom-agent'];
+    // Children before parents; every id here was created above by this spec
+    // (never a listing + name match). A failed DELETE is reported, not hidden.
+    const order = ['run', 'benchmark-run', 'evaluation-run', 'benchmark', 'test-case', 'custom-agent'];
+    const leaked: string[] = [];
     for (const kind of order) {
       for (const [k, id] of created) {
         if (k !== kind) continue;
@@ -157,9 +168,11 @@ test.describe('Caught agent 500 + failing expect → FAILED in the inspector (bo
           : kind === 'test-case' ? `/api/storage/test-cases/${id}`
           : kind === 'benchmark' ? `/api/storage/benchmarks/${id}`
           : `/api/agents/custom/${id}`;
-        await request.delete(path).catch(() => {});
+        const r = await request.delete(path).catch(() => null);
+        if (!r || (!r.ok() && r.status() !== 404)) leaked.push(`${kind} ${id} → ${r ? r.status() : 'network error'}`);
       }
     }
+    if (leaked.length) console.warn(`[caught-agent-error-verdict] cleanup left data behind:\n  ${leaked.join('\n  ')}`);
     if (agentServer) await new Promise<void>(r => agentServer.close(() => r()));
     if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   });

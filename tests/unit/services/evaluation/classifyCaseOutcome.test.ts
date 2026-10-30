@@ -12,7 +12,7 @@
  * `failed`, benchmarkRunner said `agent_failed`.
  */
 
-import { classifyCaseOutcome, isGatingMatcher } from '@/services/evaluation/classifyCaseOutcome';
+import { classifyCaseOutcome } from '@/services/evaluation/classifyCaseOutcome';
 import type { MatcherResult } from '@/lib/matchers/types';
 
 const failedGate = (over: Partial<MatcherResult> = {}): MatcherResult => ({
@@ -45,6 +45,13 @@ describe('classifyCaseOutcome', () => {
       'agent_failed', { matcherResults: [passedGate()], evalError: timeoutError, agentResultCaptured: false }],
     ['uncaught agent error with only an observe-role failure recorded (observe never gates)',
       'agent_failed', { matcherResults: [failedGate({ role: 'observe' })], evalError: timeoutError, agentResultCaptured: false }],
+    // ── an earlier recorded gate failure wins over a later uncaught agent error:
+    //    the test reached a verdict (expect.soft / a hook assertion) before the
+    //    agent crashed, so it is FAILED with the agent error as assertionError +
+    //    notReached marker — not an agent error that hides the failed gate.
+    //    (Same as evaluationRunner since #339.)
+    ['expect.soft failed, THEN agent.run() rejected uncaught',
+      'failed', { matcherResults: [failedGate()], evalError: connectorError, agentResultCaptured: false }],
     // ── the body decided after a caught error ──
     ['caught agent error + passing expect',
       'passed', { matcherResults: [passedGate()], evalError: undefined, agentResultCaptured: false }],
@@ -63,22 +70,14 @@ describe('classifyCaseOutcome', () => {
     expect(classifyCaseOutcome(input).kind).toBe(kind);
   });
 
-  it('exposes the booleans the runners stamp on the report', () => {
+  it('exposes the errored matchers so the runner can name the judge_failed cause', () => {
     const out = classifyCaseOutcome({ matcherResults: [failedGate(), erroredJudge()], evalError: assertionError, agentResultCaptured: true });
-    expect(out.anyGateFailed).toBe(true);
-    expect(out.failed).toBe(true);
     expect(out.erroredMatchers).toHaveLength(1);
     expect(out.erroredMatchers[0].errorMessage).toBe('judge unreachable');
   });
 
-  it('a body that threw with no gate failure is `failed: true` even when the kind is agent_failed', () => {
-    const out = classifyCaseOutcome({ matcherResults: [], evalError: timeoutError, agentResultCaptured: false });
-    expect(out).toMatchObject({ kind: 'agent_failed', failed: true, anyGateFailed: false });
-  });
-
-  it('the synthetic notReached marker never gates (idempotent if classified after it was appended)', () => {
+  it('the synthetic notReached marker never gates (same answer before and after appendNotReachedMarker)', () => {
     const marker = failedGate({ notReached: true });
-    expect(isGatingMatcher(marker)).toBe(false);
     expect(classifyCaseOutcome({ matcherResults: [marker], evalError: timeoutError, agentResultCaptured: false }).kind).toBe('agent_failed');
     expect(classifyCaseOutcome({ matcherResults: [failedGate(), marker], evalError: assertionError, agentResultCaptured: false }).kind).toBe('failed');
   });
