@@ -53,14 +53,20 @@ export {
   rerunEvaluationRun,
   updateEvaluationRun,
   retryJudgement,
+  startRetryJudgement,
+  preflightRetryJudgement,
   getRetryJudgementStatus,
+  notEvaluableCount,
+  groupNotEvaluableReasons,
   type CreateEvaluationRunRequest,
   type EvaluationRunProgress,
   type EvaluationRunStartedEvent,
   type RetryJudgementSummary,
   type RetryJudgementRequest,
   type RetryJudgementCaseResult,
+  type RetryJudgementOutcome,
   type RetryJudgementJobStatus,
+  type RetryJudgementPreflight,
   type RerunOverrides,
 } from './evaluationRunsApi';
 
@@ -71,3 +77,13 @@ export {
   type JudgeModelCatalogEntry,
   type AgentJudgeResolvedModel,
 } from './judgeModelsApi';
+
+export {
+  startRetryJudgementJob,
+  getRetryJudgementJob,
+  listRetryJudgementJobs,
+  subscribeRetryJudgementJobs,
+  dismissRetryJudgementJob,
+  adoptRetryJudgementJob,
+  type RetryJudgementJob,
+} from './retryJudgementJobs';

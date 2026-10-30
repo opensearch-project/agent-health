@@ -98,9 +98,9 @@ describe('deterministic evaluators — response-results source + abstain metric'
     const badSource = await post('/api/storage/evaluators', { ...evaluatorBody(), inputs: { ...evaluatorBody().inputs, prediction: { source: 'report.output' } } });
     expect(badSource.status).toBe(400);
     expect((await badSource.json()).error).toMatch(/must be 'tool-hits-ordered' or 'response-results'/);
-    const abstainWithToolHits = await post('/api/storage/evaluators', { ...evaluatorBody(), inputs: { ...evaluatorBody().inputs, prediction: { source: 'tool-hits-ordered' } } });
-    expect(abstainWithToolHits.status).toBe(400);
-    expect((await abstainWithToolHits.json()).error).toMatch(/'abstain' metric requires inputs.prediction.source 'response-results'/);
+    const badResultsTool = await post('/api/storage/evaluators', { ...evaluatorBody(), inputs: { ...evaluatorBody().inputs, prediction: { source: 'tool-hits-ordered', resultsTool: '(' } } });
+    expect(badResultsTool.status).toBe(400);
+    expect((await badResultsTool.json()).error).toMatch(/resultsTool is not a valid regular expression/);
   });
 
   it('creates the evaluator, re-scores a completed run from the RETURNED lists, and scores abstain on the gold-empty case', async () => {
@@ -195,7 +195,14 @@ describe('deterministic evaluators — response-results source + abstain metric'
     expect(start.status).toBe(202);
     const job = await pollRetryJudgement(runId);
     expect(job.status).toBe('completed');
-    expect(job.summary).toMatchObject({ retried: 8, succeeded: 6, failed: 2 });
+    // "Not evaluable" is a distinct outcome — never counted as failed; the two gold-empty cases are abstain cases.
+    expect(job.summary).toMatchObject({ retried: 8, succeeded: 6, failed: 0, notEvaluable: 2, abstain: 2 });
+    const byCase = Object.fromEntries(job.summary.results.map((r: any) => [r.testCaseId, r]));
+    expect(byCase[tcNoResponse]).toMatchObject({ outcome: 'not-evaluable', reason: 'no candidate ids found in the final answer, a results tool or the stored tool results' });
+    expect(byCase[tcNoResponse].diagnostics).toMatchObject({ gold: { source: 'expectedOutcomes[1]', ids: ['707'] }, candidates: { sourceUsed: 'none' }, toolsScanned: ['search products'] });
+    expect(byCase[tcProse]).toMatchObject({ outcome: 'not-evaluable', reason: expect.stringMatching(/^no ranked list recognised in the final response/) });
+    expect(byCase[tcAbstainOk]).toMatchObject({ outcome: 'succeeded', passFailStatus: 'passed', abstain: true });
+    expect(byCase[tcAbstainBad]).toMatchObject({ outcome: 'succeeded', passFailStatus: 'failed', abstain: true });
 
     // 5. Reports.
     const get = async (id: string) => (await fetch(`${BASE_URL}/api/storage/runs/${id}`)).json();
@@ -207,7 +214,7 @@ describe('deterministic evaluators — response-results source + abstain metric'
     expect(json.metrics).toEqual({ 'hit@5': 1, 'recall@20': 0.5, mrr: 0.5 });
     expect(json.scoringSnapshot).toMatchObject({
       goldRule: 'expected-outcomes-pattern', goldIdsUsed: ['101', '202'],
-      extractionRule: 'response-results', extraction: { candidateCount: 2, parsedFrom: 'json' },
+      extractionRule: 'response-results', extraction: { candidateCount: 2, anchorsRemoved: 0, parsedFrom: 'json', sourceUsed: 'response-results' },
       unevaluable: [], notApplicable: ['abstain'], primaryMetrics: ['hit@5', 'recall@20', 'abstain'],
     });
     expect(json.scoringSnapshot.extraction).not.toHaveProperty('citedCount');
@@ -223,20 +230,20 @@ describe('deterministic evaluators — response-results source + abstain metric'
     const fencedRep = await get(repFenced);
     expect(fencedRep.passFailStatus).toBe('passed');
     expect(fencedRep.metrics).toEqual({ 'hit@5': 1, 'recall@20': 1, mrr: 1 });
-    expect(fencedRep.scoringSnapshot.extraction).toEqual({ candidateCount: 2, parsedFrom: 'fenced' });
+    expect(fencedRep.scoringSnapshot.extraction).toEqual({ candidateCount: 2, anchorsRemoved: 0, parsedFrom: 'fenced', sourceUsed: 'response-results' });
     expect(rowOf(fencedRep, 'mrr').details.predicted).toEqual(['303', '12']); // ordered by rank, not array order
 
     const textRep = await get(repText);
     expect(textRep.passFailStatus).toBe('passed');
     expect(textRep.metrics).toEqual({ 'hit@5': 1, 'recall@20': 0.5, mrr: 0.5 });
-    expect(textRep.scoringSnapshot.extraction).toEqual({ candidateCount: 2, parsedFrom: 'text' });
+    expect(textRep.scoringSnapshot.extraction).toEqual({ candidateCount: 2, anchorsRemoved: 0, parsedFrom: 'text', sourceUsed: 'response-results' });
     expect(rowOf(textRep, 'hit@5').details.predicted).toEqual(['1', '505']); // anchor line ignored (not a list line)
 
     const emptyRep = await get(repEmpty);
     expect(emptyRep.metricsStatus).toBe('completed');
     expect(emptyRep.passFailStatus).toBe('failed');
     expect(emptyRep.metrics).toEqual({ 'hit@5': 0, 'recall@20': 0, mrr: 0 });
-    expect(emptyRep.scoringSnapshot).toMatchObject({ extraction: { candidateCount: 0, parsedFrom: 'json' }, unevaluable: [], notApplicable: ['abstain'] });
+    expect(emptyRep.scoringSnapshot).toMatchObject({ extraction: { candidateCount: 0, parsedFrom: 'json', sourceUsed: 'response-results' }, unevaluable: [], notApplicable: ['abstain'] });
     expect(rowOf(emptyRep, 'hit@5')).toMatchObject({ pass: false, actual: 0 });
     expect(rowOf(emptyRep, 'hit@5').details.predicted).toEqual([]);
 
@@ -253,23 +260,34 @@ describe('deterministic evaluators — response-results source + abstain metric'
     expect(abstainBad.metrics).toEqual({ abstain: 0 });
     expect(rowOf(abstainBad, 'abstain')).toMatchObject({ pass: false, actual: 0 });
 
+    // Not-evaluable cases keep their PREVIOUS (seeded LLM) judgement and record the attempt.
     const noResp = await get(repNoResponse);
-    expect(noResp.metricsStatus).toBe('error');
-    expect(noResp.passFailStatus ?? null).toBeNull();
-    expect(noResp.metrics).toEqual({});
-    expect(noResp.traceError).toMatch(/Not evaluable by .*no final response step/);
-    expect(noResp.scoringSnapshot.unevaluable).toEqual(['hit@5', 'recall@20', 'mrr', 'abstain']);
+    expect(noResp.metricsStatus).toBe('ready');
+    expect(noResp.passFailStatus).toBe('passed');
+    expect(noResp.metrics).toEqual({ accuracy: 90 });
+    expect(noResp.scoringSnapshot ?? undefined).toBeUndefined();
+    expect(noResp.traceError ?? undefined).toBeUndefined();
+    // The diagnostics say the retrieved hit was reported but not used (returned-lists-only evaluator).
+    expect(noResp.lastRetryAttempt).toMatchObject({
+      outcome: 'not-evaluable', scope: 'all', evaluatorId: evaluator.id,
+      reason: 'no candidate ids found in the final answer, a results tool or the stored tool results',
+      diagnostics: { gold: { ids: ['707'] }, candidates: { sourceUsed: 'none', count: 0 }, toolsScanned: ['search products'] },
+    });
+    expect(noResp.lastRetryAttempt.diagnostics.candidates.sourceTried).toEqual([
+      { source: 'response-results', count: 0, detail: 'no final response step' },
+      { source: 'tool-hits', count: 1, detail: "tool 'search products' hits (hits / results) (not used: this evaluator scores returned lists only)" },
+    ]);
 
     const prose = await get(repProse);
-    expect(prose.metricsStatus).toBe('error');
-    expect(prose.passFailStatus ?? null).toBeNull();
-    expect(prose.metrics).toEqual({});
-    expect(prose.traceError).toMatch(/no ranked list recognised in the final response/);
-    expect(prose.scoringSnapshot.extraction).toEqual({ candidateCount: 0, parsedFrom: 'none' });
+    expect(prose.passFailStatus).toBe('passed');
+    expect(prose.lastRetryAttempt).toMatchObject({ outcome: 'not-evaluable', reason: expect.stringMatching(/^no ranked list recognised in the final response/) });
+    expect(prose.lastRetryAttempt.diagnostics.candidates).toMatchObject({ sourceUsed: 'none', count: 0 });
 
     // 6. Run doc.
     const run = await (await fetch(`${BASE_URL}/api/storage/evaluation-runs/${runId}`)).json();
     expect(run.lastJudgementRetry).toMatchObject({ scope: 'all', evaluatorId: evaluator.id }); // #509: run.evaluatorId itself is not rewritten
-    expect(run.stats).toMatchObject({ passed: 4, failed: 2, errored: 2, total: 8 });
+    // The two preserved cases still count as passed (their seeded verdict).
+    expect(run.stats).toMatchObject({ passed: 6, failed: 2, errored: 0, total: 8 });
+    expect(run.lastRetryAttempt).toMatchObject({ retried: 8, succeeded: 6, notEvaluable: 2, failed: 0 });
   }, 60000);
 });

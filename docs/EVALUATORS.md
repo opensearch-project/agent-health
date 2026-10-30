@@ -110,16 +110,26 @@ row and rendered with an `n/a` badge on the Judge tab (excluded from the
 passed/failed tally). This is what lets one evaluator mix `hit@5` with
 `abstain` and score every case by the metrics that speak to it. `abstain` is
 deliberately *not* 0 on gold-non-empty cases — that would punish every
-ordinary retrieval case for having answered. `abstain` requires
-`prediction.source: "response-results"` (validated with `400`): it is about
-what the agent *returned*, and `tool-hits-ordered` only sees what was
-retrieved — an empty ranking there means "no stored hits", not "abstained".
+ordinary retrieval case for having answered. `abstain` is about what the agent
+*returned*: it is observable only when the candidate chain (below) used a
+**returned** source (typed output, the final answer, a results tool); when the
+only candidates came from retrieved tool hits it is *unevaluable* with that
+reason — an empty retrieved set means "no stored hits", not "abstained".
+
+**Implicit abstain.** A case whose gold is *explicitly empty* is an abstain
+case even when the evaluator declares no `abstain` metric: its ranked metrics
+are not applicable, so the engine judges the one thing that is — did the agent
+return nothing? — records an implicit `abstain` metric (weight 1, 0–1) and the
+verdict follows it (`passed` iff the returned list is empty). Likewise, when a
+`gates` policy has no gate that applies to a gold-empty case but the evaluator
+*does* declare `abstain`, that metric decides. An abstain case is never
+reported as "not evaluable" for lack of gold.
 
 `MetricInputs.emptyRanking` (`'unevaluable'` default | `'zero'`) tells the
-ranked metrics what an empty ranking means; the engine sets `'zero'` for
-`response-results` (the agent explicitly returned nothing → hit 0, recall 0,
-mrr 0) and leaves the default for `tool-hits-ordered` (no stored candidates →
-unevaluable).
+ranked metrics what an empty ranking means; the engine sets `'zero'` when the
+ranking came from a returned source (the agent explicitly returned nothing →
+hit 0, recall 0, mrr 0) and leaves the default for retrieved sources (no
+stored candidates → unevaluable).
 
 ### Inputs contract
 
@@ -153,18 +163,62 @@ The rule used is recorded as `scoringSnapshot.goldRule`
 ### Prediction sources
 
 Both sources read the report's *stored* data, so completed runs can be scored
-without re-invoking the agent. They answer different questions:
+without re-invoking the agent. They answer different questions — and since the
+candidate chain (next section) both are *configurations* of the same ordered
+search rather than the only place looked:
 
 | `inputs.prediction.source` | Ranking = …                                                                    | Use when                                                                                                                                                   | Caveat                                                                                                                                                                                                       |
 |----------------------------|--------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `tool-hits-ordered`        | every id the agent **retrieved** (all stored tool hits; cited ids first)         | the agent answers in prose and the retrieved set *is* what it surfaced; historical runs whose answer carries no explicit list                              | **over-credits**: a gold id fetched by an exploratory tool call but never recommended still counts, so Hit@k / Recall@k are upper bounds on what a user would have seen                                          |
 | `response-results`         | the ranked list the agent **returned as its answer** (`results[]` of `{id, rank?, …}`) | the agent's final answer is (or contains) an ordered result list — a search / recommendation agent; you want to score what was *recommended*, not retrieved | an agent that returns an **explicit empty** list scores 0 on the ranked metrics (and 1 on `abstain` when gold is empty) — that is a real outcome, not a data gap; a response in which **no ranked list can be recognised** (prose, unsupported shape, wrong `path`) is unevaluable, never 0 |
 
-Every report records which one produced its ranking
-(`scoringSnapshot.extractionRule`, and `extractionRule` on each matcher row),
-so two runs scored with different sources are never silently compared as if
-they were the same protocol (the compare page's coverage gate keys on the
-evaluator content hash, which includes `inputs`).
+Every report records the *declared* source (`scoringSnapshot.extractionRule`,
+and `extractionRule` on each matcher row) **and** the chain step that actually
+produced its ranking (`scoringSnapshot.extraction.sourceUsed`, `candidateSource`
+on each matcher row), so two runs scored with different sources are never
+silently compared as if they were the same protocol (the compare page's
+coverage gate keys on the evaluator content hash, which includes `inputs`).
+
+### The candidate chain (where the ranking is looked for, in order)
+
+[`lib/scoring/prediction/candidates.ts`](../lib/scoring/prediction/candidates.ts).
+A ranked answer can live in several places; the extractor tries them in order
+of trust, the first that yields a list (possibly an **explicitly empty** one)
+wins, and **every attempt is recorded** with its count:
+
+| # | `sourceUsed`        | Reads …                                                                                                                                                                      | Returned? |
+|---|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------|
+| 1 | `report.output`     | a typed output the connector declared (`{ results: [{ id, rank? }] }`, `{ ids: [] }`, a bare array)                                                                          | yes       |
+| 2 | `response-results`  | the final answer — JSON, fenced JSON, the single raw payload, labelled list lines (`1. id 123 — …`)                                                                           | yes       |
+| 3 | `results-tool`      | the LAST tool result whose tool name matches `inputs.prediction.resultsTool` (default `return_results` / `final_results` / `submit_results` / `results`; reads `results` / `records` / `items` / `ids` / `hits`), or — any name — whose payload carries an ordered id list under an explicitly-returned key `returned_ids` / `recommended_ids` / `result_ids` (a search tool's plain `results[]` is what it *retrieved* and stays a tool-hits candidate) | yes       |
+| 4 | `tool-hits`         | the configured tool hits (`hitsPaths` of every tool result, most recent first, cited ids first) — everything the agent **retrieved**                                          | no        |
+| 5 | `generic-scan`      | last resort, flagged `weak`: every `idFields` value anywhere in every tool result payload                                                                                     | no        |
+
+An evaluator declared `response-results` never falls through to 4–5 (it opted
+into scoring what was returned); their counts are still recorded. The anchor
+filter (`anchorTools`) is applied **after** extraction to the winning list and
+reported as `anchorRemoved`, so a list emptied by it still names its source.
+Tool results stored as a rendering (`tool(args) -> [{"text": …}]`) are parsed
+past the prefix.
+
+**Gold lines** may carry the human-readable names after the ids —
+`Gold product id(s): 290226, 116770 (First Wrap; Second Wrap)` → ids `290226`,
+`116770` (parenthesised text is dropped before splitting). An
+`expectedOutcomes` line that *is* `NONE` / `No gold` — the whole line, or
+followed only by punctuation / a dash (`NONE — the anchor has no edges…`) —
+declares gold **explicitly empty** when no line matches the gold pattern: an
+abstain case (`goldRule: expected-outcomes-none`). Prose that merely begins
+with the word (`None of the distractors should be returned`) is not a
+declaration.
+
+**Diagnostics.** Every deterministic result carries
+`scoringSnapshot.diagnostics = { gold: { source, ids, explicitlyEmpty },
+candidates: { sourceTried[], sourceUsed, count, anchorRemoved, returned, weak },
+toolsScanned }` — rendered by the retry-judgement dialog (per not-evaluable
+case) and the run report's Judge tab, e.g. *gold 2 ids from
+expectedOutcomes[0]; candidates: 0 from tool 'search' hits, 3 from tool
+'return_results' records (used); anchor removed 1*. A not-evaluable case
+never reads as a bare "no candidate ids found".
 
 **`tool-hits-ordered`** — the labelled
 **legacy** extractor ([`lib/scoring/prediction/toolHitsOrdered.ts`](../lib/scoring/prediction/toolHitsOrdered.ts)).
@@ -240,17 +294,25 @@ both sources stay available as explicitly labelled extractors for stored runs.
   not read as a pass; the `traceError` tells you which gate to add).
 - **No** metric produced a value (gold not declared, no candidates / no
   recognisable ranked list, or no metric applies to the case), or no gate
-  applies ⇒ *not a verdict*:
-  `metricsStatus: "error"`, `passFailStatus: null`, `traceError` says why
-  (`Not evaluable by <evaluator>: …`), `metrics: {}`. The report renders as
-  errored / not evaluable and is excluded from the pass rate; flipping it to
-  `failed` would punish the agent for a missing gold label or an unparseable
-  artifact.
+  applies ⇒ *not a verdict* — and, on retry judgement, **not a write to the
+  judgement either**: the report's existing verdict / scores / snapshot /
+  judge response / evaluator stamp are left byte-identical and the attempt is
+  recorded as `report.lastRetryAttempt = { at, evaluatorId, evaluatorName,
+  judgeModelId?, scope, outcome: 'not-evaluable' | 'judge-error' | 'error',
+  reason, diagnostics? }` (the run doc gets a `lastRetryAttempt` summary with
+  counts + grouped reasons). Only a SUCCESSFUL re-judgement replaces the
+  judgement — wholesale, no history — and clears the record (`null`). The
+  Judge tab shows a dismissible amber "Last re-judgement failed … · <evaluator>
+  · <reason>" banner with a Details dialog (full reason, diagnostics, "Retry
+  again"); the runs list / inspector header show a "re-judge failed" pill until
+  the next successful retry or a per-browser dismissal. Retry judgement reports
+  these as a distinct outcome (`not-evaluable`, with `reason` + `diagnostics`),
+  never as "failed" — and never demotes a previously judged case to errored.
 - `report.scoringSnapshot` — `evaluatorId`, `evaluatorVersion`, `evaluatorName`,
   `contentHash` (sha256 over `{metrics, passPolicy, inputs}` as used), `weights`,
   `scale`, `passPolicy`, `primaryMetrics` (names with `primary: true`),
-  `goldRule`, `goldIdsUsed`, `extractionRule`, `extraction`, `unevaluable`,
-  `notApplicable`.
+  `goldRule`, `goldIdsUsed`, `extractionRule`, `extraction` (incl.
+  `sourceUsed`, `weak`), `unevaluable`, `notApplicable`, `diagnostics`.
 - `report.matcherResults` — one `method: "code-assertion"` row per metric
   (`role: "primary"` for metrics named by a `gates` policy, else `"observe"`),
   `actual` = value, `expected` = gate min (when gated), `score` = normalized
@@ -333,13 +395,23 @@ curl -X POST http://localhost:4001/api/storage/evaluation-runs/<runId>/retry-jud
 # → 202 { jobId, total, status: "running" }; poll GET .../retry-judgement/status
 ```
 
+**Pre-flight first.** `POST .../retry-judgement/preflight` with the same body
+runs the extractor **read-only** and answers `{ deterministic, scope, total,
+evaluable, notEvaluable, abstain, reasons: { <reason>: n }, cases: [{ testCaseId,
+evaluable, abstain?, reason?, diagnostics? }] }` — the retry dialog shows
+"n of N cases evaluable by this evaluator" and disables Confirm when n = 0.
+The retry itself is a background job: the dialog may be closed after the
+`202`; the run's header / list row show a *Re-judging n/N…* pill and a toast
+announces the summary (`Retried 3 · 2 scored (1 abstain) · 1 not evaluable`).
+
 `evaluatorId` must name an existing evaluator (`400` otherwise); when it is
 deterministic no judge model is used at all, and `scope` must be `'all'` —
 re-scoring only the errored subset would leave a run whose reports carry two
 different scoring snapshots while the run doc claims one evaluator (`400`).
-The report's `judgeModelId` is cleared (`null`) since no judge model ran. Run stats are recomputed and the
-run's `evaluatorId` is updated to the evaluator that produced the current
-verdicts. On the compare page (`/compare?runs=a,b`) each `primary` metric is a
+The report's `judgeModelId` is cleared (`null`) since no judge model ran. Run stats are recomputed; the
+run's ORIGINAL `evaluatorId` is not rewritten — the selection is remembered in
+`run.lastJudgementRetry` (it seeds the dialog's defaults next time) and each
+report carries the evaluator that produced its current verdict. On the compare page (`/compare?runs=a,b`) each `primary` metric is a
 column and the pass-rate header carries the policy ("Pass rate (gates)").
 
 ### SDK: the same functions in code tests

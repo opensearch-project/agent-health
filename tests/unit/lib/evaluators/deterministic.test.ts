@@ -96,14 +96,25 @@ describe('validateDeterministicEvaluator — response-results source and abstain
     expect(n.inputs.prediction).toEqual({ source: 'response-results', path: 'data.results', idField: 'doc_id', rankField: 'rank' });
   });
 
-  it("rejects an 'abstain' metric with tool-hits-ordered (that extractor cannot observe an abstention)", () => {
+  it("accepts an 'abstain' metric with tool-hits-ordered (the candidate chain reads the RETURNED list first; only-retrieved hits leave abstain unevaluable at scoring time)", () => {
     const errors = validateDeterministicEvaluator({
       ...valid(),
       metrics: [{ name: 'abstain', compute: { type: 'abstain' }, weight: 1 }],
       passPolicy: { kind: 'threshold', minScore: 1 },
       inputs: { gold: { source: 'testCase.expected.ids' }, prediction: { source: 'tool-hits-ordered' } },
     });
-    expect(errors).toEqual(["an 'abstain' metric requires inputs.prediction.source 'response-results' (tool-hits-ordered cannot observe an abstention)"]);
+    expect(errors).toEqual([]);
+  });
+
+  it('validates inputs.prediction.resultsTool as a regex over tool names', () => {
+    const base = { ...valid(), inputs: { gold: { source: 'testCase.expected.ids' }, prediction: { source: 'tool-hits-ordered', resultsTool: '^(return|final)_results$' } } };
+    expect(validateDeterministicEvaluator(base)).toEqual([]);
+    expect(validateDeterministicEvaluator({ ...base, inputs: { ...base.inputs, prediction: { source: 'tool-hits-ordered', resultsTool: '(' } } })).toEqual([
+      expect.stringMatching(/inputs.prediction.resultsTool is not a valid regular expression/),
+    ]);
+    expect(validateDeterministicEvaluator({ ...base, inputs: { ...base.inputs, prediction: { source: 'tool-hits-ordered', resultsTool: 7 } } })).toEqual([
+      'inputs.prediction.resultsTool must be a non-empty string (a regex over tool names)',
+    ]);
   });
 
   it('the error for an unknown prediction source names both sources', () => {
