@@ -149,9 +149,12 @@ class CompositeLogsOperations implements ILogsOperations {
 /**
  * Did this source's trace-store query FAIL for the run? True when the call
  * threw, or when the source answered the `failedMetricsResult` shape — the
- * `error` message is the contract (`MetricsResult.error`: set on EVERY store
- * failure, never on a result computed from spans). `m.status` plays no part:
- * `status: 'error'` on a span-bearing result is the agent run's own outcome.
+ * `error` message is the contract: `MetricsResult.error` is set on EVERY store
+ * failure (query threw / timed out / was rejected; `hasSpans` left undefined)
+ * and ONLY then — never on a result computed from spans, whatever its
+ * `status`. This field — not `status` — is how consumers (this composite, the
+ * run telemetry roll-up) tell a store failure from an agent run that itself
+ * errored: `status: 'error'` on a span-bearing result is the run's own outcome.
  */
 function isStoreFailure(c: { m: MetricsResult | undefined; error: string | null }): boolean {
   return c.error !== null || c.m?.error !== undefined;
@@ -211,7 +214,7 @@ class CompositeMetricsOperations implements IMetricsOperations {
         const message = errored.error ?? errored.m?.error ?? 'trace-store query failed';
         return { ...base, runId, status: 'error', error: `${errored.src.name}: ${message}`, hasSpans: undefined } as MetricsResult;
       }
-      return (candidates.find((c) => c.m)?.m as MetricsResult) ?? noSpansResult(runId);
+      return (candidates.find((c) => c.m)?.m as MetricsResult) ?? ({ runId, traceId: null, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0, llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'pending', hasSpans: false } as MetricsResult);
     });
   }
 }
