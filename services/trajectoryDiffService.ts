@@ -4,7 +4,7 @@
  */
 
 import { TrajectoryStep } from '@/types';
-import { normalizeTrajectorySteps } from '@/lib/trajectoryStepDisplay';
+import { normalizeTrajectorySteps, stepContentText } from '@/lib/trajectoryStepDisplay';
 
 /**
  * Represents an aligned step in the diff view
@@ -63,21 +63,26 @@ export function calculateStepSimilarity(
     score += 0.2;
   }
 
-  // Content similarity: 0.2 weight (simple check)
-  if (step1.content && step2.content) {
-    if (step1.content === step2.content) {
+  // Content similarity: 0.2 weight (simple check). Go through
+  // `stepContentText` — persisted steps may carry a missing / non-string
+  // `content` (see lib/trajectoryStepDisplay.ts) and `.toLowerCase()` on an
+  // object threw out of the comparison engine.
+  const content1 = stepContentText(step1);
+  const content2 = stepContentText(step2);
+  if (content1 && content2) {
+    if (content1 === content2) {
       score += 0.2;
     } else {
       // Partial match based on common words
-      const words1 = new Set(step1.content.toLowerCase().split(/\s+/));
-      const words2 = new Set(step2.content.toLowerCase().split(/\s+/));
+      const words1 = new Set(content1.toLowerCase().split(/\s+/));
+      const words2 = new Set(content2.toLowerCase().split(/\s+/));
       const common = [...words1].filter(w => words2.has(w)).length;
       const total = Math.max(words1.size, words2.size);
       if (total > 0) {
         score += (common / total) * 0.2;
       }
     }
-  } else if (!step1.content && !step2.content) {
+  } else if (!content1 && !content2) {
     score += 0.2;
   }
 
@@ -335,8 +340,9 @@ const summarizeStep = (step: TrajectoryStep | undefined): string | undefined => 
     const argHint = step.toolArgs ? Object.keys(step.toolArgs).slice(0, 2).join(',') : '';
     return argHint ? `${step.toolName}(${argHint})` : `${step.toolName}()`;
   }
-  if (step.content) {
-    return truncate(step.content);
+  const text = stepContentText(step);
+  if (text) {
+    return truncate(text);
   }
   return step.type;
 };

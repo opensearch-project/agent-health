@@ -13,7 +13,7 @@ import { EvaluationReport, BenchmarkRun, TrajectoryStep, ToolCallStatus } from '
 import { calculateTotalLatency } from '@/data/mockComparisonData';
 import { cn } from '@/lib/utils';
 import { Markdown } from '@/components/ui/markdown';
-import { normalizeTrajectorySteps } from '@/lib/trajectoryStepDisplay';
+import { normalizeTrajectorySteps, stepContentText } from '@/lib/trajectoryStepDisplay';
 
 interface TrajectorySectionProps {
   runs: BenchmarkRun[];
@@ -41,6 +41,9 @@ const StepIcon: React.FC<{ type: TrajectoryStep['type'] }> = ({ type }) => {
 const TrajectoryStepItem: React.FC<{ step: TrajectoryStep }> = ({ step }) => {
   const [isOpen, setIsOpen] = useState(false);
   const isFailed = step.status === ToolCallStatus.FAILURE;
+  // Persisted steps may carry a missing / non-string `content`; never hand
+  // `step.content` to <Markdown> directly (react-markdown throws on non-strings).
+  const stepText = stepContentText(step);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -70,10 +73,10 @@ const TrajectoryStepItem: React.FC<{ step: TrajectoryStep }> = ({ step }) => {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-6 pl-4 border-l border-border py-2 space-y-2">
-          {step.content && (
+          {stepText && (
             <div>
               <p className="text-xs text-muted-foreground mb-1">Content:</p>
-              <Markdown className="text-xs bg-muted/30 p-2 rounded">{step.content}</Markdown>
+              <Markdown className="text-xs bg-muted/30 p-2 rounded">{stepText}</Markdown>
             </div>
           )}
           {step.toolArgs && (

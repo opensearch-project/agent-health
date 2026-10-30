@@ -478,7 +478,9 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
     }
   };
 
-  const totalLatencyMs = trajectory.reduce((acc, s) => acc + (s.latencyMs || 0), 0);
+  // `s?.` — a persisted trajectory array can contain a literal `null` entry;
+  // this runs in the (boundary-less) page render, so it must not throw.
+  const totalLatencyMs = trajectory.reduce((acc, s) => acc + (s?.latencyMs || 0), 0);
 
   return (
     <div className={`flex flex-col h-full ${className}`}>
