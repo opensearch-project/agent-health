@@ -259,6 +259,38 @@ $ agent-health doctor
 
 ---
 
+### fingerprint
+
+Print the **agent-configuration fingerprint** of an agent as configured in the local `agent-health.config.ts` — the value the run inspector / runs list show as the `config <12-hex>` chip. It is a SHA-256 of the agent's connector-relevant, secret-redacted configuration (prompt, model, tools, endpoint, header *names*, hook source, …), **not a git commit**. Use it to map a run's chip back to the config that produced it, and to check whether the config has changed since.
+
+```
+agent-health fingerprint <agentKey> [--json] [--payload] [--compare <fingerprint>] [--endpoint <url>]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Machine-readable output |
+| `--payload` | Also print the exact (secret-redacted) inputs that were hashed |
+| `--compare <fp>` | Compare against a run's fingerprint (full 64-hex or the 12-hex chip form); exit code `2` on mismatch |
+| `--endpoint <url>` | Mirror a run-level endpoint override (it participates in the hash) |
+
+```
+$ agent-health fingerprint my-agent
+
+  Agent configuration fingerprint — my-agent
+  Fingerprint   b8692d59c93ad2e4…  (chip: b8692d59c93a)
+  Prompt hash   7ad577fd7d601459…
+  Config file   /work/evals/agent-health.config.ts
+  Repo commit   93dbd95150e1…  (config file has uncommitted edits)
+
+$ agent-health fingerprint my-agent --compare b8692d59c93a      # exit 0 → the run was measured against this config
+$ agent-health fingerprint my-agent --payload                   # see exactly what moved after an edit
+```
+
+The same data is served by `GET /api/agents/<key>/fingerprint`; runs record it as `agentFingerprint` / `agentFingerprintShort` / `agentPromptHash` plus `agentConfigSource` (config file path, git commit of the repository containing it, uncommitted-edits flag).
+
+---
+
 ### init
 
 Initialize project configuration files.

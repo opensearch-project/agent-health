@@ -121,6 +121,17 @@ describe('CompositeObservabilityModule', () => {
       expect(r.hasSpans).toBeUndefined();
     });
 
+    it('a source that matched only Agent Health\'s own eval span (hasSpans:false, evalOnlySpans) does NOT hold the run — a later source with the agent\'s spans wins', async () => {
+      // The owner's shape (2026-10-24): the eval `test_case` span lands in OpenSearch, the agent exports to CloudWatch.
+      const evalOnly = metrics('r1', { status: 'pending', hasSpans: false, evalOnlySpans: 1, traceId: 'eval-trace' });
+      const agent = metrics('r1', { inputTokens: 23_906, totalTokens: 24_000, llmCalls: 8, status: 'success', hasSpans: true });
+      const c = new CompositeObservabilityModule([fake('mine', { metrics: { r1: evalOnly } }), fake('cw-team', { metrics: { r1: agent } })]);
+      expect(await c.metrics.forRun('r1')).toMatchObject({ inputTokens: 23_906, llmCalls: 8, hasSpans: true, source: 'cw-team' });
+      // When NO source has the agent's spans, the eval-only answer is preferred over a plain empty one (it carries the why).
+      const c2 = new CompositeObservabilityModule([fake('cw-team'), fake('mine', { metrics: { r1: evalOnly } })]);
+      expect(await c2.metrics.forRun('r1')).toMatchObject({ status: 'pending', hasSpans: false, evalOnlySpans: 1, source: 'mine' });
+    });
+
     it('no spans anywhere and no errors → pending / hasSpans false (same as a single backend)', async () => {
       const c = new CompositeObservabilityModule([fake('mine'), fake('cw-team')]);
       expect(await c.metrics.forRun('r1')).toMatchObject({ status: 'pending', hasSpans: false });

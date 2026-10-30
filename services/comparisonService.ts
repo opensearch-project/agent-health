@@ -156,12 +156,13 @@ export function calculateRunAggregates(
     if (runJudge) judgeModelIds.push(runJudge);
   }
 
-  // "Avg score": the ONLY run-level score. Derived from each report's frozen
+  // `avgScore`: the ONLY run-level score. Derived from each report's frozen
   // ScoringSnapshot (weighted mean of its rubrics, normalized to [0,1]); a
-  // run with any legacy (snapshot-less) evaluated report has NO score — it
-  // renders "—" + "legacy scoring" rather than a number reconstructed from an
-  // arbitrary rubric (the old alphabetical primary-rubric pick showed an
-  // unrelated rubric at ~90% next to a 45% pass rate).
+  // run with any legacy (snapshot-less) evaluated report has NO score —
+  // `undefined`, never a number reconstructed from an arbitrary rubric (the
+  // old alphabetical primary-rubric pick showed an unrelated rubric at ~90%
+  // next to a 45% pass rate). Kept in the payload for API consumers; the
+  // compare scoreboard no longer renders it as a column.
   const aggregate = runAggregate(runReports);
   const scoring = summarizeRunScoring(aggregate, runReports);
   const avgScore = aggregate.source === 'snapshot' && aggregate.score !== null
@@ -245,7 +246,7 @@ export function mergeTraceMetrics(
       const tm = traceMetricsMap.get(key);
       if (tm && tm.status !== 'pending') {
         if (tm.partial) anyPartial = true;
-        if (tm.correlatedBy === 'window' || tm.correlatedBy === 'mixed') anyWindow = true;
+        if (tm.correlatedBy === 'window') anyWindow = true;
         totalTokens += tm.totalTokens || 0;
         totalInputTokens += tm.inputTokens || 0;
         totalOutputTokens += tm.outputTokens || 0;

@@ -607,10 +607,14 @@ See `services/connectors/rest/RESTConnector.ts` for a complete example of a non-
 
 #### Request timeout (`connectorConfig.timeoutMs`)
 
-The REST connector applies an explicit per-request timeout to the agent call
-(headers **and** body). Default: **300 000 ms (5 min)** — the same ceiling
-Node's built-in `fetch` (undici `headersTimeout`) applied silently before this
-was configurable, so existing agents see no behaviour change.
+The REST connector applies an explicit per-request timeout to the agent call:
+one wall-clock deadline from the request until the response body has been
+fully read (headers **and** body — an agent that answers `200` at once and
+then trickles the body past the limit is timed out too). Default: **300 000 ms
+(5 min)** — the same ceiling Node's built-in `fetch` (undici `headersTimeout`)
+applied silently before this was configurable, so existing agents see no
+behaviour change. The streaming connectors (AG-UI / SSE) do not use this total
+deadline; they keep their own idle-timeout semantics.
 
 ```ts
 {
@@ -623,8 +627,9 @@ was configurable, so existing agents see no behaviour change.
 
 When it fires, the connector logs one line
 (`[rest] Agent request timed out after 300012ms (timeout 300000ms) — no
-response headers/body from POST http://…`) and the runner persists the
-failure as an **agent-stage** failure on the report:
+response headers/body from POST http://…`, or `… — response headers arrived
+but the body did not complete, from POST http://…` when it fired mid-body) and
+the runner persists the failure as an **agent-stage** failure on the report:
 
 | field | value |
 |---|---|

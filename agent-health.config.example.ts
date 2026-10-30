@@ -35,7 +35,7 @@ export default {
         // Default 300000 (5 min) — the same ceiling Node's fetch applied
         // silently before this was configurable. When it fires, the report
         // records `failureStage: 'agent'` with the real cause (e.g.
-        // "HeadersTimeoutError … no response within 300000ms") and the
+        // "Agent request timed out after 300012ms (timeout 300000ms)") and the
         // case is NOT judged. Raise it for agents that legitimately take
         // longer; the run-detail error card shows the value in force.
         timeoutMs: 300000,

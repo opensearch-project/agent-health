@@ -24,9 +24,12 @@ import {
 import {
   retryJudgementForRun,
   countRetryableCases,
+  preflightRetryJudgement,
   type RetryJudgementScope,
   type RetryJudgementSummary,
   type RetryJudgementOverrides,
+  type RetryableRun,
+  type PersistRunPatch,
   DETERMINISTIC_SCOPE_ERROR,
 } from '../../../services/evaluation/retryJudgement.js';
 import { isDeterministicEvaluator } from '../../../lib/evaluators/deterministic.js';
@@ -105,6 +108,54 @@ function pruneRetryJudgementJobs(now = Date.now()): void {
       retryJudgementJobs.delete(runId);
     }
   }
+}
+
+/**
+ * Resolve the run a retry-judgement request targets, together with the
+ * writer for its run-level patch.
+ *
+ * 1. The first-class evaluation-run doc, when one exists (every run created
+ *    via POST /api/storage/evaluation-runs, including the dual-written
+ *    benchmark runs of #399).
+ * 2. Otherwise, when the caller names a `benchmarkId`, the legacy
+ *    `BenchmarkRun` embedded in that benchmark's `runs[]` (classic /
+ *    CLI `benchmark` path — `run-<ts>-<rand>` ids, no evaluation-run doc).
+ *    Retry judgement only needs the stored reports + an evaluator, which
+ *    these runs have just like first-class ones; the patch goes to the
+ *    embedded projection via `storage.benchmarks.updateRun` instead. Owner
+ *    report: a benchmark whose two legacy runs' agent is no longer in this
+ *    server's config could neither re-run (legitimately — needs an agent)
+ *    nor retry judgement (not legitimate — the agent is never invoked).
+ *
+ * `null` when neither exists. A storage failure while looking up the
+ * benchmark propagates (→ the route's 500), it is not folded into "not found".
+ */
+async function resolveRunForJudgementRetry(
+  storage: ReturnType<typeof getStorageModule>,
+  runId: string,
+  benchmarkId: string | undefined,
+): Promise<{ run: RetryableRun; persistRun: PersistRunPatch } | null> {
+  const doc = await storage.evaluationRuns.getById(runId);
+  if (doc) {
+    return { run: doc, persistRun: (patch) => storage.evaluationRuns.update(runId, patch) };
+  }
+  if (!benchmarkId) return null;
+  const benchmark = await storage.benchmarks.getById(benchmarkId);
+  const embedded = benchmark?.runs?.find((r) => r.id === runId);
+  if (!embedded) return null;
+  return {
+    run: embedded,
+    persistRun: async (patch) => {
+      const ok = await storage.benchmarks.updateRun(benchmarkId, runId, patch);
+      if (!ok) throw new Error(`Run ${runId} is no longer embedded in benchmark ${benchmarkId}`);
+    },
+  };
+}
+
+/** `benchmarkId` from the JSON body, else the query string; `undefined` unless a non-empty string. */
+function readBenchmarkIdHint(body: Record<string, unknown>, query: Request['query']): string | undefined {
+  const raw = body.benchmarkId ?? query.benchmarkId;
+  return typeof raw === 'string' && raw.trim() ? raw : undefined;
 }
 
 /**
@@ -749,17 +800,21 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
 // the background, let the caller poll for progress/completion — see GET
 // .../retry-judgement/status below.
 //
-// BODY (all optional; the dialog sends all three — see
+// BODY (all optional; the dialog sends all four — see
 // components/evals3/RetryJudgementConfirmDialog.tsx):
-//   { scope?: 'errored' | 'all', evaluatorId?: string, judgeModelId?: string | null }
+//   { scope?: 'errored' | 'all', evaluatorId?: string, judgeModelId?: string | null, benchmarkId?: string }
 // `?scope=` on the query string is still honoured for older callers; the
 // body wins when both are present. `evaluatorId` must name an existing
 // (system or stored) evaluator → 400 otherwise; `judgeModelId` must be a
 // non-empty string, or `null` for "use the evaluator default". Absent keys
 // inherit the run's own evaluator / judge model (pre-existing behaviour).
-// A `kind: 'deterministic'` evaluator re-scores every selected report in
-// code from its stored trajectory — no LLM is called (see
-// services/evaluation/retryJudgement.ts).
+// `benchmarkId` lets a LEGACY benchmark-embedded run (no evaluation-run doc)
+// be retried too — see resolveRunForJudgementRetry; ignored when a
+// first-class doc exists for `:id`.
+// A `kind: 'deterministic'` evaluator (override OR the run's own) re-scores
+// every selected report in code from its stored trajectory — no LLM is
+// called — and requires scope 'all' (400 otherwise; see
+// DETERMINISTIC_SCOPE_ERROR in services/evaluation/retryJudgement.ts).
 router.post('/api/storage/evaluation-runs/:id/retry-judgement', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -771,10 +826,11 @@ router.post('/api/storage/evaluation-runs/:id/retry-judgement', async (req: Requ
     const scope: RetryJudgementScope = rawScope === 'all' ? 'all' : 'errored';
     const storage = getStorageModule();
 
-    const run = await storage.evaluationRuns.getById(id);
-    if (!run) {
+    const resolved = await resolveRunForJudgementRetry(storage, id, readBenchmarkIdHint(body, req.query));
+    if (!resolved) {
       return res.status(404).json({ error: 'Evaluation run not found' });
     }
+    const { run, persistRun } = resolved;
 
     const overrides: RetryJudgementOverrides = {};
     if (body.evaluatorId !== undefined) {
@@ -794,6 +850,16 @@ router.post('/api/storage/evaluation-runs/:id/retry-judgement', async (req: Requ
         return res.status(400).json({ error: DETERMINISTIC_SCOPE_ERROR });
       }
       overrides.evaluatorId = evaluatorId;
+    } else if (scope !== 'all' && run.evaluatorId) {
+      // Same rule for the run's OWN evaluator — fail the request, not the job
+      // (codex_review: the pre-flight forces scope 'all' for a deterministic
+      // evaluator; the POST must agree up front).
+      const own = isSystemEvaluatorId(run.evaluatorId)
+        ? getSystemEvaluatorById(run.evaluatorId)
+        : await storage.evaluators.getById(run.evaluatorId).catch(() => null);
+      if (own && isDeterministicEvaluator(own)) {
+        return res.status(400).json({ error: DETERMINISTIC_SCOPE_ERROR });
+      }
     }
     if (body.judgeModelId !== undefined) {
       const judgeModelId = body.judgeModelId;
@@ -840,6 +906,7 @@ router.post('/api/storage/evaluation-runs/:id/retry-judgement', async (req: Requ
       scope,
       overrides,
       concurrency: 3,
+      persistRun,
       onProgress: (completedCount, totalCount) => {
         job.completed = completedCount;
         job.total = totalCount;
@@ -865,6 +932,51 @@ router.post('/api/storage/evaluation-runs/:id/retry-judgement', async (req: Requ
     if (!res.headersSent) {
       res.status(500).json({ error: error.message });
     }
+  }
+});
+
+// POST /api/storage/evaluation-runs/:id/retry-judgement/preflight - READ-ONLY
+// dry run for the confirm dialog: which cases a retry with the given
+// evaluator would select and, for a `kind: 'deterministic'` evaluator, how
+// many of them it can actually score (grouped not-evaluable reasons). Writes
+// nothing, starts no job. Same body as the POST above
+// (`{ scope?, evaluatorId? }`, same validation) so the dialog can pre-flight
+// exactly what it is about to submit; a deterministic evaluator is reported
+// with `scope: 'all'` regardless of the requested scope (the retry itself
+// would 400 / fail on 'errored' — see DETERMINISTIC_SCOPE_ERROR).
+router.post('/api/storage/evaluation-runs/:id/retry-judgement/preflight', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const rawScope = body.scope ?? req.query.scope;
+    if (rawScope !== undefined && rawScope !== 'errored' && rawScope !== 'all') {
+      return res.status(400).json({ error: "scope must be 'errored' or 'all'" });
+    }
+    const scope: RetryJudgementScope = rawScope === 'all' ? 'all' : 'errored';
+    const storage = getStorageModule();
+    const resolved = await resolveRunForJudgementRetry(storage, id, readBenchmarkIdHint(body, req.query));
+    if (!resolved) {
+      return res.status(404).json({ error: 'Evaluation run not found' });
+    }
+    const { run } = resolved;
+    const overrides: RetryJudgementOverrides = {};
+    if (body.evaluatorId !== undefined) {
+      const evaluatorId = body.evaluatorId;
+      if (typeof evaluatorId !== 'string' || !evaluatorId.trim()) {
+        return res.status(400).json({ error: 'evaluatorId must be a non-empty string' });
+      }
+      const evaluatorDoc = isSystemEvaluatorId(evaluatorId)
+        ? getSystemEvaluatorById(evaluatorId)
+        : await storage.evaluators.getById(evaluatorId).catch(() => null);
+      if (!evaluatorDoc) {
+        return res.status(400).json({ error: `Evaluator not found: ${evaluatorId}` });
+      }
+      overrides.evaluatorId = evaluatorId;
+    }
+    res.json(await preflightRetryJudgement(run, storage, { scope, overrides }));
+  } catch (error: any) {
+    console.error('[StorageAPI] Retry judgement preflight failed:', error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 

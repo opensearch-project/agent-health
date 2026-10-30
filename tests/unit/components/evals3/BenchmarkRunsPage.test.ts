@@ -998,7 +998,7 @@ describe('BenchmarkRunsPage2 — telemetry columns wiring (one batch metrics cal
     expect(mockFetchBatchMetrics).toHaveBeenCalledTimes(1);
   });
 
-  it('a failed batch call leaves the page intact with "—" cells (Metrics unavailable)', async () => {
+  it('a failed batch call leaves the page intact with "unavailable" cells (tooltip carries the failure), Retry recovers', async () => {
     mockGetById.mockResolvedValue(makeBenchmark({ runs: [twoCaseRun] }));
     mockGetReportSummariesByIds.mockResolvedValue(summaries as any);
     mockFetchBatchMetrics.mockRejectedValue(new Error('Failed to fetch batch metrics: 500'));
@@ -1006,7 +1006,8 @@ describe('BenchmarkRunsPage2 — telemetry columns wiring (one batch metrics cal
     await renderPage();
     const row = screen.getByText('Telemetry Run').closest('[data-testid="run-row"]') as HTMLElement;
     await waitFor(() => expect(within(row).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('empty'));
-    expect(within(within(row).getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe('Metrics unavailable');
+    expect(within(within(row).getByTestId('run-tokens-cell')).getByText('unavailable').getAttribute('title'))
+      .toBe('Metrics unavailable — the trace-store query failed for 2 of 2 cases (Failed to fetch batch metrics: 500). Spans may well exist; use Retry.');
     expect(within(row).getByTestId('run-timepercase-cell').textContent).toBe('48 s');   // wall-clock is from the reports
     expect(within(row).getByTestId('run-passrate-cell').textContent).toContain('50%');   // rest of the row is fine
     // One request only (error cached), and a Retry affordance that re-requests.
@@ -1025,7 +1026,7 @@ describe('BenchmarkRunsPage2 — telemetry columns wiring (one batch metrics cal
     errSpy.mockRestore();
   });
 
-  it('a run whose spans were not found reads "—" with the no-spans tooltip while Time/case still shows the wall-clock', async () => {
+  it('a run whose spans were not found reads "no traces" (tooltip: agent not traced + how to enable) while Time/case still shows the wall-clock', async () => {
     mockGetById.mockResolvedValue(makeBenchmark({ runs: [twoCaseRun] }));
     mockGetReportSummariesByIds.mockResolvedValue(summaries as any);
     mockFetchBatchMetrics.mockResolvedValue({
@@ -1038,7 +1039,8 @@ describe('BenchmarkRunsPage2 — telemetry columns wiring (one batch metrics cal
     await renderPage();
     const row = screen.getByText('Telemetry Run').closest('[data-testid="run-row"]') as HTMLElement;
     await waitFor(() => expect(within(row).getByTestId('run-tokens-cell').getAttribute('data-state')).toBe('empty'));
-    expect(within(within(row).getByTestId('run-tokens-cell')).getByText('—').getAttribute('title')).toBe('No spans found for this run yet');
+    expect(within(within(row).getByTestId('run-tokens-cell')).getByText('no traces').getAttribute('title'))
+      .toMatch(/^No traces for this run — no spans were found for any of its 2 cases, so this agent's runs were not traced\. Enable trace mode on the agent \(useTraces: true\)/);
     expect(within(row).getByTestId('run-timepercase-cell').textContent).toBe('48 s');
   });
 });

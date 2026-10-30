@@ -41,6 +41,7 @@ import { RetryJudgementConfirmDialog } from './RetryJudgementConfirmDialog';
 import { RunActionsMenu } from './RunActionsMenu';
 import { Breadcrumbs } from './Breadcrumbs';
 import { AgentFingerprintChip, AgentConfigChangedBadge } from './AgentFingerprintChip';
+import { useOnRetryJudgementFinished } from '@/hooks/useRetryJudgementJob';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -101,9 +102,11 @@ export const EvalRunDetailPage: React.FC = () => {
   const [sourceRunName, setSourceRunName] = useState<string | null>(null);
   const [sourceRunMissing, setSourceRunMissing] = useState(false);
 
-  const loadRun = useCallback(async () => {
+  // `silent` re-fetches without the loading skeleton — a background
+  // retry-judgement refresh must not unmount the page (and the open dialog).
+  const loadRun = useCallback(async (silent = false) => {
     if (!runId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const data = await getEvaluationRun(runId);
       setRun(data);
@@ -173,9 +176,11 @@ export const EvalRunDetailPage: React.FC = () => {
     navigate('/evaluations/runs');
   };
 
-  // Opens the evaluator / judge-model / scope picker; the dialog owns the
-  // POST + progress polling and we refresh once the user dismisses the summary.
+  // Opens the evaluator / judge-model / scope picker (#509); the dialog hands
+  // the 202 job to the client job store and we refresh — silently — when a
+  // job for this run finishes (the dialog may have been closed long before).
   const handleRetryJudgement = () => { setRetryJudgementDialogOpen(true); };
+  useOnRetryJudgementFinished(job => { if (job.runId === runId) void loadRun(true); });
 
   if (loading) {
     return (
@@ -273,7 +278,7 @@ export const EvalRunDetailPage: React.FC = () => {
                   {agentName}
                   {/* Agent-configuration provenance: WHICH version of this
                       agent's config produced these numbers (lib/agentFingerprint.ts). */}
-                  <AgentFingerprintChip run={run} compact data-testid="inspector-fingerprint-chip" />
+                  <AgentFingerprintChip run={run} showMissing data-testid="inspector-fingerprint-chip" />
                 </span>
                 <span>{modelName}</span>
                 <span>{formatRelativeTime(run.createdAt)}</span>
@@ -542,7 +547,7 @@ export const EvalRunDetailPage: React.FC = () => {
         rejudgeableCount={getRunActionVisibility(run).rejudgeableCount}
         open={retryJudgementDialogOpen}
         onOpenChange={setRetryJudgementDialogOpen}
-        onComplete={() => { loadRun(); }}
+        onComplete={() => { loadRun(true); }}
       />
     </div>
   );

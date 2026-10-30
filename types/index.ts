@@ -392,6 +392,13 @@ export interface DeterministicEvaluatorInputs {
         hitsPaths?: string[];
         /** Tool calls whose `toolArgs[argKey]` (string or string[]) names ids to EXCLUDE from the candidates (the query's own anchors). */
         anchorTools?: Array<{ tool: string; argKey: string }>;
+        /**
+         * Regex (case-insensitive) over tool NAMES identifying the tool whose
+         * result IS the agent's returned ranked list (candidate-chain source
+         * `results-tool`; default matches `return_results` / `final_results` /
+         * `submit_results` / `results`).
+         */
+        resultsTool?: string;
       }
     | {
         /**
@@ -410,6 +417,81 @@ export interface DeterministicEvaluatorInputs {
         /** Key carrying an item's 1-based rank (default `rank`); array order when absent. */
         rankField?: string;
       };
+}
+
+/**
+ * Why a deterministic scoring produced what it did — attached to the
+ * snapshot, the retry-judgement case result and the pre-flight so the user
+ * sees "gold 2 ids from expectedOutcomes[0]; candidates: 0 from tool 'search'
+ * hits, 3 from tool 'return_results' records (used); anchor removed 1"
+ * instead of a bare "no candidate ids found".
+ */
+export interface ScoringDiagnostics {
+  gold: {
+    /** `expected.ids` | `expectedOutcomes[<i>]` | `expectedOutcomes[<i>] (explicitly none)` | `not declared`. */
+    source: string;
+    ids: string[];
+    /** The test case explicitly declares "no gold" (abstain case). */
+    explicitlyEmpty: boolean;
+  };
+  candidates: {
+    /** Every source attempted, in chain order, with the ids it found. */
+    sourceTried: Array<{ source: string; count: number; detail: string }>;
+    sourceUsed: string;
+    /** Ids from the winning source before the anchor filter. */
+    count: number;
+    anchorRemoved: number;
+    /** Winning source is a "what the agent returned" source (empty = abstention). */
+    returned: boolean;
+    weak: boolean;
+  };
+  /** Distinct tool names whose results were inspected. */
+  toolsScanned: string[];
+}
+
+/**
+ * Why the LAST retry-judgement attempt on a report produced no judgement.
+ * Owner rule: a retry that fails (judge error, not evaluable, exception)
+ * must PRESERVE the report's existing judgement — verdict, scores, snapshot,
+ * judge response, evaluator stamp — and record the attempt here instead;
+ * only a SUCCESSFUL re-judgement replaces the judgement (and clears this,
+ * `null`). Rendered by the run report's Judge tab as a dismissible banner
+ * with a Details dialog.
+ */
+export interface RetryAttemptRecord {
+  /** ISO timestamp of the attempt. */
+  at: string;
+  /** Evaluator the retry used (override or the run's own); `null` when none. */
+  evaluatorId: string | null;
+  evaluatorName?: string;
+  /** LLM path only: the judge model that was called. */
+  judgeModelId?: string;
+  scope: 'errored' | 'all';
+  /** `not-evaluable` (deterministic rules did not apply) · `judge-error` (judge call failed) · `error` (scorer / pipeline exception). */
+  outcome: 'not-evaluable' | 'judge-error' | 'error';
+  reason: string;
+  /** Deterministic: gold source + every candidate source tried. */
+  diagnostics?: ScoringDiagnostics;
+}
+
+/**
+ * Run-level mirror of {@link RetryAttemptRecord}: set on the EvaluationRun
+ * doc when a retry finishes with at least one case that produced no
+ * judgement (the runs list / inspector header show a "re-judge failed" pill
+ * off it without loading every report); cleared (`null`) when a retry
+ * finishes with every case judged.
+ */
+export interface RunRetryAttemptSummary {
+  at: string;
+  evaluatorId: string | null;
+  evaluatorName?: string;
+  scope: 'errored' | 'all';
+  retried: number;
+  succeeded: number;
+  notEvaluable: number;
+  failed: number;
+  /** Not-evaluable / error reason → number of cases (stable wording). */
+  reasons: Record<string, number>;
 }
 
 /**
@@ -602,9 +684,9 @@ export type ScoringPassPolicy =
 
 /**
  * Immutable record of HOW a report was scored, frozen onto the report at
- * judge time. Every aggregate score the UI shows for a report — the compare
- * page's "Avg score", the run inspector's overall — is derived from THIS
- * object and the report's own `metrics`, never from today's (mutable)
+ * judge time. Every aggregate score the UI shows for a report — the run
+ * inspector's overall, the comparison payload's run-level `avgScore` — is
+ * derived from THIS object and the report's own `metrics`, never from today's (mutable)
  * evaluator document. Reports persisted before snapshots existed carry none
  * and render as "legacy scoring": their rubric values are shown by name but
  * are never aggregated into a single score (see `lib/scoring/snapshotScore.ts`).
@@ -641,16 +723,26 @@ export interface ScoringSnapshot {
   judgeModelId?: string;
   /** Structured gold ids the deterministic rubrics were computed against (R3). */
   goldIdsUsed?: string[];
-  /** Which gold source produced `goldIdsUsed` (R3). */
-  goldRule?: 'expected.ids' | 'expected-outcomes-pattern';
-  /** Identifier of the rule used to extract the prediction from the agent output (R3): `tool-hits-ordered` | `response-results`. */
+  /** Which gold source produced `goldIdsUsed` (R3); `expected-outcomes-none` = an explicit "NONE …" line (abstain case). */
+  goldRule?: 'expected.ids' | 'expected-outcomes-pattern' | 'expected-outcomes-none';
+  /** The evaluator's DECLARED prediction source (R3): `tool-hits-ordered` | `response-results`. The source actually used is `extraction.sourceUsed`. */
   extractionRule?: string;
   /**
-   * Extraction statistics (R3). `citedCount` / `anchorsRemoved` are set by
-   * `tool-hits-ordered`; `parsedFrom` by `response-results`
-   * (`json` | `fenced` | `raw-event` | `text` | `none`).
+   * Extraction statistics (R3). `sourceUsed` names the step of the ordered
+   * candidate chain (lib/scoring/prediction/candidates.ts) that produced the
+   * ranked list — `report.output` | `response-results` | `results-tool` |
+   * `tool-hits` | `generic-scan` | `none`; `weak` = the generic scan was the
+   * only source. `citedCount` / `anchorsRemoved` describe the tool-hits path;
+   * `parsedFrom` the response form (`json` | `fenced` | `raw-event` | `text`).
    */
-  extraction?: { candidateCount: number; citedCount?: number; anchorsRemoved?: number; parsedFrom?: string };
+  extraction?: { candidateCount: number; citedCount?: number; anchorsRemoved?: number; parsedFrom?: string; sourceUsed?: string; weak?: boolean };
+  /**
+   * Structured provenance the dialog / Judge tab render when a case scored
+   * nothing (or unexpectedly): where the gold came from and every candidate
+   * source tried, in order, with its count (R3). See
+   * `lib/scoring/deterministicScoring.ts` `ScoringDiagnostics`.
+   */
+  diagnostics?: ScoringDiagnostics;
   /**
    * Rubrics that could not be computed for this report (input missing, judge
    * omitted the key, …). Excluded from the weighted mean — never scored as 0 —
@@ -663,6 +755,14 @@ export interface ScoringSnapshot {
    * not in the mean, not a failure reason, not an error.
    */
   notApplicable?: string[];
+  /**
+   * Metrics the engine ADDED because the evaluator declared none that speaks
+   * to the case (today: `abstain` on a gold-empty case scored by a ranked-only
+   * evaluator). They appear in `weights` / `scale` / `report.metrics` like a
+   * declared metric so the snapshot reproduces the score, but they were not
+   * part of the evaluator document.
+   */
+  implicitMetrics?: string[];
 }
 
 /**
@@ -837,6 +937,15 @@ export interface TestCaseRun {
   sessionId?: string;
   logs?: OpenSearchLog[]; // OpenSearch logs for the run (master version)
   rawEvents?: any[]; // Raw AG UI events for debugging
+  /**
+   * Typed output a connector declared for the run (optional, connector-
+   * specific). Deterministic scoring reads a ranked id list from it first
+   * (`{ results: [{ id, rank? }] }`, `{ ids: [] }` or a bare array) — see
+   * lib/scoring/prediction/candidates.ts. Never interpreted otherwise.
+   */
+  output?: unknown;
+  /** Last retry-judgement attempt that produced NO judgement (the judgement above is the preserved previous one); `null`/absent after a successful re-judgement. */
+  lastRetryAttempt?: RetryAttemptRecord | null;
   connectorProtocol?: ConnectorProtocol; // Protocol used to execute this run (for trajectory parsing)
 
   // Per-matcher verdicts captured by the SDK during the test body
@@ -897,6 +1006,56 @@ export interface TestCaseRun {
   judgementRetriedAt?: string;
   /** How many times the judgement was retried (1 on the first retry). */
   judgementRetryCount?: number;
+  /**
+   * What the SDK judge binding ACTUALLY sent to `/api/judge` for this
+   * report's `judge()` calls, per field, with where each value came from.
+   * Stamped by the runner from the bound judge fixture after the test body
+   * finishes (only when the body made at least one judge call). Distinct
+   * from {@link evaluatorId} / {@link judgeModelId}, which are the run-level
+   * *labels* — pre-fix a body's per-call pin could win the request while the
+   * label still named the run-level selection, so the verdict came from one
+   * judge and the report was labelled with another. See
+   * `bindJudge(defaults, { authoritative: true })` in lib/testCases/judge.ts.
+   */
+  judgeApplied?: JudgeApplied;
+  /**
+   * Body pins the run-level (authoritative) judge selection overrode — one
+   * entry per `(field, bodyValue)`. Present only when a `judge(...)` call in
+   * the test body asked for a different evaluator/model than the run
+   * selected. The run selection was applied; this records the disagreement
+   * so the UI can flag it instead of silently showing a clean report.
+   */
+  judgeSelectionConflicts?: JudgeSelectionConflict[];
+}
+
+/** Where an applied judge-selection value came from. */
+export type JudgeSelectionSource =
+  /** The run-level selection (UI / API / CLI `-e` / `--judge-model`). */
+  | 'run'
+  /** A per-call pin inside the test body (only applies when the run did not select the field). */
+  | 'body'
+  /** Neither — the server resolved its default. */
+  | 'default'
+  /** Per-call body pins DIVERGED across this report's judge() calls (only possible for a field the run left unselected); no single value applies — see matcherResults[].evaluatorId / .model. */
+  | 'mixed';
+
+/** Per-field record of what the judge binding actually applied for a report. */
+export interface JudgeApplied {
+  /** Evaluator id sent to `/api/judge` (undefined = server default, or `'mixed'` per-call body pins). */
+  evaluatorId?: string;
+  evaluatorIdSource: JudgeSelectionSource;
+  /** Judge model id sent to `/api/judge` as `modelId` (undefined = server default, or `'mixed'` per-call body pins). */
+  modelId?: string;
+  modelIdSource: JudgeSelectionSource;
+}
+
+/** A body pin that the authoritative run-level selection overrode. */
+export interface JudgeSelectionConflict {
+  field: 'evaluatorId' | 'modelId';
+  /** What the run selected (and what was applied). */
+  runValue: string;
+  /** What the test body asked for (ignored). */
+  bodyValue: string;
 }
 
 // Alias for backwards compatibility during migration
@@ -1125,9 +1284,18 @@ export interface TraceMetrics {
    * Which correlation strategy attributed this key's spans: precise ids
    * (`traceId` / run-id attributes / `session.id`) or the service.name +
    * time-window fallback (`window`), which can pick up unrelated traffic of
-   * the same service. `mixed` when spans came in through more than one.
+   * the same service. Precise-first: the window is consulted only when the
+   * ids found none of the agent's spans, so a key is one or the other.
    */
-  correlatedBy?: 'ids' | 'window' | 'mixed';
+  correlatedBy?: 'ids' | 'window';
+  /**
+   * Set when the query DID match spans but every one of them was Agent
+   * Health's own eval/judge span (`test_case`, judge `chat`): the agent itself
+   * emitted nothing this trace store can see — untraced, or exporting to a
+   * different store. `hasSpans` is `false` and every counter is 0 in that
+   * case; consumers render "no traces" and can say why.
+   */
+  evalOnlySpans?: number;
 }
 
 // ============ Trace Types ============
@@ -1556,6 +1724,17 @@ export interface BenchmarkRun {
    * like this showed only a bare warning-triangle count with no reason.
    */
   judgeFailureSummary?: string;
+  /**
+   * Retry-judgement bookkeeping — same fields and semantics as on
+   * {@link EvaluationRun} (`lastJudgementRetry`: what the last Retry
+   * judgement was launched with, seeds the dialog's defaults;
+   * `lastRetryAttempt`: the last retry in which ≥1 case produced no
+   * judgement, `null` after a fully successful one). Written onto the
+   * embedded projection by POST /api/storage/evaluation-runs/:id/retry-judgement
+   * when the run has no first-class doc (legacy classic/CLI runs).
+   */
+  lastJudgementRetry?: EvaluationRun['lastJudgementRetry'];
+  lastRetryAttempt?: RunRetryAttemptSummary | null;
 
   // Server-side performance metrics (populated after run completes)
   performanceMetrics?: RunPerformanceMetrics;
@@ -1751,6 +1930,8 @@ export interface EvaluationRun {
    * `EvaluationRun` and `BenchmarkRun` are independent doc shapes.
    */
   judgeFailureSummary?: string;
+  /** Last retry-judgement attempt in which ≥1 case produced no judgement (see RunRetryAttemptSummary); `null` after a fully successful retry. */
+  lastRetryAttempt?: RunRetryAttemptSummary | null;
 
   // Performance metrics
   performanceMetrics?: RunPerformanceMetrics;
@@ -1821,7 +2002,10 @@ export interface EvaluationRun {
  * is holding can be either shape regardless of which route loaded it —
  * `docType`, not the route/URL a component happened to load from, is the
  * only reliable signal for "does this run support EvaluationRun-only
- * capabilities (rerun, provenance, retry-judgement, ...)".
+ * capabilities (the provenance-tracked rerun endpoint, `rerunOf`, rename,
+ * ...)". Retry judgement is NOT such a capability: it needs only the stored
+ * reports + an evaluator, so it works for both shapes (the route takes a
+ * `benchmarkId` hint to find a legacy embedded run).
  *
  * Use this instead of inline `(run as any).docType === 'evaluation-run'`
  * checks or route-derived `mode` flags for anything that depends on the
@@ -1870,11 +2054,13 @@ export interface RunAggregateMetrics {
    */
   avgAccuracy?: number;
   /**
-   * Run-level "Avg score" (0–100): mean of the per-report weighted scores
+   * Run-level weighted score (0–100): mean of the per-report weighted scores
    * derived from each report's {@link ScoringSnapshot} (see
    * `lib/scoring/snapshotScore.ts`). `undefined` when the run is
-   * legacy-scored (`scoring.source === 'legacy'`) — rendered as "—", never
-   * reconstructed from an arbitrary rubric.
+   * legacy-scored (`scoring.source === 'legacy'`) — never reconstructed from
+   * an arbitrary rubric. Part of the comparison payload; the compare
+   * scoreboard no longer renders it as a column (it read "—" for every
+   * pre-snapshot run), the per-metric columns carry the score signal.
    */
   avgScore?: number;
   /** Provenance behind `avgScore` (evaluator, weights, policy, coverage). */
@@ -2120,8 +2306,15 @@ export interface MetricsResult {
   /** See TraceMetrics.partial -- query hit its size cap; counts are a lower bound. */
   partial?: boolean;
   /** See TraceMetrics.correlatedBy. */
-  correlatedBy?: 'ids' | 'window' | 'mixed';
-  /** Why `status` is 'error' (trace-store query failed) — the numbers are unknown, not zero. */
+  correlatedBy?: 'ids' | 'window';
+  /** See TraceMetrics.evalOnlySpans -- only our own eval/judge spans matched; `hasSpans` is false. */
+  evalOnlySpans?: number;
+  /**
+   * Set (with `status: 'error'`) when the trace-store query for this key
+   * FAILED — timeout, 5xx, rejected query. The key's spans are then UNKNOWN,
+   * not absent: `hasSpans` is left undefined so consumers render
+   * "unavailable" (and offer a retry) rather than "no spans".
+   */
   error?: string;
   /** Composite backend: the configured source these metrics were taken from. */
   source?: string;

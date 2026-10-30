@@ -38,6 +38,7 @@ import {
   createSetupCommand,
   createWorkflowCommand,
   createImportCommand,
+  createFingerprintCommand,
 } from './commands/index.js';
 
 // Get package.json for version
@@ -134,6 +135,7 @@ ${chalk.cyan.bold('Getting Started:')}
   ${chalk.yellow('agent-health')}                        Launch the web UI and evaluation server
   ${chalk.yellow('agent-health init')}                   Generate an agent-health.config.ts file
   ${chalk.yellow('agent-health doctor')}                 Verify your setup (AWS creds, OpenSearch, agents)
+  ${chalk.yellow('agent-health fingerprint')} ${chalk.gray('<agent>')}    Print the agent-config fingerprint a run's "config <hash>" chip refers to
 
 ${chalk.cyan.bold('Running Evaluations:')}
   ${chalk.yellow('agent-health run')} ${chalk.gray('-t <case> -a <agent>')}   Run a single test case against an agent
@@ -271,6 +273,7 @@ program.addCommand(createKillCommand());
 program.addCommand(createSetupTelemetryCommand());
 program.addCommand(createSkillCommand());
 program.addCommand(createSetupCommand());
+program.addCommand(createFingerprintCommand());
 program.addCommand(createProfileCommand());
 program.addCommand(createWorkflowCommand());
 program.addCommand(createImportCommand());

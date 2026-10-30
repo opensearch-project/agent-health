@@ -193,7 +193,7 @@ describe('deterministic evaluators — create, validate, Retry judgement on a co
     expect((await start.json()).total).toBe(4);
     const job = await pollRetryJudgement(runId);
     expect(job.status).toBe('completed');
-    expect(job.summary).toMatchObject({ retried: 4, succeeded: 2, failed: 2 });
+    expect(job.summary).toMatchObject({ retried: 4, succeeded: 2, failed: 0, notEvaluable: 2, abstain: 0 });
 
     // 5. Reports.
     const get = async (id: string) => (await fetch(`${BASE_URL}/api/storage/runs/${id}`)).json();
@@ -210,8 +210,13 @@ describe('deterministic evaluators — create, validate, Retry judgement on a co
       primaryMetrics: ['hit@1', 'hit@3', 'recall@5'],
       goldRule: 'expected-outcomes-pattern', goldIdsUsed: ['101', '202'],
       extractionRule: 'tool-hits-ordered',
-      extraction: { candidateCount: 5, citedCount: 1, anchorsRemoved: 1 },
+      extraction: { candidateCount: 5, citedCount: 1, anchorsRemoved: 1, sourceUsed: 'tool-hits' },
       unevaluable: [],
+    });
+    expect(hit.scoringSnapshot.diagnostics).toMatchObject({
+      gold: { source: 'expectedOutcomes[1]', ids: ['101', '202'], explicitlyEmpty: false },
+      candidates: { sourceUsed: 'tool-hits', count: 5, anchorRemoved: 1, returned: false, weak: false },
+      toolsScanned: ['search'], // both hitsStep() results are stored under the 'search' tool name
     });
     expect(hit.scoringSnapshot.contentHash).toMatch(/^sha256:/);
     expect(hit.matcherResults).toHaveLength(4);
@@ -230,17 +235,21 @@ describe('deterministic evaluators — create, validate, Retry judgement on a co
     expect(miss.metrics).toEqual({ 'hit@1': 0, 'hit@3': 0, 'recall@5': 0, mrr: 0 });
     expect(miss.matcherResults[1]).toMatchObject({ role: 'primary', pass: false });
 
-    for (const [id, reason] of [[repNoHits, /no candidate ids/], [repNoGold, /no gold ids/]] as const) {
+    // Not-evaluable cases keep their PREVIOUS judgement (the seeded LLM verdict,
+    // metrics, reasoning, matcher row) and record the attempt instead.
+    for (const [id, reason] of [[repNoHits, /^no ranked list recognised in the final response/], [repNoGold, /^no gold ids/]] as const) {
       const rep = await get(id);
-      expect(rep.metricsStatus).toBe('error');
-      expect(rep.passFailStatus ?? null).toBeNull();
-      expect(rep.metrics).toEqual({});
-      expect(rep.traceError).toMatch(/Not evaluable by/);
-      expect(rep.scoringSnapshot.unevaluable).toEqual(['hit@1', 'hit@3', 'recall@5', 'mrr']);
-      expect(rep.matcherResults.every((m: any) => m.errored === true)).toBe(true);
-      expect(rep.matcherResults[0].errorMessage).toMatch(reason);
-      // Never a judge_failed LLM error: the message names the evaluator, not a provider.
-      expect(rep.traceError).not.toMatch(/no-such-judge-provider/);
+      expect(rep.metricsStatus).toBe('ready');
+      expect(rep.passFailStatus).toBe('passed');
+      expect(rep.metrics).toEqual({ accuracy: 90 });
+      expect(rep.llmJudgeReasoning).toBe('previous LLM judgement');
+      expect(rep.matcherResults).toEqual([{ description: 'judge: expected outcomes', pass: true, method: 'llm-judge' }]);
+      expect(rep.scoringSnapshot ?? undefined).toBeUndefined();
+      expect(rep.traceError ?? undefined).toBeUndefined();
+      expect(rep.lastRetryAttempt).toMatchObject({ evaluatorId: evaluator.id, evaluatorName: evaluator.name, scope: 'all', outcome: 'not-evaluable', reason: expect.stringMatching(reason) });
+      expect(rep.lastRetryAttempt.diagnostics.candidates.sourceTried.length).toBeGreaterThan(0);
+      // Never a judge_failed LLM error: nothing names a provider.
+      expect(JSON.stringify(rep)).not.toMatch(/no-such-judge-provider/);
     }
 
     // 6. Run doc: stats recomputed, evaluator stamped; per-report primary metrics reachable for compare.
@@ -248,10 +257,12 @@ describe('deterministic evaluators — create, validate, Retry judgement on a co
     // #509 contract: the run's ORIGINAL evaluatorId stays; the selection is remembered in lastJudgementRetry.
     expect(run.evaluatorId ?? undefined).toBeUndefined();
     expect(run.lastJudgementRetry).toMatchObject({ scope: 'all', evaluatorId: evaluator.id });
-    expect(run.stats).toMatchObject({ passed: 1, failed: 1, errored: 2, total: 4 });
+    // The two preserved cases still count as passed (their seeded verdict).
+    expect(run.stats).toMatchObject({ passed: 3, failed: 1, errored: 0, total: 4 });
     expect(run.results[tcHit].passFailStatus).toBe('passed');
     expect(run.results[tcMiss].passFailStatus).toBe('failed');
-    expect(run.results[tcNoHits].passFailStatus).toBeUndefined();
+    expect(run.results[tcNoHits].passFailStatus).toBe('passed');
+    expect(run.lastRetryAttempt).toMatchObject({ evaluatorId: evaluator.id, scope: 'all', retried: 4, succeeded: 2, notEvaluable: 2, failed: 0 });
     const reportIds = Object.values(run.results).map((r: any) => r.reportId);
     const reports = await Promise.all(reportIds.map(get));
     const evaluated = reports.filter(r => r.metricsStatus === 'completed');

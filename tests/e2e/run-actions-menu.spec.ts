@@ -177,7 +177,7 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
     await expect(dialog).toBeVisible({ timeout: 10000 });
     await expect(page.locator('[data-testid="retry-judgement-scope-errored"]')).toBeChecked();
     await page.locator('[data-testid="retry-judgement-confirm-btn"]').click();
-    await expect(page.locator('[data-testid="retry-judgement-summary"]')).toContainText('1 succeeded', { timeout: 20000 });
+    await expect(page.locator('[data-testid="retry-judgement-summary-line"]')).toHaveText('Retried 1 · 1 scored', { timeout: 20000 });
     await page.locator('[data-testid="retry-judgement-done-btn"]').click();
 
     // No inline error surfaced by the menu, and the server-side effect is

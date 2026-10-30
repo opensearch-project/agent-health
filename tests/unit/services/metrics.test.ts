@@ -254,16 +254,28 @@ describe('metrics API functions', () => {
       await expect(fetchBatchMetrics(['run-1'])).rejects.toThrow('Invalid run IDs');
     });
 
-    it('should handle JSON parse failure on error response', async () => {
+    it('a non-JSON error body (proxy 524 text) → the error carries the HTTP status, not "Unknown error"', async () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: false,
-        status: 500,
+        status: 524,
+        statusText: 'A Timeout Occurred',
         json: () => Promise.reject(new Error('Invalid JSON')),
       });
 
       const { fetchBatchMetrics } = await import('@/services/metrics');
 
-      await expect(fetchBatchMetrics(['run-1'])).rejects.toThrow('Unknown error');
+      await expect(fetchBatchMetrics(['run-1'])).rejects.toThrow('Failed to fetch batch metrics: HTTP 524 A Timeout Occurred');
+    });
+
+    it('passes the caller\'s AbortSignal to fetch so a bounded wait can cut a stalled request', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: () => Promise.resolve({ metrics: [], aggregate: {} }) });
+      const { fetchBatchMetrics } = await import('@/services/metrics');
+      const controller = new AbortController();
+      await fetchBatchMetrics(['run-1'], undefined, undefined, undefined, { signal: controller.signal });
+      expect((global.fetch as jest.Mock).mock.calls[0][1].signal).toBe(controller.signal);
+      // ...and is omitted entirely when not supplied (unchanged request shape for other callers).
+      await fetchBatchMetrics(['run-1']);
+      expect((global.fetch as jest.Mock).mock.calls[1][1]).not.toHaveProperty('signal');
     });
   });
 });

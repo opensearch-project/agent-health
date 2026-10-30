@@ -157,17 +157,12 @@ export function classifyAgentError(error: unknown): { kind: AgentErrorKind; http
  * Produce the persisted `agentError` record for a connector failure.
  *
  * The message is ALWAYS the unwrapped cause — `fetch failed` on its own is
- * useless to the person reading the report. When we know the connector's
- * timeout and the failure is a timeout, the message says so explicitly so
- * the remedy (raise `connectorConfig.timeoutMs` or fix the agent's latency)
- * is obvious from the UI alone.
+ * useless to the person reading the report. (`fetchWithTimeout` already
+ * names the timeout and endpoint in its own message.)
  */
 export function describeAgentError(error: unknown, ctx: DescribeAgentErrorContext = {}): AgentErrorInfo {
   const { kind, httpStatus } = classifyAgentError(error);
   let message = unwrapErrorMessage(error);
-  if (kind === 'timeout' && ctx.timeoutMs !== undefined && !/\d+\s*ms/.test(message)) {
-    message = `${message} — no response within ${ctx.timeoutMs}ms`;
-  }
   if (ctx.endpoint && !message.includes(ctx.endpoint)) {
     message = `${message} (${ctx.endpoint})`;
   }

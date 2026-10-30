@@ -185,6 +185,11 @@ class CompositeMetricsOperations implements IMetricsOperations {
         const message = errored.error ?? errored.m?.error ?? 'trace-store query failed';
         return { ...(base as MetricsResult), runId, status: 'error', error: `${errored.src.name}: ${message}`, hasSpans: undefined } as MetricsResult;
       }
+      // No source holds the agent's spans. Prefer the answer that at least saw
+      // our own eval span for the run (`evalOnlySpans`) — it tells the UI the
+      // run WAS evaluated and the agent's spans live elsewhere.
+      const evalOnly = candidates.find((c) => c.m && (c.m.evalOnlySpans ?? 0) > 0);
+      if (evalOnly?.m) return { ...evalOnly.m, source: evalOnly.src.name } as MetricsResult;
       return (candidates.find((c) => c.m)?.m as MetricsResult) ?? ({ runId, traceId: null, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0, llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'pending', hasSpans: false } as MetricsResult);
     });
   }

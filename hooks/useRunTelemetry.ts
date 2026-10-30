@@ -47,10 +47,26 @@ import {
   type TelemetryRun,
 } from '@/lib/runTelemetry';
 
-/** Max metrics keys per `POST /api/metrics/batch` request. */
-export const TELEMETRY_BATCH_CHUNK = 200;
+/**
+ * Max metrics keys per `POST /api/metrics/batch` request.
+ *
+ * 50 = exactly ONE OpenSearch query server-side (computeBatchMetrics chunks
+ * at 50), so each HTTP request is one bounded search. It used to be 200 (4
+ * parallel searches per request, 12 in flight across 3 requests): measured on
+ * the shared cluster with a 62-run × 62-case benchmark (3 690 keys), 200-key
+ * requests took 15–68 s each and most hit the proxy's 50 s cap (524) or the
+ * server's 30 s OpenSearch timeout; 50-key requests take 2–13 s.
+ */
+export const TELEMETRY_BATCH_CHUNK = 50;
 /** Parallel chunk requests in flight at once. */
 const MAX_CONCURRENT_CHUNKS = 3;
+/**
+ * Per-request wait bound. Below the 50 s most reverse proxies / tunnels allow,
+ * so a request that is going to fail fails HERE as an explicit per-chunk error
+ * ("unavailable", Retry) instead of hanging the whole page's telemetry on one
+ * stalled chunk. Results of the chunks that did answer are kept.
+ */
+export const TELEMETRY_REQUEST_TIMEOUT_MS = 45_000;
 
 export interface UseRunTelemetryOptions {
   /** When false, nothing is fetched (e.g. the Runs tab is not the active tab). */
@@ -61,6 +77,8 @@ export interface UseRunTelemetryOptions {
   resolveTraceServiceName?: (agentKey: string | undefined) => string | undefined;
   /** Test seam / DI: the batch call. */
   fetchBatch?: typeof fetchBatchMetrics;
+  /** Test seam: per-request timeout (default {@link TELEMETRY_REQUEST_TIMEOUT_MS}). */
+  requestTimeoutMs?: number;
 }
 
 export interface UseRunTelemetryResult {
@@ -109,6 +127,7 @@ export function useRunTelemetry(
     isRunning = defaultIsRunning,
     resolveTraceServiceName = resolveAgentTraceServiceName,
     fetchBatch = fetchBatchMetrics,
+    requestTimeoutMs = TELEMETRY_REQUEST_TIMEOUT_MS,
   } = options;
 
   const [cache, setCache] = useState<ReadonlyMap<string, CacheEntry>>(() => new Map());
@@ -173,20 +192,13 @@ export function useRunTelemetry(
     const finalNow = new Set(keys.filter(k => terminalKeys.has(k)));
 
     type Outcome = { key: string; result: TelemetryMetricsResult; ok: boolean };
-    fetchChunked<Outcome>(keys, TELEMETRY_BATCH_CHUNK, async (chunk) => {
-      try {
-        const res = await fetchBatchRef.current(chunk, pick(sessionIdByKey, chunk), pick(traceIdByKey, chunk), pick(agentsByKey, chunk));
-        const byKey = new Map((res.metrics || []).filter(r => r && r.runId).map(r => [r.runId, r as TelemetryMetricsResult]));
-        // A key the server did not echo back is treated as "no spans" so the
-        // cell settles on "—" rather than a permanent skeleton.
-        return chunk.map(k => ({ key: k, ok: true, result: byKey.get(k) || { runId: k, hasSpans: false, status: 'success' } }));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'metrics unavailable';
-        console.error('[useRunTelemetry] batch metrics request failed:', message);
-        return chunk.map(k => ({ key: k, ok: false, result: { runId: k, error: message, status: 'error' } }));
-      }
-    }, MAX_CONCURRENT_CHUNKS).then(outcomes => {
-      for (const k of keys) inflightRef.current.delete(k);
+    // Each chunk is committed to the cache AS IT LANDS (not once every chunk
+    // has answered): rows whose keys came back render real numbers while
+    // slower chunks are still on the wire, and a chunk that fails or times
+    // out only blanks its own keys. Pre-fix the whole page waited for the
+    // slowest of up to 19 requests — 2 minutes of "—" on a 62-run benchmark.
+    const commit = (outcomes: Outcome[]) => {
+      for (const o of outcomes) inflightRef.current.delete(o.key);
       if (!mountedRef.current) return;
       setCache(prev => {
         const next = new Map(prev);
@@ -202,7 +214,36 @@ export function useRunTelemetry(
         }
         return next;
       });
-      setError(outcomes.some(o => !o.ok) ? 'metrics unavailable' : null);
+    };
+    let anyFailed = false;
+    fetchChunked<Outcome>(keys, TELEMETRY_BATCH_CHUNK, async (chunk) => {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
+      const timer = controller && requestTimeoutMs > 0
+        ? setTimeout(() => controller.abort(), requestTimeoutMs)
+        : undefined;
+      let outcomes: Outcome[];
+      try {
+        const res = await fetchBatchRef.current(chunk, pick(sessionIdByKey, chunk), pick(traceIdByKey, chunk), pick(agentsByKey, chunk), controller ? { signal: controller.signal } : undefined);
+        const byKey = new Map((res.metrics || []).filter(r => r && r.runId).map(r => [r.runId, r as TelemetryMetricsResult]));
+        // A key the server did not echo back is treated as "no spans" so the
+        // cell settles on "—" rather than a permanent skeleton.
+        outcomes = chunk.map(k => ({ key: k, ok: true, result: byKey.get(k) || { runId: k, hasSpans: false, status: 'success' } }));
+      } catch (err) {
+        const aborted = controller?.signal.aborted;
+        const message = aborted
+          ? `metrics request timed out after ${Math.round(requestTimeoutMs / 1000)} s`
+          : err instanceof Error ? err.message : 'metrics unavailable';
+        console.error('[useRunTelemetry] batch metrics request failed:', message);
+        anyFailed = true;
+        outcomes = chunk.map(k => ({ key: k, ok: false, result: { runId: k, error: message, status: 'error' } }));
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      commit(outcomes);
+      return outcomes;
+    }, MAX_CONCURRENT_CHUNKS).then(() => {
+      if (!mountedRef.current) return;
+      setError(anyFailed ? 'metrics unavailable' : null);
     });
     // `correlation` / `terminalKeys` are consistent with `planKey` by
     // construction; the plan string is the semantic dependency.

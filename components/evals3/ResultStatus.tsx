@@ -119,7 +119,7 @@ export function StatusLabel({ status, stage }: { status: ResultStatus; stage?: F
 /**
  * Human-readable status description for detail panels.
  */
-export function getStatusDescription(status: ResultStatus, stage?: FailureStage): string {
+export function getStatusDescription(status: ResultStatus): string {
   switch (status) {
     case 'running': return 'Running agent...';
     case 'pending_traces': return 'Agent done \u2014 waiting for traces...';
@@ -127,11 +127,7 @@ export function getStatusDescription(status: ResultStatus, stage?: FailureStage)
     case 'pending': return 'Pending';
     case 'passed': return 'Passed';
     case 'failed': return 'Failed';
-    case 'errored':
-      if (stage === 'agent') return 'Agent request failed \u2014 not judged';
-      if (stage === 'judge') return 'Judge could not produce a verdict';
-      if (stage === 'trace') return 'Trace pipeline failed';
-      return 'Evaluator could not run';
+    case 'errored': return 'Evaluator could not run';
     case 'cancelled': return 'Not run \u2014 the run was cancelled before this case started';
   }
 }
