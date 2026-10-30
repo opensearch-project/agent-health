@@ -2291,14 +2291,7 @@ export interface MetricsResult {
   partial?: boolean;
   /** See TraceMetrics.correlatedBy. */
   correlatedBy?: 'ids' | 'window' | 'mixed';
-  /**
-   * Set on EVERY trace-store failure (query threw / timed out / was rejected —
-   * `failedMetricsResult`) and ONLY then: the numbers are unknown, not zero,
-   * and `hasSpans` is left undefined. Never set on a result computed from
-   * spans, whatever its `status`. This field — not `status` — is how
-   * consumers (the composite backend, the run telemetry roll-up) tell a
-   * store failure from an agent run that itself errored.
-   */
+  /** Why `status` is 'error' (trace-store query failed) — the numbers are unknown, not zero. */
   error?: string;
   /** Composite backend: the configured source these metrics were taken from. */
   source?: string;
