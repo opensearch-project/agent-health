@@ -139,7 +139,10 @@ describe('rejectBrotliRequestBodies (CVE-2026-111497)', () => {
     });
 
     it('still lets body-parser 415 unknown encodings itself (unchanged behaviour)', async () => {
-      const res = await post(app, JSON_BYTES, 'zstd');
+      // Use a coding no body-parser release knows: `zstd` used to be the
+      // "unknown" example here, but body-parser 2.4.0 decodes it on Node
+      // >= 22.15 (so raw JSON labelled zstd becomes a 400 decode error).
+      const res = await post(app, JSON_BYTES, 'x-unknown-coding');
       expect(res.status).toBe(415);
       expect(res.body.type).toBe('encoding.unsupported');
       expect(res.body.code).toBeUndefined();
