@@ -600,7 +600,7 @@ export async function executeEvaluationRun(
               evalError,
               agentResultCaptured: capturedResult !== undefined,
             });
-            const { erroredMatchers, failed } = outcome;
+            const { erroredMatchers } = outcome;
             const agentFailed = outcome.kind === 'agent_failed';
             // ALWAYS-RECORD (owner-hit measurement-harness bug): a failing gate
             // partway through the body must not erase the objective actuals the
@@ -651,7 +651,9 @@ export async function executeEvaluationRun(
               );
               (report as any).skipJudge = true;
             } else {
-              (report as any).passFailStatus = failed ? 'failed' : 'passed';
+              // Only 'passed' | 'failed' reach this branch (judge_failed /
+              // agent_failed are handled above).
+              (report as any).passFailStatus = outcome.kind;
               // Option B BC shim: legacy `llmJudgeReasoning` is a derived view
               // of `matcherResults`. SDK runs leave it empty — judge data lives
               // in `matcherResults` (read via getJudgeMatcherResults()).

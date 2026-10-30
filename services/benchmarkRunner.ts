@@ -530,7 +530,7 @@ export async function executeRun(
               evalError,
               agentResultCaptured: capturedResult !== undefined,
             });
-            const { erroredMatchers, failed } = outcome;
+            const { erroredMatchers } = outcome;
             const agentFailed = outcome.kind === 'agent_failed';
             // ALWAYS-RECORD (owner-hit measurement-harness bug): mirrors the same
             // fix in evaluationRunner.ts — stamp the objective totalTokens/
@@ -572,7 +572,9 @@ export async function executeRun(
               );
               (report as any).skipJudge = true;
             } else {
-              (report as any).passFailStatus = failed ? 'failed' : 'passed';
+              // Only 'passed' | 'failed' reach this branch (judge_failed /
+              // agent_failed are handled above).
+              (report as any).passFailStatus = outcome.kind;
               // Option B BC shim: legacy field empty for SDK runs;
               // canonical judge data lives in `matcherResults`.
               (report as any).llmJudgeReasoning = '';

@@ -51,25 +51,24 @@ export interface ClassifyCaseOutcomeInput {
 
 export interface CaseOutcome {
   kind: CaseOutcomeKind;
-  /** Matchers whose judge/evaluator could not run (`errored: true`). */
+  /** Matchers whose judge/evaluator could not run (`errored: true`); the first one's message becomes the `judge_failed` cause. */
   erroredMatchers: MatcherResult[];
-  /** A non-observe, non-errored, actually-executed matcher failed. */
-  anyGateFailed: boolean;
-  /** Pass/fail verdict for the `failed`/`passed` kinds; also true for `agent_failed`. */
-  failed: boolean;
 }
 
-/** A matcher that gates the verdict: ran, is not observe-only, did not error. */
-export function isGatingMatcher(m: MatcherResult): boolean {
-  return m.role !== 'observe' && !m.errored && !m.notReached;
-}
+/**
+ * A matcher that gates the verdict: ran, is not observe-only, did not error.
+ * The synthetic `notReached` marker (appendNotReachedMarker) is excluded so
+ * the classification is the same whether it runs before or after the marker
+ * is appended.
+ */
+const isGatingMatcher = (m: MatcherResult): boolean =>
+  m.role !== 'observe' && !m.errored && !m.notReached;
 
 export function classifyCaseOutcome(input: ClassifyCaseOutcomeInput): CaseOutcome {
   const { matcherResults, evalError, agentResultCaptured } = input;
   const bodyThrew = evalError !== undefined;
   const erroredMatchers = matcherResults.filter(m => m.errored);
   const anyGateFailed = matcherResults.some(m => !m.pass && isGatingMatcher(m));
-  const failed = anyGateFailed || bodyThrew;
 
   let kind: CaseOutcomeKind;
   if (erroredMatchers.length > 0) {
@@ -77,7 +76,7 @@ export function classifyCaseOutcome(input: ClassifyCaseOutcomeInput): CaseOutcom
   } else if (bodyThrew && !agentResultCaptured && !anyGateFailed) {
     kind = 'agent_failed';
   } else {
-    kind = failed ? 'failed' : 'passed';
+    kind = anyGateFailed || bodyThrew ? 'failed' : 'passed';
   }
-  return { kind, erroredMatchers, anyGateFailed, failed };
+  return { kind, erroredMatchers };
 }

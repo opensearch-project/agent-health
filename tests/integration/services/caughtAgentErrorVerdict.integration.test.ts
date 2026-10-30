@@ -111,6 +111,8 @@ describe('code-SDK verdict: caught agent error + failing expect is FAILED on bot
   let resolved: Awaited<ReturnType<typeof resolveTestCaseSources>>;
   const byName = (name: string) => resolved.testCases.find(t => t.name === name)!;
   const agentHits: string[] = [];
+  /** Benchmark-runner report per test name, for the parity comparison below. */
+  const benchDocs = new Map<string, any>();
 
   beforeAll(async () => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -175,6 +177,10 @@ describe('code-SDK verdict: caught agent error + failing expect is FAILED on bot
       });
       // Every body really called the REST agent (3 cases → 3 HTTP 500s).
       expect(agentHits.length - before).toBe(3);
+      for (const tc of resolved.testCases) {
+        const doc = [...client.docs.values()].find(d => d.testCaseId === tc.id);
+        if (doc) benchDocs.set(tc.name, doc);
+      }
     }, 30_000);
 
     it('caught 500 + failing expect → FAILED with the assertion, not an agent error', () => {
@@ -191,6 +197,10 @@ describe('code-SDK verdict: caught agent error + failing expect is FAILED on bot
       // The run entry points at the persisted report (benchmark-run results carry
       // execution status only; the verdict is read from the report).
       expect(run.results[byName('caught-500-asserted').id]).toMatchObject({ status: 'completed', reportId: report.id });
+      // Secondary outputs of the FAILED branch: the always-record `notReached`
+      // marker for the tail of the body, pass-rate metrics, and the assertion.
+      expect(report.matcherResults.filter((m: any) => m.notReached)).toHaveLength(1);
+      expect(report.metrics).toMatchObject({ accuracy: 0 });
     });
 
     it('uncaught 500 (no gate ran) → AGENT ERROR, #496 semantics kept', () => {
@@ -241,6 +251,17 @@ describe('code-SDK verdict: caught agent error + failing expect is FAILED on bot
     ])('%s classifies the same as the benchmark runner', (name, expected) => {
       const report = reportFor(name);
       expect({ passFailStatus: report.passFailStatus ?? null, metricsStatus: report.metricsStatus, failureStage: report.failureStage }).toEqual(expected);
+      // …and the secondary outputs match too (matcher list incl. the
+      // notReached marker, metrics, agentError kind), not just the verdict.
+      // (`assertionError` is deliberately not compared: the benchmark path's
+      // saveReportWithClient allow-list has never persisted it — pre-existing.)
+      const bench = benchDocs.get(name)!;
+      const shape = (r: any) => ({
+        matchers: (r.matcherResults ?? []).map((m: any) => ({ pass: m.pass, notReached: !!m.notReached, method: m.method })),
+        metrics: r.metrics ?? null,
+        agentErrorKind: r.agentError?.kind ?? null,
+      });
+      expect(shape(report)).toEqual(shape(bench));
     });
   });
 });
