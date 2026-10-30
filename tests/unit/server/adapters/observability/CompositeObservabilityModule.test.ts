@@ -163,6 +163,26 @@ describe('CompositeObservabilityModule', () => {
         const thrown = new CompositeObservabilityModule([fake('primary'), fake('cw-team', { metricsFail: true })]);
         expect(await thrown.metrics.forRun('r1')).toMatchObject({ status: 'error', error: 'cw-team: cw-team throttled' });
       });
+
+      it('`error` is the contract: a result carrying one is a store failure even if it also claims hasSpans:true; status alone never is', async () => {
+        const hybrid = metrics('r1', { inputTokens: 5, totalTokens: 5, status: 'error', hasSpans: true, error: 'partial fetch failed' });
+        const c = new CompositeObservabilityModule([fake('primary', { metrics: { r1: hybrid } }), fake('cw-team')]);
+        expect(await c.metrics.forRun('r1')).toMatchObject({ status: 'error', error: 'primary: partial fetch failed' });
+        // status:'error' with NO `error` and no spans flag but non-zero counters → it holds (the agent run failed; the store answered).
+        const legacyErrored = metrics('r1', { inputTokens: 5, totalTokens: 5, llmCalls: 1, status: 'error' });
+        delete (legacyErrored as Partial<MetricsResult>).hasSpans;
+        const c2 = new CompositeObservabilityModule([fake('primary', { metrics: { r1: legacyErrored } }), fake('cw-team')]);
+        const r = await c2.metrics.forRun('r1');
+        expect(r).toMatchObject({ status: 'error', totalTokens: 5, source: 'primary' });
+        expect(r.error).toBeUndefined();
+      });
+
+      it('every source threw → a complete zero-counter result flagged error/unknown, never a bare { runId }', async () => {
+        const c = new CompositeObservabilityModule([fake('primary', { metricsFail: true }), fake('cw-team', { metricsFail: true })]);
+        const r = await c.metrics.forRun('r1');
+        expect(r).toEqual(expect.objectContaining({ runId: 'r1', status: 'error', error: 'primary: primary throttled', totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0, toolsUsed: [], durationMs: 0, traceId: null }));
+        expect(r.hasSpans).toBeUndefined();
+      });
     });
   });
 

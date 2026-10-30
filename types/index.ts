@@ -1251,9 +1251,11 @@ export interface TraceMetrics {
   /**
    * Number of the AGENT's spans (Agent Health's own eval/judge spans excluded)
    * whose OTel status is ERROR — a failing tool call, a 4xx from a backing
-   * HTTP call, a retried LLM request. Informational: these spans still
-   * contribute to the counts above, and they do NOT make `status` 'error'
-   * (that reflects the root/top-level span only). Omitted when zero.
+   * HTTP call, a retried LLM request; a failing root/top-level span counts
+   * too (and is what makes `status` 'error'). A plain count of errored spans
+   * (a failing tool call AND its failing HTTP child are 2), informational:
+   * these spans still contribute to the counts above, and a CHILD span's
+   * error never makes `status` 'error'. Omitted when zero.
    */
   agentErrorSpans?: number;
   /**
@@ -2279,7 +2281,14 @@ export interface MetricsResult {
   partial?: boolean;
   /** See TraceMetrics.correlatedBy. */
   correlatedBy?: 'ids' | 'window' | 'mixed';
-  /** Why `status` is 'error' (trace-store query failed) — the numbers are unknown, not zero. */
+  /**
+   * Set on EVERY trace-store failure (query threw / timed out / was rejected —
+   * `failedMetricsResult`) and ONLY then: the numbers are unknown, not zero,
+   * and `hasSpans` is left undefined. Never set on a result computed from
+   * spans, whatever its `status`. This field — not `status` — is how
+   * consumers (the composite backend, the run telemetry roll-up) tell a
+   * store failure from an agent run that itself errored.
+   */
   error?: string;
   /** Composite backend: the configured source these metrics were taken from. */
   source?: string;
