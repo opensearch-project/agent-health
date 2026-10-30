@@ -233,6 +233,55 @@ function makeReport(
   } as TestCaseRun;
 }
 
+/**
+ * The report an agent-request failure persists (services/evaluation/index.ts
+ * catch block): execution `failed`, `metricsStatus: 'error'`,
+ * `failureStage: 'agent'`, NO passFailStatus. Shape of the 403-on-every-request
+ * (expired credentials) incident.
+ */
+function makeErroredReport(id: string, testCaseId: string): TestCaseRun {
+  return {
+    ...makeReport(id, testCaseId, 'failed'),
+    status: 'failed',
+    passFailStatus: undefined,
+    metricsStatus: 'error',
+    failureStage: 'agent',
+    error: 'REST request failed: 403 - {"message":"The security token included in the request is expired"}',
+    metrics: undefined,
+  } as unknown as TestCaseRun;
+}
+
+/** Drive the legacy `/execute` path for a named benchmark with the given per-case results + reports. */
+function mockNamedBenchmarkRun(
+  currentApi: MockApiClient,
+  cases: Array<{ id: string; report: TestCaseRun }>,
+  runOverrides: Partial<BenchmarkRun> = {}
+): void {
+  const benchmark = makeBenchmark({
+    id: 'bench-errored',
+    name: 'Errored Benchmark',
+    testCaseIds: cases.map(c => c.id),
+  });
+  const run = makeRun({
+    id: 'run-errored',
+    results: Object.fromEntries(cases.map(c => [c.id, { reportId: c.report.id, status: 'completed' as const }])),
+    ...runOverrides,
+  });
+  currentApi.findBenchmark.mockResolvedValue(benchmark);
+  currentApi.executeBenchmark.mockImplementation(
+    async (_benchmarkId: string, _runConfig: any, onProgress?: (event: any) => void) => {
+      onProgress?.({
+        type: 'started',
+        runId: run.id,
+        testCases: cases.map(c => ({ id: c.id, name: c.id, status: 'pending' })),
+      });
+      return run;
+    }
+  );
+  const byId = new Map(cases.map(c => [c.report.id, c.report]));
+  currentApi.getReportById.mockImplementation(async (id: string) => byId.get(id) ?? null);
+}
+
 function validFileTestCases() {
   return [
     {
@@ -296,9 +345,13 @@ describe('Benchmark Command - Real Module Coverage', () => {
     delete process.env.OPENSEARCH_DASHBOARDS_URL;
     delete process.env.AH_AGENT_PATH;
     global.fetch = originalFetch;
+    process.exitCode = undefined;
   });
 
   afterEach(() => {
+    // The command sets process.exitCode (not process.exit) for errored runs;
+    // never let that leak into the jest worker's own exit status.
+    process.exitCode = undefined;
     global.fetch = originalFetch;
     logSpy.mockRestore();
     errorSpy.mockRestore();
@@ -519,7 +572,8 @@ describe('Benchmark Command - Real Module Coverage', () => {
       expect(output).toContain('Running in quick mode');
       expect(output).toContain('Agent: Demo Agent (default)');
       expect(output).toContain('## Benchmark Summary');
-      expect(output).toContain('| Agent | Passed | Failed | Pass Rate | Run ID |');
+      expect(output).toContain('| Agent | Passed | Failed | Errored | Pass Rate | Run ID |');
+      expect(output).toContain('| Demo Agent | 1 | 1 | 0 | 50% | run-quick |');
       expect(currentApi.listTestCases).toHaveBeenCalledTimes(1);
       expect(currentApi.createBenchmark).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -594,6 +648,96 @@ describe('Benchmark Command - Real Module Coverage', () => {
       expect(joinedConsoleOutput(logSpy)).toContain('TABLE');
       expect(currentApi.findBenchmark).toHaveBeenCalledWith('Existing Benchmark');
       expect(cleanupSpy).toHaveBeenCalled();
+    });
+
+    it('all-errored run (every agent request 403): summary shows Errored 3, not "Passed 3"; pass rate "—"; exit code 1', async () => {
+      mockNamedBenchmarkRun(currentApi, [
+        { id: 'tc-1', report: makeErroredReport('report-1', 'tc-1') },
+        { id: 'tc-2', report: makeErroredReport('report-2', 'tc-2') },
+        { id: 'tc-3', report: makeErroredReport('report-3', 'tc-3') },
+      ]);
+
+      await runBenchmarkCommand(['-n', 'Errored Benchmark', '-a', 'demo-agent', '--output', 'markdown']);
+
+      const output = joinedConsoleOutput(logSpy);
+      expect(output).toContain('| Agent | Passed | Failed | Errored | Pass Rate | Run ID |');
+      expect(output).toContain('| Demo Agent | 0 | 0 | 3 | — | run-errored |');
+      expect(output).not.toMatch(/\| Demo Agent \| 3 \|/);
+      expect(process.exitCode).toBe(1);
+      expect(exitSpy).not.toHaveBeenCalled(); // exitCode, not process.exit: cleanup + links still run
+      expect(cleanupSpy).toHaveBeenCalled();
+    });
+
+    it('mixed run: 2 passed, 1 failed, 2 errored → exact counts in the table AND in -o json; pass rate over judged only; exit 1', async () => {
+      const cases = [
+        { id: 'tc-1', report: makeReport('report-1', 'tc-1', 'passed') },
+        { id: 'tc-2', report: makeReport('report-2', 'tc-2', 'passed') },
+        { id: 'tc-3', report: makeReport('report-3', 'tc-3', 'failed') },
+        { id: 'tc-4', report: makeErroredReport('report-4', 'tc-4') },
+        { id: 'tc-5', report: makeErroredReport('report-5', 'tc-5') },
+      ];
+
+      mockNamedBenchmarkRun(currentApi, cases);
+      await runBenchmarkCommand(['-n', 'Errored Benchmark', '-a', 'demo-agent', '--output', 'markdown']);
+      expect(joinedConsoleOutput(logSpy)).toContain('| Demo Agent | 2 | 1 | 2 | 67% | run-errored |');
+      expect(process.exitCode).toBe(1);
+
+      logSpy.mockClear();
+      process.exitCode = undefined;
+      mockNamedBenchmarkRun(currentApi, cases);
+      await runBenchmarkCommand(['-n', 'Errored Benchmark', '-a', 'demo-agent', '--output', 'json']);
+      const jsonStart = joinedConsoleOutput(logSpy).indexOf('[');
+      const parsed = JSON.parse(joinedConsoleOutput(logSpy).slice(jsonStart, joinedConsoleOutput(logSpy).lastIndexOf(']') + 1));
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0]).toMatchObject({
+        agent: { key: 'demo-agent', name: 'Demo Agent' },
+        runId: 'run-errored',
+        status: 'completed',
+        passed: 2,
+        failed: 1,
+        errored: 2,
+        notRun: 0,
+        total: 5,
+        passRate: 67,
+      });
+      expect(parsed[0]).not.toHaveProperty('error');
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('all-judged run with a failed verdict still exits 0 — a failed test case is data, not a tool error', async () => {
+      mockNamedBenchmarkRun(currentApi, [
+        { id: 'tc-1', report: makeReport('report-1', 'tc-1', 'passed') },
+        { id: 'tc-2', report: makeReport('report-2', 'tc-2', 'failed') },
+      ]);
+
+      await runBenchmarkCommand(['-n', 'Errored Benchmark', '-a', 'demo-agent', '--output', 'json']);
+
+      const out = joinedConsoleOutput(logSpy);
+      const parsed = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
+      expect(parsed[0]).toMatchObject({ passed: 1, failed: 1, errored: 0, total: 2, passRate: 50 });
+      expect(process.exitCode).toBe(0);
+    });
+
+    it('a run the server rejected (no verdicts at all) exits 1 and carries the error in -o json', async () => {
+      const benchmark = makeBenchmark({ id: 'bench-rejected', name: 'Rejected', testCaseIds: ['tc-1', 'tc-2'] });
+      currentApi.findBenchmark.mockResolvedValue(benchmark);
+      currentApi.executeBenchmark.mockRejectedValue(
+        new (jest.requireMock('@/cli/utils/apiClient.js').ServerError)('Failed to execute benchmark: OpenSearch not configured.')
+      );
+
+      await runBenchmarkCommand(['-n', 'Rejected', '-a', 'demo-agent', '--output', 'json']);
+
+      const out = joinedConsoleOutput(logSpy);
+      const parsed = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
+      expect(parsed[0]).toMatchObject({
+        passed: 0,
+        failed: 0,
+        errored: 0,
+        total: 2,
+        passRate: null,
+        error: 'Failed to execute benchmark: OpenSearch not configured.',
+      });
+      expect(process.exitCode).toBe(1);
     });
 
     it('exits with a helpful error when the server is already running and no source is specified', async () => {

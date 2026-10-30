@@ -462,6 +462,16 @@ agent-health kill <target>      # target: sample-agent
 | `0` | Success |
 | `1` | Error |
 
+For `benchmark` and `run`, "error" includes **errored test cases** — cases
+whose evaluation could not be performed (the agent rejected or never answered
+the request, e.g. a `403` from expired credentials; the judge could not run).
+Such cases are reported separately as **Errored** (never counted as passed or
+failed) and make the command exit `1`, so an all-errored run can never look
+like a pass in a pipeline. A test case that was judged and **failed** is a
+result, not an error: a run whose cases were all judged exits `0` regardless
+of the pass rate — read the counts (`-o json` includes `passed`, `failed`,
+`errored`, `notRun`, `total`, `passRate`) to gate on quality.
+
 ---
 
 ## Output Formats
