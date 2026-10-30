@@ -13,7 +13,7 @@
  *   - 1  `test_case` eval span (Agent Health's own; excluded from the agent's counts)
  *   - 1  agent top-level `invoke_agent` span, status OK
  *   - 15 `chat` LLM spans with a model + token usage (→ llmCalls = 15)
- *   - 3  tool spans; ONE of them (`execute_tool search_index`, 2nd of 3) has
+ *   - 3  tool spans; ONE of them (`execute_tool search_docs`, 2nd of 3) has
  *        OTel status ERROR (code 2) with a message, each tool span wrapping one
  *        HTTP child span (the errored tool's child is a 4xx, also ERROR)
  *   - 36 HTTP/retrieval child spans under the chat spans to make a 50+ span trace
@@ -58,7 +58,7 @@ export const AGENT_TRACE_FIXTURE = {
   agentSpanCount: 58,
   llmCalls: 15,
   toolCalls: 3,
-  toolsUsed: ['get_index_profile', 'search_index', 'submit_results'],
+  toolsUsed: ['describe_catalog', 'search_docs', 'record_answer'],
   errorSpans: 2,
   model: 'example-model-v1',
 } as const;
@@ -122,7 +122,7 @@ export function buildAgentTraceWithErrorSpan(opts: AgentTraceFixtureOptions): Ag
     const failing = withErrorSpan && i === 1;
     const toolId = sid(`tool-${i}`);
     push({ spanId: toolId, parentSpanId: rootId, name: `execute_tool ${tool}`, startMs: t, durationMs: 1_500,
-      status: failing ? { code: 2, message: 'index_not_found_exception: no such index [orders-2026]' } : { code: 1 },
+      status: failing ? { code: 2, message: 'index_not_found_exception: no such index [docs-2026]' } : { code: 1 },
       attributes: { ...common, 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': tool, ...(failing ? { 'error.type': 'index_not_found_exception' } : {}) } });
     push({ spanId: sid(`tool-${i}-http`), parentSpanId: toolId, name: 'POST /{index}/_search', kind: 'SPAN_KIND_CLIENT', startMs: t + 50, durationMs: 1_300,
       status: failing ? { code: 2, message: '404 Not Found' } : { code: 1 },
