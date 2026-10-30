@@ -23,9 +23,18 @@ import { ensureServer, createServerCleanup, isServerRunning, type EnsureServerRe
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, ServerError, type BenchmarkExecutionEvent } from '@/cli/utils/apiClient.js';
 import { resolveUnifiedRunOutcome } from '@/cli/utils/evaluationRunOutcome.js';
-import { summarizeRunResults, exitCodeForSummary, formatResultsLines, formatPassRate, type RunSummaryCounts } from '@/cli/utils/runSummary.js';
+import {
+  summarizeRunResults,
+  buildSummaryCounts,
+  exitCodeForSummary,
+  flagExitCode,
+  formatResultsLines,
+  formatPassRate,
+  describeExitReason,
+  type RunSummaryCounts,
+} from '@/cli/utils/runSummary.js';
 import { validateTestCasesArrayJson, type ValidatedTestCaseInput } from '@/lib/testCaseValidation.js';
-import { calculateRunStats, getReportIdsFromRun } from '@/lib/runStats.js';
+import { calculateRunStats, getReportIdsFromRun, type RunStats } from '@/lib/runStats.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
 import type { AgentConfig, Benchmark, BenchmarkRun, TestCase, TestCaseRun, EvaluationReport, TestCaseSource, EvaluationRun } from '@/types/index.js';
 import { existsSync, statSync } from 'fs';
@@ -60,8 +69,12 @@ interface AgentResults {
   runId?: string; // Track runId separately in case execution fails after run is created
   passed: number;
   failed: number;
-  /** Executed but not judged (agent request rejected, judge could not run) — #242. */
-  errored: number;
+  /**
+   * Full report-based stats (`calculateRunStats`) incl. errored / pending /
+   * notRun — the summary table, `-o json` and the exit code read these, not
+   * just passed/failed. Absent when the run never produced readable results.
+   */
+  stats?: RunStats;
   /**
    * Set when the run did not reach a confirmed terminal state the CLI could
    * read verdicts from (server-side failure, lost stream with no recovery).
@@ -186,7 +199,6 @@ async function runBenchmarkForAgent(
     agent,
     passed: 0,
     failed: 0,
-    errored: 0,
   };
 
   const totalTestCases = benchmark.testCaseIds.length;
@@ -241,7 +253,7 @@ async function runBenchmarkForAgent(
 
     results.passed = stats.passed;
     results.failed = stats.failed;
-    results.errored = stats.errored;
+    results.stats = stats;
 
     // Store reports for export
     results.reports = Object.values(reportsMap).filter((r): r is TestCaseRun => r !== null);
@@ -286,7 +298,7 @@ async function runBenchmarkForAgent(
           const stats = calculateRunStats(run, reportsMap);
           results.passed = stats.passed;
           results.failed = stats.failed;
-          results.errored = stats.errored;
+          results.stats = stats;
           results.reports = Object.values(reportsMap).filter((r): r is TestCaseRun => r !== null);
 
           // Check if the run actually completed successfully (recovered after stream disconnect)
@@ -369,43 +381,41 @@ async function runBenchmarkForAgent(
 }
 
 /**
- * Per-agent counts for the final summary (table / markdown / `-o json`).
- * `passRate` is over the JUDGED set (`passed / (passed + failed)`), the
- * repo-wide convention (lib/runStats `passRateOverJudged`), so N errored
- * cases can't read as "0% pass rate" — they read as "N errored, —".
+ * Per-agent counts for the final summary (table / markdown / `-o json`),
+ * from the full report-based stats when the run produced any; a run that
+ * never produced readable results counts every planned case as not run.
  */
 export function summarizeAgentResults(
-  results: Pick<AgentResults, 'passed' | 'failed' | 'errored'>,
+  results: Pick<AgentResults, 'stats' | 'run'>,
   totalTestCases: number
 ): RunSummaryCounts {
-  const judged = results.passed + results.failed;
-  return {
-    passed: results.passed,
-    failed: results.failed,
-    errored: results.errored,
-    notRun: Math.max(0, totalTestCases - judged - results.errored),
-    total: totalTestCases,
-    passRate: judged > 0 ? Math.round((results.passed / judged) * 100) : null,
+  const stats = results.stats ?? {
+    passed: 0, failed: 0, errored: 0, pending: 0, notRun: totalTestCases, total: totalTestCases,
   };
+  return buildSummaryCounts(stats, results.run?.results);
 }
 
 /**
  * Exit code for the legacy (per-benchmark `/execute`) summary: `1` when any
- * agent's run has errored cases or never reached a readable terminal state
- * (`runError`), else `0`. Failed verdicts keep exit 0 — see
- * cli/utils/runSummary.ts for the convention.
+ * agent's run has cases that were not evaluated (errored / execution error /
+ * never run / nothing planned — `exitCodeForSummary`) or never reached a
+ * readable terminal state (`runError`), else `0`. Failed verdicts keep exit
+ * 0 — see cli/utils/runSummary.ts for the convention.
  */
 export function exitCodeForAgentResults(
-  allResults: Array<Pick<AgentResults, 'errored' | 'runError'>>
+  allResults: Array<Pick<AgentResults, 'stats' | 'run' | 'runError'>>,
+  totalTestCases: number
 ): 0 | 1 {
-  return allResults.some(r => r.runError !== undefined || exitCodeForSummary(r) === 1) ? 1 : 0;
+  return allResults.some(
+    r => r.runError !== undefined || exitCodeForSummary(summarizeAgentResults(r, totalTestCases)) === 1
+  ) ? 1 : 0;
 }
 
 /**
  * Build summary rows (shared between table and markdown)
  */
 export function buildSummaryRows(
-  allResults: Array<Pick<AgentResults, 'agent' | 'run' | 'runId' | 'passed' | 'failed' | 'errored'>>,
+  allResults: Array<Pick<AgentResults, 'agent' | 'run' | 'runId' | 'stats'>>,
   totalTestCases: number
 ): string[][] {
   return allResults.map(results => {
@@ -415,7 +425,7 @@ export function buildSummaryRows(
       counts.passed.toString(),
       counts.failed.toString(),
       counts.errored.toString(),
-      formatPassRate(counts.passRate),
+      formatPassRate(counts.passRateJudged),
       results.run?.id || results.runId || 'N/A',
     ];
   });
@@ -442,10 +452,14 @@ function displaySummary(allResults: AgentResults[], totalTestCases: number, form
     colWidths: [25, 10, 10, 10, 12, 35],
   });
 
+  const footnotes: string[] = [];
   for (const results of allResults) {
     const counts = summarizeAgentResults(results, totalTestCases);
-    const passRate = counts.passRate;
+    const passRate = counts.passRateJudged;
     const passRateColor = passRate === null ? chalk.gray : passRate >= 80 ? chalk.green : passRate >= 50 ? chalk.yellow : chalk.red;
+    const reason = describeExitReason(counts);
+    if (reason) footnotes.push(`${results.agent.name}: ${reason}`);
+    if (counts.pending > 0) footnotes.push(`${results.agent.name}: ${counts.pending} pending (judge has not run yet)`);
 
     table.push([
       results.agent.name,
@@ -460,10 +474,7 @@ function displaySummary(allResults: AgentResults[], totalTestCases: number, form
   console.log('\n');
   console.log(chalk.bold('Benchmark Summary'));
   console.log(table.toString());
-  const errored = allResults.reduce((n, r) => n + r.errored, 0);
-  if (errored > 0) {
-    console.log(chalk.yellow(`${errored} test case(s) could not be evaluated (agent request or evaluator failed) — exiting with code 1.`));
-  }
+  for (const note of footnotes) console.log(chalk.yellow(note));
 }
 
 /**
@@ -477,7 +488,7 @@ async function exportResults(
   exportPath: string,
   format: string,
   serverBaseUrl: string
-): Promise<void> {
+): Promise<boolean> {
   if (format !== 'json') {
     // Use server report API for non-JSON formats
     const runIds = allResults
@@ -495,7 +506,7 @@ async function exportResults(
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({ error: 'Unknown error' }));
       console.error(chalk.red(`\nExport failed: ${errorBody.error}`));
-      return;
+      return false;
     }
 
     const contentType = response.headers.get('content-type') || '';
@@ -518,10 +529,10 @@ async function exportResults(
         agent: { key: r.agent.key, name: r.agent.name },
         runId: r.run?.id || r.runId,
         status: r.run?.status,
-        passed: r.passed,
-        failed: r.failed,
-        passRate:
-          benchmark.testCaseIds.length > 0 ? (r.passed / benchmark.testCaseIds.length) * 100 : 0,
+        // passed / failed / passRate keep their historical shape; errored,
+        // pending, notRun, executionErrors and passRateJudged are additive.
+        ...summarizeAgentResults(r, benchmark.testCaseIds.length),
+        ...(r.runError !== undefined ? { error: r.runError } : {}),
         results: r.run?.results,
         reports: r.reports,
       })),
@@ -532,6 +543,7 @@ async function exportResults(
   }
 
   console.log(chalk.green(`\nResults exported to: ${exportPath}`));
+  return true;
 }
 
 /**
@@ -811,6 +823,13 @@ async function runUnifiedMode(
     // succeeding — this is the same class of bug this fix addresses, one
     // layer up. See cli/utils/evaluationRunOutcome.ts for the (unit-tested)
     // decision logic.
+    if (runId && !run) {
+      // We know a run was started but could not read its final state back:
+      // nothing to summarize, so don't claim success.
+      spinner.fail(`Could not read the final state of run ${runId} from the server.`);
+      console.log(chalk.gray(`  Check status: ${serverResult.baseUrl}/api/storage/evaluation-runs/${runId}`));
+      process.exit(1);
+    }
     const outcome = resolveUnifiedRunOutcome(run, completedCount);
     if (outcome.kind === 'failed') {
       spinner.fail(outcome.message);
@@ -831,7 +850,7 @@ async function runUnifiedMode(
       // pass. Pre-fix this counted `status === 'completed'` as passed, so a
       // run whose every agent request got a 403 printed "✓ Passed: N".
       const counts = summarizeRunResults(run);
-      process.exitCode = exitCodeForSummary(counts);
+      flagExitCode(exitCodeForSummary(counts));
 
       if (parseOutputFormat(options.output) === 'json') {
         console.log(formatJson({
@@ -850,8 +869,9 @@ async function runUnifiedMode(
         for (const line of rest) {
           console.log(`    ${line.startsWith('Total:') ? chalk.gray(line) : chalk.yellow(line)}`);
         }
-        if (counts.errored > 0) {
-          console.log(chalk.yellow(`  ${counts.errored} of ${counts.total} test case(s) could not be evaluated — exiting with code 1.`));
+        const reason = describeExitReason(counts);
+        if (reason) {
+          console.log(chalk.yellow(`  ${reason}`));
           console.log(chalk.gray('  Inspect the run below for the per-case error (e.g. expired credentials → 403 from the agent).'));
         }
       }
@@ -1384,7 +1404,7 @@ export function createBenchmarkCommand(): Command {
         // readable terminal state; failed verdicts keep exit 0 (see
         // cli/utils/runSummary.ts). Set via exitCode (not process.exit) so the
         // export / links below and the server cleanup in `finally` still run.
-        process.exitCode = exitCodeForAgentResults(allResults);
+        flagExitCode(exitCodeForAgentResults(allResults, benchmark.testCaseIds.length));
         if (outputFormat === 'json') {
           const jsonOutput = allResults.map((r) => ({
             agent: { key: r.agent.key, name: r.agent.name },
@@ -1399,9 +1419,11 @@ export function createBenchmarkCommand(): Command {
           displaySummary(allResults, benchmark.testCaseIds.length, outputFormat);
         }
 
-        // Export if requested
+        // Export if requested. A requested export that could not be written
+        // is an error too (previously logged and swallowed → exit 0).
         if (options.export) {
-          await exportResults(benchmark, allResults, options.export, options.format, serverResult.baseUrl);
+          const exported = await exportResults(benchmark, allResults, options.export, options.format, serverResult.baseUrl);
+          if (!exported) flagExitCode(1);
         }
 
         // Show links to view results

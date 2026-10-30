@@ -46,6 +46,12 @@ describe('verdictLabel', () => {
     expect(verdictLabel({ status: 'completed' })).toBe('ERRORED');
     expect(verdictLabel({ status: 'completed', passFailStatus: 'passed', metricsStatus: 'error' })).toBe('ERRORED');
   });
+
+  it('never shows PASSED / FAILED / PENDING for a report whose execution did not complete (stale verdict, cancelled, running)', () => {
+    expect(verdictLabel({ status: 'failed', passFailStatus: 'passed' })).toBe('ERRORED');
+    expect(verdictLabel({ status: 'cancelled', passFailStatus: 'failed' })).toBe('ERRORED');
+    expect(verdictLabel({ status: 'running', metricsStatus: 'pending' })).toBe('ERRORED');
+  });
 });
 
 describe('exitCodeForRunResults', () => {

@@ -263,7 +263,7 @@ describe('CLI summary counts errored (not judged) cases — real CLI vs a 403-in
     expect(cli.stdout).toContain('Errored: 5');
     expect(cli.stdout).toContain('Total: 5');
     expect(cli.stdout).not.toContain('Passed: 5');
-    expect(cli.stdout).toContain('5 of 5 test case(s) could not be evaluated');
+    expect(cli.stdout).toContain('5 errored (agent request or evaluator failed) of 5 test case(s) could not be evaluated — exiting with code 1.');
     expect(cli.status).toBe(1);
   }, TEST_TIMEOUT);
 
@@ -293,9 +293,12 @@ describe('CLI summary counts errored (not judged) cases — real CLI vs a 403-in
       passed: 2,
       failed: 1,
       errored: 2,
+      pending: 0,
       notRun: 0,
       total: 5,
-      passRate: 67,
+      executionErrors: 0,
+      passRate: 40,        // passed / planned total (the historical -o json formula)
+      passRateJudged: 67,  // passed / (passed + failed)
     });
     expect(typeof summary.runId).toBe('string');
     expect(typeof summary.benchmarkId).toBe('string');

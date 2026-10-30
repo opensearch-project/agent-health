@@ -23,6 +23,7 @@ import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, type EvaluationResult, type EvaluationProgressEvent } from '@/cli/utils/apiClient.js';
 import type { AgentConfig, TrajectoryStep } from '@/types/index.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
+import { flagExitCode } from '@/cli/utils/runSummary.js';
 
 // Import server connectors to ensure they're registered
 import { connectorRegistry } from '@/services/connectors/server.js';
@@ -169,18 +170,20 @@ export function exitCodeForRunResults(
  * Build rows from results (shared between table and markdown)
  */
 /**
- * Verdict label for one report: PASSED / FAILED are judge verdicts; PENDING
- * is a trace-mode judge that has not run yet; ERRORED is a report with no
- * verdict and no pending judge (agent request rejected / execution failed /
- * judge could not run). Pre-fix the last case printed the raw `report.status`
- * (`failed`), indistinguishable at a glance from a FAILED verdict.
+ * Verdict label for one report: PASSED / FAILED are judge verdicts on a
+ * report whose execution `completed`; PENDING is a trace-mode judge that has
+ * not run yet; ERRORED is everything else — no verdict and no pending judge
+ * (agent request rejected / execution failed / judge could not run), or a
+ * verdict left on a report whose execution did not complete. Pre-fix the
+ * no-verdict case printed the raw `report.status` (`failed`),
+ * indistinguishable at a glance from a FAILED verdict.
  */
 export function verdictLabel(
   report: Pick<EvaluationResult, 'status' | 'passFailStatus' | 'metricsStatus'>
 ): 'PENDING' | 'PASSED' | 'FAILED' | 'ERRORED' {
   const judgePending = report.metricsStatus === 'pending' || report.metricsStatus === 'calculating';
-  if (judgePending) return 'PENDING';
-  if (report.metricsStatus === 'error') return 'ERRORED';
+  if (report.status === 'completed' && judgePending) return 'PENDING';
+  if (report.metricsStatus === 'error' || report.status !== 'completed') return 'ERRORED';
   if (report.passFailStatus === 'passed') return 'PASSED';
   if (report.passFailStatus === 'failed') return 'FAILED';
   return 'ERRORED';
@@ -348,7 +351,7 @@ export function createRunCommand(): Command {
 
         // Output results. Exit 1 when any evaluation errored (no report / no
         // verdict); set via exitCode so the output and `finally` cleanup run.
-        process.exitCode = exitCodeForRunResults(results);
+        flagExitCode(exitCodeForRunResults(results));
         const outputFormat = parseOutputFormat(options.output);
         if (outputFormat === 'json') {
           console.log(formatJson(results.map(r => ({

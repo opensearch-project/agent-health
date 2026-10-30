@@ -113,6 +113,7 @@ type MockApiClient = {
   executeBenchmark: jest.Mock;
   findBenchmark: jest.Mock;
   getReportById: jest.Mock;
+  getRun: jest.Mock;
   listTestCases: jest.Mock;
 };
 
@@ -177,6 +178,7 @@ function makeApiClient(overrides: Partial<MockApiClient> = {}): MockApiClient {
     executeBenchmark: jest.fn(),
     findBenchmark: jest.fn(),
     getReportById: jest.fn(),
+    getRun: jest.fn(),
     listTestCases: jest.fn(),
     ...overrides,
   };
@@ -696,9 +698,12 @@ describe('Benchmark Command - Real Module Coverage', () => {
         passed: 2,
         failed: 1,
         errored: 2,
+        pending: 0,
         notRun: 0,
         total: 5,
-        passRate: 67,
+        executionErrors: 0,
+        passRate: 40,        // unchanged historical formula: passed / planned total
+        passRateJudged: 67,  // additive: over the judged set
       });
       expect(parsed[0]).not.toHaveProperty('error');
       expect(process.exitCode).toBe(1);
@@ -714,8 +719,9 @@ describe('Benchmark Command - Real Module Coverage', () => {
 
       const out = joinedConsoleOutput(logSpy);
       const parsed = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
-      expect(parsed[0]).toMatchObject({ passed: 1, failed: 1, errored: 0, total: 2, passRate: 50 });
-      expect(process.exitCode).toBe(0);
+      expect(parsed[0]).toMatchObject({ passed: 1, failed: 1, errored: 0, total: 2, passRate: 50, passRateJudged: 50 });
+      // Success never writes exitCode (sticky, process-global) — it stays untouched.
+      expect(process.exitCode).toBeUndefined();
     });
 
     it('a run the server rejected (no verdicts at all) exits 1 and carries the error in -o json', async () => {
@@ -733,10 +739,40 @@ describe('Benchmark Command - Real Module Coverage', () => {
         passed: 0,
         failed: 0,
         errored: 0,
+        notRun: 2,
         total: 2,
-        passRate: null,
+        passRate: 0,
+        passRateJudged: null,
         error: 'Failed to execute benchmark: OpenSearch not configured.',
       });
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('a cancelled run recovered from the server (1 passed, 1 never ran) exits 1 — same outcome as the unified path', async () => {
+      const benchmark = makeBenchmark({ id: 'bench-cancelled', name: 'Cancelled', testCaseIds: ['tc-1', 'tc-2'] });
+      const run = makeRun({
+        id: 'run-cancelled',
+        status: 'cancelled',
+        results: {
+          'tc-1': { reportId: 'report-1', status: 'completed' },
+          'tc-2': { reportId: '', status: 'cancelled' },
+        },
+      });
+      currentApi.findBenchmark.mockResolvedValue(benchmark);
+      currentApi.executeBenchmark.mockImplementation(
+        async (_benchmarkId: string, _runConfig: any, onProgress?: (event: any) => void) => {
+          onProgress?.({ type: 'started', runId: 'run-cancelled', testCases: [] });
+          throw new Error('stream terminated');
+        }
+      );
+      currentApi.getRun.mockResolvedValue(run);
+      currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
+
+      await runBenchmarkCommand(['-n', 'Cancelled', '-a', 'demo-agent', '--output', 'json']);
+
+      const out = joinedConsoleOutput(logSpy);
+      const parsed = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
+      expect(parsed[0]).toMatchObject({ status: 'cancelled', passed: 1, failed: 0, errored: 0, notRun: 1, total: 2, passRateJudged: 100 });
       expect(process.exitCode).toBe(1);
     });
 
