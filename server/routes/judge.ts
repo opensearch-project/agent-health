@@ -30,6 +30,7 @@ import { readEnv } from '@/lib/envCompat';
 import { getStorageModule } from '@/server/adapters';
 import { getDefaultEvaluator, getSystemEvaluatorById, isSystemEvaluatorId } from '@/server/prompts/evaluatorTemplates';
 import { applyScoringToJudgeResponse } from '@/lib/scoring/applyScoring';
+import { isDeterministicEvaluator } from '@/lib/evaluators/deterministic';
 import type { Evaluator } from '@/types';
 
 const router = Router();
@@ -406,6 +407,19 @@ function finalizeJudgeResponse<T extends JudgeResponse>(result: T, evaluator: Ev
 }
 
 /**
+ * True for an AWS SDK v3 service error that means "the request itself is
+ * invalid": the modelled `ValidationException`, or any client-fault error
+ * the service answered with HTTP 400. Throttling (429), access/credential
+ * errors (403) and server faults (5xx) are NOT matched — those may succeed
+ * on retry and keep the existing retryable 500 response.
+ */
+export function isProviderRequestRejection(error: any): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if (error.name === 'ValidationException') return true;
+  return error.$fault === 'client' && error.$metadata?.httpStatusCode === 400;
+}
+
+/**
  * POST /api/judge - Evaluate agent trajectory
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
@@ -451,6 +465,21 @@ router.post('/api/judge', async (req: Request, res: Response) => {
     } else {
       debug('JudgeAPI', 'Using default evaluator (backward compatible)');
       evaluator = getDefaultEvaluator();
+    }
+
+    // A `kind: 'deterministic'` evaluator has no system prompt and is scored
+    // in code (lib/scoring/deterministicScoring.ts) by the runner / Retry
+    // judgement — it must never be sent to an LLM. Pre-fix this fell through
+    // to the Bedrock path with `system: [{ text: '' }]` → ValidationException
+    // → the client's 10-attempt retry budget per case. 4xx = the client
+    // fails fast with this message instead.
+    if (isDeterministicEvaluator(evaluator)) {
+      return res.status(400).json({
+        error:
+          `Evaluator "${evaluator.name}" is deterministic: it is scored in code from the stored trajectory, ` +
+          'never by an LLM judge. /api/judge only serves LLM evaluators.',
+        code: 'DETERMINISTIC_EVALUATOR',
+      });
     }
 
     // Determine provider from evaluator's inferenceConfig or model config
@@ -648,6 +677,22 @@ router.post('/api/judge', async (req: Request, res: Response) => {
         error: `Judge evaluation failed: ${error.message}`,
         code: error.code,
         rawResponse: error.rawResponse,
+        details: error.message,
+      });
+    }
+
+    // The model provider REJECTED the request (AWS SDK `ValidationException`,
+    // `$fault: 'client'` with HTTP 400 — blank system prompt, unsupported
+    // inference parameter, malformed body). The same request will be rejected
+    // again; retrying it ten times with exponential back-off only burns
+    // ~8.5 min per case. Answer 400 so `callBedrockJudge` fails fast (it
+    // treats every 4xx as non-retryable) and the report carries the real
+    // provider message. Throttling (429) and server faults keep the 500 path
+    // below and stay retryable.
+    if (isProviderRequestRejection(error)) {
+      return res.status(400).json({
+        error: `Judge evaluation failed: the judge model provider rejected the request (${error.name}): ${error.message}`,
+        code: 'JUDGE_REQUEST_REJECTED',
         details: error.message,
       });
     }
