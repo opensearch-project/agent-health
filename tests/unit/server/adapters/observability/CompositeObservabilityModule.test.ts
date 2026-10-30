@@ -125,6 +125,45 @@ describe('CompositeObservabilityModule', () => {
       const c = new CompositeObservabilityModule([fake('mine'), fake('cw-team')]);
       expect(await c.metrics.forRun('r1')).toMatchObject({ status: 'pending', hasSpans: false });
     });
+
+    describe('an errored SPAN in a trace that WAS found is not a trace-store failure', () => {
+      // The real-shaped case: primary holds only our own eval span for the run (no agent
+      // spans → pending / hasSpans:false), the second source holds the agent's 58 spans,
+      // one tool call of which errored → computeMetricsFromSpans says status:'error'.
+      const withErrorSpan = metrics('r1', { inputTokens: 300_000, outputTokens: 6_000, totalTokens: 306_000, costUsd: 0.99, llmCalls: 15, toolCalls: 3, status: 'error', hasSpans: true, agentErrorSpans: 2 });
+
+      it('the source that returned the spans holds the run — tokens / cost / LLM calls come through, no `error`', async () => {
+        const c = new CompositeObservabilityModule([fake('primary'), fake('cw-team', { metrics: { r1: withErrorSpan } })]);
+        const r = await c.metrics.forRun('r1');
+        expect(r).toMatchObject({ runId: 'r1', totalTokens: 306_000, llmCalls: 15, costUsd: 0.99, hasSpans: true, agentErrorSpans: 2, source: 'cw-team' });
+        expect(r.error).toBeUndefined();
+      });
+
+      it('also when the errored-span source comes FIRST and a later source has nothing', async () => {
+        const c = new CompositeObservabilityModule([fake('primary', { metrics: { r1: withErrorSpan } }), fake('cw-team')]);
+        const r = await c.metrics.forRun('r1');
+        expect(r).toMatchObject({ totalTokens: 306_000, hasSpans: true, source: 'primary' });
+        expect(r.error).toBeUndefined();
+      });
+
+      it('a source whose query THREW is still a store failure while the other holds the run', async () => {
+        const c = new CompositeObservabilityModule([fake('primary', { metricsFail: true }), fake('cw-team', { metrics: { r1: withErrorSpan } })]);
+        const r = await c.metrics.forRun('r1');
+        expect(r).toMatchObject({ totalTokens: 306_000, source: 'cw-team' });
+        expect(r.error).toBeUndefined();
+      });
+
+      it('a REAL store failure (thrown, or the failedMetricsResult shape) with no spans anywhere still reads error — never zeros', async () => {
+        const failedShape = { ...metrics('r1', { status: 'error' }), error: 'Rate exceeded' } as MetricsResult;
+        delete (failedShape as Partial<MetricsResult>).hasSpans;
+        const shaped = new CompositeObservabilityModule([fake('primary'), fake('cw-team', { metrics: { r1: failedShape } })]);
+        const r = await shaped.metrics.forRun('r1');
+        expect(r).toMatchObject({ status: 'error', error: 'cw-team: Rate exceeded' });
+        expect(r.hasSpans).toBeUndefined();
+        const thrown = new CompositeObservabilityModule([fake('primary'), fake('cw-team', { metricsFail: true })]);
+        expect(await thrown.metrics.forRun('r1')).toMatchObject({ status: 'error', error: 'cw-team: cw-team throttled' });
+      });
+    });
   });
 
   describe('health / describe', () => {

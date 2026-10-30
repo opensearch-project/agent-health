@@ -5,6 +5,7 @@
 
 import { MODEL_PRICING, getPricing, computeAggregateMetrics, computeMetrics, computeMetricsFromSpans, computeBatchMetrics } from '@/server/services/metricsService';
 import type { MetricsResult, OpenSearchConfig } from '@/types';
+import { buildAgentTraceWithErrorSpan, AGENT_TRACE_FIXTURE } from '../../../helpers/agentTraceWithErrorSpan';
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -547,22 +548,25 @@ describe('metricsService', () => {
       expect(result.status).toBe('error');
     });
 
-    it('should detect error status from any span when no root span', async () => {
+    it('should detect error status from the agent\'s TOP-LEVEL span when there is no agent.run root', async () => {
       const mockResponse = {
         hits: {
           hits: [
             {
               _source: {
-                name: 'span.1',
+                name: 'invoke_agent',
                 traceId: 'trace-123',
-                status: { code: 1 }, // Success
+                spanId: 'top',
+                status: { code: 2 }, // the agent run itself failed
               },
             },
             {
               _source: {
-                name: 'span.2',
+                name: 'chat',
                 traceId: 'trace-123',
-                status: { code: 2 }, // Error
+                spanId: 'child',
+                parentSpanId: 'top',
+                status: { code: 1 },
               },
             },
           ],
@@ -577,6 +581,30 @@ describe('metricsService', () => {
       const result = await computeMetrics('test-run', defaultConfig);
 
       expect(result.status).toBe('error');
+      expect(result.agentErrorSpans).toBe(1);
+    });
+
+    it('an errored CHILD span (one failing tool call) does not make the run status error — it is counted in agentErrorSpans', async () => {
+      const mockResponse = {
+        hits: {
+          hits: [
+            { _source: { name: 'invoke_agent', traceId: 'trace-123', spanId: 'top', status: { code: 1 } } },
+            { _source: { name: 'execute_tool search', traceId: 'trace-123', spanId: 'tool', parentSpanId: 'top', status: { code: 2 }, attributes: { 'gen_ai.tool.name': 'search' } } },
+          ],
+        },
+      };
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockResponse),
+      });
+
+      const result = await computeMetrics('test-run', defaultConfig);
+
+      expect(result.status).toBe('success');
+      expect(result.hasSpans).toBe(true);
+      expect(result.agentErrorSpans).toBe(1);
+      expect(result.error).toBeUndefined();
     });
 
     it('should calculate cost correctly based on model pricing', async () => {
@@ -849,6 +877,43 @@ describe('metricsService', () => {
       expect(result.inputTokens).toBe(500);
       expect(result.outputTokens).toBe(100);
       expect(result.llmCalls).toBe(1);
+    });
+
+    describe('a real-shaped 59-span trace with one failing tool call (+ its HTTP child)', () => {
+      const traceId = 'f'.repeat(32);
+
+      it('status reflects the agent\'s top-level span (OK); the two ERROR spans are reported as agentErrorSpans, counts are intact', () => {
+        const docs = buildAgentTraceWithErrorSpan({ runId: 'run-err', traceId });
+        expect(docs).toHaveLength(AGENT_TRACE_FIXTURE.spanCount);
+        expect(docs.filter(d => d.status.code === 2)).toHaveLength(AGENT_TRACE_FIXTURE.errorSpans);
+
+        const result = computeMetricsFromSpans('run-err', docs as any);
+
+        expect(result).toMatchObject({
+          runId: 'run-err', traceId, hasSpans: true, status: 'success',
+          llmCalls: AGENT_TRACE_FIXTURE.llmCalls, toolCalls: AGENT_TRACE_FIXTURE.toolCalls, toolsUsed: [...AGENT_TRACE_FIXTURE.toolsUsed],
+          inputTokens: 300_000, outputTokens: 6_000, totalTokens: 306_000,
+          agentErrorSpans: AGENT_TRACE_FIXTURE.errorSpans,
+        });
+        expect(result.error).toBeUndefined();
+      });
+
+      it('the same trace without the failing tool call omits agentErrorSpans and is otherwise identical', () => {
+        const ok = computeMetricsFromSpans('run-ok', buildAgentTraceWithErrorSpan({ runId: 'run-ok', traceId, withErrorSpan: false }) as any);
+        const err = computeMetricsFromSpans('run-ok', buildAgentTraceWithErrorSpan({ runId: 'run-ok', traceId }) as any);
+        expect(ok.agentErrorSpans).toBeUndefined();
+        expect(ok.status).toBe('success');
+        const { agentErrorSpans: _n, ...errRest } = err;
+        expect(errRest).toEqual(ok);
+      });
+
+      it('an ERROR on Agent Health\'s own eval span is not an agent error span', () => {
+        const docs = buildAgentTraceWithErrorSpan({ runId: 'run-eval-err', traceId, withErrorSpan: false });
+        docs.find(d => d.name === 'test_case')!.status = { code: 2, message: 'judge timed out' };
+        const result = computeMetricsFromSpans('run-eval-err', docs as any);
+        expect(result.status).toBe('success');
+        expect(result.agentErrorSpans).toBeUndefined();
+      });
     });
   });
 

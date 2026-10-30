@@ -146,6 +146,18 @@ class CompositeLogsOperations implements ILogsOperations {
   }
 }
 
+/**
+ * Did this source's trace-store query FAIL for the run? True when the call
+ * threw, or when the source answered the `failedMetricsResult` shape (an
+ * `error` message; `hasSpans` unknown). A result that DID return spans
+ * (`hasSpans: true`) is never a store failure, whatever its `status` says —
+ * `status: 'error'` there is the agent run's own outcome (an errored span).
+ */
+function isStoreFailure(c: { m: MetricsResult | undefined; error: string | null }): boolean {
+  if (c.error) return true;
+  return !!c.m && c.m.error !== undefined && c.m.hasSpans !== true;
+}
+
 class CompositeMetricsOperations implements IMetricsOperations {
   constructor(private readonly sources: NamedSource[]) {}
 
@@ -161,6 +173,15 @@ class CompositeMetricsOperations implements IMetricsOperations {
    * Per run: the first source (configured order) that holds spans wins. If no
    * source found spans, an error from any source is surfaced (unknown, retry);
    * otherwise the run is reported as having no spans.
+   *
+   * "Holds spans" is decided by `hasSpans` / the counters, NEVER by
+   * `m.status`: that field is the agent run's outcome as the trace tells it
+   * (root span ERROR, or — pre-fix — ANY span ERROR), not the health of the
+   * store query. Treating `status: 'error'` as a store failure dropped the only
+   * source holding a run whose agent had one failing tool call, and the run
+   * then read "<source>: trace-store query failed" with 300K tokens attached.
+   * A store failure is a thrown query or a result shaped by
+   * `failedMetricsResult` (`error` set, `hasSpans` unknown).
    */
   async forRuns(runIds: string[], hints?: BatchMetricsHints): Promise<MetricsResult[]> {
     const perSource = await Promise.all(
@@ -175,11 +196,11 @@ class CompositeMetricsOperations implements IMetricsOperations {
     return runIds.map((runId, i) => {
       const candidates = perSource.map((p) => ({ src: p.src, m: p.results?.[i], error: p.error }));
       // Sources that hold the run's spans (explicit hasSpans, else any non-zero counter); a complete
-      // result beats a partial one, then configured order.
-      const holding = candidates.filter((c) => c.m && c.m.status !== 'error' && c.m.hasSpans !== false && (c.m.hasSpans === true || c.m.totalTokens > 0 || c.m.llmCalls > 0 || c.m.toolCalls > 0 || c.m.durationMs > 0));
+      // result beats a partial one, then configured order. A source whose query FAILED never holds.
+      const holding = candidates.filter((c) => c.m && !isStoreFailure(c) && c.m.hasSpans !== false && (c.m.hasSpans === true || c.m.totalTokens > 0 || c.m.llmCalls > 0 || c.m.toolCalls > 0 || c.m.durationMs > 0));
       const withSpans = holding.find((c) => !c.m!.partial) ?? holding[0];
       if (withSpans?.m) return { ...withSpans.m, source: withSpans.src.name } as MetricsResult;
-      const errored = candidates.find((c) => c.error || c.m?.status === 'error');
+      const errored = candidates.find(isStoreFailure);
       if (errored) {
         const base = errored.m ?? candidates.find((c) => c.m)?.m;
         const message = errored.error ?? errored.m?.error ?? 'trace-store query failed';

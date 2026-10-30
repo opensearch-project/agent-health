@@ -594,13 +594,28 @@ export function computeMetricsFromSpans(
     durationMs = endTime - startTime;
   }
 
+  // `status` is the OUTCOME OF THE AGENT RUN as the trace tells it — the
+  // root span's OTel status (`agent.run`, else the agent's top-level span(s):
+  // those whose parent is not another agent span, e.g. the children of our
+  // own `test_case` eval span under Strategy A). A failing CHILD span — one
+  // tool call that errored and was retried, a 4xx from a backing HTTP call —
+  // is NOT a failed run and MUST NOT read as `status: 'error'`: that value is
+  // also the shape a trace-store failure takes (`failedMetricsResult`), so a
+  // composite backend took "this run has an errored span" for "this source's
+  // query failed", dropped the only source holding the spans, and the run
+  // inspector read "Metrics unavailable" for a run with 300K measured tokens.
+  // Child-span errors are counted separately in `agentErrorSpans` instead.
+  const agentSpans = spans.filter(s => !isEvalOrJudgeSpan(readAttrs(s), s.name));
+  const agentErrorSpans = agentSpans.filter(s => s.status?.code === 2).length;
+  const agentSpanIds = new Set(agentSpans.map(s => s.spanId).filter(Boolean));
+  const outcomeSpans = rootSpan
+    ? [rootSpan]
+    : agentSpans.filter(s => !s.parentSpanId || !agentSpanIds.has(s.parentSpanId));
   let status: 'pending' | 'success' | 'error' = 'pending';
-  if (rootSpan) {
-    status = rootSpan.status?.code === 2 ? 'error' :
-             rootSpan.status?.code === 1 ? 'success' : 'success';
+  if (outcomeSpans.length > 0) {
+    status = outcomeSpans.some(s => s.status?.code === 2) ? 'error' : 'success';
   } else if (spans.length > 0) {
-    const hasError = spans.some(s => s.status?.code === 2);
-    status = hasError ? 'error' : 'success';
+    status = 'success';
   }
 
   return {
@@ -616,6 +631,7 @@ export function computeMetricsFromSpans(
     toolsUsed: Array.from(toolsUsed),
     status,
     hasSpans: true,
+    ...(agentErrorSpans > 0 ? { agentErrorSpans } : {}),
   };
 }
 
