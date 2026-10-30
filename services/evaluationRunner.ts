@@ -58,6 +58,7 @@ import { bucketRunResults } from '@/lib/runStats';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '@/lib/judgeFailureSummary';
 import { describeAgentError, agentErrorContextFrom } from '@/services/evaluation/agentFailure';
 import { buildCancelledMarkers } from '@/services/evaluationRunFinalize';
+import { resolveDeterministicEvaluator, applyDeterministicFirstJudgement } from '@/services/evaluation/deterministicJudgement';
 import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity, buildSdkJudgeIdentityPatch, assertJudgeIdentityConsistent, JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
 import { loadConfigSync } from '@/lib/config/index';
 import { getBackendUrl } from '@/lib/portConfig';
@@ -256,6 +257,14 @@ export async function executeEvaluationRun(
       run.judgeProvider = judgeProvider;
     }
   };
+
+  // A `kind: 'deterministic'` evaluator (ranked-hit / ranked-recall / mrr …)
+  // is scored in code from the stored trajectory — exactly as Retry
+  // judgement does — and must NEVER reach the LLM judge: it has no system
+  // prompt, so /api/judge would send Bedrock a blank system block →
+  // ValidationException → 10 client retries per case. Resolved once per run
+  // (one evaluator per run); `null` means "use the LLM judge as before".
+  const deterministicEvaluator = await resolveDeterministicEvaluator(run.evaluatorId, storageModule);
 
   try {
     // Per-case result persistence is BOOKKEEPING, not evaluation. It used to
@@ -714,12 +723,27 @@ export async function executeEvaluationRun(
                 // UI/CLI "separate agent vs judge model" contract. Persisted
                 // on the child report via the saveReport patch below.
                 judgeModelId: run.judgeModelId,
-                skipJudge: false,
+                // Deterministic evaluator: the agent still runs here, but the
+                // verdict is computed in code below, never by the LLM judge.
+                skipJudge: deterministicEvaluator !== null,
               }
             );
             report = caseSpanContext
               ? await context.with(caseSpanContext, runEval)
               : await runEval();
+
+            if (deterministicEvaluator) {
+              // Scored from the connector-returned trajectory (same input
+              // Retry judgement uses) — no trace polling, no LLM. A trace-
+              // mode agent's `pending` would otherwise route this report
+              // into `waitForTracesAndJudge` and the judge call we are
+              // avoiding. The judge model is cleared again by the
+              // deterministic patch; stamping it here would name a model
+              // that never ran.
+              (report as any).metricsStatus = 'completed';
+              (report as any).judgeMode = 'deterministic';
+              (report as any).llmJudgeReasoning = '';
+            }
 
             // Classic non-trace reports carry no `metricsStatus`. Without an
             // explicit stamp, the pre-persisted placeholder's 'pending'
@@ -797,7 +821,17 @@ export async function executeEvaluationRun(
           // clobbers its verdict. No runId requirement: the poller correlates
           // via sessionId/service-window hints when Strategy B is unavailable
           // (REST agents never get a runId; Claude Code spans carry only session.id).
-          if (
+          if (deterministicEvaluator && !hasDeterministicEval && (savedReport as any).failureStage !== 'agent') {
+            // First judgement with a deterministic evaluator: code-scored
+            // from the saved trajectory; the outcome (or `null` when not
+            // evaluable) is what the run stats bucket, not the pre-judge
+            // `savedReport`. No judge model / provider to note — none ran.
+            const outcome = await applyDeterministicFirstJudgement(savedReport, testCase, deterministicEvaluator, storageModule);
+            judgeOutcome = outcome.passFailStatus;
+            if (outcome.error) {
+              console.warn(`[EvaluationRunner] [${testCaseId}] Deterministic evaluator "${deterministicEvaluator.name}" could not score this case: ${outcome.error}`);
+            }
+          } else if (
             !hasDeterministicEval &&
             agentConfig?.useTraces &&
             savedReport.metricsStatus === 'pending'

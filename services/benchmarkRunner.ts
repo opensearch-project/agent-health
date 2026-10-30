@@ -64,6 +64,7 @@ import { loadConfigSync } from '@/lib/config/index';
 import { getBackendUrl } from '@/lib/portConfig';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { tracePollingManager } from './traces/tracePoller';
+import { resolveDeterministicEvaluator, applyDeterministicFirstJudgement } from '@/services/evaluation/deterministicJudgement';
 import { fetchSpansForRun, type TraceWindowAgent } from './traces/fetchSpansForRun';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { reportProvenanceFrom } from '@/server/services/agentProvenance';
@@ -297,6 +298,15 @@ export async function executeRun(
   // This ensures trace-mode runs (useTraces: true) have their judge evaluation
   // complete before the benchmark reports results (fixes #184).
   const pendingTracePolls: Promise<void>[] = [];
+
+  // A `kind: 'deterministic'` evaluator is scored in code, never by the LLM
+  // judge (see services/evaluation/deterministicJudgement.ts). Resolved once
+  // per run. Needs the storage module to persist the verdict; the legacy
+  // client-only entry point (`runBenchmark`) has none, so it keeps the LLM
+  // path, where /api/judge now answers one honest 400 instead of retrying.
+  const deterministicEvaluator = storageModule
+    ? await resolveDeterministicEvaluator(run.evaluatorId, storageModule)
+    : null;
 
   // Shared throttle signal: when any task hits a rate-limit error,
   // subsequent task starts wait until this timestamp expires.
@@ -620,7 +630,9 @@ export async function executeRun(
               {
                 registry: connectorRegistry,
                 evaluatorId: run.evaluatorId,
-                skipJudge: false,
+                // Deterministic evaluator: the agent still runs, the verdict
+                // is computed in code after the report is saved (below).
+                skipJudge: deterministicEvaluator !== null,
                 // Forward the run-level judge model so the judge call uses what
                 // the customer picked in the run config dialog / CLI / API — not
                 // the agent's own model. Without this the benchmark-execute path
@@ -633,6 +645,14 @@ export async function executeRun(
             report = caseSpanContext
               ? await context.with(caseSpanContext, runEval)
               : await runEval();
+            if (deterministicEvaluator) {
+              // Never trace-poll + LLM-judge a deterministic report (a
+              // trace-mode agent returns `pending`); it is scored from the
+              // connector-returned trajectory, as Retry judgement does.
+              (report as any).metricsStatus = 'completed';
+              (report as any).judgeMode = 'deterministic';
+              (report as any).llmJudgeReasoning = '';
+            }
           }
 
           // Stamp run-level judge inputs onto the report BEFORE saving — the
@@ -651,10 +671,20 @@ export async function executeRun(
           (report as any).traceId = (report as any).traceId ?? caseSpan?.spanContext().traceId;
 
           // Save the report to OpenSearch and get the actual stored ID
-          const savedReport = await saveReportWithClient(client, report, {
+          let savedReport = await saveReportWithClient(client, report, {
             experimentId: benchmark.id,
             experimentRunId: run.id,
           });
+          if (deterministicEvaluator && storageModule && !hasDeterministicEval && (report as any).failureStage !== 'agent') {
+            // First judgement with a deterministic evaluator (code-scored from
+            // the saved trajectory, no LLM). Re-read the doc so the span
+            // events / run stats below see the verdict, not the pre-judge shape.
+            const outcome = await applyDeterministicFirstJudgement(savedReport, testCase, deterministicEvaluator, storageModule);
+            if (outcome.error) {
+              console.warn(`[BenchmarkRunner] [${testCaseId}] Deterministic evaluator "${deterministicEvaluator.name}" could not score this case: ${outcome.error}`);
+            }
+            savedReport = (await storageModule.runs.getById(savedReport.id)) ?? savedReport;
+          }
           // Run-level judge identity (BenchmarkRun.judgeModel / judgeProvider,
           // lib/judgeIdentity): first report that resolved an LLM wins; the
           // kind is the first REAL kind ('none' only while every report so far
