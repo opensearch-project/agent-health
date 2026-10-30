@@ -30,6 +30,7 @@ import { resolveAgentModel } from '@/lib/resolveAgentModel';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
+import { classifyCaseOutcome } from '@/services/evaluation/classifyCaseOutcome';
 import { scoringFieldsFromJudgment, sdkSessionScoring } from '@/lib/scoring/verdictEngine';
 import { connectorRegistry } from '@/services/connectors/server';
 import { startTestCaseSpan, finalizeTestCaseSpan, addEvaluationResultEvents } from '@/lib/telemetry';
@@ -587,26 +588,20 @@ export async function executeEvaluationRun(
               }
             });
 
-            // observe-role signals never gate; errored signals are bucketed
-            // separately as `errored` (excluded from pass-rate), not `failed`.
-            const erroredMatchers = matcherResults.filter(m => m.errored);
-            const anyErrored = erroredMatchers.length > 0;
-            const anyGateFailed = matcherResults.some(
-              m => !m.pass && m.role !== 'observe' && !m.errored,
-            );
-            // #335: distinguish an *agent* failure (subprocess timeout / crash —
-            // `capturedResult` was never set because `agent.run()` rejected) from
-            // a deliberate gate failure. The former must surface as a clearly
-            // labelled `errored` run, not a silent `failed` with an empty card.
-            // BUT a no-prompt/deterministic test whose body threw a *recorded*
-            // gate failure (e.g. a failing chai `expect()` — which both records a
-            // code-assertion matcher AND throws) is a FAILED test, not an agent
-            // failure: a real agent crash produces no matcher (`anyGateFailed`
-            // is false). Without this guard such runs were bucketed as errored
-            // (metricsStatus:'error' → passFailStatus null), regressing #245.
-            const agentFailed =
-              evalError !== undefined && capturedResult === undefined && !anyGateFailed;
-            const failed = anyGateFailed || evalError !== undefined;
+            // Verdict classification is shared with benchmarkRunner (ONE
+            // decision table — see classifyCaseOutcome.ts): observe-role
+            // signals never gate; errored signals bucket as `judge_failed`;
+            // a body that threw with NO agent result and NO recorded gate
+            // failure is an *agent* failure (#335); a recorded gate failure
+            // (e.g. a failing chai `expect()`, which records AND throws) is a
+            // FAILED test even when the agent never answered (#245).
+            const outcome = classifyCaseOutcome({
+              matcherResults,
+              evalError,
+              agentResultCaptured: capturedResult !== undefined,
+            });
+            const { erroredMatchers, failed } = outcome;
+            const agentFailed = outcome.kind === 'agent_failed';
             // ALWAYS-RECORD (owner-hit measurement-harness bug): a failing gate
             // partway through the body must not erase the objective actuals the
             // optimizer needs from every axis. durationMs/agentDurationMs already
@@ -633,7 +628,7 @@ export async function executeEvaluationRun(
                 (evalError as any)?.message ?? String(evalError);
             }
 
-            if (anyErrored) {
+            if (outcome.kind === 'judge_failed') {
               // At least one judge/evaluator could not run. Bucket the run as
               // `errored` via the canonical #247 patch (metricsStatus:'error',
               // passFailStatus cleared) instead of a misleading score-0
