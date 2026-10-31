@@ -18,7 +18,7 @@
  */
 
 import { Span, CategorizedSpan, TimeRange, SpanCategory } from '@/types';
-import { getSpanCategory, getCategoryMeta, buildDisplayName } from './spanCategorization';
+import { buildCategoryFields } from './spanCategorization';
 import type { CategoryStats, ToolInfo } from './traceStats';
 
 /**
@@ -57,17 +57,13 @@ export function preprocessSpanTree(
    * @param depth - Current depth in tree (for visualization)
    * @returns Categorized span with all metadata
    */
-  function processNode(span: Span, depth: number): CategorizedSpan {
-    // Categorize span
-    const category = getSpanCategory(span);
-    const meta = getCategoryMeta(category);
+  function processNode(span: Span, depth: number, ancestors: readonly Span[]): CategorizedSpan {
+    // Categorize span (same fields as categorizeSpan, incl. isEntrypoint)
+    const categoryFields = buildCategoryFields(span, ancestors);
+    const category = categoryFields.category;
     const categorizedSpan: CategorizedSpan = {
       ...span,
-      category,
-      categoryLabel: meta.label,
-      categoryColor: meta.color,
-      categoryIcon: meta.icon,
-      displayName: buildDisplayName(span, category),
+      ...categoryFields,
       depth,
       children: [], // Will be populated below
     };
@@ -98,14 +94,14 @@ export function preprocessSpanTree(
 
     // Process children recursively
     if (span.children && span.children.length > 0) {
-      categorizedSpan.children = span.children.map(child => processNode(child, depth + 1));
+      categorizedSpan.children = span.children.map(child => processNode(child, depth + 1, [...ancestors, span]));
     }
 
     return categorizedSpan;
   }
 
   // Process all root spans
-  const categorizedTree = spanTree.map(span => processNode(span, 0));
+  const categorizedTree = spanTree.map(span => processNode(span, 0, []));
 
   // Calculate sum of all category durations for percentage calculation
   let sumOfAllDurations = 0;
