@@ -1140,6 +1140,16 @@ export interface TraceMetrics {
   toolsUsed: string[];
   status: 'success' | 'error' | 'pending';
   /**
+   * Number of the AGENT's spans (Agent Health's own eval/judge spans excluded)
+   * whose OTel status is ERROR — a failing tool call, a 4xx from a backing
+   * HTTP call, a retried LLM request; a failing root/top-level span counts
+   * too (and is what makes `status` 'error'). A plain count of errored spans
+   * (a failing tool call AND its failing HTTP child are 2), informational:
+   * these spans still contribute to the counts above, and a CHILD span's
+   * error never makes `status` 'error'. Omitted when zero.
+   */
+  agentErrorSpans?: number;
+  /**
    * Whether ANY trace spans were ingested for this runId at query time.
    * `false` only means "no spans matched the query right now" -- it does
    * NOT prove the run doesn't exist: ingestion lag, a wrong/narrow time
@@ -2150,6 +2160,8 @@ export interface MetricsResult {
   toolCalls: number;
   toolsUsed: string[];
   status: 'pending' | 'success' | 'error';
+  /** See TraceMetrics.agentErrorSpans -- errored agent spans inside a trace that WAS found; never a store failure. */
+  agentErrorSpans?: number;
   /** See TraceMetrics.hasSpans -- same semantics. */
   hasSpans?: boolean;
   /** See TraceMetrics.partial -- query hit its size cap; counts are a lower bound. */

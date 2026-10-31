@@ -146,6 +146,25 @@ class CompositeLogsOperations implements ILogsOperations {
   }
 }
 
+/**
+ * Did this source's trace-store query FAIL for the run? True when the call
+ * threw, or when the source answered the `failedMetricsResult` shape — the
+ * `error` message is the contract: `MetricsResult.error` is set on EVERY store
+ * failure (query threw / timed out / was rejected; `hasSpans` left undefined)
+ * and ONLY then — never on a result computed from spans, whatever its
+ * `status`. This field — not `status` — is how consumers (this composite, the
+ * run telemetry roll-up) tell a store failure from an agent run that itself
+ * errored: `status: 'error'` on a span-bearing result is the run's own outcome.
+ */
+function isStoreFailure(c: { m: MetricsResult | undefined; error: string | null }): boolean {
+  return c.error !== null || c.m?.error !== undefined;
+}
+
+/** The "looked, found nothing" shape (same as `computeMetricsFromSpans(runId, [])`). */
+function noSpansResult(runId: string): MetricsResult {
+  return { runId, traceId: null, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0, llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'pending', hasSpans: false };
+}
+
 class CompositeMetricsOperations implements IMetricsOperations {
   constructor(private readonly sources: NamedSource[]) {}
 
@@ -161,6 +180,15 @@ class CompositeMetricsOperations implements IMetricsOperations {
    * Per run: the first source (configured order) that holds spans wins. If no
    * source found spans, an error from any source is surfaced (unknown, retry);
    * otherwise the run is reported as having no spans.
+   *
+   * "Holds spans" is decided by `hasSpans` / the counters, NEVER by
+   * `m.status`: that field is the agent run's outcome as the trace tells it
+   * (root span ERROR, or — pre-fix — ANY span ERROR), not the health of the
+   * store query. Treating `status: 'error'` as a store failure dropped the only
+   * source holding a run whose agent had one failing tool call, and the run
+   * then read "<source>: trace-store query failed" with 300K tokens attached.
+   * A store failure is a thrown query or a result shaped by
+   * `failedMetricsResult` (`error` set, `hasSpans` unknown).
    */
   async forRuns(runIds: string[], hints?: BatchMetricsHints): Promise<MetricsResult[]> {
     const perSource = await Promise.all(
@@ -175,15 +203,16 @@ class CompositeMetricsOperations implements IMetricsOperations {
     return runIds.map((runId, i) => {
       const candidates = perSource.map((p) => ({ src: p.src, m: p.results?.[i], error: p.error }));
       // Sources that hold the run's spans (explicit hasSpans, else any non-zero counter); a complete
-      // result beats a partial one, then configured order.
-      const holding = candidates.filter((c) => c.m && c.m.status !== 'error' && c.m.hasSpans !== false && (c.m.hasSpans === true || c.m.totalTokens > 0 || c.m.llmCalls > 0 || c.m.toolCalls > 0 || c.m.durationMs > 0));
+      // result beats a partial one, then configured order. A source whose query FAILED never holds.
+      const holding = candidates.filter((c) => c.m && !isStoreFailure(c) && c.m.hasSpans !== false && (c.m.hasSpans === true || c.m.totalTokens > 0 || c.m.llmCalls > 0 || c.m.toolCalls > 0 || c.m.durationMs > 0));
       const withSpans = holding.find((c) => !c.m!.partial) ?? holding[0];
       if (withSpans?.m) return { ...withSpans.m, source: withSpans.src.name } as MetricsResult;
-      const errored = candidates.find((c) => c.error || c.m?.status === 'error');
+      const errored = candidates.find(isStoreFailure);
       if (errored) {
-        const base = errored.m ?? candidates.find((c) => c.m)?.m;
+        // Every source threw → no result to base on: zero counters, flagged unknown (never a bare `{ runId }`).
+        const base = errored.m ?? candidates.find((c) => c.m)?.m ?? noSpansResult(runId);
         const message = errored.error ?? errored.m?.error ?? 'trace-store query failed';
-        return { ...(base as MetricsResult), runId, status: 'error', error: `${errored.src.name}: ${message}`, hasSpans: undefined } as MetricsResult;
+        return { ...base, runId, status: 'error', error: `${errored.src.name}: ${message}`, hasSpans: undefined } as MetricsResult;
       }
       return (candidates.find((c) => c.m)?.m as MetricsResult) ?? ({ runId, traceId: null, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0, llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'pending', hasSpans: false } as MetricsResult);
     });
