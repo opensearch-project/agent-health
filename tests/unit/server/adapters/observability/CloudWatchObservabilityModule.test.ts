@@ -418,6 +418,19 @@ describe('CloudWatchObservabilityModule', () => {
       expect(spanScans(reader).at(-1)).toMatchObject({ startMs: 1000, endMs: 2000 });
     });
 
+    it('an advisory `scanWindow` (the precise-first exact phase hands the stripped agents window back through it) narrows the scan like agents do, without adding a correlation clause', async () => {
+      await mod(reader).traces.query({ traceId: TRACE, scanWindow: { startedAt: T0_MS, endedAt: T0_MS + 12_000 } });
+      const call = reader.calls.insights[0];
+      expect(call.startMs).toBe(T0_MS - 5 * 60 * 1000);
+      expect(call.endMs).toBe(T0_MS + 12_000 + 5 * 60 * 1000);
+      expect(call.query).toContain(`traceId = "${TRACE}"`);
+      expect(call.query).not.toContain('service.name'); // a hint, never a Strategy-C clause
+      expect(scanSpan(spanScans(reader))).toEqual({ startMs: call.startMs, endMs: call.endMs });
+      // explicit bounds still win over the hint
+      await mod(reader).traces.query({ traceId: TRACE, startTime: 1000, endTime: 2000, scanWindow: { startedAt: T0_MS, endedAt: T0_MS + 12_000 } });
+      expect(reader.calls.insights[1]).toMatchObject({ startMs: 1000, endMs: 2000 });
+    });
+
     it('an over-cap explicit range is clamped to the newest 30 days AND reported truncated (never silently narrowed)', async () => {
       const now = Date.now();
       const res = await mod(reader).traces.query({ traceId: TRACE, startTime: now - 60 * 86_400_000, endTime: now });

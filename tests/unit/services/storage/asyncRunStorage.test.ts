@@ -104,6 +104,16 @@ describe('AsyncRunStorage', () => {
       expect(result.status).toBe('completed');
     });
 
+    it('persists performanceMetrics through toStorageFormat (write side of the read mapper\'s round-trip)', async () => {
+      mockOsRuns.create.mockResolvedValue(createMockStorageRun('run-pm'));
+      const report = createMockReport();
+      (report as any).performanceMetrics = { durationMs: 36900, agentDurationMs: 34000 };
+      await asyncRunStorage.saveReport(report);
+      expect(mockOsRuns.create).toHaveBeenCalledWith(
+        expect.objectContaining({ performanceMetrics: { durationMs: 36900, agentDurationMs: 34000 } })
+      );
+    });
+
     it('includes experiment context when provided', async () => {
       const mockStorageRun = createMockStorageRun('run-exp');
       mockOsRuns.create.mockResolvedValue(mockStorageRun);

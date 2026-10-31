@@ -12,6 +12,7 @@
 
 import { Request, Response, Router } from 'express';
 import { classifyOpenSearchError, validateAwsCredentials, type ErrorCategory } from '../services/tracesService.js';
+import { queryTracesPreciseFirst, type CorrelationInfo } from '../services/traceCorrelation.js';
 import {
   getSampleSpansForRunIds,
   getSampleSpansByTraceId,
@@ -72,18 +73,25 @@ router.post('/api/traces', async (req: Request, res: Response) => {
     let suggestion: string | undefined;
     let nextCursor: string | null = null;
     let hasMore: boolean = false;
+    let correlation: CorrelationInfo | undefined;
     const obs = getObservabilityModule(req);
     const backend = obs.describe().type;
 
     if (traceId || (runIds && runIds.length > 0) || sessionId || startTime || endTime || (agents && agents.length > 0)) {
       try {
-        const result = await obs.traces.query(
+        // Precise-first: exact correlators (traceId / runIds / sessionId) are
+        // queried on their own; the service-name window (Strategy C) only
+        // runs when they return nothing, and its result is post-filtered so
+        // spans that name ANOTHER run are dropped. See traceCorrelation.ts.
+        const result = await queryTracesPreciseFirst(
+          (opts) => obs.traces.query(opts),
           { traceId, runIds, sessionId, startTime, endTime, size, serviceName, textSearch, cursor, agents }
         );
 
         realSpans = (result.spans || []) as Span[];
         nextCursor = result.nextCursor || null;
         hasMore = result.hasMore || false;
+        correlation = result.correlation;
         if (result.truncated) {
           // Never present a capped scan as the whole picture.
           warning = `Results are partial: the ${backend} query hit a scan, row or time-window limit; narrow the time range or filters to see everything.`;
@@ -133,6 +141,8 @@ router.post('/api/traces', async (req: Request, res: Response) => {
       nextCursor,
       hasMore,
       backend,
+      // Which strategy matched (omitted for plain time-range browses).
+      ...(correlation && correlation.strategy !== 'none' ? { correlation } : {}),
       warning,
       warningCategory,
       suggestion,

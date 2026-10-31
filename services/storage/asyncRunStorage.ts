@@ -284,6 +284,9 @@ function toStorageFormat(report: EvaluationReport): Omit<StorageRun, 'id' | 'cre
   if (report.llmVerdict !== undefined) base.llmVerdict = report.llmVerdict;
   if (report.verdictConflict !== undefined) base.verdictConflict = report.verdictConflict;
   if (report.score !== undefined) base.score = report.score;
+  // Per-case wall-clock timing — read back by toTestCaseRun above; without
+  // this the write side dropped it (see server/services/storage/index.ts).
+  if (report.performanceMetrics !== undefined) (base as any).performanceMetrics = report.performanceMetrics;
 
   return base;
 }
