@@ -141,6 +141,22 @@ export function getIndexMappings(): IndexMappings {
           agentFingerprintShort: { type: 'keyword' },
           agentPromptHash: { type: 'keyword' },
           agentConfigSource: { type: 'object', enabled: false },
+          // EvaluationRun: last retry-judgement attempt in which ≥1 case
+          // produced no judgement (RunRetryAttemptSummary). `reasons` is keyed
+          // by free-text reason strings → never mapped.
+          lastRetryAttempt: {
+            properties: {
+              at: { type: 'date' },
+              evaluatorId: { type: 'keyword' },
+              evaluatorName: { type: 'keyword' },
+              scope: { type: 'keyword' },
+              retried: { type: 'integer' },
+              succeeded: { type: 'integer' },
+              notEvaluable: { type: 'integer' },
+              failed: { type: 'integer' },
+              reasons: { type: 'object', enabled: false },
+            },
+          },
           // EvaluationRun only: what the last "Retry judgement" was launched
           // with (seeds the dialog's defaults). Explicit so `at` is a date
           // and the ids stay keyword, matching the neighbouring id fields.
@@ -271,6 +287,23 @@ export function getIndexMappings(): IndexMappings {
           caseSummary: { type: 'object', enabled: false },
           logs: { type: 'object', enabled: false },
           rawEvents: { type: 'object', enabled: false },
+          // Connector-declared typed output (optional); read, never queried.
+          output: { type: 'object', enabled: false },
+          // Last retry-judgement attempt that produced NO judgement
+          // (RetryAttemptRecord) — the judgement fields above are the
+          // preserved previous judgement.
+          lastRetryAttempt: {
+            properties: {
+              at: { type: 'date' },
+              evaluatorId: { type: 'keyword' },
+              evaluatorName: { type: 'keyword' },
+              judgeModelId: { type: 'keyword' },
+              scope: { type: 'keyword' },
+              outcome: { type: 'keyword' },
+              reason: { type: 'text' },
+              diagnostics: { type: 'object', enabled: false },
+            },
+          },
           improvementStrategies: { type: 'object', enabled: false },
           // Per-matcher verdicts captured by the SDK during the test body.
           // Stored as a nested array so we can filter / aggregate by
@@ -342,6 +375,7 @@ export function getIndexMappings(): IndexMappings {
               primaryMetrics: { type: 'keyword' },
               unevaluable: { type: 'keyword' },
               notApplicable: { type: 'keyword' },
+              implicitMetrics: { type: 'keyword' },
               extractionRule: { type: 'keyword' },
               goldIdsUsed: { type: 'keyword' },
               goldRule: { type: 'keyword' },
@@ -351,8 +385,12 @@ export function getIndexMappings(): IndexMappings {
                   citedCount: { type: 'integer' },
                   anchorsRemoved: { type: 'integer' },
                   parsedFrom: { type: 'keyword' },
+                  sourceUsed: { type: 'keyword' },
+                  weak: { type: 'boolean' },
                 },
               },
+              // Free-form provenance for humans (source attempts, tool names) — not queried.
+              diagnostics: { type: 'object', enabled: false },
               passPolicy: {
                 dynamic: false,
                 properties: { kind: { type: 'keyword' }, minScore: { type: 'float' } },

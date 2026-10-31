@@ -12,7 +12,7 @@
  */
 
 import type { Evaluator, TrajectoryStep } from '@/types';
-import { scoreDeterministic, extractPrediction } from '@/lib/scoring/deterministicScoring';
+import { scoreDeterministic } from '@/lib/scoring/deterministicScoring';
 import { normalizeDeterministicEvaluator } from '@/lib/evaluators/deterministic';
 
 const METRICS = [
@@ -60,7 +60,7 @@ describe('scoreDeterministic — response-results + abstain', () => {
   it('gold present: ranked metrics score what the agent RETURNED (not what it retrieved); abstain is not applicable', () => {
     const report = { trajectory: [toolHits('g1', 'g2', 'x'), jsonAnswer(['x', 'g2'])] };
     const r = scoreDeterministic(makeEvaluator(), withGold, report);
-    expect(r.prediction).toMatchObject({ rule: 'response-results', ranked: ['x', 'g2'], parsedFrom: 'json', present: true });
+    expect(r.prediction).toMatchObject({ sourceUsed: 'response-results', returned: true, ranked: ['x', 'g2'], parsedFrom: 'json', present: true });
     expect(r.metrics).toEqual({ 'hit@5': 1, 'recall@20': 0.5 });
     expect(r.notApplicable).toEqual(['abstain']);
     expect(r.unevaluable).toEqual([]);
@@ -80,7 +80,7 @@ describe('scoreDeterministic — response-results + abstain', () => {
     const hitRow = r.matcherResults.find(m => m.description.startsWith('hit@5'))!;
     expect(hitRow).toMatchObject({ pass: true, role: 'primary', actual: 1, expected: 1 });
     expect(hitRow.details).toMatchObject({ predicted: ['x', 'g2'], parsedFrom: 'json' });
-    expect(r.summary).toMatch(/1 of 2 gold ids among 2 candidates; first hit at rank 2; ranked list parsed from the response \(json\)/);
+    expect(r.summary).toMatch(/1 of 2 gold ids \(expectedOutcomes\[1\]\) among 2 candidates; first hit at rank 2; candidates from response-results \(json\)/);
     expect(r.summary).toMatch(/not applicable: abstain/);
   });
 
@@ -94,7 +94,7 @@ describe('scoreDeterministic — response-results + abstain', () => {
       expect(r.passFailStatus).toBe('passed');
       expect(r.matcherResults.find(m => m.description.startsWith('abstain'))).toMatchObject({ pass: true, role: 'primary', actual: 1, expected: 1 });
       expect(r.matcherResults.find(m => m.description.startsWith('hit@5'))).toMatchObject({ pass: true, role: 'observe' });
-      expect(r.summary).toMatch(/gold is explicitly empty; the agent returned 0 candidates/);
+      expect(r.summary).toMatch(/gold is explicitly empty \(expectedOutcomes\[1\] \(explicitly none\)\); the agent returned 0 candidates/);
     });
 
     it('gold explicitly empty + non-empty list → abstain 0 → failed on the abstain gate', () => {
@@ -130,21 +130,27 @@ describe('scoreDeterministic — response-results + abstain', () => {
       expect(r.passFailStatus).toBeNull();
       expect(r.metrics).toEqual({});
       expect(r.unevaluable).toEqual(['hit@5', 'recall@20', 'abstain']);
-      expect(r.snapshot.extraction).toEqual({ candidateCount: 0, parsedFrom: 'none' });
+      expect(r.snapshot.extraction).toEqual({ candidateCount: 0, anchorsRemoved: 0, sourceUsed: 'none' });
+      expect(r.diagnostics.candidates.sourceTried).toEqual([{ source: 'response-results', count: 0, detail: 'final response (no ranked list recognised)' }, { source: 'tool-hits', count: 0, detail: 'no tool results in the stored trajectory' }]);
       expect(r.matcherResults[0].errorMessage).toMatch(/no ranked list recognised in the final response .*an explicit empty list scores as an abstention/);
       expect(r.summary).toMatch(/Not evaluable: no ranked list recognised/);
     });
 
-    it('a gates policy whose every gate is not applicable to the case → NO verdict (never a silent pass)', () => {
+    it('a gates policy whose every gate is not applicable to an ABSTAIN case → the declared abstain metric decides the verdict (never a silent pass, never "not evaluable")', () => {
       // Only ranked gates; gold-empty case with abstain declared as observe-only.
       const ev = makeEvaluator({ passPolicy: { kind: 'gates', gates: [{ metric: 'hit@5', min: 1 }] } });
       const r = scoreDeterministic(ev, noGold, { trajectory: [jsonAnswer([])] });
-      expect(r.metrics).toEqual({ abstain: 1 }); // observed, but…
-      expect(r.evaluable).toBe(false);
-      expect(r.passFailStatus).toBeNull();
+      expect(r.metrics).toEqual({ abstain: 1 });
+      expect(r.kind).toBe('abstain');
+      expect(r.evaluable).toBe(true);
+      expect(r.passFailStatus).toBe('passed');
       expect(r.notApplicable).toEqual(['hit@5', 'recall@20']);
-      expect(r.summary).toMatch(/none of the pass-policy gates applies to this case .*observed abstain=1\. Add a gate on a metric that speaks to gold-empty cases/);
-      // Conversely an abstain-only gate on a gold case has no applicable gate either.
+      expect(r.summary).toMatch(/the agent returned 0 candidates \(verdict by abstain\)/);
+      // …and an agent that returned candidates on that case fails by abstain.
+      const rf = scoreDeterministic(ev, noGold, { trajectory: [jsonAnswer(['x'])] });
+      expect(rf).toMatchObject({ kind: 'abstain', passFailStatus: 'failed', metrics: { abstain: 0 } });
+      expect(rf.failReasons).toEqual(['abstain:returned 1 candidate for a gold-empty case']);
+      // Conversely an abstain-only gate on a gold case has no applicable gate at all → no verdict.
       const ev2 = makeEvaluator({ passPolicy: { kind: 'gates', gates: [{ metric: 'abstain', min: 1 }] } });
       const r2 = scoreDeterministic(ev2, withGold, { trajectory: [jsonAnswer(['g1'])] });
       expect(r2.passFailStatus).toBeNull();
@@ -163,25 +169,38 @@ describe('scoreDeterministic — response-results + abstain', () => {
       expect(r.matcherResults.every(m => m.errored === true && m.pass === false)).toBe(true);
     });
 
-    it('no final response step at all → absent prediction → every metric unevaluable (an abstaining agent is indistinguishable from a crashed one)', () => {
+    it('no final response step at all → nothing RETURNED → every metric unevaluable (an abstaining agent is indistinguishable from a crashed one); the retrieved hits are reported, not used', () => {
       const r = scoreDeterministic(makeEvaluator(), noGold, { trajectory: [toolHits('a')] });
       expect(r.evaluable).toBe(false);
       expect(r.passFailStatus).toBeNull();
+      // A response-results evaluator never falls through to retrieved hits.
+      expect(r.prediction).toMatchObject({ present: false, sourceUsed: 'none', returned: false });
       expect(r.unevaluable).toEqual(['hit@5', 'recall@20', 'abstain']);
-      expect(r.prediction.present).toBe(false);
-      expect(r.summary).toMatch(/Not evaluable: no final response step in the stored trajectory \(rule: response-results\)/);
-      expect(r.matcherResults[0].errorMessage).toMatch(/no final response step/);
+      expect(r.notEvaluableReason).toBe('no candidate ids found in the final answer, a results tool or the stored tool results');
+      expect(r.matcherResults.find(m => m.description.startsWith('abstain'))!.errorMessage).toMatch(/^abstention cannot be observed: .* — gold explicitly empty \(expectedOutcomes\[1\] \(explicitly none\)\); candidates: 0 from no final response step, 1 from tool 'search' hits \(hits \/ results\) \(not used: this evaluator scores returned lists only\)$/);
+      // Truly nothing anywhere → same outcome, explained.
+      const empty = scoreDeterministic(makeEvaluator(), noGold, { trajectory: [] });
+      expect(empty.unevaluable).toEqual(['hit@5', 'recall@20', 'abstain']);
+      expect(empty.prediction.present).toBe(false);
     });
   });
 
-  it('no applicable metric (ranked-only evaluator on an explicitly gold-empty case) → not evaluable with a specific reason', () => {
+  it('ranked-only evaluator on an explicitly gold-empty case → IMPLICIT abstain decides (an abstain case is never "not evaluable")', () => {
     const ev = makeEvaluator({ metrics: METRICS.slice(0, 2), passPolicy: { kind: 'gates', gates: [{ metric: 'hit@5', min: 1 }] } });
     const r = scoreDeterministic(ev, noGold, { trajectory: [jsonAnswer([])] });
-    expect(r.evaluable).toBe(false);
-    expect(r.passFailStatus).toBeNull();
+    expect(r).toMatchObject({ kind: 'abstain', evaluable: true, passFailStatus: 'passed', score: 1, metrics: { abstain: 1 } });
     expect(r.notApplicable).toEqual(['hit@5', 'recall@20']);
     expect(r.unevaluable).toEqual([]);
-    expect(r.summary).toMatch(/no metric applies to this case \(gold is explicitly empty and the evaluator declares no abstain metric\)/);
+    // The implicit metric is recorded on the snapshot so scoreFromSnapshot reproduces the score.
+    expect(r.snapshot.weights).toEqual({ 'hit@5': 1, 'recall@20': 1, abstain: 1 });
+    expect(r.snapshot.scale.abstain).toEqual({ min: 0, max: 1 });
+    const implicitRow = r.matcherResults.find(m => m.description.startsWith('abstain (implicit'))!;
+    expect(implicitRow).toMatchObject({ pass: true, role: 'primary', actual: 1, expected: 1 });
+    expect(implicitRow.details).toMatchObject({ implicit: true, goldSource: 'expectedOutcomes[1] (explicitly none)', candidateSource: 'response-results' });
+    // Returned candidates on a gold-empty case → failed by the implicit abstain.
+    const rf = scoreDeterministic(ev, noGold, { trajectory: [jsonAnswer(['x', 'y'])] });
+    expect(rf).toMatchObject({ kind: 'abstain', passFailStatus: 'failed', metrics: { abstain: 0 } });
+    expect(rf.failReasons).toEqual(['abstain:returned 2 candidates for a gold-empty case']);
     const evAbstainOnly = makeEvaluator({ metrics: [METRICS[2]], passPolicy: { kind: 'threshold', minScore: 1 } });
     const r2 = scoreDeterministic(evAbstainOnly, withGold, { trajectory: [jsonAnswer(['g1'])] });
     expect(r2.passFailStatus).toBeNull();
@@ -212,8 +231,8 @@ describe('scoreDeterministic — response-results + abstain', () => {
       trajectory: [step({ type: 'response', content: 'Ranked results (2):\n1. id g2 — item\n2. id z — item' })],
       rawEvents,
     });
-    expect(r.prediction).toMatchObject({ ranked: ['g2', 'z'], parsedFrom: 'raw-event' });
-    expect(r.snapshot.extraction).toEqual({ candidateCount: 2, parsedFrom: 'raw-event' });
+    expect(r.prediction).toMatchObject({ ranked: ['g2', 'z'], parsedFrom: 'raw-event', sourceUsed: 'response-results' });
+    expect(r.snapshot.extraction).toEqual({ candidateCount: 2, anchorsRemoved: 0, parsedFrom: 'raw-event', sourceUsed: 'response-results' });
   });
 });
 
@@ -225,13 +244,16 @@ describe('scoreDeterministic — tool-hits-ordered keeps its pilot behaviour', (
       inputs: { gold: { source: 'expectedOutcomes-pattern', pattern: '^Gold: (.+)$' }, prediction: { source: 'tool-hits-ordered' } },
     });
 
-  it('no candidates in the stored tool results → ranked metrics unevaluable (NOT zero), snapshot keeps citedCount / anchorsRemoved', () => {
+  it('no candidates anywhere → ranked metrics unevaluable (NOT zero), snapshot keeps citedCount / anchorsRemoved', () => {
     const r = scoreDeterministic(toolEv(), withGold, { trajectory: [step({ type: 'response', content: 'nothing' })] });
     expect(r.evaluable).toBe(false);
     expect(r.unevaluable).toEqual(['hit@5', 'recall@20']);
-    expect(r.matcherResults[0].errorMessage).toMatch(/no candidate ids found in the stored tool results \(rule: tool-hits-ordered\)/);
+    expect(r.matcherResults[0].errorMessage).toMatch(/no ranked list recognised in the final response .* — gold 2 ids from expectedOutcomes\[1\]; candidates: 0 from final response \(no ranked list recognised\), 0 from no tool results in the stored trajectory/);
+    const noHits = scoreDeterministic(toolEv(), withGold, { trajectory: [step({ type: 'tool_result', toolName: 'search', content: JSON.stringify({ status: 'ok', total: 0 }) }), step({ type: 'response', content: 'nothing' })] });
+    expect(noHits.notEvaluableReason).toBe('no candidate ids found in the final answer, a results tool or the stored tool results');
+    expect(noHits.diagnostics.toolsScanned).toEqual(['search']);
     const ok = scoreDeterministic(toolEv(), withGold, { trajectory: [toolHits('g1')] });
-    expect(ok.snapshot.extraction).toEqual({ candidateCount: 1, citedCount: 0, anchorsRemoved: 0 });
+    expect(ok.snapshot.extraction).toEqual({ candidateCount: 1, citedCount: 0, anchorsRemoved: 0, sourceUsed: 'tool-hits' });
     expect(ok.matcherResults[0].details).not.toHaveProperty('parsedFrom');
     expect(ok.snapshot).not.toHaveProperty('notApplicable');
   });
@@ -242,18 +264,26 @@ describe('scoreDeterministic — tool-hits-ordered keeps its pilot behaviour', (
     expect(r.unevaluable).toEqual(['hit@5', 'recall@20', 'abstain']);
   });
 
-  it('abstain with tool-hits-ordered (stored before the validator forbade it) is UNEVALUABLE, never a fake abstention credit', () => {
-    const r = scoreDeterministic(toolEv(METRICS), noGold, { trajectory: [step({ type: 'response', content: 'Best match: (id: 77).' })] });
+  it('abstain with tool-hits-ordered and only RETRIEVED hits is UNEVALUABLE, never a fake abstention credit', () => {
+    const r = scoreDeterministic(toolEv(METRICS), noGold, { trajectory: [toolHits('77'), step({ type: 'response', content: 'Best match is item 77.' })] });
     expect(r.metrics).toEqual({});
     expect(r.unevaluable).toEqual(['abstain']);
     expect(r.notApplicable).toEqual(['hit@5', 'recall@20']);
     expect(r.passFailStatus).toBeNull();
-    expect(r.matcherResults.find(m => m.description.startsWith('abstain'))!.errorMessage).toMatch(/abstain cannot be observed through tool-hits-ordered/);
+    expect(r.matcherResults.find(m => m.description.startsWith('abstain'))!.errorMessage).toMatch(/abstention cannot be observed: the only candidates came from retrieved tool hits/);
+    // …but through the chain a tool-hits-ordered evaluator DOES observe a returned list when there is one.
+    const ok = scoreDeterministic(toolEv(METRICS), noGold, { trajectory: [toolHits('77'), jsonAnswer([])] });
+    expect(ok).toMatchObject({ kind: 'abstain', passFailStatus: 'passed', metrics: { abstain: 1 } });
+    expect(ok.prediction).toMatchObject({ sourceUsed: 'response-results', returned: true });
   });
 
-  it('extractPrediction dispatches by source', () => {
+  it('the chain prefers the RETURNED list over the configured tool hits for both declared sources', () => {
     const report = { trajectory: [toolHits('t1'), jsonAnswer(['r1'])] };
-    expect(extractPrediction(report, { source: 'tool-hits-ordered' })).toMatchObject({ rule: 'tool-hits-ordered', ranked: ['t1'], present: true });
-    expect(extractPrediction(report, { source: 'response-results' })).toMatchObject({ rule: 'response-results', ranked: ['r1'], present: true });
+    const viaTool = scoreDeterministic(toolEv(), { expectedOutcomes: ['Gold: r1'] }, report);
+    expect(viaTool.prediction).toMatchObject({ sourceUsed: 'response-results', ranked: ['r1'] });
+    expect(viaTool.snapshot.extractionRule).toBe('tool-hits-ordered'); // the DECLARED source is still recorded
+    expect(viaTool.diagnostics.candidates.sourceTried.map(a => [a.source, a.count])).toEqual([['response-results', 1], ['tool-hits', 1]]);
+    const viaResponse = scoreDeterministic(makeEvaluator(), { expectedOutcomes: ['Gold: r1'] }, report);
+    expect(viaResponse.prediction).toMatchObject({ sourceUsed: 'response-results', ranked: ['r1'] });
   });
 });

@@ -25,7 +25,7 @@ import { callBedrockJudge, PARSE_FAILURE_MAX_ATTEMPTS, judgeErrorDetailFrom } fr
 import { isJudgeFailedCase, hasRejudgeableOutput } from '@/services/evaluation/retryJudgement';
 import { extractJudgeFailureReason } from '@/lib/judgeFailureSummary';
 import { getFailureStage, getFailureCause, agentProducedNoOutput, describeAgentErrorKind, formatMs } from '@/lib/reportFailure';
-import { copyReportFailureFields, pickReportFailureFields, REPORT_FAILURE_FIELDS } from '@/lib/reportFailureFields';
+import { copyReportFailureFields, pickReportFailureFields, REPORT_FAILURE_FIELDS, CLEARED_REPORT_FAILURE_FIELDS } from '@/lib/reportFailureFields';
 
 function undiciHeadersTimeout(): Error {
   const cause = Object.assign(new Error('Headers Timeout Error'), { name: 'HeadersTimeoutError', code: 'UND_ERR_HEADERS_TIMEOUT' });
@@ -238,6 +238,21 @@ describe('lib/reportFailure — stage derivation for new and legacy reports', ()
     expect(getFailureStage({ status: 'completed', metricsStatus: 'pending' } as any)).toBeUndefined();
     expect(getFailureStage(null)).toBeUndefined();
   });
+  // Seam with Retry judgement: a judge/trace failure that was later re-judged
+  // to a verdict (reports re-judged before the retry path cleared these
+  // fields still carry the stale stage). The verdict is authoritative for the
+  // judge/trace stages — "Judge could not produce a verdict" next to PASSED
+  // contradicts itself. The agent stage stays authoritative: nothing is ever
+  // judged after an agent-request failure, so a verdict beside it is the bug.
+  it('a later verdict supersedes a stale judge/trace stage, but never an agent stage', () => {
+    expect(getFailureStage({ failureStage: 'judge', status: 'completed', passFailStatus: 'passed', metricsStatus: 'completed' } as any)).toBeUndefined();
+    expect(getFailureStage({ failureStage: 'trace', status: 'completed', passFailStatus: 'failed', metricsStatus: 'ready' } as any)).toBeUndefined();
+    expect(getFailureStage({ metricsStatus: 'completed', passFailStatus: 'passed', traceError: 'Judge evaluation failed (kind=judge_failed): x' } as any)).toBeUndefined();
+    // No verdict, or metricsStatus still 'error' → the explicit stage stands.
+    expect(getFailureStage({ failureStage: 'judge', status: 'completed', passFailStatus: null, metricsStatus: 'error' } as any)).toBe('judge');
+    expect(getFailureStage({ failureStage: 'judge', status: 'completed', passFailStatus: 'passed', metricsStatus: 'error' } as any)).toBe('judge');
+    expect(getFailureStage({ failureStage: 'agent', status: 'completed', passFailStatus: 'passed', metricsStatus: 'completed' } as any)).toBe('agent');
+  });
   it('getFailureCause prefers agentError.message > error > traceError tail > legacy reasoning', () => {
     expect(getFailureCause({ agentError: { kind: 'timeout', message: 'A' }, error: 'B', traceError: 'L (kind=x): C' } as any)).toBe('A');
     expect(getFailureCause({ error: 'B', traceError: 'L (kind=x): C' } as any)).toBe('B');
@@ -270,5 +285,11 @@ describe('lib/reportFailureFields', () => {
     expect(pickReportFailureFields({ error: undefined, failureStage: 'judge' })).toEqual({ failureStage: 'judge' });
     expect(pickReportFailureFields(undefined)).toEqual({});
     expect([...REPORT_FAILURE_FIELDS]).toEqual(['error', 'failureStage', 'agentError', 'judgeError']);
+  });
+  it('CLEARED_REPORT_FAILURE_FIELDS nulls every failure field (and is carried through the copy helper as a clear)', () => {
+    expect(Object.keys(CLEARED_REPORT_FAILURE_FIELDS).sort()).toEqual([...REPORT_FAILURE_FIELDS].sort());
+    expect(Object.values(CLEARED_REPORT_FAILURE_FIELDS).every(v => v === null)).toBe(true);
+    expect(copyReportFailureFields(CLEARED_REPORT_FAILURE_FIELDS, { failureStage: 'judge', error: 'x' } as any))
+      .toEqual({ error: null, failureStage: null, agentError: null, judgeError: null });
   });
 });

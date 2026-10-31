@@ -502,12 +502,15 @@ legacy report makes the whole run `legacy` — a mean over half the cases would
 be misleading.
 
 **"Legacy scoring"** is what every report judged before snapshots existed is.
-The compare page renders such a run's Avg score as `—` with a muted
-"legacy scoring" label, shows its rubric values BY NAME in the per-case cells,
-and never picks one rubric (alphabetically or otherwise) to stand in for the
-score — that alphabetical pick is exactly what used to show an unrelated rubric
-at ~90% next to a 45% pass rate. Old runs are not re-scored with today's
-evaluator; they are labelled honestly instead.
+Such a run's `RunAggregateMetrics.avgScore` is `undefined` in the comparison
+payload; the compare page shows its rubric values BY NAME in the per-case
+cells and never picks one rubric (alphabetically or otherwise) to stand in for
+the score — that alphabetical pick is exactly what used to show an unrelated
+rubric at ~90% next to a 45% pass rate. Old runs are not re-scored with
+today's evaluator; they are labelled honestly instead. The scoreboard does
+NOT render `avgScore` as a column any more (it read `—` for every
+pre-snapshot run, i.e. all runs today — noise); the evaluator-declared
+primary-metric columns carry the run-level score signal instead.
 
 Related compare-page surfaces built on the same data
 ([`lib/comparison/scoringDisplay.ts`](../lib/comparison/scoringDisplay.ts)):

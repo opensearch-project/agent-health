@@ -32,6 +32,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { asyncBenchmarkStorage, asyncTestCaseStorage, asyncRunStorage } from '@/services/storage';
 import { listEvaluationRuns, updateEvaluationRun, deleteEvaluationRun, cancelEvaluationRun } from '@/services/client';
+import { RetryJudgementJobPill } from './RetryJudgementJobs';
+import { useOnRetryJudgementFinished } from '@/hooks/useRetryJudgementJob';
 import { cancelBenchmarkRun } from '@/services/client/benchmarkApi';
 import { Benchmark, TestCase, BenchmarkRun, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
@@ -220,8 +222,10 @@ export const EvalRunsPage: React.FC = () => {
   const [visibleRunCount, setVisibleRunCount] = useState(RUNS_PER_PAGE);
   const loadMoreSentinelRef = useRef<HTMLTableRowElement | null>(null);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  // `silent` re-fetches without the page-level spinner — a background
+  // retry-judgement refresh must not unmount the list (and the open dialog).
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       // Fetch both run models in parallel (see RunRow convergence note). The
       // eval-runs fetch is best-effort so a failure there still shows
@@ -513,11 +517,15 @@ export const EvalRunsPage: React.FC = () => {
     await loadData();
   };
 
-  // Opens the evaluator / judge-model / scope picker for this row's run;
-  // the dialog owns the POST + polling, we refresh once it's dismissed.
+  // Opens the evaluator / judge-model / scope picker (#509) for this row's
+  // run; Confirm hands the 202 job to the client job store, the row shows a
+  // "Re-judging n/N…" pill meanwhile and the list refreshes when the job
+  // finishes (useOnRetryJudgementFinished below) — the dialog may be closed
+  // long before that.
   const handleRetryJudgementRow = (rr: RunRow) => {
     setRetryJudgementTarget(rr.run as unknown as EvaluationRun);
   };
+  useOnRetryJudgementFinished(() => { void loadData(true); });
 
   const toggleGroup = (id: string) => {
     setCollapsedGroups(prev => {
@@ -765,6 +773,7 @@ export const EvalRunsPage: React.FC = () => {
             ) : (
               <span className="text-xs font-medium truncate max-w-[220px]">{rr.run.name}</span>
             )}
+            {rr.kind === 'eval-run' && <RetryJudgementJobPill runId={rr.run.id} runName={rr.run.name} lastRetryAttempt={(rr.run as EvaluationRun).lastRetryAttempt} />}
             {rr.status === 'running' && !(rr.run as { cancelRequestedAt?: string }).cancelRequestedAt && (
               <span
                 data-testid="run-row-status-running"
@@ -1069,7 +1078,7 @@ export const EvalRunsPage: React.FC = () => {
               <List size={11} /> Flat
             </button>
           </div>
-          <Button variant="outline" size="sm" onClick={loadData} disabled={loading} className="h-7">
+          <Button variant="outline" size="sm" onClick={() => loadData()} disabled={loading} className="h-7">
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
           </Button>
           {(() => {
@@ -1323,7 +1332,7 @@ export const EvalRunsPage: React.FC = () => {
         rejudgeableCount={getRunActionVisibility(retryJudgementTarget).rejudgeableCount}
         open={retryJudgementTarget !== null}
         onOpenChange={open => { if (!open) setRetryJudgementTarget(null); }}
-        onComplete={() => { loadData(); }}
+        onComplete={() => { loadData(true); }}
       />
     </div>
   );

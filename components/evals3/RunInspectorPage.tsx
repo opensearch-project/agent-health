@@ -34,14 +34,15 @@ import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel, getErrorStage } from './ResultStatus';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { formatDate, getModelName } from '@/lib/utils';
-import { getRunActionVisibility } from '@/lib/runActions';
+import { getRunActionVisibility, isRejudgeableResult, isEvaluationRun as isEvaluationRunDoc } from '@/lib/runActions';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
 import { InlineRenameField } from './InlineRenameField';
 import { Breadcrumbs } from './Breadcrumbs';
 import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
 import { RunConfigDialog } from './RunConfigDialog';
 import { RetryJudgementConfirmDialog } from './RetryJudgementConfirmDialog';
-import type { RetryJudgementSummary } from '@/services/client';
+import { RetryJudgementJobPill } from './RetryJudgementJobs';
+import { useOnRetryJudgementFinished } from '@/hooks/useRetryJudgementJob';
 import { RunActionsMenu } from './RunActionsMenu';
 import { RunTelemetryStrip } from './RunTelemetryStrip';
 import { useRunTelemetry } from '@/hooks/useRunTelemetry';
@@ -138,9 +139,12 @@ export const RunInspectorPage: React.FC = () => {
   const [sourceRunProvenance, setSourceRunProvenance] = useState<Pick<EvaluationRun, 'agentKey' | 'agentFingerprint' | 'agentPromptHash'> | null>(null);
 
   // Load data — fetch reports to get real pass/fail status
-  const loadData = useCallback(async () => {
+  // `silent` re-fetches WITHOUT the loading skeleton: the whole page (and any
+  // open dialog) would otherwise unmount for the duration — the background
+  // retry-judgement refresh must not yank the dialog showing its summary.
+  const loadData = useCallback(async (silent = false) => {
     if (!runId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setLoadError(false);
     setNotFoundReason(null);
     try {
@@ -342,9 +346,12 @@ export const RunInspectorPage: React.FC = () => {
   };
 
   // Retry judgement from the kebab opens the RetryJudgementConfirmDialog —
-  // one code path (dialog → retryJudgement() with progress polling), not a
-  // second fire-and-forget one.
+  // one code path (dialog → background job in the client job store), not a
+  // second one.
   const handleRetryJudgement = () => { setRetryJudgementDialogOpen(true); };
+  // The job runs in the background (the dialog may be closed) — refresh the
+  // verdicts when a job for THIS run finishes.
+  useOnRetryJudgementFinished(job => { if (job.runId === runId) void loadData(true); });
 
   // Telemetry strip (tokens · cost · LLM calls · tool calls · median time/case
   // · spans N/M): ONE batch metrics call for this run's reports, correlated by
@@ -483,6 +490,18 @@ export const RunInspectorPage: React.FC = () => {
   // confused the owner. Re-run is the remedy for agent errors.
   const agentErrorCount = results.filter(r => r.status === 'errored' && getErrorStage(r.status, r.report) === 'agent').length;
   const rejudgeableErroredCount = erroredCount - agentErrorCount;
+  // Cases Retry judgement can re-judge at all (`scope=all`), derived from the
+  // LOADED REPORTS — the single source of truth for both the kebab item's
+  // enablement and its count. The run doc alone (`getRunActionVisibility`)
+  // cannot tell an agent-request failure from a completed case (the runner
+  // writes both as `results[tc].status: 'completed'`), so a run whose every
+  // case failed at the agent used to offer "Retry judgement (N)" and then
+  // have the backend reject all N. Same predicate as the backend's selection
+  // (`isRejudgeableResult`, lib/runActions), so judged-FAILED cases count too.
+  // Legacy benchmark-embedded runs have no retry endpoint → 0, as before.
+  const rejudgeableCount = isEvaluationRunDoc(run)
+    ? results.filter(r => isRejudgeableResult(run.results?.[r.testCaseId], r.report)).length
+    : 0;
   const totalCount = results.length;
   const judgedCount = passCount + failCount;
   const passRate = judgedCount > 0 ? Math.round((passCount / judgedCount) * 100) : 0;
@@ -595,6 +614,7 @@ export const RunInspectorPage: React.FC = () => {
             ) : (
               <h2 className="text-lg font-bold truncate" title={run.name}>{run.name}</h2>
             )}
+            {evalRun && <RetryJudgementJobPill runId={evalRun.id} runName={evalRun.name} lastRetryAttempt={evalRun.lastRetryAttempt} className="ml-2 align-middle" />}
             {/* Provenance chip visibility is a DOC concern (does this run
                 object actually carry rerunOf data?), not a route concern --
                 isEvaluationRun() narrows `run` so `.rerunOf` is type-safe.
@@ -708,12 +728,14 @@ export const RunInspectorPage: React.FC = () => {
               // needs SOME completed case to re-judge.
               const runTerminal = run.status !== 'running' && run.status !== 'pending';
               // Retry judgement (#509) is available on any terminal run with at
-              // least one completed case to re-judge; the judge-failed count
-              // offered as the dialog's default scope EXCLUDES agent-request
-              // failures (#496) — nothing was ever judged for those, so only
-              // rejudgeableErroredCount (errored cases minus agent-stage errors)
-              // is retryable; see services/evaluation/retryJudgement.ts.
-              const rejudgeableCount = visibility.rejudgeableCount;
+              // least one re-judgeable case (`rejudgeableCount`, derived from the
+              // loaded reports above — NOT `visibility.rejudgeableCount`, which
+              // only sees the run doc and counts agent-request failures as
+              // completed cases); the judge-failed count offered as the dialog's
+              // default scope EXCLUDES agent-request failures (#496) — nothing
+              // was ever judged for those, so only rejudgeableErroredCount
+              // (errored cases minus agent-stage errors) is retryable; see
+              // services/evaluation/retryJudgement.ts.
               const canRetryJudgement = !!evalRun && runTerminal && rejudgeableCount > 0;
               const retryJudgementDisabledReason = canRetryJudgement
                 ? undefined
@@ -785,10 +807,10 @@ export const RunInspectorPage: React.FC = () => {
         <RetryJudgementConfirmDialog
           run={run as EvaluationRun | null}
           judgeFailedCount={rejudgeableErroredCount}
-          rejudgeableCount={getRunActionVisibility(run).rejudgeableCount}
+          rejudgeableCount={rejudgeableCount}
           open={retryJudgementDialogOpen}
           onOpenChange={setRetryJudgementDialogOpen}
-          onComplete={(_summary: RetryJudgementSummary) => loadData()}
+          onComplete={() => loadData(true)}
         />
       )}
 
@@ -851,6 +873,7 @@ export const RunInspectorPage: React.FC = () => {
                 testCase={selectedTestCase || selectedResult.testCase}
                 status={selectedResult.status}
                 testCaseFullRecord={selectedTestCaseFullRecord}
+                onRetryJudgement={evalRun ? handleRetryJudgement : undefined}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground">

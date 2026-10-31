@@ -42,6 +42,8 @@ import { ResponseFirstOutput } from './ResponseFirstOutput';
 import { RawEventsPanel } from './RawEventsPanel';
 import { MatcherResultsPanel } from './MatcherResultsPanel';
 import { VerdictSummary } from './judge/VerdictSummary';
+import { ScoringDiagnosticsView } from './evals3/ScoringDiagnosticsView';
+import { LastRetryAttemptBanner } from './evals3/LastRetryAttemptBanner';
 import { getJudgeReasoningText, getJudgeMatcherResults } from '@/lib/matchers/judgeAccessor';
 import { resolveJudgeIdentityFromMatchers } from '@/lib/judgeIdentity';
 import { resolveImprovementStrategies } from '@/lib/judgeStrategies';
@@ -72,6 +74,7 @@ import { Progress } from '@/components/ui/progress';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { CollapsibleTestCaseDefinition } from '@/components/evals3/CollapsibleTestCaseDefinition';
+import { JudgeSelectionConflictChip } from '@/components/JudgeSelectionConflictChip';
 
 interface RunDetailsContentProps {
   report: EvaluationReport;
@@ -81,6 +84,8 @@ interface RunDetailsContentProps {
   onEditTestCase?: (testCase: TestCase) => void;
   performanceMetrics?: TestCasePerformanceMetrics;
   hideMetrics?: boolean;
+  /** Opens the retry-judgement dialog — the "Retry again" shortcut on the last-re-judgement-failed banner (inspector only). */
+  onRetryJudgement?: () => void;
 }
 
 const EVALUATOR_ICONS: Record<string, React.ComponentType<any>> = {
@@ -113,6 +118,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   className = '',
   showViewAllReports = false,
   onViewAllReports,
+  onRetryJudgement,
   onEditTestCase,
   performanceMetrics: performanceMetricsProp,
   hideMetrics = false,
@@ -1111,6 +1117,11 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </TabsContent>
 
           <TabsContent value="judge" className="p-6 mt-0 space-y-6 overflow-y-auto">
+            {/* A retry judgement that produced no judgement preserved the
+                judgement shown below and recorded itself here (owner rule). */}
+            {liveReport.lastRetryAttempt && (
+              <LastRetryAttemptBanner reportId={liveReport.id} attempt={liveReport.lastRetryAttempt} onRetryJudgement={onRetryJudgement} />
+            )}
             {/* Only the LATEST judgement is kept on a report (retry-judgement
                 overwrites it in place — services/evaluation/retryJudgement.ts),
                 so say plainly when what's shown is a re-judgement and with what. */}
@@ -1119,7 +1130,9 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 Re-judged {formatRelativeTime(liveReport.judgementRetriedAt)} with{' '}
                 {evaluator?.name ?? liveReport.evaluatorId ?? 'the default evaluator'}
                 {' · '}
-                {liveReport.judgeModelId ? getModelName(liveReport.judgeModelId) : 'default judge model'}
+                {liveReport.judgeMode === 'deterministic'
+                  ? 'no LLM judge (scored in code)'
+                  : liveReport.judgeModelId ? getModelName(liveReport.judgeModelId) : 'default judge model'}
                 {(liveReport.judgementRetryCount ?? 0) > 1 ? ` (retry #${liveReport.judgementRetryCount})` : ''}
               </p>
             )}
@@ -1135,6 +1148,10 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 pre-snapshot (legacy) reports. */}
             <VerdictSummary report={liveReport} />
 
+            {/* Run-level judge selection overrode a body pin — flag it so the
+                report isn't mistaken for one judged by the evaluator/model
+                the eval author hard-coded. Independent of evaluator loading. */}
+            <JudgeSelectionConflictChip conflicts={liveReport.judgeSelectionConflicts} />
             {/* Evaluator Info */}
             {evaluator && (
               <div>
@@ -1231,7 +1248,19 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 m => m.method !== 'llm-judge'
               );
               const merged = [...codeEntries, ...judgeEntries];
-              return merged.length > 0 ? <MatcherResultsPanel results={merged} /> : null;
+              return (
+                <>
+                  {merged.length > 0 ? <MatcherResultsPanel results={merged} /> : null}
+                  {/* Deterministic provenance: where the gold and the candidate
+                      ids came from (every source tried, in order). */}
+                  {liveReport.scoringSnapshot?.diagnostics && (
+                    <div className="mt-3 rounded-md border bg-muted/30 p-2.5" data-testid="judge-tab-scoring-diagnostics">
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Deterministic scoring provenance</div>
+                      <ScoringDiagnosticsView diagnostics={liveReport.scoringSnapshot.diagnostics} />
+                    </div>
+                  )}
+                </>
+              );
             })()}
 
             {/* Judge Reasoning card removed — judge data now flows through

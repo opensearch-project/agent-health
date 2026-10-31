@@ -16,6 +16,7 @@ import {
   isRunTerminal,
   countJudgeFailed,
   countRejudgeable,
+  isRejudgeableResult,
   getRunActionVisibility,
   isOldEnoughForZombieCancel,
   ZOMBIE_CANCEL_MIN_AGE_MS,
@@ -86,22 +87,48 @@ describe('countJudgeFailed', () => {
 });
 
 describe('countRejudgeable', () => {
-  it('counts every completed result regardless of verdict (what scope=all re-judges)', () => {
+  it('counts every completed result regardless of verdict, PLUS judged failures (status failed carrying the passFailStatus mirror) — what scope=all re-judges', () => {
     expect(countRejudgeable(evalRun({
       results: {
         tc1: { status: 'completed', passFailStatus: 'passed', reportId: 'r1' },
         tc2: { status: 'completed', passFailStatus: 'failed', reportId: 'r2' },
         tc3: { status: 'completed', reportId: 'r3' },
-        tc4: { status: 'failed', reportId: 'r4' },
+        tc4: { status: 'failed', reportId: 'r4' },                              // executor crash / legacy: no verdict → not counted
         tc5: { status: 'pending', reportId: 'r5' },
+        tc6: { status: 'failed', passFailStatus: 'failed', reportId: 'r6' },   // judged FAILED → counted
       },
-    }))).toBe(3);
+    }))).toBe(4);
   });
 
   it('returns 0 when results is empty/missing', () => {
     expect(countRejudgeable(evalRun({ results: {} }))).toBe(0);
     expect(countRejudgeable(null)).toBe(0);
     expect(countRejudgeable({ status: 'completed' } as any)).toBe(0);
+  });
+});
+
+// The report-aware predicate shared by the inspector (enablement + count) and
+// the backend's scope=all selection (services/evaluation/retryJudgement.ts).
+describe('isRejudgeableResult', () => {
+  it('completed cases are re-judgeable whatever their verdict (passed / judge-failed / trace-failed)', () => {
+    expect(isRejudgeableResult({ status: 'completed', passFailStatus: 'passed' }, { passFailStatus: 'passed' })).toBe(true);
+    expect(isRejudgeableResult({ status: 'completed' }, { passFailStatus: null, failureStage: 'judge' })).toBe(true);
+    expect(isRejudgeableResult({ status: 'completed' }, { passFailStatus: null, failureStage: 'trace' })).toBe(true);
+  });
+  it('an agent-request failure is never re-judgeable, even though the runner stores it as a completed result', () => {
+    expect(isRejudgeableResult({ status: 'completed' }, { passFailStatus: null, failureStage: 'agent' })).toBe(false);
+  });
+  it('a judged FAILURE (status failed + failed verdict) is re-judgeable; a failed result without a verdict (crash) is not', () => {
+    expect(isRejudgeableResult({ status: 'failed', passFailStatus: 'failed' }, { passFailStatus: 'failed' })).toBe(true);
+    expect(isRejudgeableResult({ status: 'failed' }, { passFailStatus: null })).toBe(false);
+    expect(isRejudgeableResult({ status: 'failed' }, {})).toBe(false);
+  });
+  it('needs both a result and a loaded report; pending / running / cancelled are never re-judgeable', () => {
+    expect(isRejudgeableResult(undefined, { passFailStatus: 'passed' })).toBe(false);
+    expect(isRejudgeableResult({ status: 'completed' }, null)).toBe(false);
+    for (const status of ['pending', 'running', 'cancelled']) {
+      expect(isRejudgeableResult({ status }, { passFailStatus: 'passed' })).toBe(false);
+    }
   });
 });
 

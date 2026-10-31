@@ -723,6 +723,24 @@ describe('RunDetailsContent', () => {
       expect(line.textContent).toContain('default judge model');
       expect(line.textContent).not.toContain('retry #');
     });
+
+    it('a deterministic re-score says "no LLM judge (scored in code)" instead of "default judge model"', async () => {
+      (global as any).fetch = jest.fn(async () => ({ ok: false, json: async () => ({}) }));
+      const report = createReport({
+        metricsStatus: 'ready',
+        judgementRetriedAt: '2026-01-01T00:00:00Z',
+        judgementRetryCount: 1,
+        evaluatorId: 'ranked-retrieval',
+        judgeModelId: undefined,
+        judgeMode: 'deterministic',
+      } as any);
+      mockGetReportById.mockResolvedValue(report);
+      await renderAndWait(report);
+      await openJudgeTab();
+      const line = await screen.findByTestId('judgement-retried-line');
+      expect(line.textContent).toContain('no LLM judge (scored in code)');
+      expect(line.textContent).not.toContain('default judge model');
+    });
   });
 
   describe('per-test-case performance metrics', () => {
