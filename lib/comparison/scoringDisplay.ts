@@ -111,21 +111,6 @@ export function judgeCaption(
   return `mixed (${ids.map(displayName).join(' · ')})`;
 }
 
-// ─── Avg score hover ─────────────────────────────────────────────────────────
-
-/** Tooltip body for the "Avg score" cell — evaluator, version, weights, coverage. */
-export function avgScoreTooltip(scoring: RunScoringSummary | undefined): string {
-  if (!scoring || scoring.source !== 'snapshot') {
-    return 'This run was judged before scoring snapshots existed; its rubric values are shown by name below and are not aggregated into a score.';
-  }
-  const weights = Object.entries(scoring.weights)
-    .filter(([, w]) => Number.isFinite(w) && w > 0)
-    .map(([name, w]) => `${name} ${Math.round(w * 100) / 100}`)
-    .join(', ');
-  const evaluator = scoring.evaluatorName || scoring.evaluatorId;
-  return `Evaluator ${evaluator} v${scoring.evaluatorVersion} · weights: ${weights} · scored ${scoring.scoredRubrics} / ${scoring.totalRubrics} rubrics over ${scoring.scoredReports} case${scoring.scoredReports === 1 ? '' : 's'}`;
-}
-
 // ─── Coverage gate ───────────────────────────────────────────────────────────
 
 export interface ScoringComparability {

@@ -47,6 +47,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { AssistantProvider } from "@/components/assistant-ui/AssistantProvider";
 import { AssistantModal } from "@/components/assistant-ui/AssistantModal";
+import { RetryJudgementToaster } from "@/components/evals3/RetryJudgementJobs";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -532,6 +533,10 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         <AssistantProvider>
           {children}
           <AssistantModal />
+          {/* Background retry-judgement jobs announce their summary here
+              (services/client/retryJudgementJobs.ts) — the confirm dialog no
+              longer has to stay open while the judge pipeline runs. */}
+          <RetryJudgementToaster />
         </AssistantProvider>
       </SidebarInset>
       </SidebarProvider>

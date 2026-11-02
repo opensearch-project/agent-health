@@ -101,12 +101,14 @@ test.describe('Comparison scoreboard — all metrics on the row, no chart, judge
     // Change 2 — every RunAggregateMetrics field visible directly on the row.
     await expect(rowA.locator(`[data-testid="run-passrate-${RUN_A}"]`)).toContainText('100%');
     // No accuracy-only column: "accuracy" is one evaluator's rubric name, not
-    // the score. Snapshot-less reports render "— legacy scoring" for Avg score.
+    // the score. No "Avg score" column either (it read "—" for every
+    // snapshot-less run — noise).
     await expect(rowA.locator(`[data-testid="run-accuracy-${RUN_A}"]`)).toHaveCount(0);
-    await expect(rowA.locator(`[data-testid="run-avgscore-${RUN_A}"]`)).toContainText('legacy scoring');
+    await expect(rowA.locator(`[data-testid="run-avgscore-${RUN_A}"]`)).toHaveCount(0);
+    await expect(page.locator('[data-testid="scoreboard-col-avgScore"]')).toHaveCount(0);
     await expect(rowA).toContainText('--'); // cost/duration/tokens fall back to "--" without trace metrics
     await expect(rowB.locator(`[data-testid="run-passrate-${RUN_B}"]`)).toContainText('100%');
-    await expect(rowB.locator(`[data-testid="run-avgscore-${RUN_B}"]`)).toContainText('legacy scoring');
+    await expect(rowB.locator(`[data-testid="run-avgscore-${RUN_B}"]`)).toHaveCount(0);
 
     // The standalone "All metrics" expander + MetricComparisonPanel are gone.
     await expect(page.locator('[data-testid="scoreboard-all-metrics-toggle"]')).toHaveCount(0);
