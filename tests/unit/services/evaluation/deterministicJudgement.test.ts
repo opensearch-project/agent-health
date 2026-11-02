@@ -67,10 +67,15 @@ describe('resolveDeterministicEvaluator', () => {
     await expect(resolveDeterministicEvaluator('eval-det', s)).rejects.toThrow('storage down');
   });
 
-  it('is null for a system (LLM) evaluator id without touching storage', async () => {
+  it('is null for a system (LLM) evaluator id — known or unknown — without touching storage', async () => {
     const s = storage({});
     expect(await resolveDeterministicEvaluator('system-rca-default', s)).toBeNull();
+    expect(await resolveDeterministicEvaluator('system-does-not-exist', s)).toBeNull();
     expect(s.evaluators.getById).not.toHaveBeenCalled();
+  });
+
+  it('tolerates a storage module without an evaluators collection (null, LLM path unchanged)', async () => {
+    expect(await resolveDeterministicEvaluator('eval-det', { runs: {} } as unknown as IStorageModule)).toBeNull();
   });
 });
 

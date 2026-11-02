@@ -162,6 +162,21 @@ describe('executeEvaluationRun — deterministic run evaluator', () => {
     expect(completed.stats.passed).toBe(1);
   });
 
+  it('a trace-mode agent whose span-built trajectory has no candidates is "not evaluable" (warned, errored, never failed)', async () => {
+    mockStartPolling.mockImplementation((reportId: string, _runId: any, handlers: any) => {
+      setImmediate(() => handlers.onTracesFound([{ traceId: 't1' }], { ...docs[reportId], trajectory: [{ type: 'response', content: 'nothing' }] }));
+    });
+    const completed = await executeEvaluationRun(makeRun({ evaluatorId: 'eval-det', agentKey: 'traced-agent' }), [tc('tc-hit')], {
+      storageModule: storage, onProgress: jest.fn(), onTestCaseComplete: jest.fn(),
+    } as any);
+    expect(mockJudge).not.toHaveBeenCalled();
+    expect(completed.results['tc-hit'].status).toBe('completed');
+    expect(completed.results['tc-hit'].passFailStatus).toBeUndefined();
+    expect(completed.stats).toMatchObject({ passed: 0, failed: 0, errored: 1 });
+    expect(docs['placeholder-tc-hit']).toMatchObject({ metricsStatus: 'error', passFailStatus: null, judgeMode: 'deterministic' });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('could not score this case (span-built trajectory)'));
+  });
+
   it('a trace-mode agent whose trace polling FAILS falls back to the stored connector trajectory (what Retry judgement scores)', async () => {
     mockStartPolling.mockImplementation((_reportId: string, _runId: any, handlers: any) => {
       setImmediate(() => handlers.onError(new Error('no spans within the budget')));
