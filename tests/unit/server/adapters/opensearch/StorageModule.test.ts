@@ -221,6 +221,52 @@ describe('OpenSearchStorageModule', () => {
         );
       });
 
+      // #591: `?fields=summary` used to load every document in full and trim
+      // it in Node, so the 1.7 MB summary took as long as the 213 MB full
+      // listing. The projection must be pushed into the query itself.
+      it('summary projection excludes the heavy fields via _source.excludes in the query', async () => {
+        mockClient.search.mockResolvedValue(makeSearchResponse([]));
+
+        await mod.testCases.getAll({ projection: 'summary' });
+
+        const call = (mockClient.search as jest.Mock).mock.calls[0][0] as any;
+        expect(call.body._source).toBeDefined();
+        expect(call.body._source.excludes).toEqual(
+          expect.arrayContaining(['sourceCode', 'definition', 'versions', 'context', 'expectedOutcomes']),
+        );
+        // The per-id latest-version pick still needs these.
+        expect(call.body._source.excludes).not.toContain('version');
+        expect(call.body._source.excludes).not.toContain('currentVersion');
+        expect(call.body._source.includes).toBeUndefined();
+      });
+
+      it('full projection (default) does not add a _source filter', async () => {
+        mockClient.search.mockResolvedValue(makeSearchResponse([]));
+
+        await mod.testCases.getAll();
+        await mod.testCases.getAll({ projection: 'full' });
+
+        for (const [arg] of (mockClient.search as jest.Mock).mock.calls as any[]) {
+          expect(arg.body._source).toBeUndefined();
+        }
+      });
+
+      it('summary projection still dedupes to the latest version per id from the projected hits', async () => {
+        // What OpenSearch hands back with the excludes applied: no heavy
+        // fields, but `version` intact.
+        const hits = [
+          { id: 'tc-1', name: 'TC 1 v2', version: 2, currentVersion: 2, createdAt: '2025-01-02T00:00:00Z' },
+          { id: 'tc-1', name: 'TC 1 v1', version: 1, currentVersion: 1, createdAt: '2025-01-01T00:00:00Z' },
+        ];
+        mockClient.search.mockResolvedValue(makeSearchResponse(hits, 2));
+
+        const result = await mod.testCases.getAll({ projection: 'summary' });
+
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0].name).toBe('TC 1 v2');
+        expect(result.items[0]).not.toHaveProperty('sourceCode');
+      });
+
       it('should handle numeric total format', async () => {
         mockClient.search.mockResolvedValue({
           body: {

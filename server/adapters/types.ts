@@ -42,6 +42,18 @@ export interface PaginationOptions {
   _source?: string[];
 }
 
+/**
+ * Options for listing test cases. `projection: 'summary'` asks the adapter
+ * to leave the heavy fields (`sourceCode`, `definition`, `versions`,
+ * `context`, `expectedOutcomes` — see
+ * server/services/testCaseSummary.ts) out of the documents it returns, at
+ * the storage layer (OpenSearch `_source.excludes`) rather than after
+ * loading them. Default `'full'`.
+ */
+export interface TestCaseListOptions extends PaginationOptions {
+  projection?: 'full' | 'summary';
+}
+
 export interface DateRangeFilter {
   start: string;
   end: string;
@@ -102,7 +114,7 @@ export interface TracesQueryOptions {
  * Test Case CRUD operations
  */
 export interface ITestCaseOperations {
-  getAll(options?: PaginationOptions): Promise<{ items: TestCase[]; total: number }>;
+  getAll(options?: TestCaseListOptions): Promise<{ items: TestCase[]; total: number }>;
   getById(id: string): Promise<TestCase | null>;
   getVersions(id: string): Promise<TestCase[]>;
   getVersion(id: string, version: number): Promise<TestCase | null>;

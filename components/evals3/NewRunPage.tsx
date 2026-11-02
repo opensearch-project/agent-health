@@ -180,7 +180,10 @@ export const NewRunPage: React.FC = () => {
       try {
         const [bms, tcs] = await Promise.all([
           asyncBenchmarkStorage.getAll(),
-          asyncTestCaseStorage.getAll(),
+          // The picker only renders id + name; the run itself is built from
+          // test-case ids, so the full documents (200+ MB on a corpus with
+          // large `sourceCode` fields, #591) are never needed here.
+          asyncTestCaseStorage.getAll({ summary: true }),
         ]);
         setBenchmarks(bms);
         setTestCases(tcs);

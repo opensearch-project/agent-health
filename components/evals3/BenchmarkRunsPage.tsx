@@ -268,7 +268,12 @@ export const BenchmarkRunsPage2: React.FC = () => {
 
       if (!isPolling) {
         try {
-          const benchmarkTcs = await asyncTestCaseStorage.getByIds(exp.testCaseIds || []);
+          // Summary projection only (#591): this page renders names, labels,
+          // describe paths and a truncated prompt for every case. A 62-case
+          // code-imported benchmark used to pull 6.7 MB here (6.55 MB of it
+          // `sourceCode`); the summary is ~50 KB. The Cases tab fetches the
+          // ONE selected case in full by id for its definition pane.
+          const benchmarkTcs = await asyncTestCaseStorage.getByIds(exp.testCaseIds || [], { summary: true });
           setTestCases(benchmarkTcs);
         } catch (error) {
           console.error('Failed to load test cases:', error);

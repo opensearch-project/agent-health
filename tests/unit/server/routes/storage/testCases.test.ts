@@ -836,6 +836,52 @@ describe('Test Cases Storage Routes', () => {
   });
 
   describe('Summary mode (fields=summary)', () => {
+    // #591: the route must ask the adapter for the summary projection so the
+    // heavy fields are excluded at the storage layer (OpenSearch
+    // `_source.excludes`) instead of being loaded in full and trimmed here.
+    it('asks storage for the summary projection instead of loading full documents', async () => {
+      mockStorage.testCases.getAll.mockResolvedValue({ items: [], total: 0 });
+      const { req, res } = createMocks({}, {}, { fields: 'summary' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      expect(mockStorage.testCases.getAll).toHaveBeenCalledTimes(1);
+      expect(mockStorage.testCases.getAll).toHaveBeenCalledWith({ projection: 'summary' });
+    });
+
+    it('does not request a projection for the full (default) listing', async () => {
+      mockStorage.testCases.getAll.mockResolvedValue({ items: [], total: 0 });
+      const { req, res } = createMocks({}, {}, {});
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      expect(mockStorage.testCases.getAll).toHaveBeenCalledWith(undefined);
+    });
+
+    it('still pins the summary shape when the adapter already projected the documents', async () => {
+      // What the OpenSearch adapter returns with `_source.excludes` applied:
+      // the heavy keys are simply absent. Clients rely on `context` /
+      // `expectedOutcomes` / `versions` being arrays, so the route fills them.
+      mockStorage.testCases.getAll.mockResolvedValue({
+        items: [{ id: 'tc-projected', name: 'Projected', version: 1, currentVersion: 1, createdAt: '2024-01-01T00:00:00Z', initialPrompt: 'p'.repeat(300) }],
+        total: 1,
+      });
+      const { req, res } = createMocks({}, {}, { fields: 'summary' });
+      const handler = getRouteHandler(testCasesRoutes, 'get', '/api/storage/test-cases');
+
+      await handler(req, res);
+
+      const response = (res.json as jest.Mock).mock.calls[0][0];
+      const tc = response.testCases.find((t: any) => t.id === 'tc-projected');
+      expect(tc.context).toEqual([]);
+      expect(tc.expectedOutcomes).toEqual([]);
+      expect(tc.versions).toEqual([]);
+      expect(tc.initialPrompt).toHaveLength(203);
+      expect(tc.sourceCode).toBeUndefined();
+    });
+
     it('should apply summary transformation to storage results', async () => {
       mockStorage.testCases.getAll.mockResolvedValue({
         items: [
