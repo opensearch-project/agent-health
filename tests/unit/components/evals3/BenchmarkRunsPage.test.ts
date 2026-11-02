@@ -228,6 +228,19 @@ describe('BenchmarkRunsPage2 — associated (non-embedded) eval-runs merge (bug 
     });
   });
 
+  it('loads the benchmark\'s test cases as the SUMMARY projection, never the full documents (#591)', async () => {
+    mockGetById.mockResolvedValue(makeBenchmark({ testCaseIds: ['tc-1', 'tc-2'] }));
+    await renderPage();
+
+    await waitFor(() => expect(mockGetByIds).toHaveBeenCalled());
+    // Every list fetch this page issues carries the summary flag — a 62-case
+    // code-imported benchmark is 6.7 MB in full vs ~50 KB as summaries.
+    for (const call of mockGetByIds.mock.calls) {
+      expect(call[0]).toEqual(['tc-1', 'tc-2']);
+      expect(call[1]).toEqual(expect.objectContaining({ summary: true }));
+    }
+  });
+
   it('renders an associated running eval-run that is NOT embedded in benchmark.runs, with a Running badge', async () => {
     mockGetById.mockResolvedValue(makeBenchmark());
     mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [makeAssociatedEvalRun()] });

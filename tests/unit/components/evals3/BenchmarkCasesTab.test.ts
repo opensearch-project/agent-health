@@ -8,13 +8,20 @@
  */
 
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { BenchmarkCasesTab, CaseHeatStrip } from '@/components/evals3/BenchmarkCasesTab';
 import type { BenchmarkRun, EvaluationReport, TestCase } from '@/types';
 
 jest.mock('@/components/ui/markdown', () => ({
   Markdown: ({ children }: { children: string }) => React.createElement('div', null, children),
+}));
+
+// The tab receives the SUMMARY projection and fetches the selected case in
+// full by id (#591). Default: resolve with the fixture case of that id.
+const mockGetById = jest.fn();
+jest.mock('@/services/storage', () => ({
+  asyncTestCaseStorage: { getById: (...a: unknown[]) => mockGetById(...a) },
 }));
 
 const onSelectCase = jest.fn();
@@ -109,6 +116,11 @@ const reportsById = {
   'report-pass-new': { passFailStatus: 'passed', metricsStatus: 'completed' },
   'report-pass-old': { passFailStatus: 'passed', metricsStatus: 'completed' },
 } as Record<string, EvaluationReport>;
+
+beforeEach(() => {
+  mockGetById.mockReset();
+  mockGetById.mockImplementation(async (id: string) => testCases.find(tc => tc.id === id) ?? null);
+});
 
 function renderTab(selectedCaseId?: string) {
   return render(React.createElement(
@@ -234,11 +246,12 @@ describe('BenchmarkCasesTab', () => {
     expect(onSelectCase).toHaveBeenCalledWith('case-stable');
   });
 
-  it('renders full selected-case provenance, trajectory, follow-ups, and pager controls', () => {
+  it('renders full selected-case provenance, trajectory, follow-ups, and pager controls', async () => {
     renderTab('case-failing');
 
     expect(screen.getByTestId('case-detail-pane')).toBeTruthy();
-    expect(screen.getByText('Provenance')).toBeTruthy();
+    expect(await screen.findByText('Provenance')).toBeTruthy();
+    expect(mockGetById).toHaveBeenCalledWith('case-failing');
     expect(screen.getByText('benchmarks/cache.eval.ts')).toBeTruthy();
     expect(screen.getByText('sha256:abc123')).toBeTruthy();
     expect(screen.getByText('Expected Trajectory')).toBeTruthy();
@@ -255,9 +268,10 @@ describe('BenchmarkCasesTab', () => {
     expect(onClearCase).toHaveBeenCalled();
   });
 
-  it('moves the mobile pager to the next case after a horizontal swipe', () => {
+  it('moves the mobile pager to the next case after a horizontal swipe', async () => {
     jest.useFakeTimers();
     renderTab('case-failing');
+    await act(async () => {}); // let the per-id full fetch settle
     const pager = document.querySelector('[data-mobile-case-pager]')!;
 
     pager.dispatchEvent(touchEvent('touchstart', [{ clientX: 120, clientY: 20 }]));
@@ -275,12 +289,13 @@ describe('BenchmarkCasesTab', () => {
     expect(button.getAttribute('title')).toMatch(/last 3 completed runs/);
   });
 
-  it('shows no historical-version notice when every run matches the current case version', () => {
+  it('shows no historical-version notice when every run matches the current case version', async () => {
     renderTab('case-failing');
+    await act(async () => {}); // let the per-id full fetch settle
     expect(screen.queryByTestId('historical-version-notice')).toBeNull();
   });
 
-  it('shows a historical-version notice when a run evaluated an older case definition', () => {
+  it('shows a historical-version notice when a run evaluated an older case definition', async () => {
     const versionedCase = {
       id: 'case-versioned',
       name: 'Versioned case',
@@ -325,8 +340,175 @@ describe('BenchmarkCasesTab', () => {
       }),
     ));
 
+    await act(async () => {}); // let the per-id full fetch settle
     const notice = screen.getByTestId('historical-version-notice');
     expect(notice.textContent).toMatch(/v2/);
+  });
+
+  describe('selected-case definition comes from a per-id full fetch (#591)', () => {
+    /** What the list hands the tab: the summary projection of the fixture. */
+    const summaryOf = (tc: TestCase): TestCase => ({
+      ...tc,
+      initialPrompt: tc.initialPrompt.length > 20 ? `${tc.initialPrompt.slice(0, 20)}...` : tc.initialPrompt,
+      expectedOutcomes: [],
+      context: [],
+      versions: [],
+    });
+    const fullCases: TestCase[] = [
+      { ...testCases[0], id: 'case-a', name: 'Duplicate name', initialPrompt: 'Full prompt for case A, long enough to be truncated', expectedOutcomes: ['Outcome only A has'] },
+      { ...testCases[1], id: 'case-b', name: 'Duplicate name', initialPrompt: 'Full prompt for case B, long enough to be truncated', expectedOutcomes: ['Outcome only B has'] },
+      { ...testCases[2], id: 'case-c', name: 'Third case', initialPrompt: 'Full prompt for case C, long enough to be truncated', expectedOutcomes: ['Outcome only C has'] },
+    ];
+    const summaries = fullCases.map(summaryOf);
+    const deferred = () => {
+      let resolve!: (v: TestCase | null) => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<TestCase | null>((res, rej) => { resolve = res; reject = rej; });
+      return { promise, resolve, reject };
+    };
+
+    function renderSummaries(selectedCaseId?: string) {
+      return render(React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(BenchmarkCasesTab, {
+          benchmarkId: 'bench-summary',
+          testCases: summaries,
+          recentRuns: [],
+          allRuns: [],
+          totalRuns: 0,
+          reportsById: {},
+          selectedCaseId,
+          onSelectCase,
+          onClearCase,
+          onOpenRuns,
+        }),
+      ));
+    }
+
+    it('shows a loading row (never the truncated summary) until the full document arrives, then its prompt and outcomes', async () => {
+      const pending = deferred();
+      mockGetById.mockReturnValueOnce(pending.promise);
+      renderSummaries('case-a');
+
+      expect(mockGetById).toHaveBeenCalledTimes(1);
+      expect(mockGetById).toHaveBeenCalledWith('case-a');
+      expect(screen.getByTestId('case-definition-loading')).toBeTruthy();
+      expect(screen.getByTestId('case-definition').getAttribute('data-status')).toBe('loading');
+      expect(screen.queryByText(/Full prompt for case A, long/)).toBeNull();
+
+      await act(async () => { pending.resolve(fullCases[0]); });
+
+      expect(screen.queryByTestId('case-definition-loading')).toBeNull();
+      expect(screen.getByText('Full prompt for case A, long enough to be truncated')).toBeTruthy();
+      expect(screen.getByText('Outcome only A has')).toBeTruthy();
+      expect(screen.getByTestId('case-definition').getAttribute('data-case-id')).toBe('case-a');
+      expect(screen.getByTestId('case-definition').getAttribute('data-status')).toBe('ready');
+    });
+
+    it('ignores a late response for a previous selection and caches per id (two cases share a name)', async () => {
+      const a = deferred();
+      const b = deferred();
+      mockGetById.mockImplementation((id: string) => (id === 'case-a' ? a.promise : id === 'case-b' ? b.promise : Promise.resolve(null)));
+      const view = renderSummaries('case-a');
+      const rerenderWith = (id: string) => view.rerender(React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(BenchmarkCasesTab, {
+          benchmarkId: 'bench-summary',
+          testCases: summaries,
+          recentRuns: [],
+          allRuns: [],
+          totalRuns: 0,
+          reportsById: {},
+          selectedCaseId: id,
+          onSelectCase,
+          onClearCase,
+          onOpenRuns,
+        }),
+      ));
+
+      // Select B before A's document arrives, then let A's response land late.
+      rerenderWith('case-b');
+      expect(mockGetById).toHaveBeenCalledWith('case-b');
+      await act(async () => { a.resolve(fullCases[0]); });
+      expect(screen.getByTestId('case-definition').getAttribute('data-case-id')).toBe('case-b');
+      expect(screen.getByTestId('case-definition-loading')).toBeTruthy();
+      expect(screen.queryByText('Outcome only A has')).toBeNull();
+
+      await act(async () => { b.resolve(fullCases[1]); });
+      expect(screen.getByText('Outcome only B has')).toBeTruthy();
+      expect(screen.queryByText('Outcome only A has')).toBeNull();
+
+      // Back to A: served from the per-id cache, no second request, no loader.
+      const callsBefore = mockGetById.mock.calls.length;
+      rerenderWith('case-a');
+      expect(screen.queryByTestId('case-definition-loading')).toBeNull();
+      expect(screen.getByText('Outcome only A has')).toBeTruthy();
+      expect(mockGetById.mock.calls.length).toBe(callsBefore);
+    });
+
+    it('shows an error note with Retry when the full fetch fails (never the summary dressed as the full doc), and Retry refetches', async () => {
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockGetById.mockRejectedValueOnce(new Error('storage down'));
+      renderSummaries('case-c');
+
+      await waitFor(() => expect(screen.getByTestId('case-definition-error')).toBeTruthy());
+      const pane = screen.getByTestId('case-definition');
+      expect(pane.getAttribute('data-status')).toBe('error');
+      expect(screen.queryByTestId('case-definition-loading')).toBeNull();
+      // Neither the truncated summary prompt nor the (absent) outcomes are shown as if they were the definition.
+      expect(pane.textContent).not.toContain('Full prompt for case');
+      expect(pane.textContent).not.toContain('Outcome only C has');
+      expect(consoleError).toHaveBeenCalled();
+
+      // Retry: the mock now succeeds (default implementation) and the pane becomes ready.
+      mockGetById.mockImplementation(async (id: string) => fullCases.find(tc => tc.id === id) ?? null);
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+      await waitFor(() => expect(pane.getAttribute('data-status')).toBe('ready'));
+      expect(screen.getByText('Outcome only C has')).toBeTruthy();
+      expect(mockGetById).toHaveBeenCalledTimes(2);
+      consoleError.mockRestore();
+    });
+
+    it('A → B → A while A is still in flight reuses A\'s request (one fetch per case) and treats a 404 as an error', async () => {
+      const a = deferred();
+      mockGetById.mockImplementation((id: string) => (id === 'case-a' ? a.promise : Promise.resolve(null)));
+      const view = renderSummaries('case-a');
+      const rerenderWith = (id: string, cases: TestCase[] = summaries) => view.rerender(React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(BenchmarkCasesTab, {
+          benchmarkId: 'bench-summary',
+          testCases: cases,
+          recentRuns: [],
+          allRuns: [],
+          totalRuns: 0,
+          reportsById: {},
+          selectedCaseId: id,
+          onSelectCase,
+          onClearCase,
+          onOpenRuns,
+        }),
+      ));
+
+      rerenderWith('case-b');
+      await waitFor(() => expect(screen.getByTestId('case-definition-error')).toBeTruthy()); // 404 → error, not a blank pane
+      rerenderWith('case-a');
+      expect(screen.getByTestId('case-definition').getAttribute('data-status')).toBe('loading');
+      // Exactly one request for A despite leaving and coming back while it was pending.
+      expect(mockGetById.mock.calls.filter(c => c[0] === 'case-a')).toHaveLength(1);
+
+      await act(async () => { a.resolve(fullCases[0]); });
+      expect(screen.getByText('Outcome only A has')).toBeTruthy();
+
+      // A new version of the same case on the polled list invalidates the cached document.
+      mockGetById.mockImplementation(async (id: string) => (id === 'case-a' ? { ...fullCases[0], currentVersion: 2, expectedOutcomes: ['Outcome of A v2'] } : null));
+      rerenderWith('case-a', summaries.map(tc => (tc.id === 'case-a' ? { ...tc, currentVersion: 2 } : tc)));
+      expect(screen.getByTestId('case-definition').getAttribute('data-status')).toBe('loading');
+      await waitFor(() => expect(screen.getByText('Outcome of A v2')).toBeTruthy());
+      expect(mockGetById.mock.calls.filter(c => c[0] === 'case-a')).toHaveLength(2);
+    });
   });
 
   it('renders a 400-case benchmark incrementally and loads more when the sentinel intersects', () => {
