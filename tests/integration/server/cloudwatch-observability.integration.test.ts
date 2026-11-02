@@ -293,7 +293,13 @@ describe('CloudWatch observability backend (HTTP integration)', () => {
   });
 
   it('a 60-day /api/traces range is answered from the newest 30 days WITH a partial warning (documented bound)', async () => {
-    const now = Date.now();
+    // Anchor the 60-day range on the FIXTURE's time, not the wall clock: the
+    // fixture spans are dated 2026-09-03, so a range ending at Date.now()
+    // stopped containing them exactly 60 days later and the test went red on
+    // 2026-11-02 with no code change. One day after the newest fixture span
+    // keeps the range realistic (end of range = "now" for the request).
+    const fixtureEndMs = Math.max(...(spanFixture as any[]).map((s) => Math.floor(Number(s.endTimeUnixNano) / 1_000_000)));
+    const now = fixtureEndMs + 86_400_000;
     const res = await request(app).post('/api/traces').send({ traceId: TRACE, startTime: now - 60 * 86_400_000, endTime: now });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(12);

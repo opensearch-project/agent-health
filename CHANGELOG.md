@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+- CI: the CloudWatch "60-day range" integration test no longer depends on the wall clock (it failed once its fixture turned 60 days old) ([#608](https://github.com/opensearch-project/agent-health/pull/608))
+
 ## [0.9.0] - 2026-11-02
 
 Release 0.9.0 is about trustworthy scores and readable reports: one canonical verdict engine writes a scoring snapshot on every judgement (unevaluable is never a 0, a judge error produces no metrics); deterministic retrieval evaluators (Hit@k / Recall@k / MRR / abstain) re-score completed runs through Retry judgement without an LLM call; Retry judgement is always available with an evaluator + judge-model picker; agent-side failures are recorded as agent failures and never judged; every run carries the agent's configuration fingerprint; the Runs table shows tokens / cost / LLM calls / time-per-case; the run report leads with a case TL;DR; and Amazon CloudWatch joins OpenSearch as an observability source.
