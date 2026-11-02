@@ -485,8 +485,14 @@ describe('RunDetailsContent', () => {
 
       await renderAndWait(report);
 
-      expect(screen.getByTestId('trajectory-view')).toBeTruthy();
+      // The inspector stayed up: tab strip + the answer-first Output tab.
       expect(screen.getByRole('tab', { name: /Test Case Output/ })).toBeTruthy();
+      expect(screen.getByTestId('response-first-output')).toBeTruthy();
+      // The steps list (collapsed by default since #596) renders the hardened
+      // TrajectoryView over the array that still contains the `null` entry.
+      fireEvent.click(screen.getByTestId('steps-toggle'));
+      expect(screen.getByTestId('steps-body')).toBeTruthy();
+      expect(screen.getByTestId('trajectory-view')).toBeTruthy();
     });
   });
 
