@@ -41,6 +41,13 @@ import {
   type FactVerdictKind,
 } from '@/lib/matchers/judgeReasoningParse';
 import { Badge } from '@/components/ui/badge';
+import {
+  parseAssertionMessage,
+  isNotReachedMarker,
+  formatNumber,
+  formatRatio,
+  splitReasoningSections,
+} from '@/lib/judgement/checks';
 
 interface Props {
   results: MatcherResult[];
@@ -84,11 +91,16 @@ export const MatcherResultsPanel: React.FC<Props> = ({ results }) => {
   const notApplicableCount = results.filter(r => r.notApplicable && !r.notReached).length;
   const passed = reached.filter(r => r.pass).length;
   const failed = reached.length - passed;
+  // The not-reached marker carries the exception that stopped the test body.
+  // Usually that is a copy of the failing assertion's message (already shown
+  // on its row); when it is NOT — the body threw somewhere else — the marker
+  // is the only place the cause lives, so the row must show it inline.
+  const otherErrors = new Set(results.filter(r => !isNotReachedMarker(r)).map(r => r.errorMessage).filter(Boolean));
 
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-        Matchers
+      <h3 className="text-lg font-semibold mb-3 flex items-center gap-2" data-testid="checks-heading">
+        Checks
         <span className="text-xs font-normal text-muted-foreground">
           ({passed}/{reached.length} passed{failed > 0 ? `, ${failed} failed` : ''}{notApplicableCount > 0 ? `, ${notApplicableCount} n/a` : ''}{notReachedCount > 0 ? `, ${notReachedCount} not reached` : ''})
         </span>
@@ -98,7 +110,7 @@ export const MatcherResultsPanel: React.FC<Props> = ({ results }) => {
           r.method === 'llm-judge' && !r.notReached ? (
             <JudgeRow key={`${idx}-${r.description}`} result={r} />
           ) : (
-            <MatcherRow key={`${idx}-${r.description}`} result={r} />
+            <MatcherRow key={`${idx}-${r.description}`} result={r} distinctCause={isNotReachedMarker(r) && !!r.errorMessage && !otherErrors.has(r.errorMessage)} />
           )
         )}
       </div>
@@ -110,6 +122,8 @@ export const MatcherResultsPanel: React.FC<Props> = ({ results }) => {
 
 interface RowProps {
   result: MatcherResult;
+  /** Not-reached marker only: its error is not shown on any other row → show it inline. */
+  distinctCause?: boolean;
 }
 
 const PassIcon: React.FC<{ pass: boolean; notReached?: boolean }> = ({ pass, notReached }) =>
@@ -188,9 +202,21 @@ const IdChips: React.FC<{ ids: string[]; total?: number; goldSet?: Set<string>; 
   </span>
 );
 
-const MatcherRow: React.FC<RowProps> = ({ result }) => {
+const MatcherRow: React.FC<RowProps> = ({ result, distinctCause }) => {
   const idListsRaw = idListDetails(result.details);
   const idLists = idListsRaw && result.notApplicable ? { ...idListsRaw, notApplicable: true } : idListsRaw;
+  // The runner's synthetic "later matchers never ran" marker is a note, not
+  // a check: one short line, raw text behind a disclosure — unless its error
+  // is the only record of why the body stopped (distinctCause).
+  const notReached = isNotReachedMarker(result);
+  // Code-SDK assertions: when the author's message is STRUCTURED ("<what was
+  // checked>: k=v (bar ≤ N) …") it is the readable title and the evidence,
+  // and the chai text ("false to equal true") moves into the raw disclosure.
+  // Anything the parser does not understand renders exactly as before.
+  const parsed = useMemo(() => parseAssertionMessage(result.errorMessage), [result.errorMessage]);
+  const titleIsParsed = !notReached && parsed.structured && !!parsed.label;
+  const title = notReached ? 'Later checks did not run' : titleIsParsed ? parsed.label : (result.description || '(matcher)');
+  const measurements = parsed.structured ? parsed.measurements : [];
   const hasDetail =
     !!result.errorMessage ||
     !!result.reasoning ||
@@ -198,8 +224,38 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
     !!idLists ||
     result.actual !== undefined ||
     result.expected !== undefined;
-  const [open, setOpen] = useState(!result.pass && hasDetail);
+  const [open, setOpen] = useState(!result.pass && hasDetail && !notReached);
   const meta = METHOD_META[result.method] ?? METHOD_META['code-assertion'];
+
+  if (notReached) {
+    return (
+      <div className="px-3 py-2" data-testid="check-not-reached">
+        <div className="flex items-start gap-2">
+          <div className="pt-0.5 shrink-0"><PassIcon pass={false} notReached /></div>
+          <div className="flex-1 min-w-0 text-sm">
+            <span className="text-muted-foreground">{title}</span>
+            <span className="text-[9px] uppercase tracking-wide text-muted-foreground ml-2">not reached</span>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {distinctCause
+                ? 'The test body threw before reaching these checks. To record every check even when one fails, use '
+                : 'The failing check above threw, so the rest of the test body never executed. To record every check even when one fails, use '}
+              <code className="bg-muted px-1 py-0.5 rounded">expect.soft(...)</code>.
+            </div>
+            {distinctCause && (
+              <div className="text-xs text-red-600 dark:text-red-400 mt-1 whitespace-pre-wrap" data-testid="check-not-reached-cause">
+                <span className="font-semibold">thrown:</span> {result.errorMessage}
+              </div>
+            )}
+            <details className="mt-1 text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none">Raw marker text</summary>
+              <div className="mt-1 whitespace-pre-wrap">{result.description}</div>
+              {result.errorMessage && !distinctCause && <div className="mt-1 whitespace-pre-wrap">error: {result.errorMessage}</div>}
+            </details>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-3 py-2">
@@ -224,8 +280,8 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={`text-sm ${result.notReached ? 'text-muted-foreground italic' : result.pass ? '' : 'text-red-600 dark:text-red-400 font-medium'}`}>
-              {result.description || '(matcher)'}
+            <span className={`text-sm ${result.pass ? '' : 'text-red-600 dark:text-red-400 font-medium'}`} data-testid="check-title">
+              {title}
             </span>
             {result.notReached && (
               <span className="text-[9px] uppercase tracking-wide text-muted-foreground shrink-0">
@@ -272,13 +328,57 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
 
       {open && hasDetail && (
         <div className="mt-2 pl-6 space-y-1.5 text-xs">
-          {result.errorMessage && (
+          {/* Measured vs limit — parsed from the author's own `k=v (bar ≤ N)` message. */}
+          {measurements.length > 0 && (
+            <table className="text-xs" data-testid="check-measurements">
+              <tbody>
+                {measurements.map((m, i) => (
+                  <tr key={i} data-ok={m.ok === undefined ? undefined : String(m.ok)}>
+                    <td className="pr-3 py-0.5 text-muted-foreground align-top whitespace-nowrap">{m.key}</td>
+                    <td className="pr-3 py-0.5 font-semibold tabular-nums align-top">{formatNumber(m.value)}</td>
+                    <td className={`pr-3 py-0.5 align-top whitespace-nowrap ${m.ok === false ? 'text-red-600 dark:text-red-400' : m.ok === true ? 'text-green-700 dark:text-green-400' : 'text-muted-foreground'}`}>
+                      {m.limit ? `${m.ok === false ? '✕' : m.ok === true ? '✓' : ''} limit ${m.op} ${formatNumber(m.limit)}` : m.ok === false ? '✕' : m.ok === true ? '✓' : ''}
+                    </td>
+                    <td className="py-0.5 align-top">
+                      {m.ok === false && m.ratio !== undefined && (
+                        <span className="text-[10px] border border-red-300 dark:border-red-500/40 text-red-700 dark:text-red-300 rounded px-1">{formatRatio(m.ratio)}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {titleIsParsed && parsed.rest && measurements.length === 0 && (
+            <div className="text-foreground/90 whitespace-pre-wrap" data-testid="check-rest">{parsed.rest}</div>
+          )}
+          {parsed.context && (
+            <div className="text-muted-foreground" data-testid="check-context">{parsed.context}</div>
+          )}
+          {/* The exact assertion the SDK recorded — kept, but behind a disclosure when a readable title exists. */}
+          {result.errorMessage && (titleIsParsed ? (
+            <details className="text-muted-foreground" data-testid="check-raw">
+              <summary className="cursor-pointer select-none">Raw assertion</summary>
+              <div className="mt-1 space-y-1">
+                <div><span className="font-semibold">assertion:</span> <code className="bg-muted px-1 py-0.5 rounded">{result.description}</code></div>
+                <div className="text-red-600 dark:text-red-400 whitespace-pre-wrap"><span className="font-semibold">error:</span> {result.errorMessage}</div>
+                {result.expected !== undefined && (
+                  <div><span className="font-semibold">expected:</span> <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.expected)}</code></div>
+                )}
+                {result.actual !== undefined && (
+                  <div><span className="font-semibold">actual:</span> <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.actual)}</code></div>
+                )}
+              </div>
+            </details>
+          ) : (
             <div className="text-red-600 dark:text-red-400">
               <span className="font-semibold">error:</span> {result.errorMessage}
             </div>
-          )}
+          ))}
           {result.reasoning && result.reasoning !== result.errorMessage && (
-            <div className="text-muted-foreground whitespace-pre-wrap">{result.reasoning}</div>
+            hasRealMarkdown(result.reasoning)
+              ? <Markdown className="text-muted-foreground">{result.reasoning}</Markdown>
+              : <div className="text-muted-foreground whitespace-pre-wrap">{result.reasoning}</div>
           )}
           {idLists && (
             <div className="space-y-1" data-testid="matcher-id-lists">
@@ -309,13 +409,13 @@ const MatcherRow: React.FC<RowProps> = ({ result }) => {
               )}
             </div>
           )}
-          {!idLists && result.expected !== undefined && (
+          {!idLists && !titleIsParsed && result.expected !== undefined && (
             <div>
               <span className="font-semibold">expected:</span>{' '}
               <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.expected)}</code>
             </div>
           )}
-          {result.actual !== undefined && (
+          {(idLists || !titleIsParsed) && result.actual !== undefined && (
             <div>
               <span className="font-semibold">{idLists ? 'value' : 'actual'}:</span>{' '}
               <code className="bg-muted px-1 py-0.5 rounded">{formatValue(result.actual)}</code>
@@ -631,21 +731,50 @@ const JudgeRow: React.FC<RowProps> = ({ result }) => {
             </details>
           )}
 
-          {/* Verbatim reasoning — SINGLE copy, collapsed unless it's all we have */}
-          {hasReasoning && (
-            <details open={failed && whyBullets.length === 0 && facts.length === 0}>
-              <summary className="cursor-pointer text-muted-foreground select-none">
-                Full judge reasoning
-              </summary>
-              <div className="mt-1.5">
-                {hasRealMarkdown(result.reasoning!) ? (
-                  <Markdown className="text-muted-foreground">{result.reasoning!}</Markdown>
-                ) : (
-                  <div className="text-muted-foreground whitespace-pre-wrap">{result.reasoning}</div>
-                )}
-              </div>
-            </details>
-          )}
+          {/* Verbatim reasoning — SINGLE copy. Long judge prose is split into
+              its own sections (one per **Heading** the judge wrote, e.g. one
+              per rubric criterion) so a reader can open just the criterion
+              that failed; shorter prose stays one collapsible. */}
+          {hasReasoning && (() => {
+            const sections = splitReasoningSections(result.reasoning);
+            const openByDefault = failed && whyBullets.length === 0 && facts.length === 0;
+            if (sections.length > 1) {
+              // Open only the judge's own Summary/Verdict section (or the
+              // first one when there is none) — the point of sectioning is
+              // that the reader opens the criterion they care about.
+              const summaryIdx = sections.findIndex(sec => /summary|verdict|conclusion/i.test(sec.title));
+              const openIdx = summaryIdx >= 0 ? summaryIdx : 0;
+              return (
+                <div data-testid="judge-reasoning-sections">
+                  <div className="text-muted-foreground mb-1">Full judge reasoning · {sections.length} sections</div>
+                  <div className="border rounded-md divide-y bg-card/50">
+                    {sections.map((sec, i) => (
+                      <details key={i} open={i === openIdx} className="px-2 py-1" data-testid="judge-reasoning-section">
+                        <summary className="cursor-pointer select-none text-foreground font-medium">{sec.title || `Section ${i + 1}`}</summary>
+                        <div className="mt-1">
+                          <Markdown className="text-muted-foreground">{sec.body}</Markdown>
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <details open={openByDefault}>
+                <summary className="cursor-pointer text-muted-foreground select-none">
+                  Full judge reasoning
+                </summary>
+                <div className="mt-1.5">
+                  {hasRealMarkdown(result.reasoning!) ? (
+                    <Markdown className="text-muted-foreground">{result.reasoning!}</Markdown>
+                  ) : (
+                    <div className="text-muted-foreground whitespace-pre-wrap">{result.reasoning}</div>
+                  )}
+                </div>
+              </details>
+            );
+          })()}
 
           {result.model && (
             <div className="text-muted-foreground">

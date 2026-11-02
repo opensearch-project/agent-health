@@ -150,7 +150,7 @@ test.describe('Judge Evaluation tab — why/fix redesign', () => {
     await page.getByRole('tab', { name: /Judge Evaluation/ }).click();
 
     // Matchers summary with the failed judge row expanded by default.
-    await expect(page.getByText('Matchers', { exact: false }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Checks', { exact: false }).first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('judge: 2 claims')).toBeVisible();
 
     // 1. No fabricated "score 0%"; dimension chips are the scannable verdict.

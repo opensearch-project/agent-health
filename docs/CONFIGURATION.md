@@ -415,6 +415,10 @@ Debug logging can also be toggled at runtime via the Settings page "Verbose Logg
 | `VITE_BACKEND_PORT` | Backend server port | `4001` |
 | `AGENT_HEALTH_EVAL_ROOTS` | Path-delimiter-separated directories a relative code-SDK `sourceFile` is resolved against (see [`evalRoots`](#where-the-server-looks-for-eval-source-files-evalroots)) | server cwd |
 | `BEDROCK_MODEL_ID` | Judge model ID | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| `CASE_SUMMARY_ENABLED` | Set to `false` to never send case data (prompt, answer, judge reasoning) to the summary model behind the run inspector's TL;DR card; the card then shows a deterministic field-based summary | `true` |
+| `CASE_SUMMARY_MODEL_ID` | Model for the TL;DR card | `BEDROCK_MODEL_ID` |
+| `CASE_SUMMARY_TIMEOUT_MS` | Per-summary model timeout (then the field-based summary is shown) | `20000` |
+| `CASE_SUMMARY_MAX_CONCURRENT` | Max model summaries in flight per server; extra requests get the field-based summary | `4` |
 
 ## Where the server looks for eval source files (`evalRoots`)
 

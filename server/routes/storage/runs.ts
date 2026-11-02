@@ -14,6 +14,7 @@ import { Router, Request, Response } from 'express';
 import { debug } from '@/lib/debug';
 import { getStorageModule } from '../../adapters/index.js';
 import { refreshBenchmarkRunStatsByReportId } from '../../services/benchmarkRunStats.js';
+import { generateCaseSummary, buildCaseSummaryInputs, hashCaseSummaryInputs } from '../../services/caseSummaryService.js';
 import {
   SAMPLE_RUNS,
   getSampleRun,
@@ -543,6 +544,57 @@ router.get('/api/storage/runs/iterations/:benchmarkId/:testCaseId', async (req: 
   } catch (error: any) {
     console.error('[StorageAPI] Get iterations failed:', error.message);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/storage/runs/:id/summary - Case TL;DR (lazy, cached on the report)
+//
+// Body: { force?: boolean }. Returns { summary: CaseSummary, cached: boolean }.
+// The summary is regenerated whenever its inputs hash (prompt / answer /
+// judgement) no longer matches the cached one — i.e. after Retry judgement —
+// and never blocks on a dead model: the fallback is field-based text with
+// `source: 'fallback'` + `error`. Sample (demo-*) reports are summarised but
+// never written to.
+router.post('/api/storage/runs/:id/summary', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const force = req.body?.force === true;
+    const storage = getStorageModule();
+    const report = isSampleId(id) ? getSampleRun(id) : await storage.runs.getById(id);
+    if (!report) {
+      return res.status(404).json({ error: 'Run not found' });
+    }
+    // A missing test case (deleted since the run) is a legitimate state —
+    // the summary just lacks the prompt. A FAILING test-case store is not:
+    // let it surface as a 500 rather than caching a degraded summary.
+    const testCase = report.testCaseId ? await storage.testCases.getById(report.testCaseId) : null;
+    const result = await generateCaseSummary(report as TestCaseRun, testCase, {
+      force,
+      persist: isSampleId(id)
+        ? undefined
+        : async (summary) => {
+            // Stale-write guard: a re-judge may have landed while the model
+            // was writing. Persist only if the report STILL hashes to the
+            // inputs this summary was written from; otherwise the next view
+            // regenerates against the new judgement.
+            const fresh = await storage.runs.getById(id);
+            if (!fresh) return;
+            const currentHash = hashCaseSummaryInputs(buildCaseSummaryInputs(fresh as TestCaseRun, testCase));
+            if (currentHash !== summary.inputsHash) {
+              debug('StorageAPI', `Case summary for ${id} is already stale (report changed during generation); not cached`);
+              return;
+            }
+            await storage.runs.update(id, { caseSummary: summary } as Partial<TestCaseRun>);
+          },
+    });
+    res.json(result);
+  } catch (error: any) {
+    // Log the real cause server-side; the body gets a generic message + a
+    // correlation id (storage / SDK errors can carry hostnames and config).
+    const ref = `cs-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    // Full error object (stack included); the id is encoded so a crafted id cannot forge log lines.
+    console.error(`[StorageAPI] Case summary failed (${ref}) for ${encodeURIComponent(String(req.params.id))}:`, error);
+    res.status(500).json({ error: `Case summary failed (ref ${ref}); see server log` });
   }
 });
 

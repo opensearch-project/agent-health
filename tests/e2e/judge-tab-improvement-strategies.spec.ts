@@ -103,7 +103,7 @@ test.describe('Judge Evaluation tab — improvement strategies (run inspector)',
   async function openJudgeTab(page: any, reportId: string) {
     await page.goto(`/evaluations/runs/${runId}/inspect?reportId=${reportId}`);
     await page.getByRole('tab', { name: /Judge Evaluation/ }).click({ timeout: 30_000 });
-    await expect(page.getByText('Matchers', { exact: false }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Checks', { exact: false }).first()).toBeVisible({ timeout: 15_000 });
   }
 
   for (const kind of ['passed', 'failed'] as const) {

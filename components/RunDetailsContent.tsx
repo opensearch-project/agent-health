@@ -38,10 +38,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { EvaluationReport, RunAnnotation, TestCase, TestCasePerformanceMetrics, Span, TimeRange, TraceMetrics, Evaluator } from '@/types';
 import { fetchRunMetrics, formatCost, formatDuration, formatTokens } from '@/services/metrics';
-import { TrajectoryView } from './TrajectoryView';
+import { ResponseFirstOutput } from './ResponseFirstOutput';
 import { RawEventsPanel } from './RawEventsPanel';
 import { MatcherResultsPanel } from './MatcherResultsPanel';
 import { VerdictSummary } from './judge/VerdictSummary';
+import { ScoringDiagnosticsView } from './evals3/ScoringDiagnosticsView';
+import { LastRetryAttemptBanner } from './evals3/LastRetryAttemptBanner';
 import { getJudgeReasoningText, getJudgeMatcherResults } from '@/lib/matchers/judgeAccessor';
 import { resolveJudgeIdentityFromMatchers } from '@/lib/judgeIdentity';
 import { resolveImprovementStrategies } from '@/lib/judgeStrategies';
@@ -60,6 +62,7 @@ import { tracePollingManager } from '@/services/traces/tracePoller';
 import { ensureTracePollingForReport } from '@/services/traces/browserRecovery';
 import { getResultStatus as getSharedResultStatus, StatusIcon as SharedStatusIcon, StatusLabel as SharedStatusLabel, getErrorStage } from '@/components/evals3/ResultStatus';
 import { RunFailureCard } from '@/components/evals3/RunFailureCard';
+import { JudgementHeadline } from '@/components/judge/JudgementHeadline';
 import { getFailureStage } from '@/lib/reportFailure';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -80,6 +83,8 @@ interface RunDetailsContentProps {
   onEditTestCase?: (testCase: TestCase) => void;
   performanceMetrics?: TestCasePerformanceMetrics;
   hideMetrics?: boolean;
+  /** Opens the retry-judgement dialog — the "Retry again" shortcut on the last-re-judgement-failed banner (inspector only). */
+  onRetryJudgement?: () => void;
 }
 
 const EVALUATOR_ICONS: Record<string, React.ComponentType<any>> = {
@@ -112,6 +117,7 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
   className = '',
   showViewAllReports = false,
   onViewAllReports,
+  onRetryJudgement,
   onEditTestCase,
   performanceMetrics: performanceMetricsProp,
   hideMetrics = false,
@@ -908,9 +914,10 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
               </div>
             </div>
 
-            {/* Conditional View */}
+            {/* Conditional View — answer first (Markdown, Rendered/Raw), then
+                every step in a collapsible (owner feedback). */}
             {trajectoryViewMode === 'processed' ? (
-              <TrajectoryView steps={trajectory} loading={false} />
+              <ResponseFirstOutput steps={trajectory} />
             ) : (
               report.rawEvents && report.rawEvents.length > 0 ? (
                 <RawEventsPanel events={report.rawEvents} />
@@ -1109,6 +1116,11 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
           </TabsContent>
 
           <TabsContent value="judge" className="p-6 mt-0 space-y-6 overflow-y-auto">
+            {/* A retry judgement that produced no judgement preserved the
+                judgement shown below and recorded itself here (owner rule). */}
+            {liveReport.lastRetryAttempt && (
+              <LastRetryAttemptBanner reportId={liveReport.id} attempt={liveReport.lastRetryAttempt} onRetryJudgement={onRetryJudgement} />
+            )}
             {/* Only the LATEST judgement is kept on a report (retry-judgement
                 overwrites it in place — services/evaluation/retryJudgement.ts),
                 so say plainly when what's shown is a re-judgement and with what. */}
@@ -1121,6 +1133,11 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 {(liveReport.judgementRetryCount ?? 0) > 1 ? ` (retry #${liveReport.judgementRetryCount})` : ''}
               </p>
             )}
+            {/* Headline FIRST: the verdict, what decided it, and which check
+                failed with its measured-vs-limit evidence — built from the
+                report's own fields (lib/judgement/checks.ts). */}
+            <JudgementHeadline report={liveReport} />
+
             {/* Verdict — what the canonical verdict engine decided and how
                 (policy, LLM's own verdict, conflict, unevaluable rubrics), or
                 the explicit "no metrics" state for a judge error. Reads only
@@ -1224,7 +1241,19 @@ export const RunDetailsContent: React.FC<RunDetailsContentProps> = ({
                 m => m.method !== 'llm-judge'
               );
               const merged = [...codeEntries, ...judgeEntries];
-              return merged.length > 0 ? <MatcherResultsPanel results={merged} /> : null;
+              return (
+                <>
+                  {merged.length > 0 ? <MatcherResultsPanel results={merged} /> : null}
+                  {/* Deterministic provenance: where the gold and the candidate
+                      ids came from (every source tried, in order). */}
+                  {liveReport.scoringSnapshot?.diagnostics && (
+                    <div className="mt-3 rounded-md border bg-muted/30 p-2.5" data-testid="judge-tab-scoring-diagnostics">
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Deterministic scoring provenance</div>
+                      <ScoringDiagnosticsView diagnostics={liveReport.scoringSnapshot.diagnostics} />
+                    </div>
+                  )}
+                </>
+              );
             })()}
 
             {/* Judge Reasoning card removed — judge data now flows through

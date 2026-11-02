@@ -159,12 +159,13 @@ test.describe('Run inspector page (/evaluations/.../runs/:id) — no auto-select
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}`);
     await expect(page.getByText(/e2e-inspector-noauto-tc-1-/)).toBeVisible({ timeout: 15_000 });
     await page.getByText(/e2e-inspector-noauto-tc-1-/).click();
-    await expect(page.getByText(`step for ${testCaseIds[1]}`)).toBeVisible({ timeout: 15_000 });
+    // exact: the case TL;DR card above the definition also quotes the answer.
+    await expect(page.getByText(`step for ${testCaseIds[1]}`, { exact: true })).toBeVisible({ timeout: 15_000 });
 
     // Deep link with ?reportId= (the actual navigation shape used by
     // EvalRunDetailPage's 'View' button — direct to .../inspect, not the
     // bare redirecting route) still preselects that case on a fresh load.
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect?reportId=${reportIds[2]}`);
-    await expect(page.getByText(`step for ${testCaseIds[2]}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(`step for ${testCaseIds[2]}`, { exact: true })).toBeVisible({ timeout: 15_000 });
   });
 });

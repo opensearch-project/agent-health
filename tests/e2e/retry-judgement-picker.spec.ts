@@ -98,7 +98,7 @@ test.describe('Retry judgement picker — always available, evaluator/model choi
     await expect(page.locator('[data-testid="retry-judgement-progress"]')).toBeVisible({ timeout: 5000 });
     const summary = page.locator('[data-testid="retry-judgement-summary"]');
     await expect(summary).toBeVisible({ timeout: 20000 });
-    await expect(summary).toContainText('1 succeeded');
+    await expect(page.locator('[data-testid="retry-judgement-summary-line"]')).toHaveText('Retried 1 · 1 scored');
     await page.locator('[data-testid="retry-judgement-done-btn"]').click();
     await expect(dialog).not.toBeVisible();
 
@@ -191,7 +191,8 @@ test.describe('Retry judgement picker — always available, evaluator/model choi
 
     // Completed (graded 'failed', no judge failures): ENABLED, opens the picker with All cases.
     let posted = 0;
-    page.on('request', req => { if (req.method() === 'POST' && req.url().includes(`/evaluation-runs/${completedId}/retry-judgement`)) posted += 1; });
+    // The read-only pre-flight (…/retry-judgement/preflight) fires on open; only the retry POST itself counts.
+    page.on('request', req => { if (req.method() === 'POST' && req.url().includes(`/evaluation-runs/${completedId}/retry-judgement`) && !req.url().includes('/preflight')) posted += 1; });
     await page.locator(`[data-testid="run-actions-menu-trigger-${completedId}"]`).click();
     const item = page.locator(`[data-testid="run-action-retry-judgement-${completedId}"]`);
     await expect(item).toContainText('Retry judgement (1)');

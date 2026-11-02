@@ -48,7 +48,7 @@ it('some-unevaluable: the gate passes but the verdict is failed with an explicit
   expect(r.failReasons).toEqual(['unevaluable:mrr']);
   expect(r.snapshot.unevaluable).toEqual(['mrr']);
   expect(r.matcherResults[0]).toMatchObject({ pass: true, role: 'primary' });
-  expect(r.matcherResults[1]).toMatchObject({ pass: false, errored: true, role: 'observe', errorMessage: 'metric could not be computed' });
+  expect(r.matcherResults[1]).toMatchObject({ pass: false, errored: true, role: 'observe', errorMessage: expect.stringMatching(/^metric could not be computed — gold 1 id from expected\.ids; candidates: /) });
   expect(r.summary).toContain('unevaluable: mrr');
   expect(r.summary).toContain('Verdict failed (unevaluable:mrr)');
 });

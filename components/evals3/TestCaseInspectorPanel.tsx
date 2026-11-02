@@ -19,6 +19,7 @@ import { type ResultStatus } from './ResultStatus';
 import { getFailureStage } from '@/lib/reportFailure';
 import { getRunDisplayName } from '@/lib/utils';
 import { CollapsibleTestCaseDefinition } from './CollapsibleTestCaseDefinition';
+import { CaseTldrCard } from './CaseTldrCard';
 import type { FullRecordState } from './SdkTestDefinitionView';
 
 interface TestCaseInspectorPanelProps {
@@ -33,12 +34,15 @@ interface TestCaseInspectorPanelProps {
    * this unset.
    */
   testCaseFullRecord?: FullRecordState;
+  /** Opens the run's retry-judgement dialog (the "Retry again" shortcut on the last-re-judgement-failed banner). */
+  onRetryJudgement?: () => void;
 }
 
 export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
   report,
   testCase,
   status,
+  onRetryJudgement,
   testCaseFullRecord,
 }) => {
   // Issue #242: an evaluator-error report has metricsStatus='error' and a
@@ -95,6 +99,11 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
         </div>
       </div>
 
+      {/* TL;DR — three sentences (asked → agent → verdict) above the
+          definition so a reader gets the whole story of this case before
+          opening the definition or the tabs. Lazy + cached server-side. */}
+      <CaseTldrCard report={report} testCase={testCase} status={status} />
+
       {/* Reusable definition collapsible — same widget on both
           TestCaseDetailPage and RunInspectorPage so users get the
           identical right-pane experience whether they came from a
@@ -105,7 +114,7 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
 
       {/* Tabs — directly into content, no extra chrome */}
       <div className="flex-1 overflow-hidden">
-        <RunDetailsContent report={report} hideMetrics />
+        <RunDetailsContent report={report} hideMetrics onRetryJudgement={onRetryJudgement} />
       </div>
     </div>
   );
