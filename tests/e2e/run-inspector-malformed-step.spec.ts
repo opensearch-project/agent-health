@@ -26,6 +26,19 @@ import {
  * storage API, opens the inspector in a real browser (real react-markdown),
  * and asserts the page renders with every other step visible.
  */
+/**
+ * Since #596 the Test Case Output tab is answer-first: the final answer is
+ * rendered on top and the step list sits collapsed behind a "Steps" toggle.
+ * Open it so the trajectory steps are in the DOM.
+ */
+async function openOutputSteps(page: import('@playwright/test').Page) {
+  await expect(page.getByRole('heading', { name: 'Test Case Output' })).toBeVisible({ timeout: 15000 });
+  const toggle = page.getByTestId('steps-toggle');
+  await expect(toggle).toBeVisible({ timeout: 15000 });
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(page.getByTestId('steps-body')).toBeVisible();
+}
+
 test.describe('Run inspector — trajectory step without a string `content` must not blank the page', () => {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const reportIds: Record<string, string> = {};
@@ -66,8 +79,8 @@ test.describe('Run inspector — trajectory step without a string `content` must
 
       await page.goto(`/runs/${reportIds[shape]}`);
 
-      // The page is NOT blank: the tab strip and the trajectory heading render.
-      await expect(page.getByRole('heading', { name: 'Test Case Output' })).toBeVisible({ timeout: 15000 });
+      // The page is NOT blank: the tab strip and the Output tab render; open the steps.
+      await openOutputSteps(page);
 
       const steps = page.getByTestId('trajectory-step');
       await expect(steps).toHaveCount(REAL_SHAPED_STEP_COUNT);
@@ -77,7 +90,7 @@ test.describe('Run inspector — trajectory step without a string `content` must
       // Neighbours of the malformed step (and the final answer) are visible.
       await expect(page.getByText(STEP_BEFORE_MALFORMED_TEXT)).toBeVisible();
       await expect(page.getByText(STEP_AFTER_MALFORMED_TEXT)).toBeVisible();
-      await expect(page.getByText(FINAL_RESPONSE_TEXT)).toBeVisible();
+      await expect(page.getByText(FINAL_RESPONSE_TEXT).first()).toBeVisible(); // answer section + step
 
       // The malformed action step is labelled with its tool and shows the
       // serialized arguments (nested object), not an empty card.
@@ -92,7 +105,7 @@ test.describe('Run inspector — trajectory step without a string `content` must
 
   test('a step with no content and no toolArgs shows a neutral "(no text)" body', async ({ page }) => {
     await page.goto(`/runs/${reportIds['no-text']}`);
-    await expect(page.getByRole('heading', { name: 'Test Case Output' })).toBeVisible({ timeout: 15000 });
+    await openOutputSteps(page);
     await expect(page.getByTestId('trajectory-step')).toHaveCount(REAL_SHAPED_STEP_COUNT);
     const malformed = page.getByTestId('trajectory-step').filter({ hasText: `action · ${MALFORMED_STEP_TOOL_NAME}` });
     await expect(malformed.getByTestId('trajectory-step-no-text')).toHaveText('(no text)');
@@ -102,20 +115,20 @@ test.describe('Run inspector — trajectory step without a string `content` must
     const pageErrors: string[] = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
     await page.goto(`/runs/${reportIds['null-entry']}`);
-    await expect(page.getByRole('heading', { name: 'Test Case Output' })).toBeVisible({ timeout: 15000 });
+    await openOutputSteps(page);
     await expect(page.getByTestId('trajectory-step')).toHaveCount(REAL_SHAPED_STEP_COUNT - 1);
     const card = page.getByTestId('render-error-boundary');
     await expect(card).toHaveCount(1);
     await expect(card).toContainText("Couldn't render trajectory step 6");
     await expect(page.getByText(STEP_BEFORE_MALFORMED_TEXT)).toBeVisible();
     await expect(page.getByText(STEP_AFTER_MALFORMED_TEXT)).toBeVisible();
-    await expect(page.getByText(FINAL_RESPONSE_TEXT)).toBeVisible();
+    await expect(page.getByText(FINAL_RESPONSE_TEXT).first()).toBeVisible(); // answer section + step
     expect(pageErrors, pageErrors.join('\n')).toEqual([]);
   });
 
   test('long object content is collapsible and expands to the serialized JSON', async ({ page }) => {
     await page.goto(`/runs/${reportIds['object']}`);
-    await expect(page.getByRole('heading', { name: 'Test Case Output' })).toBeVisible({ timeout: 15000 });
+    await openOutputSteps(page);
     const malformed = page.getByTestId('trajectory-step').filter({ hasText: `action · ${MALFORMED_STEP_TOOL_NAME}` });
     // Pretty-printed JSON of the nested args is > 200 chars → collapsible preview with a char count.
     await expect(malformed.getByText(/\(\d+ chars\)/)).toBeVisible();
