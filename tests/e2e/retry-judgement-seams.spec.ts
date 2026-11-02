@@ -20,6 +20,9 @@
  *      judge caption names the NEW judge for B, the original for A.
  *   5. A deterministic re-score → the Judge tab no longer names the earlier
  *      LLM, and the compare caption reads "No LLM judge".
+ *   6. A report re-judged BEFORE the retry path cleared the stage fields (a
+ *      stale `failureStage: 'judge'` next to a PASSED verdict) → badge, row
+ *      and the Judge tab headline all say PASSED; nothing says "Not judged".
  *
  * All fixtures are synthetic and seeded through the storage API; the retry
  * uses the built-in demo/mock judge (`judgeModelId: 'demo-model'`).
@@ -164,6 +167,39 @@ test.describe('Retry judgement seams — failure card, enablement, judge identit
     await expect(page.locator('[data-testid="status-label"]').first()).toHaveText(after.passFailStatus.toUpperCase());
     await expect(page.locator('[data-testid="run-failure-card"]')).toHaveCount(0);
     await expect(page.getByText('Judge could not produce a verdict')).toHaveCount(0);
+    // Judge tab headline agrees with the badge.
+    await page.getByRole('tab', { name: /Judge/ }).first().click();
+    const headline = page.locator('[data-testid="judgement-headline-title"]');
+    await expect(headline).toContainText(after.passFailStatus.toUpperCase(), { timeout: 15000 });
+    await expect(headline).not.toContainText('Not judged');
+  });
+
+  test('a stale judge stage beside a PASSED verdict (re-judged before #571 cleared it): headline says PASSED, not "Not judged"', async ({ page, request, testData }) => {
+    const seed = new Seeder(request, testData);
+    const tc = await seed.testCase();
+    // Exactly what a pre-#571 Retry judgement left behind: verdict + metrics
+    // written, the earlier judge failure's stage fields never cleared.
+    const reportId = await seed.report(tc, {
+      ...judgeFailedFields,
+      passFailStatus: 'passed', metricsStatus: 'ready', metrics: { accuracy: 100 },
+      llmJudgeReasoning: 'The agent identified the root cause: the disk is full.', judgeProvider: 'bedrock',
+      judgeModelId: 'demo-model', judgeModel: 'demo-model',
+    });
+    const runId = await seed.evalRun({ [tc]: { reportId, status: 'completed', passFailStatus: 'passed' } });
+
+    await openInspector(page, runId);
+    const row = page.locator(`[data-testid="test-case-row"][data-test-case-id="${tc}"]`);
+    await expect(row).toHaveAttribute('data-status', 'passed', { timeout: 15000 });
+    await row.click();
+    await expect(page.locator('[data-testid="status-label"]').first()).toHaveText('PASSED');
+    await expect(page.locator('[data-testid="run-failure-card"]')).toHaveCount(0);
+
+    await page.getByRole('tab', { name: /Judge/ }).first().click();
+    const headline = page.locator('[data-testid="judgement-headline"]');
+    await expect(headline).toBeVisible({ timeout: 15000 });
+    await expect(headline).toHaveAttribute('data-tone', 'passed');
+    await expect(headline.locator('[data-testid="judgement-headline-title"]')).toHaveText('PASSED');
+    await expect(page.getByText(/Not judged/)).toHaveCount(0);
   });
 
   test('a run whose every case failed at the agent request: Retry judgement is DISABLED with the agent-failure reason', async ({ page, request, testData }) => {

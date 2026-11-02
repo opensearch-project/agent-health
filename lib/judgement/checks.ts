@@ -22,6 +22,7 @@
  */
 
 import type { MatcherResult } from '@/lib/matchers/types';
+import { getFailureStage } from '@/lib/reportFailure';
 
 export interface Measurement {
   key: string;
@@ -263,16 +264,24 @@ export function buildJudgementHeadline(report: {
   passFailStatus?: string | null;
   metricsStatus?: string;
   failureStage?: string;
+  status?: string;
+  traceError?: string;
   matcherResults?: MatcherResult[];
   llmJudgeReasoning?: string;
   judgeProvider?: string;
   error?: string;
 }): JudgementHeadline {
   const s = summarizeChecks(report.matcherResults);
-  const errored = report.metricsStatus === 'error' || report.failureStage === 'agent' || report.failureStage === 'judge' || report.failureStage === 'trace';
+  // Derive the stage the same way the badge, failure card and TL;DR do
+  // (`getFailureStage`): a stale `failureStage: 'judge'` left on a report
+  // that was re-judged successfully before the retry path cleared it is
+  // superseded by its verdict, so this headline must not say "Not judged"
+  // under a PASSED badge.
+  const stage = getFailureStage(report as Parameters<typeof getFailureStage>[0]);
+  const errored = report.metricsStatus === 'error' || stage !== undefined;
   if (errored) {
-    const stage = report.failureStage === 'agent' ? 'the agent request failed' : report.failureStage === 'trace' ? 'traces could not be collected' : 'the judge could not produce a verdict';
-    return { tone: 'errored', title: `Not judged — ${stage}`, how: report.error ? firstSentence(report.error, 240) : 'No checks ran, so no metrics were recorded (not zeros).' };
+    const why = stage === 'agent' ? 'the agent request failed' : stage === 'trace' ? 'traces could not be collected' : 'the judge could not produce a verdict';
+    return { tone: 'errored', title: `Not judged — ${why}`, how: report.error ? firstSentence(report.error, 240) : 'No checks ran, so no metrics were recorded (not zeros).' };
   }
   if (report.passFailStatus !== 'passed' && report.passFailStatus !== 'failed') {
     return { tone: 'pending', title: 'No verdict yet', how: 'The judgement has not completed for this report.' };
