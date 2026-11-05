@@ -28,7 +28,7 @@ import {
   rowFieldValue, rowFieldLabel,
 } from '@/lib/benchmarkRunsTable';
 import { CaseHeatStrip } from '@/components/evals3/BenchmarkCasesTab';
-import { RunTelemetry, formatTokensCompact, formatCostUsd, formatDurationCompact } from '@/lib/runTelemetry';
+import { RunTelemetry, TELEMETRY_EMPTY_LABEL, describeNoTraces, describeUnavailable, formatTokensCompact, formatCostUsd, formatDurationCompact } from '@/lib/runTelemetry';
 import type { EvaluationReport, TestCase } from '@/types';
 
 // Pill/tooltip labels mirror the column headers: the evaluator IS the judge
@@ -147,55 +147,80 @@ export function formatRunDate(iso: string, now: Date = new Date()): string {
 
 // ─── Telemetry cells ─────────────────────────────────────────────────────────
 
-export const TELEMETRY_NO_SPANS_TITLE = 'No spans found for this run yet';
-export const TELEMETRY_UNAVAILABLE_TITLE = 'Metrics unavailable';
+export { TELEMETRY_NO_SPANS_TITLE, TELEMETRY_UNAVAILABLE_TITLE } from '@/lib/runTelemetry';
 export const TELEMETRY_NO_REPORTS_TITLE = 'No reports to correlate yet';
+export const TELEMETRY_NOT_RECORDED_TITLE = 'Not recorded for this run';
 
 export interface TelemetryCellState {
   telemetry: RunTelemetry | undefined;
   loading: boolean;
 }
 
+/** What an empty telemetry cell shows and why (the tooltip). */
+export interface TelemetryEmptyState {
+  /** Cell text: "—", "no traces" or "unavailable". */
+  label: string;
+  /** Tooltip explaining the state (and, for "no traces", how to fix it). */
+  title: string;
+  kind: 'no-reports' | 'unavailable' | 'no-traces' | 'not-recorded';
+}
+
 /**
- * Why a telemetry cell shows "—" (drives the tooltip). Unavailability is
- * PER RUN (`telemetry.unavailable` — every one of its keys errored), so a
+ * Why a telemetry cell is empty, or `null` when it has a value to show.
+ * Trace-derived reasons apply only to trace-derived columns
+ * (`dependsOnSpans`): the wall-clock column comes from the reports and stays
+ * valid regardless. Unavailability is PER RUN (`telemetry.unavailable`), so a
  * failed chunk never blanks rows whose metrics did come back.
  */
+export function telemetryEmptyState(state: TelemetryCellState, dependsOnSpans: boolean, value: string | null): TelemetryEmptyState | null {
+  const t = state.telemetry;
+  if (!t) return { kind: 'no-reports', label: TELEMETRY_EMPTY_LABEL.none, title: TELEMETRY_NO_REPORTS_TITLE };
+  if (dependsOnSpans && t.unavailable) return { kind: 'unavailable', label: TELEMETRY_EMPTY_LABEL.unavailable, title: describeUnavailable(t) };
+  if (dependsOnSpans && !t.hasSpans) return { kind: 'no-traces', label: TELEMETRY_EMPTY_LABEL.noTraces, title: describeNoTraces(t) };
+  if (value === null) return { kind: 'not-recorded', label: TELEMETRY_EMPTY_LABEL.none, title: TELEMETRY_NOT_RECORDED_TITLE };
+  return null;
+}
+
+/** Back-compat: the tooltip of an empty cell ('' when the cell has a value). */
 export function telemetryDashTitle(state: TelemetryCellState, dependsOnSpans: boolean, value: string | null): string {
-  if (!state.telemetry) return TELEMETRY_NO_REPORTS_TITLE;
-  // Both trace-derived reasons only apply to trace-derived columns: the
-  // wall-clock column comes from the reports and stays valid regardless.
-  if (dependsOnSpans && state.telemetry.unavailable) return TELEMETRY_UNAVAILABLE_TITLE;
-  if (dependsOnSpans && !state.telemetry.hasSpans) return TELEMETRY_NO_SPANS_TITLE;
-  if (value === null) return 'Not recorded for this run';
-  return '';
+  return telemetryEmptyState(state, dependsOnSpans, value)?.title ?? '';
 }
 
 /**
  * One numeric telemetry cell. `value` is the formatted string, or null when
- * the metric is not available for this run (renders "—" with the reason).
- * `dependsOnSpans` = false for the wall-clock column, which is valid even
- * when no spans were found. `narrowSuffix` is appended on narrow viewports
- * only (used to fold Cost into the Tokens cell when the Cost column is
- * hidden below `lg`).
+ * the metric is not available for this run (renders the empty state with its
+ * reason). `dependsOnSpans` = false for the wall-clock column, which is valid
+ * even when no spans were found — and which renders immediately, while the
+ * trace-derived columns show a skeleton until their metrics request has
+ * answered (the roll-up exists as soon as the reports load, so "has a
+ * roll-up" is NOT "has answered"; pre-fix the skeleton never showed and the
+ * in-flight state read as "no spans" for the whole request). `narrowSuffix`
+ * is appended on narrow viewports only (used to fold Cost into the Tokens
+ * cell when the Cost column is hidden below `lg`).
  */
 function TelemetryCell({ state, value, testId, title, dependsOnSpans = true, className, narrowSuffix }: {
   state: TelemetryCellState; value: string | null; testId: string; title?: string;
   dependsOnSpans?: boolean; className?: string; narrowSuffix?: string | null;
 }) {
   const base = `px-2 py-1 align-middle text-right text-[11px] tabular-nums whitespace-nowrap ${className || ''}`;
-  if (state.loading && !state.telemetry) {
+  const t = state.telemetry;
+  // Skeleton while nothing is known yet: no roll-up at all, or (trace
+  // columns) keys still in flight and none has reported spans so far. Once
+  // any key has spans the growing sum is shown instead (a live run gains a
+  // key per case; flickering back to a skeleton on each would be worse).
+  const pending = !t ? state.loading : (dependsOnSpans && t.pendingCases > 0 && t.spansCases === 0);
+  if (pending) {
     return (
       <td className={base} data-testid={testId} data-state="loading">
-        <span className="inline-block h-3 w-10 rounded bg-muted animate-pulse" aria-label="Loading" />
+        <span className="inline-block h-3 w-10 rounded bg-muted animate-pulse" aria-label="Loading" title="Loading trace metrics…" />
       </td>
     );
   }
-  const dash = telemetryDashTitle(state, dependsOnSpans, value);
-  if (dash) {
+  const empty = telemetryEmptyState(state, dependsOnSpans, value);
+  if (empty) {
     return (
-      <td className={`${base} text-muted-foreground`} data-testid={testId} data-state="empty">
-        <span title={dash}>—</span>
+      <td className={`${base} text-muted-foreground`} data-testid={testId} data-state="empty" data-empty-kind={empty.kind}>
+        <span title={empty.title} className={empty.label === TELEMETRY_EMPTY_LABEL.none ? '' : 'text-[10px] italic'}>{empty.label}</span>
       </td>
     );
   }

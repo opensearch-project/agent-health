@@ -1041,6 +1041,56 @@ export interface TestCaseRun {
   judgementRetriedAt?: string;
   /** How many times the judgement was retried (1 on the first retry). */
   judgementRetryCount?: number;
+  /**
+   * What the SDK judge binding ACTUALLY sent to `/api/judge` for this
+   * report's `judge()` calls, per field, with where each value came from.
+   * Stamped by the runner from the bound judge fixture after the test body
+   * finishes (only when the body made at least one judge call). Distinct
+   * from {@link evaluatorId} / {@link judgeModelId}, which are the run-level
+   * *labels* — pre-fix a body's per-call pin could win the request while the
+   * label still named the run-level selection, so the verdict came from one
+   * judge and the report was labelled with another. See
+   * `bindJudge(defaults, { authoritative: true })` in lib/testCases/judge.ts.
+   */
+  judgeApplied?: JudgeApplied;
+  /**
+   * Body pins the run-level (authoritative) judge selection overrode — one
+   * entry per `(field, bodyValue)`. Present only when a `judge(...)` call in
+   * the test body asked for a different evaluator/model than the run
+   * selected. The run selection was applied; this records the disagreement
+   * so the UI can flag it instead of silently showing a clean report.
+   */
+  judgeSelectionConflicts?: JudgeSelectionConflict[];
+}
+
+/** Where an applied judge-selection value came from. */
+export type JudgeSelectionSource =
+  /** The run-level selection (UI / API / CLI `-e` / `--judge-model`). */
+  | 'run'
+  /** A per-call pin inside the test body (only applies when the run did not select the field). */
+  | 'body'
+  /** Neither — the server resolved its default. */
+  | 'default'
+  /** Per-call body pins DIVERGED across this report's judge() calls (only possible for a field the run left unselected); no single value applies — see matcherResults[].evaluatorId / .model. */
+  | 'mixed';
+
+/** Per-field record of what the judge binding actually applied for a report. */
+export interface JudgeApplied {
+  /** Evaluator id sent to `/api/judge` (undefined = server default, or `'mixed'` per-call body pins). */
+  evaluatorId?: string;
+  evaluatorIdSource: JudgeSelectionSource;
+  /** Judge model id sent to `/api/judge` as `modelId` (undefined = server default, or `'mixed'` per-call body pins). */
+  modelId?: string;
+  modelIdSource: JudgeSelectionSource;
+}
+
+/** A body pin that the authoritative run-level selection overrode. */
+export interface JudgeSelectionConflict {
+  field: 'evaluatorId' | 'modelId';
+  /** What the run selected (and what was applied). */
+  runValue: string;
+  /** What the test body asked for (ignored). */
+  bodyValue: string;
 }
 
 // Alias for backwards compatibility during migration
@@ -1269,9 +1319,18 @@ export interface TraceMetrics {
    * Which correlation strategy attributed this key's spans: precise ids
    * (`traceId` / run-id attributes / `session.id`) or the service.name +
    * time-window fallback (`window`), which can pick up unrelated traffic of
-   * the same service. `mixed` when spans came in through more than one.
+   * the same service. Precise-first: the window is consulted only when the
+   * ids found none of the agent's spans, so a key is one or the other.
    */
-  correlatedBy?: 'ids' | 'window' | 'mixed';
+  correlatedBy?: 'ids' | 'window';
+  /**
+   * Set when the query DID match spans but every one of them was Agent
+   * Health's own eval/judge span (`test_case`, judge `chat`): the agent itself
+   * emitted nothing this trace store can see — untraced, or exporting to a
+   * different store. `hasSpans` is `false` and every counter is 0 in that
+   * case; consumers render "no traces" and can say why.
+   */
+  evalOnlySpans?: number;
 }
 
 // ============ Trace Types ============
@@ -1700,6 +1759,17 @@ export interface BenchmarkRun {
    * like this showed only a bare warning-triangle count with no reason.
    */
   judgeFailureSummary?: string;
+  /**
+   * Retry-judgement bookkeeping — same fields and semantics as on
+   * {@link EvaluationRun} (`lastJudgementRetry`: what the last Retry
+   * judgement was launched with, seeds the dialog's defaults;
+   * `lastRetryAttempt`: the last retry in which ≥1 case produced no
+   * judgement, `null` after a fully successful one). Written onto the
+   * embedded projection by POST /api/storage/evaluation-runs/:id/retry-judgement
+   * when the run has no first-class doc (legacy classic/CLI runs).
+   */
+  lastJudgementRetry?: EvaluationRun['lastJudgementRetry'];
+  lastRetryAttempt?: RunRetryAttemptSummary | null;
 
   // Server-side performance metrics (populated after run completes)
   performanceMetrics?: RunPerformanceMetrics;
@@ -1967,7 +2037,10 @@ export interface EvaluationRun {
  * is holding can be either shape regardless of which route loaded it —
  * `docType`, not the route/URL a component happened to load from, is the
  * only reliable signal for "does this run support EvaluationRun-only
- * capabilities (rerun, provenance, retry-judgement, ...)".
+ * capabilities (the provenance-tracked rerun endpoint, `rerunOf`, rename,
+ * ...)". Retry judgement is NOT such a capability: it needs only the stored
+ * reports + an evaluator, so it works for both shapes (the route takes a
+ * `benchmarkId` hint to find a legacy embedded run).
  *
  * Use this instead of inline `(run as any).docType === 'evaluation-run'`
  * checks or route-derived `mode` flags for anything that depends on the
@@ -2268,8 +2341,15 @@ export interface MetricsResult {
   /** See TraceMetrics.partial -- query hit its size cap; counts are a lower bound. */
   partial?: boolean;
   /** See TraceMetrics.correlatedBy. */
-  correlatedBy?: 'ids' | 'window' | 'mixed';
-  /** Why `status` is 'error' (trace-store query failed) — the numbers are unknown, not zero. */
+  correlatedBy?: 'ids' | 'window';
+  /** See TraceMetrics.evalOnlySpans -- only our own eval/judge spans matched; `hasSpans` is false. */
+  evalOnlySpans?: number;
+  /**
+   * Set (with `status: 'error'`) when the trace-store query for this key
+   * FAILED — timeout, 5xx, rejected query. The key's spans are then UNKNOWN,
+   * not absent: `hasSpans` is left undefined so consumers render
+   * "unavailable" (and offer a retry) rather than "no spans".
+   */
   error?: string;
   /** Composite backend: the configured source these metrics were taken from. */
   source?: string;

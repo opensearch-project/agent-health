@@ -24,10 +24,10 @@ describe('resolveConnectorTimeoutMs', () => {
     expect(resolveConnectorTimeoutMs(undefined)).toBe(300_000);
     expect(resolveConnectorTimeoutMs({})).toBe(300_000);
   });
-  it('honours connectorConfig.timeoutMs (number or numeric string) and legacy `timeout`', () => {
+  it('honours connectorConfig.timeoutMs (number or numeric string); ignores other keys', () => {
     expect(resolveConnectorTimeoutMs({ timeoutMs: 900_000 })).toBe(900_000);
     expect(resolveConnectorTimeoutMs({ timeoutMs: '12000' })).toBe(12_000);
-    expect(resolveConnectorTimeoutMs({ timeout: 45_000 })).toBe(45_000);
+    expect(resolveConnectorTimeoutMs({ timeout: 45_000 })).toBe(300_000);
   });
   it('rejects non-positive / non-finite values', () => {
     expect(resolveConnectorTimeoutMs({ timeoutMs: 0 })).toBe(300_000);
@@ -39,7 +39,7 @@ describe('resolveConnectorTimeoutMs', () => {
 describe('fetchWithTimeout (real http server)', () => {
   let server: http.Server;
   let baseUrl: string;
-  let mode: 'hang' | 'slow-ok' | 'error-500' = 'hang';
+  let mode: 'hang' | 'slow-ok' | 'error-500' | 'trickle' | 'body-cut' = 'hang';
   const openSockets = new Set<import('node:net').Socket>();
 
   beforeAll(async () => {
@@ -48,6 +48,27 @@ describe('fetchWithTimeout (real http server)', () => {
       req.on('end', () => {
         if (mode === 'hang') return; // never respond
         if (mode === 'error-500') { res.statusCode = 500; res.end('upstream exploded'); return; }
+        if (mode === 'trickle') {
+          // Headers at once, then a 200-byte body in 20 ms chunks for ~400 ms —
+          // every chunk lands well inside undici's per-chunk bodyTimeout, so
+          // only a TOTAL deadline can stop it.
+          res.setHeader('content-type', 'application/json');
+          res.write('{"response":"');
+          let n = 0;
+          const tick = setInterval(() => {
+            res.write('x'.repeat(10));
+            if (++n >= 20) { clearInterval(tick); res.end('"}'); }
+          }, 20);
+          res.on('close', () => clearInterval(tick));
+          return;
+        }
+        if (mode === 'body-cut') {
+          // Headers + half a body, then the agent drops the connection.
+          res.setHeader('content-type', 'application/json');
+          res.write('{"response":"half');
+          setTimeout(() => res.socket?.destroy(), 30);
+          return;
+        }
         setTimeout(() => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ response: 'late but fine' })); }, 150);
       });
     });
@@ -121,7 +142,9 @@ describe('fetchWithTimeout (real http server)', () => {
     // success path
     mode = 'slow-ok';
     const ac1 = new AbortController();
-    await fetchWithTimeout(`${baseUrl}/ok`, { method: 'POST', body: '{}', timeoutMs: 5_000, signal: ac1.signal });
+    // The deadline now covers the body, so the success path settles (timer
+    // cleared, listener removed) when the body has been consumed.
+    await (await fetchWithTimeout(`${baseUrl}/ok`, { method: 'POST', body: '{}', timeoutMs: 5_000, signal: ac1.signal })).text();
     // timeout path
     mode = 'hang';
     const ac2 = new AbortController();
@@ -144,6 +167,109 @@ describe('fetchWithTimeout (real http server)', () => {
     expect(removed).toBe(added);
     clearSpy.mockRestore(); removeSpy.mockRestore(); addSpy.mockRestore();
   }, 15_000);
+
+  // Adversarial review of the stack: the timer and the caller-abort listener
+  // were torn down as soon as the HEADERS arrived, so `timeoutMs` was never
+  // enforced for the body (probe: timeoutMs 50 → HTTP 200 after 221 ms with a
+  // body trickling in 20 ms chunks) and body-read errors escaped unwrapped.
+  describe('the deadline covers the BODY, not just the headers', () => {
+    it('a body that trickles past timeoutMs fails the read with a timeout AgentRequestError (elapsed ≥ timeout, kind timeout)', async () => {
+      mode = 'trickle';
+      const t0 = Date.now();
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 120, connectorType: 'rest' });
+      expect(res.status).toBe(200); // headers arrived in time — fine
+      let caught: unknown;
+      try { await res.text(); } catch (e) { caught = e; }
+      const elapsed = Date.now() - t0;
+      expect(caught).toBeInstanceOf(AgentRequestError);
+      const err = caught as AgentRequestError;
+      expect(err.message).toMatch(/timed out after \d+ms \(timeout 120ms\)/);
+      expect(err.message).toMatch(/body did not complete/);
+      expect(err.endpoint).toBe(`${baseUrl}/ask`);
+      expect(err.timeoutMs).toBe(120);
+      expect(err.elapsedMs).toBeGreaterThanOrEqual(100);
+      expect(elapsed).toBeLessThan(400); // did NOT wait for the ~400 ms trickle to finish
+      expect(describeAgentError(err).kind).toBe('timeout');
+      expect((console.error as jest.Mock).mock.calls.some(c => /body did not complete.*connectorConfig\.timeoutMs/.test(String(c[0])))).toBe(true);
+    });
+
+    it('a body that completes within timeoutMs is returned whole (json() works through the guarded stream)', async () => {
+      mode = 'trickle';
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 5_000 });
+      expect(await res.json()).toEqual({ response: 'x'.repeat(200) });
+    });
+
+    it('the agent dropping the connection mid-body surfaces as a NON-timeout AgentRequestError with elapsed + endpoint (kind connection)', async () => {
+      mode = 'body-cut';
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 5_000, connectorType: 'rest' });
+      expect(res.status).toBe(200);
+      let caught: unknown;
+      try { await res.json(); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(AgentRequestError);
+      const err = caught as AgentRequestError;
+      expect(err.message).toMatch(/response body .* failed after \d+ms \(headers had arrived\)/);
+      expect(err.endpoint).toBe(`${baseUrl}/ask`);
+      expect(typeof err.elapsedMs).toBe('number');
+      expect((err as any).cause).toBeDefined();
+      expect(describeAgentError(err).kind).not.toBe('timeout');
+      expect(describeAgentError(err).kind).toBe('connection');
+    });
+
+    it('a caller abort DURING the body read still cancels it (the listener outlives the headers)', async () => {
+      mode = 'trickle';
+      const ac = new AbortController();
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 10_000, signal: ac.signal });
+      setTimeout(() => ac.abort(new Error('caller cancelled')), 40);
+      let caught: unknown;
+      try { await res.text(); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(AgentRequestError);
+    });
+
+    // Review of #571: with the body left UNREAD, the caller's abort listener
+    // (and timer bookkeeping) stayed registered after the deadline because
+    // settle() only ran from a later reader.read() pull. The deadline firing
+    // must finalise the wiring on its own — and the body must still fail
+    // with the timeout AgentRequestError when it is read afterwards.
+    it('a response left unread settles its bookkeeping when the deadline fires: caller-abort listener gone, body read still a timeout error', async () => {
+      mode = 'trickle';
+      const removeSpy = jest.spyOn(AbortSignal.prototype, 'removeEventListener');
+      const addSpy = jest.spyOn(AbortSignal.prototype, 'addEventListener');
+      const ac = new AbortController();
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 80, signal: ac.signal });
+      expect(res.status).toBe(200);
+      // Do NOT read the body. Wait past the deadline.
+      await new Promise(r => setTimeout(r, 200));
+      const added = addSpy.mock.contexts.filter((ctx, i) => ctx === ac.signal && addSpy.mock.calls[i][0] === 'abort').length;
+      const removed = removeSpy.mock.contexts.filter((ctx, i) => ctx === ac.signal && removeSpy.mock.calls[i][0] === 'abort').length;
+      expect(added).toBe(1);
+      expect(removed).toBe(1); // listener count on the caller's signal is back to 0
+      // The body's failure is not lost by the early settle.
+      let caught: unknown;
+      try { await res.text(); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(AgentRequestError);
+      expect((caught as Error).message).toMatch(/timed out .*body did not complete/);
+      removeSpy.mockRestore(); addSpy.mockRestore();
+    });
+
+    it('the guarded Response carries url / redirected / type from the original', async () => {
+      mode = 'slow-ok';
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 5_000 });
+      expect(res.url).toBe(`${baseUrl}/ask`);
+      expect(res.redirected).toBe(false);
+      expect(res.type).toBe('basic');
+      await res.text();
+    });
+
+    it('clone() + a discarded body (the sigv4 rejection classifier pattern) and cancel() both settle the deadline', async () => {
+      const clearSpy = jest.spyOn(global, 'clearTimeout');
+      mode = 'slow-ok';
+      const res = await fetchWithTimeout(`${baseUrl}/ask`, { method: 'POST', body: '{}', timeoutMs: 5_000 });
+      expect(await res.clone().text()).toContain('late but fine');
+      await res.body!.cancel();
+      expect(clearSpy).toHaveBeenCalled();
+      clearSpy.mockRestore();
+    });
+  });
 
   it('honours a caller-supplied AbortSignal', async () => {
     mode = 'hang';

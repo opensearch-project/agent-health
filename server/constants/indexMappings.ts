@@ -194,6 +194,32 @@ export function getIndexMappings(): IndexMappings {
               agentFingerprintShort: { type: 'keyword' },
               agentPromptHash: { type: 'keyword' },
               agentConfigSource: { type: 'object', enabled: false },
+              // Retry-judgement bookkeeping written onto a LEGACY embedded
+              // run (no evaluation-run doc) by POST
+              // /api/storage/evaluation-runs/:id/retry-judgement — same
+              // shapes as the root-level fields above; `reasons` is keyed by
+              // free-text reason strings → never mapped (mapping explosion).
+              lastRetryAttempt: {
+                properties: {
+                  at: { type: 'date' },
+                  evaluatorId: { type: 'keyword' },
+                  evaluatorName: { type: 'keyword' },
+                  scope: { type: 'keyword' },
+                  retried: { type: 'integer' },
+                  succeeded: { type: 'integer' },
+                  notEvaluable: { type: 'integer' },
+                  failed: { type: 'integer' },
+                  reasons: { type: 'object', enabled: false },
+                },
+              },
+              lastJudgementRetry: {
+                properties: {
+                  evaluatorId: { type: 'keyword' },
+                  judgeModelId: { type: 'keyword' },
+                  scope: { type: 'keyword' },
+                  at: { type: 'date' },
+                },
+              },
             },
           },
         },

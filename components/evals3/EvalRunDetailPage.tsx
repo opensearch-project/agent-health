@@ -278,7 +278,7 @@ export const EvalRunDetailPage: React.FC = () => {
                   {agentName}
                   {/* Agent-configuration provenance: WHICH version of this
                       agent's config produced these numbers (lib/agentFingerprint.ts). */}
-                  <AgentFingerprintChip run={run} compact data-testid="inspector-fingerprint-chip" />
+                  <AgentFingerprintChip run={run} showMissing data-testid="inspector-fingerprint-chip" />
                 </span>
                 <span>{modelName}</span>
                 <span>{formatRelativeTime(run.createdAt)}</span>

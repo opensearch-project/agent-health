@@ -93,3 +93,40 @@ export function formatFingerprintTooltip(fp: FingerprintCarrier & {
   }
   return lines.join('\n');
 }
+
+/**
+ * What goes INTO the fingerprint, one entry per top-level key of the hashed
+ * payload (`buildFingerprintPayload` in lib/agentFingerprint.ts — that module
+ * is server-only because of node `crypto`, so the browser-facing catalogue
+ * lives here and a unit test pins the two together: every payload key must
+ * be documented, and nothing documented may be missing from the payload).
+ *
+ * Shown in the chip's details popover so a reader can tell what a changed
+ * fingerprint can mean. The inputs themselves are NOT stored on the run —
+ * only the hashes are — so the popover points at the CLI / API that
+ * recompute them from the current config instead of pretending to list
+ * per-run values it does not have.
+ */
+export interface FingerprintInputField {
+  /** Top-level key in the hashed payload. */
+  key: string;
+  /** Human label. */
+  label: string;
+  /** What exactly participates (and what is redacted). */
+  detail: string;
+}
+
+export const FINGERPRINT_INPUT_FIELDS: readonly FingerprintInputField[] = [
+  { key: 'v', label: 'Fingerprint version', detail: 'payload-shape version (bumped when the hashed shape changes)' },
+  { key: 'key', label: 'Agent key', detail: 'the `key` in agent-health.config.ts' },
+  { key: 'connectorType', label: 'Connector type', detail: 'e.g. claude-code, rest, agui-streaming' },
+  { key: 'endpoint', label: 'Endpoint', detail: 'the agent endpoint, including a run-level endpoint override' },
+  { key: 'useTraces', label: 'Trace mode', detail: 'whether the run judges from traces' },
+  { key: 'model', label: 'Resolved model', detail: 'connectorConfig.model › env.ANTHROPIC_MODEL › --model arg' },
+  { key: 'headerKeys', label: 'Header names', detail: 'sorted header KEY names only — values are credentials and never hashed' },
+  { key: 'auth', label: 'Auth shape', detail: 'type, AWS region/service, header names, has-username/has-token — never the secrets' },
+  { key: 'traceServiceName', label: 'Trace service name', detail: 'OTel service.name used for trace correlation' },
+  { key: 'tracePolling', label: 'Trace polling', detail: 'trace-mode polling settings' },
+  { key: 'connectorConfig', label: 'Connector config', detail: 'system/append prompt, allowed tools, args, MCP servers, trace context, … — secret-looking keys redacted, env maps reduced to key names (model selectors kept)' },
+  { key: 'hooks', label: 'Hooks', detail: 'exact source text of each hook function (a reformat IS a change)' },
+];

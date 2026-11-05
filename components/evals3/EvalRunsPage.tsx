@@ -212,7 +212,10 @@ export const EvalRunsPage: React.FC = () => {
   // benchmark-embedded runs aren't supported — see renderRunRow).
   const [rerunTarget, setRerunTarget] = useState<EvaluationRun | null>(null);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
-  const [retryJudgementTarget, setRetryJudgementTarget] = useState<EvaluationRun | null>(null);
+  // The row whose Retry judgement picker is open. Legacy benchmark-embedded
+  // rows (no evaluation-run doc) are retried too — the dialog sends the
+  // row's `benchmarkId` so the server can find the run in `benchmark.runs[]`.
+  const [retryJudgementTarget, setRetryJudgementTarget] = useState<{ run: BenchmarkRun; benchmarkId: string } | null>(null);
 
   // Annotation counts: runId → { totalAnnotations, testCasesWithAnnotations, firstTestCaseId }
   const [annotationMap, setAnnotationMap] = useState<Map<string, { total: number; tcCount: number; firstTcId: string }>>(new Map());
@@ -383,9 +386,18 @@ export const EvalRunsPage: React.FC = () => {
     () => allRunRows.some(rr => rr.status === 'running'),
     [allRunRows]
   );
+  //
+  // The poll is a BACKGROUND refresh (`silent`): the non-silent path flips
+  // `loading` and the page body is replaced by the full-page spinner for as
+  // long as the three list requests take (seconds on a cluster with hundreds
+  // of runs) — every 5 s, for as long as any run is `running`. To the owner
+  // that read as "the runs list is refreshing constantly" (2026-10-22): rows
+  // flashed in and out, scroll position reset, and anything mounted per row
+  // (retry-judgement pill adoption requests) re-fired on every tick. Rows
+  // are keyed by run id, so a silent state swap re-renders in place.
   useEffect(() => {
     if (!hasInProgressRuns) return;
-    const interval = setInterval(() => { loadData(); }, 5000);
+    const interval = setInterval(() => { void loadData(true); }, 5000);
     return () => clearInterval(interval);
   }, [hasInProgressRuns, loadData]);
 
@@ -523,7 +535,7 @@ export const EvalRunsPage: React.FC = () => {
   // finishes (useOnRetryJudgementFinished below) — the dialog may be closed
   // long before that.
   const handleRetryJudgementRow = (rr: RunRow) => {
-    setRetryJudgementTarget(rr.run as unknown as EvaluationRun);
+    setRetryJudgementTarget({ run: rr.run, benchmarkId: rr.benchmarkId });
   };
   useOnRetryJudgementFinished(() => { void loadData(true); });
 
@@ -831,7 +843,7 @@ export const EvalRunsPage: React.FC = () => {
           <div>{rr.agentName}</div>
           {/* Agent-configuration provenance: WHICH version of this agent's
               config produced these numbers. Renders nothing for legacy runs. */}
-          <AgentFingerprintChip run={rr.run} compact className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
+          <AgentFingerprintChip run={rr.run} className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
         </td>
         <td className="px-2 py-1.5 align-middle text-[11px]">{getModelName(rr.run.modelId)}</td>
         <td className="px-2 py-1.5 align-middle text-right text-[11px] text-muted-foreground" data-testid="run-concurrency-cell" title="Concurrency — parallel test cases">
@@ -914,7 +926,7 @@ export const EvalRunsPage: React.FC = () => {
               <RotateCcw size={13} />
             </button>
           ) : (
-            <span className="text-[10px] text-muted-foreground" title="Re-run isn't available for legacy benchmark-embedded runs">—</span>
+            <span className="text-[10px] text-muted-foreground" title="Legacy benchmark run — re-run it from its inspector page (opens the run dialog prefilled from this run)">—</span>
           )}
         </td>
         <td className="relative px-2 py-1.5 align-middle text-center w-8" onClick={e => e.stopPropagation()}>
@@ -1327,9 +1339,10 @@ export const EvalRunsPage: React.FC = () => {
 
       {/* Retry judgement picker (evaluator / judge model / scope) — shared with the run pages */}
       <RetryJudgementConfirmDialog
-        run={retryJudgementTarget}
-        judgeFailedCount={getRunActionVisibility(retryJudgementTarget).judgeFailedCount}
-        rejudgeableCount={getRunActionVisibility(retryJudgementTarget).rejudgeableCount}
+        run={retryJudgementTarget?.run ?? null}
+        benchmarkId={retryJudgementTarget?.benchmarkId}
+        judgeFailedCount={getRunActionVisibility(retryJudgementTarget?.run).judgeFailedCount}
+        rejudgeableCount={getRunActionVisibility(retryJudgementTarget?.run).rejudgeableCount}
         open={retryJudgementTarget !== null}
         onOpenChange={open => { if (!open) setRetryJudgementTarget(null); }}
         onComplete={() => { loadData(true); }}

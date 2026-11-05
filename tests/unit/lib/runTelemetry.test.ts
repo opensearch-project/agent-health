@@ -14,6 +14,7 @@ import {
   aggregateAllRunTelemetry,
   buildRunTelemetryCorrelation,
   collectReportIds,
+  describeNoTraces,
   metricsKeyForReport,
   median,
   formatTokensCompact,
@@ -123,20 +124,45 @@ describe('aggregateRunTelemetry', () => {
     expect(t.errorCases).toBe(1);        // k4 errored → counted, but a partial failure is NOT "unavailable"
     expect(t.unavailable).toBe(false);
     expect(t.hasSpans).toBe(true);
-    expect(t.partial).toBe(false);
+    expect(t.partial).toBe(true);        // ...it IS a lower bound: k4's spans are unknown → rendered "≥"
   });
 
-  it('unavailable only when EVERY report\'s metrics request failed; wall-clock median survives', () => {
+  it('unavailable when the keys have all answered, some failed and NONE found spans; wall-clock median survives', () => {
     const t = aggregateRunTelemetry(run('run-a', ['r1', 'r2']), reports, {
-      k1: { runId: 'k1', error: '500', status: 'error' },
+      k1: { runId: 'k1', error: 'Request timed out', status: 'error' },
       k2: { runId: 'k2', error: '500', status: 'error' },
     })!;
     expect(t.unavailable).toBe(true);
     expect(t.errorCases).toBe(2);
+    expect(t.errorMessage).toBe('Request timed out');   // first error, for the tooltip
     expect(t.hasSpans).toBe(false);
+    expect(t.pendingCases).toBe(0);
     expect(t.medianDurationMs).toBe(41_000);
-    // one key not fetched yet + one errored → not (yet) unavailable
-    expect(aggregateRunTelemetry(run('run-a', ['r1', 'r2']), reports, { k1: { runId: 'k1', error: '500', status: 'error' } })!.unavailable).toBe(false);
+    // one key not fetched yet + one errored → still loading, not (yet) unavailable
+    const loading = aggregateRunTelemetry(run('run-a', ['r1', 'r2']), reports, { k1: { runId: 'k1', error: '500', status: 'error' } })!;
+    expect(loading.unavailable).toBe(false);
+    expect(loading.pendingCases).toBe(1);
+  });
+
+  it('regression: ONE failed key + the rest "no spans" is UNAVAILABLE, not "no traces" (a timed-out chunk must not read as "never traced")', () => {
+    const t = aggregateRunTelemetry(run('run-a', ['r1', 'r2', 'r3']), reports, {
+      k1: { runId: 'k1', error: 'Request timed out', status: 'error' },
+      k2: ok('k2', { hasSpans: false, totalTokens: 0, costUsd: 0, llmCalls: 0 }),
+      k3: ok('k3', { hasSpans: false, totalTokens: 0, costUsd: 0, llmCalls: 0 }),
+    })!;
+    expect(t.unavailable).toBe(true);
+    expect(t.hasSpans).toBe(false);
+    expect(t.errorCases).toBe(1);
+  });
+
+  it('the server\'s "pending" result shape (queried, zero spans) counts as NO SPANS, not as still loading', () => {
+    const t = aggregateRunTelemetry(run('run-a', ['r1']), reports, {
+      k1: { runId: 'k1', status: 'pending', hasSpans: false },
+    })!;
+    expect(t.pendingCases).toBe(0);
+    expect(t.spansCases).toBe(0);
+    expect(t.hasSpans).toBe(false);
+    expect(t.unavailable).toBe(false);
   });
 
   it('hasSpans:false for every report → zero sums, hasSpans false, duration still populated', () => {
@@ -178,6 +204,64 @@ describe('aggregateRunTelemetry', () => {
     expect(t.hasSpans).toBe(false);
     expect(t.totalCases).toBe(1);
     expect(t.medianDurationMs).toBe(44_000);
+  });
+
+  it('eval-only results (the server matched only our own test_case span) are NO SPANS and counted in evalOnlyCases — never a measured 0', () => {
+    // Owner report 2026-10-24 (classic benchmark, agent traces in a different store):
+    // the server answers hasSpans:false + evalOnlySpans for every key.
+    const t = aggregateRunTelemetry(run('run-a', ['r1', 'r2', 'r3']), reports, {
+      k1: { runId: 'k1', status: 'pending', hasSpans: false, evalOnlySpans: 1, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0 },
+      k2: { runId: 'k2', status: 'pending', hasSpans: false, evalOnlySpans: 2, totalTokens: 0, costUsd: 0, llmCalls: 0, toolCalls: 0 },
+      k3: { runId: 'k3', status: 'pending', hasSpans: false },   // genuinely nothing matched
+    })!;
+    expect(t.hasSpans).toBe(false);
+    expect(t.spansCases).toBe(0);
+    expect(t.evalOnlyCases).toBe(2);
+    expect(t.unavailable).toBe(false);
+    expect(t.pendingCases).toBe(0);
+    expect(t.medianDurationMs).toBe(44_000);
+    // The tooltip says WHY: our eval span is there, the agent's spans are not — so "enable tracing" is not the advice.
+    expect(describeNoTraces(t)).toMatch(/^No traces for this run — the trace store holds only Agent Health's own evaluation spans for 2 of its 3 cases; no spans from the agent itself were found\./);
+    expect(describeNoTraces(t)).toMatch(/different trace store/);
+    expect(describeNoTraces({ ...t, evalOnlyCases: 3 })).toMatch(/for every one of its 3 cases/);
+    // Plain no-spans keeps the enable-tracing advice.
+    expect(describeNoTraces({ totalCases: 3, evalOnlyCases: 0 })).toMatch(/so this agent's runs were not traced\. Enable trace mode/);
+    expect(describeNoTraces({ totalCases: 3 })).toMatch(/Enable trace mode/);
+  });
+
+  it('a span-bearing result with evalOnlySpans unset is unaffected; a stray evalOnlySpans on a hasSpans:true result is ignored', () => {
+    const t = aggregateRunTelemetry(run('run-a', ['r1']), reports, { k1: ok('k1', { evalOnlySpans: 0 }) })!;
+    expect(t).toMatchObject({ hasSpans: true, spansCases: 1, evalOnlyCases: 0, totalTokens: 1000 });
+  });
+
+  it('Time/case falls back to the per-case wall-clock embedded on the RUN when the report carries none (classic benchmark runs)', () => {
+    // The classic path persisted `results[tc].performanceMetrics` on the run but not on the report
+    // (reports r4/r5 below have no performanceMetrics) → pre-fix the column read "—" for every such run.
+    const legacyReports = { ...reports, r5: report('r5', { runId: 'k5' }) };
+    const legacyRun = {
+      id: 'run-legacy',
+      results: {
+        'tc-0': { reportId: 'r4', status: 'completed', performanceMetrics: { durationMs: 75_929, agentDurationMs: 70_213, judgeDurationMs: 5_712, judgeAttempts: 1 } },
+        'tc-1': { reportId: 'r5', status: 'completed', performanceMetrics: { durationMs: 54_284, agentDurationMs: 47_491 } },
+        // The report's own wall-clock wins when both exist.
+        'tc-2': { reportId: 'r1', status: 'completed', performanceMetrics: { durationMs: 1 } },
+      },
+    };
+    const t = aggregateRunTelemetry(legacyRun, legacyReports, {
+      k4: { runId: 'k4', status: 'pending', hasSpans: false, evalOnlySpans: 1 },
+      k5: { runId: 'k5', status: 'pending', hasSpans: false, evalOnlySpans: 1 },
+      k1: { runId: 'k1', status: 'pending', hasSpans: false, evalOnlySpans: 1 },
+    })!;
+    expect(t.medianDurationMs).toBe(54_284);   // median of 75_929, 54_284, 44_000
+    expect(t.hasSpans).toBe(false);
+    expect(t.evalOnlyCases).toBe(3);
+    // Nothing to fall back to → still null (renders "—" / "Not recorded").
+    const none = aggregateRunTelemetry({ id: 'x', results: { 'tc-0': { reportId: 'r4', status: 'completed' } } }, reports, {})!;
+    expect(none.medianDurationMs).toBeNull();
+    // An unusable report value (0 / NaN) does not block the embedded fallback.
+    const zeroReport = { ...reports, r6: report('r6', { runId: 'k6', performanceMetrics: { durationMs: 0, agentDurationMs: 0 } }) };
+    const fb = aggregateRunTelemetry({ id: 'y', results: { 'tc-0': { reportId: 'r6', performanceMetrics: { durationMs: 12_000 } } } }, zeroReport, {})!;
+    expect(fb.medianDurationMs).toBe(12_000);
   });
 
   it('aggregateAllRunTelemetry keys by run id', () => {

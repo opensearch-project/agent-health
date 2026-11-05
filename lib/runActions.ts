@@ -13,14 +13,21 @@
  * Action matrix (see AGENTS.md / PR description for the full writeup):
  *   - Delete: any run, any status. Always available (existing endpoint).
  *   - Cancel: only while `status === 'running'`.
- *   - Re-run: only top-level EvaluationRun docs (docType === 'evaluation-run').
- *     Legacy benchmark-embedded BenchmarkRun rows don't support the
- *     provenance-tracked rerun endpoint (pre-existing constraint — see
- *     RunConfigDialog / EvalRunsPage).
- *   - Retry judgement: only EvaluationRun docs, only when the run is
- *     terminal (not running) AND it has at least one test case whose agent
- *     execution completed (`results[*].status === 'completed'`) — i.e.
- *     there is stored agent output to re-judge. Owner requirement
+ *   - Re-run: any run. A top-level EvaluationRun doc (docType ===
+ *     'evaluation-run') goes through the provenance-tracked rerun endpoint;
+ *     a legacy benchmark-embedded BenchmarkRun has no such endpoint, so its
+ *     surfaces open the same run-config dialog in create mode, prefilled
+ *     from the run, and start a NEW run on the benchmark (see
+ *     RunInspectorPage). Either way the dialog is where "the agent is no
+ *     longer configured" is said honestly — Re-run legitimately needs a
+ *     configured agent, and the picker offers the alternatives.
+ *   - Retry judgement: any run (EvaluationRun doc OR legacy
+ *     benchmark-embedded run — the endpoint takes a `benchmarkId` hint for
+ *     the latter), only when the run is terminal (not running) AND it has at
+ *     least one test case whose agent execution completed
+ *     (`results[*].status === 'completed'`) — i.e. there is stored agent
+ *     output to re-judge. Retry judgement never needs the agent: only the
+ *     stored trajectory plus an evaluator / judge model. Owner requirement
  *     (follow-up to #468): "Retry judgement should be a retryable step all
  *     the time" — so it is NOT limited to judge-failed cases anymore; the
  *     dialog lets the user pick the scope (only judge-failed cases vs. all
@@ -39,6 +46,7 @@ import { isEvaluationRun as isEvaluationRunDoc } from '@/types';
 /** Minimal shape both BenchmarkRun and EvaluationRun satisfy for these checks. */
 export type RunLike = Pick<BenchmarkRun | EvaluationRun, 'status' | 'results'> & {
   docType?: string;
+  stats?: BenchmarkRun['stats'] | null;
 };
 
 /**
@@ -46,7 +54,7 @@ export type RunLike = Pick<BenchmarkRun | EvaluationRun, 'status' | 'results'> &
  * `POST /api/storage/evaluation-runs`), as opposed to a legacy
  * benchmark-embedded BenchmarkRun (`benchmark.runs[]`). The two share a lot
  * of shape but only EvaluationRun docs carry `docType: 'evaluation-run'` and
- * support the rerun/retry-judgement endpoints.
+ * support the rerun / rename endpoints (retry judgement works for both).
  *
  * Null-tolerant wrapper over the typed predicate in `types/index.ts` (the
  * single source of truth for the docType discriminator) — kept so callers
@@ -61,9 +69,19 @@ export function isRunRunning(run: RunLike | null | undefined): boolean {
   return run?.status === 'running';
 }
 
-/** True once a run has reached any terminal state (not running/pending). */
+/**
+ * True once a run has reached any terminal state (not running/pending). A
+ * run with NO status is legacy data persisted before the field existed
+ * (`BenchmarkRun.status` doc: "undefined = legacy data, treat as completed")
+ * — terminal unless one of its own results is still running/pending (the
+ * same reading `lib/runStats` `getEffectiveRunStatus` gives such a run).
+ */
 export function isRunTerminal(run: RunLike | null | undefined): boolean {
-  return !!run && (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled');
+  if (!run) return false;
+  if (run.status === undefined) {
+    return !Object.values(run.results || {}).some(r => r?.status === 'running' || r?.status === 'pending');
+  }
+  return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
 }
 
 /**
@@ -95,16 +113,69 @@ export function countJudgeFailed(run: RunLike | null | undefined): number {
 }
 
 /**
- * Count test cases whose AGENT execution completed (`status === 'completed'`)
- * — every one of them has stored output the judge can be re-run against,
- * regardless of the current verdict. This is what `scope=all` re-judges and
- * what gates the Retry-judgement item.
+ * Minimal shape of one `run.results[tc]` entry these predicates read. Wider
+ * than the declared `EvaluationRun['results'][string]` type: the runner
+ * persists `passFailStatus` on this map at runtime.
+ */
+export interface RunResultEntryLike {
+  reportId?: string;
+  status?: string;
+  passFailStatus?: string | null;
+}
+
+/** The report-summary fields {@link isRejudgeableResult} reads (all present on the inspector's lightweight summaries). */
+export type RejudgeableReportLike = { failureStage?: string | null; passFailStatus?: string | null };
+
+/**
+ * Does this case have stored agent output the judge can be re-run against
+ * (`scope=all`)? ONE predicate shared by the server-side selection
+ * (services/evaluation/retryJudgement.ts `selectRetryableCases`) and the run
+ * inspector's Retry-judgement enablement + count, so the item is never
+ * enabled for a set the backend then rejects in full.
+ *
+ *   - no report loaded → false (nothing to judge against);
+ *   - `report.failureStage === 'agent'` → false: the agent request failed
+ *     (timeout / connection / non-2xx), nothing was ever judged — the runner
+ *     still writes these as `results[tc].status: 'completed'`, which is why
+ *     the run doc alone over-counts; Re-run is the remedy;
+ *   - `results[tc].status === 'completed'` → true: the agent finished
+ *     (passed, judge-failed, trace-failed — all re-judgeable);
+ *   - `results[tc].status === 'failed'` → true only for a judged FAILURE
+ *     (`report.passFailStatus === 'failed'`): the runner mirrors a failed
+ *     verdict as `status: 'failed'`, so these cases DO have output and are
+ *     exactly the ones a second opinion is wanted on; a `status: 'failed'`
+ *     entry with no verdict is an executor crash / legacy agent failure
+ *     (placeholder report, nothing stored) and is not counted.
+ *
+ * The backend additionally requires a non-empty stored trajectory
+ * (`hasRejudgeableOutput`), which the inspector's summaries cannot see.
+ */
+export function isRejudgeableResult(
+  result: RunResultEntryLike | null | undefined,
+  report: RejudgeableReportLike | null | undefined
+): boolean {
+  if (!result || !report) return false;
+  if (report.failureStage === 'agent') return false;
+  if (result.status === 'completed') return true;
+  return result.status === 'failed' && report.passFailStatus === 'failed';
+}
+
+/**
+ * Count test cases with stored output the judge can be re-run against,
+ * regardless of the current verdict, from the RUN DOC alone (no reports
+ * loaded — the runs list / detail page). Mirrors {@link isRejudgeableResult}
+ * as far as the run doc allows: completed cases plus judged failures
+ * (`status: 'failed'` carrying the runner's `passFailStatus: 'failed'`
+ * mirror). Agent-request failures look like plain completed cases here, so
+ * this may over-count; surfaces that have the reports loaded (the inspector)
+ * use `isRejudgeableResult` instead.
  */
 export function countRejudgeable(run: RunLike | null | undefined): number {
   if (!run?.results) return 0;
   let count = 0;
   for (const r of Object.values(run.results)) {
-    if ((r as { status?: string }).status === 'completed') count++;
+    const result = r as RunResultEntryLike;
+    if (result.status === 'completed' || (result.status === 'failed' && result.passFailStatus === 'failed')) count++;
   }
   return count;
 }
@@ -114,11 +185,11 @@ export interface RunActionVisibility {
   canDelete: boolean;
   /** Cancel is available only while the run is actively running. */
   canCancel: boolean;
-  /** Re-run is available only for top-level EvaluationRun docs. */
+  /** Re-run is available for any run (see the module comment for how legacy runs re-run). */
   canRerun: boolean;
   /** Reason to show (e.g. as a disabled-item tooltip) when canRerun is false. */
   rerunDisabledReason?: string;
-  /** Retry judgement: EvaluationRun, terminal, with >0 completed (re-judgeable) cases. */
+  /** Retry judgement: terminal run with >0 completed (re-judgeable) cases — any run shape. */
   canRetryJudgement: boolean;
   /** Reason to show when canRetryJudgement is false. */
   retryJudgementDisabledReason?: string;
@@ -134,8 +205,6 @@ export interface RunActionVisibility {
   retryJudgementCount: number;
 }
 
-const RERUN_NOT_SUPPORTED_REASON = "Re-run isn't available for legacy benchmark-embedded runs";
-const RETRY_JUDGEMENT_NOT_SUPPORTED_REASON = "Retry judgement isn't available for legacy benchmark-embedded runs";
 const RETRY_JUDGEMENT_STILL_RUNNING_REASON = 'Retry judgement is only available once the run finishes';
 const RETRY_JUDGEMENT_NOTHING_TO_REJUDGE_REASON = 'No completed test cases to re-judge';
 
@@ -184,25 +253,39 @@ export function isOldEnoughForZombieCancel(createdAt: string | undefined, now: n
  * so the two never drift.
  */
 export function getRunActionVisibility(run: RunLike | null | undefined): RunActionVisibility {
-  const evalRun = isEvaluationRun(run);
   const running = isRunRunning(run);
   const terminal = isRunTerminal(run);
-  const judgeFailedCount = evalRun ? countJudgeFailed(run) : 0;
-  const rejudgeableCount = evalRun ? countRejudgeable(run) : 0;
+  // Both shapes carry `results[tc].status` (+ the runner's `passFailStatus`
+  // mirror on newer docs), so the counts apply to legacy embedded runs too.
+  const rejudgeableCount = countRejudgeable(run);
+  let judgeFailedCount = countJudgeFailed(run);
+  // Classic-shape docs (every legacy benchmark-embedded run, older eval-run
+  // docs) carry NO `passFailStatus` mirror on any result, so every completed
+  // case reads as judge-failed above — the kebab would say "Retry judgement
+  // (5)" for a run whose dialog pre-flight then finds 1. When no result has a
+  // mirror but the denormalized `stats` show real verdicts, those stats are
+  // the honest judge-failed count (same signature `lib/runStats`
+  // `computeRunStats` trusts for the same reason).
+  if (run?.results && judgeFailedCount > 0) {
+    const anyMirror = Object.values(run.results).some(r => (r as RunResultEntryLike)?.passFailStatus === 'passed' || (r as RunResultEntryLike)?.passFailStatus === 'failed');
+    const stats = run.stats;
+    if (!anyMirror && stats && ((stats.passed ?? 0) > 0 || (stats.failed ?? 0) > 0)) {
+      judgeFailedCount = Math.min(judgeFailedCount, stats.errored ?? 0);
+    }
+  }
 
-  const canRetryJudgement = evalRun && terminal && rejudgeableCount > 0;
+  const canRetryJudgement = terminal && rejudgeableCount > 0;
   let retryJudgementDisabledReason: string | undefined;
   if (!canRetryJudgement) {
-    if (!evalRun) retryJudgementDisabledReason = RETRY_JUDGEMENT_NOT_SUPPORTED_REASON;
-    else if (!terminal) retryJudgementDisabledReason = RETRY_JUDGEMENT_STILL_RUNNING_REASON;
+    if (!terminal) retryJudgementDisabledReason = RETRY_JUDGEMENT_STILL_RUNNING_REASON;
     else retryJudgementDisabledReason = RETRY_JUDGEMENT_NOTHING_TO_REJUDGE_REASON;
   }
 
   return {
     canDelete: true,
     canCancel: running,
-    canRerun: evalRun,
-    rerunDisabledReason: evalRun ? undefined : RERUN_NOT_SUPPORTED_REASON,
+    canRerun: !!run,
+    rerunDisabledReason: undefined,
     canRetryJudgement,
     retryJudgementDisabledReason,
     judgeFailedCount,

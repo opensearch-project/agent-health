@@ -50,9 +50,11 @@ import {
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { JudgeModelSelect } from '@/components/JudgeModelSelect';
-import { EvaluationRun, Evaluator } from '@/types';
+import { BenchmarkRun, EvaluationRun, Evaluator } from '@/types';
 import type { ScoringDiagnostics } from '@/types';
 import { ENV_CONFIG } from '@/lib/config';
+import { DEFAULT_CONFIG } from '@/lib/constants';
+import { toJudgeModelKey } from '@/lib/judgeModelKey';
 import {
   groupNotEvaluableReasons,
   notEvaluableCount,
@@ -88,7 +90,8 @@ export function seedRetryJudgementDefaults(
   const last = run.lastJudgementRetry;
   return {
     evaluatorId: (last ? last.evaluatorId : run.evaluatorId) || DEFAULT_EVALUATOR_ID,
-    judgeModelId: (last ? last.judgeModelId : run.judgeModelId) || '',
+    // A full provider model id (CLI / classic runs) is shown as its picker key.
+    judgeModelId: toJudgeModelKey(last ? last.judgeModelId : run.judgeModelId, DEFAULT_CONFIG.models),
     scope: judgeFailedCount > 0 ? 'errored' : 'all',
   };
 }
@@ -104,8 +107,18 @@ export function selectionToRequest(selection: RetryJudgementSelection, determini
 }
 
 export interface RetryJudgementConfirmDialogProps {
-  /** The run to retry judgement on. Dialog renders nothing while this is null. */
-  run: EvaluationRun | null;
+  /**
+   * The run to retry judgement on — a first-class EvaluationRun doc or a
+   * legacy benchmark-embedded BenchmarkRun (both carry the evaluator / judge
+   * model / results this dialog reads). Dialog renders nothing while null.
+   */
+  run: EvaluationRun | BenchmarkRun | null;
+  /**
+   * The benchmark the run belongs to. Required for a legacy embedded run (the
+   * server finds it in `benchmark.runs[]` by this id); harmless for a
+   * first-class doc. Sent on the pre-flight and the retry itself.
+   */
+  benchmarkId?: string;
   /** Number of judge-failed (no-verdict) cases — the "Only judge-failed cases (N)" scope. */
   judgeFailedCount: number;
   /** Number of completed cases with agent output to re-judge — the "All cases (M)" scope. */
@@ -152,7 +165,7 @@ export const NotEvaluableReasons: React.FC<{ reasons: Array<{ reason: string; co
 );
 
 export const RetryJudgementConfirmDialog: React.FC<RetryJudgementConfirmDialogProps> = ({
-  run, judgeFailedCount, rejudgeableCount, open, onOpenChange, onComplete,
+  run, benchmarkId, judgeFailedCount, rejudgeableCount, open, onOpenChange, onComplete,
 }) => {
   const runId = run?.id ?? null;
   const job = useRetryJudgementJob(runId ?? undefined, run?.name);
@@ -193,11 +206,11 @@ export const RetryJudgementConfirmDialog: React.FC<RetryJudgementConfirmDialogPr
     let cancelled = false;
     setPreflight(null);
     setPreflightError(null);
-    preflightRetryJudgement(runId, { scope: selection.scope, evaluatorId: selection.evaluatorId })
+    preflightRetryJudgement(runId, { scope: selection.scope, evaluatorId: selection.evaluatorId, ...(benchmarkId ? { benchmarkId } : {}) })
       .then(p => { if (!cancelled) setPreflight(p); })
       .catch(err => { if (!cancelled) setPreflightError(err?.message || 'Pre-flight failed'); });
     return () => { cancelled = true; };
-  }, [open, runId, selection.evaluatorId, selection.scope]);
+  }, [open, runId, benchmarkId, selection.evaluatorId, selection.scope]);
 
   // Re-opened while the job runs → watch it (live progress instead of the pickers).
   useEffect(() => {
@@ -237,7 +250,8 @@ export const RetryJudgementConfirmDialog: React.FC<RetryJudgementConfirmDialogPr
     setSubmitting(true);
     setError(null);
     try {
-      const started = await startRetryJudgementJob(run.id, selectionToRequest(selection, deterministic), run.name);
+      const request = { ...selectionToRequest(selection, deterministic), ...(benchmarkId ? { benchmarkId } : {}) };
+      const started = await startRetryJudgementJob(run.id, request, run.name);
       setWatchedStartedAt(started.startedAt);
     } catch (err: any) {
       setError(err.message || 'Failed to retry judgement');

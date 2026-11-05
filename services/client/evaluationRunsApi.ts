@@ -387,6 +387,12 @@ export interface RetryJudgementRequest {
   evaluatorId?: string;
   /** Judge model; `null` = evaluator default; omitted → the run's own judge model. */
   judgeModelId?: string | null;
+  /**
+   * The benchmark a LEGACY benchmark-embedded run (no evaluation-run doc)
+   * lives in — lets the server find it in `benchmark.runs[]`. Ignored when a
+   * first-class doc exists for the id, so callers may always send it.
+   */
+  benchmarkId?: string;
 }
 
 /** Mirrors services/evaluation/retryJudgement.ts `RetryJudgementPreflight`. */

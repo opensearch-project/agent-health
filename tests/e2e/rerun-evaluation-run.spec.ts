@@ -435,7 +435,12 @@ test.describe('Run inspector — Re-run button (eval-run mode)', () => {
   });
 });
 
-test.describe('Run inspector — Re-run button hidden for benchmark-embedded runs', () => {
+// Owner report (#509 follow-up): Re-run was greyed out as "isn't available for
+// legacy benchmark-embedded runs". There is still no rerun endpoint for a
+// legacy run, so the inspector opens the shared run dialog in CREATE mode
+// (the Runs tab's Add Run path), prefilled from the run — and never calls
+// POST …/rerun for it.
+test.describe('Run inspector — Re-run on a legacy benchmark-embedded run opens the create-mode run dialog', () => {
   let testCaseId: string | null = null;
   let benchmarkId: string | null = null;
   let runId: string | null = null;
@@ -487,8 +492,10 @@ test.describe('Run inspector — Re-run button hidden for benchmark-embedded run
     if (testCaseId) await request.delete(`/api/storage/test-cases/${testCaseId}`).catch(() => {});
   });
 
-  test('kebab Re-run item is disabled for benchmark-embedded runs', async ({ page }) => {
+  test('kebab Re-run item is ENABLED for a benchmark-embedded run and opens the run dialog in create mode, prefilled; no POST …/rerun is made', async ({ page }) => {
     test.skip(!seeded, 'Could not seed benchmark run (storage not configured?)');
+    let rerunPosts = 0;
+    page.on('request', req => { if (req.method() === 'POST' && req.url().includes(`/evaluation-runs/${runId}/rerun`)) rerunPosts += 1; });
 
     await page.goto(`/evaluations/benchmarks/${benchmarkId}/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
@@ -497,10 +504,18 @@ test.describe('Run inspector — Re-run button hidden for benchmark-embedded run
     await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
     const rerunItem = page.locator(`[data-testid="run-action-rerun-${runId}"]`);
     await expect(rerunItem).toBeVisible({ timeout: 15000 });
-    // Radix marks disabled items via aria-disabled / data-disabled (not the
-    // native `disabled` attribute), so assert the accessible state.
-    await expect(rerunItem).toHaveAttribute('aria-disabled', 'true');
-    await page.keyboard.press('Escape');
+    await expect(rerunItem).not.toHaveAttribute('aria-disabled', 'true');
+    await rerunItem.click();
+
+    const dialog = page.locator('[data-testid="run-config-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await expect(dialog).toHaveAttribute('data-mode', 'create');
+    await expect(page.locator('[data-testid="run-config-name-input"]')).toHaveValue('BM Run 1 (re-run)');
+    await expect(page.locator('[data-testid="run-config-agent-trigger"]')).toContainText('Demo Agent');
+    await expect(page.locator('[data-testid="run-config-source-summary"]')).toContainText('E2E Inspector BM');
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible();
+    expect(rerunPosts).toBe(0);
   });
 });
 

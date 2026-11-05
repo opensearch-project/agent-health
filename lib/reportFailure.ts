@@ -22,12 +22,23 @@ const KIND_TOKEN_RE = /\(kind=([a-z_]+)\)/;
 
 export function getFailureStage(report: Pick<EvaluationReport, 'status' | 'metricsStatus' | 'traceError' | 'failureStage' | 'llmJudgeReasoning' | 'passFailStatus'> | null | undefined): FailureStage | undefined {
   if (!report) return undefined;
-  if (report.failureStage === 'agent' || report.failureStage === 'judge' || report.failureStage === 'trace') {
-    return report.failureStage;
+  // An agent-request failure is authoritative: nothing is ever judged after
+  // it, so a stale verdict next to it would itself be the inconsistency.
+  if (report.failureStage === 'agent') return 'agent';
+  // A judge/trace-stage failure is superseded by a LATER successful
+  // judgement (Retry judgement writes the verdict and clears these fields,
+  // but reports re-judged before it did so still carry the stale stage):
+  // a report with a verdict and a non-errored metricsStatus is healthy, and
+  // rendering "Judge could not produce a verdict" beside PASSED contradicts
+  // itself. The explicit stage still wins whenever there is no verdict.
+  const hasVerdict = (report.passFailStatus === 'passed' || report.passFailStatus === 'failed') && report.metricsStatus !== 'error';
+  if (report.failureStage === 'judge' || report.failureStage === 'trace') {
+    return hasVerdict ? undefined : report.failureStage;
   }
   const kind = (report.traceError || '').match(KIND_TOKEN_RE)?.[1];
   if (kind) {
     if (kind === 'agent_failed') return 'agent';
+    if (hasVerdict) return undefined;
     if (kind === 'judge_failed') return 'judge';
     if (kind.startsWith('trace_')) return 'trace';
     return 'judge';

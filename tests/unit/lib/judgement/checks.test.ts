@@ -191,6 +191,28 @@ describe('summarizeChecks + buildJudgementHeadline', () => {
     expect(buildJudgementHeadline({}).tone).toBe('pending');
   });
 
+  it('a stale judge stage next to a verdict (re-judged before the retry path cleared it) reads as the verdict, not "Not judged"', () => {
+    // The shape Retry judgement left behind before #571: the verdict and metrics
+    // were written, but `failureStage`/`error`/`traceError` from the earlier
+    // judge failure stayed on the doc. Badge, TL;DR and the verdict engine all
+    // derive the stage with getFailureStage() and say PASSED — so must this.
+    const stale = {
+      status: 'completed', passFailStatus: 'passed', metricsStatus: 'ready',
+      failureStage: 'judge', error: 'judge returned no JSON',
+      traceError: 'Judge evaluation failed (kind=judge_failed): judge returned no JSON',
+      llmJudgeReasoning: 'The agent identified the root cause.', judgeProvider: 'bedrock',
+    };
+    const h = buildJudgementHeadline(stale);
+    expect(h.tone).toBe('passed');
+    expect(h.title).toBe('PASSED');
+    expect(h.title).not.toContain('Not judged');
+    expect(buildJudgementHeadline({ ...stale, passFailStatus: 'failed' }).tone).toBe('failed');
+    // Without a verdict the stale stage still wins; an agent-stage failure is
+    // authoritative even beside a verdict (nothing is judged after it).
+    expect(buildJudgementHeadline({ ...stale, passFailStatus: null }).title).toBe('Not judged — the judge could not produce a verdict');
+    expect(buildJudgementHeadline({ ...stale, failureStage: 'agent' }).title).toBe('Not judged — the agent request failed');
+  });
+
   it('caps long evidence in the headline', () => {
     const h = buildJudgementHeadline({ passFailStatus: 'failed', judgeProvider: 'none', matcherResults: [m({ errorMessage: `SIMPLE request succeeded — got: ${'x'.repeat(500)} (request abc)` })] });
     expect(h.title.length).toBeLessThan(220);

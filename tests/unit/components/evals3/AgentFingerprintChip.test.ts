@@ -16,8 +16,11 @@
  */
 
 import * as React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AgentFingerprintChip, AgentConfigChangedBadge } from '@/components/evals3/AgentFingerprintChip';
+import { FINGERPRINT_INPUT_FIELDS } from '@/lib/agentFingerprintDiff';
+
+jest.mock('@/lib/config', () => ({ ENV_CONFIG: { backendUrl: 'http://test-backend' } }));
 
 const FP_A = 'a'.repeat(64);
 const FP_B = 'b'.repeat(64);
@@ -56,11 +59,86 @@ describe('AgentFingerprintChip', () => {
     expect(chip.getAttribute('title')).toContain('no system prompt recorded');
   });
 
-  it('compact mode drops the "config" label', () => {
-    render(React.createElement(AgentFingerprintChip, { run: { agentFingerprint: FP_A }, compact: true }));
-    expect(screen.getByTestId('agent-fingerprint-chip').textContent).not.toContain('config');
-    render(React.createElement(AgentFingerprintChip, { run: { agentFingerprint: FP_A }, 'data-testid': 'full' }));
-    expect(screen.getByTestId('full').textContent).toContain('config');
+  it('ALWAYS shows the "config" label next to the hash (owner 2026-10-22 read the bare hex as a commit SHA)', () => {
+    render(React.createElement(AgentFingerprintChip, { run: { agentFingerprint: FP_A } }));
+    const chip = screen.getByTestId('agent-fingerprint-chip');
+    expect(chip.textContent).toContain('config');
+    expect(chip.textContent).toContain('aaaaaaaaaaaa');
+    expect(chip.tagName).toBe('BUTTON');
+    expect(chip.getAttribute('title')).toContain('Click for what this hash covers');
+  });
+
+  it('renders nothing for a legacy run by default, and an explicit "config · not recorded" chip with showMissing', () => {
+    const { container } = render(React.createElement(AgentFingerprintChip, { run: { agentKey: 'x' } }));
+    expect(container.innerHTML).toBe('');
+    render(React.createElement(AgentFingerprintChip, { run: { agentKey: 'x' }, showMissing: true, 'data-testid': 'hdr' }));
+    const missing = screen.getByTestId('hdr-missing');
+    expect(missing.textContent).toContain('config');
+    expect(missing.textContent).toContain('not recorded');
+    expect(missing.getAttribute('title')).toMatch(/created before/i);
+  });
+
+  describe('details popover (click)', () => {
+    const run = {
+      agentFingerprint: FP_A,
+      agentFingerprintShort: 'aaaaaaaaaaaa',
+      agentPromptHash: PH_1,
+      agentKey: 'coding-agent',
+      modelId: 'claude-sonnet-4',
+      agentConfigSource: { path: '/repo/agent-health.config.ts', gitSha: 'deadbeefcafe0000deadbeefcafe0000deadbeef', dirty: true },
+    };
+
+    it('explains the hash is NOT a git commit, lists every hashed input, shows the recorded config file + repo commit, and the CLI/API to recompute it', () => {
+      render(React.createElement(AgentFingerprintChip, { run }));
+      fireEvent.click(screen.getByTestId('agent-fingerprint-chip'));
+      const details = screen.getByTestId('agent-fingerprint-chip-details');
+      expect(details.textContent).toMatch(/SHA-256 of this agent.s configuration/);
+      expect(details.textContent).toContain('not a git commit');
+      expect(screen.getByTestId('agent-fingerprint-chip-details-fingerprint').textContent).toContain(FP_A);
+      expect(screen.getByTestId('agent-fingerprint-chip-details-prompt-hash').textContent).toContain(PH_1);
+      expect(screen.getByTestId('agent-fingerprint-chip-details-agent-key').textContent).toBe('coding-agent');
+      expect(screen.getByTestId('agent-fingerprint-chip-details-config-path').textContent).toBe('/repo/agent-health.config.ts');
+      const sha = screen.getByTestId('agent-fingerprint-chip-details-config-sha');
+      expect(sha.textContent).toContain('deadbeefcafe0000deadbeefcafe0000deadbeef');
+      expect(sha.textContent).toContain('uncommitted edits');
+      // Every documented input (minus the version marker) is listed, from the shared catalogue.
+      const items = screen.getByTestId('agent-fingerprint-chip-details-inputs').querySelectorAll('li');
+      const listedKeys = Array.from(items).map(li => li.getAttribute('data-input-key'));
+      expect(listedKeys).toEqual(FINGERPRINT_INPUT_FIELDS.filter(f => f.key !== 'v').map(f => f.key));
+      expect(listedKeys).toEqual(expect.arrayContaining(['connectorConfig', 'model', 'endpoint', 'hooks', 'headerKeys', 'auth']));
+      // Honest about what is NOT stored.
+      expect(details.textContent).toContain('The inputs themselves are not stored on the run');
+      // How to find it in your code.
+      expect(screen.getByTestId('agent-fingerprint-chip-details-cli').textContent).toContain('npx @opensearch-project/agent-health fingerprint coding-agent');
+      expect(details.textContent).toContain('GET /api/agents/coding-agent/fingerprint');
+    });
+
+    it('"Compare with current config" calls GET /api/agents/:key/fingerprint and reports same / differs / unknown agent', async () => {
+      const fetchMock = jest.fn();
+      (global as any).fetch = fetchMock;
+      render(React.createElement(AgentFingerprintChip, { run }));
+      fireEvent.click(screen.getByTestId('agent-fingerprint-chip'));
+
+      // same
+      fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ agentKey: 'coding-agent', agentFingerprint: FP_A, agentFingerprintShort: 'aaaaaaaaaaaa', agentPromptHash: PH_1 }) });
+      fireEvent.click(screen.getByTestId('agent-fingerprint-chip-details-compare'));
+      await waitFor(() => expect(screen.getByTestId('agent-fingerprint-chip-details-compare-result').getAttribute('data-state')).toBe('done'));
+      expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/agents\/coding-agent\/fingerprint$/);
+      expect(screen.getByTestId('agent-fingerprint-chip-details-compare-result').textContent).toContain('matches the current config');
+
+      // prompt changed
+      fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ agentFingerprint: FP_B, agentFingerprintShort: 'bbbbbbbbbbbb', agentPromptHash: PH_2 }) });
+      fireEvent.click(screen.getByTestId('agent-fingerprint-chip-details-compare'));
+      await waitFor(() => expect(screen.getByTestId('agent-fingerprint-chip-details-compare-result').getAttribute('data-kind')).toBe('prompt'));
+      expect(screen.getByTestId('agent-fingerprint-chip-details-compare-result').textContent).toContain('current config differs (bbbbbbbbbbbb)');
+      expect(screen.getByTestId('agent-fingerprint-chip-details-compare-result').textContent).toContain('system prompt changed');
+
+      // unknown agent on this server
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ error: 'Unknown agent' }) });
+      fireEvent.click(screen.getByTestId('agent-fingerprint-chip-details-compare'));
+      await waitFor(() => expect(screen.getByTestId('agent-fingerprint-chip-details-compare-result').getAttribute('data-state')).toBe('unknown-agent'));
+      expect(screen.getByTestId('agent-fingerprint-chip-details-compare-result').textContent).toContain('is not in this server');
+    });
   });
 });
 

@@ -26,3 +26,4 @@ export { createProfileCommand } from './profile.js';
 export { createSetupCommand } from './setup.js';
 export { createWorkflowCommand } from './workflow.js';
 export { createImportCommand } from './import.js';
+export { createFingerprintCommand } from './fingerprint.js';

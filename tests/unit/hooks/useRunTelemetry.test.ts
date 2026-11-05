@@ -224,6 +224,59 @@ describe('useRunTelemetry', () => {
     expect(result.current.byRunId['run-a']?.hasSpans).toBe(false);
   });
 
+  it('one HTTP request = ONE server-side OpenSearch query: the chunk is 50 keys (regression: 200-key requests took 15–68 s on the shared cluster and hit the proxy\'s 50 s cap)', () => {
+    expect(TELEMETRY_BATCH_CHUNK).toBe(50);
+  });
+
+  it('commits each chunk AS IT LANDS: the fast chunk\'s run renders values while the slow chunk is still in flight', async () => {
+    const many: Record<string, TelemetryReport> = {};
+    const idsA: string[] = [], idsB: string[] = [];
+    for (let i = 0; i < TELEMETRY_BATCH_CHUNK; i++) { const id = `a-${i}`; idsA.push(id); many[id] = report(id); }
+    for (let i = 0; i < 3; i++) { const id = `b-${i}`; idsB.push(id); many[id] = report(id); }
+    let releaseSlow: (() => void) | undefined;
+    const slow = new Promise<void>(r => { releaseSlow = r; });
+    // Chunk 1 (50 keys) answers immediately; chunk 2 (3 keys) is HELD.
+    const fetchBatch = jest.fn(async (keys: string[]) => { if (keys.length === 3) await slow; return okMetrics(keys); });
+    const { result } = renderHook(() => useRunTelemetry([run('run-a', idsA), run('run-b', idsB)], many, { fetchBatch }));
+
+    await waitFor(() => expect(result.current.byRunId['run-a']?.hasSpans).toBe(true));
+    // run-a is done; run-b is still loading — NOT "no spans", not an error.
+    expect(result.current.loading).toBe(true);
+    expect(result.current.loadingRunIds).toEqual(new Set(['run-b']));
+    expect(result.current.byRunId['run-b']).toMatchObject({ hasSpans: false, unavailable: false, errorCases: 0, pendingCases: 3 });
+    expect(result.current.error).toBeNull();
+
+    await act(async () => { releaseSlow!(); await slow; });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.byRunId['run-b']).toMatchObject({ hasSpans: true, spansCases: 3, pendingCases: 0 });
+  });
+
+  it('a chunk that exceeds the request timeout is aborted and marked unavailable (Retry) — the other chunk\'s values are kept, the page never hangs on it', async () => {
+    const many: Record<string, TelemetryReport> = {};
+    const idsA: string[] = [], idsB: string[] = [];
+    for (let i = 0; i < TELEMETRY_BATCH_CHUNK; i++) { const id = `a-${i}`; idsA.push(id); many[id] = report(id); }
+    for (let i = 0; i < 3; i++) { const id = `b-${i}`; idsB.push(id); many[id] = report(id); }
+    const seenSignals: Array<AbortSignal | undefined> = [];
+    // The 3-key chunk never answers unless aborted (a stalled proxy); the hook's signal must cut it.
+    const fetchBatch = jest.fn(async (keys: string[], _s?: any, _t?: any, _a?: any, opts?: { signal?: AbortSignal }) => {
+      seenSignals.push(opts?.signal);
+      if (keys.length === 3) {
+        await new Promise<void>((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })));
+        });
+      }
+      return okMetrics(keys);
+    });
+    const { result } = renderHook(() => useRunTelemetry([run('run-a', idsA), run('run-b', idsB)], many, { fetchBatch, requestTimeoutMs: 30 }));
+
+    await waitFor(() => expect(result.current.error).toBe('metrics unavailable'), { timeout: 3000 });
+    expect(result.current.loading).toBe(false);
+    expect(seenSignals.every(s => s instanceof AbortSignal)).toBe(true);
+    expect(result.current.byRunId['run-a']).toMatchObject({ hasSpans: true, unavailable: false, spansCases: TELEMETRY_BATCH_CHUNK });
+    expect(result.current.byRunId['run-b']).toMatchObject({ hasSpans: false, unavailable: true, errorCases: 3 });
+    expect(result.current.byRunId['run-b']?.errorMessage).toMatch(/timed out after 0 s/);
+  });
+
   it('enabled:false fetches nothing and reports nothing loading', async () => {
     const fetchBatch = jest.fn(async (keys: string[]) => okMetrics(keys));
     const { result } = renderHook(() => useRunTelemetry([run('run-a', ['r1'])], reports, { fetchBatch, enabled: false }));

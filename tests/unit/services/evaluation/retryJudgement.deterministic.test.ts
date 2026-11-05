@@ -26,6 +26,8 @@ import { callBedrockJudge } from '@/services/evaluation';
 import { fetchSpansForRun } from '@/services/traces/fetchSpansForRun';
 import { retryJudgementForRun, retryJudgementForCase, resolveEvaluatorDoc, preflightRetryJudgement } from '@/services/evaluation/retryJudgement';
 import { normalizeDeterministicEvaluator } from '@/lib/evaluators/deterministic';
+import { JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
+import { resolveJudgeModelId } from '@/lib/comparison/scoringDisplay';
 
 const mockedJudge = callBedrockJudge as jest.Mock;
 const mockedFetchSpans = fetchSpansForRun as jest.Mock;
@@ -178,6 +180,52 @@ describe('retry judgement with a deterministic evaluator (override)', () => {
     expect(runUpdate.stats).toMatchObject({ passed: 2, failed: 1, errored: 0, total: 3 });
     expect(runUpdate.lastRetryAttempt).toMatchObject({ evaluatorId: 'eval-det', evaluatorName: 'Ranked retrieval', scope: 'all', retried: 3, succeeded: 2, notEvaluable: 1, failed: 0 });
     expect(Object.values(runUpdate.lastRetryAttempt.reasons)).toEqual([1]);
+  });
+
+  // Seam with the resolved judge identity (`report.judgeModel` /
+  // `judgeProvider`, lib/judgeIdentity): the deterministic path cleared
+  // `judgeModelId` + `llmJudgeResponse` but left `judgeModel`, and the compare
+  // page's judge caption PREFERS `report.judgeModel` — so a run re-scored in
+  // code still named the previous LLM as its judge. The report now carries the
+  // existing no-LLM-judge marker instead.
+  it('a successful deterministic re-score clears the resolved LLM identity and stamps judgeProvider "none" (the shared no-LLM marker)', async () => {
+    const reports: Record<string, EvaluationReport> = {
+      'rep-a': makeReport('rep-a', 'tc-a', { judgeModelId: 'claude-sonnet-4.6', judgeModel: 'us.anthropic.claude-sonnet-4-6', judgeProvider: 'bedrock' } as any),
+    };
+    const storage = makeStorage(reports, { 'eval-det': evaluator });
+    const r = run({ 'tc-a': { reportId: 'rep-a', status: 'completed', passFailStatus: 'passed' } });
+
+    await retryJudgementForRun(r, storage, { scope: 'all', overrides: { evaluatorId: 'eval-det' } });
+
+    const a = reports['rep-a'] as any;
+    expect(a.passFailStatus).toBe('passed');
+    expect(a.judgeModelId).toBeNull();
+    expect(a.judgeModel).toBeNull();
+    expect(a.judgeProvider).toBe(JUDGE_PROVIDER_NONE);
+    // What the compare page resolves for this report: the no-LLM marker, never the old LLM or the run's judge.
+    expect(resolveJudgeModelId(a, { judgeModelId: 'claude-sonnet-4.6' })).toBe(JUDGE_PROVIDER_NONE);
+  });
+
+  it('a successful deterministic re-score clears the stage-failure fields a judge failure had recorded', async () => {
+    const reports: Record<string, EvaluationReport> = {
+      'rep-a': makeReport('rep-a', 'tc-a', {
+        metricsStatus: 'error' as any, passFailStatus: null as any,
+        traceError: 'Judge evaluation failed (kind=judge_failed): mock 400',
+        failureStage: 'judge', error: 'mock 400', judgeError: { message: 'mock 400', attempts: 1 },
+      } as any),
+    };
+    const storage = makeStorage(reports, { 'eval-det': evaluator });
+    const r = run({ 'tc-a': { reportId: 'rep-a', status: 'completed' } });
+
+    const summary = await retryJudgementForRun(r, storage, { scope: 'all', overrides: { evaluatorId: 'eval-det' } });
+
+    expect(summary.succeeded).toBe(1);
+    const a = reports['rep-a'] as any;
+    expect(a.passFailStatus).toBe('passed');
+    expect(a.failureStage ?? null).toBeNull();
+    expect(a.error ?? null).toBeNull();
+    expect(a.judgeError ?? null).toBeNull();
+    expect(a.traceError ?? null).toBeNull();
   });
 
   describe('preflightRetryJudgement — read-only evaluability check for the dialog', () => {

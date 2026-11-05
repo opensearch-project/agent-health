@@ -104,11 +104,6 @@ const KIND_STAGE: Record<EvaluatorErrorKind, FailureStage> = {
   unknown: 'judge',
 };
 
-/** Map an evaluator-error kind to its {@link FailureStage}. */
-export function failureStageForKind(kind: EvaluatorErrorKind): FailureStage {
-  return KIND_STAGE[kind];
-}
-
 export interface EvaluatorErrorPatchOptions {
   /** Structured detail persisted as `report.agentError` (agent_failed). */
   agentError?: AgentErrorInfo;

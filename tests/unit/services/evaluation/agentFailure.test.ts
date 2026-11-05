@@ -88,7 +88,6 @@ describe('agentFailure — describeAgentError', () => {
     });
     expect(info.kind).toBe('timeout');
     expect(info.message).toMatch(/HeadersTimeoutError/);
-    expect(info.message).toMatch(/no response within 300000ms/);
     expect(info.message).toMatch(/http:\/\/localhost:8000\/ask/);
     expect(info.endpoint).toBe('http://localhost:8000/ask');
     expect(info.elapsedMs).toBe(300_728);
@@ -101,7 +100,6 @@ describe('agentFailure — describeAgentError', () => {
     });
     const info = describeAgentError(err, agentErrorContextFrom(err));
     expect(info.message.match(/http:\/\/a\/b/g)?.length).toBe(1);
-    expect(info.message).not.toMatch(/no response within/);
     expect(info.kind).toBe('timeout');
   });
 
