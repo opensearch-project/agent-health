@@ -72,10 +72,11 @@ export function createReportCommand(): Command {
         const benchmark = await api.findBenchmark(options.benchmark);
         if (!benchmark) {
           spinner.fail(`Benchmark not found: "${options.benchmark}"`);
-          console.log('');
-          console.log(chalk.cyan('  Available benchmarks:'));
-          console.log(chalk.gray('    npx agent-health list benchmarks'));
-          console.log('');
+          // Diagnostics go to stderr: with --stdout, stdout is the report channel.
+          console.error('');
+          console.error(chalk.cyan('  Available benchmarks:'));
+          console.error(chalk.gray('    npx agent-health list benchmarks'));
+          console.error('');
           process.exit(1);
           return;
         }
@@ -106,7 +107,9 @@ export function createReportCommand(): Command {
         const defaultFilename = filenameMatch?.[1] || `report.${options.format}`;
 
         if (options.stdout) {
-          // Write to stdout
+          // Write ONLY the report body to stdout. Spinners and every
+          // [ServerLifecycle]/[Config] diagnostic are on stderr, so
+          // `report -f json --stdout | jq` parses.
           const text = await response.text();
           reportSpinner.stop();
           process.stdout.write(text);

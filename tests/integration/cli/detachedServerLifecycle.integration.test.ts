@@ -344,7 +344,8 @@ for (let i = 1; i <= 3; i++) {
     try {
       const exited = await waitUntil(() => command.child.exitCode !== null || command.child.signalCode !== null, 60_000);
       if (!exited || command.child.exitCode !== 0) throw new Error(command.stdout() + command.stderr());
-      const match = command.stdout().match(/server started on port (\d+)/);
+      // The port-fallback notice is a [ServerLifecycle] diagnostic → stderr (stdout stays data-only).
+      const match = command.stderr().match(/server started on port (\d+)/);
       expect(match).not.toBeNull();
       const actualPort = Number(match![1]);
       expect(actualPort).toBeGreaterThan(port);
