@@ -318,12 +318,20 @@ describe('CLI entry point and server lifecycle (real CLI processes)', () => {
         timeoutMs: 150_000,
       });
       const out = plain(res.output);
-      expect(res.status).toBe(0);
+      // Lifecycle is what this test asserts: the CLI auto-started a server,
+      // imported the file, ran the command to its summary and stopped the
+      // server. The RUN itself is rejected on this path — an auto-started
+      // file-storage server answers `/execute` for the demo agent with
+      // "OpenSearch not configured. Cannot execute benchmarks in sample-only
+      // mode" — and since #600 a case that never ran is an exit-1 outcome
+      // (`benchmark` no longer reports a rejected run as success).
+      expect(res.status).toBe(1);
       expect(out).toMatch(/Running in file mode/);
       expect(out).toContain(`Started server on port ${port}`);
       expect(out).toMatch(/Loaded 1 test cases from/);
       expect(out).toMatch(/Imported 1 test cases/);
       expect(out).toMatch(/Benchmark Summary/);
+      expect(out).toMatch(/1 never ran of 1 test case\(s\) could not be evaluated — exiting with code 1/);
       // The auto-started server was stopped by the CLI itself (file mode).
       await sleep(500);
       expect(await portOpen(port)).toBe(false);
