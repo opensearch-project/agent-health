@@ -462,6 +462,22 @@ agent-health kill <target>      # target: sample-agent
 | `0` | Success |
 | `1` | Error |
 
+For `benchmark` and `run`, "error" includes test cases whose evaluation was
+**not performed**: **errored** cases (the agent rejected or never answered the
+request, e.g. a `403` from expired credentials; the judge could not run),
+cases that hit an execution error inside the runner, planned cases that never
+ran (cancelled run), a run with nothing to evaluate, or a requested `--export`
+that could not be written. Errored cases are reported separately (never
+counted as passed or failed) and any of these makes the command exit `1`, so
+an all-errored run can never look like a pass in a pipeline. A test case that
+was judged and **failed** is a result, not an error: a run whose cases were
+all judged exits `0` regardless of the pass rate — read the counts to gate on
+quality. `-o json` includes `passed`, `failed`, `errored`, `pending`,
+`notRun`, `total`, `executionErrors`, `passRate` (passed / planned total, the
+historical formula) and `passRateJudged` (passed / judged, `null` when nothing
+was judged). A trace-mode judge that has not run yet (`PENDING`) is not an
+error.
+
 ---
 
 ## Output Formats
