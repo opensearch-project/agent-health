@@ -86,6 +86,9 @@ module.exports = {
     'lib/**/*.ts',
     'cli/**/*.ts',
     'types/**/*.ts',
+    // CI helper imported directly by its unit test (the CLI entry next to it,
+    // scripts/coverage-diff-summary.ts, uses import.meta and is only spawned).
+    'scripts/coverageDiffSummary.ts',
     // Explicitly collect the small Overview state surfaces exercised by their
     // focused component/hook tests without pulling the legacy Dashboard's
     // unrelated rendering branches into this coverage scope.
