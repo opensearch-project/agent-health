@@ -331,9 +331,10 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
   });
 
   it('judge line shows the JUDGE identity (judgeModelId · judgeModel), not the agent model, when runs carry it', () => {
-    const runA = makeRun('run-a');
-    const runB = makeRun('run-b');
     const SONNET_45 = 'amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0';
+    // The reports resolved to the same LLM the run recorded (the normal case).
+    const runA = { ...makeRun('run-a'), judgeModelId: SONNET_45 };
+    const runB = { ...makeRun('run-b'), judgeModelId: SONNET_45 };
     render(
       React.createElement(ComparisonScoreboard, {
         runs: [runA, runB],
@@ -358,8 +359,9 @@ describe('ComparisonScoreboard "Open run" deep link (rendered)', () => {
   });
 
   it('judge line labels differing judges A/B and flags an unrecorded agent-judge model on old runs', () => {
-    const runA = makeRun('run-a');
-    const runB = makeRun('run-b');
+    // Each run's reports resolved to the judge the run itself recorded.
+    const runA = { ...makeRun('run-a'), judgeModelId: 'agent-trace-judge' };
+    const runB = { ...makeRun('run-b'), judgeModelId: 'us.anthropic.claude-sonnet-4-6' };
     render(
       React.createElement(ComparisonScoreboard, {
         runs: [runA, runB],

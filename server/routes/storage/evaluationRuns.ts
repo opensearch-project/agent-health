@@ -817,16 +817,6 @@ router.post('/api/storage/evaluation-runs/:id/retry-judgement', async (req: Requ
         return res.status(400).json({ error: 'judgeModelId must be a non-empty string, or null for the evaluator default' });
       }
     }
-    if (body.judgeModelId !== undefined) {
-      const judgeModelId = body.judgeModelId;
-      if (judgeModelId === null) {
-        overrides.judgeModelId = null;
-      } else if (typeof judgeModelId === 'string' && judgeModelId.trim()) {
-        overrides.judgeModelId = judgeModelId;
-      } else {
-        return res.status(400).json({ error: 'judgeModelId must be a non-empty string, or null for the evaluator default' });
-      }
-    }
 
     // The run must be in a TERMINAL state — retrying judgement on a run
     // that's still executing would race the runner's own writes to the same

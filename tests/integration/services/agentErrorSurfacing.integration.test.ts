@@ -171,6 +171,55 @@ describe('agent-error surfacing (integration)', () => {
         await new Promise<void>(r => srv.close(() => r()));
       }
     });
+
+    // Adversarial review of the stack: `fetchWithTimeout` dropped its deadline
+    // as soon as the response HEADERS arrived, so an agent that answered 200
+    // instantly and then trickled the body for longer than `timeoutMs` was
+    // never timed out, and a body-read failure escaped the AgentRequestError
+    // wrapping (no kind / stage / endpoint / elapsed on the report).
+    it('an agent whose BODY trickles past connectorConfig.timeoutMs is an agent-stage timeout with the real cause (judge not called)', async () => {
+      const trickleSockets = new Set<import('node:net').Socket>();
+      const srv = http.createServer((req, res) => {
+        req.on('data', () => {});
+        req.on('end', () => {
+          res.statusCode = 200;
+          res.setHeader('content-type', 'application/json');
+          res.write('{"response":"');
+          let n = 0;
+          const tick = setInterval(() => {
+            res.write('x'.repeat(10));
+            if (++n >= 100) { clearInterval(tick); res.end('"}'); } // ~2 s of 20 ms chunks
+          }, 20);
+          res.on('close', () => clearInterval(tick));
+        });
+      });
+      srv.on('connection', s => { trickleSockets.add(s); s.on('close', () => trickleSockets.delete(s)); });
+      await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
+      const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/ask`;
+      try {
+        const hitsBefore = judgeHits;
+        const agent = {
+          key: 'a', name: 'A REST agent', endpoint: url, connectorType: 'rest', useTraces: false,
+          connectorConfig: { timeoutMs: 300 },
+        } as unknown as AgentConfig;
+        const t0 = Date.now();
+        const report = await runEvaluationWithConnector(agent, 'm', buildTestCase(), () => {}, { registry: restRegistry() }) as any;
+        const elapsed = Date.now() - t0;
+
+        expect(elapsed).toBeLessThan(1_800); // did NOT wait for the 2 s body
+        expect(report.failureStage).toBe('agent');
+        expect(report.status).toBe('failed');
+        expect(report.passFailStatus).toBeNull();
+        expect(report.agentError).toEqual(expect.objectContaining({ kind: 'timeout', endpoint: url, timeoutMs: 300 }));
+        expect(report.agentError.elapsedMs).toBeGreaterThanOrEqual(250);
+        expect(report.error).toMatch(/timed out after \d+ms \(timeout 300ms\)/);
+        expect(report.error).toMatch(/body did not complete/);
+        expect(judgeHits).toBe(hitsBefore);
+      } finally {
+        for (const s of trickleSockets) s.destroy();
+        await new Promise<void>(r => srv.close(() => r()));
+      }
+    }, 20_000);
   });
 
   describe('Scenario B — judge model returns an empty reply', () => {

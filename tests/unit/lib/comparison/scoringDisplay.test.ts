@@ -58,6 +58,15 @@ describe('resolveJudgeModelId — precedence, never the agent model', () => {
     expect(resolveJudgeModelId({ modelId: 'AGENT-MODEL' } as EvaluationReport, { modelId: 'AGENT-MODEL' } as { judgeModelId?: string })).toBeUndefined();
     expect(resolveJudgeModelId({ judgeModel: '  ', llmJudgeResponse: { modelId: '' } } as unknown as EvaluationReport, {})).toBeUndefined();
   });
+  // Seam with the no-LLM-judge marker (lib/judgeIdentity JUDGE_PROVIDER_NONE):
+  // a report re-scored by a deterministic evaluator (or a code-SDK body that
+  // never called judge()) records `judgeProvider: 'none'`. Falling through to
+  // the run's configured judge would name an LLM that did not judge it.
+  it("a report marked judgeProvider 'none' resolves to the marker, never to the run's judge", () => {
+    expect(resolveJudgeModelId({ judgeProvider: 'none', judgeModelId: null, judgeModel: null } as unknown as EvaluationReport, run)).toBe('none');
+    // A recorded LLM still wins (a stale 'none' never hides a judge that ran).
+    expect(resolveJudgeModelId({ judgeProvider: 'none', judgeModel: 'resolved-llm' } as unknown as EvaluationReport, run)).toBe('resolved-llm');
+  });
 });
 
 describe('pass-rate policy labels + denominators', () => {
@@ -95,6 +104,9 @@ describe('pass-rate policy labels + denominators', () => {
     expect(judgeCaption({})).toBe('not recorded');
     // Older fixtures with only judgeModelId still resolve.
     expect(judgeCaption({ judgeModelId: 'only' })).toBe('only');
+    // The no-LLM marker is captioned as such, never passed to the model-name lookup.
+    expect(judgeCaption({ judgeModelIds: ['none'] }, id => `MODEL:${id}`)).toBe('No LLM judge');
+    expect(judgeCaption({ judgeModelIds: ['j1', 'none'] }, id => id.toUpperCase())).toBe('mixed (J1 · No LLM judge)');
   });
 });
 

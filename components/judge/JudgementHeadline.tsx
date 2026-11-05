@@ -17,7 +17,7 @@ import type { EvaluationReport } from '@/types';
 import { buildJudgementHeadline } from '@/lib/judgement/checks';
 
 interface Props {
-  report: Pick<EvaluationReport, 'passFailStatus' | 'metricsStatus' | 'failureStage' | 'matcherResults' | 'llmJudgeReasoning' | 'judgeProvider' | 'error'>;
+  report: Pick<EvaluationReport, 'passFailStatus' | 'metricsStatus' | 'failureStage' | 'status' | 'traceError' | 'matcherResults' | 'llmJudgeReasoning' | 'judgeProvider' | 'error'>;
   className?: string;
 }
 
