@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { normalizeLegacyUserStep, normalizeTrajectorySteps } from '@/lib/trajectoryStepDisplay';
+import { normalizeLegacyUserStep, normalizeTrajectorySteps, stepContentText, stepContentIsStructured, safeStringify, NO_STEP_TEXT_PLACEHOLDER } from '@/lib/trajectoryStepDisplay';
 import { TrajectoryStep } from '@/types';
 
 function makeStep(overrides: Partial<TrajectoryStep> = {}): TrajectoryStep {
@@ -75,5 +75,111 @@ describe('normalizeTrajectorySteps', () => {
 
   it('returns an empty array for an empty trajectory', () => {
     expect(normalizeTrajectorySteps([])).toEqual([]);
+  });
+});
+
+/**
+ * Persisted reports are not guaranteed to carry a string `content` on every
+ * step (connectors, the code SDK, raw `POST /api/storage/runs` clients). The
+ * legacy-user normalizer used to call `.startsWith` unguarded and threw.
+ */
+describe('normalizeLegacyUserStep — non-string content (inspector blank-page regression)', () => {
+  it.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['object', { index: 'orders-*', size: 5 }],
+    ['number', 42],
+  ])('does not throw and returns the step unchanged when a thinking step has %s content', (_label, content) => {
+    const step = makeStep({ type: 'thinking', content: content as unknown as string });
+    expect(() => normalizeLegacyUserStep(step)).not.toThrow();
+    expect(normalizeLegacyUserStep(step)).toBe(step);
+  });
+
+  it('normalizeTrajectorySteps survives a malformed step in the middle of a real trajectory', () => {
+    const steps = [
+      makeStep({ id: 'a', type: 'user', content: 'Why did orders fail?' }),
+      makeStep({ id: 'b', type: 'thinking', content: 'User: a legacy echo' }),
+      makeStep({ id: 'c', type: 'action', content: undefined as unknown as string, toolName: 'search_orders' }),
+      makeStep({ id: 'd', type: 'response', content: 'Payment gateway timeout.' }),
+    ];
+    const out = normalizeTrajectorySteps(steps);
+    expect(out.map(s => s.type)).toEqual(['user', 'user', 'action', 'response']);
+    expect(out[1].content).toBe('a legacy echo');
+  });
+});
+
+describe('stepContentText', () => {
+  it('returns string content as-is (including the empty string)', () => {
+    expect(stepContentText({ content: 'hello **world**' })).toBe('hello **world**');
+    expect(stepContentText({ content: '' })).toBe('');
+  });
+
+  it('returns "" for undefined / null content (callers render the placeholder)', () => {
+    expect(stepContentText({ content: undefined as unknown as string })).toBe('');
+    expect(stepContentText({ content: null as unknown as string })).toBe('');
+    expect(NO_STEP_TEXT_PLACEHOLDER).toBe('(no text)');
+  });
+
+  it('pretty-prints an object content as JSON (the serialized tool arguments the producer meant)', () => {
+    const args = { index: 'orders-*', query: { bool: { filter: [{ term: { status: 'failed' } }] } } };
+    expect(stepContentText({ content: args as unknown as string })).toBe(JSON.stringify(args, null, 2));
+  });
+
+  it('pretty-prints an array content as JSON', () => {
+    expect(stepContentText({ content: ['a', 'b'] as unknown as string })).toBe('[\n  "a",\n  "b"\n]');
+  });
+
+  it('stringifies other primitives', () => {
+    expect(stepContentText({ content: 42 as unknown as string })).toBe('42');
+    expect(stepContentText({ content: true as unknown as string })).toBe('true');
+  });
+
+  it('falls back to String() when JSON.stringify throws (circular object)', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(stepContentText({ content: circular as unknown as string })).toBe('[object Object]');
+  });
+
+  it('returns "" for a null / undefined step itself (a null entry in a persisted trajectory array)', () => {
+    expect(stepContentText(null)).toBe('');
+    expect(stepContentText(undefined)).toBe('');
+  });
+});
+
+describe('stepContentIsStructured', () => {
+  it('is true only for object / array content', () => {
+    expect(stepContentIsStructured({ content: { a: 1 } as unknown as string })).toBe(true);
+    expect(stepContentIsStructured({ content: [1] as unknown as string })).toBe(true);
+    expect(stepContentIsStructured({ content: 'text' })).toBe(false);
+    expect(stepContentIsStructured({ content: null as unknown as string })).toBe(false);
+    expect(stepContentIsStructured({ content: undefined as unknown as string })).toBe(false);
+    expect(stepContentIsStructured(null)).toBe(false);
+  });
+});
+
+describe('safeStringify', () => {
+  it('pretty-prints JSON-able values', () => {
+    expect(safeStringify({ a: 1 })).toBe('{\n  "a": 1\n}');
+    expect(safeStringify([1, 2], 0)).toBe('[1,2]');
+  });
+
+  it('never throws: circular → String(), hostile toJSON → String(), hostile toString → fixed marker', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(safeStringify(circular)).toBe('[object Object]');
+
+    const hostileToJson = { toJSON() { throw new Error('nope'); } };
+    expect(safeStringify(hostileToJson)).toBe('[object Object]');
+
+    const hostileBoth = {
+      toJSON() { throw new Error('nope'); },
+      toString() { throw new Error('nope'); },
+    };
+    expect(safeStringify(hostileBoth)).toBe('[unserializable value]');
+  });
+
+  it('returns a string even when JSON.stringify would return undefined', () => {
+    expect(safeStringify(undefined)).toBe('undefined');
+    expect(safeStringify(() => 1)).toMatch(/^\(\) => 1|function/);
   });
 });

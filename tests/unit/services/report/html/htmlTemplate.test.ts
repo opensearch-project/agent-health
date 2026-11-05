@@ -660,6 +660,25 @@ describe('generateHtmlReport', () => {
       expect(html).toContain('failed');
     });
 
+    it('does not throw on a trajectory step without a string content (undefined / null / object)', () => {
+      const data = createMockReportData();
+      (data.reports['report-1'] as any).trajectory = [
+        { id: 's0', timestamp: 1, type: 'assistant', content: 'Looking up orders' },
+        { id: 's1', timestamp: 2, type: 'action', toolName: 'search_orders', toolArgs: { index: 'orders-*' } },
+        { id: 's2', timestamp: 3, type: 'action', toolName: 'search_payments', content: null },
+        { id: 's3', timestamp: 4, type: 'action', toolName: 'search_refunds', content: { index: 'refunds-*', size: 5 } },
+        { id: 's4', timestamp: 5, type: 'response', content: 'Done' },
+      ];
+      let html = '';
+      expect(() => { html = generateHtmlReport(data); }).not.toThrow();
+      expect(html).toContain('Looking up orders');
+      expect(html).toContain('search_orders');
+      expect(html).toContain('search_payments');
+      // Object content is serialized (and HTML-escaped) rather than dropped.
+      expect(html).toContain('refunds-*');
+      expect(html).toContain('Done');
+    });
+
     it('should handle assistant step type', () => {
       const data = createMockReportData();
       (data.reports['report-1'] as any).trajectory = [
