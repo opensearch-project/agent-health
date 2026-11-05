@@ -31,6 +31,14 @@ const packageJsonPath = join(__dirname, '..', '..', 'package.json');
 let cachedVersion: string | null = null;
 
 /**
+ * Every lifecycle notice goes to stderr. stdout belongs to the command's data
+ * (`report -f json --stdout`, `list --output json`) and must stay parseable.
+ */
+function lifecycleNotice(message: string): void {
+  console.error(`[ServerLifecycle] ${message}`);
+}
+
+/**
  * Get the CLI version from package.json
  */
 export function getCliVersion(): string {
@@ -261,7 +269,7 @@ export async function startServer(
 ): Promise<StartServerResult> {
   const cliPath = join(__dirname, '..', '..', 'bin', 'cli.js');
   const { logPath, logFd } = openServerLog(port);
-  console.error(`[ServerLifecycle] Server log: ${logPath}`);
+  lifecycleNotice(`Server log: ${logPath}`);
   let child: ChildProcess;
   try {
     child = spawn(process.execPath, [cliPath, 'serve', '-p', String(port), '--no-browser'], {
@@ -307,10 +315,10 @@ export async function startServer(
   } catch (error) {
     // Startup failed; kill only the exact child we created, never a port owner.
     child.kill('SIGKILL');
-    console.error(`[ServerLifecycle] Server log: ${logPath}`);
+    lifecycleNotice(`Server log: ${logPath}`);
     try {
       const output = readLogTail(logPath);
-      if (output) console.error(`[ServerLifecycle] Server output (last 64 KiB):\n${output}`);
+      if (output) lifecycleNotice(`Server output (last 64 KiB):\n${output}`);
     } catch {
       // Preserve the startup error even if its log is no longer readable.
     }
@@ -337,7 +345,7 @@ export function stopServer(child: ChildProcess): void {
     child.unref();
   };
   const onError = (error: Error) => {
-    console.error(`[ServerLifecycle] Could not stop child ${child.pid}: ${error.message}`);
+    lifecycleNotice(`Could not stop child ${child.pid}: ${error.message}`);
     finish();
   };
   const escalate = setTimeout(() => {
@@ -400,22 +408,22 @@ export async function ensureServer(
       );
     }
     if (ownership.action === 'reuse-foreign-readonly') {
-      console.log(
-        `[ServerLifecycle] Reusing FOREIGN server on port ${port} in read-only mode ` +
+      lifecycleNotice(
+        `Reusing FOREIGN server on port ${port} in read-only mode ` +
           `(cwd ${serverStatus.cwd}, no writes will be issued).`
       );
       return { wasStarted: false, baseUrl };
     }
     if (ownership.action === 'reuse-foreign') {
-      console.log(
-        `[ServerLifecycle] Reusing FOREIGN server on port ${port} ` +
+      lifecycleNotice(
+        `Reusing FOREIGN server on port ${port} ` +
           `(cwd ${serverStatus.cwd}) — AH_REUSE_FOREIGN_SERVER override set.`
       );
       return { wasStarted: false, baseUrl };
     }
     if (!serverStatus.cwd) {
-      console.log(
-        `[ServerLifecycle] Server on port ${port} reports no instance identity ` +
+      lifecycleNotice(
+        `Server on port ${port} reports no instance identity ` +
           `(older build) — ownership unverifiable; proceeding with legacy reuse logic.`
       );
     }
@@ -426,13 +434,13 @@ export async function ensureServer(
                            cliVersion === 'unknown';
 
     if (!versionMatches) {
-      console.log(`[ServerLifecycle] Version mismatch detected!`);
-      console.log(`[ServerLifecycle]   Server version: ${serverStatus.version}`);
-      console.log(`[ServerLifecycle]   CLI version: ${cliVersion}`);
+      lifecycleNotice(`Version mismatch detected!`);
+      lifecycleNotice(`  Server version: ${serverStatus.version}`);
+      lifecycleNotice(`  CLI version: ${cliVersion}`);
 
       if (reuseExistingServer) {
         // Kill old server and start new one with matching version
-        console.log(`[ServerLifecycle] Stopping old server and starting v${cliVersion}...`);
+        lifecycleNotice(`Stopping old server and starting v${cliVersion}...`);
         await killServerOnPort(port);
         // Fall through to start new server below
       } else {
@@ -444,7 +452,7 @@ export async function ensureServer(
       }
     } else if (reuseExistingServer) {
       // Versions match - safe to reuse
-      console.log(`[ServerLifecycle] Reusing existing server (version ${serverStatus.version})`);
+      lifecycleNotice(`Reusing existing server (version ${serverStatus.version})`);
       return {
         wasStarted: false,
         baseUrl,
@@ -463,7 +471,7 @@ export async function ensureServer(
   const { child, actualPort } = await startServer(port, startTimeout);
 
   if (actualPort !== port) {
-    console.log(`[ServerLifecycle] Port ${port} was in use, server started on port ${actualPort}`);
+    lifecycleNotice(`Port ${port} was in use, server started on port ${actualPort}`);
   }
 
   return {

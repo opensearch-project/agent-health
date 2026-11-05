@@ -108,6 +108,7 @@ describe('Report Command', () => {
   let stdoutWriteSpy: jest.SpyInstance;
   let exitSpy: jest.SpyInstance;
   let logSpy: jest.SpyInstance;
+  let errorSpy: jest.SpyInstance;
   let cleanupSpy: jest.Mock;
 
   beforeEach(() => {
@@ -128,6 +129,7 @@ describe('Report Command', () => {
       throw new ProcessExitError(code ?? 0);
     }) as never);
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -135,6 +137,7 @@ describe('Report Command', () => {
     stdoutWriteSpy.mockRestore();
     exitSpy.mockRestore();
     logSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   describe('command configuration', () => {
@@ -235,6 +238,25 @@ describe('Report Command', () => {
       expect(cleanupSpy).toHaveBeenCalled();
     });
 
+    it('--stdout: the report body is the ONLY thing written to stdout (machine-readable contract)', async () => {
+      // `report -f json --stdout | jq` must parse. Spinners (ora → stderr) and
+      // lifecycle/config diagnostics must never share stdout with the body.
+      mockEnsureServer.mockResolvedValue({ baseUrl: 'http://localhost:4101', wasStarted: true });
+      (global.fetch as jest.Mock).mockResolvedValue(
+        makeResponse({
+          text: '{"benchmark":{"id":"bench-1"},"runs":[]}',
+          headers: { 'content-type': 'application/json' },
+        })
+      );
+
+      await runReportCommand(['--benchmark', 'bench-1', '--format', 'json', '--stdout']);
+
+      const stdoutText = stdoutWriteSpy.mock.calls.map((c) => String(c[0])).join('');
+      expect(JSON.parse(stdoutText)).toEqual({ benchmark: { id: 'bench-1' }, runs: [] });
+      // console.log is stdout: nothing in the command may use it on this path.
+      expect(logSpy).not.toHaveBeenCalled();
+    });
+
     it('writes PDF reports as buffers and respects --output', async () => {
       mockEnsureServer.mockResolvedValue({ baseUrl: 'http://localhost:4101', wasStarted: true });
       const pdfBuffer = Uint8Array.from([80, 68, 70]).buffer;
@@ -267,7 +289,10 @@ describe('Report Command', () => {
 
       expect(global.fetch).not.toHaveBeenCalled();
       expect(cleanupSpy).toHaveBeenCalled();
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Available benchmarks'));
+      // Failure hints are diagnostics → stderr, never stdout (which may be piped to jq).
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Available benchmarks'));
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(stdoutWriteSpy).not.toHaveBeenCalled();
     });
 
     it('exits when the server cannot be reached before the API client is used', async () => {
@@ -318,6 +343,7 @@ describe('Report Command', () => {
       mockWriteFileSync.mockReset();
       exitSpy = jest.spyOn(process, 'exit').mockImplementation(((): never => undefined as never) as any);
       jest.spyOn(console, 'log').mockImplementation();
+      jest.spyOn(console, 'error').mockImplementation();
       jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     });
 
