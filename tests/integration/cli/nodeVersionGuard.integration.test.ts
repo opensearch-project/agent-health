@@ -217,6 +217,23 @@ describe('bin/cli.js Node.js version guard (real processes)', () => {
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain('could not verify the Node.js version requirement');
       expect(result.stderr).toContain('has no engines.node range');
+      // A malformed engines field is OUR defect, not a broken install — say so.
+      expect(result.stderr).toContain('defect in the agent-health package');
+      expect(result.stderr).not.toMatch(/^\s+at /m);
+    } finally {
+      rmSync(broken.project, { recursive: true, force: true });
+    }
+  }, TEST_TIMEOUT);
+
+  it('fails CLOSED when package.json is missing (incomplete install)', async () => {
+    const broken = stagePackage();
+    try {
+      rmSync(join(broken.cli, '..', '..', 'package.json'));
+      const result = await runCli(process.execPath, [], broken.cli, ['--version'], broken.project, cleanEnv(), TEST_TIMEOUT);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('could not verify the Node.js version requirement');
+      expect(result.stderr).toContain('install looks incomplete; reinstall it');
       expect(result.stderr).not.toMatch(/^\s+at /m);
     } finally {
       rmSync(broken.project, { recursive: true, force: true });
