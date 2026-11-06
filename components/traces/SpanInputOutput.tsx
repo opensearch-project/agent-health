@@ -26,6 +26,7 @@ import {
   Cpu,
   Wrench,
   ClipboardCheck,
+  Database,
   MessageSquare,
   AlertCircle,
   CheckCircle2,
@@ -38,6 +39,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Span } from '@/types';
 import { formatDuration } from '@/services/traces/utils';
+import { getSpanCategory } from '@/services/traces/spanCategorization';
+import { extractRetrievalIO } from '@/services/traces/retrievalSpan';
 
 interface SpanInputOutputProps {
   spans: Span[];
@@ -45,7 +48,7 @@ interface SpanInputOutputProps {
 
 interface SpanIOData {
   span: Span;
-  category: 'agent' | 'llm' | 'tool' | 'eval' | 'other';
+  category: 'agent' | 'llm' | 'tool' | 'retrieval' | 'eval' | 'other';
   input: string | null;
   output: string | null;
   toolName?: string;
@@ -117,9 +120,12 @@ export function extractSpanIO(span: Span): SpanIOData {
   const attrs = span.attributes || {};
   const name = span.name.toLowerCase();
 
-  // Determine category
+  // Determine category. Retrieval follows the shared categorizer so a hybrid
+  // span (known GenAI operation + db.*) keeps its tool/LLM I/O here.
   let category: SpanIOData['category'] = 'other';
-  if (name.includes('test_case') || attrs['test.case.name']) {
+  if (getSpanCategory(span) === 'RETRIEVAL') {
+    category = 'retrieval';
+  } else if (name.includes('test_case') || attrs['test.case.name']) {
     category = 'eval';
   } else if (name.includes('agent') || attrs['gen_ai.agent.name']) {
     category = 'agent';
@@ -205,6 +211,13 @@ export function extractSpanIO(span: Span): SpanIOData {
              null;
   }
 
+  // Retrieval spans - the query is the input, rows/status/ids the output
+  if (category === 'retrieval') {
+    const io = extractRetrievalIO(span);
+    input = io.queryText;
+    output = io.outputText;
+  }
+
   // Eval spans - test case input/output
   if (category === 'eval') {
     input = attrs['test.case.input'] || attrs['input'] || null;
@@ -260,6 +273,8 @@ const SpanIOCard: React.FC<SpanIOCardProps> = ({ data }) => {
         return <Wrench size={14} className="text-amber-400" />;
       case 'eval':
         return <ClipboardCheck size={14} className="text-emerald-400" />;
+      case 'retrieval':
+        return <Database size={14} className="text-cyan-400" />;
       default:
         return <MessageSquare size={14} className="text-gray-400" />;
     }
@@ -275,6 +290,8 @@ const SpanIOCard: React.FC<SpanIOCardProps> = ({ data }) => {
         return 'border-l-amber-400';
       case 'eval':
         return 'border-l-emerald-400';
+      case 'retrieval':
+        return 'border-l-cyan-400';
       default:
         return 'border-l-gray-400';
     }
@@ -427,7 +444,7 @@ export const SpanInputOutput: React.FC<SpanInputOutputProps> = ({ spans }) => {
       acc[data.category]++;
       return acc;
     },
-    { agent: 0, llm: 0, tool: 0, eval: 0, other: 0 } as Record<string, number>
+    { agent: 0, llm: 0, tool: 0, retrieval: 0, eval: 0, other: 0 } as Record<string, number>
   );
 
   if (spanIOData.length === 0) {
@@ -470,6 +487,12 @@ export const SpanInputOutput: React.FC<SpanInputOutputProps> = ({ spans }) => {
           <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30">
             <Wrench size={10} className="mr-1" />
             Tool: {categoryCounts.tool}
+          </Badge>
+        )}
+        {categoryCounts.retrieval > 0 && (
+          <Badge variant="outline" className="bg-cyan-100 text-cyan-800 border-cyan-300 dark:bg-cyan-500/10 dark:text-cyan-300 dark:border-cyan-500/30">
+            <Database size={10} className="mr-1" />
+            Retrieval: {categoryCounts.retrieval}
           </Badge>
         )}
         {categoryCounts.eval > 0 && (
