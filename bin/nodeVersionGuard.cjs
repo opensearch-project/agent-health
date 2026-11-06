@@ -9,15 +9,17 @@
  * `engines.node` in package.json only makes `npm install` / `npx` print an
  * EBADENGINE *warning* (engine-strict is off by default), so without this check
  * the CLI happily starts on an end-of-life Node 18/20 — exposed to
- * CVE-2026-111497 — and then fails in a confusing place (Node < 22.6 cannot
+ * CVE-2026-111497 — and then fails in a confusing place (older Node cannot
  * import an `agent-health.config.ts`, so the first error the user sees is
  * `Unknown file extension ".ts"`). This module turns the engines range into a
  * hard, explained refusal at startup.
  *
- * Plain CommonJS with zero dependencies on purpose: it must load and run on
- * ANY Node version — including the ones it is about to reject — before the
- * bundled CLI (which may use newer syntax or APIs) is touched. The range is
- * read from package.json so there is a single source of truth.
+ * Plain CommonJS on purpose: it must load and run on ANY Node version —
+ * including the ones it is about to reject — before the bundled CLI (which may
+ * use newer syntax or APIs) is touched. The range is read from package.json
+ * (single source of truth) and evaluated with `semver`, the same library npm
+ * uses for `engines`, with default options: a pre-release of the floor
+ * (`22.23.4-rc.0`) is therefore refused, as it should be.
  */
 
 'use strict';
@@ -25,116 +27,6 @@
 const { readFileSync, writeSync } = require('fs');
 
 const ISSUES_URL = 'https://github.com/opensearch-project/agent-health/issues';
-
-/**
- * Parse "X.Y.Z" (optional leading "v", optional pre-release `-tag` and build
- * `+meta`) into a comparable tuple `[major, minor, patch, release]` where
- * `release` is 1 for a final release and 0 for a pre-release — semver orders a
- * pre-release BELOW its final version (`22.23.4-rc.0 < 22.23.4`), so a
- * release-candidate of the floor must not pass a `>=` floor. Build metadata
- * does not affect precedence. Returns null when unparseable; partial versions
- * ("24", "24.1") are NOT accepted — engine floors here are always full.
- * @param {string} version
- * @returns {[number, number, number, number] | null}
- */
-function parseVersion(version) {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.exec(String(version).trim());
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3]), match[4] ? 0 : 1];
-}
-
-/**
- * @param {number[]} a
- * @param {number[]} b
- * @returns {number} negative if a < b, 0 if equal, positive if a > b
- */
-function compareVersions(a, b) {
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return a[i] - b[i];
-  }
-  return 0;
-}
-
-/**
- * Parse ONE comparator. Grammar is deliberately tiny — exactly what an engine
- * floor needs: `^X.Y.Z`, `>=X.Y.Z`, `>X.Y.Z`, `<=X.Y.Z`, `<X.Y.Z`, all with
- * full release versions. Anything else throws.
- * @param {string} comparator
- * @returns {{ operator: string, bound: number[] }}
- */
-function parseComparator(comparator) {
-  const match = /^(\^|>=|<=|>|<)\s*(v?\d+\.\d+\.\d+)$/.exec(comparator.trim());
-  const bound = match ? parseVersion(match[2]) : null;
-  if (!match || !bound) {
-    throw new Error(
-      `Unsupported version comparator "${comparator}" (expected ^X.Y.Z, >=X.Y.Z, >X.Y.Z, <=X.Y.Z or <X.Y.Z)`
-    );
-  }
-  return { operator: match[1], bound };
-}
-
-/**
- * Parse a whole range EAGERLY — every alternative and every comparator is
- * validated before anything is evaluated, so `^22.23.4 || garbage` or a
- * trailing `||` throws instead of being short-circuited past on a matching
- * runtime. The unit test runs the REAL package.json range through this, so an
- * unsupported edit to `engines.node` fails CI, never the user's CLI.
- * @param {string} range e.g. "^22.23.4 || ^24.22.1 || >=26.12.1"
- * @returns {Array<Array<{ operator: string, bound: number[] }>>} OR of ANDs
- */
-function parseRange(range) {
-  const text = String(range).trim();
-  if (text === '') throw new Error('Empty engines range');
-  return text.split('||').map((alternative) => {
-    const alt = alternative.trim();
-    if (alt === '') throw new Error(`Empty alternative in engines range "${range}"`);
-    return alt.split(/\s+/).map(parseComparator);
-  });
-}
-
-/**
- * @param {number[]} version parsed tuple
- * @param {{ operator: string, bound: number[] }} comparator
- * @returns {boolean}
- */
-function satisfiesComparator(version, { operator, bound }) {
-  const cmp = compareVersions(version, bound);
-  switch (operator) {
-    case '>':
-      return cmp > 0;
-    case '>=':
-      return cmp >= 0;
-    case '<':
-      return cmp < 0;
-    case '<=':
-      return cmp <= 0;
-    case '^':
-      // Same major, at or above the floor (Node has no 0.x line in scope).
-      return cmp >= 0 && version[0] === bound[0];
-    default:
-      throw new Error(`Unsupported version comparator "${operator}"`);
-  }
-}
-
-/**
- * Does `version` satisfy an npm-style `engines` range? A deliberate SUBSET of
- * node-semver: `||`-separated alternatives of whitespace-ANDed comparators
- * (see parseComparator). Pre-releases order below their final release as in
- * semver (`22.23.4-rc.0` fails `^22.23.4`; `27.0.0-nightly…` passes
- * `>=26.12.1`); build metadata is ignored. Throws on an unparseable version or
- * any unsupported range syntax.
- * @param {string} version e.g. "22.23.4"
- * @param {string} range e.g. "^22.23.4 || ^24.22.1 || >=26.12.1"
- * @returns {boolean}
- */
-function satisfiesRange(version, range) {
-  const parsed = parseVersion(version);
-  if (!parsed) {
-    throw new Error(`Unparseable Node.js version "${version}"`);
-  }
-  const alternatives = parseRange(range);
-  return alternatives.some((comparators) => comparators.every((cmp) => satisfiesComparator(parsed, cmp)));
-}
 
 /**
  * Read `engines.node` from a package.json file.
@@ -151,23 +43,24 @@ function readEnginesRange(packageJsonPath) {
 }
 
 /**
- * Human-readable rendering of the range: "22.23.4+ (22.x), 24.22.1+ (24.x) or 26.12.1+".
- * Falls back to the raw range for comparators this does not know how to phrase.
+ * Human-readable rendering of a semver range from its parsed comparator sets:
+ * "^22.23.4 || ^24.22.1 || >=26.12.1" → "22.23.4+ (22.x), 24.22.1+ (24.x) or 26.12.1+".
  * @param {string} range
  * @returns {string}
  */
 function describeRange(range) {
-  const parts = String(range)
-    .split('||')
-    .map((alt) => alt.trim())
-    .filter(Boolean)
-    .map((alt) => {
-      const match = /^(\^|>=)\s*v?(\d+)\.(\d+)\.(\d+)$/.exec(alt);
-      if (!match) return alt;
-      const [, op, major, minor, patch] = match;
-      const floor = `${major}.${minor}.${patch}+`;
-      return op === '^' ? `${floor} (${major}.x)` : floor;
-    });
+  const semver = require('semver');
+  const parts = new semver.Range(range).set.map((comparators) => {
+    const lower = comparators.find((c) => c.operator === '>=' || c.operator === '');
+    const upper = comparators.find((c) => c.operator === '<' || c.operator === '<=');
+    const floor = lower && `${lower.semver.version}+`;
+    if (lower && !upper) return floor;
+    const caretShaped =
+      lower && upper && upper.operator === '<' && upper.semver.major === lower.semver.major + 1 &&
+      upper.semver.minor === 0 && upper.semver.patch === 0;
+    if (caretShaped) return `${floor} (${lower.semver.major}.x)`;
+    return comparators.map(String).join(' '); // shapes we don't phrase: show the comparators as-is
+  });
   if (parts.length <= 1) return parts.join('');
   return `${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}`;
 }
@@ -203,13 +96,18 @@ function formatUnsupportedNodeMessage(currentVersion, range) {
 }
 
 /**
- * Check a Node.js version against an engines range.
+ * Check a Node.js version against an engines range (semver defaults).
+ * Throws if the range is not valid semver syntax.
  * @param {string} currentVersion e.g. process.versions.node
  * @param {string} range the engines.node range
  * @returns {{ ok: true } | { ok: false, message: string }}
  */
 function checkNodeVersion(currentVersion, range) {
-  if (satisfiesRange(currentVersion, range)) {
+  const semver = require('semver');
+  if (semver.validRange(range) === null) {
+    throw new Error(`Invalid engines.node range "${range}"`);
+  }
+  if (semver.satisfies(currentVersion, range)) {
     return { ok: true };
   }
   return { ok: false, message: formatUnsupportedNodeMessage(currentVersion, range) };
@@ -218,12 +116,12 @@ function checkNodeVersion(currentVersion, range) {
 /**
  * Entry-point glue: check the running Node against `engines.node` of the
  * given package.json and, if it is unsupported — or the requirement cannot be
- * read at all (corrupt / incomplete install; fail CLOSED, with a controlled
- * message rather than a stack trace) — write the message synchronously to
- * stderr and exit 1. `writeSync(2)` + `process.exit` is used on purpose:
- * `process.stderr.write` on a pipe is asynchronous and can be truncated by
- * `process.exit`, while leaving the process to end naturally can hang if a
- * preload left handles open. Returns normally only when the runtime is fine.
+ * verified at all (fail CLOSED, with a controlled message rather than a stack
+ * trace) — write the message synchronously to stderr and exit 1.
+ * `writeSync(2)` + `process.exit` is used on purpose: `process.stderr.write`
+ * on a pipe is asynchronous and can be truncated by `process.exit`, while
+ * leaving the process to end naturally can hang if a preload left handles
+ * open. Returns normally only when the runtime is fine.
  * @param {string} packageJsonPath
  */
 function enforceSupportedNode(packageJsonPath) {
@@ -231,14 +129,13 @@ function enforceSupportedNode(packageJsonPath) {
   try {
     verdict = checkNodeVersion(process.versions.node, readEnginesRange(packageJsonPath));
   } catch (error) {
-    // Fail CLOSED, but say what is actually wrong: a missing/unreadable
-    // package.json is a broken install; a malformed engines.node or an
-    // unparseable runtime version is a bug in this package, not the user's Node.
+    // Say what is actually wrong: a missing/unreadable package.json or semver
+    // is a broken install; a malformed engines.node is a defect in this package.
     const reason = error instanceof Error ? error.message : String(error);
     const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
     const hint =
-      code === 'ENOENT' || code === 'EACCES' || code === 'EISDIR' || error instanceof SyntaxError
-        ? `  ${packageJsonPath} is missing or unreadable — the package install looks incomplete; reinstall it.\n`
+      code === 'ENOENT' || code === 'EACCES' || code === 'EISDIR' || code === 'MODULE_NOT_FOUND' || error instanceof SyntaxError
+        ? '  The package install looks incomplete (package.json or the semver dependency is missing or unreadable); reinstall it.\n'
         : `  This is a defect in the agent-health package, not in your Node.js — please report it at ${ISSUES_URL}\n`;
     verdict = {
       ok: false,
@@ -251,12 +148,9 @@ function enforceSupportedNode(packageJsonPath) {
 }
 
 module.exports = {
-  parseVersion,
-  parseRange,
-  enforceSupportedNode,
-  satisfiesRange,
   readEnginesRange,
   describeRange,
   formatUnsupportedNodeMessage,
   checkNodeVersion,
+  enforceSupportedNode,
 };
