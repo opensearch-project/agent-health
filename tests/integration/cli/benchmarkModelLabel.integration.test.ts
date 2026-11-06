@@ -147,8 +147,8 @@ test('model label case', { prompt: 'fixture question' }, async ({ agent, expect 
 });
 `);
 
-    const runBenchmark = async (agentKey: string) => {
-      const cmd = startCli(cli, ['benchmark', '-f', './evals/model-label.eval.ts', '-a', agentKey], project, env);
+    const runBenchmark = async (agentKey: string, extraArgs: string[] = []) => {
+      const cmd = startCli(cli, ['benchmark', '-f', './evals/model-label.eval.ts', '-a', agentKey, ...extraArgs], project, env);
       children.push(cmd.child);
       const done = await waitUntil(() => cmd.child.exitCode !== null || cmd.child.signalCode !== null, 90_000);
       if (!done || cmd.child.exitCode !== 0) {
@@ -163,15 +163,20 @@ test('model label case', { prompt: 'fixture question' }, async ({ agent, expect 
       expect(modelLine(noModelOut)).toBe('Model: —');
       expect(noModelOut).not.toContain('demo-model');
 
-      const withModelOut = await runBenchmark('rest-with-model');
-      console.log(`[model-label] rest-with-model printed: ${modelLine(withModelOut)}`);
-      expect(modelLine(withModelOut)).toBe(`Model: ${DECLARED_MODEL}`);
-
-      // Evidence only (not asserted): what the server recorded as the run's
-      // model for each agent — see the PR for the follow-up on the wire value.
+      // What the server recorded as the run's model, read back before the
+      // second run stops the server. Only the PRINTED line changes in this
+      // fix: the no-model agent's run still carries the catalog fallback
+      // (`demo-model`, the first key of the built-in catalog) — the wire half
+      // of #612 problem 7 is a separate change.
       const list = await fetch(`${baseUrl}/api/storage/evaluation-runs`, { signal: AbortSignal.timeout(15_000) });
       const { evaluationRuns = [] } = (await list.json()) as { evaluationRuns?: Array<{ agentKey: string; modelId?: string }> };
       for (const run of evaluationRuns) console.log(`[model-label] stored run agentKey=${run.agentKey} modelId=${JSON.stringify(run.modelId)}`);
+      expect(evaluationRuns.find(r => r.agentKey === 'rest-no-model')?.modelId).toBe('demo-model');
+
+      // Second run reuses the server and asks the CLI to stop it on exit.
+      const withModelOut = await runBenchmark('rest-with-model', ['--stop-server']);
+      console.log(`[model-label] rest-with-model printed: ${modelLine(withModelOut)}`);
+      expect(modelLine(withModelOut)).toBe(`Model: ${DECLARED_MODEL}`);
     } finally {
       for (const child of children) await stopChild(child);
       // Only PIDs observed from our own spawned server; the project (and its file storage) goes with it.
