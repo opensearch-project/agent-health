@@ -10,8 +10,8 @@
  * In development: Runs TypeScript source directly via tsx (instant changes)
  * In production: Runs pre-built JavaScript from cli/dist/
  *
- * This shim is deliberately plain JavaScript with only built-in imports: the
- * Node.js version guard below has to run BEFORE the bundled CLI (or tsx) is
+ * This shim is deliberately plain, dependency-free JavaScript (built-ins plus
+ * ./nodeVersionGuard.cjs): the Node.js version guard has to run BEFORE the bundled CLI (or tsx) is
  * loaded, so that an unsupported Node fails with one clear message instead of
  * whatever the bundle happens to trip over first.
  */

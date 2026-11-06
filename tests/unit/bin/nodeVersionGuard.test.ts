@@ -19,7 +19,8 @@ import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const guard = require('../../../bin/nodeVersionGuard.cjs') as {
-  parseVersion: (v: string) => [number, number, number] | null;
+  parseVersion: (v: string) => [number, number, number, number] | null;
+  parseRange: (range: string) => Array<Array<{ operator: string; bound: number[] }>>;
   satisfiesRange: (version: string, range: string) => boolean;
   readEnginesRange: (packageJsonPath: string) => string;
   describeRange: (range: string) => string;
@@ -74,10 +75,20 @@ describe('bin/nodeVersionGuard.cjs', () => {
       expect(guard.checkNodeVersion(process.versions.node, range)).toEqual({ ok: true });
     });
 
-    it('accepts a leading "v" and pre-release suffixes', () => {
+    it('accepts a leading "v"; build metadata is ignored', () => {
       expect(guard.satisfiesRange('v24.22.1', range)).toBe(true);
-      expect(guard.satisfiesRange('27.0.0-nightly20261101abcdef', range)).toBe(true);
+      expect(guard.satisfiesRange('24.22.1+vendor.3', range)).toBe(true);
       expect(guard.satisfiesRange('v20.19.0', range)).toBe(false);
+    });
+
+    it('orders pre-releases BELOW their final release, like semver', () => {
+      // A release candidate of the security floor is not the fixed release.
+      expect(guard.satisfiesRange('22.23.4-rc.0', range)).toBe(false);
+      expect(guard.satisfiesRange('24.22.1-rc.1', range)).toBe(false);
+      expect(guard.satisfiesRange('26.12.1-rc.1', range)).toBe(false);
+      // A pre-release of a LATER version is above the floor.
+      expect(guard.satisfiesRange('22.23.5-rc.0', range)).toBe(true);
+      expect(guard.satisfiesRange('27.0.0-nightly20261101abcdef', range)).toBe(true);
     });
   });
 
@@ -89,21 +100,15 @@ describe('bin/nodeVersionGuard.cjs', () => {
       expect(guard.satisfiesRange('23.0.0', '^22.23.4')).toBe(false);
     });
 
-    it('tilde: same major.minor, at or above the floor', () => {
-      expect(guard.satisfiesRange('22.23.9', '~22.23.4')).toBe(true);
-      expect(guard.satisfiesRange('22.24.0', '~22.23.4')).toBe(false);
-    });
-
-    it('>=, >, <=, <, = and bare versions', () => {
+    it('>=, >, <=, <', () => {
       expect(guard.satisfiesRange('26.12.1', '>=26.12.1')).toBe(true);
       expect(guard.satisfiesRange('26.12.0', '>=26.12.1')).toBe(false);
       expect(guard.satisfiesRange('26.12.1', '>26.12.1')).toBe(false);
       expect(guard.satisfiesRange('26.12.2', '>26.12.1')).toBe(true);
       expect(guard.satisfiesRange('26.12.1', '<=26.12.1')).toBe(true);
+      expect(guard.satisfiesRange('26.12.2', '<=26.12.1')).toBe(false);
       expect(guard.satisfiesRange('26.12.1', '<26.12.1')).toBe(false);
-      expect(guard.satisfiesRange('26.12.1', '=26.12.1')).toBe(true);
-      expect(guard.satisfiesRange('26.12.1', '26.12.1')).toBe(true);
-      expect(guard.satisfiesRange('26.12.2', '26.12.1')).toBe(false);
+      expect(guard.satisfiesRange('26.12.0', '<26.12.1')).toBe(true);
     });
 
     it('whitespace-joined comparators are ANDed, || alternatives are ORed', () => {
@@ -113,17 +118,35 @@ describe('bin/nodeVersionGuard.cjs', () => {
       expect(guard.satisfiesRange('24.1.0', '>=22.0.0 <23.0.0 || ^24.0.0')).toBe(true);
     });
 
-    it('rejects comparator syntax it does not understand rather than guessing', () => {
-      expect(() => guard.satisfiesRange('24.0.0', '22.x')).toThrow(/Unsupported version comparator/);
-      expect(() => guard.satisfiesRange('24.0.0', '>=22.0.0 - 24.0.0')).toThrow(/Unsupported version comparator/);
-      expect(() => guard.satisfiesRange('24.0.0', '')).toThrow(/Empty engines range/);
-      expect(() => guard.satisfiesRange('not-a-version', '>=22.0.0')).toThrow(/Unparseable Node.js version/);
+    it('validates the WHOLE range before evaluating — a matching first alternative cannot hide garbage', () => {
+      expect(() => guard.satisfiesRange('22.23.4', '^22.23.4 || garbage')).toThrow(/Unsupported version comparator "garbage"/);
+      expect(() => guard.satisfiesRange('22.23.4', '^22.23.4 ||')).toThrow(/Empty alternative/);
+      expect(() => guard.satisfiesRange('22.23.4', '|| ^22.23.4')).toThrow(/Empty alternative/);
+      expect(() => guard.parseRange('^22.23.4 || ^24.22.1 || >=26.12.1')).not.toThrow();
+      expect(guard.parseRange('^22.23.4 || >=26.12.1')).toEqual([
+        [{ operator: '^', bound: [22, 23, 4, 1] }],
+        [{ operator: '>=', bound: [26, 12, 1, 1] }],
+      ]);
     });
 
-    it('parseVersion fills in missing minor/patch and rejects garbage', () => {
-      expect(guard.parseVersion('24')).toEqual([24, 0, 0]);
-      expect(guard.parseVersion('v24.1')).toEqual([24, 1, 0]);
-      expect(guard.parseVersion('24.1.2-rc.1+build')).toEqual([24, 1, 2]);
+    it('rejects syntax outside the tiny supported grammar rather than guessing', () => {
+      for (const bad of ['22.x', '*', '>=22.0.0 - 24.0.0', '^22', '^22.23', '~22.23.4', '=22.23.4', '22.23.4', '^22.23.4-rc.0']) {
+        expect(() => guard.satisfiesRange('24.0.0', bad)).toThrow(/Unsupported version comparator/);
+      }
+      expect(() => guard.satisfiesRange('24.0.0', '')).toThrow(/Empty engines range/);
+      expect(() => guard.satisfiesRange('24.0.0', '   ')).toThrow(/Empty engines range/);
+      expect(() => guard.satisfiesRange('not-a-version', '>=22.0.0')).toThrow(/Unparseable Node.js version/);
+      expect(() => guard.satisfiesRange('24', '>=22.0.0')).toThrow(/Unparseable Node.js version/);
+    });
+
+    it('parseVersion: full versions only; release flag orders pre-releases below finals', () => {
+      expect(guard.parseVersion('24.1.2')).toEqual([24, 1, 2, 1]);
+      expect(guard.parseVersion('v24.1.2')).toEqual([24, 1, 2, 1]);
+      expect(guard.parseVersion('24.1.2-rc.1')).toEqual([24, 1, 2, 0]);
+      expect(guard.parseVersion('24.1.2+build.7')).toEqual([24, 1, 2, 1]);
+      expect(guard.parseVersion('24.1.2-rc.1+build')).toEqual([24, 1, 2, 0]);
+      expect(guard.parseVersion('24')).toBeNull();
+      expect(guard.parseVersion('v24.1')).toBeNull();
       expect(guard.parseVersion('latest')).toBeNull();
     });
   });
@@ -137,8 +160,8 @@ describe('bin/nodeVersionGuard.cjs', () => {
         '22.23.4+ (22.x), 24.22.1+ (24.x) or 26.12.1+'
       );
       expect(guard.describeRange('>=26.12.1')).toBe('26.12.1+');
-      // Unknown comparator shapes fall back to the raw text instead of lying.
-      expect(guard.describeRange('~22.23.4 || >=24.0.0')).toBe('~22.23.4 or 24.0.0+');
+      // Comparator shapes it cannot phrase fall back to the raw text instead of lying.
+      expect(guard.describeRange('<22.23.4 || >=24.0.0')).toBe('<22.23.4 or 24.0.0+');
     });
 
     it('names the current version, the requirement, the reasons and how to upgrade', () => {
@@ -155,6 +178,13 @@ describe('bin/nodeVersionGuard.cjs', () => {
       expect(message).toContain('https://nodejs.org/');
       expect(message.endsWith('\n')).toBe(true);
       expect(guard.formatUnsupportedNodeMessage('20.19.0', range)).toBe(message);
+      // Does not blanket-label every rejected line as vulnerable.
+      expect(message).toContain('fixed only from the releases above');
+    });
+
+    it('does not double the "v" when given a v-prefixed version', () => {
+      expect(guard.formatUnsupportedNodeMessage('v20.19.0', range)).toContain('version v20.19.0.');
+      expect(guard.formatUnsupportedNodeMessage('v20.19.0', range)).not.toContain('vv20');
     });
   });
 });
