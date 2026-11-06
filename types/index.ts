@@ -830,11 +830,13 @@ export interface AgentErrorInfo {
   /** HTTP status, for `http_<status>` kinds. */
   httpStatus?: number;
   /**
-   * Response headers of the non-2xx reply, for `http_<status>` kinds —
-   * lower-cased names, credential-bearing values redacted (see
-   * `redactResponseHeaders`). A failed REST call used to throw before any of
-   * this was captured, so the report had no service request id for exactly
-   * the cases that most need one (#612, problem 6).
+   * Diagnostic response headers of the non-2xx reply, for `http_<status>`
+   * kinds: ONLY the allowlisted names (request / correlation / trace ids,
+   * `x-amzn-errortype`, `retry-after`, `date`, `content-type` — see
+   * `selectDiagnosticResponseHeaders`), lower-cased, values bounded. A failed
+   * REST call used to throw before any of this was captured, so the report
+   * had no service request id for exactly the cases that most need one
+   * (#612, problem 6).
    */
   responseHeaders?: Record<string, string>;
 }

@@ -138,12 +138,16 @@ describe('RESTConnector', () => {
       ).rejects.toThrow('REST request failed: 500');
     });
 
-    it('a non-2xx reply keeps its status AND response headers on the thrown error (#612 problem 6)', async () => {
+    it('a non-2xx reply keeps its status AND the diagnostic response headers on the thrown error — never a cookie or auth challenge (#612 problem 6)', async () => {
       // Real Response: a 503 with a service request id — the header the
-      // agent's operator needs to look up this exact failed call.
+      // agent's operator needs to look up this exact failed call — next to
+      // headers that must never leave the process.
       (global.fetch as jest.Mock).mockResolvedValue(new Response('upstream unavailable', {
         status: 503,
-        headers: { 'X-Request-Id': 'req-123', 'Content-Type': 'text/plain', 'Set-Cookie': 'session=abc' },
+        headers: {
+          'X-Request-Id': 'req-123', 'Retry-After': '30', 'Content-Type': 'text/plain',
+          'Set-Cookie': 'session=abc', 'WWW-Authenticate': 'Bearer realm="x"', Location: 'https://x.example/?X-Amz-Signature=deadbeef',
+        },
       }));
 
       const request: ConnectorRequest = { testCase: mockTestCase, modelId: 'test-model' };
@@ -158,8 +162,27 @@ describe('RESTConnector', () => {
       expect(err.message).toBe('REST request failed: 503 - upstream unavailable');
       expect(err.httpStatus).toBe(503);
       expect(err.endpoint).toBe('http://localhost:8080/api');
-      // Raw on the error (in-process); redaction happens when the runner persists it.
-      expect(err.responseHeaders).toEqual({ 'x-request-id': 'req-123', 'content-type': 'text/plain', 'set-cookie': 'session=abc' });
+      // Allowlist applied BEFORE attaching to the error (errors get logged / serialised).
+      expect(err.responseHeaders).toEqual({ 'x-request-id': 'req-123', 'retry-after': '30', 'content-type': 'text/plain' });
+      expect(JSON.stringify(err)).not.toMatch(/session=abc|Bearer realm|X-Amz-Signature/);
+    });
+
+    it('a non-2xx reply whose body cannot be read still keeps status + headers on the thrown error', async () => {
+      const response = new Response('ignored', { status: 502, headers: { 'X-Amzn-RequestId': 'amzn-9' } });
+      jest.spyOn(response, 'text').mockRejectedValue(new Error('aborted'));
+      (global.fetch as jest.Mock).mockResolvedValue(response);
+
+      let thrown: unknown;
+      try {
+        await connector.execute('http://localhost:8080/api', { testCase: mockTestCase, modelId: 'm' }, mockAuth);
+      } catch (e) {
+        thrown = e;
+      }
+      const err = thrown as AgentRequestError;
+      expect(err).toBeInstanceOf(AgentRequestError);
+      expect(err.message).toBe('REST request failed: 502 - <body unreadable: aborted>');
+      expect(err.httpStatus).toBe(502);
+      expect(err.responseHeaders).toMatchObject({ 'x-amzn-requestid': 'amzn-9' });
     });
 
     it('should return trajectory from response', async () => {

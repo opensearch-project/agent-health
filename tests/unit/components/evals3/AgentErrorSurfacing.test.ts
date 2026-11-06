@@ -123,7 +123,7 @@ describe('RunFailureCard', () => {
       agentError: {
         kind: 'http_503', httpStatus: 503, endpoint: 'http://localhost:8000/ask', elapsedMs: 120,
         message: 'REST request failed: 503 - upstream unavailable (http://localhost:8000/ask)',
-        responseHeaders: { 'x-request-id': 'req-123', 'content-type': 'text/plain', 'set-cookie': '[redacted]' },
+        responseHeaders: { 'x-request-id': 'req-123', 'content-type': 'text/plain', 'retry-after': '30' },
       },
     } as unknown as EvaluationReport;
     render(h(RunFailureCard, { report: r }));
@@ -131,9 +131,9 @@ describe('RunFailureCard', () => {
     const headers = screen.getByTestId('run-failure-response-headers');
     expect(headers.textContent).toContain('Response headers');
     const rows = screen.getAllByTestId('run-failure-response-header');
-    expect(rows.map(el => el.getAttribute('data-header-name'))).toEqual(['x-request-id', 'content-type', 'set-cookie']);
+    expect(rows.map(el => el.getAttribute('data-header-name'))).toEqual(['x-request-id', 'content-type', 'retry-after']);
     expect(rows[0].textContent).toBe('x-request-id:req-123');
-    expect(rows[2].textContent).toBe('set-cookie:[redacted]');
+    expect(rows[2].textContent).toBe('retry-after:30');
   });
 
   it('agent stage: no response-headers block when the failure recorded none (timeouts, connection errors, older reports)', () => {

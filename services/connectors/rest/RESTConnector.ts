@@ -11,7 +11,7 @@
 import type { TrajectoryStep, ToolCallStatus } from '@/types';
 import { BaseConnector } from '@/services/connectors/base/BaseConnector';
 import { fetchWithTimeout, resolveConnectorTimeoutMs } from '@/services/connectors/base/fetchWithTimeout';
-import { AgentRequestError } from '@/services/evaluation/agentFailure';
+import { AgentRequestError, selectDiagnosticResponseHeaders } from '@/services/evaluation/agentFailure';
 import type {
   ConnectorAuth,
   ConnectorRequest,
@@ -80,18 +80,26 @@ export class RESTConnector extends BaseConnector {
     );
 
     if (!response.ok) {
-      const errorText = await response.text();
-      // Keep the reply's status + headers on the error: a service request id
-      // (`x-request-id`, `x-amzn-requestid`, …) is what the agent's operator
-      // needs to look up exactly this failed call. The runner persists them
-      // on `report.agentError` (redacted — see agentFailure.ts) because the
-      // throw below means `afterResponse` never runs for a non-2xx reply.
+      // Keep the reply's status + diagnostic headers on the error: a service
+      // request id (`x-request-id`, `x-amzn-requestid`, …) is what the agent's
+      // operator needs to look up exactly this failed call. Captured BEFORE
+      // the body is read (an unreadable body must not lose them), filtered to
+      // the allowlist here so the error object never carries credentials, and
+      // persisted on `report.agentError` by the runner — the throw below
+      // means `afterResponse` never runs for a non-2xx reply.
+      const responseHeaders = selectDiagnosticResponseHeaders(response.headers);
+      let errorText: string;
+      try {
+        errorText = await response.text();
+      } catch (bodyError) {
+        errorText = `<body unreadable: ${bodyError instanceof Error ? bodyError.message : String(bodyError)}>`;
+      }
       throw new AgentRequestError(`REST request failed: ${response.status} - ${errorText}`, {
         endpoint,
         elapsedMs: Date.now() - startedAt,
         timeoutMs,
         httpStatus: response.status,
-        responseHeaders: Object.fromEntries(response.headers.entries()),
+        responseHeaders,
       });
     }
 

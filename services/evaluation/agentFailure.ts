@@ -30,26 +30,64 @@ export interface DescribeAgentErrorContext {
   endpoint?: string;
   elapsedMs?: number;
   timeoutMs?: number;
-  /** Raw response headers of a non-2xx reply; redacted before persisting. */
+  /**
+   * Response headers of a non-2xx reply. Passed through
+   * {@link selectDiagnosticResponseHeaders} before persisting, so a caller
+   * may hand over either the raw set or an already-filtered one.
+   */
   responseHeaders?: Record<string, string>;
 }
 
 /**
- * Header names whose values must never be persisted on a report. Matched
- * case-insensitively as substrings so `x-amz-security-token`,
- * `proxy-authorization`, `set-cookie`, `x-api-key` etc. are all covered.
+ * The ONLY response headers of a non-2xx reply that are persisted on a report:
+ * an allowlist, not a redaction denylist. Anything else a server sends back
+ * (`set-cookie`, `www-authenticate`, `location` with a signed URL, `server`,
+ * vendor diagnostics, …) is attacker-/operator-controlled text that can carry
+ * credentials or PII, and a name-based denylist cannot be made exhaustive.
+ *
+ * What is kept is what an operator needs to look up exactly this failed call:
+ *   - request / correlation / trace ids, by the common naming patterns
+ *     (`x-request-id`, `x-amzn-requestid`, `x-amz-request-id`, `x-amz-id-2`,
+ *     `x-amz-cf-id`, `x-amzn-trace-id`, `x-correlation-id`, `cf-ray`,
+ *     `traceparent`, `x-cloud-trace-context`, `x-b3-traceid`, …);
+ *   - the service's own error classification (`x-amzn-errortype`);
+ *   - `retry-after`, `date`, `content-type`.
  */
-const SENSITIVE_HEADER_PATTERN = /authorization|cookie|token|secret|api-?key|credential|password|signature/i;
+const DIAGNOSTIC_HEADER_PATTERNS: readonly RegExp[] = [
+  /(^|[-_])(request|correlation|trace|req)[-_]?id$/,
+  /(^|[-_])requestid$/,
+  /^x-amz-id-2$/,
+  /^x-amz-cf-id$/,
+  /^x-amzn-trace-id$/,
+  /^cf-ray$/,
+  /^traceparent$/,
+  /^x-cloud-trace-context$/,
+  /^x-b3-traceid$/,
+  /^x-amzn-errortype$/,
+  /^retry-after$/,
+  /^date$/,
+  /^content-type$/,
+];
 
-/** Replacement for a redacted header value. */
-export const REDACTED_HEADER_VALUE = '[redacted]';
+/** Bounds on what one report may carry (the reply is untrusted input). */
+export const MAX_DIAGNOSTIC_HEADERS = 20;
+export const MAX_DIAGNOSTIC_HEADER_VALUE_LENGTH = 256;
+
+/** True when a (lower-cased) header name is on the diagnostic allowlist. */
+export function isDiagnosticResponseHeader(name: string): boolean {
+  return DIAGNOSTIC_HEADER_PATTERNS.some((re) => re.test(name));
+}
 
 /**
- * Lower-case header names and redact credential-bearing values so a non-2xx
- * reply's headers can be stored on the report. Returns `undefined` for an
- * empty / missing set so the field is simply absent on the report.
+ * Keep only the allowlisted diagnostic headers of a non-2xx reply, with
+ * lower-cased names, at most {@link MAX_DIAGNOSTIC_HEADERS} entries and
+ * values cut to {@link MAX_DIAGNOSTIC_HEADER_VALUE_LENGTH} chars. Accepts the
+ * fetch `Headers` object (iterable) or a plain record; idempotent, so it is
+ * applied both where the connector builds the error and again where the
+ * runner persists it. Returns `undefined` when nothing qualifies so the
+ * field is simply absent on the report.
  */
-export function redactResponseHeaders(
+export function selectDiagnosticResponseHeaders(
   headers: Record<string, string> | Iterable<[string, string]> | undefined | null,
 ): Record<string, string> | undefined {
   if (!headers) return undefined;
@@ -57,11 +95,15 @@ export function redactResponseHeaders(
     ? (headers as Iterable<[string, string]>)
     : Object.entries(headers as Record<string, string>);
   const out: Record<string, string> = {};
+  let count = 0;
   for (const [rawName, value] of entries) {
     const name = String(rawName).toLowerCase();
-    out[name] = SENSITIVE_HEADER_PATTERN.test(name) ? REDACTED_HEADER_VALUE : String(value);
+    if (!isDiagnosticResponseHeader(name)) continue;
+    if (count >= MAX_DIAGNOSTIC_HEADERS) break;
+    out[name] = String(value).slice(0, MAX_DIAGNOSTIC_HEADER_VALUE_LENGTH);
+    count += 1;
   }
-  return Object.keys(out).length > 0 ? out : undefined;
+  return count > 0 ? out : undefined;
 }
 
 const TIMEOUT_CODES = new Set([
@@ -208,7 +250,12 @@ export function describeAgentError(error: unknown, ctx: DescribeAgentErrorContex
   if (ctx.endpoint) info.endpoint = ctx.endpoint;
   if (ctx.timeoutMs !== undefined) info.timeoutMs = ctx.timeoutMs;
   if (httpStatus !== undefined) info.httpStatus = httpStatus;
-  const responseHeaders = redactResponseHeaders(ctx.responseHeaders);
+  // Allowlist applied again here (idempotent): the context normally carries
+  // the connector's already-filtered set, but a caller that built the context
+  // by hand — or forgot `agentErrorContextFrom` — must not persist raw headers.
+  const responseHeaders = selectDiagnosticResponseHeaders(
+    ctx.responseHeaders ?? (error as Partial<AgentRequestError> | undefined)?.responseHeaders,
+  );
   if (responseHeaders) info.responseHeaders = responseHeaders;
   return info;
 }
@@ -223,7 +270,12 @@ export class AgentRequestError extends Error {
   readonly elapsedMs?: number;
   readonly timeoutMs?: number;
   readonly httpStatus?: number;
-  /** Response headers of the non-2xx reply (raw; redacted when persisted). */
+  /**
+   * Diagnostic response headers of the non-2xx reply — connectors pass the
+   * reply through {@link selectDiagnosticResponseHeaders} BEFORE attaching
+   * it here, so the error object never carries credential-bearing values
+   * (errors get logged and serialised).
+   */
   readonly responseHeaders?: Record<string, string>;
 
   constructor(

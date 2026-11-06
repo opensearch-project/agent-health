@@ -9,10 +9,10 @@
  *
  * Seeds the exact report shape the runner now persists for a 503 from a REST
  * agent — `failureStage: 'agent'`, `agentError.httpStatus`, and the new
- * `agentError.responseHeaders` (lower-cased, credential values already
- * redacted) — then asserts the rendered result on `/runs/:id`: the HTTP status
- * row, a "Response headers" block listing `x-request-id` (the service request
- * id an operator needs), and the redacted cookie shown as `[redacted]`.
+ * `agentError.responseHeaders` (the allowlisted diagnostic subset, lower-cased)
+ * — then asserts the rendered result on `/runs/:id`: the HTTP status row and a
+ * "Response headers" block listing `x-request-id` (the service request id an
+ * operator needs), `x-amzn-requestid` and `retry-after`.
  *
  * Also seeds a 5xx report WITHOUT headers (a report persisted before this
  * field existed) to prove the block is simply absent, not an empty box.
@@ -51,8 +51,8 @@ test.describe('REST non-2xx — response headers on the run-detail failure card'
         kind: 'http_503', httpStatus: 503, message: CAUSE, endpoint: ENDPOINT, elapsedMs: 118, timeoutMs: 300_000,
         responseHeaders: {
           'content-type': 'text/plain',
+          'date': 'Fri, 06 Nov 2026 08:18:12 GMT',
           'retry-after': '30',
-          'set-cookie': '[redacted]',
           'x-amzn-requestid': 'amzn-req-456',
           'x-request-id': 'req-123',
         },
@@ -68,7 +68,7 @@ test.describe('REST non-2xx — response headers on the run-detail failure card'
     for (const id of [withHeaders, withoutHeaders]) if (id) await request.delete(`/api/storage/runs/${id}`).catch(() => {});
   });
 
-  test('run detail lists the 503 reply\'s response headers (request id visible, cookie redacted)', async ({ page }) => {
+  test('run detail lists the 503 reply\'s diagnostic response headers (request ids + retry-after visible)', async ({ page }) => {
     test.skip(!withHeaders, 'Could not seed report (storage unavailable)');
     await page.goto(`/runs/${withHeaders}`);
     const card = page.getByTestId('run-failure-card').first();
@@ -85,7 +85,7 @@ test.describe('REST non-2xx — response headers on the run-detail failure card'
     await expect(rows).toHaveCount(5);
     await expect(headers.locator('[data-header-name="x-request-id"]')).toHaveText('x-request-id:req-123');
     await expect(headers.locator('[data-header-name="x-amzn-requestid"]')).toHaveText('x-amzn-requestid:amzn-req-456');
-    await expect(headers.locator('[data-header-name="set-cookie"]')).toHaveText('set-cookie:[redacted]');
+    await expect(headers.locator('[data-header-name="retry-after"]')).toHaveText('retry-after:30');
     await expect(page.getByTestId('status-label').first()).toHaveText('AGENT ERROR');
   });
 

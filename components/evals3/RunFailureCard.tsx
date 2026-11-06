@@ -15,7 +15,7 @@
  * long we waited and the timeout that was in force (agent stage) — plus, for
  * a non-2xx reply, its HTTP status and the recorded response headers (the
  * service request id an operator needs to look up that exact failed call;
- * credential-bearing values are already redacted when persisted) — or the
+ * only an allowlisted diagnostic subset is ever persisted) — or the
  * judge's raw reply + attempt count (judge stage), and tells the user what
  * the remedy is (re-run the case vs. retry judgement).
  *
@@ -98,7 +98,7 @@ export const RunFailureCard: React.FC<RunFailureCardProps> = ({ report, classNam
               <div data-testid="run-failure-response-headers">
                 <div className="text-xs text-muted-foreground">
                   Response headers
-                  <span className="ml-1 opacity-70">(credential-bearing values redacted)</span>
+                  <span className="ml-1 opacity-70">(diagnostic subset: request ids, retry-after, content-type)</span>
                 </div>
                 <dl className="mt-1 text-[11px] font-mono bg-background/60 rounded border border-orange-200 dark:border-orange-500/30 p-2 max-h-48 overflow-auto space-y-0.5">
                   {Object.entries(ae.responseHeaders).map(([name, value]) => (

@@ -14,8 +14,9 @@
  * carry `connectorConfig` / hooks) and `debug` is silenced.
  *
  * The stub answers `503` with `x-request-id: req-123` (the service request id
- * an operator needs to look up exactly this failed call) plus a `set-cookie`
- * that must never be persisted. Pre-fix the connector threw before anything
+ * an operator needs to look up exactly this failed call) plus a `set-cookie`,
+ * a `www-authenticate` challenge, a signed `location` and a `server` banner
+ * that must never be persisted (allowlist, not denylist). Pre-fix the connector threw before anything
  * about the reply was captured, so the report had no headers for exactly the
  * cases that most need one.
  *
@@ -98,6 +99,9 @@ describe('REST agent non-2xx reply → report.agentError carries status + respon
         res.setHeader('X-Request-Id', 'req-123');
         res.setHeader('X-Amzn-RequestId', 'amzn-req-456');
         res.setHeader('Set-Cookie', 'session=secret-cookie; HttpOnly');
+        res.setHeader('WWW-Authenticate', 'Bearer realm="agent", error_description="secret-challenge"');
+        res.setHeader('Location', 'https://bucket.example/obj?X-Amz-Signature=secret-signature');
+        res.setHeader('Server', 'secret-internal-host-01');
         res.setHeader('Retry-After', '30');
         res.end('upstream unavailable');
       });
@@ -141,7 +145,7 @@ describe('REST agent non-2xx reply → report.agentError carries status + respon
   afterEach(() => jest.restoreAllMocks());
 
   it(
-    'a 503 from the REST agent is stored with httpStatus 503, x-request-id, redacted set-cookie — and the afterResponse hook never ran',
+    'a 503 from the REST agent is stored with httpStatus 503 + the diagnostic headers only (x-request-id kept, cookie/challenge/location dropped) — and the afterResponse hook never ran',
     async () => {
       const res = await request(app)
         .post('/api/evaluate')
@@ -174,17 +178,20 @@ describe('REST agent non-2xx reply → report.agentError carries status + respon
         kind: 'http_503',
         httpStatus: 503,
         endpoint: agentState.endpoint,
-        responseHeaders: {
-          'x-request-id': 'req-123',
-          'x-amzn-requestid': 'amzn-req-456',
-          'retry-after': '30',
-          'content-type': 'text/plain',
-          'set-cookie': '[redacted]',
-        },
+      });
+      // Exactly the diagnostic allowlist — ids, retry hint, content type, date
+      // — and nothing else the stub sent (cookie, auth challenge, signed
+      // location, server banner, connection/keep-alive/content-length).
+      expect(Object.keys(report.agentError.responseHeaders).sort()).toEqual(['content-type', 'date', 'retry-after', 'x-amzn-requestid', 'x-request-id']);
+      expect(report.agentError.responseHeaders).toMatchObject({
+        'x-request-id': 'req-123',
+        'x-amzn-requestid': 'amzn-req-456',
+        'retry-after': '30',
+        'content-type': 'text/plain',
       });
       expect(report.agentError.message).toContain('REST request failed: 503 - upstream unavailable');
-      // The cookie value itself must not appear anywhere on the stored doc.
-      expect(JSON.stringify(report)).not.toContain('secret-cookie');
+      // None of the sensitive values appears anywhere on the stored doc.
+      expect(JSON.stringify(report)).not.toMatch(/secret-cookie|secret-challenge|secret-signature|secret-internal-host/);
       // eslint-disable-next-line no-console
       process.stdout.write(`[rest-non2xx] stored agentError: ${JSON.stringify(report.agentError)}\n`);
     },

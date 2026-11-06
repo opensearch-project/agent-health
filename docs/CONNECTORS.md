@@ -636,13 +636,18 @@ failure as an **agent-stage** failure on the report:
 | `passFailStatus` | unset (no verdict) |
 
 For a **non-2xx reply** (`kind: 'http_<status>'`) the REST connector also keeps
-the reply's response headers on the error, and the runner persists them as
-`agentError.responseHeaders` — header names lower-cased, and the values of
-`authorization` / `cookie` / `token` / `secret` / `api-key` / `credential` /
-`password` / `signature` headers replaced by `[redacted]`. That is where a
-service request id (`x-request-id`, `x-amzn-requestid`, …) for a failed call
-lives; the `afterResponse` hook is **not** invoked for an error reply (a hook
-written for a success body would crash on one), so hook code cannot capture it.
+an allowlisted **diagnostic subset** of the reply's headers on the error, and
+the runner persists it as `agentError.responseHeaders`: request / correlation /
+trace ids (`x-request-id`, `x-amzn-requestid`, `x-amz-request-id`,
+`x-amz-id-2`, `x-amz-cf-id`, `x-amzn-trace-id`, `x-correlation-id`, `cf-ray`,
+`traceparent`, …), `x-amzn-errortype`, `retry-after`, `date` and
+`content-type` — names lower-cased, at most 20 entries, values cut to 256
+chars. Nothing else a server sends (`set-cookie`, `www-authenticate`, a signed
+`location`, `server`, vendor diagnostics) is ever stored. That is where a
+service request id for a failed call lives; the `afterResponse` hook is **not**
+invoked for an error reply (a hook written for a success body would crash on
+one), so hook code cannot capture it. See `selectDiagnosticResponseHeaders` in
+`services/evaluation/agentFailure.ts`.
 
 The judge is **not** invoked for an agent-stage failure (there is no output to
 judge), the run-detail *Test Case Output* tab shows an "Agent request failed"
