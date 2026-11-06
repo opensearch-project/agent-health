@@ -29,6 +29,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { createServer, type Server, type ServerResponse } from 'http';
 import { join } from 'path';
 import { createTestDataTracker, uniqueTestName } from '../../helpers/testDataTracker';
+import { withCliCoverage } from '../../helpers/cliCoverage';
 
 const ROOT = join(__dirname, '../../..');
 const AGENT_KEY = 'cli-upgrade-fixture';
@@ -174,11 +175,11 @@ describe('packaged CLI: upgrading the CLI while a run is in flight', () => {
       return response.json();
     };
     const health = () => api('/health');
-    const env: NodeJS.ProcessEnv = { ...process.env, AH_PORT: String(port), PORT: String(port),
+    const env: NodeJS.ProcessEnv = withCliCoverage({ ...process.env, AH_PORT: String(port), PORT: String(port),
       BENCHMARK_RUN_RECOVERY_DISABLED: '1', EVALUATION_RUN_RECOVERY_DISABLED: '1',
       NODE_OPTIONS: `--require=${pidProbe}`, NO_COLOR: '1',
       // killServerOnPort shells out to lsof; some hosts keep it in sbin only.
-      PATH: [process.env.PATH, '/usr/sbin', '/sbin'].filter(Boolean).join(':') };
+      PATH: [process.env.PATH, '/usr/sbin', '/sbin'].filter(Boolean).join(':') });
     delete env.CI;
     delete env.AH_REUSE_FOREIGN_SERVER;
     delete env.AH_SUPPRESS_EXPERIMENTAL;
