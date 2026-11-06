@@ -67,9 +67,9 @@ export function decideVersionMismatchRestart(params: {
 }
 
 function stopHint(serverPid?: number): string {
-  return serverPid
-    ? `stop the server explicitly (kill ${serverPid}) and re-run this command`
-    : `stop the server explicitly and re-run this command`;
+  if (!serverPid) return `stop the server explicitly and re-run this command`;
+  const command = process.platform === 'win32' ? `taskkill /PID ${serverPid} /F` : `kill ${serverPid}`;
+  return `stop the server explicitly (${command}) and re-run this command`;
 }
 
 /**
