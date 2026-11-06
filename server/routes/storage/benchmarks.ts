@@ -31,7 +31,7 @@ import { loadConfigSync } from '../../../lib/config/index.js';
 import { getCustomAgents } from '../../services/customAgentStore.js';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '../../../lib/judgeFailureSummary.js';
 import { deleteRunEverywhere } from '../../services/runDelete.js';
-import { registerRunCanceller, cancelActiveRun } from '../../services/runCancellation.js';
+import { registerRunCanceller, registerActiveRunLister, cancelActiveRun } from '../../services/runCancellation.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 
 /**
@@ -321,6 +321,7 @@ export function cancelActiveBenchmarkRun(runId: string): boolean {
   return true;
 }
 registerRunCanceller(cancelActiveBenchmarkRun);
+registerActiveRunLister(() => [...activeRuns.keys()].map((id) => ({ id, kind: 'benchmark' as const })));
 
 function generateId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;

@@ -10,7 +10,7 @@
  */
 
 import { deleteRunEverywhere, resolveRunBenchmarkId, isSampleRunOrBenchmarkId } from '@/server/services/runDelete';
-import { registerRunCanceller, cancelActiveRun } from '@/server/services/runCancellation';
+import { registerRunCanceller, cancelActiveRun, registerActiveRunLister, listActiveRuns } from '@/server/services/runCancellation';
 
 function makeStorage(overrides: {
   doc?: any;
@@ -210,6 +210,33 @@ describe('runCancellation registry', () => {
     try {
       expect(cancelActiveRun('r')).toBe(true);
       expect(ok).toHaveBeenCalled();
+      expect(warn).toHaveBeenCalled();
+    } finally { offBoom(); offOk(); warn.mockRestore(); }
+  });
+});
+
+describe('runCancellation active-run listers', () => {
+  it('unions every registry and forgets an unregistered one', () => {
+    const offA = registerActiveRunLister(() => [{ id: 'run-a', kind: 'benchmark' }]);
+    const offB = registerActiveRunLister(() => [{ id: 'eval-b', kind: 'evaluation' }, { id: 'eval-c', kind: 'retry-judgement' }]);
+    try {
+      expect(listActiveRuns()).toEqual([
+        { id: 'run-a', kind: 'benchmark' },
+        { id: 'eval-b', kind: 'evaluation' },
+        { id: 'eval-c', kind: 'retry-judgement' },
+      ]);
+      offA();
+      expect(listActiveRuns()).toEqual([{ id: 'eval-b', kind: 'evaluation' }, { id: 'eval-c', kind: 'retry-judgement' }]);
+    } finally { offA(); offB(); }
+    expect(listActiveRuns()).toEqual([]);
+  });
+
+  it('a throwing lister is logged and does not hide the others', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const offBoom = registerActiveRunLister(() => { throw new Error('boom'); });
+    const offOk = registerActiveRunLister(() => [{ id: 'run-ok', kind: 'benchmark' }]);
+    try {
+      expect(listActiveRuns()).toEqual([{ id: 'run-ok', kind: 'benchmark' }]);
       expect(warn).toHaveBeenCalled();
     } finally { offBoom(); offOk(); warn.mockRestore(); }
   });

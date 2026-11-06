@@ -16,6 +16,16 @@ jest.mock('@/server/services/codingAgents', () => ({
 }));
 
 import healthRoutes from '@/server/routes/health';
+import { registerActiveRunLister } from '@/server/services/runCancellation';
+
+function callHealth(req: Request, res: Response): any {
+  const routes = (healthRoutes as any).stack;
+  const healthRoute = routes.find(
+    (layer: any) => layer.route && layer.route.path === '/health'
+  );
+  healthRoute.route.stack[0].handle(req, res);
+  return (res.json as jest.Mock).mock.calls[0][0];
+}
 
 // Helper to create mock request/response. `remoteAddress` defaults to
 // loopback since the CLI ownership check always dials over localhost.
@@ -94,9 +104,53 @@ describe('Health Routes', () => {
 
       const payload = (res.json as jest.Mock).mock.calls[0][0];
       expect(payload.instance).toBeUndefined();
+      expect(payload.activeRuns).toBeUndefined();
       // non-sensitive fields still returned
       expect(payload.status).toBe('ok');
       expect(payload.features).toBeDefined();
+    });
+  });
+
+  // #612 problem 5: the CLI must know whether a version-mismatched server is
+  // executing anything before it restarts it. The answer comes from the
+  // process's own executor registries, never from storage status.
+  describe('GET /health activeRuns (loopback only)', () => {
+    it('reports zero in-flight runs on an idle server', () => {
+      const { req, res } = createMocks();
+      expect(callHealth(req, res).activeRuns).toEqual({ count: 0, runs: [] });
+    });
+
+    it('lists every run the registries are executing, with its kind', () => {
+      const off = registerActiveRunLister(() => [
+        { id: 'run-1', kind: 'benchmark' },
+        { id: 'eval-run-2', kind: 'evaluation' },
+      ]);
+      try {
+        const { req, res } = createMocks();
+        expect(callHealth(req, res).activeRuns).toEqual({
+          count: 2,
+          runs: [{ id: 'run-1', kind: 'benchmark' }, { id: 'eval-run-2', kind: 'evaluation' }],
+        });
+      } finally {
+        off();
+      }
+      const { req, res } = createMocks();
+      expect(callHealth(req, res).activeRuns).toEqual({ count: 0, runs: [] });
+    });
+
+    it('caps the listed ids at 20 but keeps the true count', () => {
+      const off = registerActiveRunLister(() =>
+        Array.from({ length: 25 }, (_, i) => ({ id: `run-${i}`, kind: 'evaluation' as const }))
+      );
+      try {
+        const { req, res } = createMocks();
+        const { activeRuns } = callHealth(req, res);
+        expect(activeRuns.count).toBe(25);
+        expect(activeRuns.runs).toHaveLength(20);
+        expect(activeRuns.runs[0]).toEqual({ id: 'run-0', kind: 'evaluation' });
+      } finally {
+        off();
+      }
     });
   });
 });
