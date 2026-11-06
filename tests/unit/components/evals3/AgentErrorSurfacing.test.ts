@@ -116,6 +116,34 @@ describe('RunFailureCard', () => {
     expect(screen.queryByText(/Evaluator could not run/)).toBeNull();
   });
 
+  it('agent stage: a non-2xx reply lists its recorded response headers (service request id) under the HTTP status', () => {
+    const r = {
+      ...agentFailedReport,
+      error: 'REST request failed: 503 - upstream unavailable (http://localhost:8000/ask)',
+      agentError: {
+        kind: 'http_503', httpStatus: 503, endpoint: 'http://localhost:8000/ask', elapsedMs: 120,
+        message: 'REST request failed: 503 - upstream unavailable (http://localhost:8000/ask)',
+        responseHeaders: { 'x-request-id': 'req-123', 'content-type': 'text/plain', 'retry-after': '30' },
+      },
+    } as unknown as EvaluationReport;
+    render(h(RunFailureCard, { report: r }));
+    expect(screen.getByText('503')).toBeTruthy();
+    const headers = screen.getByTestId('run-failure-response-headers');
+    expect(headers.textContent).toContain('Response headers');
+    const rows = screen.getAllByTestId('run-failure-response-header');
+    expect(rows.map(el => el.getAttribute('data-header-name'))).toEqual(['x-request-id', 'content-type', 'retry-after']);
+    expect(rows[0].textContent).toBe('x-request-id:req-123');
+    expect(rows[2].textContent).toBe('retry-after:30');
+  });
+
+  it('agent stage: no response-headers block when the failure recorded none (timeouts, connection errors, older reports)', () => {
+    render(h(RunFailureCard, { report: agentFailedReport }));
+    expect(screen.queryByTestId('run-failure-response-headers')).toBeNull();
+    const empty = { ...agentFailedReport, agentError: { ...(agentFailedReport as any).agentError, responseHeaders: {} } } as any;
+    render(h(RunFailureCard, { report: empty }));
+    expect(screen.queryByTestId('run-failure-response-headers')).toBeNull();
+  });
+
   it('judge stage: shows the cause, attempt count, "model returned an empty response" for an empty raw reply, and the retry-judgement remedy', () => {
     render(h(RunFailureCard, { report: judgeFailedReport }));
     expect(screen.getByTestId('run-failure-card').getAttribute('data-stage')).toBe('judge');
