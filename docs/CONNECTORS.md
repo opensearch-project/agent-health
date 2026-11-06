@@ -632,8 +632,17 @@ failure as an **agent-stage** failure on the report:
 | `metricsStatus` | `error` |
 | `failureStage` | `agent` |
 | `error` | the unwrapped cause — e.g. `HeadersTimeoutError: Headers Timeout Error (UND_ERR_HEADERS_TIMEOUT) — no response within 300000ms (POST http://…)` — never the bare `fetch failed` |
-| `agentError` | `{ kind: 'timeout' \| 'connection' \| 'http_<status>' \| 'unknown', message, elapsedMs, endpoint, timeoutMs, httpStatus? }` |
+| `agentError` | `{ kind: 'timeout' \| 'connection' \| 'http_<status>' \| 'unknown', message, elapsedMs, endpoint, timeoutMs, httpStatus?, responseHeaders? }` |
 | `passFailStatus` | unset (no verdict) |
+
+For a **non-2xx reply** (`kind: 'http_<status>'`) the REST connector also keeps
+the reply's response headers on the error, and the runner persists them as
+`agentError.responseHeaders` — header names lower-cased, and the values of
+`authorization` / `cookie` / `token` / `secret` / `api-key` / `credential` /
+`password` / `signature` headers replaced by `[redacted]`. That is where a
+service request id (`x-request-id`, `x-amzn-requestid`, …) for a failed call
+lives; the `afterResponse` hook is **not** invoked for an error reply (a hook
+written for a success body would crash on one), so hook code cannot capture it.
 
 The judge is **not** invoked for an agent-stage failure (there is no output to
 judge), the run-detail *Test Case Output* tab shows an "Agent request failed"
