@@ -25,11 +25,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Refuse end-of-life / unpatched Node releases (CVE-2026-111497; `.ts` config
 // needs built-in type stripping). `engines.node` in package.json is the single
-// source of truth — npm only warns on it, this makes it binding.
-const nodeVerdict = nodeVersionGuard.checkNodeVersion(
-  process.versions.node,
-  nodeVersionGuard.readEnginesRange(join(__dirname, '..', 'package.json'))
-);
+// source of truth — npm only warns on it, this makes it binding. Writes one
+// message to stderr and exits 1; returns only on a supported runtime. (Node
+// older than 14.8 cannot even parse this file's top-level `await` and fails
+// before reaching here — that was already the case.)
+nodeVersionGuard.enforceSupportedNode(join(__dirname, '..', 'package.json'));
 
 const cliSourcePath = join(__dirname, '..', 'cli', 'index.ts');
 const isInNodeModules = import.meta.url.split('/').includes('node_modules');
@@ -37,12 +37,7 @@ const isInNodeModules = import.meta.url.split('/').includes('node_modules');
 // Development mode: TypeScript source exists and not running from node_modules
 const isDev = existsSync(cliSourcePath) && !isInNodeModules;
 
-if (!nodeVerdict.ok) {
-  // Set the exit code and let the process end naturally so the message is
-  // fully flushed even when stderr is a pipe (process.exit() can truncate it).
-  process.exitCode = 1;
-  process.stderr.write(nodeVerdict.message);
-} else if (isDev) {
+if (isDev) {
   // Import tsx to enable TypeScript execution, then run source
   await import('tsx/esm');
   await import('../cli/index.ts');

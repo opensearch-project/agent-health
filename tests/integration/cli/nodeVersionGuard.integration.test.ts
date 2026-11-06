@@ -26,7 +26,7 @@
  * Build first: npm run build:all
  */
 import { spawn, spawnSync } from 'child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -206,6 +206,22 @@ describe('bin/cli.js Node.js version guard (real processes)', () => {
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
     }, TEST_TIMEOUT);
   });
+
+  it('fails CLOSED with a controlled message when package.json cannot provide the requirement', async () => {
+    // A corrupt / incomplete install must not run unchecked, and must not dump a stack trace.
+    const broken = stagePackage();
+    try {
+      writeFileSync(join(broken.cli, '..', '..', 'package.json'), JSON.stringify({ name: 'x', version: '0.0.0' }));
+      const result = await runCli(process.execPath, [], broken.cli, ['--version'], broken.project, cleanEnv(), TEST_TIMEOUT);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('could not verify the Node.js version requirement');
+      expect(result.stderr).toContain('has no engines.node range');
+      expect(result.stderr).not.toMatch(/^\s+at /m);
+    } finally {
+      rmSync(broken.project, { recursive: true, force: true });
+    }
+  }, TEST_TIMEOUT);
 
   describe('with a REAL older Node binary', () => {
     const legacy = findLegacyNode(range);
