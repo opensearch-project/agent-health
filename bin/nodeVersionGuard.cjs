@@ -22,7 +22,7 @@
 
 'use strict';
 
-const { readFileSync } = require('fs');
+const { readFileSync, writeSync } = require('fs');
 
 const SECURITY_NOTE =
   'releases below the required versions ship a brotli decoder with an out-of-bounds ' +
@@ -96,9 +96,15 @@ function satisfiesComparator(version, comparator) {
 }
 
 /**
- * Does `version` satisfy an npm-style `engines` range? Supports the subset
- * npm's semver uses for engine ranges: comparators joined by whitespace (AND)
- * and `||` (OR).
+ * Does `version` satisfy an npm-style `engines` range? Deliberately a SUBSET of
+ * node-semver (not a drop-in): simple comparators joined by whitespace (AND)
+ * and `||` (OR). Pre-release / build suffixes on the version are ignored, i.e.
+ * `27.0.0-nightly…` is treated as 27.0.0 (node-semver would exclude it) — the
+ * only pre-release Node builds in practice are nightlies of an already-patched
+ * line, and refusing them buys nothing. Anything else (`x`, `*`, hyphen ranges,
+ * partial `^22`) throws, and the unit test runs the REAL package.json range
+ * through here, so an unsupported edit to `engines.node` fails the build
+ * instead of bricking the CLI for users.
  * @param {string} version e.g. "22.23.4"
  * @param {string} range e.g. "^22.23.4 || ^24.22.1 || >=26.12.1"
  * @returns {boolean}
@@ -193,8 +199,39 @@ function checkNodeVersion(currentVersion, range) {
   return { ok: false, message: formatUnsupportedNodeMessage(currentVersion, range) };
 }
 
+/**
+ * Entry-point glue: check the running Node against `engines.node` of the
+ * given package.json and, if it is unsupported — or the requirement cannot be
+ * read at all (corrupt / incomplete install; fail CLOSED, with a controlled
+ * message rather than a stack trace) — write the message synchronously to
+ * stderr and exit 1. `writeSync(2)` + `process.exit` is used on purpose:
+ * `process.stderr.write` on a pipe is asynchronous and can be truncated by
+ * `process.exit`, while leaving the process to end naturally can hang if a
+ * preload left handles open. Returns normally only when the runtime is fine.
+ * @param {string} packageJsonPath
+ */
+function enforceSupportedNode(packageJsonPath) {
+  let verdict;
+  try {
+    verdict = checkNodeVersion(process.versions.node, readEnginesRange(packageJsonPath));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    verdict = {
+      ok: false,
+      message:
+        `agent-health: could not verify the Node.js version requirement (${reason}).\n` +
+        '  The package install looks incomplete or corrupt; reinstall it with\n' +
+        '  `npm install -g @opensearch-project/agent-health` or clear the npx cache.\n',
+    };
+  }
+  if (verdict.ok) return;
+  writeSync(2, verdict.message);
+  process.exit(1);
+}
+
 module.exports = {
   parseVersion,
+  enforceSupportedNode,
   satisfiesRange,
   readEnginesRange,
   describeRange,
