@@ -89,6 +89,7 @@ jest.mock('@/services/evaluation/retryJudgement', () => ({
 }));
 
 import express, { Application } from 'express';
+import { listActiveRuns } from '@/server/services/runCancellation';
 const request = require('supertest');
 import evaluationRunsRouter, {
   startSseHeartbeat,
@@ -639,6 +640,30 @@ describe('Evaluation Runs API', () => {
       await postPromise;
     });
 
+    // #612 problem 5: /health reads this registry so the CLI can refuse to
+    // restart a version-mismatched server mid-run.
+    it('publishes the run to the process-wide in-flight list exactly while it executes', async () => {
+      let resolveExec: (v: any) => void;
+      let signalStarted: () => void;
+      const executionStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+      mockExecuteEvaluationRun.mockImplementation(() => {
+        signalStarted();
+        return new Promise((resolve) => { resolveExec = resolve; });
+      });
+
+      expect(listActiveRuns().runs).toEqual([]);
+      const postPromise = request(app).post('/api/storage/evaluation-runs').send({ sources: [{ testCaseId: 'tc-1' }], agentKey: 'a1' });
+      postPromise.catch(() => {});
+      await executionStarted;
+      const runId = mockEvaluationRunsCreate.mock.calls[0][0].id;
+
+      expect(listActiveRuns().runs).toEqual([{ id: runId, kind: 'evaluation' }]);
+
+      resolveExec!({ results: {}, stats: {} });
+      await postPromise;
+      expect(listActiveRuns().runs).toEqual([]);
+    });
+
     it('500s when the update call throws', async () => {
       let resolveExec: (v: any) => void;
       let signalStarted: () => void;
@@ -931,9 +956,13 @@ describe('Evaluation Runs API', () => {
       expect(secondRes.status).toBe(409);
       expect(secondRes.body.error).toMatch(/already in progress/i);
 
+      // The job is in-flight judge work: listed process-wide until it settles (#612).
+      expect(listActiveRuns().runs).toEqual([{ id: 'run-409', kind: 'retry-judgement' }]);
+
       resolveFirst!(summary);
       const job = await pollStatus('run-409');
       expect(job.status).toBe('completed');
+      expect(listActiveRuns().runs).toEqual([]);
     });
 
     it('releases the in-progress guard after a failure, so a later request is not blocked forever', async () => {

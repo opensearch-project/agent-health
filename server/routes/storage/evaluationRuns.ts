@@ -7,7 +7,7 @@ import { Router, Request, Response } from 'express';
 import { BenchmarkRun, EvaluationRun, TestCaseSource, TestCaseSnapshot } from '../../../types/index.js';
 import { getStorageModule } from '../../adapters/index.js';
 import { deleteRunEverywhere, isSampleRunOrBenchmarkId } from '../../services/runDelete.js';
-import { registerRunCanceller, cancelActiveRun } from '../../services/runCancellation.js';
+import { registerRunCanceller, registerActiveRunLister, cancelActiveRun } from '../../services/runCancellation.js';
 import { resolveTestCaseSources } from '../../../services/sourceResolver.js';
 import {
   executeEvaluationRun,
@@ -59,6 +59,7 @@ export function cancelActiveEvaluationRun(runId: string): boolean {
   return true;
 }
 registerRunCanceller(cancelActiveEvaluationRun);
+registerActiveRunLister(() => [...activeCancellationTokens.keys()].map((id) => ({ id, kind: 'evaluation' as const })));
 
 // codex_review (retry-judgement): the 409-if-running gate on
 // /retry-judgement checks the run's PERSISTED status, which is not a lock —
@@ -71,6 +72,8 @@ registerRunCanceller(cancelActiveEvaluationRun);
 // mutation endpoint in this file has that guarantee today (see this repo's
 // "single-writer discipline" convention for run mutations).
 const activeRetryJudgementRuns = new Set<string>();
+// A retry-judgement job is in-flight judge work too: a restart mid-job loses it.
+registerActiveRunLister(() => [...activeRetryJudgementRuns].map((id) => ({ id, kind: 'retry-judgement' as const })));
 
 /**
  * Retry-judgement is fire-and-poll (see the POST handler below): the route

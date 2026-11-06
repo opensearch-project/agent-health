@@ -21,6 +21,12 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import type { ResolvedServerConfig } from '@/lib/config/types.js';
 import { decideServerOwnership, foreignServerError } from './serverOwnership.js';
+import {
+  decideVersionMismatchRestart,
+  parseActiveRuns,
+  restartRefusedError,
+  type ActiveRunsSummary,
+} from './versionMismatch.js';
 
 // Get CLI version from package.json
 const __filename = fileURLToPath(import.meta.url);
@@ -80,6 +86,13 @@ export interface ServerStatus {
   cwd?: string;
   /** PID of the running server (from /health `instance.pid`). */
   pid?: number;
+  /**
+   * Runs the server process is executing right now (from /health
+   * `activeRuns`, read from its in-memory executor registries). Absent for
+   * older servers that predate the field — then we cannot tell, and a
+   * version-mismatch restart is refused rather than risked.
+   */
+  activeRuns?: ActiveRunsSummary;
 }
 
 /**
@@ -160,6 +173,7 @@ export async function checkServerStatus(port: number): Promise<ServerStatus> {
         version: data.version,
         cwd: data.instance?.cwd,
         pid: data.instance?.pid,
+        activeRuns: parseActiveRuns(data.activeRuns),
       };
     }
   } catch {
@@ -439,6 +453,22 @@ export async function ensureServer(
       lifecycleNotice(`  CLI version: ${cliVersion}`);
 
       if (reuseExistingServer) {
+        // Restarting kills whatever the old server is executing. Only do it
+        // when the server itself says nothing is in flight (#612): its
+        // in-memory registries, not storage status, which can hold stale
+        // `running` docs from crashed processes that would block forever.
+        const decision = decideVersionMismatchRestart({ activeRuns: serverStatus.activeRuns });
+        if (decision.action === 'refuse') {
+          throw new Error(
+            restartRefusedError({
+              port,
+              serverVersion: serverStatus.version,
+              cliVersion,
+              serverPid: serverStatus.pid,
+              decision,
+            })
+          );
+        }
         // Kill old server and start new one with matching version
         lifecycleNotice(`Stopping old server and starting v${cliVersion}...`);
         await killServerOnPort(port);
