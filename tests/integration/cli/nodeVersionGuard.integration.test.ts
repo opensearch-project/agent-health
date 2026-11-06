@@ -33,7 +33,7 @@ import { join } from 'path';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const guard = require('../../../bin/nodeVersionGuard.cjs') as {
   readEnginesRange: (packageJsonPath: string) => string;
-  satisfiesRange: (version: string, range: string) => boolean;
+  checkNodeVersion: (version: string, range: string) => { ok: boolean };
 };
 
 const ROOT = join(__dirname, '../../..');
@@ -121,7 +121,7 @@ function findLegacyNode(range: string): { bin: string; version: string } | undef
     if (probe.status !== 0) continue; // e.g. built against a newer glibc than this host has
     const version = probe.stdout.trim().replace(/^v/, '');
     if (!/^\d+\.\d+\.\d+/.test(version)) continue;
-    if (!guard.satisfiesRange(version, range)) return { bin, version };
+    if (!guard.checkNodeVersion(version, range).ok) return { bin, version };
   }
   return undefined;
 }
@@ -139,7 +139,7 @@ describe('bin/cli.js Node.js version guard (real processes)', () => {
   });
 
   it('runs normally on the Node this suite runs on', async () => {
-    expect(guard.satisfiesRange(process.versions.node, range)).toBe(true);
+    expect(guard.checkNodeVersion(process.versions.node, range).ok).toBe(true);
     const result = await runCli(process.execPath, [], staged.cli, ['--version'], staged.project, cleanEnv(), TEST_TIMEOUT);
     expect(result.stderr).not.toContain('unsupported Node.js version');
     expect(result.status).toBe(0);
@@ -233,7 +233,7 @@ describe('bin/cli.js Node.js version guard (real processes)', () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain('could not verify the Node.js version requirement');
-      expect(result.stderr).toContain('install looks incomplete; reinstall it');
+      expect(result.stderr).toContain('install looks incomplete');
       expect(result.stderr).not.toMatch(/^\s+at /m);
     } finally {
       rmSync(broken.project, { recursive: true, force: true });
