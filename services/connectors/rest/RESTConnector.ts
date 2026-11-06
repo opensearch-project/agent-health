@@ -81,11 +81,17 @@ export class RESTConnector extends BaseConnector {
 
     if (!response.ok) {
       const errorText = await response.text();
+      // Keep the reply's status + headers on the error: a service request id
+      // (`x-request-id`, `x-amzn-requestid`, …) is what the agent's operator
+      // needs to look up exactly this failed call. The runner persists them
+      // on `report.agentError` (redacted — see agentFailure.ts) because the
+      // throw below means `afterResponse` never runs for a non-2xx reply.
       throw new AgentRequestError(`REST request failed: ${response.status} - ${errorText}`, {
         endpoint,
         elapsedMs: Date.now() - startedAt,
         timeoutMs,
         httpStatus: response.status,
+        responseHeaders: Object.fromEntries(response.headers.entries()),
       });
     }
 

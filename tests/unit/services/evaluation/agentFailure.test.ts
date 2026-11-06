@@ -17,6 +17,8 @@ import {
   unwrapErrorMessage,
   AgentRequestError,
   agentErrorContextFrom,
+  redactResponseHeaders,
+  REDACTED_HEADER_VALUE,
 } from '@/services/evaluation/agentFailure';
 
 /** Exactly what Node 20/22/24's fetch throws after the default 300 s headersTimeout. */
@@ -109,5 +111,63 @@ describe('agentFailure — describeAgentError', () => {
     const err = new AgentRequestError('x', { endpoint: 'http://err', elapsedMs: 5, timeoutMs: 10 });
     expect(agentErrorContextFrom(err, { endpoint: 'http://fallback', elapsedMs: 99 })).toEqual({ endpoint: 'http://err', elapsedMs: 5, timeoutMs: 10 });
     expect(agentErrorContextFrom(new Error('plain'), { endpoint: 'http://fallback', elapsedMs: 99 })).toEqual({ endpoint: 'http://fallback', elapsedMs: 99, timeoutMs: undefined });
+  });
+});
+
+describe('agentFailure — response headers of a non-2xx reply (#612 problem 6)', () => {
+  it('redactResponseHeaders lower-cases names and redacts credential-bearing values, keeping request ids', () => {
+    expect(redactResponseHeaders({
+      'X-Request-Id': 'req-123',
+      'x-amzn-RequestId': 'amzn-1',
+      'Content-Type': 'application/json',
+      'Set-Cookie': 'session=abc',
+      Authorization: 'Bearer xyz',
+      'Proxy-Authorization': 'Basic abc',
+      'X-Api-Key': 'k',
+      'x-amz-security-token': 't',
+      'WWW-Authenticate': 'Bearer realm="x"',
+      'X-Signature': 'sig',
+    })).toEqual({
+      'x-request-id': 'req-123',
+      'x-amzn-requestid': 'amzn-1',
+      'content-type': 'application/json',
+      'set-cookie': REDACTED_HEADER_VALUE,
+      authorization: REDACTED_HEADER_VALUE,
+      'proxy-authorization': REDACTED_HEADER_VALUE,
+      'x-api-key': REDACTED_HEADER_VALUE,
+      'x-amz-security-token': REDACTED_HEADER_VALUE,
+      // `www-authenticate` names a scheme, not a credential; it is kept.
+      'www-authenticate': 'Bearer realm="x"',
+      'x-signature': REDACTED_HEADER_VALUE,
+    });
+  });
+
+  it('redactResponseHeaders accepts a Headers iterable and returns undefined for nothing', () => {
+    expect(redactResponseHeaders(new Headers({ 'X-Request-Id': 'r1', Cookie: 'c' }))).toEqual({ 'x-request-id': 'r1', cookie: REDACTED_HEADER_VALUE });
+    expect(redactResponseHeaders(undefined)).toBeUndefined();
+    expect(redactResponseHeaders(null)).toBeUndefined();
+    expect(redactResponseHeaders({})).toBeUndefined();
+  });
+
+  it('describeAgentError persists the (redacted) headers of the AgentRequestError a REST 503 throws', () => {
+    const err = new AgentRequestError('REST request failed: 503 - upstream unavailable', {
+      endpoint: 'http://a/b', elapsedMs: 120, timeoutMs: 300_000, httpStatus: 503,
+      responseHeaders: { 'x-request-id': 'req-123', 'set-cookie': 'session=abc', 'content-type': 'text/plain' },
+    });
+    const info = describeAgentError(err, agentErrorContextFrom(err));
+    expect(info).toEqual({
+      kind: 'http_503',
+      httpStatus: 503,
+      message: 'REST request failed: 503 - upstream unavailable (http://a/b)',
+      endpoint: 'http://a/b',
+      elapsedMs: 120,
+      timeoutMs: 300_000,
+      responseHeaders: { 'x-request-id': 'req-123', 'set-cookie': REDACTED_HEADER_VALUE, 'content-type': 'text/plain' },
+    });
+  });
+
+  it('describeAgentError leaves responseHeaders absent when the error carried none (timeouts, connection errors)', () => {
+    const info = describeAgentError(new AgentRequestError('x', { endpoint: 'http://a', elapsedMs: 1 }), agentErrorContextFrom(new Error('plain')));
+    expect(info).not.toHaveProperty('responseHeaders');
   });
 });

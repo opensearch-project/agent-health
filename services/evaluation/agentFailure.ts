@@ -30,6 +30,38 @@ export interface DescribeAgentErrorContext {
   endpoint?: string;
   elapsedMs?: number;
   timeoutMs?: number;
+  /** Raw response headers of a non-2xx reply; redacted before persisting. */
+  responseHeaders?: Record<string, string>;
+}
+
+/**
+ * Header names whose values must never be persisted on a report. Matched
+ * case-insensitively as substrings so `x-amz-security-token`,
+ * `proxy-authorization`, `set-cookie`, `x-api-key` etc. are all covered.
+ */
+const SENSITIVE_HEADER_PATTERN = /authorization|cookie|token|secret|api-?key|credential|password|signature/i;
+
+/** Replacement for a redacted header value. */
+export const REDACTED_HEADER_VALUE = '[redacted]';
+
+/**
+ * Lower-case header names and redact credential-bearing values so a non-2xx
+ * reply's headers can be stored on the report. Returns `undefined` for an
+ * empty / missing set so the field is simply absent on the report.
+ */
+export function redactResponseHeaders(
+  headers: Record<string, string> | Iterable<[string, string]> | undefined | null,
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const entries: Iterable<[string, string]> = typeof (headers as any)[Symbol.iterator] === 'function'
+    ? (headers as Iterable<[string, string]>)
+    : Object.entries(headers as Record<string, string>);
+  const out: Record<string, string> = {};
+  for (const [rawName, value] of entries) {
+    const name = String(rawName).toLowerCase();
+    out[name] = SENSITIVE_HEADER_PATTERN.test(name) ? REDACTED_HEADER_VALUE : String(value);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 const TIMEOUT_CODES = new Set([
@@ -176,6 +208,8 @@ export function describeAgentError(error: unknown, ctx: DescribeAgentErrorContex
   if (ctx.endpoint) info.endpoint = ctx.endpoint;
   if (ctx.timeoutMs !== undefined) info.timeoutMs = ctx.timeoutMs;
   if (httpStatus !== undefined) info.httpStatus = httpStatus;
+  const responseHeaders = redactResponseHeaders(ctx.responseHeaders);
+  if (responseHeaders) info.responseHeaders = responseHeaders;
   return info;
 }
 
@@ -189,10 +223,12 @@ export class AgentRequestError extends Error {
   readonly elapsedMs?: number;
   readonly timeoutMs?: number;
   readonly httpStatus?: number;
+  /** Response headers of the non-2xx reply (raw; redacted when persisted). */
+  readonly responseHeaders?: Record<string, string>;
 
   constructor(
     message: string,
-    options: { cause?: unknown; endpoint?: string; elapsedMs?: number; timeoutMs?: number; httpStatus?: number } = {},
+    options: { cause?: unknown; endpoint?: string; elapsedMs?: number; timeoutMs?: number; httpStatus?: number; responseHeaders?: Record<string, string> } = {},
   ) {
     super(message);
     this.name = 'AgentRequestError';
@@ -201,6 +237,7 @@ export class AgentRequestError extends Error {
     this.elapsedMs = options.elapsedMs;
     this.timeoutMs = options.timeoutMs;
     this.httpStatus = options.httpStatus;
+    this.responseHeaders = options.responseHeaders;
   }
 }
 
@@ -211,5 +248,6 @@ export function agentErrorContextFrom(error: unknown, fallback: DescribeAgentErr
     endpoint: e?.endpoint ?? fallback.endpoint,
     elapsedMs: e?.elapsedMs ?? fallback.elapsedMs,
     timeoutMs: e?.timeoutMs ?? fallback.timeoutMs,
+    responseHeaders: e?.responseHeaders ?? fallback.responseHeaders,
   };
 }

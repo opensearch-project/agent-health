@@ -5,6 +5,7 @@
 
 import { RESTConnector, restConnector } from '@/services/connectors/rest/RESTConnector';
 import type { ConnectorRequest, ConnectorAuth } from '@/services/connectors/types';
+import { AgentRequestError } from '@/services/evaluation/agentFailure';
 import type { TestCase, TrajectoryStep } from '@/types';
 
 describe('RESTConnector', () => {
@@ -123,6 +124,7 @@ describe('RESTConnector', () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: false,
         status: 500,
+        headers: new Headers(),
         text: () => Promise.resolve('Internal Server Error'),
       });
 
@@ -134,6 +136,30 @@ describe('RESTConnector', () => {
       await expect(
         connector.execute('http://localhost:8080/api', request, mockAuth)
       ).rejects.toThrow('REST request failed: 500');
+    });
+
+    it('a non-2xx reply keeps its status AND response headers on the thrown error (#612 problem 6)', async () => {
+      // Real Response: a 503 with a service request id — the header the
+      // agent's operator needs to look up this exact failed call.
+      (global.fetch as jest.Mock).mockResolvedValue(new Response('upstream unavailable', {
+        status: 503,
+        headers: { 'X-Request-Id': 'req-123', 'Content-Type': 'text/plain', 'Set-Cookie': 'session=abc' },
+      }));
+
+      const request: ConnectorRequest = { testCase: mockTestCase, modelId: 'test-model' };
+      let thrown: unknown;
+      try {
+        await connector.execute('http://localhost:8080/api', request, mockAuth);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(AgentRequestError);
+      const err = thrown as AgentRequestError;
+      expect(err.message).toBe('REST request failed: 503 - upstream unavailable');
+      expect(err.httpStatus).toBe(503);
+      expect(err.endpoint).toBe('http://localhost:8080/api');
+      // Raw on the error (in-process); redaction happens when the runner persists it.
+      expect(err.responseHeaders).toEqual({ 'x-request-id': 'req-123', 'content-type': 'text/plain', 'set-cookie': 'session=abc' });
     });
 
     it('should return trajectory from response', async () => {
