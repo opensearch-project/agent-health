@@ -12,7 +12,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { Clock, Bot, MessageSquare, Wrench, XCircle, ChevronDown, ChevronRight, X, ClipboardCheck } from 'lucide-react';
+import { Clock, Bot, MessageSquare, Wrench, XCircle, ChevronDown, ChevronRight, X, ClipboardCheck, Database } from 'lucide-react';
 import { Span } from '@/types';
 import { cn } from '@/lib/utils';
 import { getTheme } from '@/lib/theme';
@@ -99,6 +99,7 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
       if (category === 'llm') return name.includes('llm') || name.includes('bedrock') || name.includes('converse');
       if (category === 'tool') return name.includes('tool') || span.attributes?.['gen_ai.tool.name'];
       if (category === 'eval') return span.category === 'EVAL';
+      if (category === 'retrieval') return span.category === 'RETRIEVAL';
       if (category === 'error') return span.status === 'ERROR';
       return false;
     });
@@ -154,6 +155,10 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
         return isDarkMode
           ? { backgroundColor: 'rgba(245, 158, 11, 0.15)', color: 'rgb(251, 191, 36)', border: '1px solid rgba(245, 158, 11, 0.4)' }
           : { backgroundColor: 'rgb(254, 243, 199)', color: 'rgb(146, 64, 14)', border: '1px solid rgb(252, 211, 77)' };
+      case 'retrieval':
+        return isDarkMode
+          ? { backgroundColor: 'rgba(6, 182, 212, 0.15)', color: 'rgb(103, 232, 249)', border: '1px solid rgba(6, 182, 212, 0.4)' }
+          : { backgroundColor: 'rgb(207, 250, 254)', color: 'rgb(21, 94, 117)', border: '1px solid rgb(103, 232, 249)' };
       case 'eval':
         return isDarkMode
           ? { backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'rgb(110, 231, 183)', border: '1px solid rgba(16, 185, 129, 0.4)' }
@@ -396,6 +401,28 @@ const TraceInfoView: React.FC<TraceInfoViewProps> = ({ spanTree, runId }) => {
               <span className="font-normal">Eval</span>
               <span className="text-[10px] opacity-70 ml-auto">{formatDuration(spanStats.byCategory.eval.duration)}</span>
               {expandedSummary === 'eval' ? (
+                <ChevronDown size={11} />
+              ) : (
+                <ChevronRight size={11} />
+              )}
+            </button>
+          )}
+          {spanStats.byCategory.retrieval?.count > 0 && (
+            <button
+              data-testid="span-category-pill-retrieval"
+              onClick={() => handleSummaryClick('retrieval')}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border-2 transition-all cursor-pointer',
+                expandedSummary === 'retrieval'
+                  ? 'bg-cyan-100 text-cyan-900 border-cyan-400 dark:bg-cyan-500/20 dark:text-cyan-200 dark:border-cyan-500/50'
+                  : 'bg-cyan-50 text-cyan-800 border-cyan-200 dark:bg-cyan-500/10 dark:text-cyan-300 dark:border-cyan-500/30 hover:bg-cyan-100 hover:border-cyan-400 hover:shadow-md dark:hover:bg-cyan-500/20 dark:hover:border-cyan-500/50'
+              )}
+            >
+              <Database size={11} className="flex-shrink-0" />
+              <span className="font-medium">{spanStats.byCategory.retrieval.count}</span>
+              <span className="font-normal">Retrieval</span>
+              <span className="text-[10px] opacity-70 ml-auto">{formatDuration(spanStats.byCategory.retrieval.duration)}</span>
+              {expandedSummary === 'retrieval' ? (
                 <ChevronDown size={11} />
               ) : (
                 <ChevronRight size={11} />
