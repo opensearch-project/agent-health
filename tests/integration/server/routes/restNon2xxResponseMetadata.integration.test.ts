@@ -29,8 +29,13 @@
  * `import.meta.url` reason documented in
  * agentJudgeImprovementStrategies.integration.test.ts.
  *
+ * Binds its own stub agent and its own router listener on EPHEMERAL ports
+ * (never `AH_PORT` — in CI the shared integration server already holds that
+ * port) and points `AH_PORT` at the listener for the judge's self-dial only
+ * for the lifetime of this file; the original value is restored afterwards.
+ *
  * Run:
- *   AH_PORT=<your port> npm run test:integration -- --testPathPatterns=restNon2xxResponseMetadata
+ *   npm run test:integration -- --testPathPatterns=restNon2xxResponseMetadata
  */
 
 import express from 'express';
@@ -86,6 +91,7 @@ describe('REST agent non-2xx reply → report.agentError carries status + respon
   let app: express.Express;
   let server: http.Server;
   let agentServer: http.Server;
+  let originalAhPort: string | undefined;
   const createdReportIds: string[] = [];
 
   beforeAll(async () => {
@@ -119,16 +125,23 @@ describe('REST agent non-2xx reply → report.agentError carries status + respon
     app.use(evaluationRoutes);
     app.use(runRoutes);
 
-    // Our assigned test port when the runner provides one, else ephemeral.
-    const port = Number(process.env.AH_PORT) || 0;
-    await new Promise<void>((resolve) => { server = app.listen(port, '127.0.0.1', () => resolve()); });
-    process.env.AH_PORT = String((server.address() as any).port);
+    // Ephemeral port: AH_PORT may be held by a shared server (CI). The judge
+    // route self-dials over AH_PORT, so point it at THIS listener meanwhile.
+    await new Promise<void>((resolve, reject) => {
+      server = app.listen(0, '127.0.0.1', () => resolve());
+      server.once('error', reject);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('router listener did not bind a TCP port');
+    originalAhPort = process.env.AH_PORT;
+    process.env.AH_PORT = String(address.port);
   }, TEST_TIMEOUT);
 
   afterAll(async () => {
     for (const id of createdReportIds) {
       await request(app).delete(`/api/storage/runs/${encodeURIComponent(id)}`).catch(() => {});
     }
+    if (originalAhPort === undefined) delete process.env.AH_PORT; else process.env.AH_PORT = originalAhPort;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => agentServer.close(() => resolve()));
   });
