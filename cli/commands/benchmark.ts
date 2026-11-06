@@ -100,6 +100,25 @@ function getDefaultModel(config: ResolvedConfig): string {
   return Object.keys(config.models)[0] || 'claude-sonnet';
 }
 
+/** Printed in place of a model when the agent declares none. */
+export const NO_AGENT_MODEL_LABEL = '—';
+
+/**
+ * The model label the CLI prints for an agent: the model the agent itself
+ * declares in its connector config (`connectorConfig.model`,
+ * `env.ANTHROPIC_MODEL`, a `--model` arg — see {@link resolveAgentModel}),
+ * or `—` when it declares none.
+ *
+ * Never the catalog fallback: `getDefaultModel()` returns the FIRST key of
+ * `config.models`, which in the built-in catalog is `demo-model`, so a REST
+ * agent without a model printed `Model: demo-model` and users read that as
+ * "the mock judge is on" (#612, problem 7). The agent's model is owned by its
+ * own config; when it is not declared there, agent-health does not know it.
+ */
+export function formatAgentModelLabel(agent: AgentConfig | undefined): string {
+  return resolveAgentModel(agent) || NO_AGENT_MODEL_LABEL;
+}
+
 /**
  * Resolve the agent key to run against when the caller did not pass -a/--agent.
  * Picks the first agent whose `enabled` flag is not explicitly `false`.
@@ -674,8 +693,11 @@ async function runUnifiedMode(
   }
 
   // The agent's model comes from its agent-health.config.ts connectorConfig;
-  // there is no --model flag. getDefaultModel is a last-resort fallback.
-  const modelId = resolveAgentModel(config.agents.find(a => a.key === agentKey), getDefaultModel(config));
+  // there is no --model flag. getDefaultModel is a last-resort fallback for
+  // the wire value only — it is never shown to the user (see
+  // formatAgentModelLabel).
+  const agent = config.agents.find(a => a.key === agentKey);
+  const modelId = resolveAgentModel(agent, getDefaultModel(config));
   const concurrency = Math.max(1, Math.min(20, parseInt(options.concurrency, 10) || 1));
 
   // Determine benchmark association. With explicit sources (-f/-d/-t/--label),
@@ -698,7 +720,7 @@ async function runUnifiedMode(
   }
 
   console.log(chalk.gray(`  Sources: ${sources.length} source(s)`));
-  console.log(chalk.gray(`  Model: ${modelId}`));
+  console.log(chalk.gray(`  Model: ${formatAgentModelLabel(agent)}`));
   if (concurrency > 1) console.log(chalk.gray(`  Concurrency: ${concurrency}`));
   if (benchmarkId) console.log(chalk.gray(`  Benchmark: ${options.name}`));
   else console.log(chalk.gray(`  Mode: Ad-hoc (no benchmark association)`));
