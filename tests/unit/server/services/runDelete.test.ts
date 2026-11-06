@@ -220,23 +220,23 @@ describe('runCancellation active-run listers', () => {
     const offA = registerActiveRunLister(() => [{ id: 'run-a', kind: 'benchmark' }]);
     const offB = registerActiveRunLister(() => [{ id: 'eval-b', kind: 'evaluation' }, { id: 'eval-c', kind: 'retry-judgement' }]);
     try {
-      expect(listActiveRuns()).toEqual([
+      expect(listActiveRuns()).toEqual({ complete: true, runs: [
         { id: 'run-a', kind: 'benchmark' },
         { id: 'eval-b', kind: 'evaluation' },
         { id: 'eval-c', kind: 'retry-judgement' },
-      ]);
+      ] });
       offA();
-      expect(listActiveRuns()).toEqual([{ id: 'eval-b', kind: 'evaluation' }, { id: 'eval-c', kind: 'retry-judgement' }]);
+      expect(listActiveRuns().runs).toEqual([{ id: 'eval-b', kind: 'evaluation' }, { id: 'eval-c', kind: 'retry-judgement' }]);
     } finally { offA(); offB(); }
-    expect(listActiveRuns()).toEqual([]);
+    expect(listActiveRuns()).toEqual({ complete: true, runs: [] });
   });
 
-  it('a throwing lister is logged and does not hide the others', () => {
+  it('a throwing lister is logged and marks the snapshot INCOMPLETE (never a silent "idle")', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const offBoom = registerActiveRunLister(() => { throw new Error('boom'); });
     const offOk = registerActiveRunLister(() => [{ id: 'run-ok', kind: 'benchmark' }]);
     try {
-      expect(listActiveRuns()).toEqual([{ id: 'run-ok', kind: 'benchmark' }]);
+      expect(listActiveRuns()).toEqual({ complete: false, runs: [{ id: 'run-ok', kind: 'benchmark' }] });
       expect(warn).toHaveBeenCalled();
     } finally { offBoom(); offOk(); warn.mockRestore(); }
   });

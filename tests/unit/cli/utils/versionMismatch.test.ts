@@ -20,6 +20,7 @@ import {
   decideVersionMismatchRestart,
   parseActiveRuns,
   restartRefusedError,
+  validPid,
 } from '@/cli/utils/versionMismatch';
 
 describe('parseActiveRuns()', () => {
@@ -44,6 +45,17 @@ describe('parseActiveRuns()', () => {
     expect(parseActiveRuns({ count: 1, runs: [{ id: '' }] })).toBeUndefined();
   });
 
+  it('rejects a summary that lists more runs than it counts (contradictory evidence is no evidence)', () => {
+    expect(parseActiveRuns({ count: 0, runs: [{ id: 'run-live', kind: 'benchmark' }] })).toBeUndefined();
+  });
+
+  it('rejects ids/kinds that are not printable bounded tokens (they are echoed into the terminal)', () => {
+    expect(parseActiveRuns({ count: 1, runs: [{ id: 'run-1\u001b[2Jx', kind: 'benchmark' }] })).toBeUndefined();
+    expect(parseActiveRuns({ count: 1, runs: [{ id: 'x'.repeat(201), kind: 'benchmark' }] })).toBeUndefined();
+    expect(parseActiveRuns({ count: 1, runs: [{ id: 'run-1', kind: 'bench\nmark' }] }))
+      .toEqual({ count: 1, runs: [{ id: 'run-1', kind: 'run' }] });
+  });
+
   it('tolerates a missing kind', () => {
     expect(parseActiveRuns({ count: 1, runs: [{ id: 'run-1' }] })).toEqual({ count: 1, runs: [{ id: 'run-1', kind: 'run' }] });
   });
@@ -64,7 +76,38 @@ describe('decideVersionMismatchRestart()', () => {
   });
 });
 
+describe('validPid()', () => {
+  it('accepts only a real process id', () => {
+    expect(validPid(4242)).toBe(4242);
+    expect(validPid(1)).toBeUndefined();
+    expect(validPid(0)).toBeUndefined();
+    expect(validPid(-1)).toBeUndefined();
+    expect(validPid(1.5)).toBeUndefined();
+    expect(validPid('4242')).toBeUndefined();
+    expect(validPid(undefined)).toBeUndefined();
+  });
+});
+
 describe('restartRefusedError()', () => {
+  it('never prints a kill hint for a bogus pid (kill -1 would signal every process)', () => {
+    const message = restartRefusedError({
+      port: 4001, serverVersion: '0.9.1', cliVersion: '0.9.2', serverPid: -1,
+      decision: { action: 'refuse', reason: 'unknown' },
+    });
+    expect(message).not.toContain('kill');
+    expect(message).not.toContain('(pid');
+    expect(message).toContain('stop the server explicitly and re-run this command');
+  });
+
+  it('gives the Windows stop command on win32', () => {
+    const message = restartRefusedError({
+      port: 4001, serverVersion: '0.9.1', cliVersion: '0.9.2', serverPid: 4242, platform: 'win32',
+      decision: { action: 'refuse', reason: 'unknown' },
+    });
+    expect(message).toContain('taskkill /PID 4242 /F');
+    expect(message).not.toContain('kill 4242');
+  });
+
   it('names the in-flight runs, both versions, the pid, and what to do', () => {
     const message = restartRefusedError({
       port: 4001,

@@ -302,4 +302,66 @@ test('upgrade case', { prompt: 'fixture question' }, async ({ agent, expect }) =
       }
     }
   }, 240_000);
+
+  it('refuses to restart a server that predates the activeRuns field (≤ 0.9.1) and says what to do', async () => {
+    const { project, installed, upgraded, pidFile } = stagePackages();
+    // A separate process answering /health with the exact shape a 0.9.1
+    // server returns to a loopback caller (status/version/service/features/
+    // instance — no `activeRuns`). The CLI cannot tell whether it is mid-run,
+    // so it must not kill it. It is its own process so that a regression
+    // (port-wide kill) takes out this fixture, not the jest worker.
+    const fixture = join(project, 'old-server.cjs');
+    writeFileSync(fixture, `
+const http = require('node:http');
+const [version, cwd] = process.argv.slice(2);
+http.createServer((request, response) => {
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify({
+    status: 'ok', version, service: 'agent-health', features: { codingAgentAnalytics: true },
+    instance: { pid: process.pid, cwd, port: 0, startedAt: new Date().toISOString() },
+  }));
+}).listen(0, '127.0.0.1', function () { process.stdout.write(String(this.address().port) + '\\n'); });
+`);
+    const oldServer = spawn(process.execPath, [fixture, installed.version, project], { stdio: ['ignore', 'pipe', 'inherit'] });
+    let portLine = '';
+    oldServer.stdout.on('data', chunk => { portLine += chunk.toString(); });
+    if (!await waitUntil(() => portLine.includes('\n') || exited(oldServer), 10_000) || exited(oldServer)) {
+      throw new Error('old-server fixture did not start');
+    }
+    const port = Number(portLine.trim());
+    const oldPid = oldServer.pid!;
+    writeFileSync(join(project, 'agent-health.config.mjs'), 'export default {};\n');
+    const env: NodeJS.ProcessEnv = withCliCoverage({ ...process.env, AH_PORT: String(port), PORT: String(port),
+      BENCHMARK_RUN_RECOVERY_DISABLED: '1', EVALUATION_RUN_RECOVERY_DISABLED: '1', NO_COLOR: '1',
+      PATH: [process.env.PATH, '/usr/sbin', '/sbin'].filter(Boolean).join(':') });
+    delete env.CI;
+    delete env.AH_REUSE_FOREIGN_SERVER;
+    const refused = startCli(upgraded.cli, ['list', 'agents', '--output', 'json'], project, env);
+    try {
+      await waitUntil(() => exited(refused.child), 60_000);
+      if (!isAlive(oldPid) || exited(oldServer)) {
+        throw new Error(`REGRESSION: the upgraded CLI (v${upgraded.version}) killed the older-build server pid ${oldPid} ` +
+          `whose in-flight runs it could not see.\n${refused.stdout()}\n${refused.stderr()}`);
+      }
+      expect(exited(refused.child)).toBe(true);
+      expect(refused.child.exitCode).toBe(1);
+      const message = refused.stderr();
+      expect(message).toContain('Refusing to restart the server on port');
+      expect(message).toContain('does not report which runs it is executing (older build)');
+      expect(message).toContain(`server version : ${installed.version} (pid ${oldPid})`);
+      expect(message).toContain(`CLI version    : ${upgraded.version}`);
+      expect(message).toContain(`Check for running runs in the UI at http://localhost:${port}`);
+      expect(message).toContain(`kill ${oldPid}`);
+      expect(message).toContain(`it will start v${upgraded.version}`);
+      expect(refused.stdout()).toBe('');
+      expect(serverPids(pidFile)).toEqual([]); // no replacement server was started either
+      const stillThere = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(5000) }).then(r => r.json());
+      expect(stillThere.version).toBe(installed.version);
+      console.log(`[upgrade] older-build server pid ${oldPid} left alive; upgraded CLI exited 1 with the stop instructions`);
+    } finally {
+      await stopChild(refused.child);
+      await stopChild(oldServer);
+      removeProject(project, pidFile);
+    }
+  }, 90_000);
 });

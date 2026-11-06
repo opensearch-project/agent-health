@@ -138,6 +138,21 @@ describe('Health Routes', () => {
       expect(callHealth(req, res).activeRuns).toEqual({ count: 0, runs: [] });
     });
 
+    it('OMITS the field when a registry could not answer — "unknown" must never read as "idle"', () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const off = registerActiveRunLister(() => { throw new Error('registry unavailable'); });
+      try {
+        const { req, res } = createMocks();
+        const payload = callHealth(req, res);
+        expect(payload.activeRuns).toBeUndefined();
+        expect(payload.instance).toBeDefined();
+        expect(payload.status).toBe('ok');
+      } finally {
+        off();
+        warn.mockRestore();
+      }
+    });
+
     it('caps the listed ids at 20 but keeps the true count', () => {
       const off = registerActiveRunLister(() =>
         Array.from({ length: 25 }, (_, i) => ({ id: `run-${i}`, kind: 'evaluation' as const }))

@@ -33,8 +33,13 @@ function isLoopback(req: Request): boolean {
 /** Cap the ids listed on /health; `count` always carries the true total. */
 const ACTIVE_RUNS_LISTED_MAX = 20;
 
-function summarizeActiveRuns(): { count: number; runs: Array<{ id: string; kind: string }> } {
-  const runs = listActiveRuns();
+/**
+ * Omitted (not `count: 0`) when a registry could not answer: the CLI must
+ * treat "don't know" as "not safe to restart", never as "idle".
+ */
+function summarizeActiveRuns(): { count: number; runs: Array<{ id: string; kind: string }> } | undefined {
+  const { runs, complete } = listActiveRuns();
+  if (!complete) return undefined;
   return { count: runs.length, runs: runs.slice(0, ACTIVE_RUNS_LISTED_MAX) };
 }
 

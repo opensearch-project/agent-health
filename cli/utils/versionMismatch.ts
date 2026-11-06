@@ -43,18 +43,29 @@ export type VersionMismatchDecision =
  * servers that don't report it (older builds) or report it malformed — both
  * are treated as "unknown" by `decideVersionMismatchRestart`.
  */
+/** Run ids / kinds are echoed into a terminal message: printable, bounded. */
+const PRINTABLE_TOKEN = /^[\x20-\x7e]{1,200}$/;
+
 export function parseActiveRuns(value: unknown): ActiveRunsSummary | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const { count, runs } = value as { count?: unknown; runs?: unknown };
   if (!Number.isInteger(count) || (count as number) < 0 || !Array.isArray(runs)) return undefined;
+  // The server lists at most a page of ids but `count` is the total; a
+  // summary that lists more runs than it counts is not evidence of anything.
+  if ((count as number) < runs.length) return undefined;
   const refs: ActiveRunRef[] = [];
   for (const entry of runs) {
     const id = (entry as { id?: unknown })?.id;
-    if (typeof id !== 'string' || !id) return undefined;
+    if (typeof id !== 'string' || !PRINTABLE_TOKEN.test(id)) return undefined;
     const kind = (entry as { kind?: unknown }).kind;
-    refs.push({ id, kind: typeof kind === 'string' ? kind : 'run' });
+    refs.push({ id, kind: typeof kind === 'string' && PRINTABLE_TOKEN.test(kind) ? kind : 'run' });
   }
   return { count: count as number, runs: refs };
+}
+
+/** Only a real pid is ever echoed into a `kill` hint (`kill -1` would signal everything). */
+export function validPid(pid: unknown): number | undefined {
+  return Number.isSafeInteger(pid) && (pid as number) > 1 ? (pid as number) : undefined;
 }
 
 export function decideVersionMismatchRestart(params: {
@@ -66,9 +77,9 @@ export function decideVersionMismatchRestart(params: {
   return { action: 'restart' };
 }
 
-function stopHint(serverPid?: number): string {
+function stopHint(serverPid: number | undefined, platform: NodeJS.Platform): string {
   if (!serverPid) return `stop the server explicitly and re-run this command`;
-  const command = process.platform === 'win32' ? `taskkill /PID ${serverPid} /F` : `kill ${serverPid}`;
+  const command = platform === 'win32' ? `taskkill /PID ${serverPid} /F` : `kill ${serverPid}`;
   return `stop the server explicitly (${command}) and re-run this command`;
 }
 
@@ -82,8 +93,10 @@ export function restartRefusedError(params: {
   cliVersion: string;
   serverPid?: number;
   decision: Exclude<VersionMismatchDecision, { action: 'restart' }>;
+  platform?: NodeJS.Platform;
 }): string {
-  const { port, serverVersion, cliVersion, serverPid, decision } = params;
+  const { port, serverVersion, cliVersion, decision, platform = process.platform } = params;
+  const serverPid = validPid(params.serverPid);
   const versions =
     `  server version : ${serverVersion ?? 'unknown'}` + (serverPid ? ` (pid ${serverPid})` : '') + `\n` +
     `  CLI version    : ${cliVersion}\n`;
@@ -94,7 +107,7 @@ export function restartRefusedError(params: {
       `executing (older build), so this CLI cannot tell whether a restart would lose a run in progress.\n` +
       versions +
       `Check for running runs in the UI at http://localhost:${port}; when none are running, ` +
-      `${stopHint(serverPid)} — it will start v${cliVersion}.`
+      `${stopHint(serverPid, platform)} — it will start v${cliVersion}.`
     );
   }
 
@@ -108,6 +121,6 @@ export function restartRefusedError(params: {
     `  in flight      :\n${listed}${more}\n` +
     `Wait for ${count === 1 ? 'it' : 'them'} to finish (progress: http://localhost:${port}), then re-run this ` +
     `command — it will restart the server on v${cliVersion}.\n` +
-    `To abandon ${count === 1 ? 'it' : 'them'} instead, ${stopHint(serverPid)}.`
+    `To abandon ${count === 1 ? 'it' : 'them'} instead, ${stopHint(serverPid, platform)}.`
   );
 }
