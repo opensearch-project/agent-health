@@ -21,6 +21,8 @@ npm install -g @opensearch-project/agent-health   # Global install
 npx @opensearch-project/agent-health <command>    # No install required
 ```
 
+**Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+** (the `engines.node` range in `package.json`; the repo's `.nvmrc` picks 24). The CLI checks this at startup and refuses to run on anything older — including every Node 18 and 20 release, which are end-of-life and unpatched for [CVE-2026-111497](https://nvd.nist.gov/vuln/detail/CVE-2026-111497), and which also cannot load an `agent-health.config.ts` (their failure there is a confusing `Unknown file extension ".ts"`). The refusal names your version, the supported versions and how to upgrade (`nvm install 24 && nvm use 24`, or [nodejs.org](https://nodejs.org/)), and exits with code `1`; `npm` alone only *warns* about `engines`, so this is the guard that actually stops an unsupported runtime.
+
 ---
 
 ## Commands
