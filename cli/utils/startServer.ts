@@ -19,7 +19,7 @@ const __dirname = dirname(__filename);
 
 interface StartOptions {
   port: number;
-  /** Address to bind; resolved by the caller (`--host` → `HOST` → loopback). */
+  /** Address to bind; resolved by the caller (`--host` → `AH_HOST` → loopback). */
   host?: string;
   headless?: boolean;
   apiKey?: string;
@@ -41,10 +41,17 @@ function findPackageRoot(): string {
 
 const MAX_PORT_ATTEMPTS = 10;
 
+export interface StartedServer {
+  /** Port actually bound (may differ from the requested one after EADDRINUSE fallback). */
+  port: number;
+  /** Address actually bound, as reported by the OS (`server.address().address`). */
+  host: string;
+}
+
 /**
  * Start the Express server, auto-incrementing port if already in use
  */
-export async function startServer(options: StartOptions): Promise<number> {
+export async function startServer(options: StartOptions): Promise<StartedServer> {
   // Set environment variables for the server (use new AH_* names; legacy
   // AGENT_HEALTH_* names are still read by the readEnv compatibility shim).
   process.env.AH_PORT = String(options.port);
@@ -104,5 +111,7 @@ export async function startServer(options: StartOptions): Promise<number> {
   if (process.send && process.connected) {
     process.send({ type: 'agent-health:server-ready', port: actualPort }, undefined, undefined, () => {});
   }
-  return actualPort;
+  const address = server.address();
+  const actualHost = address && typeof address === 'object' ? address.address : (options.host ?? DEFAULT_BIND_HOST);
+  return { port: actualPort, host: actualHost };
 }

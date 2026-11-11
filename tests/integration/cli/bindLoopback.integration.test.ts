@@ -5,20 +5,24 @@
 
 /**
  * Real CLI processes, real sockets: every server the CLI starts binds loopback
- * only (#622), honours `HOST` / `--host` for a deliberate wider bind, warns on
- * stderr when it does, and prints the bound address.
+ * only (#622), honours `AH_HOST` / `--host` for a deliberate wider bind, warns
+ * on stderr when it does, ignores the generic `HOST` variable (with a notice),
+ * and prints the bound address.
  *
  * Covered paths:
- *   - `agent-health serve` (default bind, `HOST=0.0.0.0`, `--host` over `HOST`)
- *   - `node server/dist/index.js` (the entry point that already read `HOST`;
- *     its default moves from `0.0.0.0` to loopback so every entry point agrees)
+ *   - `agent-health serve` (default bind, `AH_HOST=0.0.0.0`, `--host` over
+ *     `AH_HOST`, inherited `HOST=0.0.0.0` ignored)
+ *   - `node server/dist/index.js` (the entry point that used to read `HOST`
+ *     with a `0.0.0.0` default; now the same loopback default as the CLI)
  *   - the server `agent-health benchmark` auto-starts (detached child) — and
- *     the CLI still reaches it.
+ *     the CLI still reaches it; with `AH_HOST=0.0.0.0` the parent CLI warns.
  *
  * "Loopback only" is asserted by actually connecting: `127.0.0.1:<port>`
  * answers `/health`; the machine's own non-loopback IPv4 address (the one a
- * LAN peer would use) is refused. A runner with no non-loopback interface
- * skips that half (noted on stdout) — the stdout address check still runs.
+ * LAN peer would use) is refused. A runner with no non-loopback interface has
+ * no LAN peer to protect against: that half is skipped locally (noted on
+ * stdout) but is mandatory under `CI`, so the guarantee is always exercised
+ * where it is enforced.
  *
  * The CLI runs from a staged package copy (`<project>/node_modules/@opensearch-project/agent-health`,
  * like detachedServerLifecycle) so `bin/cli.js` takes the production path —
@@ -216,11 +220,11 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
     }
   }
 
-  function runCli(args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
+  function runCli(args: string[], env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; status: number | null }> {
     return new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [cli, ...args], {
         cwd: project,
-        env: withCliCoverage(cleanEnv({ AH_PORT: String(port) })),
+        env: withCliCoverage(cleanEnv({ AH_PORT: String(port), ...env })),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
@@ -241,6 +245,7 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
 
   async function expectLanRefused(): Promise<void> {
     if (!lanIp) {
+      if (process.env.CI) throw new Error('CI runner has no non-loopback IPv4 interface — the LAN-refused assertion cannot be skipped in CI');
       console.log('[bindLoopback] no non-loopback IPv4 interface on this runner — skipping the LAN-refused half');
       return;
     }
@@ -280,17 +285,27 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
     }
   }, TEST_TIMEOUT);
 
+  /** Stop the server a `benchmark` case auto-started (verified ours via /health cwd before the pid was recorded). */
+  async function stopAutoStarted(): Promise<void> {
+    if (!autoStartedPid) return;
+    const pid = autoStartedPid;
+    autoStartedPid = undefined;
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+    if (!(await waitForExit(pid, 8000))) { try { process.kill(pid, 'SIGKILL'); } catch { /* noop */ } }
+    const start = Date.now();
+    while (Date.now() - start < 5000 && (await tcpConnect('127.0.0.1', port)) === 'connected') {
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+
   afterAll(async () => {
     for (const child of started) await stop(child);
-    if (autoStartedPid) {
-      try { process.kill(autoStartedPid, 'SIGTERM'); } catch { /* already gone */ }
-      if (!(await waitForExit(autoStartedPid, 8000))) { try { process.kill(autoStartedPid, 'SIGKILL'); } catch { /* noop */ } }
-    }
+    await stopAutoStarted();
     if (agentServer) await closeServer(agentServer);
     if (project) rmSync(project, { recursive: true, force: true });
   });
 
-  it('`serve` with no HOST / --host: reachable on 127.0.0.1, refused on the LAN address, bound address printed, no warning', async () => {
+  it('`serve` with no AH_HOST / --host: reachable on 127.0.0.1, refused on the LAN address, bound address printed, no warning', async () => {
     const s = serve([], {});
     try {
       await waitForHealth('127.0.0.1', port, 60_000);
@@ -304,8 +319,8 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
     }
   }, TEST_TIMEOUT);
 
-  it('`HOST=0.0.0.0 serve`: reachable on the LAN address, bound address printed, unauthenticated-API warning on stderr', async () => {
-    const s = serve([], { HOST: '0.0.0.0' });
+  it('`AH_HOST=0.0.0.0 serve`: reachable on the LAN address, bound address printed, unauthenticated-API warning on stderr', async () => {
+    const s = serve([], { AH_HOST: '0.0.0.0' });
     try {
       await waitForHealth('127.0.0.1', port, 60_000);
       if (lanIp) expect((await httpGet(lanIp, port, '/health')).status).toBe(200);
@@ -316,8 +331,22 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
     }
   }, TEST_TIMEOUT);
 
-  it('`--host` wins over HOST: `HOST=127.0.0.1 serve --host 0.0.0.0` binds all interfaces and warns', async () => {
-    const s = serve(['--host', '0.0.0.0'], { HOST: '127.0.0.1' });
+  it('an inherited generic `HOST=0.0.0.0` is ignored: still loopback only, with a notice naming AH_HOST', async () => {
+    const s = serve([], { HOST: '0.0.0.0' });
+    try {
+      await waitForHealth('127.0.0.1', port, 60_000);
+      await expectLanRefused();
+      expect(s.stdout()).toContain(`API server running on http://127.0.0.1:${port}`);
+      expect(s.stderr()).toContain('HOST=0.0.0.0 is ignored');
+      expect(s.stderr()).toContain('AH_HOST');
+      expect(s.stderr()).not.toMatch(/WARNING: listening on/);
+    } finally {
+      await stop(s.child);
+    }
+  }, TEST_TIMEOUT);
+
+  it('`--host` wins over AH_HOST: `AH_HOST=127.0.0.1 serve --host 0.0.0.0` binds all interfaces and warns', async () => {
+    const s = serve(['--host', '0.0.0.0'], { AH_HOST: '127.0.0.1' });
     try {
       await waitForHealth('127.0.0.1', port, 60_000);
       if (lanIp) expect((await httpGet(lanIp, port, '/health')).status).toBe(200);
@@ -328,11 +357,11 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
     }
   }, TEST_TIMEOUT);
 
-  it('`node server/dist/index.js` (dev / production entry point) binds loopback by default too', async () => {
+  it('`node server/dist/index.js` (dev / production entry point) binds loopback by default too — even with a generic HOST=0.0.0.0 in the env', async () => {
     const serverEntry = path.join(path.dirname(cli), '..', 'server', 'dist', 'index.js');
     const child = spawn(process.execPath, [serverEntry], {
       cwd: project,
-      env: cleanEnv({ AH_PORT: String(port), PORT: String(port) }),
+      env: cleanEnv({ AH_PORT: String(port), PORT: String(port), HOST: '0.0.0.0' }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     started.push(child);
@@ -343,6 +372,7 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
       await waitForHealth('127.0.0.1', port, 60_000);
       await expectLanRefused();
       expect(out).toContain(`Backend Server running on http://127.0.0.1:${port}`);
+      expect(out).toContain('HOST=0.0.0.0 is ignored');
     } finally {
       await stop(child);
     }
@@ -363,5 +393,22 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
     autoStartedPid = health.body.instance?.pid;      // stopped in afterAll even if an assertion below fails
     expect(typeof autoStartedPid).toBe('number');
     await expectLanRefused();
+    expect(cli.stderr).not.toMatch(/WARNING: listening on/);
+  }, TEST_TIMEOUT);
+
+  it('`AH_HOST=0.0.0.0 benchmark` auto-start: the parent CLI itself prints the unauthenticated-API warning (the child only has a log file)', async () => {
+    await stopAutoStarted();
+    expect(await tcpConnect('127.0.0.1', port)).toBe('ECONNREFUSED');
+
+    const cli = await runCli(['benchmark', '-f', 'evals/one.eval.js', '-a', 'stub', '-n', 'bind-wide'], { AH_HOST: '0.0.0.0' });
+    expect(cli.stderr).toContain(`Started server on port ${port}`);
+    expect(cli.stderr).toMatch(/\[ServerLifecycle\] WARNING: listening on 0\.0\.0\.0 .*unauthenticated/);
+    expect(cli.status).toBe(0);
+
+    const health = await httpGet<{ instance?: { pid?: number; cwd?: string } }>('127.0.0.1', port, '/health');
+    expect(health.body.instance?.cwd).toBe(project);
+    autoStartedPid = health.body.instance?.pid;
+    expect(typeof autoStartedPid).toBe('number');
+    if (lanIp) expect((await httpGet(lanIp, port, '/health')).status).toBe(200);
   }, TEST_TIMEOUT);
 });

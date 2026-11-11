@@ -14,9 +14,11 @@
  * requires ≥22), and a client that dials `127.0.0.1` explicitly (Playwright,
  * the integration suites, reverse proxies) bypasses the resolver entirely.
  * The CLI keeps dialing `localhost` on purpose: the printed links share the
- * browser origin (localStorage prefs, theme) with the auto-opened UI. The host's resolver cannot be reconfigured from a test,
- * so the `::1`-first ordering is injected through Node's standard `lookup`
- * option — the socket, connect and fallback paths are the real ones.
+ * browser origin (localStorage prefs, theme) with the auto-opened UI.
+ *
+ * The host's resolver cannot be reconfigured from a test, so the `::1`-first
+ * ordering is injected through Node's standard `lookup` option — the socket,
+ * connect and fallback paths are the real ones.
  */
 
 import { createServer, get as httpGet, type Server } from 'http';
@@ -24,30 +26,55 @@ import { connect as netConnect } from 'net';
 import {
   DEFAULT_BIND_HOST,
   bindUrl,
+  hostEnvIgnoredNotice,
   isLoopbackHost,
   nonLoopbackBindWarning,
   resolveBindHost,
 } from '../../../lib/bindHost';
 
 describe('resolveBindHost', () => {
-  it('defaults to loopback when neither --host nor HOST is set', () => {
+  it('defaults to loopback when neither --host nor AH_HOST is set', () => {
     expect(resolveBindHost(undefined, {})).toBe('127.0.0.1');
     expect(DEFAULT_BIND_HOST).toBe('127.0.0.1');
   });
 
-  it('honours HOST from the environment', () => {
-    expect(resolveBindHost(undefined, { HOST: '0.0.0.0' })).toBe('0.0.0.0');
-    expect(resolveBindHost(undefined, { HOST: ' :: ' })).toBe('::');
+  it('honours AH_HOST from the environment', () => {
+    expect(resolveBindHost(undefined, { AH_HOST: '0.0.0.0' })).toBe('0.0.0.0');
+    expect(resolveBindHost(undefined, { AH_HOST: ' :: ' })).toBe('::');
   });
 
-  it('treats a blank HOST as unset', () => {
-    expect(resolveBindHost(undefined, { HOST: '' })).toBe('127.0.0.1');
-    expect(resolveBindHost(undefined, { HOST: '   ' })).toBe('127.0.0.1');
+  it('treats a blank AH_HOST as unset', () => {
+    expect(resolveBindHost(undefined, { AH_HOST: '' })).toBe('127.0.0.1');
+    expect(resolveBindHost(undefined, { AH_HOST: '   ' })).toBe('127.0.0.1');
   });
 
-  it('lets --host override HOST', () => {
-    expect(resolveBindHost('10.0.0.5', { HOST: '0.0.0.0' })).toBe('10.0.0.5');
-    expect(resolveBindHost('  ', { HOST: '0.0.0.0' })).toBe('0.0.0.0');
+  it('lets --host override AH_HOST', () => {
+    expect(resolveBindHost('10.0.0.5', { AH_HOST: '0.0.0.0' })).toBe('10.0.0.5');
+    expect(resolveBindHost('  ', { AH_HOST: '0.0.0.0' })).toBe('0.0.0.0');
+  });
+
+  it('ignores the generic HOST variable — an inherited HOST=0.0.0.0 must not widen the bind', () => {
+    expect(resolveBindHost(undefined, { HOST: '0.0.0.0' })).toBe('127.0.0.1');
+    expect(resolveBindHost(undefined, { HOST: 'ci-runner-42' })).toBe('127.0.0.1');
+    expect(resolveBindHost(undefined, { HOST: '0.0.0.0', AH_HOST: '::' })).toBe('::');
+  });
+});
+
+describe('hostEnvIgnoredNotice', () => {
+  it('names the ignored non-loopback HOST and the variables that do work', () => {
+    const notice = hostEnvIgnoredNotice(undefined, { HOST: '0.0.0.0' });
+    expect(notice).toContain('HOST=0.0.0.0 is ignored');
+    expect(notice).toContain('AH_HOST');
+    expect(notice).toContain('--host');
+    expect(notice).toContain('127.0.0.1');
+  });
+
+  it('is silent when HOST is unset, blank, loopback, or the bind was set explicitly', () => {
+    expect(hostEnvIgnoredNotice(undefined, {})).toBeUndefined();
+    expect(hostEnvIgnoredNotice(undefined, { HOST: '  ' })).toBeUndefined();
+    expect(hostEnvIgnoredNotice(undefined, { HOST: '127.0.0.1' })).toBeUndefined();
+    expect(hostEnvIgnoredNotice(undefined, { HOST: '0.0.0.0', AH_HOST: '0.0.0.0' })).toBeUndefined();
+    expect(hostEnvIgnoredNotice('0.0.0.0', { HOST: '0.0.0.0' })).toBeUndefined();
   });
 });
 

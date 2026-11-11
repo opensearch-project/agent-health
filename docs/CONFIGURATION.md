@@ -413,7 +413,7 @@ Debug logging can also be toggled at runtime via the Settings page "Verbose Logg
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VITE_BACKEND_PORT` | Backend server port | `4001` |
-| `HOST` | Address the server binds (every entry point: `serve`, the auto-started server, `node server/dist/index.js`; `serve --host` overrides it). The API is unauthenticated, so a non-loopback value such as `0.0.0.0` prints a warning — set it only when other machines must reach the server (e.g. `agent-health remote`) | `127.0.0.1` |
+| `AH_HOST` | Address the server binds (every entry point: `serve`, the auto-started server, `node server/dist/index.js`; `serve --host` overrides it). The API is unauthenticated, so a non-loopback value such as `0.0.0.0` prints a warning — set it only when other machines must reach the server and an SSH tunnel is not an option (see [CLI → serve](CLI.md#serve-default)). The generic `HOST` variable is ignored (a notice is printed when a non-loopback one is present) | `127.0.0.1` |
 | `AGENT_HEALTH_EVAL_ROOTS` | Path-delimiter-separated directories a relative code-SDK `sourceFile` is resolved against (see [`evalRoots`](#where-the-server-looks-for-eval-source-files-evalroots)) | server cwd |
 | `BEDROCK_MODEL_ID` | Judge model ID | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 | `CASE_SUMMARY_ENABLED` | Set to `false` to never send case data (prompt, answer, judge reasoning) to the summary model behind the run inspector's TL;DR card; the card then shows a deterministic field-based summary | `true` |

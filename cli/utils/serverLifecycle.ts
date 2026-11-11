@@ -21,6 +21,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import type { ResolvedServerConfig } from '@/lib/config/types.js';
 import { decideServerOwnership, foreignServerError } from './serverOwnership.js';
+import { nonLoopbackBindWarning, resolveBindHost } from '../../lib/bindHost.js';
 import {
   decideVersionMismatchRestart,
   parseActiveRuns,
@@ -284,6 +285,10 @@ export async function startServer(
   const cliPath = join(__dirname, '..', '..', 'bin', 'cli.js');
   const { logPath, logFd } = openServerLog(port);
   lifecycleNotice(`Server log: ${logPath}`);
+  // The child inherits AH_HOST and warns in its own (file) log; say it here
+  // too, where the user running `benchmark` / `run` actually looks.
+  const bindWarning = nonLoopbackBindWarning(resolveBindHost(undefined, process.env));
+  if (bindWarning) lifecycleNotice(bindWarning);
   let child: ChildProcess;
   try {
     child = spawn(process.execPath, [cliPath, 'serve', '-p', String(port), '--no-browser'], {
