@@ -382,16 +382,17 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
     expect(await tcpConnect('127.0.0.1', port)).toBe('ECONNREFUSED'); // nothing on the port yet
 
     const cli = await runCli(['benchmark', '-f', 'evals/one.eval.js', '-a', 'stub', '-n', 'bind-loopback']);
-    expect(cli.stderr).toContain(`Started server on port ${port}`); // spinner line: auto-start, not reuse
-    expect(cli.stdout).toContain('✓ Passed: 1');
-    expect(cli.status).toBe(0);
-
-    // The auto-started server is detached and outlives the CLI: inspect its bind now.
+    // The auto-started server is detached and outlives the CLI. Record its pid
+    // FIRST so afterAll stops it even if an assertion below fails.
     const health = await httpGet<{ instance?: { pid?: number; cwd?: string } }>('127.0.0.1', port, '/health');
     expect(health.status).toBe(200);
     expect(health.body.instance?.cwd).toBe(project); // ours, not a foreign server on the port
-    autoStartedPid = health.body.instance?.pid;      // stopped in afterAll even if an assertion below fails
+    autoStartedPid = health.body.instance?.pid;
     expect(typeof autoStartedPid).toBe('number');
+
+    expect(cli.stderr).toContain(`Started server on port ${port}`); // spinner line: auto-start, not reuse
+    expect(cli.stdout).toContain('✓ Passed: 1');
+    expect(cli.status).toBe(0);
     await expectLanRefused();
     expect(cli.stderr).not.toMatch(/WARNING: listening on/);
   }, TEST_TIMEOUT);
@@ -401,14 +402,14 @@ describe('CLI-started servers bind loopback by default (#622) — real `serve` a
     expect(await tcpConnect('127.0.0.1', port)).toBe('ECONNREFUSED');
 
     const cli = await runCli(['benchmark', '-f', 'evals/one.eval.js', '-a', 'stub', '-n', 'bind-wide'], { AH_HOST: '0.0.0.0' });
+    const health = await httpGet<{ instance?: { pid?: number; cwd?: string } }>('127.0.0.1', port, '/health');
+    expect(health.body.instance?.cwd).toBe(project);
+    autoStartedPid = health.body.instance?.pid;      // recorded before any assertion can fail
+    expect(typeof autoStartedPid).toBe('number');
+
     expect(cli.stderr).toContain(`Started server on port ${port}`);
     expect(cli.stderr).toMatch(/\[ServerLifecycle\] WARNING: listening on 0\.0\.0\.0 .*unauthenticated/);
     expect(cli.status).toBe(0);
-
-    const health = await httpGet<{ instance?: { pid?: number; cwd?: string } }>('127.0.0.1', port, '/health');
-    expect(health.body.instance?.cwd).toBe(project);
-    autoStartedPid = health.body.instance?.pid;
-    expect(typeof autoStartedPid).toBe('number');
     if (lanIp) expect((await httpGet(lanIp, port, '/health')).status).toBe(200);
   }, TEST_TIMEOUT);
 });
