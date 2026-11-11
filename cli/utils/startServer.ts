@@ -12,12 +12,15 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import type { Server } from 'http';
+import { DEFAULT_BIND_HOST } from '../../lib/bindHost.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 interface StartOptions {
   port: number;
+  /** Address to bind; resolved by the caller (`--host` → `HOST` → loopback). */
+  host?: string;
   headless?: boolean;
   apiKey?: string;
 }
@@ -56,7 +59,7 @@ export async function startServer(options: StartOptions): Promise<number> {
 
   const tryListen = (port: number): Promise<{ server: Server; port: number }> => {
     return new Promise((resolve, reject) => {
-      const server: Server = app.listen(port, '0.0.0.0');
+      const server: Server = app.listen(port, options.host ?? DEFAULT_BIND_HOST);
 
       server.on('listening', () => {
         resolve({ server, port });

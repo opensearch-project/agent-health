@@ -101,7 +101,8 @@ The port retry logic uses a recursive `tryListen()` pattern in both `server/inde
 ```typescript
 const tryListen = (port: number): Promise<number> => {
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, '0.0.0.0');
+    // host: `--host` → `HOST` → '127.0.0.1' (lib/bindHost.ts); the API is unauthenticated
+    const server = app.listen(port, host);
     server.on('listening', () => resolve(port));
     server.on('error', (err: NodeJS.ErrnoException) => {
       server.close();
