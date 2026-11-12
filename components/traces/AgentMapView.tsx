@@ -51,6 +51,8 @@ const minimapNodeColor = (node: Node): string => {
       return '#a855f7'; // purple
     case 'TOOL':
       return '#f59e0b'; // amber
+    case 'RETRIEVAL':
+      return '#06b6d4'; // cyan
     case 'EVAL':
       return '#10b981'; // emerald
     case 'ERROR':
