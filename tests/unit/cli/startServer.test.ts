@@ -45,10 +45,9 @@ describe('startServer module', () => {
   });
 
   describe('server startup', () => {
-    it('should listen on 0.0.0.0 for external access', () => {
-      const expectedHost = '0.0.0.0';
-      expect(expectedHost).toBe('0.0.0.0');
-    });
+    // Bind address (loopback by default, `--host` / `HOST` to widen) is covered
+    // by tests/unit/lib/bindHost.test.ts and, with real `serve` processes, by
+    // tests/integration/cli/bindLoopback.integration.test.ts.
 
     it('should return a Promise that resolves with the actual port', () => {
       const promiseResult = Promise.resolve(4001);

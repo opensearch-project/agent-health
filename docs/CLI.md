@@ -35,14 +35,37 @@ agent-health [serve] [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-p, --port <n>` | Server port | `4001` |
+| `-p, --port <n>` | Server port (or `AH_PORT`) | `4001` |
+| `--host <address>` | Address to bind (or `AH_HOST`) | `127.0.0.1` |
 | `-e, --env-file <path>` | Load env file | `.env` |
 | `--no-browser` | Skip auto-open browser | - |
+| `--headless` | API only, no frontend, no browser | - |
+| `--api-key <key>` | Require an API key on the coding-agents endpoints | - |
 
 ```bash
 agent-health --port 8080 --env-file prod.env
 agent-health serve -p 8080 --no-browser
 ```
+
+**Bind address.** Every server the CLI starts — `serve` and the one
+`benchmark` / `run` start for you — listens on loopback (`127.0.0.1`) only:
+the HTTP API has no authentication apart from the coding-agents endpoints
+(`--api-key`), and a run invokes your agents and the Bedrock judge with this
+machine's credentials. Bind wider only on purpose, with `--host` or `AH_HOST`
+(`--host` wins); the server then prints a warning on stderr and the "server
+running" line shows the bound address. The generic `HOST` variable is
+ignored (many tools read it as their bind address, so it is often exported
+for unrelated reasons); a non-loopback `HOST` in the environment prints a
+notice saying so.
+
+```bash
+agent-health serve --host 0.0.0.0           # reachable from other machines — warns
+AH_HOST=0.0.0.0 agent-health benchmark …    # the auto-started server honours AH_HOST too; the CLI warns
+```
+
+To reach a loopback-bound server from another machine without exposing it,
+forward the port over SSH instead: `ssh -L 4001:127.0.0.1:4001 <machine>`,
+then open `http://localhost:4001` locally.
 
 ---
 
@@ -360,6 +383,15 @@ Analytics aggregation).
 ```
 agent-health remote <add|remove|list|test>
 ```
+
+A remote server is reached over the network. Prefer keeping it on loopback
+and tunnelling to it — `ssh -L 4002:127.0.0.1:4001 <machine>` and then
+`agent-health remote add … http://localhost:4002` — or put an authenticating
+reverse proxy in front of it. If the machine must listen on the network
+directly (`agent-health serve --host 0.0.0.0` or `AH_HOST=0.0.0.0`; see
+[serve](#serve-default)), its API is reachable by anyone on that network:
+restrict it to a private/VPN interface where you can, and protect the
+coding-agents endpoints with `--api-key`.
 
 | Subcommand | Description |
 |-----------|-------------|

@@ -15,6 +15,7 @@ import { createApp, installAppShutdown } from './app.js';
 import { getStorageConfigFromFile, getObservabilityConfigFromFile, getStorageConfigFromTs, getObservabilityConfigFromTs } from './services/configService.js';
 import { findObservioRoot, spawnObservioAgent, OBSERVIO_DEFAULT_PORT, resetObservioPort, isPortFree, setObservioPort, waitForObservioReady, killObservioAgent } from './services/observioAgent.js';
 import { validateAwsCredentials } from './services/tracesService.js';
+import { bindUrl, hostEnvIgnoredNotice, nonLoopbackBindWarning, resolveBindHost } from '../lib/bindHost.js';
 import { resumePendingTracePollsSafely } from './services/traceRecoveryOnBoot.js';
 import { recoverOrphanBenchmarkRunsSafely } from './services/benchmarkRunRecoveryOnBoot.js';
 import { getStorageModule } from './adapters/index.js';
@@ -138,7 +139,9 @@ async function startServer() {
 
   const tryListen = (port: number): Promise<void> => {
     return new Promise((resolve, reject) => {
-      const host = process.env.HOST || '0.0.0.0';
+      // Loopback by default: the API is unauthenticated and runs agents with
+      // this machine's credentials. `AH_HOST` widens the bind on purpose.
+      const host = resolveBindHost(undefined, process.env);
       const server = app.listen(port, host);
 
       server.on('listening', () => {
@@ -149,7 +152,13 @@ async function startServer() {
         // requested port — which may be a foreign instance such as the live
         // demo. See AGENTS.md → server lifecycle.
         process.env.AH_PORT = String(port);
-        console.log(`\n  Backend Server running on http://${host}:${port}`);
+        const address = server.address();
+        const boundHost = address && typeof address === 'object' ? address.address : host;
+        const ignored = hostEnvIgnoredNotice(undefined, process.env);
+        if (ignored) console.warn(`\n  ${ignored}`);
+        const bindWarning = nonLoopbackBindWarning(boundHost);
+        if (bindWarning) console.warn(`\n  ⚠️  ${bindWarning}`);
+        console.log(`\n  Backend Server running on ${bindUrl(boundHost, port)}`);
         console.log(`   Health check: http://localhost:${port}/health`);
         console.log(`   AWS Region: ${process.env.AWS_REGION || 'us-west-2'}`);
         console.log(`   Bedrock Model: ${process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'}`);

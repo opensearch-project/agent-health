@@ -19,6 +19,7 @@ import open from 'open';
 import ora from 'ora';
 import { startServer } from './utils/startServer.js';
 import { readEnv } from '../lib/envCompat.js';
+import { bindUrl, hostEnvIgnoredNotice, nonLoopbackBindWarning, resolveBindHost } from '../lib/bindHost.js';
 import {
   createListCommand,
   createRunCommand,
@@ -74,6 +75,14 @@ function loadEnvFile(envPath: string): void {
   }
 
   console.log(chalk.gray(`  Loaded environment from: ${envPath}`));
+}
+
+/** A non-loopback bind is never silent: the API has no authentication. */
+function printBindNotices(requestedHost: string | undefined, boundHost: string): void {
+  const ignored = hostEnvIgnoredNotice(requestedHost);
+  if (ignored) console.warn(chalk.gray(`\n  ${ignored}`));
+  const warning = nonLoopbackBindWarning(boundHost);
+  if (warning) console.warn(chalk.yellow(`\n  ${warning}`));
 }
 
 // Auto-load .env file BEFORE parsing commands (so all subcommands get env vars)
@@ -182,6 +191,7 @@ ${chalk.cyan.bold('Examples:')}
 // CLI options for default action (when no subcommand is specified)
 program
   .option('-p, --port <number>', 'Server port (or set AH_PORT env var)', readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001')
+  .option('--host <address>', 'Address to bind (or set AH_HOST). Default: 127.0.0.1 (loopback only); the API is unauthenticated, so bind wider only on purpose')
   .option('-e, --env-file <path>', 'Load environment variables from file (e.g., .env)')
   .option('--no-browser', 'Do not open browser automatically')
   .option('--headless', 'Run API server only (no frontend, no browser)')
@@ -215,19 +225,21 @@ program.action(async (options) => {
   }
 
   const port = parseInt(options.port, 10);
+  const host = resolveBindHost(options.host);
   const headless = options.headless || false;
   const spinner = ora(headless ? 'Starting headless API server...' : 'Starting server...').start();
 
   try {
-    const actualPort = await startServer({ port, headless, apiKey: options.apiKey });
+    const { port: actualPort, host: boundHost } = await startServer({ port, host, headless, apiKey: options.apiKey });
     spinner.succeed(headless ? 'Headless API server started' : 'Server started');
 
     if (actualPort !== port) {
       console.log(chalk.yellow(`\n  Port ${port} was in use, started on port ${actualPort} instead`));
     }
+    printBindNotices(options.host, boundHost);
 
     if (headless) {
-      console.log(chalk.green(`\n  API server running on http://0.0.0.0:${actualPort}`));
+      console.log(chalk.green(`\n  API server running on ${bindUrl(boundHost, actualPort)}`));
       if (options.apiKey) console.log(chalk.gray('  API key authentication enabled'));
       console.log(chalk.gray('  Mode: headless (API only, no frontend)\n'));
     } else {
@@ -237,7 +249,7 @@ program.action(async (options) => {
       console.log(chalk.gray(`    Judge: Select in UI (Demo Judge for mock, Bedrock requires AWS creds)\n`));
 
       const url = `http://localhost:${actualPort}`;
-      console.log(chalk.green(`  Server running at ${chalk.bold(url)}\n`));
+      console.log(chalk.green(`  Server running at ${chalk.bold(url)} (bound to ${boundHost})\n`));
       console.log(chalk.green(`  Demo data loaded`));
 
       if (options.browser !== false) {
@@ -280,6 +292,7 @@ program
   .command('serve')
   .description('Start the Agent Health server (same as default action)')
   .option('-p, --port <number>', 'Server port (or set AH_PORT env var)', readEnv('AH_PORT', 'AGENT_HEALTH_PORT') || '4001')
+  .option('--host <address>', 'Address to bind (or set AH_HOST). Default: 127.0.0.1 (loopback only); the API is unauthenticated, so bind wider only on purpose')
   .option('--no-browser', 'Do not open browser automatically')
   .option('--headless', 'Run API server only (no frontend, no browser)')
   .option('--api-key <key>', 'Require API key for coding-agents endpoints')
@@ -296,24 +309,26 @@ program
     }
 
     const port = parseInt(options.port, 10);
+    const host = resolveBindHost(options.host);
     const headless = options.headless || false;
     const spinner = ora(headless ? 'Starting headless API server...' : 'Starting server...').start();
 
     try {
-      const actualPort = await startServer({ port, headless, apiKey: options.apiKey });
+      const { port: actualPort, host: boundHost } = await startServer({ port, host, headless, apiKey: options.apiKey });
       spinner.succeed(headless ? 'Headless API server started' : 'Server started');
 
       if (actualPort !== port) {
         console.log(chalk.yellow(`\n  Port ${port} was in use, started on port ${actualPort} instead`));
       }
+      printBindNotices(options.host, boundHost);
 
       const url = `http://localhost:${actualPort}`;
       if (headless) {
-        console.log(chalk.green(`  API server running on http://0.0.0.0:${actualPort}`));
+        console.log(chalk.green(`  API server running on ${bindUrl(boundHost, actualPort)}`));
         if (options.apiKey) console.log(chalk.gray('  API key authentication enabled'));
         console.log(chalk.gray('  Mode: headless (API only, no frontend)\n'));
       } else {
-        console.log(chalk.green(`  Server running at ${chalk.bold(url)}\n`));
+        console.log(chalk.green(`  Server running at ${chalk.bold(url)} (bound to ${boundHost})\n`));
 
         if (options.browser !== false) {
           console.log(chalk.gray('  Opening browser...'));

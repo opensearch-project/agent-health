@@ -20,7 +20,8 @@ const router = Router();
 const STARTED_AT = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString();
 
 // The instance block carries absolute cwd + pid, which are sensitive when the
-// server binds 0.0.0.0 and /health is reachable off-host. Only expose it to
+// server binds a non-loopback address (`--host` / `AH_HOST`, see lib/bindHost.ts)
+// and /health is reachable off-host. Only expose it to
 // loopback peers — the CLI ownership check always dials over localhost, so it
 // keeps working; remote callers (e.g. the browser in prod) get status/features
 // only. Uses the real socket address, not a spoofable X-Forwarded-For header.
