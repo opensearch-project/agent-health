@@ -62,13 +62,16 @@ test.describe('Eval Span Category Capsule', () => {
       return;
     }
 
-    // Click the first visible span row inside the inline tree.
-    const treeRows = tree.locator('> div > div');
-    const rowCount = await treeRows.count();
+    // Click the first span's name inside the inline tree. The tree now
+    // renders a list header (`trace-list-header`: sort hint + t=0 anchor)
+    // as its first child, so the first `> div > div` is no longer a span
+    // row; the name button is the row's explicit "open details" affordance.
+    const spanNames = tree.locator('[data-testid="span-row-name"]');
+    const rowCount = await spanNames.count();
     if (rowCount < 1) {
       return;
     }
-    await treeRows.first().click();
+    await spanNames.first().click();
     await page.waitForTimeout(800);
 
     // The bottom drawer (Sheet side="bottom") should be open with the

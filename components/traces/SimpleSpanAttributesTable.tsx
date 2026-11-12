@@ -18,7 +18,11 @@ import React, { useMemo, useState } from 'react';
 import { Span } from '@/types';
 import { formatDuration } from '@/services/traces/utils';
 import { Input } from '@/components/ui/input';
-import { Search, Copy, Check } from 'lucide-react';
+import { Search, Copy, Check, Database } from 'lucide-react';
+import { isDbSpan } from '@/services/traces/spanCategorization';
+import { extractRetrievalIO } from '@/services/traces/retrievalSpan';
+import { formatClockTime, formatIsoTime } from '@/services/traces/spanTime';
+import RetrievedReturnedLists from './RetrievedReturnedLists';
 
 interface SimpleSpanAttributesTableProps {
   span: Span;
@@ -71,6 +75,12 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
     () => new Date(span.endTime).getTime() - new Date(span.startTime).getTime(),
     [span]
   );
+
+  // Retrieval (OTel DB semconv) spans get a one-line summary in the identity
+  // strip — `{operation} {collection} ({system}) · N rows` — so the query
+  // target and result size are visible without scanning the table. The
+  // query text itself stays in the table (db.query.text, pretty-printed).
+  const retrieval = useMemo(() => (isDbSpan(span) ? extractRetrievalIO(span) : null), [span]);
 
   // Flat sorted list of attribute entries. Sort alphabetically so users
   // can scan predictably; this is the "simple table" the user asked for.
@@ -133,16 +143,46 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
           positioned close (X) button rendered by the parent drawer so
           it doesn't visually overlap the trailing "N attributes" text. */}
       <div className="flex items-center justify-between gap-3 pl-3 pr-10 py-2 border-b bg-muted/30 text-[11px] flex-wrap">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="font-medium truncate" title={span.name}>{span.name}</span>
+        <div className="flex items-center gap-2 min-w-0 flex-wrap">
+          {/* Full span name — never truncated here: the row it was opened
+              from may have had to ellipsize a long `execute_tool <name>`,
+              and the drawer is where the reader comes for the whole thing. */}
+          <span className="font-medium break-words" title={span.name} data-testid="span-drawer-name">{span.name}</span>
           <span className="text-muted-foreground">·</span>
           <span className="font-mono text-muted-foreground" title={span.spanId}>
             {span.spanId.slice(0, 12)}…
           </span>
           <span className="text-muted-foreground">·</span>
+          <span
+            className="font-mono text-muted-foreground"
+            title={`Started ${formatIsoTime(span.startTime)} (local ${formatClockTime(span.startTime)})`}
+            data-testid="span-drawer-start"
+          >
+            {formatClockTime(span.startTime)}
+          </span>
+          <span className="text-muted-foreground">·</span>
           <span className="font-mono text-amber-700 dark:text-amber-400">
             {formatDuration(duration)}
           </span>
+          {retrieval && (
+            <>
+              <span className="text-muted-foreground">·</span>
+              <span
+                className="inline-flex items-center gap-1 font-mono text-cyan-700 dark:text-cyan-300"
+                data-testid="span-retrieval-summary"
+                title="OTel DB semconv span (RETRIEVAL)"
+              >
+                <Database size={11} className="shrink-0" />
+                {retrieval.caption && <span>{retrieval.caption}</span>}
+                {retrieval.returnedRows !== null && (
+                  <span className="text-muted-foreground">
+                    · {retrieval.returnedRows} row{retrieval.returnedRows === 1 ? '' : 's'}
+                  </span>
+                )}
+                {retrieval.statusCode && <span className="text-muted-foreground">· {retrieval.statusCode}</span>}
+              </span>
+            </>
+          )}
           {span.status && span.status !== 'UNSET' && (
             <>
               <span className="text-muted-foreground">·</span>
@@ -200,9 +240,14 @@ const SimpleSpanAttributesTable: React.FC<SimpleSpanAttributesTableProps> = ({ s
         </div>
       </div>
 
-      {/* Plain attributes table. Two columns: key, value. Long values wrap
-          and use a monospace font so JSON / IDs stay readable. */}
+      {/* Retrieved vs returned id lists (labelled pair) — only renders when
+          the span carries either key family. Sits above the flat table so
+          the reader sees "seen" and "returned" side by side before the raw
+          attributes, where the two lists look identical. */}
       <div className="flex-1 overflow-auto">
+        <RetrievedReturnedLists span={span} compact className="px-3 py-2 border-b bg-background" />
+        {/* Plain attributes table. Two columns: key, value. Long values wrap
+            and use a monospace font so JSON / IDs stay readable. */}
         {filtered.length === 0 ? (
           <div className="px-3 py-6 text-center text-[11px] text-muted-foreground">
             {entries.length === 0
