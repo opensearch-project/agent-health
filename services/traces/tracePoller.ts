@@ -361,12 +361,10 @@ class TracePollingManager {
 
       // Try to fetch traces — union of Strategy A (eval traceId), B (runId),
       // C (service.name + time window) and D (session.id inside the window hint).
-      const result = await (state.tracesClient?.fetchTracesForRun ?? fetchTracesForRun)({
-        runId: state.runId,
-        evalTraceId,
-        windowAgents,
-        includeWindowFallback: windowAgents.length > 0,
-      });
+      const traceQuery = { runId: state.runId, evalTraceId, windowAgents, includeWindowFallback: windowAgents.length > 0 };
+      const result = state.tracesClient
+        ? await state.tracesClient.fetchTracesForRun(traceQuery)
+        : await fetchTracesForRun(traceQuery);
 
       // EXACT-MATCH FILTER (fail-closed): the window clause (Strategy C) is a
       // discovery fallback and can return spans from CONCURRENT runs of the

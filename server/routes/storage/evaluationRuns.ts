@@ -555,9 +555,6 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
     const overrides = req.body && Object.keys(req.body).length > 0 ? req.body : undefined;
     const nameOverride: string | undefined = typeof overrides?.name === 'string' && overrides.name.trim() ? overrides.name.trim() : undefined;
 
-    // Same per-run re-read of `.env` + config as the create route (#612).
-    const refreshed = await refreshRunEnvironment();
-
     const sourceRun = await storage.evaluationRuns.getById(id);
     if (!sourceRun) {
       return res.status(404).json({ error: 'Evaluation run not found' });
@@ -595,6 +592,11 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
     }
     const { defaultsApplied } = built;
     const { config, modified } = applyRerunOverrides(built.config, overrides);
+
+    // Same per-run re-read of `.env` + config as the create route (#612) —
+    // after the request itself has been validated, so a 404/400/409 about the
+    // source run is never masked by a config that fails to load.
+    const refreshed = await refreshRunEnvironment();
 
     // Resolve sources up front (same as the create route) so a stale/removed
     // benchmark, deleted test case, or missing import file surfaces as a

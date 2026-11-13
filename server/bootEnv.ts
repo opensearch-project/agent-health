@@ -16,8 +16,9 @@
  * import, is what actually guarantees snapshot-then-dotenv.
  */
 
-import { config as loadDotenv } from 'dotenv';
 import { captureShellEnvSnapshot } from '../lib/config/envReload.js';
 
 captureShellEnvSnapshot();
-loadDotenv();
+// Dynamic so it is evaluated HERE (after the snapshot) while keeping the exact
+// `dotenv/config` semantics (DOTENV_CONFIG_* env vars, `dotenv_config_*` argv).
+await import('dotenv/config');

@@ -209,6 +209,19 @@ describe.each([
     expect((await h.storage.evaluationRuns.getById('run-1'))?.results['tc-1']?.status).toBe('completed');
   });
 
+  it('a report written under one run/case cannot be merged or patched under another', async () => {
+    await h.sink.createRun(makeRun('run-1'));
+    await h.sink.createRun(makeRun('run-2'));
+    const reportId = mintReportId();
+    await h.sink.upsertCaseReport({ runId: 'run-1', testCaseId: 'tc-1', attempt: 1, reportId, report: { status: 'running', testCaseId: 'tc-1', experimentRunId: 'run-1' } as any });
+    await expect(h.sink.upsertCaseReport({ runId: 'run-2', testCaseId: 'tc-1', attempt: 1, reportId, report: { status: 'completed' } as any }))
+      .rejects.toThrow(/belongs to run run-1/);
+    await expect(h.sink.upsertCaseReport({ runId: 'run-1', testCaseId: 'tc-2', attempt: 1, reportId, report: { status: 'completed' } as any }))
+      .rejects.toThrow(/belongs to test case tc-1/);
+    await expect(h.sink.patchCaseReport('run-2', reportId, { status: 'failed' } as any)).rejects.toThrow(/belongs to run run-1/);
+    expect((await h.storage.runs.getById(reportId))?.status).toBe('running');
+  });
+
   it('finalize of an unknown run rejects with a not-found error', async () => {
     await h.sink.createRun(makeRun('run-1'));
     await expect(h.sink.finalize('run-does-not-exist', { status: 'completed', completedRun: { results: {}, testCaseSnapshots: [] } }))
@@ -241,6 +254,15 @@ describe('HttpRunSink specifics', () => {
 
   it('surfaces server validation errors with their HTTP status', async () => {
     await h.sink.createRun(makeRun('run-1'));
+    // Body/URL consistency and enums are checked before anything is written.
+    await expect(h.sink.upsertCaseReport({ runId: 'run-1', testCaseId: 'tc-1', attempt: 1, reportId: mintReportId(), report: { testCaseId: 'tc-other' } as any }))
+      .rejects.toMatchObject({ status: 400, message: /testCaseId/ });
+    await expect(h.sink.upsertCaseReport({ runId: 'run-1', testCaseId: 'tc-1', attempt: 1, reportId: mintReportId(), report: { experimentRunId: 'run-other' } as any }))
+      .rejects.toMatchObject({ status: 400, message: /experimentRunId/ });
+    await expect(h.sink.upsertCaseReport({ runId: 'run-1', testCaseId: 'tc-1', attempt: 0, reportId: mintReportId(), report: {} }))
+      .rejects.toMatchObject({ status: 400, message: /attempt/ });
+    await expect(h.sink.setCaseResult('run-1', 'tc-1', { reportId: 'r', status: 'bogus' } as any))
+      .rejects.toMatchObject({ status: 400, message: /status must be one of/ });
     await expect((h.sink as HttpRunSink).finalize('run-1', { status: 'bogus' } as any)).rejects.toMatchObject({ status: 400 } as Partial<HttpRunSinkError>);
     await expect(h.sink.upsertCaseReport({ runId: 'run-1', testCaseId: 'tc-1', attempt: 1, reportId: '', report: {} })).rejects.toMatchObject({ status: 400 });
   });

@@ -115,7 +115,8 @@ export async function fetchSpansForRun(
   const maxAttempts = Math.max(1, Math.min(requestedMax, SDK_TRACE_POLL_CEILING));
   const intervalMs = Math.max(0, options.intervalMs ?? SDK_DEFAULT_POLL_INTERVAL_MS);
   const windowAgents = options.windowAgents?.length ? options.windowAgents : undefined;
-  const fetchTraces = options.tracesClient?.fetchTracesForRun ?? fetchTracesForRun;
+  const client = options.tracesClient;
+  const fetchTraces = client ? (p: Parameters<typeof fetchTracesForRun>[0]) => client.fetchTracesForRun(p) : fetchTracesForRun;
   const label = runId ?? `service:${windowAgents?.map(a => a.serviceName).join(',') ?? 'none'}`;
 
   let lastError: string | undefined;

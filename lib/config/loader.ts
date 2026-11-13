@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { createHash } from 'crypto';
-import { resolve, join } from 'path';
+import { resolve, join, dirname } from 'path';
 import { projectStatePath, userStatePath } from './statePaths.js';
 import { logStartupDiagnostic } from '@/lib/diagnostics';
 import { pathToFileURL } from 'url';
@@ -207,7 +207,8 @@ function mergeConfigs(
  * @param reload - Re-evaluate the file even if this process already imported
  *   it. Node caches ES modules by URL for the life of the process, so a plain
  *   re-import of an edited `agent-health.config.ts` returns the OLD module;
- *   a query string keyed on the file's content hash makes an edited file a
+ *   a query string keyed on the content hash of the file (and of `.env`
+ *   next to it, which the file may read at import) makes an edited file a
  *   new URL (and an unchanged file the same, cached one — so the cache grows
  *   by one module graph per distinct config version, not per run).
  *   Limitation: only the config file itself is re-evaluated; modules it
@@ -218,7 +219,12 @@ async function loadUserConfig(configPath: string, reload: boolean = false): Prom
     // Use dynamic import with file URL for cross-platform compatibility
     let fileUrl = pathToFileURL(configPath).href;
     if (reload) {
-      fileUrl += `?reload=${createHash('sha1').update(readFileSync(configPath)).digest('hex').slice(0, 16)}`;
+      // Keyed on the config file AND `<cwd>/.env`: a config that reads
+      // `process.env` at import must be re-evaluated after a `.env` edit too.
+      const hash = createHash('sha1').update(readFileSync(configPath));
+      const envFile = join(dirname(configPath), '.env');
+      if (existsSync(envFile)) hash.update(readFileSync(envFile));
+      fileUrl += `?reload=${hash.digest('hex').slice(0, 16)}`;
     }
 
     // For TypeScript files, we need tsx or ts-node to be available

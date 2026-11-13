@@ -628,7 +628,9 @@ export function bindJudge(defaults?: {
     // want to *clear* a bound default should pass an empty string or
     // call the unbound `judge` directly.
     serverUrl: options?.serverUrl ?? defaults.serverUrl,
-    transport: options?.transport ?? defaults.transport,
+    // A per-call `serverUrl` is an explicit "dial THAT server": it wins over
+    // a bound transport (which would otherwise silently ignore it).
+    transport: options?.transport ?? (options?.serverUrl ? undefined : defaults.transport),
     model: options?.model ?? defaults.model,
     evaluatorId: options?.evaluatorId ?? defaults.evaluatorId,
     skip: options?.skip ?? defaults.skip,

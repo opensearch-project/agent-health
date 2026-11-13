@@ -357,8 +357,9 @@ export async function executeEvaluationRun(
         // `runs.create()` below (which is what the runner did historically).
         // The report id is minted HERE (not by storage) so every write for
         // this case — placeholder, final report, trace-judged patch — is
-        // idempotent on the same id through whatever sink persists it.
-        const reportId = mintReportId();
+        // idempotent on the same id through whatever sink persists it. The id
+        // the sink reports back is authoritative for the later writes.
+        let reportId = mintReportId();
         let placeholderRunId: string | undefined;
         try {
           const placeholder = await sink.upsertCaseReport({ runId: run.id, testCaseId, attempt: 1, reportId, report: {
@@ -402,6 +403,7 @@ export async function executeEvaluationRun(
             timestamp: new Date().toISOString(),
           } as any });
           placeholderRunId = placeholder.reportId;
+          reportId = placeholder.reportId;
           debug('EvaluationRunner', `[${testCaseId}] Pre-persisted placeholder run: ${placeholderRunId}`);
         } catch (placeholderErr: any) {
           // Storage may not be configured / may be transiently unavailable.

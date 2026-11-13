@@ -64,6 +64,7 @@ export interface UpsertCaseReportInput {
 }
 
 export interface UpsertCaseReportResult {
+  /** The persisted id — address every later write for this report by it. */
   reportId: string;
   /** The persisted document after the write (what `runs.update` returns). */
   report: EvaluationReport;
@@ -166,41 +167,66 @@ function buildBenchmarkRunProjection(
  * create-then-merge sequence per report, same finalize + benchmark projection).
  */
 export class LocalRunSink implements RunSink {
-  /** Report ids this sink has already written (fast path for the merge write). */
-  private readonly knownReportIds = new Set<string>();
+  /** Reports this sink has written: id → the run/case they belong to (fast path + identity check). */
+  private readonly knownReports = new Map<string, { runId: string; testCaseId: string }>();
 
   constructor(private readonly storage: IStorageModule) {}
 
-  private async reportExists(reportId: string): Promise<boolean> {
-    if (this.knownReportIds.has(reportId)) return true;
+  /**
+   * A write may only touch the report of the run/case it names. Catches an
+   * id collision or a caller addressing another run's report before anything
+   * is merged.
+   */
+  private assertOwnership(reportId: string, runId: string, owner: { runId?: string; testCaseId?: string } | undefined, testCaseId?: string): void {
+    if (!owner) return;
+    if (owner.runId && owner.runId !== runId) {
+      throw new Error(`Report ${reportId} belongs to run ${owner.runId}, not ${runId}`);
+    }
+    if (testCaseId && owner.testCaseId && owner.testCaseId !== testCaseId) {
+      throw new Error(`Report ${reportId} belongs to test case ${owner.testCaseId}, not ${testCaseId}`);
+    }
+  }
+
+  /** Who owns an existing report, or `undefined` when it does not exist yet. */
+  private async existingOwner(reportId: string): Promise<{ runId?: string; testCaseId?: string } | undefined> {
+    const known = this.knownReports.get(reportId);
+    if (known) return known;
     // First sight of this id in this process: it may still exist in storage
     // (a retried request whose first attempt landed, or a server restart
     // between two writes of the same report).
-    return !!(await this.storage.runs.getById(reportId));
+    const existing = await this.storage.runs.getById(reportId);
+    if (!existing) return undefined;
+    return { runId: (existing as any).experimentRunId, testCaseId: existing.testCaseId };
   }
 
   async createRun(run: EvaluationRun): Promise<{ runId: string; executorToken: string }> {
+    const executorToken = mintExecutorToken();
     await this.storage.evaluationRuns.create(run);
-    return { runId: run.id, executorToken: mintExecutorToken() };
+    return { runId: run.id, executorToken };
   }
 
   async upsertCaseReport(input: UpsertCaseReportInput): Promise<UpsertCaseReportResult> {
-    const { reportId, report } = input;
+    const { runId, testCaseId, reportId, report } = input;
     // Idempotent on reportId: the first write creates, every later write
     // (the final report after the `running` placeholder, or a retried
     // request) merges — the same create-then-update sequence the runner
     // used to issue directly, so the stored document is unchanged.
-    if (await this.reportExists(reportId)) {
+    const owner = await this.existingOwner(reportId);
+    if (owner) {
+      this.assertOwnership(reportId, runId, owner, testCaseId);
       const { id: _ignored, ...fields } = report as EvaluationReport;
       const saved = await this.storage.runs.update(reportId, fields as Partial<EvaluationReport>);
       return { reportId, report: saved as EvaluationReport };
     }
     const saved = await this.storage.runs.create({ ...report, id: reportId } as Partial<EvaluationReport>);
-    this.knownReportIds.add(reportId);
+    // The id the adapter persisted is authoritative (both adapters honour the
+    // one they are given); callers address every later write by the returned id.
+    this.knownReports.set(saved.id, { runId, testCaseId });
     return { reportId: saved.id, report: saved as EvaluationReport };
   }
 
-  async patchCaseReport(_runId: string, reportId: string, patch: Partial<EvaluationReport>): Promise<void> {
+  async patchCaseReport(runId: string, reportId: string, patch: Partial<EvaluationReport>): Promise<void> {
+    this.assertOwnership(reportId, runId, this.knownReports.get(reportId));
     await this.storage.runs.update(reportId, patch);
   }
 

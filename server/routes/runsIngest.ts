@@ -57,6 +57,8 @@ function fail(res: Response, error: any): void {
 }
 
 const isObject = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
+/** `EvaluationRun.results[*].status` values (types/index.ts `RunResultStatus`). */
+const CASE_RESULT_STATUSES: ReadonlySet<string> = new Set(['pending', 'running', 'completed', 'failed', 'cancelled']);
 
 router.post('/api/runs/ingest', async (req: Request, res: Response) => {
   const run = req.body?.run;
@@ -77,11 +79,21 @@ router.put('/api/runs/ingest/:runId/cases/:caseId/report', requireExecutorToken,
   if (typeof reportId !== 'string' || !reportId || !isObject(report)) {
     return res.status(400).json({ error: 'body.reportId (string) and body.report (object) are required' });
   }
+  // A report may only name the run / case of the URL it is written under.
+  if (report.experimentRunId !== undefined && report.experimentRunId !== req.params.runId) {
+    return res.status(400).json({ error: `body.report.experimentRunId (${report.experimentRunId}) does not match the run in the URL` });
+  }
+  if (report.testCaseId !== undefined && report.testCaseId !== req.params.caseId) {
+    return res.status(400).json({ error: `body.report.testCaseId (${report.testCaseId}) does not match the case in the URL` });
+  }
+  if (attempt !== undefined && !(Number.isInteger(attempt) && attempt > 0)) {
+    return res.status(400).json({ error: 'body.attempt must be a positive integer when given' });
+  }
   try {
     const saved = await sinkFor(getStorageModule()).upsertCaseReport({
       runId: req.params.runId,
       testCaseId: req.params.caseId,
-      attempt: Number.isInteger(attempt) && attempt > 0 ? attempt : 1,
+      attempt: attempt ?? 1,
       reportId,
       report,
     });
@@ -104,8 +116,8 @@ router.patch('/api/runs/ingest/:runId/reports/:reportId', requireExecutorToken, 
 
 router.patch('/api/runs/ingest/:runId/cases/:caseId/result', requireExecutorToken, async (req: Request, res: Response) => {
   const result = req.body?.result;
-  if (!isObject(result) || typeof result.status !== 'string') {
-    return res.status(400).json({ error: 'body.result (object with a status) is required' });
+  if (!isObject(result) || !CASE_RESULT_STATUSES.has(result.status)) {
+    return res.status(400).json({ error: `body.result.status must be one of ${[...CASE_RESULT_STATUSES].join(', ')}` });
   }
   try {
     res.json(await sinkFor(getStorageModule()).setCaseResult(req.params.runId, req.params.caseId, result as any));

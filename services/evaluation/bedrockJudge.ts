@@ -137,9 +137,10 @@ export async function callBedrockJudge(
 ): Promise<JudgeResult> {
   const maxRetries = 10;
   const baseDelay = 1000; // 1 second
-  // Only used for the connection-error message below; the transport decides where requests go.
-  const judgeApiUrl = defaultJudgeApiUrl();
   const transport = options?.transport ?? defaultJudgeTransport();
+  // Only for the connection-error message below: the default transport dials
+  // this process's own /api/judge; an injected one decides for itself.
+  const judgeApiUrl = options?.transport ? '<injected judge transport>' : defaultJudgeApiUrl();
 
   console.log('[BedrockJudge] Sending request to backend proxy...');
   console.log('[BedrockJudge] Trajectory steps:', trajectory.length);
