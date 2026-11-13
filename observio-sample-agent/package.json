@@ -16,7 +16,7 @@
   "dependencies": {
     "@ag-ui/client": "^1.0.0",
     "@ag-ui/core": "^0.0.36",
-    "@langchain/aws": "^0.1.15",
+    "@langchain/aws": "^1.0.0",
     "@langchain/core": "^1.1.40",
     "@langchain/langgraph": "^0.4.9",
     "@modelcontextprotocol/sdk": "^1.32.0",
