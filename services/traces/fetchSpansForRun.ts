@@ -29,7 +29,7 @@
  */
 import type { Span } from '@/types';
 import { debug } from '@/lib/debug';
-import { fetchTracesForRun } from './index';
+import { fetchTracesForRun, type TracesClient } from './index';
 
 /**
  * Strategy-C correlation input: an agent's OTel `service.name` plus the run's
@@ -80,6 +80,11 @@ export interface FetchSpansForRunOptions {
    * correlation returns 0 spans and the judge never sees the trace (#XXX).
    */
   windowAgents?: TraceWindowAgent[];
+  /**
+   * Where to read traces from. Defaults to this process's own `/api/traces`;
+   * runners pass the client their caller gave them (services/runnerDeps.ts).
+   */
+  tracesClient?: TracesClient;
 }
 
 export interface FetchSpansForRunResult {
@@ -110,6 +115,7 @@ export async function fetchSpansForRun(
   const maxAttempts = Math.max(1, Math.min(requestedMax, SDK_TRACE_POLL_CEILING));
   const intervalMs = Math.max(0, options.intervalMs ?? SDK_DEFAULT_POLL_INTERVAL_MS);
   const windowAgents = options.windowAgents?.length ? options.windowAgents : undefined;
+  const fetchTraces = options.tracesClient?.fetchTracesForRun ?? fetchTracesForRun;
   const label = runId ?? `service:${windowAgents?.map(a => a.serviceName).join(',') ?? 'none'}`;
 
   let lastError: string | undefined;
@@ -119,7 +125,7 @@ export async function fetchSpansForRun(
       // Union of Strategy B (runId) and Strategy C (service-name + time window),
       // matching the run-report Traces tab. Either clause alone can be empty
       // (e.g. Claude Code never tags spans with our runId), so we need both.
-      const result = await fetchTracesForRun({
+      const result = await fetchTraces({
         runId: runId || undefined,
         includeWindowFallback: !!windowAgents,
         windowAgents,

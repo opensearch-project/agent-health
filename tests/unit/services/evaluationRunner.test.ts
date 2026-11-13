@@ -118,10 +118,12 @@ function makeStorageModule() {
     runs: {
       create,
       update,
+      getById: jest.fn().mockImplementation((id: string) => Promise.resolve(docs.get(id) ?? null)),
       get: jest.fn(),
       list: jest.fn(),
       delete: jest.fn(),
     },
+    evaluationRuns: { updateResult: jest.fn().mockResolvedValue(true) },
     testCases: { create: jest.fn(), update: jest.fn(), get: jest.fn(), list: jest.fn(), delete: jest.fn() },
     benchmarks: { create: jest.fn(), update: jest.fn(), get: jest.fn(), list: jest.fn(), delete: jest.fn() },
   } as any;

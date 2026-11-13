@@ -128,9 +128,13 @@ function createMockStorageModule(): IStorageModule {
         docs.set(id, merged);
         return Promise.resolve(merged);
       }),
+      getById: jest.fn().mockImplementation((id: string) => Promise.resolve(docs.get(id) ?? null)),
       get: jest.fn().mockResolvedValue(null),
       list: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue(undefined),
+    },
+    evaluationRuns: {
+      updateResult: jest.fn().mockResolvedValue(true),
     },
     testCases: {
       create: jest.fn().mockResolvedValue({}),

@@ -46,6 +46,7 @@ import { recordVerdict } from '../matchers/session.js';
 import { readEnv } from '../envCompat.js';
 import { getBackendUrl, isBackendPortExplicit, DEFAULT_BACKEND_PORT } from '../portConfig.js';
 import { buildJudgeIdentityPatch } from '../judgeIdentity.js';
+import { createHttpJudgeTransport, type JudgeRequestBody, type JudgeTransport, type JudgeTransportResponse } from '../judge/transport.js';
 
 /** Whether a judge signal gates the test verdict or is observational only. */
 export type JudgeRole = 'gate' | 'observe';
@@ -125,6 +126,14 @@ export interface JudgeOptions {
    * `http://localhost:${AGENT_HEALTH_PORT ?? 4001}`.
    */
   serverUrl?: string;
+  /**
+   * How to reach the judge. When set, `serverUrl` is ignored: the runner
+   * that executes the test hands the SDK the same transport it judges with
+   * itself (HTTP to the server it belongs to, or an in-process judge), so
+   * `judge()` inside a test body never re-derives a server from the
+   * environment. See lib/judge/transport.ts.
+   */
+  transport?: JudgeTransport;
   /**
    * Override the judge model. Forwarded as `modelId` on the request body;
    * the server resolves it through `config.models[modelId]` exactly as it
@@ -342,7 +351,7 @@ async function runJudge(
     : undefined;
   const claims = Array.isArray(claimOrClaims) ? claimOrClaims : [claimOrClaims];
 
-  const serverUrl = resolveJudgeServerUrl(options?.serverUrl);
+  const transport = options?.transport ?? createHttpJudgeTransport(`${resolveJudgeServerUrl(options?.serverUrl)}/api/judge`);
 
   const description =
     claims.length === 1 ? `judge: ${claims[0]}` : `judge: ${claims.length} claims`;
@@ -482,15 +491,11 @@ async function runJudge(
   // with exponential backoff before giving up. Deterministic 4xx (not 429) are
   // not retried.
   const MAX_JUDGE_ATTEMPTS = 3;
-  let response: Response | undefined;
+  let response: JudgeTransportResponse | undefined;
   let lastErrMsg = '';
   for (let attempt = 1; attempt <= MAX_JUDGE_ATTEMPTS; attempt++) {
     try {
-      const r = await fetch(`${serverUrl}/api/judge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
+      const r = await transport(requestBody as unknown as JudgeRequestBody);
       if (r.ok) { response = r; break; }
       lastErrMsg = `Judge HTTP ${r.status}: ${await r.text()}`;
       // 4xx (except 429) are deterministic — retrying won't help; surface as errored.
@@ -603,6 +608,7 @@ export function bindJudge(defaults?: {
   evaluatorId?: string;
   model?: string;
   serverUrl?: string;
+  transport?: JudgeTransport;
   skip?: boolean;
 }): JudgeFn {
   // No defaults set → return the unbound function unchanged. Keeps zero
@@ -612,7 +618,7 @@ export function bindJudge(defaults?: {
   // rather than short-circuited to the unbound judge.
   if (
     !defaults ||
-    (!defaults.evaluatorId && !defaults.model && !defaults.serverUrl && defaults.skip === undefined)
+    (!defaults.evaluatorId && !defaults.model && !defaults.serverUrl && !defaults.transport && defaults.skip === undefined)
   ) {
     return judge;
   }
@@ -622,6 +628,7 @@ export function bindJudge(defaults?: {
     // want to *clear* a bound default should pass an empty string or
     // call the unbound `judge` directly.
     serverUrl: options?.serverUrl ?? defaults.serverUrl,
+    transport: options?.transport ?? defaults.transport,
     model: options?.model ?? defaults.model,
     evaluatorId: options?.evaluatorId ?? defaults.evaluatorId,
     skip: options?.skip ?? defaults.skip,

@@ -44,11 +44,15 @@ function getApiBaseUrl(): string {
  */
 export const TRACE_FETCH_TIMEOUT_MS = 20000;
 
-export async function fetchTraces(params: TraceQueryParams, timeoutMs: number = TRACE_FETCH_TIMEOUT_MS): Promise<TraceSearchResult> {
+export async function fetchTraces(
+  params: TraceQueryParams,
+  timeoutMs: number = TRACE_FETCH_TIMEOUT_MS,
+  options: TracesClientOptions = {},
+): Promise<TraceSearchResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${getApiBaseUrl()}/api/traces`, {
+    const response = await fetch(`${options.baseUrl ?? getApiBaseUrl()}/api/traces`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -87,6 +91,24 @@ export async function fetchTracesByRunIds(runIds: string[]): Promise<TraceSearch
   return fetchTraces({ runIds });
 }
 
+export interface TracesClientOptions {
+  /**
+   * Base URL of the agent-health server that answers `/api/traces`. Defaults
+   * to this process's own backend URL on the server, relative URLs in the
+   * browser. Runners receive a `TracesClient` bound to an explicit URL from
+   * their caller (see services/runnerDeps.ts).
+   */
+  baseUrl?: string;
+}
+
+/**
+ * The trace-reading capability a runner depends on (see services/runnerDeps.ts
+ * for the server's HTTP-bound instance; tests pass a stub).
+ */
+export interface TracesClient {
+  fetchTracesForRun: (params: FetchTracesForRunParams) => Promise<TraceSearchResult>;
+}
+
 /**
  * Fetch traces correlated with a single test-case run, using all available
  * correlation strategies (see AGENTS.md → Trace correlation conventions):
@@ -102,7 +124,7 @@ export async function fetchTracesByRunIds(runIds: string[]): Promise<TraceSearch
  * opt-in because it can surface concurrent runs of the same agent and
  * cross-team noise on a shared cluster.
  */
-export async function fetchTracesForRun(params: {
+export interface FetchTracesForRunParams {
   /**
    * Agent run id (Strategy B correlation). Optional — runs persisted via the
    * deferred trace-mode path may not carry one; in that case correlation
@@ -126,7 +148,9 @@ export async function fetchTracesForRun(params: {
   includeWindowFallback?: boolean;
   windowAgents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>;
   size?: number;
-}): Promise<TraceSearchResult> {
+}
+
+export async function fetchTracesForRun(params: FetchTracesForRunParams, options: TracesClientOptions = {}): Promise<TraceSearchResult> {
   const { runId, evalTraceId, traceId, sessionId, includeWindowFallback, windowAgents, size = 1000 } = params;
   // Only include the runIds clause when runId is a non-empty string. A
   // `[undefined]` array makes the server build a `terms: [null]` query that
@@ -143,7 +167,7 @@ export async function fetchTracesForRun(params: {
   if (includeWindowFallback && windowAgents && windowAgents.length > 0) {
     query.agents = windowAgents;
   }
-  return fetchTraces(query);
+  return fetchTraces(query, TRACE_FETCH_TIMEOUT_MS, options);
 }
 
 /**

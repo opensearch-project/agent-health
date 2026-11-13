@@ -61,6 +61,8 @@ jest.mock('@/services/benchmarkPromotion', () => ({
 
 jest.mock('@/lib/config/index', () => ({
   loadConfigSync: jest.fn().mockReturnValue({ agents: [] }),
+  // Per-run config re-read (server/services/runEnvironment.ts) — same shape.
+  loadConfig: jest.fn().mockResolvedValue({ agents: [], models: {} }),
 }));
 
 jest.mock('@/server/services/customAgentStore', () => ({

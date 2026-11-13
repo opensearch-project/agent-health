@@ -9,8 +9,17 @@
  */
 
 import { TrajectoryStep, EvaluationMetrics, ImprovementStrategy, OpenSearchLog, PassFailStatus, ScoringSnapshot } from '@/types';
-import { ENV_CONFIG } from '@/lib/config';
-import { getBackendUrl } from '@/lib/portConfig';
+import { defaultJudgeApiUrl, defaultJudgeTransport, type JudgeTransport } from '@/lib/judge/transport';
+
+export interface CallBedrockJudgeOptions {
+  /**
+   * How to reach the judge. Defaults to an HTTP POST to this process's own
+   * `/api/judge` (`ENV_CONFIG.judgeApiUrl`, i.e. `http://localhost:<AH_PORT>`).
+   * Runners receive theirs from their caller (see services/runnerDeps.ts) so
+   * the judge location is an explicit dependency, not a process global.
+   */
+  transport?: JudgeTransport;
+}
 
 interface JudgeResult {
   passFailStatus: PassFailStatus;
@@ -123,11 +132,14 @@ export async function callBedrockJudge(
   modelId?: string,
   evaluatorId?: string,
   runId?: string,
-  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>
+  agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>,
+  options?: CallBedrockJudgeOptions
 ): Promise<JudgeResult> {
   const maxRetries = 10;
   const baseDelay = 1000; // 1 second
-  const judgeApiUrl = ENV_CONFIG.judgeApiUrl || `${getBackendUrl()}/api/judge`;
+  // Only used for the connection-error message below; the transport decides where requests go.
+  const judgeApiUrl = defaultJudgeApiUrl();
+  const transport = options?.transport ?? defaultJudgeTransport();
 
   console.log('[BedrockJudge] Sending request to backend proxy...');
   console.log('[BedrockJudge] Trajectory steps:', trajectory.length);
@@ -147,28 +159,22 @@ export async function callBedrockJudge(
 
       // Call backend proxy
       const startTime = Date.now();
-      const response = await fetch(judgeApiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          trajectory,
-          expectedOutcomes: expected.expectedOutcomes,
-          expectedTrajectory: expected.expectedTrajectory,
-          logs,
-          modelId,
-          ...(evaluatorId ? { evaluatorId } : {}),
-          // Forward runId so /api/judge can route to the `agent` (trace)
-          // provider — its tools require this to scope. Other providers
-          // ignore it.
-          ...(runId ? { runId } : {}),
-          // Forward Strategy C correlation hints (#264) so the agent (trace)
-          // judge tool can find spans the agent emits under its OWN
-          // correlation (claude-code's session id, etc.), not just spans
-          // that share agent-health's runId via gen_ai.request.id.
-          ...(agents && agents.length > 0 ? { agents } : {}),
-        }),
+      const response = await transport({
+        trajectory,
+        expectedOutcomes: expected.expectedOutcomes,
+        expectedTrajectory: expected.expectedTrajectory,
+        logs,
+        modelId,
+        ...(evaluatorId ? { evaluatorId } : {}),
+        // Forward runId so /api/judge can route to the `agent` (trace)
+        // provider — its tools require this to scope. Other providers
+        // ignore it.
+        ...(runId ? { runId } : {}),
+        // Forward Strategy C correlation hints (#264) so the agent (trace)
+        // judge tool can find spans the agent emits under its OWN
+        // correlation (claude-code's session id, etc.), not just spans
+        // that share agent-health's runId via gen_ai.request.id.
+        ...(agents && agents.length > 0 ? { agents } : {}),
       });
 
       if (!response.ok) {
