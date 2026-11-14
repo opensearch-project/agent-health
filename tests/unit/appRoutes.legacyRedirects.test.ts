@@ -57,10 +57,12 @@ jest.mock('@/lib/theme', () => ({ initializeTheme: jest.fn() }));
 
 const getReportById = jest.fn();
 const getBenchmarkById = jest.fn();
+const getTestCaseById = jest.fn();
 const getEvaluationRun = jest.fn();
 jest.mock('@/services/storage', () => ({
   asyncRunStorage: { getReportById: (...args: unknown[]) => getReportById(...args) },
   asyncBenchmarkStorage: { getById: (...args: unknown[]) => getBenchmarkById(...args) },
+  asyncTestCaseStorage: { getById: (...args: unknown[]) => getTestCaseById(...args) },
 }));
 jest.mock('@/services/client', () => ({
   getEvaluationRun: (...args: unknown[]) => getEvaluationRun(...args),
@@ -123,8 +125,11 @@ describe('App routes — /runs/:reportId resolves the report before redirecting'
   beforeEach(() => {
     getReportById.mockReset();
     getBenchmarkById.mockReset();
+    getTestCaseById.mockReset();
     getEvaluationRun.mockReset();
     getEvaluationRun.mockResolvedValue({ id: 'run' });
+    getBenchmarkById.mockResolvedValue({ id: 'bm-1', runs: [] });
+    getTestCaseById.mockImplementation(async (id: string) => ({ id }));
   });
 
   it('report of a benchmark run → benchmark-scoped inspector with ?reportId', async () => {
@@ -132,6 +137,49 @@ describe('App routes — /runs/:reportId resolves the report before redirecting'
     await landsOn('/runs/rep-1', 'evals3-run-inspector', '/evaluations/benchmarks/bm-1/runs/run-1/inspect?reportId=rep-1');
     expect(getReportById).toHaveBeenCalledWith('rep-1');
     expect(getEvaluationRun).toHaveBeenCalledWith('run-1');
+    expect(getBenchmarkById).toHaveBeenCalledWith('bm-1');
+  });
+
+  it('report of a run whose benchmark was deleted (run doc still exists) → the BARE inspector, not the benchmark-scoped one that bounces to the Benchmarks list', async () => {
+    getReportById.mockResolvedValue({ id: 'rep-8', testCaseId: 'tc-1', experimentId: 'bm-gone', experimentRunId: 'run-8' });
+    getBenchmarkById.mockResolvedValue(null);
+    await landsOn('/runs/rep-8', 'evals3-run-inspector', '/evaluations/runs/run-8/inspect?reportId=rep-8');
+  });
+
+  it('report of an ad-hoc run never looks the benchmark up', async () => {
+    getReportById.mockResolvedValue({ id: 'rep-9', testCaseId: 'tc-1', experimentRunId: 'run-9' });
+    await landsOn('/runs/rep-9', 'evals3-run-inspector', '/evaluations/runs/run-9/inspect?reportId=rep-9');
+    expect(getBenchmarkById).not.toHaveBeenCalled();
+    expect(getTestCaseById).not.toHaveBeenCalled();
+  });
+
+  it('a transient failure looking the run up shows the error state instead of misrouting to the test case page', async () => {
+    getReportById.mockResolvedValue({ id: 'rep-10', testCaseId: 'tc-1', experimentRunId: 'run-10' });
+    getEvaluationRun.mockRejectedValue(Object.assign(new Error('Failed to get evaluation run: Bad Gateway'), { status: 502 }));
+    mount('/runs/rep-10');
+    await waitFor(() => expect(screen.getByTestId('report-redirect-error').textContent).toContain('Bad Gateway'));
+    expect(screen.queryByTestId('page-evals3-test-case-detail')).toBeNull();
+  });
+
+  it('orphan report (run gone AND test case gone) → an explicit explanation with a way out, never a silent bounce to the Test Cases list', async () => {
+    getReportById.mockResolvedValue({ id: 'rep-11', testCaseId: 'tc-gone', experimentRunId: 'run-gone' });
+    getEvaluationRun.mockRejectedValue(Object.assign(new Error('404'), { status: 404 }));
+    getTestCaseById.mockResolvedValue(null);
+    mount('/runs/rep-11');
+    const orphan = await screen.findByTestId('report-redirect-orphan');
+    expect(orphan.textContent).toContain('rep-11');
+    expect(orphan.textContent).toContain('deleted');
+    expect(screen.getByTestId('report-redirect-orphan-runs-link').getAttribute('href')).toBe('/evaluations/runs');
+    expect(getTestCaseById).toHaveBeenCalledWith('tc-gone');
+    expect(screen.queryByTestId('page-evals3-test-case-detail')).toBeNull();
+  });
+
+  it('a standalone report whose test case still exists does not pay for a run or benchmark lookup', async () => {
+    getReportById.mockResolvedValue({ id: 'rep-12', testCaseId: 'tc-12' });
+    await landsOn('/runs/rep-12', 'evals3-test-case-detail', '/evaluations/test-cases/tc-12?run=rep-12');
+    expect(getEvaluationRun).not.toHaveBeenCalled();
+    expect(getBenchmarkById).not.toHaveBeenCalled();
+    expect(getTestCaseById).toHaveBeenCalledWith('tc-12');
   });
 
   it('report of an ad-hoc evaluation run → bare inspector with ?reportId', async () => {

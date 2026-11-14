@@ -86,6 +86,14 @@ describe('resolveReportRedirect', () => {
       .toBe('/evaluations/test-cases/tc1?run=rep1');
   });
 
+  it('opens a run whose benchmark was deleted in the bare run inspector (the benchmark-scoped one would bounce to the Benchmarks list)', () => {
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc1', experimentId: 'bm-gone', experimentRunId: 'run1' }, { benchmarkReachable: false }))
+      .toBe('/evaluations/runs/run1/inspect?reportId=rep1');
+    // Irrelevant when the run itself is unreachable — still the test case page.
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc1', experimentId: 'bm-gone', experimentRunId: 'run1' }, { runReachable: false, benchmarkReachable: false }))
+      .toBe('/evaluations/test-cases/tc1?run=rep1');
+  });
+
   it('carries the legacy query string over without overriding the keys the destination sets', () => {
     expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc1', experimentRunId: 'run1' }, { search: '?tab=traces&reportId=other' }))
       .toBe('/evaluations/runs/run1/inspect?reportId=rep1&tab=traces');
