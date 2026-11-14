@@ -31,6 +31,10 @@ jest.mock('fs', () => ({
   // config-v2 writeStateScope() does mkdirSync(dir,{recursive:true}) before
   // writing .agent-health/state.json; without it the write path threw 500.
   mkdirSync: (...args: any[]) => mockMkdirSync(...args),
+  // The route now reaches `@aws-sdk/credential-providers` (via
+  // runModelResolution → connectors → the refreshing credential provider),
+  // which destructures `fs.promises` at module load; keep the real one.
+  promises: jest.requireActual('fs').promises,
 }));
 
 jest.mock('@/lib/config/index', () => ({
