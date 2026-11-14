@@ -189,7 +189,9 @@ describe('React bindings: pill, finished-callback, toaster', () => {
     expect(toast.textContent).toContain('Retry judgement finished — UI run');
     expect(screen.getByTestId('retry-judgement-toast-summary-run-ui').textContent).toBe('Retried 3 · 2 scored (1 abstain) · 1 not evaluable');
     expect(toast.textContent).toContain("gold/extraction rules don't match these cases");
-    expect(toast.querySelector('a')!.getAttribute('href')).toBe('/evaluations/runs/run-ui');
+    // "Open run" lands on the run inspector directly — the older
+    // `/evaluations/runs/:id` detail page is retired and only redirects there.
+    expect(toast.querySelector('a')!.getAttribute('href')).toBe('/evaluations/runs/run-ui/inspect');
 
     fireEvent.click(screen.getByTestId('retry-judgement-toast-dismiss-run-ui'));
     expect(screen.queryByTestId('retry-judgement-toast-run-ui')).toBeNull();

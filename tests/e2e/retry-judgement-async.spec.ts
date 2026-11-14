@@ -114,7 +114,8 @@ test.describe('Retry judgement — non-blocking job (pill + toast)', () => {
     await expect(toast).toBeVisible({ timeout: 20000 });
     await expect(page.locator(`[data-testid="retry-judgement-toast-summary-${runId}"]`)).toHaveText('Retried 1 · 1 scored');
     await expect(toast).toContainText('Retry judgement finished');
-    await expect(toast.getByRole('link', { name: 'Open run' })).toHaveAttribute('href', `/evaluations/runs/${runId}`);
+    // "Open run" links straight to the inspector (the retired detail page only redirected there).
+    await expect(toast.getByRole('link', { name: 'Open run' })).toHaveAttribute('href', `/evaluations/runs/${runId}/inspect`);
     await expect(pill).toHaveCount(0);
     expect(posted).toBe(1); // exactly one job started, never re-POSTed on re-open
     expect(statusPolls).toBeGreaterThanOrEqual(3);
