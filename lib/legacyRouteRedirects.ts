@@ -59,21 +59,24 @@ export const legacyRouteRedirects: readonly LegacyRouteRedirect[] = [
  * the inspector preselects that case; standalone single-case reports — and
  * reports whose run no longer exists (`runReachable === false`; the inspector
  * would only render "not found" for those) — open on the test case's detail
- * page with `?run=` preselecting the run.
+ * page with `?run=` preselecting the run. A run whose benchmark was deleted
+ * (`benchmarkReachable === false`; deleting a benchmark keeps its runs and
+ * reports) opens in the bare run inspector — the benchmark-scoped inspector
+ * would bounce to the Benchmarks list.
  *
  * `search` (the legacy URL's query string) is merged into the destination;
  * keys the destination itself sets win.
  */
 export function resolveReportRedirect(
   report: { id: string; testCaseId: string; experimentId?: string; experimentRunId?: string },
-  options: { runReachable?: boolean; search?: string } = {},
+  options: { runReachable?: boolean; benchmarkReachable?: boolean; search?: string } = {},
 ): string {
-  const { runReachable = true, search = '' } = options;
+  const { runReachable = true, benchmarkReachable = true, search = '' } = options;
   const reportId = encodeURIComponent(report.id);
   let target: string;
   if (report.experimentRunId && runReachable) {
     const runId = encodeURIComponent(report.experimentRunId);
-    target = report.experimentId
+    target = report.experimentId && benchmarkReachable
       ? `/evaluations/benchmarks/${encodeURIComponent(report.experimentId)}/runs/${runId}/inspect?reportId=${reportId}`
       : `/evaluations/runs/${runId}/inspect?reportId=${reportId}`;
   } else {

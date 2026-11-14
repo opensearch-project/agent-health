@@ -27,6 +27,12 @@ test.describe('Retired legacy routes redirect to their evals3 twin', () => {
   const RUN_ID = `eval-run-legacy-redirect-${stamp}`;
   const RUN_REPORT_ID = `report-legacy-redirect-run-${stamp}`;
   const STANDALONE_REPORT_ID = `report-legacy-redirect-standalone-${stamp}`;
+  // A report whose run AND test case were both deleted afterwards (deleting
+  // either keeps the report documents — no cascade).
+  const ORPHAN_REPORT_ID = `report-legacy-redirect-orphan-${stamp}`;
+  // A run whose benchmark was deleted afterwards (the run doc survives).
+  const DELETED_BM_RUN_ID = `eval-run-legacy-redirect-deleted-bm-${stamp}`;
+  const DELETED_BM_REPORT_ID = `report-legacy-redirect-deleted-bm-${stamp}`;
   let testCaseId: string | null = null;
   let benchmarkId: string | null = null;
   let seeded = false;
@@ -98,6 +104,82 @@ test.describe('Retired legacy routes redirect to their evals3 twin', () => {
     });
     if (!runRes.ok()) return;
     tracker.evaluationRun(RUN_ID);
+
+    // Orphan: a report for a run + test case that are deleted right after
+    // (the two deletes are the real, supported operations that orphan reports).
+    const orphanTc = await request.post('/api/storage/test-cases', {
+      data: {
+        name: uniqueTestName('legacy-redirect-orphan-tc'),
+        category: 'Synthetic', difficulty: 'Easy',
+        initialPrompt: 'Synthetic prompt', expectedOutcomes: ['Synthetic outcome'],
+      },
+    });
+    if (!orphanTc.ok()) return;
+    const orphanTcId = ((await orphanTc.json()).id as string);
+    tracker.testCase(orphanTcId);
+    const ORPHAN_RUN_ID = `eval-run-legacy-redirect-orphan-${stamp}`;
+    const orphanReport = await request.post('/api/storage/runs', {
+      data: {
+        id: ORPHAN_REPORT_ID, timestamp: new Date().toISOString(), testCaseId: orphanTcId,
+        experimentRunId: ORPHAN_RUN_ID,
+        agentKey: 'demo', modelId: 'demo-model', status: 'completed', passFailStatus: 'passed',
+        metricsStatus: 'ready', evaluationType: 'deterministic',
+        trajectory: [{ type: 'assistant', content: 'synthetic step' }], metrics: { accuracy: 1 },
+      },
+    });
+    if (!orphanReport.ok()) return;
+    tracker.run(ORPHAN_REPORT_ID);
+    const orphanRun = await request.put(`/api/storage/evaluation-runs/${ORPHAN_RUN_ID}`, {
+      data: {
+        id: ORPHAN_RUN_ID, docType: 'evaluation-run', name: uniqueTestName('legacy-redirect-orphan-run'),
+        createdAt: new Date().toISOString(), status: 'completed',
+        agentKey: 'demo', modelId: 'demo-model', sources: [{ type: 'test-case-ids', ids: [orphanTcId] }], trigger: 'api',
+        testCaseSnapshots: [{ id: orphanTcId, version: 1, name: 'legacy-redirect-orphan-tc' }],
+        results: { [orphanTcId]: { reportId: ORPHAN_REPORT_ID, status: 'completed', passFailStatus: 'passed' } },
+        stats: { passed: 1, failed: 0, pending: 0, errored: 0, total: 1 },
+      },
+    });
+    if (!orphanRun.ok()) return;
+    tracker.evaluationRun(ORPHAN_RUN_ID);
+    if (!(await request.delete(`/api/storage/evaluation-runs/${ORPHAN_RUN_ID}`)).ok()) return;
+    if (!(await request.delete(`/api/storage/test-cases/${orphanTcId}`)).ok()) return;
+
+    // Deleted benchmark: a benchmark-associated run + report, then the benchmark is deleted.
+    const bm2Res = await request.post('/api/storage/benchmarks', {
+      data: {
+        name: uniqueTestName('legacy-redirect-deleted-benchmark'),
+        description: 'legacy-redirect E2E (deleted afterwards)',
+        testCaseIds: [testCaseId], runs: [], currentVersion: 1,
+        versions: [{ version: 1, createdAt: new Date().toISOString(), testCaseIds: [testCaseId] }],
+      },
+    });
+    if (!bm2Res.ok()) return;
+    const deletedBenchmarkId = (await bm2Res.json()).id as string;
+    tracker.benchmark(deletedBenchmarkId);
+    const bm2Report = await request.post('/api/storage/runs', {
+      data: {
+        id: DELETED_BM_REPORT_ID, timestamp: new Date().toISOString(), testCaseId,
+        experimentId: deletedBenchmarkId, experimentRunId: DELETED_BM_RUN_ID,
+        agentKey: 'demo', modelId: 'demo-model', status: 'completed', passFailStatus: 'passed',
+        metricsStatus: 'ready', evaluationType: 'deterministic',
+        trajectory: [{ type: 'assistant', content: 'synthetic step' }], metrics: { accuracy: 1 },
+      },
+    });
+    if (!bm2Report.ok()) return;
+    tracker.run(DELETED_BM_REPORT_ID);
+    const bm2Run = await request.put(`/api/storage/evaluation-runs/${DELETED_BM_RUN_ID}`, {
+      data: {
+        id: DELETED_BM_RUN_ID, docType: 'evaluation-run', name: uniqueTestName('legacy-redirect-deleted-bm-run'),
+        benchmarkId: deletedBenchmarkId, createdAt: new Date().toISOString(), status: 'completed',
+        agentKey: 'demo', modelId: 'demo-model', sources: [{ type: 'benchmark', benchmarkId: deletedBenchmarkId }], trigger: 'api',
+        testCaseSnapshots: [{ id: testCaseId, version: 1, name: 'legacy-redirect-tc' }],
+        results: { [testCaseId!]: { reportId: DELETED_BM_REPORT_ID, status: 'completed', passFailStatus: 'passed' } },
+        stats: { passed: 1, failed: 0, pending: 0, errored: 0, total: 1 },
+      },
+    });
+    if (!bm2Run.ok()) return;
+    tracker.evaluationRun(DELETED_BM_RUN_ID);
+    if (!(await request.delete(`/api/storage/benchmarks/${deletedBenchmarkId}`)).ok()) return;
     seeded = true;
   });
 
@@ -170,6 +252,27 @@ test.describe('Retired legacy routes redirect to their evals3 twin', () => {
     await expect(row).toHaveAttribute('aria-selected', 'true');
     // The newer run (the one that belongs to the benchmark run) is NOT the selected one.
     await expect(page.locator(`[data-testid="test-case-run-row-${RUN_REPORT_ID}"]`)).toHaveAttribute('aria-selected', 'false');
+  });
+
+  test('/runs/:reportId for a report whose run AND test case were deleted → an explicit explanation, not a silent bounce to a list', async ({ page }) => {
+    test.skip(!seeded, 'Could not seed fixtures (storage not configured?)');
+    await page.goto(`/runs/${ORPHAN_REPORT_ID}`);
+    const orphan = page.locator('[data-testid="report-redirect-orphan"]');
+    await expect(orphan).toBeVisible({ timeout: 15000 });
+    await expect(orphan).toContainText(ORPHAN_REPORT_ID);
+    await expect(orphan).toContainText('deleted');
+    // Stays on the legacy URL (nothing to redirect to) and offers a way out.
+    expect(new URL(page.url()).pathname).toBe(`/runs/${ORPHAN_REPORT_ID}`);
+    await page.locator('[data-testid="report-redirect-orphan-runs-link"]').click();
+    await page.waitForURL(/\/evaluations\/runs\/?$/, { timeout: 15000 });
+  });
+
+  test('/runs/:reportId for a run whose benchmark was deleted → the bare run inspector (the benchmark-scoped one would bounce to the Benchmarks list)', async ({ page }) => {
+    test.skip(!seeded, 'Could not seed fixtures (storage not configured?)');
+    await page.goto(`/runs/${DELETED_BM_REPORT_ID}`);
+    await page.waitForURL(`**/evaluations/runs/${DELETED_BM_RUN_ID}/inspect?reportId=${DELETED_BM_REPORT_ID}`, { timeout: 15000 });
+    await expect(page.locator(`[data-testid="run-actions-menu-trigger-${DELETED_BM_RUN_ID}"]`)).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole('tab', { name: /Judge Evaluation/ })).toBeVisible({ timeout: 30000 });
   });
 
   test('/runs/:reportId for an unknown report → the evaluation runs list (never a blank page)', async ({ page }) => {
