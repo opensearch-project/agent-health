@@ -150,6 +150,15 @@ module.exports = {
     // #428: definition-first test-case detail page hero has a focused
     // jsdom/RTL suite exercising its new rendering lines.
     'components/evals3/TestCaseDetailPage.tsx',
+    // #583: the built-in assistant's client state and rendered surfaces each
+    // have a focused jsdom/RTL suite (tests/unit/components/ask/*): thread /
+    // selection state machine, chip / composer / turn rendering, the docked
+    // panel (history tabs, resize) and the anchored popover (placement).
+    // AskSurface.tsx / AskNudge.tsx stay e2e-covered (router + live selection).
+    'components/ask/askState.ts',
+    'components/ask/AskShared.tsx',
+    'components/ask/AskPanel.tsx',
+    'components/ask/AskPopover.tsx',
     '!**/__tests__/**',
     '!**/*.test.ts',
     '!**/dist/**',

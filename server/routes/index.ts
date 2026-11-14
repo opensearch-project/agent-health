@@ -26,7 +26,7 @@ import codingAgentsRoutes from './codingAgents';
 import claudeCodeWorkspaceRoutes from './claudeCodeWorkspace';
 import sessionAnnotationsRoutes from './sessionAnnotations';
 import { codingAnalyticsEnabled } from '../services/codingAgents';
-import assistantRoutes from './assistant';
+import askRoutes from './ask';
 import skillsRoutes from './skills';
 import comparisonClusterRoutes from './comparisonCluster';
 import comparisonRoutes from './comparison';
@@ -54,7 +54,7 @@ router.use(observabilityRoutes); // /api/observability/*
 router.use(configRoutes);        // /api/agents, /api/models
 router.use(evaluationRoutes);    // /api/evaluate
 router.use(debugRoutes);         // /api/debug
-router.use(assistantRoutes);     // /api/assistant/*
+router.use(askRoutes);           // /api/ask — the Agent Health assistant (highlight & ask)
 router.use(skillsRoutes);        // /api/skills/*
 router.use(comparisonClusterRoutes); // /api/comparison/cluster-failures
 router.use(comparisonRoutes);    // /api/comparison/deep-dive

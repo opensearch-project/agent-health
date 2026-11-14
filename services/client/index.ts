@@ -31,10 +31,11 @@ export {
 } from './sessionAnnotationsApi';
 
 export {
-  streamAssistantChat,
-  clearAssistantSession,
-  checkAssistantHealth,
-} from './assistantApi';
+  streamAsk,
+  prepareAsk,
+  listAskSessions,
+  getAskSession,
+} from './askApi';
 
 export {
   discoverSkills,
