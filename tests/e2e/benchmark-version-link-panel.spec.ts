@@ -129,26 +129,6 @@ test.describe('Benchmark page test-case panel renders CLI-created (run-linked) c
     await expect(caseList.getByText(testCaseName)).toBeVisible();
   });
 
-  test('the version-aware benchmark runs page renders the linked case, not "No test cases in this version"', async ({ page }) => {
-    test.skip(!benchmarkId, 'Seed data unavailable');
-
-    // The Cases tab above derives its rows from the TOP-LEVEL `testCaseIds`,
-    // so it cannot distinguish the original bug (top-level populated,
-    // `versions[current].testCaseIds` still empty). This page —
-    // components/BenchmarkRunsPage.tsx, routed at /benchmarks/:id/runs and
-    // reached from the Overview's "Run a benchmark" CTA — is the surface that
-    // reads the CURRENT VERSION's array (getVersionTestCases), and is where
-    // the bug originally rendered as "No test cases in this version".
-    await page.goto(`/benchmarks/${benchmarkId}/runs`);
-    await expect(page.locator('[data-testid="benchmark-name"]')).toHaveText(benchmarkName, { timeout: 30000 });
-
-    // THE BUG: this text renders when the current version's testCaseIds is
-    // empty, even though the benchmark's top-level testCaseIds is correct.
-    await expect(page.locator('text=No test cases in this version')).toHaveCount(0);
-
-    // THE FIX: the version panel's count reflects the linked test case, and
-    // the card for it actually renders.
-    await expect(page.locator('text=/^1 test case$/')).toBeVisible();
-    await expect(page.locator(`text=${testCaseName}`).first()).toBeVisible();
-  });
+  // (A third test covered the pre-evals3 /benchmarks/:id/runs page's version
+  // panel; that page is retired — the route redirects here.)
 });

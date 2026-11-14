@@ -4,18 +4,13 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useParams, useLocation, generatePath } from 'react-router-dom';
 import { refreshConfig, subscribeConfigChange } from '@/lib/constants';
 import { initializeTheme } from '@/lib/theme';
 import { ENV_CONFIG } from '@/lib/config';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
-import { BenchmarksPage } from './components/BenchmarksPage';
 import { SettingsPage } from './components/SettingsPage';
-import { BenchmarkRunsPage } from './components/BenchmarkRunsPage';
-import { RunDetailsPage } from './components/RunDetailsPage';
-import { TestCasesPage } from './components/TestCasesPage';
-import { TestCaseRunsPage } from './components/TestCaseRunsPage';
 import { ComparisonPage } from './components/comparison/ComparisonPage';
 import { AgentTracesPage } from './components/traces/AgentTracesPage';
 import { PerformanceOverlay } from './components/PerformanceOverlay';
@@ -33,11 +28,19 @@ import { TestCaseDetailPage as Evals3TestCaseDetail } from './components/evals3/
 import { EvalRunsPage as Evals3EvalRuns } from './components/evals3/EvalRunsPage';
 import { RunInspectorPage as Evals3RunInspector } from './components/evals3/RunInspectorPage';
 import { NewRunPage as Evals3NewRun } from './components/evals3/NewRunPage';
-import { EvalRunDetailPage as Evals3EvalRunDetail } from './components/evals3/EvalRunDetailPage';
+import { ReportRedirect } from './components/ReportRedirect';
+import { legacyRouteRedirects } from '@/lib/legacyRouteRedirects';
 
-function ExperimentRunsRedirect() {
-  const { experimentId } = useParams();
-  return <Navigate to={`/benchmarks/${experimentId}/runs`} replace />;
+/**
+ * `<Navigate replace>` to the evals3 twin of a retired route, carrying the
+ * matched params and the query string over. One component for every row of
+ * `legacyRouteRedirects` (lib/legacyRouteRedirects.ts) so the table is the
+ * single place a redirect is defined.
+ */
+function LegacyRedirect({ to }: { to: string }) {
+  const params = useParams();
+  const { search } = useLocation();
+  return <Navigate to={`${generatePath(to, params)}${search}`} replace />;
 }
 
 /**
@@ -79,6 +82,68 @@ function DebugStateSync() {
   return null; // This component doesn't render anything
 }
 
+/**
+ * The application's route table. Exported (without the BrowserRouter / Layout
+ * shell) so tests can mount it under a MemoryRouter and assert where each
+ * URL — in particular every retired legacy URL — actually lands.
+ */
+export function AppRoutes() {
+  return (
+    <Routes>
+      {/* Primary routes */}
+      <Route path="/" element={<Dashboard />} />
+      <Route path="/evaluators" element={<EvaluatorsPage />} />
+      <Route path="/evaluators/new" element={<EvaluatorEditPage />} />
+      <Route path="/evaluators/:evaluatorId" element={<EvaluatorEditPage />} />
+      <Route path="/evaluators/:evaluatorId/edit" element={<EvaluatorEditPage />} />
+
+      {/* Settings */}
+      <Route path="/settings" element={<SettingsPage />} />
+
+      {/* Comparison */}
+      <Route path="/compare" element={<ComparisonPage />} />
+      <Route path="/compare/:benchmarkId" element={<ComparisonPage />} />
+
+      {/* Agent Traces - Table View */}
+      <Route path="/agent-traces" element={<AgentTracesPage />} />
+
+      {/* Evaluations (evals3) — the only benchmark / test-case / run UI */}
+      <Route path="/evaluations/benchmarks" element={<Evals3Benchmarks />} />
+      <Route path="/evaluations/test-cases" element={<Evals3TestCases />} />
+      <Route path="/evaluations/test-cases/:testCaseId" element={<Evals3TestCaseDetail />} />
+      <Route path="/evaluations/runs" element={<Evals3EvalRuns />} />
+      <Route path="/evaluations/runs/new" element={<Evals3NewRun />} />
+      <Route path="/evaluations/runs/:runId/inspect" element={<Evals3RunInspector />} />
+      <Route path="/evaluations/benchmarks/:benchmarkId" element={<Evals3BenchmarkRuns />} />
+      <Route path="/evaluations/benchmarks/:benchmarkId/cases/:caseId" element={<Evals3BenchmarkRuns />} />
+      <Route path="/evaluations/benchmarks/:benchmarkId/runs" element={<Evals3BenchmarkRuns />} />
+      <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId" element={<Navigate to="inspect" replace />} />
+      <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId/inspect" element={<Evals3RunInspector />} />
+
+      {/* Skills Evaluator */}
+      <Route path="/skills" element={<SkillsPage />} />
+
+      {/* Coding Agent Analytics */}
+      <Route path="/coding-agents" element={<CodingAgentsPage />} />
+
+      {/* AI Assistant */}
+      <Route path="/assistant" element={<AssistantChat />} />
+
+      {/* Retired pre-evals3 pages and the older evals3 run-detail page:
+          every one redirects to its evals3 twin (lib/legacyRouteRedirects.ts). */}
+      {legacyRouteRedirects.map(({ pattern, to }) => (
+        <Route key={pattern} path={pattern} element={<LegacyRedirect to={to} />} />
+      ))}
+      {/* `/runs/:runId` took a REPORT id — resolve it to the run inspector
+          (or the test case's detail page) after a lookup. */}
+      <Route path="/runs/:runId" element={<ReportRedirect />} />
+
+      {/* Catch-all */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
 function App() {
   // Initialize theme on mount
   useEffect(() => {
@@ -100,68 +165,7 @@ function App() {
       <Router>
         <DebugStateSync />
         <Layout>
-          <Routes>
-            {/* Primary routes */}
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/test-cases" element={<TestCasesPage />} />
-            <Route path="/test-cases/:testCaseId/runs" element={<TestCaseRunsPage />} />
-            <Route path="/benchmarks" element={<BenchmarksPage />} />
-            <Route path="/benchmarks/:benchmarkId/runs" element={<BenchmarkRunsPage />} />
-            <Route path="/evaluators" element={<EvaluatorsPage />} />
-            <Route path="/evaluators/new" element={<EvaluatorEditPage />} />
-            <Route path="/evaluators/:evaluatorId" element={<EvaluatorEditPage />} />
-            <Route path="/evaluators/:evaluatorId/edit" element={<EvaluatorEditPage />} />
-
-            {/* Unified run details page - works for both test case and benchmark runs */}
-            <Route path="/runs/:runId" element={<RunDetailsPage />} />
-
-            {/* Backwards compatibility - redirect old benchmark run route to new unified route */}
-            <Route path="/benchmarks/:benchmarkId/runs/:runId" element={<RunDetailsPage />} />
-
-            {/* Settings */}
-            <Route path="/settings" element={<SettingsPage />} />
-
-            {/* Comparison */}
-            <Route path="/compare" element={<ComparisonPage />} />
-            <Route path="/compare/:benchmarkId" element={<ComparisonPage />} />
-
-            {/* Agent Traces - Table View */}
-            <Route path="/agent-traces" element={<AgentTracesPage />} />
-
-            {/* Evals 3 → Evaluations */}
-            <Route path="/evaluations/benchmarks" element={<Evals3Benchmarks />} />
-            <Route path="/evaluations/test-cases" element={<Evals3TestCases />} />
-            <Route path="/evaluations/test-cases/:testCaseId" element={<Evals3TestCaseDetail />} />
-            <Route path="/evaluations/runs" element={<Evals3EvalRuns />} />
-            <Route path="/evaluations/runs/new" element={<Evals3NewRun />} />
-            <Route path="/evaluations/runs/:runId" element={<Evals3EvalRunDetail />} />
-            <Route path="/evaluations/runs/:runId/inspect" element={<Evals3RunInspector />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId" element={<Evals3BenchmarkRuns />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId/cases/:caseId" element={<Evals3BenchmarkRuns />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId/runs" element={<Evals3BenchmarkRuns />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId" element={<Navigate to="inspect" replace />} />
-            <Route path="/evaluations/benchmarks/:benchmarkId/runs/:runId/inspect" element={<Evals3RunInspector />} />
-
-            {/* Skills Evaluator */}
-            <Route path="/skills" element={<SkillsPage />} />
-
-            {/* Coding Agent Analytics */}
-            <Route path="/coding-agents" element={<CodingAgentsPage />} />
-
-            {/* AI Assistant */}
-            <Route path="/assistant" element={<AssistantChat />} />
-            {/* Redirects for deprecated routes */}
-            <Route path="/evals" element={<Navigate to="/test-cases" replace />} />
-            <Route path="/run" element={<Navigate to="/test-cases" replace />} />
-            <Route path="/reports" element={<Navigate to="/benchmarks" replace />} />
-            <Route path="/experiments" element={<Navigate to="/benchmarks" replace />} />
-            <Route path="/experiments/:experimentId/runs" element={<ExperimentRunsRedirect />} />
-
-            {/* Catch-all: redirect unknown sub-paths to their parent list pages */}
-            <Route path="/benchmarks/*" element={<Navigate to="/benchmarks" replace />} />
-            <Route path="/test-cases/*" element={<Navigate to="/test-cases" replace />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <AppRoutes />
         </Layout>
       </Router>
       <PerformanceOverlay />

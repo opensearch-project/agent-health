@@ -486,6 +486,9 @@ describe('AsyncRunStorage', () => {
       const [ids, options] = mockOsRuns.getByIds.mock.calls[0];
       expect(ids).toEqual(['r-1']);
       expect(options.fields).toEqual(expect.arrayContaining(['status', 'passFailStatus', 'metricsStatus', 'traceId', 'annotations']));
+      // Failure staging for list rows: the keyword field for new reports AND
+      // the `(kind=…)` token carrier for reports written before it existed.
+      expect(options.fields).toEqual(expect.arrayContaining(['failureStage', 'traceError']));
       expect(result['r-1'].passFailStatus).toBe('passed');
       expect(result['r-1'].metricsStatus).toBe('ready');
       expect(result['r-1'].runId).toBe('otel-1');
