@@ -46,6 +46,7 @@
  */
 
 import { spawnSync } from 'child_process';
+import { withCliCoverage } from '../../helpers/cliCoverage';
 import {
   existsSync,
   mkdirSync,
@@ -209,7 +210,7 @@ describe('Code SDK — .eval.ts CLI subprocess integration (module-instance regr
     const cli = spawnSync(
       'node',
       [CLI_BUNDLE, 'benchmark', '-f', fixturePath, '-a', 'demo', '-n', benchmarkName],
-      { cwd: REPO_ROOT, env: cleanEnv, encoding: 'utf-8', timeout: TEST_TIMEOUT - 10_000 },
+      { cwd: REPO_ROOT, env: withCliCoverage(cleanEnv), encoding: 'utf-8', timeout: TEST_TIMEOUT - 10_000 },
     );
 
     cliStdout = (cli.stdout || '').replace(/\u001b\[[0-9;]*m/g, '');

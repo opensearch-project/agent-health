@@ -46,6 +46,7 @@
  */
 
 import { spawnSync } from 'child_process';
+import { withCliCoverage } from '../../helpers/cliCoverage';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -372,7 +373,7 @@ describe('judge identity matrix — every entry path × every judge path (integr
       env.AH_PORT = new URL(BASE_URL).port || '4001';
       env.AH_SUPPRESS_EXPERIMENTAL = '1';
       env.AH_QUIET_DEPRECATIONS = '1';
-      const r = spawnSync('node', [CLI_BUNDLE, 'benchmark', ...args], { cwd: REPO_ROOT, env, encoding: 'utf-8', timeout: TEST_TIMEOUT - 20_000 });
+      const r = spawnSync('node', [CLI_BUNDLE, 'benchmark', ...args], { cwd: REPO_ROOT, env: withCliCoverage(env), encoding: 'utf-8', timeout: TEST_TIMEOUT - 20_000 });
       return { stdout: (r.stdout || '').replace(/\u001b\[[0-9;]*m/g, ''), stderr: r.stderr || '', status: r.status };
     }
 

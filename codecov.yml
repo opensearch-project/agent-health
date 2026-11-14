@@ -1,8 +1,47 @@
-# cli/** is subprocess-integration-tested (jest can't instrument subprocesses)
-ignore:
-  - "cli/**"
+# Codecov configuration — https://docs.codecov.com/docs/codecov-yaml
+#
+# Four suites upload, each under its own flag, and Codecov unions them per
+# file for the project / patch numbers:
+#   unit         jest (build-and-test job)
+#   integration  jest against the real server (integration-tests job)
+#   e2e          Playwright + nyc (e2e-tests job)
+#   cli          REAL `cli/dist/index.js` processes spawned by the integration
+#                suites, recorded with NODE_V8_COVERAGE and mapped back onto
+#                cli/**/*.ts by c8 (`npm run coverage:cli`). cli/** used to be
+#                ignored here because jest cannot instrument subprocesses, which
+#                made a CLI-only PR show "all modified lines covered" with zero
+#                measurement behind it.
 
-# PR comment with per-suite (flag) coverage: unit, integration, e2e
+coverage:
+  status:
+    # New / changed lines in the PR. This is the check that should be made
+    # REQUIRED in the repo rulesets (needs an org/repo admin — see
+    # docs/DEVELOPER_GUIDE.md → Coverage).
+    patch:
+      default:
+        target: 80%
+        threshold: 0%
+        # Keep this status flag-agnostic: Codecov drops the line annotations in
+        # the "Files changed" tab as soon as the top-level patch status carries
+        # `flags:` or `paths:`.
+    # Whole-repo coverage vs the base commit. `auto` = must not regress; the
+    # threshold absorbs the ordinary run-to-run noise so unrelated PRs do not
+    # turn red.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+
+# Line-by-line annotations on the PR diff for uncovered added/changed lines
+# (GitHub Checks). Enabled by default when the Codecov GitHub App is installed;
+# stated explicitly so nobody has to guess. Codecov has announced the GitHub
+# annotations feature is deprecated (the API cannot clear stale annotations);
+# the Codecov browser extension is their recommended successor.
+github_checks:
+  annotations: true
+
+# PR comment: totals, per-flag numbers (unit / integration / e2e / cli) and the
+# changed files with their patch coverage.
 comment:
   layout: "reach, diff, flags, files"
   require_changes: false

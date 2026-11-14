@@ -30,6 +30,7 @@ agent-health.config.json
 
 # Test coverage
 /coverage/
+/coverage-cli/
 
 # Playwright
 /playwright-report/
