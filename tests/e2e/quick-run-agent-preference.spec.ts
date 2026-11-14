@@ -51,16 +51,12 @@ async function ensureTestCaseExists(
   return null;
 }
 
-/** Open the QuickRunModal for the first visible test case on /test-cases. */
+/** Open the QuickRunModal for the first visible test case on /evaluations/test-cases. */
 async function openQuickRunModal(page: Page): Promise<void> {
-  await page.goto('/test-cases');
+  await page.goto('/evaluations/test-cases');
   await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
-  // Wait for cards to render
-  await page.waitForTimeout(1500);
 
-  const card = page.locator('[class*="card"]').filter({ hasText: /run/i }).first();
-  await card.hover();
-
+  // Every test-case row carries a Run action (evals3 table rows).
   const runButton = page.locator('[data-testid="test-case-run-button"]').first();
   await runButton.waitFor({ state: 'visible', timeout: 10000 });
   await runButton.click();
@@ -74,7 +70,7 @@ test.describe('QuickRunModal — agent default and persistence', () => {
     // Make sure storage has at least one test case to operate on
     await ensureTestCaseExists(request, testData);
 
-    await page.goto('/test-cases');
+    await page.goto('/evaluations/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
 
     // Reset the QuickRun agent preference so we can test "first-time" behavior

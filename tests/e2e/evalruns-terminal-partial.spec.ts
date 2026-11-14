@@ -127,9 +127,11 @@ test.describe('Evaluation Runs page — terminal runs with partial results (no p
     await expect(row.locator('[data-testid="run-row-not-run"]')).toContainText('25 not run');
   });
 
-  test('run detail page for the cancelled run shows a "Not run" stat and a pass rate over executed cases only', async ({ page }) => {
+  test('run inspector for the cancelled run shows a "not run" tally and a pass rate over executed cases only', async ({ page }) => {
+    // The retired `/evaluations/runs/:id` detail page redirects to the inspector.
     await page.goto(`/evaluations/runs/${CANCELLED_ID}`);
-    const notRun = page.locator('[data-testid="run-detail-not-run"]');
+    await page.waitForURL(`**/evaluations/runs/${CANCELLED_ID}/inspect`, { timeout: 15000 });
+    const notRun = page.locator('[data-testid="run-inspector-not-run"]');
     await expect(notRun).toBeVisible({ timeout: 15000 });
     await expect(notRun).toContainText('28');
     // 17 passed of 34 executed = 50% — not 17/62 (27%).

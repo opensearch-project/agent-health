@@ -24,7 +24,7 @@ test.describe('Assistant Modal', () => {
   });
 
   test('"?" button renders on benchmarks page', async ({ page }) => {
-    await page.goto('/benchmarks');
+    await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     const trigger = page.locator('[data-testid="assistant-modal-trigger"]');
     await expect(trigger).toBeVisible({ timeout: 10000 });
@@ -82,7 +82,7 @@ test.describe('Assistant Modal', () => {
     await expect(content).toBeVisible({ timeout: 5000 });
 
     // Navigate to another page
-    await page.goto('/benchmarks');
+    await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
     // The trigger should still be visible

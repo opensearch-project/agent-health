@@ -375,7 +375,7 @@ export const BenchmarksPage4: React.FC = () => {
             <Upload size={12} /> {isImporting ? 'Importing...' : 'Import JSON'}
           </Button>
           {/* New Benchmark */}
-          <Button size="sm" onClick={() => { setEditingBenchmark(null); setEditorError(null); setShowEditor(true); }} className="h-7 gap-1.5 text-xs">
+          <Button size="sm" data-testid="new-benchmark-button" onClick={() => { setEditingBenchmark(null); setEditorError(null); setShowEditor(true); }} className="h-7 gap-1.5 text-xs">
             <Plus size={12} /> New Benchmark
           </Button>
           {/* Sample data toggle */}

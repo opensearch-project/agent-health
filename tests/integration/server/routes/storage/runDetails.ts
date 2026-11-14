@@ -4,10 +4,10 @@
  */
 
 /**
- * Integration tests for RunDetailsPage data loading
+ * Integration tests for run-report data loading (run inspector)
  *
  * These tests verify the API supports loading experiment runs in different states
- * for the RunDetailsPage component navigation.
+ * for the run inspector page navigation.
  *
  * Run tests:
  *   npm test -- --testPathPattern=runDetails
@@ -27,7 +27,7 @@ const checkBackend = async (): Promise<boolean> => {
   }
 };
 
-describe('RunDetailsPage Integration Tests', () => {
+describe('Run report Integration Tests', () => {
   let backendAvailable = false;
   let testExperimentId: string | null = null;
   let testCaseIds: string[] = [];

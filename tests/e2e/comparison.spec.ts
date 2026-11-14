@@ -159,7 +159,7 @@ async function seedComparisonFixture(
 
 /** From the seeded benchmark's runs page: select both runs and open Compare. */
 async function openComparison(page: Page, seed: ComparisonSeed): Promise<void> {
-  await page.goto(`/benchmarks/${seed.benchmarkId}/runs`);
+  await page.goto(`/evaluations/benchmarks/${seed.benchmarkId}/runs`);
   await page.waitForSelector('[data-testid="benchmark-runs-page"]', { timeout: 30000 });
 
   const selectAllButton = page.locator('button:has-text("Select All")');

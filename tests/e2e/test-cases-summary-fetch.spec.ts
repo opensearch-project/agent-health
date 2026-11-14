@@ -82,7 +82,7 @@ test.describe('Test-case summary fetch — network + data-loss regression', () =
       }
     });
 
-    await page.goto('/test-cases');
+    await page.goto('/evaluations/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
     await page.waitForTimeout(1000);
 
@@ -101,7 +101,7 @@ test.describe('Test-case summary fetch — network + data-loss regression', () =
       }
     });
 
-    await page.goto('/benchmarks');
+    await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
     await page.waitForTimeout(500);
 
@@ -147,14 +147,16 @@ test.describe('Test-case summary fetch — network + data-loss regression', () =
       }
     });
 
-    await page.goto('/test-cases');
+    await page.goto('/evaluations/test-cases');
     await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
 
-    // The freshly-created test case sorts first (most recent lastActivity).
-    const card = page.locator('.group', { hasText: RICH_TC_NAME }).first();
-    await card.waitFor({ state: 'visible', timeout: 10000 });
+    // Isolate the freshly-created test case with the page's search box, then
+    // open its row's Edit action.
+    await page.locator('input[placeholder*="Search"]').first().fill(RICH_TC_NAME);
+    const row = page.locator('tr', { hasText: RICH_TC_NAME }).first();
+    await row.waitFor({ state: 'visible', timeout: 10000 });
 
-    await card.locator('button[title="Edit test case"]').click();
+    await row.locator('[data-testid="test-case-edit-button"]').click();
     await page.waitForSelector('text=Edit Test Case', { timeout: 5000 });
 
     // The editor must have refetched the full record by id (not relied on
