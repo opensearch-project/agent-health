@@ -81,6 +81,8 @@ export function serverRunnerDeps(storage: IStorageModule, overrides: Partial<Run
     models: overrides.models ?? fromProcess!.models,
     judge: overrides.judge ?? defaultJudgeTransport(),
     traces: overrides.traces ?? httpTracesClient(getBackendUrl()),
-    getEvaluator: overrides.getEvaluator ?? ((id) => storage.evaluators.getById(id)),
+    // `evaluators` is optional-chained like `resolveDeterministicEvaluator`
+    // always did: a storage module without evaluator ops resolves to null.
+    getEvaluator: overrides.getEvaluator ?? (async (id) => (await storage.evaluators?.getById(id)) ?? null),
   };
 }

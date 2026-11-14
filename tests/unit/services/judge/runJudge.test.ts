@@ -46,7 +46,7 @@ import { evaluateWithClaudeCode } from '@/server/services/claudeCodeJudgeService
 import { evaluateWithPi } from '@/server/services/piJudgeService';
 import { evaluateWithPiAgenticTrace } from '@/server/services/piAgenticJudgeService';
 import { evaluateWithAgenticJudge } from '@/server/services/agenticJudgeService';
-import { runJudge, JudgeRequestError, describeJudgeFailure, resolveJudgeProvider, type JudgeConfig } from '@/services/judge/runJudge';
+import { runJudge, JudgeRequestError, describeJudgeFailure, resolveJudgeProvider, isProviderRequestRejection, type JudgeConfig } from '@/services/judge/runJudge';
 import { DEFAULT_EVALUATOR_ID } from '@/server/prompts/evaluatorTemplates';
 
 const verdict = {
@@ -97,6 +97,13 @@ describe('runJudge — provider dispatch', () => {
     getEvaluator.mockClear();
     await runJudge(body({ evaluatorId: DEFAULT_EVALUATOR_ID, modelId: 'bedrock-model' }), deps(getEvaluator));
     expect(getEvaluator).not.toHaveBeenCalled();
+  });
+
+  it('a deterministic evaluator is refused with 400 DETERMINISTIC_EVALUATOR before any provider is called (#606)', async () => {
+    const evaluator = { id: 'ev-det', name: 'Hit@k', kind: 'deterministic', scoringConfig: { metrics: [] } } as any;
+    await expect(runJudge(body({ evaluatorId: 'ev-det', modelId: 'bedrock-model' }), deps(jest.fn(async () => evaluator))))
+      .rejects.toMatchObject({ status: 400, code: 'DETERMINISTIC_EVALUATOR', message: /is deterministic/ });
+    expect(evaluateTrajectory).not.toHaveBeenCalled();
   });
 
   it('demo → mock verdict with judgeProvider demo and a structured MOCK_JUDGE warning (no provider called)', async () => {
@@ -179,6 +186,17 @@ describe('runJudge — provider dispatch', () => {
   it('provider errors propagate untouched (the wrapper decides the HTTP shape)', async () => {
     (evaluateTrajectory as jest.Mock).mockRejectedValue(new Error('ThrottlingException'));
     await expect(runJudge(body({ modelId: 'bedrock-model' }), deps())).rejects.toThrow('ThrottlingException');
+  });
+});
+
+describe('isProviderRequestRejection (#606)', () => {
+  it('matches ValidationException and client-fault 400/404 only', () => {
+    expect(isProviderRequestRejection({ name: 'ValidationException' })).toBe(true);
+    expect(isProviderRequestRejection({ name: 'X', $fault: 'client', $metadata: { httpStatusCode: 400 } })).toBe(true);
+    expect(isProviderRequestRejection({ name: 'ResourceNotFoundException', $fault: 'client', $metadata: { httpStatusCode: 404 } })).toBe(true);
+    expect(isProviderRequestRejection({ name: 'ThrottlingException', $fault: 'client', $metadata: { httpStatusCode: 429 } })).toBe(false);
+    expect(isProviderRequestRejection({ name: 'InternalServerException', $fault: 'server', $metadata: { httpStatusCode: 500 } })).toBe(false);
+    expect(isProviderRequestRejection(undefined)).toBe(false);
   });
 });
 

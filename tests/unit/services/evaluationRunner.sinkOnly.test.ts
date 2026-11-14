@@ -84,6 +84,8 @@ function spySink(): RunSink & { calls: Array<{ method: string; args: any[] }> } 
 
 const judge: JudgeTransport = jest.fn(async () => { throw new Error('judge transport must not be called on this path'); });
 const traces: TracesClient = { fetchTracesForRun: jest.fn(async () => { throw new Error('traces must not be called on this path'); }) };
+// The runner's one read: the run has no evaluatorId here, so it must never be consulted.
+const getEvaluator = jest.fn(async () => { throw new Error('getEvaluator must not be called without an evaluatorId'); });
 
 const agents = [{ key: 'agent-a', name: 'Agent A', endpoint: 'http://agent.local', headers: {} }] as any;
 const models = { 'model-a': { model_id: 'provider.model-a', display_name: 'Model A' } } as any;
@@ -115,7 +117,7 @@ describe('executeEvaluationRun writes only through the sink (behavioural spy, no
     const onTestCaseComplete = jest.fn();
 
     const result = await executeEvaluationRun(makeRun(), [testCase], {
-      sink, agents, models, judge, traces,
+      sink, agents, models, judge, traces, getEvaluator,
       storageModule: throwingStorage(),
       onProgress: jest.fn(),
       onTestCaseComplete,
@@ -152,7 +154,7 @@ describe('executeEvaluationRun writes only through the sink (behavioural spy, no
     const sink = spySink();
 
     const result = await executeEvaluationRun(makeRun(), [testCase], {
-      sink, agents, models, judge, traces, storageModule: throwingStorage(), onProgress: jest.fn(),
+      sink, agents, models, judge, traces, getEvaluator, storageModule: throwingStorage(), onProgress: jest.fn(),
     });
 
     expect(result.stats).toMatchObject({ failed: 1, total: 1 });
@@ -175,7 +177,7 @@ describe('executeEvaluationRun writes only through the sink (behavioural spy, no
     };
 
     const result = await executeEvaluationRun(makeRun(), [testCase], {
-      sink, agents, models, judge, traces, storageModule: throwingStorage(), onProgress: jest.fn(),
+      sink, agents, models, judge, traces, getEvaluator, storageModule: throwingStorage(), onProgress: jest.fn(),
     });
 
     expect(result.stats).toMatchObject({ passed: 1 });
@@ -191,7 +193,7 @@ describe('executeEvaluationRun writes only through the sink (behavioural spy, no
     sink.setCaseResult = async () => { throw new Error('version_conflict_engine_exception'); };
 
     const result = await executeEvaluationRun(makeRun(), [testCase], {
-      sink, agents, models, judge, traces, storageModule: throwingStorage(), onProgress: jest.fn(),
+      sink, agents, models, judge, traces, getEvaluator, storageModule: throwingStorage(), onProgress: jest.fn(),
     });
     expect(result.results['tc-1']).toMatchObject({ status: 'completed', passFailStatus: 'passed' });
     expect(result.stats).toMatchObject({ passed: 1, failed: 0 });
@@ -199,20 +201,20 @@ describe('executeEvaluationRun writes only through the sink (behavioural spy, no
 
   it('an explicit sink with a missing dependency fails fast instead of mixing in process defaults', async () => {
     const sink = spySink();
-    await expect(executeEvaluationRun(makeRun(), [testCase], { sink, agents, models, traces, onProgress: jest.fn() } as any))
+    await expect(executeEvaluationRun(makeRun(), [testCase], { sink, agents, models, traces, getEvaluator, onProgress: jest.fn() } as any))
       .rejects.toThrow(/every runner dependency must be explicit — missing: judge/);
     expect(sink.calls).toEqual([]);
   });
 
   it('rejects when neither a sink nor the legacy storageModule is provided', async () => {
-    await expect(executeEvaluationRun(makeRun(), [testCase], { agents, models, judge, traces, onProgress: jest.fn() } as any))
+    await expect(executeEvaluationRun(makeRun(), [testCase], { agents, models, judge, traces, getEvaluator, onProgress: jest.fn() } as any))
       .rejects.toThrow(/options\.sink is required/);
   });
 
   it('an unknown agentKey fails before any write', async () => {
     const sink = spySink();
     await expect(executeEvaluationRun({ ...makeRun(), agentKey: 'nope' }, [testCase], {
-      sink, agents, models, judge, traces, storageModule: throwingStorage(), onProgress: jest.fn(),
+      sink, agents, models, judge, traces, getEvaluator, storageModule: throwingStorage(), onProgress: jest.fn(),
     })).rejects.toThrow('Agent not found: nope');
     expect(sink.calls).toEqual([]);
   });
