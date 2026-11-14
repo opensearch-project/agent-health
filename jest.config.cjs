@@ -18,6 +18,9 @@ module.exports = {
   testMatch: ['**/tests/**/*.test.ts'],
   moduleNameMapper: {
     '^@/lib/config$': '<rootDir>/__mocks__/@/lib/config.ts',
+    // Mock lib/viteEnv to avoid import.meta parsing issues in Jest (see
+    // lib/viteEnv.ts's header comment)
+    '^@/lib/viteEnv$': '<rootDir>/__mocks__/@/lib/viteEnv.ts',
     // Mock packagePaths to avoid import.meta.url issues in Jest
     '^@/lib/packagePaths$': '<rootDir>/__mocks__/@/lib/packagePaths.ts',
     '^\.\./packagePaths\.js$': '<rootDir>/__mocks__/@/lib/packagePaths.ts',
