@@ -136,7 +136,7 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
     // No click-to-expand needed anymore — the Open-run link is inline on the row.
     const openRunA = page.locator(`[data-testid="open-run-${BENCH_RUN_ID}"]`);
     await expect(openRunA).toBeVisible();
-    await expect(openRunA).toHaveAttribute('href', `/evaluations/benchmarks/${BENCH_ID}/runs/${BENCH_RUN_ID}`);
+    await expect(openRunA).toHaveAttribute('href', `/evaluations/benchmarks/${BENCH_ID}/runs/${BENCH_RUN_ID}/inspect`);
 
     await openRunA.click();
     // The benchmarkId/runId route redirects to .../inspect (App.tsx) —
@@ -154,10 +154,10 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
 
     const openRunB = page.locator(`[data-testid="open-run-${ADHOC_RUN_ID}"]`);
     await expect(openRunB).toBeVisible();
-    await expect(openRunB).toHaveAttribute('href', `/evaluations/runs/${ADHOC_RUN_ID}`);
+    await expect(openRunB).toHaveAttribute('href', `/evaluations/runs/${ADHOC_RUN_ID}/inspect`);
 
     await openRunB.click();
-    await page.waitForURL(`**/evaluations/runs/${ADHOC_RUN_ID}`, { timeout: 15000 });
+    await page.waitForURL(`**/evaluations/runs/${ADHOC_RUN_ID}/inspect`, { timeout: 15000 });
   });
 
   test('eval-run labeled with a benchmarkId but NOT embedded in that benchmark still deep-links to the bare eval-run route', async ({ page }) => {
@@ -169,10 +169,10 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
 
     const openRunLabeled = page.locator(`[data-testid="open-run-${LABELED_RUN_ID}"]`);
     await expect(openRunLabeled).toBeVisible();
-    await expect(openRunLabeled).toHaveAttribute('href', `/evaluations/runs/${LABELED_RUN_ID}`);
+    await expect(openRunLabeled).toHaveAttribute('href', `/evaluations/runs/${LABELED_RUN_ID}/inspect`);
 
     await openRunLabeled.click();
-    await page.waitForURL(`**/evaluations/runs/${LABELED_RUN_ID}`, { timeout: 15000 });
+    await page.waitForURL(`**/evaluations/runs/${LABELED_RUN_ID}/inspect`, { timeout: 15000 });
     // Never routed through the benchmark path at all.
     await expect(page).not.toHaveURL(new RegExp(`/evaluations/benchmarks/${BENCH_ID}/runs`));
   });
@@ -184,15 +184,15 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
     // Owner: "run names should be clickable to the run link, complete name
     // should show up on hover" — the name anchor must agree with the icon.
     const nameA = page.locator(`[data-testid="run-name-link-${BENCH_RUN_ID}"]`);
-    await expect(nameA).toHaveAttribute('href', `/evaluations/benchmarks/${BENCH_ID}/runs/${BENCH_RUN_ID}`);
+    await expect(nameA).toHaveAttribute('href', `/evaluations/benchmarks/${BENCH_ID}/runs/${BENCH_RUN_ID}/inspect`);
     await expect(nameA).toHaveAttribute('title', 'Benchmark Run');
     const nameB = page.locator(`[data-testid="run-name-link-${ADHOC_RUN_ID}"]`);
-    await expect(nameB).toHaveAttribute('href', `/evaluations/runs/${ADHOC_RUN_ID}`);
+    await expect(nameB).toHaveAttribute('href', `/evaluations/runs/${ADHOC_RUN_ID}/inspect`);
     await expect(nameB).toHaveAttribute('title', 'Ad-hoc Run');
 
     // The per-case table's run headers link the same way.
     const headerLinkA = page.locator(`[data-testid="case-table-run-link-${BENCH_RUN_ID}"]`);
-    await expect(headerLinkA).toHaveAttribute('href', `/evaluations/benchmarks/${BENCH_ID}/runs/${BENCH_RUN_ID}`);
+    await expect(headerLinkA).toHaveAttribute('href', `/evaluations/benchmarks/${BENCH_ID}/runs/${BENCH_RUN_ID}/inspect`);
     await expect(headerLinkA).toHaveAttribute('title', 'Benchmark Run');
 
     // Owner: "each column should be explainable by a hover with a one line
@@ -221,6 +221,6 @@ test.describe('Comparison scoreboard — "Open run" deep link', () => {
     await page.goBack();
     await page.waitForSelector('[data-testid="comparison-scoreboard"]', { timeout: 30000 });
     await page.locator(`[data-testid="case-table-run-link-${ADHOC_RUN_ID}"]`).click();
-    await page.waitForURL(`**/evaluations/runs/${ADHOC_RUN_ID}`, { timeout: 15000 });
+    await page.waitForURL(`**/evaluations/runs/${ADHOC_RUN_ID}/inspect`, { timeout: 15000 });
   });
 });

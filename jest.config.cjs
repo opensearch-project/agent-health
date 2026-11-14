@@ -169,6 +169,15 @@ module.exports = {
     // persisted / stale / deterministic-only / unjudged states) has a focused
     // jsdom/RTL suite (tests/unit/components/evals3/CaseTldrCard.test.ts).
     'components/evals3/CaseTldrCard.tsx',
+    // - App.tsx, ReportRedirect.tsx, RunInspectorPage.tsx (#542, legacy-route
+    //   retirement): the real route table + the report-id redirect have jsdom
+    //   suites (appRoutes.legacyRedirects / appRoutes.legacyRedirectGuard) that
+    //   drive every redirect branch, and RunInspectorPage.test.ts covers the
+    //   promote / customize-rerun / planned-aware tally paths that moved here
+    //   from the retired eval-run detail page (95%+ lines in isolation).
+    'App.tsx',
+    'components/ReportRedirect.tsx',
+    'components/evals3/RunInspectorPage.tsx',
     '!**/__tests__/**',
     '!**/*.test.ts',
     '!**/dist/**',

@@ -19,8 +19,10 @@ import { test, expect } from './fixtures/test-fixtures';
  * 84/84 passed.
  *
  * This spec seeds an evaluation-run doc where `run.stats` still has the OLD
- * buggy shape (every case counted as passed) but `run.results` carries the
- * real per-test-case verdicts (2 passed / 2 failed). If the detail page ever
+ * buggy shape (every case counted as passed) but `run.results` (and the
+ * per-case report docs) carry the real verdicts (2 passed / 2 failed). The
+ * run-report surface is the run inspector (`/evaluations/runs/:id/inspect`;
+ * the older detail page is retired and redirects there) — if it ever
  * regresses to trusting `run.stats` directly, this test fails by asserting
  * the buggy numbers are NOT shown and the real numbers ARE.
  */
@@ -59,28 +61,55 @@ function evalRunDoc() {
   };
 }
 
-test.describe('Evaluation Run Detail Page — stats reflect real verdicts, not stale run.stats', () => {
-  test('shows passed/failed computed from run.results, not the buggy denormalized run.stats', async ({ page }) => {
+function reportDoc(testCaseId: string, passFailStatus: 'passed' | 'failed') {
+  return {
+    id: `report-${testCaseId}`,
+    timestamp: new Date().toISOString(),
+    testCaseId,
+    experimentRunId: RUN_ID,
+    agentKey: 'agent-alpha',
+    modelId: 'e2e-model',
+    status: 'completed',
+    passFailStatus,
+    metricsStatus: 'ready',
+    evaluationType: 'deterministic',
+    trajectory: [],
+    metrics: { accuracy: passFailStatus === 'passed' ? 1 : 0 },
+  };
+}
+
+test.describe('Run inspector — stats reflect real verdicts, not stale run.stats', () => {
+  test('shows passed/failed computed from the per-case verdicts, not the buggy denormalized run.stats', async ({ page }) => {
     const api = page.request;
+    const cases: Array<[string, 'passed' | 'failed']> = [
+      [TC_PASS_1, 'passed'], [TC_PASS_2, 'passed'], [TC_FAIL_1, 'failed'], [TC_FAIL_2, 'failed'],
+    ];
     try {
+      for (const [tc, verdict] of cases) {
+        const r = await api.post('/api/storage/runs', { data: reportDoc(tc, verdict) });
+        expect(r.ok(), `seed report for ${tc}`).toBeTruthy();
+      }
       const seeded = await api.put(`/api/storage/evaluation-runs/${RUN_ID}`, { data: evalRunDoc() });
       expect(seeded.ok()).toBeTruthy();
 
+      // The retired detail URL redirects to the inspector.
       await page.goto(`/evaluations/runs/${RUN_ID}`);
-      await expect(page.getByText('EVALUATION RUN', { exact: true })).toBeVisible({ timeout: 15000 });
-      await page.waitForTimeout(1000);
+      await page.waitForURL(`**/evaluations/runs/${RUN_ID}/inspect`, { timeout: 15000 });
+      await expect(page.locator(`[data-testid="run-actions-menu-trigger-${RUN_ID}"]`)).toBeVisible({ timeout: 15000 });
 
-      // Real verdicts: 2 passed, 2 failed, 4 total — NOT the buggy 4 passed.
-      await expect(page.locator('text=Passed').first()).toBeVisible();
-
-      const passedValue = page.locator('div.text-2xl.font-bold.text-green-600');
-      const failedValue = page.locator('div.text-2xl.font-bold.text-red-600');
-      // Assert the REAL numbers are shown — this is what regresses to '4'/'0'
+      // Real verdicts: 2 passed, 2 failed, 4 total, 50% — NOT the buggy 4/4.
+      // Assert the REAL numbers are shown — this is what regresses to '4✓'/'0✗'
       // if the page ever goes back to trusting the stale run.stats blob.
-      await expect(passedValue).toHaveText('2');
-      await expect(failedValue).toHaveText('2');
+      const header = page.locator('.text-green-500.font-semibold', { hasText: /✓$/ });
+      await expect(header).toHaveText('2✓', { timeout: 15000 });
+      await expect(page.locator('.text-red-500.font-semibold', { hasText: /✗$/ })).toHaveText('2✗');
+      await expect(page.getByText('/ 4', { exact: true })).toBeVisible();
+      await expect(page.getByText('50%', { exact: true })).toBeVisible();
     } finally {
       await api.delete(`/api/storage/evaluation-runs/${RUN_ID}`).catch(() => {});
+      for (const [tc] of cases) {
+        await api.delete(`/api/storage/runs/report-${tc}`).catch(() => {});
+      }
     }
   });
 });
