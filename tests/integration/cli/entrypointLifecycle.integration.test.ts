@@ -192,7 +192,7 @@ describe('CLI entry point and server lifecycle (real CLI processes)', () => {
     expect(instance!.port).toBe(port);
     expect(out()).toMatch(new RegExp(`Agent Health v${VERSION.replace(/\\./g, '\\\\.')}`));
     expect(out()).toMatch(/Headless API server started/);
-    expect(out()).toContain(`API server running on http://0.0.0.0:${port}`);
+    expect(out()).toContain(`API server running on http://127.0.0.1:${port}`);
     expect(out()).toMatch(/Mode: headless \(API only, no frontend\)/);
     // Headless: the SPA is not served.
     const index = await httpJson(`http://127.0.0.1:${port}/`);
@@ -254,7 +254,7 @@ describe('CLI entry point and server lifecycle (real CLI processes)', () => {
     const secondInstance = await waitForHealth(fallbackPort!, SERVER_READY_TIMEOUT);
     if (secondInstance) pidsToReap.add(secondInstance.pid);
     expect(secondInstance?.port).toBe(fallbackPort);
-    expect(plain(second.output())).toContain(`API server running on http://0.0.0.0:${fallbackPort}`);
+    expect(plain(second.output())).toContain(`API server running on http://127.0.0.1:${fallbackPort}`);
 
     second.child.kill('SIGTERM');
     first.child.kill('SIGTERM');
