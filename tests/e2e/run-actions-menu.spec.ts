@@ -162,13 +162,15 @@ test.describe('Run actions menu — Delete / Cancel / Retry judgement', () => {
     });
     testData.evaluationRun(runId);
 
+    // The retired `/evaluations/runs/:id` detail page redirects to the inspector.
     await page.goto(`/evaluations/runs/${runId}`);
+    await page.waitForURL(`**/evaluations/runs/${runId}/inspect`, { timeout: 15000 });
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
     await page.locator('[data-testid="run-actions-menu-trigger-' + runId + '"]').click();
     const retryItem = page.locator(`[data-testid="run-action-retry-judgement-${runId}"]`);
     await expect(retryItem).toBeVisible({ timeout: 10000 });
-    await expect(retryItem).toBeEnabled();
+    await expect(retryItem).toBeEnabled({ timeout: 10000 });
     await retryItem.click();
 
     // The kebab item opens the SAME picker dialog as the inspector (one
@@ -224,7 +226,7 @@ test.describe('Re-run dialog — the shared RunConfigDialog, prefilled + editabl
     test.skip(!res.ok(), 'Could not seed source run');
     testData.evaluationRun(runId);
 
-    await page.goto(`/evaluations/runs/${runId}`);
+    await page.goto(`/evaluations/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${runId}"]`).click();
@@ -304,7 +306,8 @@ test.describe('Re-run from the inspector kebab — the SAME dialog as Add Run, p
     // Submit as a faithful duplicate — a REAL run is created against the
     // demo agent (cheap), linked back via rerunOf, and we land on it.
     await page.locator('[data-testid="run-config-submit-btn"]').click();
-    await expect(page).toHaveURL(/\/evaluations\/runs\/eval-run-[^/]+$/, { timeout: 15000 });
+    // Re-running lands on the NEW run's inspector.
+    await expect(page).toHaveURL(/\/evaluations\/runs\/eval-run-[^/]+\/inspect$/, { timeout: 15000 });
     const newRunId = page.url().split('/evaluations/runs/')[1].split(/[/?#]/)[0];
     expect(newRunId).not.toBe(runId);
     testData.evaluationRun(newRunId);
@@ -353,7 +356,7 @@ test.describe('Re-run dialog — source-run agent no longer in config (real Radi
     test.skip(!res.ok(), 'Could not seed source run');
     testData.evaluationRun(runId);
 
-    await page.goto(`/evaluations/runs/${runId}`);
+    await page.goto(`/evaluations/runs/${runId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await page.locator(`[data-testid="run-actions-menu-trigger-${runId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${runId}"]`).click();
@@ -430,7 +433,10 @@ test.describe('Run inspector header — kebab is the only action surface (gating
     await expect(menu).toBeVisible({ timeout: 10000 });
     const items = menu.getByRole('menuitem');
     const ids = await items.evaluateAll(els => els.map(el => (el.getAttribute('data-testid') || '')));
-    return ids.map(id => id.replace(/^run-action-/, '').replace(new RegExp(`-${runId}$`), ''));
+    // "Customize before re-running…" (`rerun-customize-btn`) and "Convert to
+    // Benchmark" (`run-action-promote-<id>`, ad-hoc completed runs only) moved
+    // into this kebab from the retired eval-run detail page.
+    return ids.map(id => id.replace(/^rerun-customize-btn$/, 'customize').replace(/^run-action-/, '').replace(new RegExp(`-${runId}$`), ''));
   }
 
   async function assertNoStandaloneHeaderButtons(page: import('@playwright/test').Page, runId: string) {
@@ -473,7 +479,7 @@ test.describe('Run inspector header — kebab is the only action surface (gating
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await assertNoStandaloneHeaderButtons(page, runId);
 
-    expect(await openKebabKinds(page, runId)).toEqual(['rerun', 'cancel', 'retry-judgement', 'delete']);
+    expect(await openKebabKinds(page, runId)).toEqual(['rerun', 'customize', 'cancel', 'retry-judgement', 'delete']);
     await expect(page.locator(`[data-testid="run-action-rerun-${runId}"]`)).not.toHaveAttribute('aria-disabled', 'true');
     const retry = page.locator(`[data-testid="run-action-retry-judgement-${runId}"]`);
     await expect(retry).toHaveAttribute('aria-disabled', 'true');
@@ -519,7 +525,7 @@ test.describe('Run inspector header — kebab is the only action surface (gating
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await assertNoStandaloneHeaderButtons(page, runId);
 
-    expect(await openKebabKinds(page, runId)).toEqual(['rerun', 'retry-judgement', 'delete']);
+    expect(await openKebabKinds(page, runId)).toEqual(['rerun', 'customize', 'promote', 'retry-judgement', 'delete']);
     await expect(page.locator(`[data-testid="run-action-cancel-${runId}"]`)).toHaveCount(0);
     // The label re-renders in place once the report-summary batch lands
     // (count flips 0 → 1) — the open menu reflects live state.
@@ -573,7 +579,7 @@ test.describe('Run inspector header — kebab is the only action surface (gating
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await assertNoStandaloneHeaderButtons(page, runId);
 
-    expect(await openKebabKinds(page, runId)).toEqual(['rerun', 'retry-judgement', 'delete']);
+    expect(await openKebabKinds(page, runId)).toEqual(['rerun', 'customize', 'promote', 'retry-judgement', 'delete']);
     const retry = page.locator(`[data-testid="run-action-retry-judgement-${runId}"]`);
     await expect(retry).toContainText('Retry judgement (1)');
     await expect(retry).not.toHaveAttribute('aria-disabled', 'true');
