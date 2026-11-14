@@ -25,6 +25,19 @@ export interface PiModel {
   id: string;
 }
 
+/**
+ * The subset of pi's ModelRuntime we consume: the credentialed registry, and
+ * the auth/stream entry points the assistant wraps for credential rotation
+ * (see server/services/ask/askModelRuntime.ts).
+ */
+export interface PiModelRuntime {
+  getAvailable(): Promise<PiModel[]>;
+  getAuth(model: any, overrides?: any): Promise<{ auth?: { apiKey?: string }; env?: Record<string, string> } | undefined>;
+  stream(model: any, context: any, options?: any): unknown;
+  streamSimple(model: any, context: any, options?: any): unknown;
+  [key: string]: any;
+}
+
 /** Result returned by a registered pi tool's `execute`. */
 export interface PiToolResult {
   content: Array<{ type: 'text'; text: string }>;
@@ -60,7 +73,7 @@ export interface PiSdk {
   createAgentSession(opts: any): Promise<{ session: PiSession }>;
   SessionManager: { inMemory(): unknown };
   /** pi >= 0.80.8: canonical async model/auth facade (replaced AuthStorage + ModelRegistry). */
-  ModelRuntime: { create(opts?: unknown): Promise<{ getAvailable(): Promise<PiModel[]> }> };
+  ModelRuntime: { create(opts?: unknown): Promise<PiModelRuntime> };
   DefaultResourceLoader: new (opts: any) => { reload(): Promise<void> };
   getAgentDir(): string;
 }

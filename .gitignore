@@ -31,6 +31,9 @@ agent-health.config.json
 # Test coverage
 /coverage/
 /coverage-cli/
+# Playwright e2e coverage (E2E_COVERAGE=true → nyc raw data + report)
+/.nyc_output/
+/coverage-e2e/
 
 # Playwright
 /playwright-report/

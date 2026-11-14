@@ -21,7 +21,7 @@ import { AgentTracesPage } from './components/traces/AgentTracesPage';
 import { CodingAgentsPage } from './components/codingAgents/CodingAgentsPage';
 import { EvaluatorsPage } from './components/EvaluatorsPage';
 import { EvaluatorEditPage } from './components/EvaluatorEditPage';
-import { AssistantChat } from './components/assistant-ui/AssistantChat';
+import { AskOpenRedirect } from './components/ask/AskSurface';
 import { SkillsPage } from './components/skills/SkillsPage';
 
 // Evals 3 — Evaluations
@@ -148,7 +148,7 @@ function App() {
             <Route path="/coding-agents" element={<CodingAgentsPage />} />
 
             {/* AI Assistant */}
-            <Route path="/assistant" element={<AssistantChat />} />
+            <Route path="/assistant" element={<AskOpenRedirect />} />
             {/* Redirects for deprecated routes */}
             <Route path="/evals" element={<Navigate to="/test-cases" replace />} />
             <Route path="/run" element={<Navigate to="/test-cases" replace />} />
