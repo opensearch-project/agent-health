@@ -306,11 +306,11 @@ project. They live in **three mirrored locations** and must be kept in sync:
   generated from it — `.claude/skills/agent-health/SKILL.md` is `frontmatter +
   AGENT_HEALTH.md body`, and `.kiro/steering/agent-health.md` is the body verbatim.
   Regenerate both copies whenever you edit `AGENT_HEALTH.md`.
-- **`docs/skills/AGENT_HEALTH.md` is loaded into the live AI-assistant system
-  prompt at runtime** (`server/services/assistantService.ts`) and into the
-  Claude-Code judge (`server/services/claudeCodeJudgeService.ts`). Treat stale
-  content here as a product bug, not just a docs gap — and keep the filename
-  stable (the loaders resolve it by path).
+- **`docs/skills/AGENT_HEALTH.md` is loaded into the Claude-Code judge's system
+  prompt at runtime** (`server/services/claudeCodeJudgeService.ts`). The built-in
+  assistant (`server/services/ask/`) carries its own fixed system prompt and
+  does not read this file. Treat stale content here as a product bug, not just
+  a docs gap — and keep the filename stable (the loader resolves it by path).
 
 ## Development Workflow
 
