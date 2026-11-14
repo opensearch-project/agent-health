@@ -12,7 +12,7 @@
 
 import { Span, EvaluationReport, AgentConfig, BuildTrajectoryContext } from '@/types';
 import { debug } from '@/lib/debug';
-import { fetchTracesForRun } from './index';
+import { fetchTracesForRun, type TracesClient } from './index';
 import { buildJudgeAgentsHints } from './judgeAgentsHints';
 import { asyncRunStorage } from '../storage/asyncRunStorage';
 import { executeBuildTrajectoryHook } from '@/lib/hooks';
@@ -58,6 +58,15 @@ export interface PollState {
   running: boolean;
   timerId?: ReturnType<typeof setTimeout>;
   agentConfig?: AgentConfig;
+  /** Where this poll reads traces from (default: this process's own `/api/traces`). */
+  tracesClient?: TracesClient;
+}
+
+export interface StartPollingOptions {
+  intervalMs?: number;
+  maxAttempts?: number;
+  agentConfig?: AgentConfig;
+  tracesClient?: TracesClient;
 }
 
 export interface PollCallbacks {
@@ -95,7 +104,7 @@ class TracePollingManager {
     reportId: string,
     runId: string | undefined,
     callbacks: PollCallbacks,
-    options?: { intervalMs?: number; maxAttempts?: number; agentConfig?: AgentConfig }
+    options?: StartPollingOptions
   ): void {
     // Don't start if already polling for this report
     if (this.polls.has(reportId) && this.polls.get(reportId)!.running) {
@@ -119,6 +128,7 @@ class TracePollingManager {
       lastAttempt: null,
       running: true,
       agentConfig: options?.agentConfig,
+      tracesClient: options?.tracesClient,
     };
 
     this.polls.set(reportId, state);
@@ -184,7 +194,7 @@ class TracePollingManager {
     reportId: string,
     runId: string | undefined,
     callbacks: PollCallbacks,
-    options?: { intervalMs?: number; maxAttempts?: number; agentConfig?: AgentConfig }
+    options?: StartPollingOptions
   ): Promise<void> {
     // If already polling, return the existing completion promise
     const existing = this.completionPromises.get(reportId);
@@ -351,12 +361,10 @@ class TracePollingManager {
 
       // Try to fetch traces — union of Strategy A (eval traceId), B (runId),
       // C (service.name + time window) and D (session.id inside the window hint).
-      const result = await fetchTracesForRun({
-        runId: state.runId,
-        evalTraceId,
-        windowAgents,
-        includeWindowFallback: windowAgents.length > 0,
-      });
+      const traceQuery = { runId: state.runId, evalTraceId, windowAgents, includeWindowFallback: windowAgents.length > 0 };
+      const result = state.tracesClient
+        ? await state.tracesClient.fetchTracesForRun(traceQuery)
+        : await fetchTracesForRun(traceQuery);
 
       // EXACT-MATCH FILTER (fail-closed): the window clause (Strategy C) is a
       // discovery fallback and can return spans from CONCURRENT runs of the

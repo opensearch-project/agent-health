@@ -8,8 +8,9 @@
  * Loads and resolves agent-health.config.ts files
  */
 
-import { existsSync } from 'fs';
-import { resolve, join } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { resolve, join, dirname } from 'path';
 import { projectStatePath, userStatePath } from './statePaths.js';
 import { logStartupDiagnostic } from '@/lib/diagnostics';
 import { pathToFileURL } from 'url';
@@ -202,11 +203,29 @@ function mergeConfigs(
 
 /**
  * Load user config file
+ *
+ * @param reload - Re-evaluate the file even if this process already imported
+ *   it. Node caches ES modules by URL for the life of the process, so a plain
+ *   re-import of an edited `agent-health.config.ts` returns the OLD module;
+ *   a query string keyed on the content hash of the file (and of `.env`
+ *   next to it, which the file may read at import) makes an edited file a
+ *   new URL (and an unchanged file the same, cached one — so the cache grows
+ *   by one module graph per distinct config version, not per run).
+ *   Limitation: only the config file itself is re-evaluated; modules it
+ *   imports are still served from Node's cache (restart after editing those).
  */
-async function loadUserConfig(configPath: string): Promise<UserConfig> {
+async function loadUserConfig(configPath: string, reload: boolean = false): Promise<UserConfig> {
   try {
     // Use dynamic import with file URL for cross-platform compatibility
-    const fileUrl = pathToFileURL(configPath).href;
+    let fileUrl = pathToFileURL(configPath).href;
+    if (reload) {
+      // Keyed on the config file AND `<cwd>/.env`: a config that reads
+      // `process.env` at import must be re-evaluated after a `.env` edit too.
+      const hash = createHash('sha1').update(readFileSync(configPath));
+      const envFile = join(dirname(configPath), '.env');
+      if (existsSync(envFile)) hash.update(readFileSync(envFile));
+      fileUrl += `?reload=${hash.digest('hex').slice(0, 16)}`;
+    }
 
     // For TypeScript files, we need tsx or ts-node to be available
     // The CLI build process compiles TS, so this works in production
@@ -258,7 +277,7 @@ export async function loadConfig(
 
   if (configFile) {
     logStartupDiagnostic(`[Config] Loading ${configFile.path}`);
-    userConfig = await loadUserConfig(configFile.path);
+    userConfig = await loadUserConfig(configFile.path, force);
   } else if (hasServerJsonConfig(cwd)) {
     // Code config absent, but server-side JSON config present — it's loaded
     // by separate server services (storage / observability / custom agents).

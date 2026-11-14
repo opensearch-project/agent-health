@@ -31,6 +31,7 @@ import skillsRoutes from './skills';
 import comparisonClusterRoutes from './comparisonCluster';
 import comparisonRoutes from './comparison';
 import telemetryRoutes from './telemetry';
+import runsIngestRoutes from './runsIngest';
 
 const router = Router();
 
@@ -59,6 +60,7 @@ router.use(skillsRoutes);        // /api/skills/*
 router.use(comparisonClusterRoutes); // /api/comparison/cluster-failures
 router.use(comparisonRoutes);    // /api/comparison/deep-dive
 router.use(telemetryRoutes);     // /api/telemetry/ui-event
+router.use(runsIngestRoutes);    // /api/runs/ingest/* (RunSink over HTTP)
 
 // Coding Agent Analytics — only mount when feature is enabled
 if (codingAnalyticsEnabled) {
