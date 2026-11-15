@@ -392,6 +392,28 @@ export const EvalRunsPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [hasInProgressRuns, loadData]);
 
+  // A run started OUTSIDE this page — the CLI executing in its own process
+  // (#612), another browser tab — is unknown to the poll above until a manual
+  // reload. Probe the cheap in-flight list (lease data, not the full run
+  // documents) every 5 s and reload the page's data only when it names a run
+  // this page has not seen yet, so a CLI run shows up within one poll period.
+  const knownRunIds = useMemo(() => new Set(evalRuns.map(r => r.id)), [evalRuns]);
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const res = await fetch(`${ENV_CONFIG.backendUrl}/api/runs/in-flight`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json() as { runs?: Array<{ id: string }> };
+        if ((data.runs ?? []).some(r => !knownRunIds.has(r.id))) loadData(true);
+      } catch {
+        // Best-effort; the next tick tries again.
+      }
+    };
+    const interval = setInterval(probe, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [knownRunIds, loadData]);
+
   // Available filter options (derived from data)
   const availableBenchmarks = useMemo(() => {
     const bms = new Map<string, string>();

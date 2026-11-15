@@ -17,6 +17,9 @@ jest.mock('chalk', () => {
 });
 jest.mock('ora', () => ({ __esModule: true, default: jest.fn(() => ({ start: jest.fn() })) }));
 jest.mock('@/lib/config/index.js', () => ({ __esModule: true, loadConfig: jest.fn() }));
+// The local executor (#612) pulls in the runner, connectors and the AWS SDK;
+// this suite covers the command's option handling / summary only.
+jest.mock('@/cli/utils/localExecutor.js', () => ({ __esModule: true, executeRunLocally: jest.fn(), LocalRunFailure: class LocalRunFailure extends Error {} }));
 jest.mock('@/cli/utils/serverLifecycle.js', () => ({ __esModule: true, ensureServer: jest.fn(), createServerCleanup: jest.fn() }));
 jest.mock('@/cli/utils/apiClient.js', () => ({ __esModule: true, ApiClient: jest.fn() }));
 jest.mock('@/services/connectors/server.js', () => ({ __esModule: true, connectorRegistry: { register: jest.fn() } }));

@@ -10,7 +10,9 @@
  * these routes; each one is a thin wrapper over the server's `LocalRunSink`,
  * so a run ingested here is stored exactly like a run executed in-process.
  *
- *   POST  /api/runs/ingest                                  createRun       → { runId, executorToken }
+ *   POST  /api/runs/ingest                                  createRun       → { runId, executorToken, lease }
+ *         (also links the run's cases into `run.benchmarkId` and stamps the
+ *         benchmark image — server/services/runBookkeeping.ts)
  *   PUT   /api/runs/ingest/:runId/cases/:caseId/report      upsertCaseReport → { reportId, report }
  *   PATCH /api/runs/ingest/:runId/reports/:reportId         patchCaseReport → { ok: true }
  *   PATCH /api/runs/ingest/:runId/cases/:caseId/result      setCaseResult   → LeaseEcho
@@ -36,6 +38,7 @@ import { getStorageModule } from '../adapters/index.js';
 import { LocalRunSink, EXECUTOR_TOKEN_HEADER, LEASE_GENERATION_HEADER, type FinalizeInput } from '../../services/runSink.js';
 import { isLeaseLostError } from '../../lib/runLease.js';
 import { refuseWhenDraining } from '../services/serverDrain.js';
+import { performIngestedRunBookkeeping } from '../services/runBookkeeping.js';
 
 const router = Router();
 
@@ -97,7 +100,14 @@ router.post('/api/runs/ingest', refuseWhenDraining, async (req: Request, res: Re
     return res.status(400).json({ error: 'body.executor.version must be a printable string of at most 64 characters when given' });
   }
   try {
-    const sink = new LocalRunSink(getStorageModule(), { executorKind: 'cli', executorVersion });
+    const storage = getStorageModule();
+    // Same storage-side bookkeeping a server-executed run gets at creation:
+    // the parent benchmark stays linked to the run's cases and the run's
+    // judge conditions are stamped as a benchmark image. The executor only
+    // ever ships the run document; the links are the server's job.
+    const { imageDigest } = await performIngestedRunBookkeeping(storage, run as any);
+    if (imageDigest) run.imageDigest = imageDigest;
+    const sink = new LocalRunSink(storage, { executorKind: 'cli', executorVersion });
     const created = await sink.createRun(run as any);
     res.setHeader(EXECUTOR_TOKEN_HEADER, created.executorToken);
     res.status(201).json(created);

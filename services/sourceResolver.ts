@@ -8,6 +8,19 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import type { TestCaseSource, TestCase } from '@/types';
 import type { IStorageModule } from '@/server/adapters/types';
+
+/**
+ * The storage surface source resolution needs — a structural subset of
+ * `IStorageModule`, so the resolver can run wherever the test cases live
+ * behind any transport: inside the server (the module itself) or in a CLI
+ * process talking to the server's storage API (`cli/utils/httpSourceStorage.ts`,
+ * #612). Reads look up stored cases/benchmarks; the only writes are the
+ * imports (`create` for JSON definitions, `bulkUpsert` for code-SDK files).
+ */
+export interface SourceStorage {
+  benchmarks: Pick<IStorageModule['benchmarks'], 'getById'>;
+  testCases: Pick<IStorageModule['testCases'], 'getById' | 'getAll' | 'search' | 'create' | 'bulkUpsert'>;
+}
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
 import { getCategoryFromLabels, getDifficultyFromLabels } from '@/lib/testCaseLabels';
 import { debug } from '@/lib/debug';
@@ -45,7 +58,7 @@ export interface ResolvedSources {
 
 export async function resolveTestCaseSources(
   sources: TestCaseSource[],
-  storage: IStorageModule
+  storage: SourceStorage
 ): Promise<ResolvedSources> {
   const allTestCases: TestCase[] = [];
   const updatedSources: TestCaseSource[] = [];
@@ -224,7 +237,7 @@ export async function resolveCodeFnMapForStoredTestCases(
   return { evaluateFnMap, hooksByFile, testHookScopes };
 }
 
-async function fetchTestCasesByIds(ids: string[], storage: IStorageModule): Promise<TestCase[]> {
+async function fetchTestCasesByIds(ids: string[], storage: SourceStorage): Promise<TestCase[]> {
   return Promise.all(
     ids.map(async (id) => {
       const tc = await storage.testCases.getById(id);
@@ -264,7 +277,7 @@ function definitionHash(testCase: Partial<TestCase>): string {
  */
 async function reuseOrCreateImportedTestCases(
   definitions: Partial<TestCase>[],
-  storage: IStorageModule
+  storage: SourceStorage
 ): Promise<TestCase[]> {
   const scanLimit = 10_000;
   const { items, total } = await storage.testCases.getAll({ size: scanLimit });
@@ -303,7 +316,7 @@ async function reuseOrCreateImportedTestCases(
   return resolved;
 }
 
-async function resolveFileImport(filenames: string[], storage: IStorageModule): Promise<TestCase[]> {
+async function resolveFileImport(filenames: string[], storage: SourceStorage): Promise<TestCase[]> {
   const allCreated: TestCase[] = [];
 
   for (const filename of filenames) {
@@ -329,7 +342,7 @@ async function resolveFileImport(filenames: string[], storage: IStorageModule): 
 
 async function resolveCodeImport(
   filenames: string[],
-  storage: IStorageModule
+  storage: SourceStorage
 ): Promise<{
   testCases: TestCase[];
   fnMap: Map<string, EvaluateFn>;
@@ -445,7 +458,7 @@ async function resolveCodeImport(
   return { testCases: allTestCases, fnMap, hooksByFile, testScopes };
 }
 
-async function resolveDirectoryImport(dirPaths: string[], storage: IStorageModule): Promise<TestCase[]> {
+async function resolveDirectoryImport(dirPaths: string[], storage: SourceStorage): Promise<TestCase[]> {
   const allCreated: TestCase[] = [];
 
   for (const dirPath of dirPaths) {
