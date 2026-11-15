@@ -64,17 +64,23 @@ describe('runBookkeeping (real file storage)', () => {
     await expect(performIngestedRunBookkeeping(storage, { benchmarkId: 'bench-missing', testCaseSnapshots: cases.map((c) => ({ id: c.id })) })).rejects.toThrow('Benchmark not found: bench-missing');
   });
 
-  it('ingested run: resolves the cases from the snapshots, links and stamps; unknown snapshot ids → link still, no image', async () => {
+  it('ingested run: resolves the cases from the snapshots (at the snapshot version), links only stored ids, stamps with the SERVER clock; an unknown or re-versioned snapshot → no image, not linked', async () => {
     const cases = await makeCases(2);
     const bench = await storage.benchmarks.create({ name: 'B2', description: '', testCaseIds: ['stale-id'] } as any);
-    const run = { benchmarkId: bench.id, testCaseSnapshots: cases.map((c) => ({ id: c.id })), evaluatorId: 'ev-2', judgeModelId: undefined, createdAt: '2026-02-02T00:00:00.000Z' };
-    const { imageDigest } = await performIngestedRunBookkeeping(storage, run);
+    const run = { benchmarkId: bench.id, testCaseSnapshots: cases.map((c) => ({ id: c.id, version: 1 })), evaluatorId: 'ev-2', judgeModelId: undefined };
+    const { imageDigest } = await performIngestedRunBookkeeping(storage, run, '2026-02-02T00:00:00.000Z');
     expect(imageDigest).toBe(computeImageDigest({ testCases: cases, evalConditions: { evaluatorId: 'ev-2', judgeModelId: undefined } }));
     expect((await storage.benchmarks.getById(bench.id))!.testCaseIds).toEqual(cases.map((c) => c.id));
-    expect((await storage.images.getByDigest(imageDigest!))!.lastRunAt).toBe(run.createdAt);
+    expect((await storage.images.getByDigest(imageDigest!))!.lastRunAt).toBe('2026-02-02T00:00:00.000Z');
 
-    const partial = await performIngestedRunBookkeeping(storage, { benchmarkId: bench.id, testCaseSnapshots: [{ id: cases[0].id }, { id: 'tc-not-stored' }] });
+    // A snapshot naming an id that is not stored is dropped from the link and blocks the image.
+    const partial = await performIngestedRunBookkeeping(storage, { benchmarkId: bench.id, testCaseSnapshots: [{ id: cases[0].id, version: 1 }, { id: 'tc-not-stored' }] });
     expect(partial.imageDigest).toBeUndefined();
-    expect((await storage.benchmarks.getById(bench.id))!.testCaseIds).toEqual([cases[0].id, 'tc-not-stored']);
+    expect((await storage.benchmarks.getById(bench.id))!.testCaseIds).toEqual([cases[0].id]);
+
+    // The case was edited (new version) after the executor resolved it: the digest would describe other content → no image.
+    await storage.testCases.update(cases[0].id, { initialPrompt: 'edited' } as any);
+    const reversioned = await performIngestedRunBookkeeping(storage, { testCaseSnapshots: [{ id: cases[0].id, version: 1 }] });
+    expect(reversioned.imageDigest).toBeUndefined();
   });
 });

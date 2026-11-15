@@ -155,6 +155,13 @@ export interface LocalRunSinkOptions {
   /** Stamped on runs this sink creates. */
   executorKind?: 'cli' | 'server';
   executorVersion?: string;
+  /**
+   * Token the executor minted itself for the run this sink creates (an
+   * out-of-process executor sends it with `createRun` so a retried create
+   * after a lost response is recognised as the same executor). Default: a
+   * fresh server-minted token.
+   */
+  executorToken?: string;
   /** Lease TTL for runs this sink creates; default `AH_RUN_LEASE_TTL_MS` / 5 min. */
   ttlMs?: number;
   /** Clock (tests). */
@@ -309,7 +316,7 @@ export class LocalRunSink implements RunSink {
   }
 
   async createRun(run: EvaluationRun): Promise<CreatedRun> {
-    const executorToken = mintExecutorToken();
+    const executorToken = this.options.executorToken ?? mintExecutorToken();
     const now = (this.options.now ?? (() => new Date()))().toISOString();
     const lease: RunLease = { generation: 1, heartbeatAt: now, ttlMs: this.options.ttlMs ?? resolveLeaseTtlMs() };
     // Stamped on the caller's object too: the run the executor holds in

@@ -84,7 +84,6 @@ export async function stampRunImage(
   evalConditions: ImageEvalConditions,
   now: string,
 ): Promise<string | undefined> {
-  if (testCases.length === 0) return undefined;
   try {
     const digest = computeImageDigest({ testCases, evalConditions });
     await storage.images.create(buildImageDoc({ testCases, evalConditions }));
@@ -114,30 +113,34 @@ export async function performRunBookkeeping(storage: IStorageModule, input: RunB
 /**
  * Bookkeeping for a run document ingested from another process: its test
  * cases are the ones named by `testCaseSnapshots` (already upserted by the
- * executor through the storage API). Snapshots whose document cannot be
- * read are skipped for the image (a digest over a partial set would alias a
- * different run), while the benchmark link still receives every id.
+ * executor through the storage API). Only snapshots whose stored document
+ * exists AT THE SNAPSHOT'S VERSION take part — the benchmark is never linked
+ * to an id that is not stored, and no image is stamped unless every case is
+ * present at the version the executor ran (a digest over other content would
+ * alias a different run). `lastRunAt` is the server's clock, not the client's.
  */
 export async function performIngestedRunBookkeeping(
   storage: IStorageModule,
-  run: { benchmarkId?: string; testCaseSnapshots?: Array<{ id: string }>; evaluatorId?: string; judgeModelId?: string; createdAt?: string },
+  run: { benchmarkId?: string; testCaseSnapshots?: Array<{ id: string; version?: number }>; evaluatorId?: string; judgeModelId?: string },
+  now: string = new Date().toISOString(),
 ): Promise<{ imageDigest?: string }> {
-  const ids = (run.testCaseSnapshots ?? []).map((s) => s.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
-  const now = run.createdAt ?? new Date().toISOString();
+  const snapshots = (run.testCaseSnapshots ?? []).filter((s) => typeof s?.id === 'string' && s.id.length > 0);
+  const stored: TestCase[] = [];
+  const skipped: string[] = [];
+  for (const snapshot of snapshots) {
+    const tc = await storage.testCases.getById(snapshot.id).catch(() => null);
+    if (!tc) { skipped.push(`${snapshot.id} (not stored)`); continue; }
+    const storedVersion = (tc as any).version ?? (tc as any).currentVersion ?? 1;
+    if (snapshot.version !== undefined && storedVersion !== snapshot.version) { skipped.push(`${snapshot.id} (stored v${storedVersion}, run used v${snapshot.version})`); continue; }
+    stored.push(tc);
+  }
   if (run.benchmarkId) {
-    await linkRunTestCasesToBenchmark(storage, run.benchmarkId, ids);
+    await linkRunTestCasesToBenchmark(storage, run.benchmarkId, stored.map((tc) => tc.id));
   }
-  const testCases: TestCase[] = [];
-  let missing = 0;
-  for (const id of ids) {
-    const tc = await storage.testCases.getById(id).catch(() => null);
-    if (tc) testCases.push(tc);
-    else missing++;
-  }
-  if (missing > 0 || testCases.length === 0) {
-    if (ids.length > 0) console.warn(`[runBookkeeping] ${missing} of ${ids.length} test cases of the ingested run are not stored; no image stamped`);
+  if (skipped.length > 0 || stored.length === 0) {
+    if (snapshots.length > 0) console.warn(`[runBookkeeping] ingested run: ${skipped.length} of ${snapshots.length} test case(s) not usable for the image — ${skipped.join('; ')}; no image stamped`);
     return {};
   }
-  const imageDigest = await stampRunImage(storage, testCases, { evaluatorId: run.evaluatorId || undefined, judgeModelId: run.judgeModelId || undefined }, now);
+  const imageDigest = await stampRunImage(storage, stored, { evaluatorId: run.evaluatorId || undefined, judgeModelId: run.judgeModelId || undefined }, now);
   return imageDigest ? { imageDigest } : {};
 }
