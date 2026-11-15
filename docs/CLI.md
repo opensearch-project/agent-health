@@ -184,8 +184,15 @@ the CLI within one heartbeat. `Ctrl-C` cancels the run the same way (in-flight
 cases finish, the run ends `cancelled`); a second `Ctrl-C` exits at once and the
 server marks the run failed ("executor lost") once its lease expires. The
 runner's and judge's log lines go to `.agent-health/logs/<runId>.log` (`-v` or
-`DEBUG=true` echo them). The legacy single-JSON-file mode (`-f cases.json`
-alone) and `-n <benchmark>` alone still execute on the server.
+`DEBUG=true` echo them). **Consequences of executing in the CLI:** the run lives
+and dies with the CLI process — closing the terminal, losing an SSH session or
+killing the CLI abandons the run (the server marks it failed, "executor lost",
+once its lease expires; use `nohup` / `tmux` for long runs) — and the spool and
+log files under `.agent-health/` contain prompts, trajectories and model output
+(written owner-only, `0600`; the spool is deleted once the server has confirmed
+every write; keep `.agent-health/` out of version control). The legacy
+single-JSON-file mode (`-f cases.json` alone) and `-n <benchmark>` alone still
+execute on the server.
 
 Every evaluation run is stamped with an **image digest** — a content hash of
 its test-case contents + eval conditions (evaluator, judge model). Runs with

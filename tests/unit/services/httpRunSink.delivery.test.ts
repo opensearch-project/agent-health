@@ -12,7 +12,7 @@
  */
 
 import { createServer, type Server } from 'http';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { HttpRunSink, RunDeliveryError, HttpRunSinkError, classifyTransportError } from '@/services/httpRunSink';
@@ -242,5 +242,76 @@ describe('classifyTransportError', () => {
   it('treats anything else (programming errors, JSON errors) as not retryable', () => {
     expect(classifyTransportError(new SyntaxError('Unexpected token'))).toEqual({ transient: false, refused: false });
     expect(classifyTransportError('string error')).toEqual({ transient: false, refused: false });
+  });
+});
+
+describe('HttpRunSink delivery — bounds the review asked for', () => {
+  let stub: Stub;
+  let spoolDir: string;
+  beforeEach(async () => {
+    stub = await startStub(okFallback);
+    spoolDir = mkdtempSync(path.join(tmpdir(), 'ah-sink-spool2-'));
+  });
+  afterEach(async () => {
+    await stopStub(stub);
+    rmSync(spoolDir, { recursive: true, force: true });
+  });
+
+  it('a stalled server (headers never sent) is cut off by the per-attempt timeout and the write is retried, instead of hanging past the lease', async () => {
+    let stalled = 0;
+    // First attempt: the server accepts the connection and never answers. The
+    // attempt timeout fires (real timer, 300 ms), the retry then succeeds.
+    const hang = createServer((req, res) => { stalled++; if (stalled === 1) return; /* hold */ res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ generation: 1 })); });
+    await new Promise<void>((r) => hang.listen(0, '127.0.0.1', () => r()));
+    const port = (hang.address() as { port: number }).port;
+    try {
+      const clock = fakeClock();
+      const sink = new HttpRunSink(`http://127.0.0.1:${port}`, { executorToken: 'tok-1', delivery: { spoolDir, attemptTimeoutMs: 300, now: clock.now, sleep: clock.sleep } });
+      const echo = await sink.setCaseResult('run-1', 'tc-1', { reportId: 'rep-1', status: 'completed' } as any);
+      expect(echo).toEqual({ generation: 1 });
+      expect(stalled).toBe(2);
+      expect(clock.sleeps).toEqual([1000]);
+    } finally {
+      hang.closeAllConnections?.();
+      await new Promise<void>((r) => hang.close(() => r()));
+    }
+  });
+
+  it('the retry budget is the lease time LEFT since the last acknowledgement, never a fresh TTL per write', async () => {
+    const clock = fakeClock();
+    const sink = new HttpRunSink(stub.url, { delivery: { spoolDir, now: clock.now, sleep: clock.sleep } });
+    await sink.createRun(run()); // ack at t0, TTL 60 s
+    clock.advance(50_000);       // 50 s without a server answer: 10 s of lease left
+    stub.fallback = () => ({ status: 503, body: { error: 'draining' } });
+    await expect(sink.finalize('run-1', { status: 'failed', error: 'x' })).rejects.toBeInstanceOf(RunDeliveryError);
+    // 1 s + 2 s + 4 s = 7 s slept; the next 8 s delay would pass the 10 s left → stop after 4 attempts.
+    expect(clock.sleeps).toEqual([1000, 2000, 4000]);
+    expect(stub.calls.filter((c) => c.path.endsWith('/finalize'))).toHaveLength(4);
+  });
+
+  it('408 / 429 are retried like 5xx; an onRetry observer that throws does not break delivery', async () => {
+    const clock = fakeClock();
+    const sink = new HttpRunSink(stub.url, { delivery: { spoolDir, now: clock.now, sleep: clock.sleep, onRetry: () => { throw new Error('spinner exploded'); } } });
+    await sink.createRun(run());
+    stub.script.push({ status: 429, body: { error: 'slow down' } }, { status: 408, body: { error: 'timeout' } });
+    await expect(sink.setCaseResult('run-1', 'tc-1', { reportId: 'r', status: 'completed' } as any)).resolves.toEqual({ generation: 1 });
+    expect(clock.sleeps).toEqual([1000, 2000]);
+  });
+
+  it('a write refused for good (4xx) is counted; a later confirmed finalize then KEEPS the spool, marked, instead of deleting the only record of it', async () => {
+    const sink = new HttpRunSink(stub.url, { delivery: { spoolDir } });
+    await sink.createRun(run());
+    stub.script.push({ status: 400, body: { error: 'bad report' } });
+    await expect(sink.upsertCaseReport({ runId: 'run-1', testCaseId: 'tc-1', attempt: 1, reportId: 'rep-1', report: {} as any })).rejects.toMatchObject({ status: 400 });
+    expect(sink.unconfirmedWrites).toBe(1);
+    await sink.finalize('run-1', { status: 'completed', completedRun: { results: {}, testCaseSnapshots: [] } });
+    expect(existsSync(sink.spoolFile!)).toBe(true);
+    const ops = readFileSync(sink.spoolFile!, 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(ops.map((o) => o.op)).toEqual(['createRun', 'upsertCaseReport', 'finalize', 'finalize-confirmed']);
+    expect(ops[0].run).toMatchObject({ id: 'run-1' });           // full bodies, not breadcrumbs
+    expect(ops[2].input).toMatchObject({ status: 'completed' });
+    expect(ops[3]).toMatchObject({ unconfirmedWrites: 1 });
+    // Owner-only file.
+    expect(statSync(sink.spoolFile!).mode & 0o077).toBe(0);
   });
 });

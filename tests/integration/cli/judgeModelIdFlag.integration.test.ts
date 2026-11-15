@@ -205,8 +205,10 @@ describe('CLI --judge-model flag — end-to-end', () => {
       createdReportIds.push(run.id);
 
       // The two contracts the flag exists to enforce:
-      //   1. Both fields are persisted (not silently merged).
-      expect(run.modelId).toBe('demo-model');
+      //   1. Both fields are persisted (not silently merged). `run` executes
+      //      through the shared runner (#612), which records the catalog's
+      //      resolved model id (`mock://demo-model`) like benchmark reports do.
+      expect(run.modelId).toBe('mock://demo-model');
       expect(run.judgeModelId).toBe('us.anthropic.claude-opus-4-6-v1');
       //   2. They MUST NOT be equal — the bug the flag fixes was them
       //      sharing a value.
@@ -272,7 +274,7 @@ describe('CLI --judge-model flag — end-to-end', () => {
       // Critical: pre-fix this would have silently been set to
       // run.modelId. Now it stays undefined.
       expect(run.judgeModelId).toBeUndefined();
-      expect(run.modelId).toBe('demo-model');
+      expect(run.modelId).toBe('mock://demo-model');
     },
     TEST_TIMEOUT
   );
