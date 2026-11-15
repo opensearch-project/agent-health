@@ -14,7 +14,8 @@ import {
   createCancellationToken,
   CancellationToken,
 } from '../../../services/evaluationRunner.js';
-import { promoteRunToBenchmark, linkTestCaseIdsToBenchmark } from '../../../services/benchmarkPromotion.js';
+import { promoteRunToBenchmark } from '../../../services/benchmarkPromotion.js';
+import { linkRunTestCasesToBenchmark, stampRunImage, BenchmarkNotFoundError } from '../../services/runBookkeeping.js';
 import {
   checkBenchmarkSourcesStillExist,
   buildRerunConfig,
@@ -34,7 +35,6 @@ import { isDeterministicEvaluator } from '../../../lib/evaluators/deterministic.
 import { isSystemEvaluatorId, getSystemEvaluatorById } from '../../prompts/evaluatorTemplates.js';
 import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
 import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
-import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.js';
 import { validateRunNameUpdate } from '../../../lib/runName.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 import { serverRunnerDeps } from '../../../services/runnerDeps.js';
@@ -293,20 +293,17 @@ router.post('/api/storage/evaluation-runs', refuseWhenDraining, async (req: Requ
     const hooksByFile = resolved.hooksByFile;
     const testHookScopes = resolved.testHookScopes;
 
-    // Keep an explicitly associated benchmark linked to the canonical test
-    // case documents resolved above. Repeated CLI imports therefore reuse one
-    // benchmark and one stable set of testCaseIds instead of creating rows
-    // whose definitions and runs live only in evaluation-run documents.
+    // Benchmark link (top level + current version) — the same bookkeeping an
+    // ingested CLI run gets (server/services/runBookkeeping.ts). Refused only
+    // when the benchmark does not exist; a link failure never aborts the run.
     if (benchmarkId) {
-      const benchmark = await storage.benchmarks.getById(benchmarkId);
-      if (!benchmark) {
-        sendSSE(res, 'error', { error: `Benchmark not found: ${benchmarkId}` });
+      try {
+        await linkRunTestCasesToBenchmark(storage, benchmarkId, resolvedTestCaseIds);
+      } catch (linkError: any) {
+        if (!(linkError instanceof BenchmarkNotFoundError)) throw linkError;
+        sendSSE(res, 'error', { error: linkError.message });
         res.end();
         return;
-      }
-      const idsChanged = JSON.stringify(benchmark.testCaseIds || []) !== JSON.stringify(resolvedTestCaseIds);
-      if (idsChanged) {
-        await storage.benchmarks.update(benchmarkId, { testCaseIds: resolvedTestCaseIds });
       }
     }
 
@@ -316,22 +313,6 @@ router.post('/api/storage/evaluation-runs', refuseWhenDraining, async (req: Requ
       version: (tc as any).version || 1,
       name: tc.name,
     }));
-
-    // Link the resolved test case ids into the referenced benchmark's
-    // testCaseIds (top level AND current version) immediately — independent
-    // of whether the run itself succeeds. Without this, a run against a
-    // fresh `benchmarkId` (created with testCaseIds: [] by the CLI) leaves
-    // the benchmark a permanent shell, and the benchmark page's test-case
-    // panel keeps rendering "No test cases in this version" even after the
-    // top level is populated by some other path. Best-effort: a failure
-    // here must not abort the run.
-    if (benchmarkId && snapshots.length > 0) {
-      try {
-        await linkTestCaseIdsToBenchmark(benchmarkId, snapshots.map(s => s.id), storage);
-      } catch (linkError: any) {
-        console.error(`[StorageAPI] Failed to link test cases into benchmark ${benchmarkId}:`, linkError.message);
-      }
-    }
 
     // Create the evaluation run document
     const runId = `eval-run-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -373,25 +354,13 @@ router.post('/api/storage/evaluation-runs', refuseWhenDraining, async (req: Requ
       ...(await resolveAgentProvenance(agentKey, { agentEndpoint })),
     };
 
-    // Stamp the content digest of this run's evaluation conditions and
-    // find-or-create the corresponding benchmark image. Content-addressed
-    // identity is the inherent dedup: re-running the same command yields the
-    // same digest → the same image doc — never a duplicate entity. Runs with
-    // equal digests are comparable by construction (same test-case contents,
-    // same evaluator/judge conditions; only the agent varies).
-    // Failure-safe: image bookkeeping must never block run execution.
-    try {
-      const evalConditions = {
-        evaluatorId: evaluatorId || undefined,
-        judgeModelId: run.judgeModelId || undefined,
-      };
-      const digest = computeImageDigest({ testCases, evalConditions });
-      run.imageDigest = digest;
-      await storage.images.create(buildImageDoc({ testCases, evalConditions }));
-      await storage.images.update(digest, { lastRunAt: now }).catch(() => {});
-    } catch (imageErr: any) {
-      console.warn('[StorageAPI] Image digest stamping failed (run continues):', imageErr?.message);
-    }
+    // Benchmark image: content digest of this run's evaluation conditions
+    // (find-or-create; failure-safe). See server/services/runBookkeeping.ts.
+    const imageDigest = await stampRunImage(storage, testCases, {
+      evaluatorId: evaluatorId || undefined,
+      judgeModelId: run.judgeModelId || undefined,
+    }, now);
+    if (imageDigest) run.imageDigest = imageDigest;
 
     // Every write of this run — the run doc, per-case reports, verdicts, the
     // terminal status and the benchmark link — goes through ONE sink

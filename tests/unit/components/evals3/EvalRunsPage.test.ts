@@ -683,3 +683,38 @@ describe('EvalRunsPage — agent-configuration provenance chip (lib/agentFingerp
     expect(screen.queryByTestId('run-row-fingerprint-eval-run-legacy-1')).toBeNull();
   });
 });
+
+describe('EvalRunsPage — a run started outside this page (CLI executor, #612) appears within one poll period', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockGetAllBenchmarks.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    (global.fetch as jest.Mock).mockImplementation(async () => ({ ok: true, json: async () => ({ evaluators: [] }) }));
+  });
+
+  const inFlight = (ids: string[]) => ({ ok: true, json: async () => ({ count: ids.length, runs: ids.map(id => ({ id, kind: 'evaluation', source: 'lease' })), complete: true }) });
+
+  it('probes /api/runs/in-flight every 5 s and reloads the list only when it names an unknown run', async () => {
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) =>
+      String(url).endsWith('/api/runs/in-flight') ? inFlight([]) : { ok: true, json: async () => ({ evaluators: [] } ) });
+    await renderPage();
+    expect(mockListEvaluationRuns).toHaveBeenCalledTimes(1);
+
+    // Nothing in flight → no reload.
+    await act(async () => { jest.advanceTimersByTime(5000); });
+    await act(async () => {});
+    expect((global.fetch as jest.Mock).mock.calls.filter(c => String(c[0]).endsWith('/api/runs/in-flight'))).toHaveLength(1);
+    expect(mockListEvaluationRuns).toHaveBeenCalledTimes(1);
+
+    // A CLI run the page has never seen is in flight → the page reloads its data.
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) =>
+      String(url).endsWith('/api/runs/in-flight') ? inFlight(['eval-run-from-cli']) : { ok: true, json: async () => ({ evaluators: [] }) });
+    mockListEvaluationRuns.mockResolvedValue({ evaluationRuns: [{ id: 'eval-run-from-cli', name: 'CLI run', createdAt: new Date().toISOString(), status: 'running', agentKey: 'agent-a', modelId: 'm', results: {}, testCaseSnapshots: [], sources: [], trigger: 'cli' }] });
+    await act(async () => { jest.advanceTimersByTime(5000); });
+    await act(async () => {});
+    expect(mockListEvaluationRuns).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByText('CLI run')).toBeTruthy());
+  });
+});

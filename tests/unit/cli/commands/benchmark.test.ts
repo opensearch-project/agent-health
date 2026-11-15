@@ -63,6 +63,9 @@ jest.mock('@/lib/config/index.js', () => ({
   loadConfig: jest.fn(),
   DEFAULT_SERVER_CONFIG: {},
 }));
+// The local executor (#612) pulls in the runner, connectors and the AWS SDK;
+// this suite covers the command's option handling / summary only.
+jest.mock('@/cli/utils/localExecutor.js', () => ({ __esModule: true, executeRunLocally: jest.fn(), LocalRunFailure: class LocalRunFailure extends Error {} }));
 jest.mock('@/cli/utils/serverLifecycle.js', () => ({
   ensureServer: jest.fn(),
   createServerCleanup: jest.fn(),
