@@ -221,8 +221,13 @@ test('upgrade case', { prompt: 'fixture question' }, async ({ agent, expect }) =
         throw new Error(`benchmark never reached the agent (exit=${benchmark.child.exitCode}).\n${benchmark.stdout()}\n${benchmark.stderr()}`);
       }
       const duringRun = await health();
-      const inFlightRunId: string | undefined = duringRun.activeRuns?.runs?.[0]?.id;
-      console.log(`[upgrade] run ${inFlightRunId} in flight on server pid ${oldPid} (v${installed.version})`);
+      // Since #612 step 3 the CLI executes the run ITSELF and holds a lease on
+      // the server; the server's in-memory registry (/health.activeRuns) is
+      // empty, and the run is visible through GET /api/runs/in-flight — which
+      // is what the upgraded CLI consults before restarting.
+      const inFlight = await api('/api/runs/in-flight');
+      const inFlightRunId: string | undefined = inFlight.runs?.[0]?.id;
+      console.log(`[upgrade] run ${inFlightRunId} in flight (leased by the CLI) on server pid ${oldPid} (v${installed.version})`);
 
       // ── 3. Upgraded CLI meets the mismatch while the run is in flight ─
       const refused = startCli(upgraded.cli, ['list', 'agents', '--output', 'json'], project, env);
@@ -234,10 +239,14 @@ test('upgrade case', { prompt: 'fixture question' }, async ({ agent, expect }) =
         throw new Error(`REGRESSION: the upgraded CLI (v${upgraded.version}) killed server pid ${oldPid} ` +
           `(v${installed.version}) while a run was in flight.\n${refused.stdout()}\n${refused.stderr()}`);
       }
-      // /health reports what THIS process is executing (not storage status).
+      // /health reports what THIS process is executing (not storage status):
+      // nothing — the CLI is the executor. The lease is what the in-flight
+      // endpoint reports, and the only reason the restart was refused.
       expect(before.activeRuns).toEqual({ count: 0, runs: [] });
-      expect(duringRun.activeRuns.count).toBe(1);
-      expect(duringRun.activeRuns.runs).toEqual([{ id: inFlightRunId, kind: 'evaluation' }]);
+      expect(duringRun.activeRuns).toEqual({ count: 0, runs: [] });
+      expect(inFlight.complete).toBe(true);
+      expect(inFlight.count).toBe(1);
+      expect(inFlight.runs).toEqual([expect.objectContaining({ id: inFlightRunId, kind: 'evaluation', source: 'lease', executor: expect.objectContaining({ kind: 'cli' }) })]);
       expect(exited(refused.child)).toBe(true);
       expect(refused.child.exitCode).toBe(1);
       const message = refused.stderr();
@@ -249,7 +258,7 @@ test('upgrade case', { prompt: 'fixture question' }, async ({ agent, expect }) =
       expect(refused.stdout()).toBe('');
       const stillRunning = await health();
       expect(stillRunning.instance.pid).toBe(oldPid);
-      expect(stillRunning.activeRuns.runs.map((run: { id: string }) => run.id)).toEqual([inFlightRunId]);
+      expect((await api('/api/runs/in-flight')).runs.map((run: { id: string }) => run.id)).toEqual([inFlightRunId]);
       console.log(`[upgrade] upgraded CLI exited 1 and left pid ${oldPid} alive; run still registered`);
 
       // ── 4. The run completes on the old server ────────────────────────
@@ -261,6 +270,7 @@ test('upgrade case', { prompt: 'fixture question' }, async ({ agent, expect }) =
       const afterRun = await health();
       expect(afterRun.instance.pid).toBe(oldPid);
       expect(afterRun.activeRuns).toEqual({ count: 0, runs: [] });
+      expect((await api('/api/runs/in-flight')).count).toBe(0);
       console.log(`[upgrade] benchmark exited 0 on the old server; no runs in flight`);
 
       // ── 5. With nothing in flight, the upgraded CLI restarts the server ─
