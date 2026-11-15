@@ -383,7 +383,10 @@ for the old bail-on-first-failure behaviour at a specific point.
   when `AH_SKIP_JUDGE` is set.
 
 The legacy form `judge(trajectory, [...claims])` is preserved for backward
-compatibility with code written against the original PR.
+compatibility with code written against the original PR. Note that under the
+default `system-claim` evaluator (below) a multi-claim call passes only when
+**every** claim is satisfied; the RCA default's partial credit (pass at ≥ 70 %)
+applies only when you select it explicitly.
 
 #### Which evaluator judges the claim
 
@@ -405,7 +408,10 @@ odd reasoning on claims like "every returned item is a running shoe under
 $100". The evaluator that actually judged a claim is recorded on the matcher's
 `scoringSnapshot.evaluatorId` and shown as **evaluator:** in the run page's
 matcher panel. An explicit `-e` is never overridden — pass
-`-e system-rca-default` to get the previous behaviour.
+`-e system-rca-default` to get the previous behaviour. The id is resolved by
+the server, so a `serverUrl` pointing at an agent-health server older than the
+SDK (one without `system-claim`) answers `400 System evaluator not found` —
+pass an explicit `evaluatorId` in that case.
 
 #### Per-call options
 

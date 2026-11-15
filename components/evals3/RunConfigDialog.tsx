@@ -62,6 +62,8 @@ export const MAX_CONCURRENCY = 20;
 
 const NO_BENCHMARK = '__none__';
 const DEFAULT_EVALUATOR = '__default__';
+/** What "no evaluator" means per case kind — see lib/testCases/judge.ts CLAIM_EVALUATOR_ID. */
+const DEFAULT_EVALUATOR_LABEL = 'Default (RCA; Claim for SDK judge())';
 
 /**
  * Values the dialog edits. Superset of {@link RunConfigInput} (create mode
@@ -331,19 +333,22 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = (props) => {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               {/* Evaluator — scoring config + default judge prompt/model.
-                  "RCA Default" maps to undefined; the server resolves the
-                  built-in default. Visible + editable in rerun mode too
-                  (owner request), never carried silently. */}
+                  "Default" maps to undefined: classic (expected-outcome)
+                  cases get the server's RCA default, code-SDK judge() calls
+                  the neutral Claim evaluator (#619) — the label says both so
+                  the dialog never claims RCA for an SDK run. Visible +
+                  editable in rerun mode too (owner request), never carried
+                  silently. */}
               <Label className="text-xs">Evaluator</Label>
               <Select
                 value={values.evaluatorId || DEFAULT_EVALUATOR}
                 onValueChange={val => set('evaluatorId', val === DEFAULT_EVALUATOR ? undefined : val)}
               >
                 <SelectTrigger className="h-8" data-testid="run-config-evaluator-trigger">
-                  <SelectValue placeholder="RCA Default" />
+                  <SelectValue placeholder={DEFAULT_EVALUATOR_LABEL} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={DEFAULT_EVALUATOR}>RCA Default</SelectItem>
+                  <SelectItem value={DEFAULT_EVALUATOR}>{DEFAULT_EVALUATOR_LABEL}</SelectItem>
                   {evaluatorMissing && values.evaluatorId && (
                     <SelectItem value={values.evaluatorId} disabled data-testid="run-config-evaluator-missing-item">
                       {values.evaluatorId} (not found)

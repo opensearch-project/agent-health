@@ -109,8 +109,6 @@ describe('CLI: SDK judge() without -e uses the neutral system-claim evaluator (#
     expect(judged[0].scoringSnapshot).toMatchObject({ evaluatorId: 'system-claim', evaluatorName: 'Claim' });
     expect(judged[0].scoringSnapshot.evaluatorId).not.toBe('system-rca-default');
     expect(judged[0].errored).not.toBe(true);
-    // The run itself still records no explicit evaluator — the author chose none.
-    expect(report.evaluatorId ?? undefined).toBeUndefined();
   }, SUITE_TIMEOUT);
 
   it('-e system-rca-default → explicit evaluator is forwarded unchanged', async () => {

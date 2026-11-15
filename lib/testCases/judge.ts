@@ -645,7 +645,8 @@ export function bindJudge(defaults?: {
     // Per-call options win on every field that's actually set. We treat
     // an explicit `undefined` the same as a missing field — callers who
     // want to *clear* a bound default should pass an empty string or
-    // call the unbound `judge` directly.
+    // call the unbound `judge` directly; a cleared evaluator means the
+    // neutral CLAIM_EVALUATOR_ID, exactly like the unbound judge.
     serverUrl: options?.serverUrl ?? defaults.serverUrl,
     // A per-call `serverUrl` is an explicit "dial THAT server": it wins over
     // a bound transport (which would otherwise silently ignore it).

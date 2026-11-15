@@ -420,6 +420,14 @@ In your reasoning, identify any safety concerns, biases, or guardrail violations
 };
 
 /**
+ * Evaluator the code SDK `judge(result, claim)` falls back to when neither the
+ * call nor the run names one. Mirrors `CLAIM_EVALUATOR_ID` in
+ * lib/testCases/judge.ts (lib never imports server code); a unit test keeps
+ * the two in sync.
+ */
+export const CLAIM_EVALUATOR_ID = 'system-claim';
+
+/**
  * 6. Claim Evaluator
  *
  * Domain-neutral: "does the trajectory satisfy this claim?" The SDK
@@ -430,7 +438,7 @@ In your reasoning, identify any safety concerns, biases, or guardrail violations
  * unchanged; `accuracy` is the share of claims satisfied.
  */
 const CLAIM_EVALUATOR: Omit<Evaluator, 'createdAt' | 'updatedAt' | 'versions'> = {
-  id: 'system-claim',
+  id: CLAIM_EVALUATOR_ID,
   name: 'Claim',
   description: 'Domain-neutral evaluator: checks whether the agent trajectory satisfies each stated claim (pass/fail with reasoning). Used by the code SDK judge() when the run has no explicit evaluator.',
   isSystem: true,
@@ -512,13 +520,6 @@ export const SYSTEM_EVALUATORS = [
  */
 export const DEFAULT_EVALUATOR_ID = 'system-rca-default';
 
-/**
- * Evaluator the code SDK `judge(result, claim)` falls back to when neither the
- * call nor the run names one. Mirrors `CLAIM_EVALUATOR_ID` in
- * lib/testCases/judge.ts (lib never imports server code); a unit test keeps
- * the two in sync.
- */
-export const CLAIM_EVALUATOR_ID = 'system-claim';
 
 /**
  * Convert a template to a full Evaluator entity with timestamps and versions

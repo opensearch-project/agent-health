@@ -106,6 +106,13 @@ describe('judge() — per-call options', () => {
     expect(lastBody().evaluatorId).toBe('system-claim');
   });
 
+  it('an empty-string evaluatorId (the documented "clear the bound default") means system-claim, like the unbound judge', async () => {
+    const { lastBody } = mockJudgeFetch();
+    const bound = bindJudge({ evaluatorId: 'system-rca-default' });
+    await bound({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim', { evaluatorId: '' });
+    expect(lastBody().evaluatorId).toBe('system-claim');
+  });
+
   it('a bound run-level evaluator (-e) still wins over the claim default', async () => {
     const { lastBody } = mockJudgeFetch();
     const bound = bindJudge({ evaluatorId: 'system-rca-default' });
