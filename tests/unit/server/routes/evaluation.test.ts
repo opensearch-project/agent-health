@@ -101,7 +101,9 @@ function getEvaluateHandler(): (req: Request, res: Response) => Promise<void> {
     (l: any) => l.route?.path === '/api/evaluate' && l.route?.methods?.post,
   );
   if (!layer) throw new Error('POST /api/evaluate not registered');
-  return layer.route.stack[0].handle;
+  // The LAST layer is the handler; earlier layers are route middleware
+  // (the drain guard, server/services/serverDrain.ts).
+  return layer.route.stack[layer.route.stack.length - 1].handle;
 }
 
 // ---------------------------------------------------------------------------

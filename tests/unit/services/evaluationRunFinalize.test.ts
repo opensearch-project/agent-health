@@ -55,7 +55,7 @@ describe('evaluationRunFinalize', () => {
 
     const out = await finalizeEvaluationRun(storage, { runId: 'run-1', finalStatus: 'completed', completedRun, completedAt: 'T' });
 
-    expect(evaluationRuns.mergeMissingResults).toHaveBeenCalledWith('run-1', completedRun.results);
+    expect(evaluationRuns.mergeMissingResults).toHaveBeenCalledWith('run-1', completedRun.results, undefined);
     expect(doc.results['tc-1'].passFailStatus).toBe('passed'); // NOT clobbered by the stale in-memory copy
     expect(doc.results['tc-2']).toEqual(completedRun.results['tc-2']); // healed
     const [, fields] = evaluationRuns.update.mock.calls[0];

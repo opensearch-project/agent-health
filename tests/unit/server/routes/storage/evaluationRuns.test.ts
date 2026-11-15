@@ -93,6 +93,9 @@ jest.mock('@/services/evaluation/retryJudgement', () => ({
 import express, { Application } from 'express';
 import { listActiveRuns } from '@/server/services/runCancellation';
 const request = require('supertest');
+
+/** Every write of a leased run carries its lease guard (lib/runLease.ts). */
+const GUARD = expect.objectContaining({ executorId: expect.stringMatching(/^[0-9a-f]{32}$/), generation: 1 });
 import evaluationRunsRouter, {
   startSseHeartbeat,
   getEvaluationRunSseHeartbeatMs,
@@ -229,7 +232,7 @@ describe('Evaluation Runs API', () => {
       expect(mockExecuteEvaluationRun).toHaveBeenCalled();
       const createdRun = mockEvaluationRunsCreate.mock.calls[0][0];
       expect(createdRun.id).toEqual(expect.any(String));
-      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(createdRun.id, expect.objectContaining({ status: 'completed' }));
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(createdRun.id, expect.objectContaining({ status: 'completed' }), GUARD);
     });
 
     // Data-integrity contract (2026-09-04): the terminal write must NOT
@@ -256,6 +259,7 @@ describe('Evaluation Runs API', () => {
       expect(mockEvaluationRunsMergeMissingResults).toHaveBeenCalledWith(
         createdRun.id,
         { 'tc-1': { reportId: 'r1', status: 'completed', passFailStatus: 'passed' } },
+        GUARD,
       );
       const terminalUpdate = mockEvaluationRunsUpdate.mock.calls.find((c: any[]) => c[1]?.status === 'completed');
       expect(terminalUpdate).toBeDefined();
@@ -331,14 +335,14 @@ describe('Evaluation Runs API', () => {
       expect(res.text).toContain('event: error');
       expect(res.text).toContain('Benchmark not found while linking completed run');
       // Failed-status update path also runs.
-      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'failed' }));
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'failed' }), GUARD);
     });
 
     it('marks the run cancelled (not completed) when the cancellation token was tripped', async () => {
       mockCreateCancellationToken.mockReturnValue({ isCancelled: true, cancel: jest.fn() });
       const res = await request(app).post('/api/storage/evaluation-runs').send(body);
       expect(res.status).toBe(200);
-      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'cancelled' }));
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'cancelled' }), GUARD);
     });
 
     it('on cancel, stamps explicit `cancelled` markers for planned cases that never started and reports them as notRun (not pending)', async () => {
@@ -374,7 +378,7 @@ describe('Evaluation Runs API', () => {
       expect(mockEvaluationRunsMergeMissingResults).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
         'tc-2': { reportId: '', status: 'cancelled' },
         'tc-3': { reportId: '', status: 'cancelled' },
-      }));
+      }), GUARD);
       const terminalUpdate = mockEvaluationRunsUpdate.mock.calls.find((c: any[]) => c[1]?.status === 'cancelled');
       expect(terminalUpdate![1].stats).toEqual({ passed: 1, failed: 0, errored: 0, pending: 0, notRun: 2, total: 3 });
     });
@@ -394,7 +398,7 @@ describe('Evaluation Runs API', () => {
 
       expect(res.text).toContain('event: progress');
       expect(res.text).toContain('event: testCaseComplete');
-      expect(mockEvaluationRunsUpdateResult).toHaveBeenCalledWith(expect.any(String), 'tc-1', { reportId: 'r1', status: 'completed' });
+      expect(mockEvaluationRunsUpdateResult).toHaveBeenCalledWith(expect.any(String), 'tc-1', { reportId: 'r1', status: 'completed' }, GUARD);
     });
 
     it('emits an SSE error and marks the run failed when execution throws', async () => {
@@ -403,7 +407,18 @@ describe('Evaluation Runs API', () => {
 
       expect(res.text).toContain('event: error');
       expect(res.text).toContain('agent crashed');
-      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'failed', error: 'agent crashed' }));
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'failed', error: 'agent crashed' }), GUARD);
+    });
+
+    it('lease lost (the sweeper already failed the run): emits the SSE error with the lease-lost info and makes NO terminal write', async () => {
+      const { LeaseLostError } = await import('@/lib/runLease');
+      mockExecuteEvaluationRun.mockRejectedValue(new LeaseLostError({ error: 'lease-lost', runId: 'r', generation: 2, at: '2026-01-01T00:06:00.000Z', status: 'failed' }));
+      const res = await request(app).post('/api/storage/evaluation-runs').send(body);
+
+      expect(res.text).toContain('event: error');
+      expect(res.text).toContain('"leaseLost":{"error":"lease-lost"');
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'failed' }), expect.anything());
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'failed' }));
     });
 
     it('keeps going (logs only) when the failed-status update itself throws', async () => {
@@ -585,9 +600,11 @@ describe('Evaluation Runs API', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.viaFallback).toBe(true);
+      // A pre-lease doc has nothing to CAS on: unguarded write, as before.
       expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith(
         'zombie-1',
-        expect.objectContaining({ status: 'cancelled', cancelNote: expect.stringContaining('no active executor') })
+        expect.objectContaining({ status: 'cancelled', cancelNote: expect.stringContaining('no active executor') }),
+        undefined,
       );
     });
 
@@ -598,6 +615,76 @@ describe('Evaluation Runs API', () => {
 
       expect(res.status).toBe(409);
       expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+    });
+
+    // #612 cancel by lease: the run is executing in ANOTHER process that is
+    // still heartbeating — no in-memory token here, but a live lease.
+    it('cancel by lease: a live lease (no in-memory token) stamps cancelRequestedAt and reports draining, never the zombie fallback', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'leased-1', status: 'running', createdAt: new Date().toISOString(),
+        executor: { id: 'tok', kind: 'cli', version: '1' }, lease: { generation: 1, heartbeatAt: new Date().toISOString(), ttlMs: 300_000 },
+      });
+      mockEvaluationRunsUpdate.mockResolvedValueOnce({ id: 'leased-1', status: 'running' });
+
+      const res = await request(app).post('/api/storage/evaluation-runs/leased-1/cancel');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true, draining: true, viaLease: true, cancelRequestedAt: expect.any(String) });
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledTimes(1);
+      // Guarded on token + generation + running — never on the heartbeat the executor keeps renewing.
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith('leased-1', { cancelRequestedAt: res.body.cancelRequestedAt }, { executorId: 'tok', generation: 1 });
+      // Status stays `running` until the executor drains; no fallback terminal write.
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalledWith('leased-1', expect.objectContaining({ status: 'cancelled' }));
+    });
+
+    it('cancel by lease: if the run finished between the read and the stamp, nothing is written and the caller gets 409', async () => {
+      const { LeaseLostError } = await import('@/lib/runLease');
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'leased-1', status: 'running', createdAt: new Date().toISOString(),
+        executor: { id: 'tok', kind: 'cli', version: '1' }, lease: { generation: 1, heartbeatAt: new Date().toISOString(), ttlMs: 300_000 },
+      });
+      mockEvaluationRunsUpdate.mockRejectedValueOnce(new LeaseLostError({ error: 'lease-lost', runId: 'leased-1', generation: 1, at: 'T', status: 'completed' }));
+      const res = await request(app).post('/api/storage/evaluation-runs/leased-1/cancel');
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/now completed/);
+    });
+
+    it('cancel by lease is idempotent: a second cancel keeps the first cancelRequestedAt and writes nothing', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'leased-1', status: 'running', createdAt: new Date().toISOString(), cancelRequestedAt: '2026-01-01T00:05:00.000Z',
+        executor: { id: 'tok', kind: 'cli', version: '1' }, lease: { generation: 1, heartbeatAt: new Date().toISOString(), ttlMs: 300_000 },
+      });
+      const res = await request(app).post('/api/storage/evaluation-runs/leased-1/cancel');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ viaLease: true, cancelRequestedAt: '2026-01-01T00:05:00.000Z' });
+      expect(mockEvaluationRunsUpdate).not.toHaveBeenCalled();
+    });
+
+    it('an EXPIRED lease takes the zombie fallback (the sweeper will fail it anyway; the user gets an immediate cancel)', async () => {
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'leased-dead', status: 'running', createdAt: new Date(Date.now() - 600_000).toISOString(),
+        executor: { id: 'tok', kind: 'cli', version: '1' }, lease: { generation: 1, heartbeatAt: new Date(Date.now() - 400_000).toISOString(), ttlMs: 300_000 },
+      });
+      mockEvaluationRunsUpdate.mockResolvedValueOnce({ id: 'leased-dead', status: 'cancelled' });
+      const res = await request(app).post('/api/storage/evaluation-runs/leased-dead/cancel');
+      expect(res.status).toBe(200);
+      expect(res.body.viaFallback).toBe(true);
+      // …as a CAS on the exact lease it observed (token, generation, the expired heartbeat).
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith('leased-dead', expect.objectContaining({ status: 'cancelled', cancelNote: expect.stringContaining('no active executor') }), expect.objectContaining({ executorId: 'tok', generation: 1, heartbeatAt: expect.any(String) }));
+    });
+
+    it('the zombie fallback on a leased run is a CAS: if the run changed state meanwhile (finished / swept / heartbeated) nothing is overwritten and the caller gets 409', async () => {
+      const { LeaseLostError } = await import('@/lib/runLease');
+      mockEvaluationRunsGetById.mockResolvedValueOnce({
+        id: 'leased-dead', status: 'running', createdAt: new Date(Date.now() - 600_000).toISOString(),
+        executor: { id: 'tok', kind: 'cli', version: '1' }, lease: { generation: 1, heartbeatAt: '2026-01-01T00:00:00.000Z', ttlMs: 300_000 },
+      });
+      mockEvaluationRunsUpdate.mockRejectedValueOnce(new LeaseLostError({ error: 'lease-lost', runId: 'leased-dead', generation: 1, at: 'T', status: 'completed' }));
+      const res = await request(app).post('/api/storage/evaluation-runs/leased-dead/cancel');
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/changed state while cancelling \(now completed\)/);
+      // The write was attempted under the exact observed lease, heartbeat included.
+      expect(mockEvaluationRunsUpdate).toHaveBeenCalledWith('leased-dead', expect.objectContaining({ status: 'cancelled' }), { executorId: 'tok', generation: 1, heartbeatAt: '2026-01-01T00:00:00.000Z' });
     });
 
     it('does not block the zombie fallback on legacy docs with no createdAt', async () => {

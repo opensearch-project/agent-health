@@ -20,6 +20,7 @@ import { validateAwsCredentials } from './services/tracesService.js';
 import { bindUrl, hostEnvIgnoredNotice, nonLoopbackBindWarning, resolveBindHost } from '../lib/bindHost.js';
 import { resumePendingTracePollsSafely } from './services/traceRecoveryOnBoot.js';
 import { recoverOrphanBenchmarkRunsSafely } from './services/benchmarkRunRecoveryOnBoot.js';
+import { startRunLeaseSweeper, type RunLeaseSweeperHandle } from './services/runLeaseSweeper.js';
 import { getStorageModule } from './adapters/index.js';
 
 // Register server-side connectors (subprocess, claude-code)
@@ -125,6 +126,11 @@ function stopCodingAgentRefresh(): void {
   } catch { /* registry may not be initialized */ }
 }
 
+let leaseSweeper: RunLeaseSweeperHandle | undefined;
+function stopLeaseSweeper(): void {
+  leaseSweeper?.stop();
+}
+
 async function startServer() {
   const app = await createApp();
 
@@ -198,6 +204,10 @@ async function startServer() {
             // with the runner long dead). Different bug class — see
             // server/services/benchmarkRunRecoveryOnBoot.ts.
             recoverOrphanBenchmarkRunsSafely(storage);
+            // Fail out leased evaluation runs whose executor stopped
+            // heartbeating (boot pass + every minute). See
+            // server/services/runLeaseSweeper.ts.
+            leaseSweeper = startRunLeaseSweeper(storage);
           }
         } catch (err: any) {
           console.warn(`[bootRecovery] Could not start: ${err?.message || err}`);
@@ -206,7 +216,7 @@ async function startServer() {
         // Graceful shutdown — stop the observio child + background timers, flush
         // telemetry, close the listener, exit within the shared bound.
         installAppShutdown(server, {
-          cleanup: [stopObservioAgent, stopCodingAgentRefresh],
+          cleanup: [stopObservioAgent, stopCodingAgentRefresh, stopLeaseSweeper],
         });
 
         resolve();

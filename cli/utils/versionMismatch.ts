@@ -11,8 +11,13 @@
  * that blindly kills whatever the old server is executing (issue #612,
  * problem 5). The server reports what it is executing on `/health`
  * (`activeRuns`, read from its in-memory executor registries — never from
- * storage, whose `running` docs can be stale leftovers of a crashed process).
- * This module decides, from that field, whether the restart is safe.
+ * storage, whose `running` docs can be stale leftovers of a crashed process)
+ * and, since executor leases exist, on `GET /api/runs/in-flight` — the
+ * leased runs of EVERY executor writing to that server (a CLI run included)
+ * unioned with the in-memory registries. The in-flight answer is preferred
+ * when the server has it ({@link pickActiveRuns}); `/health` is the fallback
+ * for older servers. This module decides, from that, whether the restart is
+ * safe.
  *
  * Extracted into its own module (no `import.meta`) so it can be imported by
  * ts-jest unit tests; `serverLifecycle.ts` uses ESM-only constructs that the
@@ -61,6 +66,42 @@ export function parseActiveRuns(value: unknown): ActiveRunsSummary | undefined {
     refs.push({ id, kind: typeof kind === 'string' && PRINTABLE_TOKEN.test(kind) ? kind : 'run' });
   }
   return { count: count as number, runs: refs };
+}
+
+/**
+ * Parse `GET /api/runs/in-flight` (`{ count, runs: [{ id, kind, … }], complete }`).
+ * Same shape rules as `/health.activeRuns`; `complete: false` means a registry
+ * could not answer, which must read as "unknown", never as "idle".
+ */
+export function parseInFlightRuns(value: unknown): ActiveRunsSummary | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  if ((value as { complete?: unknown }).complete !== true) return undefined;
+  return parseActiveRuns(value);
+}
+
+/**
+ * What `GET /api/runs/in-flight` yielded:
+ *   - `absent`  — the server has no such route (older build): decide from `/health`.
+ *   - `unknown` — the server has the route but could not answer it (error,
+ *                 timeout, malformed, incomplete): NOT safe to fall back to
+ *                 `/health`, which cannot see leased runs of other executors.
+ *   - `ok`      — the authoritative answer.
+ */
+export type InFlightProbe =
+  | { kind: 'absent' }
+  | { kind: 'unknown' }
+  | { kind: 'ok'; runs: ActiveRunsSummary };
+
+/**
+ * Which answer drives the decision. The in-flight listing wins whenever the
+ * server has the route (it sees CLI-executed runs the process registries
+ * cannot) — including when it failed, which must read as "unknown" and
+ * refuse the restart; only a server WITHOUT the route falls back to `/health`.
+ */
+export function pickActiveRuns(health: ActiveRunsSummary | undefined, inFlight: InFlightProbe): ActiveRunsSummary | undefined {
+  if (inFlight.kind === 'ok') return inFlight.runs;
+  if (inFlight.kind === 'unknown') return undefined;
+  return health;
 }
 
 /** Only a real pid is ever echoed into a `kill` hint (`kill -1` would signal everything). */

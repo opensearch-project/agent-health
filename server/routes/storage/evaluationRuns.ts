@@ -39,6 +39,8 @@ import { validateRunNameUpdate } from '../../../lib/runName.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 import { serverRunnerDeps } from '../../../services/runnerDeps.js';
 import { refreshRunEnvironment } from '../../services/runEnvironment.js';
+import { refuseWhenDraining } from '../../services/serverDrain.js';
+import { guardFor, isLeaseLive, isLeaseLostError } from '../../../lib/runLease.js';
 
 const router = Router();
 
@@ -243,7 +245,7 @@ router.get('/api/storage/evaluation-runs/:id', async (req: Request, res: Respons
 });
 
 // POST /api/storage/evaluation-runs - Create and execute an evaluation run (SSE streaming)
-router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) => {
+router.post('/api/storage/evaluation-runs', refuseWhenDraining, async (req: Request, res: Response) => {
   try {
     const { sources, agentKey, modelId, judgeModelId, name, description, evaluatorId, concurrency, benchmarkId, trigger, agentEndpoint, headers } = req.body;
 
@@ -437,14 +439,18 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     } catch (error: any) {
       console.error(`[StorageAPI] Evaluation run failed: ${runId}`, error.message);
 
-      // Update run status to failed
-      try {
-        await deps.sink.finalize(runId, { status: 'failed', error: error.message });
-      } catch (updateError: any) {
-        console.error(`[StorageAPI] Failed to update run status: ${updateError.message}`);
+      // Lease lost: the sweeper already marked the run failed and fenced this
+      // executor out — a terminal write from here would be refused (409) and
+      // must not be attempted. Every other failure is persisted as `failed`.
+      if (!isLeaseLostError(error)) {
+        try {
+          await deps.sink.finalize(runId, { status: 'failed', error: error.message });
+        } catch (updateError: any) {
+          console.error(`[StorageAPI] Failed to update run status: ${updateError.message}`);
+        }
       }
 
-      sendSSE(res, 'error', { error: error.message, runId });
+      sendSSE(res, 'error', { error: error.message, runId, ...(isLeaseLostError(error) ? { leaseLost: error.info } : {}) });
     } finally {
       stopHeartbeat();
       // Clean up cancellation token
@@ -510,6 +516,33 @@ router.post('/api/storage/evaluation-runs/:id/cancel', async (req: Request, res:
     if (run.status !== 'running') {
       return res.status(400).json({ error: `Run is not currently running (status: ${run.status})` });
     }
+
+    // Cancel by lease (#612): the run is executing in ANOTHER process (a CLI,
+    // or a server instance sharing this storage) that is still heartbeating.
+    // Stamp the request; the executor sees `cancelRequestedAt` in its next
+    // lease echo (≤ one heartbeat period), stops starting cases and finalizes
+    // `cancelled` with explicit markers — the same drain semantics as the
+    // in-process path above. The UI shows "Cancelling…" meanwhile. An
+    // EXPIRED lease falls through to the zombie fallback below (the sweeper
+    // will fail the run within a minute anyway).
+    if (run.lease && isLeaseLive(run.lease)) {
+      const cancelRequestedAt = run.cancelRequestedAt ?? new Date().toISOString();
+      if (!run.cancelRequestedAt) {
+        // Guarded on token + generation + running (not on the heartbeat, which
+        // the executor legitimately renews meanwhile): a run that finished or
+        // was swept between the read and this write is not stamped.
+        try {
+          await storage.evaluationRuns.update(id, { cancelRequestedAt }, guardFor(run));
+        } catch (error: any) {
+          if (isLeaseLostError(error)) {
+            return res.status(409).json({ error: `Run changed state while cancelling (now ${error.info.status}); refresh and retry if it is still running.`, leaseLost: error.info });
+          }
+          throw error;
+        }
+      }
+      return res.json({ success: true, draining: true, viaLease: true, cancelRequestedAt });
+    }
+
     if (!isOldEnoughForZombieCancel(run.createdAt)) {
       // Too close to creation to safely assume "no token yet" means "no
       // executor anywhere" — the executor may simply not have registered
@@ -526,11 +559,24 @@ router.post('/api/storage/evaluation-runs/:id/cancel', async (req: Request, res:
     // REQUEST — it stamps cancelRequestedAt and lets finalization publish
     // the terminal status once the executor has drained.)
     const cancelNote = 'Cancelled: no active executor found for this run (process restarted or crashed) — marked cancelled directly.';
-    await storage.evaluationRuns.update(id, {
-      status: 'cancelled',
-      completedAt: new Date().toISOString(),
-      cancelNote,
-    } as any);
+    // For a leased run this terminal write is a CAS on the exact state just
+    // read (token, generation, the expired heartbeat): if the executor came
+    // back, finished, or the sweeper took the run over in between, the write
+    // is refused and nothing is overwritten. Pre-lease docs have no guard.
+    const observed = guardFor(run);
+    const guard = observed && run.lease ? { ...observed, heartbeatAt: run.lease.heartbeatAt } : undefined;
+    try {
+      await storage.evaluationRuns.update(id, {
+        status: 'cancelled',
+        completedAt: new Date().toISOString(),
+        cancelNote,
+      } as any, guard);
+    } catch (error: any) {
+      if (isLeaseLostError(error)) {
+        return res.status(409).json({ error: `Run changed state while cancelling (now ${error.info.status}); refresh and retry if it is still running.`, leaseLost: error.info });
+      }
+      throw error;
+    }
 
     res.json({ success: true, viaFallback: true, note: cancelNote });
   } catch (error: any) {
@@ -548,7 +594,7 @@ router.post('/api/storage/evaluation-runs/:id/cancel', async (req: Request, res:
 // any override actually changes the effective config, the new run is
 // flagged `modified: true` in addition to recording `rerunOf` -- so a
 // tweaked re-run is never mistaken for a faithful duplicate.
-router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: Response) => {
+router.post('/api/storage/evaluation-runs/:id/rerun', refuseWhenDraining, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const storage = getStorageModule();
@@ -685,6 +731,7 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
       })
       .catch(async (error: any) => {
         console.error(`[StorageAPI] Rerun evaluation run failed: ${newRunId}`, error.message);
+        if (isLeaseLostError(error)) return; // already `failed` by the sweeper; this executor is fenced out
         try {
           await deps.sink.finalize(newRunId, { status: 'failed', error: error.message });
         } catch (updateError: any) {

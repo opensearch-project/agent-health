@@ -19,9 +19,42 @@
 import {
   decideVersionMismatchRestart,
   parseActiveRuns,
+  parseInFlightRuns,
+  pickActiveRuns,
   restartRefusedError,
   validPid,
 } from '@/cli/utils/versionMismatch';
+
+describe('parseInFlightRuns() / pickActiveRuns() — /api/runs/in-flight preferred over /health.activeRuns (#612)', () => {
+  const inFlightBody = { count: 1, runs: [{ id: 'eval-run-cli', kind: 'evaluation', source: 'lease', executor: { kind: 'cli', version: '0.9.2' } }], complete: true, draining: false };
+
+  it('reads the in-flight listing with the same shape rules as activeRuns', () => {
+    expect(parseInFlightRuns(inFlightBody)).toEqual({ count: 1, runs: [{ id: 'eval-run-cli', kind: 'evaluation' }] });
+    expect(parseInFlightRuns({ count: 0, runs: [], complete: true })).toEqual({ count: 0, runs: [] });
+  });
+
+  it('an incomplete listing (a registry could not answer / truncated) or one without `complete: true` is unknown, not idle', () => {
+    expect(parseInFlightRuns({ ...inFlightBody, complete: false })).toBeUndefined();
+    expect(parseInFlightRuns({ count: 0, runs: [] })).toBeUndefined();
+    expect(parseInFlightRuns(undefined)).toBeUndefined();
+    expect(parseInFlightRuns({ error: 'boom' })).toBeUndefined();
+  });
+
+  it('the in-flight answer wins whenever the server HAS the route — a failure there is "unknown" (refuse), only an older server falls back to /health', () => {
+    const health = { count: 0, runs: [] };
+    const inFlight = { count: 1, runs: [{ id: 'eval-run-cli', kind: 'evaluation' }] };
+    expect(pickActiveRuns(health, { kind: 'ok', runs: inFlight })).toBe(inFlight);
+    expect(pickActiveRuns(health, { kind: 'absent' })).toBe(health);
+    expect(pickActiveRuns(health, { kind: 'unknown' })).toBeUndefined();
+    expect(pickActiveRuns(undefined, { kind: 'absent' })).toBeUndefined();
+    // Composition: a CLI run in flight refuses the restart even though the server process itself is idle …
+    expect(decideVersionMismatchRestart({ activeRuns: pickActiveRuns(health, { kind: 'ok', runs: inFlight }) })).toEqual({ action: 'refuse', reason: 'in-flight', activeRuns: inFlight });
+    // … a current server whose in-flight listing failed is never trusted on /health alone …
+    expect(decideVersionMismatchRestart({ activeRuns: pickActiveRuns(health, { kind: 'unknown' }) })).toEqual({ action: 'refuse', reason: 'unknown' });
+    // … and an older server without the route keeps the #613 behaviour.
+    expect(decideVersionMismatchRestart({ activeRuns: pickActiveRuns(health, { kind: 'absent' }) })).toEqual({ action: 'restart' });
+  });
+});
 
 describe('parseActiveRuns()', () => {
   it('reads the /health activeRuns block', () => {
