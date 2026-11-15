@@ -23,6 +23,9 @@
  *   4. model 500s     → `source: 'fallback'` + error text; the persisted LLM summary is left untouched
  *   5. model hangs    → timeout → fallback says so
  *   6. unknown report → 404
+ *   9. #618: a deterministic-only report (code checks, no LLM judge) never
+ *      reaches the model — not even with force — and GET /runs/:id carries
+ *      the persisted summary so the UI can show it without any request
  *
  * The verdict sentence's label is always composed server-side from the
  * report (the model supplies only the "why"), which 1) and 3) assert.
@@ -190,6 +193,8 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
     });
     expect(res.body.summary.inputsHash).toMatch(/^[0-9a-f]{16}$/);
     expect(res.body.summary.model).toMatch(/anthropic\.claude/);
+    // The model's sentence on its own (#618: rendered as a separate labelled row).
+    expect(res.body.summary.reason).toBe('both expected outcomes were met');
 
     // The REAL SDK signed the request with the credential the REAL provider resolved.
     expect(fake.calls).toHaveLength(1);
@@ -367,6 +372,38 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
       expect(sibling.status).toBe(200);
     } finally {
       delete process.env.AH_API_KEY;
+    }
+  });
+
+  it('9) #618: a deterministic-only report (code checks, no LLM judge) never reaches the model, even with force; the reason is the failing check\'s own message', async () => {
+    fake.mode = 'ok';
+    const rep = await request(app).post('/api/storage/runs').send({
+      testCaseId: tcId, agentName: 'Example search agent', modelName: 'demo-model',
+      status: 'completed', metricsStatus: 'ready', passFailStatus: 'failed',
+      judgeProvider: 'none', judgeModel: null, judgeModelId: null, evaluatorId: null, llmJudgeReasoning: '',
+      trajectory: [{ id: 's1', type: 'response', content: 'Here are three running shoes under 120.', timestamp: 1 }],
+      matcherResults: [
+        { description: '[ Array(3) ] to have a length of 3', pass: true, method: 'code-assertion' },
+        { description: 'false to equal true', pass: false, method: 'code-assertion', errorMessage: 'top-3 results must all carry the requested brand: brand_matches=1 (need ≥ 3), documents=3 (request 7f1a): expected false to equal true' },
+      ],
+      metrics: {},
+    });
+    expect(rep.status).toBe(201);
+    const id = rep.body.id as string;
+    try {
+      const before = fake.calls.length;
+      for (const body of [{}, { force: true }]) {
+        const res = await request(app).post(`/api/storage/runs/${id}/summary`).send(body);
+        expect(res.status).toBe(200);
+        expect(res.body.cached).toBe(false);
+        expect(res.body.summary.source).toBe('fallback');
+        expect(res.body.summary.error).toBeUndefined();
+        expect(res.body.summary.parts.verdict).toBe('Verdict: FAILED — 1 of 2 checks failed — top-3 results must all carry the requested brand: brand_matches 1 vs ≥ 3.');
+      }
+      expect(fake.calls).toHaveLength(before);
+      expect((await request(app).get(`/api/storage/runs/${id}`)).body.caseSummary).toBeUndefined();
+    } finally {
+      await request(app).delete(`/api/storage/runs/${id}`);
     }
   });
 

@@ -10,7 +10,7 @@
  * the verdict's REASON with model text (never the label).
  */
 
-import { buildCaseSummary, buildCaseSummaryInputs, composeVerdict, hasVerdictToExplain, extractFinalAnswer, truncateForSummary } from '@/lib/caseSummary';
+import { buildCaseSummary, buildCaseSummaryInputs, composeVerdict, hasVerdictToExplain, extractFinalAnswer, truncateForSummary, isJudgedByChecksOnly, canRequestModelSummary, modelReasonOf, usableCachedSummary } from '@/lib/caseSummary';
 import type { TestCase, TestCaseRun } from '@/types';
 
 function testCase(overrides: Partial<TestCase> = {}): TestCase {
@@ -116,5 +116,64 @@ describe('buildCaseSummary — Verdict', () => {
     expect(buildCaseSummary(report({ metricsStatus: 'calculating', passFailStatus: undefined }), testCase()).verdict).toBe('Not judged yet: judgement in progress.');
     const inputs = buildCaseSummaryInputs(judgeErr, testCase());
     expect(composeVerdict(inputs, 'whatever', false)).not.toMatch(/score|PASSED|FAILED/);
+  });
+});
+
+// ─── #618: when a model may be asked, and when a persisted summary is shown as-is ───
+
+const CHECKS_ONLY = { passFailStatus: 'failed' as const, score: undefined, llmJudgeReasoning: '', judgeProvider: 'none', judgeModel: undefined, evaluatorId: undefined, matcherResults: [
+  { description: '[ Array(1) ] to be empty', pass: true, method: 'code-assertion' },
+  { description: 'false to equal true', pass: false, method: 'code-assertion', errorMessage: 'top-3 results must all carry the requested brand: brand_matches=1 (need ≥ 3), documents=3 (request 7f1a, mode AGENTIC): expected false to equal true' },
+] as any };
+
+describe('#618 — deterministic-only runs never need a model; the failing check\'s errorMessage is the reason', () => {
+  it('code checks with no LLM judge: judged-by-checks-only, no model summary may be requested', () => {
+    const r = report(CHECKS_ONLY);
+    expect(isJudgedByChecksOnly(r)).toBe(true);
+    expect(canRequestModelSummary(r)).toBe(false);
+    // The deterministic verdict already names the condition the model omitted in the issue's example.
+    expect(buildCaseSummary(r, testCase()).verdict).toBe('Verdict: FAILED — 1 of 2 checks failed — top-3 results must all carry the requested brand: brand_matches 1 vs ≥ 3.');
+  });
+  it('a judge() call inside a code-SDK body counts as judged by a model', () => {
+    const r = report({ ...CHECKS_ONLY, judgeProvider: 'bedrock', matcherResults: [...CHECKS_ONLY.matcherResults, { description: 'judge: answer is grounded', pass: false, method: 'llm-judge', reasoning: 'The answer cites a product that is not in the results.' }] as any });
+    expect(isJudgedByChecksOnly(r)).toBe(false);
+    expect(canRequestModelSummary(r)).toBe(true);
+  });
+  it('classic LLM-judged report → summarizable; unjudged (agent error / pending) → never', () => {
+    expect(isJudgedByChecksOnly(report())).toBe(false);
+    expect(canRequestModelSummary(report())).toBe(true);
+    const agentErr = report({ status: 'failed', metricsStatus: 'error', failureStage: 'agent', passFailStatus: undefined, trajectory: [], error: 'timed out', llmJudgeReasoning: '', matcherResults: CHECKS_ONLY.matcherResults });
+    expect(isJudgedByChecksOnly(agentErr)).toBe(false);
+    expect(canRequestModelSummary(agentErr)).toBe(false);
+    expect(canRequestModelSummary(report({ metricsStatus: 'calculating', passFailStatus: undefined }))).toBe(false);
+  });
+});
+
+describe('#618 — a persisted model summary is shown from the report, without a request, only while it is current', () => {
+  const det = { verdict: 'Judge verdict: PASSED (score 90%) — The agent traced the 500s to the NullPointerException introduced by build 8812 and recommended a rollback.' };
+  const llm = (over: Record<string, unknown> = {}) => ({
+    source: 'llm' as const, parts: { asked: 'a', agent: 'b', verdict: 'Judge verdict: PASSED (score 90%) — both outcomes were met.' },
+    model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', generatedAt: '2026-11-05T12:00:00.000Z', inputsHash: 'abc', ...over,
+  });
+  it('current: same verdict label, no later re-judge', () => {
+    expect(usableCachedSummary(report({ caseSummary: llm() }), det)).toEqual(llm());
+    expect(usableCachedSummary(report({ caseSummary: llm(), judgementRetriedAt: '2026-11-05T11:00:00.000Z' }), det)).toEqual(llm());
+  });
+  it('stale after a re-judge that landed after it was written', () => {
+    expect(usableCachedSummary(report({ caseSummary: llm(), judgementRetriedAt: '2026-11-05T13:00:00.000Z' }), det)).toBeUndefined();
+  });
+  it('stale when the verdict label no longer matches the report\'s own fields', () => {
+    expect(usableCachedSummary(report({ caseSummary: llm() }), { verdict: 'Judge verdict: FAILED (score 90%) — whatever.' })).toBeUndefined();
+    expect(usableCachedSummary(report({ caseSummary: llm() }), { verdict: 'Judge verdict: PASSED (score 72%) — whatever.' })).toBeUndefined();
+  });
+  it('never a fallback, a missing summary, or an unparseable timestamp', () => {
+    expect(usableCachedSummary(report({ caseSummary: llm({ source: 'fallback', error: 'down' }) }), det)).toBeUndefined();
+    expect(usableCachedSummary(report(), det)).toBeUndefined();
+    expect(usableCachedSummary(report({ caseSummary: llm({ generatedAt: 'not a date' }) }), det)).toBeUndefined();
+  });
+  it('modelReasonOf: the stored `reason`, else the part of the verdict sentence after the dash', () => {
+    expect(modelReasonOf(llm({ reason: 'both outcomes were met' }))).toBe('both outcomes were met');
+    expect(modelReasonOf(llm())).toBe('both outcomes were met.');
+    expect(modelReasonOf({ parts: { asked: '', agent: '', verdict: 'Verdict: PASSED.' } })).toBe('Verdict: PASSED.');
   });
 });

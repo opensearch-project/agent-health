@@ -775,15 +775,18 @@ export interface CaseSummaryParts {
 /**
  * A 3-sentence plain-language summary of one test-case run, shown above the
  * Test Case Definition in the run inspector. `source: 'llm'` = written by the
- * summary model and cached on the report; `source: 'fallback'` = deterministic
- * field-based text returned when the model was unavailable (`error` says
- * why) — never persisted, so the next view tries the model again.
+ * summary model (only when the user asked for it — #618) and cached on the
+ * report; `source: 'fallback'` = deterministic field-based text returned when
+ * the model was unavailable or was not consulted (`error` says why when it
+ * failed) — never persisted.
  */
 export interface CaseSummary {
   source: 'llm' | 'fallback';
   parts: CaseSummaryParts;
   /** Resolved model id for `source: 'llm'`. */
   model?: string;
+  /** The model's one-sentence reason on its own (`source: 'llm'`); `parts.verdict` is the label + this. Absent on summaries persisted before 0.9.2. */
+  reason?: string;
   generatedAt: string;
   /** Short hash of the inputs the summary was built from (cache key). */
   inputsHash: string;
@@ -962,8 +965,9 @@ export interface TestCaseRun {
    */
   traceId?: string;
   /**
-   * Cached TL;DR of this run (see {@link CaseSummary}), written lazily by
-   * `POST /api/storage/runs/:id/summary` on first view. Only LLM-written
+   * Cached TL;DR of this run (see {@link CaseSummary}), written by
+   * `POST /api/storage/runs/:id/summary` when the user clicks Summarize
+   * (never on page view — #618). Only LLM-written
    * summaries are persisted; `inputsHash` ties the text to the exact prompt /
    * answer / judgement it was written from, so a re-judge invalidates it. The
    * verdict sentence's label is always composed from this report's own

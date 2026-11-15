@@ -16,13 +16,20 @@
  * Honesty rules (owner: "errors ⇒ no metrics, never zeros"): agent / judge
  * errors read "Not judged: … — <cause>", never a verdict; the verdict label
  * always comes from the report's own fields; code-SDK reports with no judge
- * prose explain themselves from their checks (lib/judgement/checks.ts).
+ * prose explain themselves from their checks (lib/judgement/checks.ts) — the
+ * failing check's own `errorMessage` is the reason, and no model is ever
+ * consulted for them (#618).
+ *
+ * The model-written summary is a SEPARATE, labelled addition the user asks
+ * for with the card's Summarize button; it never replaces these sentences in
+ * the card. The helpers at the bottom decide when it may be requested and
+ * whether a persisted one is still current.
  *
  * Browser-safe: no node built-ins. Pure functions, unit-tested in
  * tests/unit/lib/caseSummary.test.ts.
  */
 
-import type { CaseSummaryParts, TestCase, TestCaseRun } from '@/types';
+import type { CaseSummary, CaseSummaryParts, TestCase, TestCaseRun } from '@/types';
 import { getJudgeReasoningText } from '@/lib/matchers/judgeAccessor';
 import { getFailureStage, getFailureCause } from '@/lib/reportFailure';
 import { checkEvidence, checkTitle, isNotReachedMarker, summarizeChecks, firstSentence, splitReasoningSections } from '@/lib/judgement/checks';
@@ -252,4 +259,66 @@ export function buildCaseSummary(report: TestCaseRun, testCase: TestCase | null 
 /** True when there is a pass/fail verdict whose reason a model could word — unjudged runs need no model. */
 export function hasVerdictToExplain(report: Parameters<typeof classifyVerdict>[0]): boolean {
   return classifyVerdict(report).verdict !== 'not_judged';
+}
+
+type ChecksOnlyReport = Parameters<typeof classifyVerdict>[0] & Pick<TestCaseRun, 'matcherResults'>;
+
+/**
+ * True when the verdict came from deterministic checks alone — code `expect`
+ * assertions, trace checks, deterministic evaluators — with no LLM judge
+ * reasoning on the report (no `--judge-model`, no `judge()` call). The
+ * failing check's own `errorMessage` IS the reason, so the card offers no
+ * Summarize and the server never calls a model for such a run (#618).
+ */
+export function isJudgedByChecksOnly(report: ChecksOnlyReport): boolean {
+  if (classifyVerdict(report).verdict === 'not_judged') return false;
+  return !getJudgeReasoningText(report).trim() && summarizeChecks(report.matcherResults).total > 0;
+}
+
+/** Whether a model summary may be requested at all: a pass/fail verdict with judge prose behind it. */
+export function canRequestModelSummary(report: ChecksOnlyReport): boolean {
+  return hasVerdictToExplain(report) && !isJudgedByChecksOnly(report);
+}
+
+/** The label part of a verdict sentence ("Judge verdict: FAILED (score 30%)"), without the reason or the final period. */
+function verdictLabel(verdict: string): string {
+  const v = String(verdict || '');
+  const i = v.indexOf(' — ');
+  return (i >= 0 ? v.slice(0, i) : v).replace(/\.$/, '').trim();
+}
+
+/**
+ * The model's own sentence inside a stored summary. Summaries written since
+ * 0.9.2 carry it as `reason`; older ones only have the composed verdict
+ * sentence, from which the part after the dash is the reason.
+ */
+export function modelReasonOf(summary: Pick<CaseSummary, 'reason' | 'parts'>): string {
+  if (summary.reason && summary.reason.trim()) return summary.reason.trim();
+  const v = String(summary.parts?.verdict || '');
+  const i = v.indexOf(' — ');
+  return i >= 0 ? v.slice(i + 3).trim() : v.trim();
+}
+
+/**
+ * The model summary persisted on the report, when it still describes THIS
+ * judgement — shown without any request (#618). It is stale, and therefore
+ * not returned, when the judgement was retried after it was written or when
+ * its verdict label no longer matches the one the report's own fields
+ * produce now. The server keeps the exact inputs-hash check for the moment
+ * the user asks again.
+ */
+export function usableCachedSummary(
+  report: Pick<TestCaseRun, 'caseSummary' | 'judgementRetriedAt'>,
+  deterministic: Pick<CaseSummaryParts, 'verdict'>
+): CaseSummary | undefined {
+  const c = report.caseSummary;
+  if (!c || c.source !== 'llm' || !c.parts?.verdict) return undefined;
+  const generated = Date.parse(c.generatedAt);
+  if (!Number.isFinite(generated)) return undefined;
+  if (report.judgementRetriedAt) {
+    const retried = Date.parse(report.judgementRetriedAt);
+    if (!Number.isFinite(retried) || generated < retried) return undefined;
+  }
+  if (verdictLabel(c.parts.verdict) !== verdictLabel(deterministic.verdict)) return undefined;
+  return c;
 }

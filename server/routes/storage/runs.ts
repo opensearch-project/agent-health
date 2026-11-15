@@ -547,14 +547,17 @@ router.get('/api/storage/runs/iterations/:benchmarkId/:testCaseId', async (req: 
   }
 });
 
-// POST /api/storage/runs/:id/summary - Case TL;DR (lazy, cached on the report)
+// POST /api/storage/runs/:id/summary - Case TL;DR model summary (on demand, cached on the report)
 //
 // Body: { force?: boolean }. Returns { summary: CaseSummary, cached: boolean }.
-// The summary is regenerated whenever its inputs hash (prompt / answer /
-// judgement) no longer matches the cached one — i.e. after Retry judgement —
-// and never blocks on a dead model: the fallback is field-based text with
-// `source: 'fallback'` + `error`. Sample (demo-*) reports are summarised but
-// never written to.
+// Called ONLY when the user clicks Summarize on the card — never on page view
+// (#618); a persisted summary is shown from the report itself. The summary is
+// regenerated whenever its inputs hash (prompt / answer / judgement) no
+// longer matches the cached one — i.e. after Retry judgement — and never
+// blocks on a dead model: the fallback is field-based text with
+// `source: 'fallback'` + `error`. Unjudged and deterministic-only (no LLM
+// judge) runs get the field-based text without any model call. Sample
+// (demo-*) reports are summarised but never written to.
 router.post('/api/storage/runs/:id/summary', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;

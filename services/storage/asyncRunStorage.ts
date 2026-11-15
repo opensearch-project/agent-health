@@ -222,6 +222,12 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     llmVerdict: stored.llmVerdict,
     verdictConflict: stored.verdictConflict,
     score: stored.score,
+    // The model-written case TL;DR persisted by POST /runs/:id/summary. Until
+    // this was mapped the browser never saw it, so every view of a judged
+    // report had to call the summary route (and, uncached, a Bedrock model)
+    // just to find out one was stored (#618). The card now shows it with no
+    // request at all; see lib/caseSummary.ts `usableCachedSummary`.
+    caseSummary: (stored as any).caseSummary,
   };
 }
 
