@@ -247,8 +247,11 @@ describe('#640 — file storage + CloudWatch: the run inspector finds a run\'s s
     const [insights] = insightsQueries();
     expect(insights.endTime - insights.startTime).toBeGreaterThanOrEqual(7 * 86_400); // the lookback, not the 4-minute window
     expect(insights.queryString).toContain(`\`attributes.agent_health.run.id\` in ["${RUN}"]`);
-    // The Strategy-C clause itself stays bounded to the (stale) window inside the query.
-    expect(insights.queryString).toContain(`startTimeUnixNano >= ${stale.startedAt}000000`);
+    // Precise-first: the exact phase carries no Strategy-C clause, and since
+    // it found the run's spans the (stale) window phase is never queried.
+    expect(insights.queryString).not.toContain('service.name');
+    expect(insightsQueries()).toHaveLength(1);
+    expect(res.body.correlation.strategy).not.toBe('window');
 
     // Header metrics for the same run were never affected (the batch path already scanned the lookback) — parity.
     const metrics = await request(app).get(`/api/metrics/${RUN}`);

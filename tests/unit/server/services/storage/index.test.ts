@@ -390,6 +390,32 @@ describe('Storage Service', () => {
       jest.restoreAllMocks();
     });
 
+    it('persists performanceMetrics (per-case wall-clock) so the Traces tab can use the run\'s own window', async () => {
+      mockClient.index.mockResolvedValue({ body: { result: 'created' } });
+
+      await saveReport({
+        testCaseId: 'tc-1',
+        performanceMetrics: { durationMs: 36900, agentDurationMs: 34000 },
+      } as any);
+
+      expect(mockClient.index).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            performanceMetrics: { durationMs: 36900, agentDurationMs: 34000 },
+          }),
+        })
+      );
+    });
+
+    it('omits performanceMetrics from the stored doc when the report has none', async () => {
+      mockClient.index.mockResolvedValue({ body: { result: 'created' } });
+
+      await saveReport({ testCaseId: 'tc-1' } as any);
+
+      const body = mockClient.index.mock.calls[0][0].body;
+      expect(body).not.toHaveProperty('performanceMetrics');
+    });
+
     it('should save report with all fields converted', async () => {
       mockClient.index.mockResolvedValue({ body: { result: 'created' } });
 

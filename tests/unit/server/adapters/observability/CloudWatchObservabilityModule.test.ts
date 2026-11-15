@@ -489,6 +489,40 @@ describe('CloudWatchObservabilityModule', () => {
       }
     });
 
+    it('an advisory `scanWindow` (the precise-first exact phase hands the stripped agents window back through it) never narrows an exact-id scan and never adds a correlation clause (#640 rule)', async () => {
+      // A STALE hint (built around "now", the run an hour earlier) must not hide the run from its exact id.
+      const now = T0_MS + 60 * 60 * 1000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      reader.honourInsightsBounds = true;
+      try {
+        const res = await mod(reader).traces.query({ traceId: TRACE, scanWindow: { startedAt: now - 3 * 60_000, endedAt: now + 60_000 } });
+        expect(res.total).toBe(12); // narrowing to the hint would return 0
+        const call = reader.calls.insights[0];
+        expect(call).toMatchObject({ startMs: now - DEFAULT_LOOKBACK_MS, endMs: now }); // the lookback, not the 4-minute hint
+        expect(call.query).toContain(`traceId = "${TRACE}"`);
+        expect(call.query).not.toContain('service.name'); // a hint, never a Strategy-C clause
+        expect(scanSpan(spanScans(reader))).toEqual({ startMs: now - FRESH_SCAN_MS, endMs: now });
+        // explicit bounds still win over the hint
+        await mod(reader).traces.query({ traceId: TRACE, startTime: 1000, endTime: 2000, scanWindow: { startedAt: T0_MS, endedAt: T0_MS + 12_000 } });
+        expect(reader.calls.insights[1]).toMatchObject({ startMs: 1000, endMs: 2000 });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('a `scanWindow` older than the lookback WIDENS the exact-id scan (a correct hint still finds an 8-day-old run)', async () => {
+      const now = T0_MS + 8 * 24 * 60 * 60 * 1000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      reader.honourInsightsBounds = true;
+      try {
+        const res = await mod(reader).traces.query({ traceId: TRACE, scanWindow: { startedAt: T0_MS, endedAt: T0_MS + 12_000 } });
+        expect(res.total).toBe(12);
+        expect(reader.calls.insights[0]).toMatchObject({ startMs: T0_MS - 5 * 60 * 1000, endMs: now });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
     it('an over-cap explicit range is clamped to the newest 30 days AND reported truncated (never silently narrowed)', async () => {
       const now = Date.now();
       const res = await mod(reader).traces.query({ traceId: TRACE, startTime: now - 60 * 86_400_000, endTime: now });

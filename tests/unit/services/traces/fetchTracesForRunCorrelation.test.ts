@@ -13,7 +13,7 @@
  * previously only sent runId (Strategy B) + windowAgents (Strategy C).
  */
 
-import { fetchTracesForRun } from '@/services/traces';
+import { fetchTracesForRun, describeTraceCorrelation } from '@/services/traces';
 
 describe('fetchTracesForRun — direct traceId / sessionId correlation', () => {
   let bodies: any[] = [];
@@ -55,5 +55,27 @@ describe('fetchTracesForRun — direct traceId / sessionId correlation', () => {
       windowAgents: [{ serviceName: 'claude-code-agent', startedAt: 1, endedAt: 2, sessionId: 'sid-x' }],
     });
     expect(bodies[0].agents[0]).toMatchObject({ serviceName: 'claude-code-agent', sessionId: 'sid-x' });
+  });
+});
+
+describe('describeTraceCorrelation — Traces tab caption', () => {
+  it('names the exact strategy that matched', () => {
+    expect(describeTraceCorrelation({ strategy: 'traceId', windowFiltered: 0 })).toBe('Matched by trace id');
+    expect(describeTraceCorrelation({ strategy: 'runIds', windowFiltered: 0 })).toBe('Matched by run id');
+    expect(describeTraceCorrelation({ strategy: 'sessionId', windowFiltered: 0 })).toBe('Matched by session id');
+  });
+
+  it('flags the window fallback and how many other-run spans were filtered', () => {
+    expect(describeTraceCorrelation({ strategy: 'window', windowFiltered: 0 })).toBe('Matched by service-name window');
+    expect(describeTraceCorrelation({ strategy: 'window', windowFiltered: 1 }))
+      .toBe('Matched by service-name window — 1 span from other runs filtered');
+    expect(describeTraceCorrelation({ strategy: 'window', windowFiltered: 41 }))
+      .toBe('Matched by service-name window — 41 spans from other runs filtered');
+  });
+
+  it('returns null when there is nothing to say', () => {
+    expect(describeTraceCorrelation(undefined)).toBeNull();
+    expect(describeTraceCorrelation(null)).toBeNull();
+    expect(describeTraceCorrelation({ strategy: 'none', windowFiltered: 0 })).toBeNull();
   });
 });
