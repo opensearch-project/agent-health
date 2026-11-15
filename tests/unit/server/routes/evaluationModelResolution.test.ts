@@ -29,7 +29,11 @@ import { getCustomAgents } from '@/server/services/customAgentStore';
 
 jest.mock('@/server/adapters', () => ({ getStorageModule: jest.fn() }));
 jest.mock('@/services/benchmarkRunner', () => ({ runSingleUseCase: jest.fn() }));
-jest.mock('@/lib/config/index', () => ({ loadConfigSync: jest.fn() }));
+jest.mock('@/lib/config/index', () => ({
+  loadConfigSync: jest.fn(),
+  // Per-run config re-read (server/services/runEnvironment.ts, #629).
+  loadConfig: jest.fn().mockResolvedValue({ agents: [], models: {} }),
+}));
 jest.mock('@/server/services/customAgentStore', () => ({ getCustomAgents: jest.fn(() => []) }));
 
 const mockGetStorageModule = getStorageModule as jest.MockedFunction<typeof getStorageModule>;
