@@ -20,6 +20,9 @@
  *                                         "Added N test cases …" naming b's
  *                                         cases; the description records the
  *                                         addition.
+ *   5. `-f a.eval.js -n shop`           → now a SUBSET of what shop holds →
+ *                                         refused ("leaves out b.eval.js");
+ *      `-f a.eval.js -f b.eval.js -n shop` → exactly the set → allowed.
  *
  * Red on the old code: step 3 exits 0 with "Evaluation run completed", the
  * version's test-case list doubles and the description still names a.eval.js.
@@ -138,7 +141,7 @@ describe('CLI benchmark: -n <existing> with a different eval file is refused unl
     const out = plain(res.output);
 
     expect(res.status).toBe(0);
-    expect(out).toMatch(/Warning: --force — adding the test cases of ".*b\.eval\.js" to benchmark ".*src-guard-shop.*", which was created from ".*a\.eval\.js"\./);
+    expect(out).toMatch(/Warning: --force — adding the test cases of ".*b\.eval\.js" to benchmark ".*src-guard-shop.*", which was created from ".*a\.eval\.js"; running ".*" without ".*a\.eval\.js"\./);
     expect(out).toMatch(/Evaluation run completed \(3\/3 test cases\)/);
     const added = /Added 3 test cases to ".*": (.*)/.exec(out);
     expect(added).not.toBeNull();
@@ -148,5 +151,24 @@ describe('CLI benchmark: -n <existing> with a different eval file is refused unl
     expect(doc.description).toMatch(/b\.eval\.js added with --force/);
     expect(doc.versions[doc.versions.length - 1].testCaseIds).toHaveLength(5);
     expect(await listEvaluationRunsOf(benchmarkId)).toHaveLength(3);
+  }, TEST_TIMEOUT);
+
+  it('the benchmark now holds a + b: running only a.eval.js again is refused as a subset ("leaves out b.eval.js"); both files together are allowed', async () => {
+    if (!ready) return;
+    const subset = runCli(['benchmark', '-f', fileA, '-a', 'demo', '-n', benchmarkName, ...JUDGE], { timeoutMs: TEST_TIMEOUT - 20_000 });
+    const out = plain(subset.output);
+    expect(subset.status).toBe(1);
+    expect(out).toMatch(/Error: benchmark ".*src-guard-shop.*" holds test cases from ".*\.eval\.js", ".*\.eval\.js"; this run leaves out ".*b\.eval\.js"\./);
+    expect(out).toMatch(/holds test cases from [^;]*a\.eval\.js[^;]*;/);
+    expect(out).toMatch(/holds test cases from [^;]*b\.eval\.js[^;]*;/);
+    expect(out).toMatch(/pass --force to run this subset under/);
+    expect(await listEvaluationRunsOf(benchmarkId)).toHaveLength(3);
+
+    const both = runCli(['benchmark', '-f', fileA, '-f', fileB, '-a', 'demo', '-n', benchmarkName, ...JUDGE], { timeoutMs: TEST_TIMEOUT - 20_000 });
+    await trackBenchmarkByName(tracker, benchmarkName);
+    expect(both.status).toBe(0);
+    expect(plain(both.output)).not.toMatch(/Error: benchmark|Warning: --force/);
+    expect(plain(both.output)).toMatch(/Evaluation run completed \(5\/5 test cases\)/);
+    expect(await listEvaluationRunsOf(benchmarkId)).toHaveLength(4);
   }, TEST_TIMEOUT);
 });
