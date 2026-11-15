@@ -66,6 +66,9 @@ const mockLoadConfigSync = jest.fn(() => ({ agents, models: {} }));
 const mockGetConfigFileInfo = jest.fn(() => null);
 jest.mock('@/lib/config/index', () => ({
   loadConfigSync: (...args: any[]) => mockLoadConfigSync(...args),
+  // Per-run config re-read (server/services/runEnvironment.ts) resolves to
+  // the same config the sync accessor returns in this suite.
+  loadConfig: async (...args: any[]) => mockLoadConfigSync(...args),
   getConfigFileInfo: (...args: any[]) => mockGetConfigFileInfo(...args),
 }));
 

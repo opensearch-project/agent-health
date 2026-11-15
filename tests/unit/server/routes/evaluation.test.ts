@@ -33,6 +33,8 @@ jest.mock('@/services/benchmarkRunner', () => ({
 }));
 jest.mock('@/lib/config/index', () => ({
   loadConfigSync: jest.fn(),
+  // Per-run config re-read (server/services/runEnvironment.ts).
+  loadConfig: jest.fn().mockResolvedValue({ agents: [], models: {} }),
 }));
 jest.mock('@/server/services/customAgentStore', () => ({
   getCustomAgents: jest.fn(() => []),
@@ -385,9 +387,9 @@ describe('POST /api/evaluate — disconnect recovery contract', () => {
 
     const promise = getEvaluateHandler()(req, res);
 
-    // Let the synchronous setup (placeholder create + started event) settle.
-    await Promise.resolve();
-    await Promise.resolve();
+    // Let the setup (per-run env/config refresh, placeholder create, started
+    // event) settle — a bounded microtask flush, not a timer (fake timers).
+    for (let i = 0; i < 20; i++) await Promise.resolve();
 
     // Two heartbeat ticks: at 15s and 30s into the eval.
     jest.advanceTimersByTime(15_000);

@@ -16,6 +16,7 @@ import { AGUIToTrajectoryConverter, consumeSSEStream, buildAgentPayload } from '
 import { AGUIEvent } from '@/types/agui';
 import { generateMockTrajectory } from './mockTrajectory';
 import { callBedrockJudge, judgeErrorDetailFrom } from './bedrockJudge';
+import type { JudgeTransport } from '@/lib/judge/transport';
 import { buildJudgeMatcherEntry, formatExpectedOutcomesAsClaim } from '@/lib/matchers/judgeAccessor';
 import type { MatcherResult } from '@/lib/matchers/types';
 import type { TracesAccessor } from '@/lib/matchers/traces';
@@ -320,6 +321,12 @@ export interface RunEvaluationWithConnectorOptions {
   judgeModelId?: string;
   /** When true, skip the LLM judge (caller will handle evaluation) */
   skipJudge?: boolean;
+  /**
+   * How the judge is reached (see lib/judge/transport.ts). Defaults to an
+   * HTTP call to this process's own `/api/judge`; runners pass the transport
+   * their caller gave them so the judge location is not a process global.
+   */
+  judge?: JudgeTransport;
 }
 
 /**
@@ -535,7 +542,7 @@ export async function runEvaluationWithConnector(
   onStep: (step: TrajectoryStep) => void,
   options: RunEvaluationWithConnectorOptions
 ): Promise<EvaluationReport> {
-  const { registry: connectorRegistry, onRawEvent, evaluatorId, skipJudge } = options;
+  const { registry: connectorRegistry, onRawEvent, evaluatorId, skipJudge, judge: judgeTransport } = options;
   // Pull `judgeModelId` once so the closure inside the standard-mode call
   // below uses the run-level value rather than the agent's `modelId`.
   const optionsJudgeModelId = options.judgeModelId;
@@ -665,7 +672,7 @@ export async function runEvaluationWithConnector(
     // browserRecovery.ts).
     let judgment: Awaited<ReturnType<typeof callBedrockJudge>>;
     try {
-      judgment = await callBedrockJudge(
+      const judgeArgs: Parameters<typeof callBedrockJudge> = [
         fullTrajectory,
         {
           expectedOutcomes: testCase.expectedOutcomes,
@@ -690,8 +697,12 @@ export async function runEvaluationWithConnector(
             performanceMetrics: { durationMs: Date.now() - evalStartTime, agentDurationMs },
           },
           agent.traceServiceName
-        )
-      );
+        ),
+      ];
+      // Only when the caller supplied one — keeps the positional contract
+      // (and callers' spies) unchanged for the default HTTP self-call.
+      if (judgeTransport) judgeArgs.push({ transport: judgeTransport });
+      judgment = await callBedrockJudge(...judgeArgs);
     } catch (judgeError) {
       console.error('[Eval] Judge call failed:', judgeError instanceof Error ? judgeError.message : judgeError);
       return {

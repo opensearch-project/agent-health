@@ -17,6 +17,7 @@ import { SAMPLE_TEST_CASES } from '../../cli/demo/sampleTestCases';
 import { runSingleUseCase } from '@/services/benchmarkRunner';
 import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
+import { refreshRunEnvironment } from '@/server/services/runEnvironment';
 import { debug } from '@/lib/debug';
 import type { BenchmarkRun, TestCase, TestCaseRun } from '@/types';
 
@@ -113,6 +114,12 @@ router.post('/api/evaluate', async (req: Request, res: Response) => {
   const { testCaseId, agentKey, modelId, judgeModelId, agentEndpoint, evaluatorId, runName, runDescription } = req.body;
   const inlineTestCase = req.body.testCase as TestCase | undefined;
   debug('EvalAPI', 'testCaseId:', testCaseId, 'agentKey:', agentKey, 'modelId:', modelId, 'judgeModelId:', judgeModelId || '(default)', 'inline:', !!inlineTestCase);
+
+  // A UI "Run Test" executes in this long-lived process: re-read `.env` and
+  // the config file first so edits made since boot apply to THIS run (#612).
+  // The refresh updates the process config cache that `loadConfigSync()`
+  // (here and in the connector/provenance code below) reads.
+  await refreshRunEnvironment();
 
   // Validate agent exists (check both built-in and custom agents)
   const config = loadConfigSync();

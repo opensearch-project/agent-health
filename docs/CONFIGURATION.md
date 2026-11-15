@@ -615,6 +615,41 @@ TypeScript config (`agent-health.config.ts`) is always authoritative. For
 `.agent-health/state.json` > `OPENSEARCH_*` env > file fallback. See
 [Two modes: code-first vs UI-first](#two-modes-code-first-vs-ui-first).
 
+## When edits take effect on a running server
+
+A server started with `agent-health serve` (or auto-started by `benchmark` /
+`run`) is long-lived. Before **every run it executes itself** — a run or
+re-run started from the UI, "Run Test" on a single case, or a direct
+`POST /api/storage/evaluation-runs` / `POST /api/evaluate` — it re-reads:
+
+- **`<cwd>/.env`** — new or changed values are applied, removed keys are
+  unset. Precedence is unchanged: a variable **exported in the shell** that
+  started the server always wins over `.env`, and a value the server set
+  itself (for example `AH_PORT` after binding a fallback port) is never
+  replaced.
+- **`agent-health.config.{ts,js,mjs}`** — the file is re-evaluated, so edits
+  to agents (endpoint, headers, hooks, model) apply to the next run. A config
+  file that no longer loads fails that run with the loader's error instead of
+  silently using the previous version.
+
+Still requires a restart:
+
+- variables **exported in the shell** that started the server (the server
+  cannot see your shell change them);
+- the variables that describe the server process itself — `AH_PORT`, `PORT`,
+  `AH_HOST`, `AH_HEADLESS`, `AH_API_KEY`, `NODE_ENV` — are never re-applied
+  from `.env`;
+- the **`storage` / `observability`** blocks of the config (clusters are
+  connected once at startup — see [Two modes](#two-modes-code-first-vs-ui-first));
+- **connectors** declared in the config (registered once at startup);
+- modules the config file **imports** (only the config file itself is
+  re-evaluated);
+- anything a connector or hook caches in module scope.
+
+The environment is process-wide: a run already in progress when another run
+re-reads `.env` sees the new values from that moment. Runs that must be
+isolated from each other's environment should not share a server.
+
 ## Validation
 
 Check your configuration:

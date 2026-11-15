@@ -68,6 +68,8 @@ jest.mock('@/services/benchmarkPromotion', () => ({
 
 jest.mock('@/lib/config/index', () => ({
   loadConfigSync: jest.fn().mockReturnValue({ agents: [] }),
+  // Per-run config re-read (server/services/runEnvironment.ts) — same shape.
+  loadConfig: jest.fn().mockResolvedValue({ agents: [], models: {} }),
 }));
 
 jest.mock('@/server/services/customAgentStore', () => ({
@@ -377,9 +379,13 @@ describe('Evaluation Runs API', () => {
       expect(terminalUpdate![1].stats).toEqual({ passed: 1, failed: 0, errored: 0, pending: 0, notRun: 2, total: 3 });
     });
 
-    it('forwards onProgress and onTestCaseComplete callbacks that stream SSE and persist results', async () => {
-      mockExecuteEvaluationRun.mockImplementation(async (_run: any, _testCases: any, opts: any) => {
+    it('forwards onProgress and onTestCaseComplete callbacks that stream SSE, and hands the runner a sink that persists results', async () => {
+      // The runner persists each verdict through `opts.sink.setCaseResult`
+      // (services/runSink.ts) and then notifies `onTestCaseComplete`, which
+      // the route uses for the SSE event only.
+      mockExecuteEvaluationRun.mockImplementation(async (run: any, _testCases: any, opts: any) => {
         opts.onProgress({ percent: 50 });
+        await opts.sink.setCaseResult(run.id, 'tc-1', { reportId: 'r1', status: 'completed' });
         await opts.onTestCaseComplete('tc-1', { reportId: 'r1', status: 'completed' });
         return { results: {}, stats: {} };
       });

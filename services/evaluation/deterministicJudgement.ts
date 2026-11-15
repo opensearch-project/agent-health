@@ -69,7 +69,7 @@ export interface DeterministicFirstJudgement extends DeterministicJudgementOutco
  */
 export async function resolveDeterministicEvaluator(
   evaluatorId: string | undefined,
-  storage: IStorageModule
+  storage: Pick<IStorageModule, 'evaluators'>
 ): Promise<Evaluator | null> {
   if (!evaluatorId) return null;
   const evaluator = isSystemEvaluatorId(evaluatorId)

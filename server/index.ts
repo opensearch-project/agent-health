@@ -8,7 +8,9 @@
  * Handles AWS Bedrock API calls and serves as the main API server
  */
 
-import 'dotenv/config';
+// Shell-env snapshot + .env load, in that order (see server/bootEnv.ts for
+// why this must be the first import and not a bare `dotenv/config`).
+import './bootEnv.js';
 import { ChildProcess } from 'child_process';
 import config from './config/index.js';
 import { createApp, installAppShutdown } from './app.js';

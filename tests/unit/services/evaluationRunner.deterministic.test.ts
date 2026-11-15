@@ -277,10 +277,17 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
       createdAt: new Date().toISOString(),
     } as unknown as EvaluationRun;
 
+    // The runner pre-persists a placeholder (create) and then merges the
+    // final report into the same document (update); the verdict is on the
+    // merged doc.
     let savedReport: any = null;
     (storage.runs.create as jest.Mock).mockImplementation((report: any) => {
       savedReport = report;
       return Promise.resolve({ ...report });
+    });
+    (storage.runs.update as jest.Mock).mockImplementation((id: string, fields: any) => {
+      savedReport = { ...savedReport, ...fields, id };
+      return Promise.resolve(savedReport);
     });
 
     await executeEvaluationRun(run, [testCase], {

@@ -12,6 +12,7 @@ const mockRouter = {
   get: jest.fn(),
   post: jest.fn(),
   put: jest.fn(),
+  patch: jest.fn(),
   delete: jest.fn(),
 };
 
@@ -32,6 +33,7 @@ jest.mock('@/server/routes/config', () => ({ __esModule: true, default: 'configR
 jest.mock('@/server/routes/evaluation', () => ({ __esModule: true, default: 'evaluationRoutes' }));
 jest.mock('@/server/routes/debug', () => ({ __esModule: true, default: 'debugRoutes' }));
 jest.mock('@/server/routes/sessionAnnotations', () => ({ __esModule: true, default: 'sessionAnnotationsRoutes' }));
+jest.mock('@/server/routes/runsIngest', () => ({ __esModule: true, default: 'runsIngestRoutes' }));
 
 describe('Routes Aggregator', () => {
   beforeEach(() => {
@@ -56,6 +58,7 @@ describe('Routes Aggregator', () => {
     expect(mockUse).toHaveBeenCalledWith('observabilityRoutes');
     expect(mockUse).toHaveBeenCalledWith('configRoutes');
     expect(mockUse).toHaveBeenCalledWith('evaluationRoutes');
+    expect(mockUse).toHaveBeenCalledWith('runsIngestRoutes');
   });
 
   it('should mount routes in the correct order', () => {

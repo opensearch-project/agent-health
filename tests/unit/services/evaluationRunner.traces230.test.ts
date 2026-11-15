@@ -266,11 +266,13 @@ describe('executeEvaluationRun — issue #230 traces fixture pre-loading', () =>
       onProgress: jest.fn(),
     });
 
+    // Second argument: the server's own base URL — the traces client the
+    // runner was handed is bound to an explicit URL, not a process global.
     expect(mockFetchTraces).toHaveBeenCalledWith({
       runId: 'agent-run-id-123',
       includeWindowFallback: false,
       windowAgents: undefined,
-    });
+    }, { baseUrl: expect.stringMatching(/^http:\/\/localhost:\d+$/) });
     expect((caught as Error).message).toMatch(/traces fixture unavailable/);
     expect((caught as Error).message).toMatch(/no spans found for runId=agent-run-id-123/);
     expect(captureLastReport(storage).passFailStatus).toBe('failed');

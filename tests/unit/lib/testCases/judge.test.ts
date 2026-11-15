@@ -326,6 +326,25 @@ describe('bindJudge() — run-level defaults (UI-equivalent)', () => {
     expect(lastBody().evaluatorId).toBe('system-rca-default');
   });
 
+  it('a bound transport replaces the fetch to the server; a per-call serverUrl overrides the bound transport', async () => {
+    const { fetchMock } = mockJudgeFetch();
+    const transport = jest.fn(async () => ({
+      ok: true, status: 200, text: async () => '',
+      json: async () => ({ passFailStatus: 'passed', metrics: { accuracy: 90 }, llmJudgeReasoning: 'via transport' }),
+    }));
+    const bound = bindJudge({ evaluatorId: 'system-rca-default', transport });
+
+    await bound({ trajectory: [{ type: 'response', content: 'a' }] } as any, 'c1');
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect((transport.mock.calls[0] as any)[0]).toMatchObject({ evaluatorId: 'system-rca-default', expectedOutcomes: ['c1'] });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Explicit per-call server: dial THAT server, not the bound transport.
+    await bound({ trajectory: [{ type: 'response', content: 'b' }] } as any, 'c2', { serverUrl: 'http://127.0.0.1:1234' });
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:1234/api/judge', expect.anything());
+  });
+
   it('per-call evaluatorId wins over bound default', async () => {
     const { lastBody } = mockJudgeFetch();
     const bound = bindJudge({ evaluatorId: 'system-rca-default' });

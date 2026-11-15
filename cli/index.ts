@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
 import { readFileSync, existsSync } from 'fs';
 import { config as loadDotenv } from 'dotenv';
+import { captureShellEnvSnapshot } from '../lib/config/envReload.js';
 import open from 'open';
 import ora from 'ora';
 import { startServer } from './utils/startServer.js';
@@ -85,6 +86,10 @@ function printBindNotices(requestedHost: string | undefined, boundHost: string):
   if (warning) console.warn(chalk.yellow(`\n  ${warning}`));
 }
 
+// Record the shell-provided variables BEFORE any .env merge, so a server this
+// CLI starts (`serve`) can re-read .env per run without overriding a shell
+// export (lib/config/envReload.ts).
+captureShellEnvSnapshot();
 // Auto-load .env file BEFORE parsing commands (so all subcommands get env vars)
 const defaultEnvPath = resolve(process.cwd(), '.env');
 if (existsSync(defaultEnvPath)) {

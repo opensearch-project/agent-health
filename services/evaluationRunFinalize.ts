@@ -83,7 +83,10 @@ export interface FinalizeEvaluationRunInput {
 }
 
 export interface FinalizeEvaluationRunOutput {
+  /** The document as the terminal update returned it. */
   run: EvaluationRun;
+  /** The full document as read back BEFORE the terminal update (results already merged). */
+  persisted: EvaluationRun;
   stats: RunStats;
   /** Never-started cases stamped `cancelled` by this call (empty unless cancelled). */
   cancelledMarkers: Record<string, EvaluationRunResultEntry>;
@@ -131,5 +134,5 @@ export async function finalizeEvaluationRun(
     ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
     ...(completedRun.judgeProvider ? { judgeProvider: completedRun.judgeProvider } : {}),
   });
-  return { run, stats, cancelledMarkers };
+  return { run, persisted, stats, cancelledMarkers };
 }

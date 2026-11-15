@@ -33,13 +33,12 @@ import {
 import { isDeterministicEvaluator } from '../../../lib/evaluators/deterministic.js';
 import { isSystemEvaluatorId, getSystemEvaluatorById } from '../../prompts/evaluatorTemplates.js';
 import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
-import { loadConfigSync } from '../../../lib/config/index.js';
-import { getCustomAgents } from '../../services/customAgentStore.js';
 import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
 import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.js';
 import { validateRunNameUpdate } from '../../../lib/runName.js';
-import { finalizeEvaluationRun } from '../../../services/evaluationRunFinalize.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
+import { serverRunnerDeps } from '../../../services/runnerDeps.js';
+import { refreshRunEnvironment } from '../../services/runEnvironment.js';
 
 const router = Router();
 
@@ -259,6 +258,11 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     // own config (connectorConfig), resolved server-side by the runner. Any
     // client-supplied modelId is only kept as a legacy backward-compat fallback.
 
+    // A UI-started run executes in this long-lived process: re-read `.env`
+    // and the config file so edits made since boot apply to THIS run (#612).
+    // Before the SSE headers so a config that no longer loads is a plain 500.
+    const refreshed = await refreshRunEnvironment();
+
     // Set SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -337,10 +341,8 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     // (legacy) then empty. The runner re-resolves the same way at execution.
     let resolvedModelId: string = modelId || '';
     try {
-      const cfg = loadConfigSync();
-      const allAgents = [...cfg.agents, ...getCustomAgents()];
-      resolvedModelId = resolveAgentModel(allAgents.find(a => a.key === agentKey), modelId);
-    } catch { /* loadConfigSync or anything else — keep fallback */ }
+      resolvedModelId = resolveAgentModel(refreshed.agents.find(a => a.key === agentKey), modelId);
+    } catch { /* keep fallback */ }
 
     const run: any = {
       id: runId,
@@ -389,7 +391,11 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
       console.warn('[StorageAPI] Image digest stamping failed (run continues):', imageErr?.message);
     }
 
-    await storage.evaluationRuns.create(run);
+    // Every write of this run — the run doc, per-case reports, verdicts, the
+    // terminal status and the benchmark link — goes through ONE sink
+    // (services/runSink.ts). Agents/models are the ones just re-read above.
+    const deps = serverRunnerDeps(storage, { agents: refreshed.agents, models: refreshed.models });
+    await deps.sink.createRun(run);
 
     // Send started event
     sendSSE(res, 'started', { runId, testCases: snapshots });
@@ -404,7 +410,7 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     try {
       // Execute the evaluation run
       const completedRun = await executeEvaluationRun(run, testCases, {
-        storageModule: storage,
+        ...deps,
         cancellationToken,
         evaluateFnMap,
         hooksByFile,
@@ -413,67 +419,27 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
           sendSSE(res, 'progress', progress);
         },
         onTestCaseComplete: async (testCaseId: string, result: any) => {
-          await storage.evaluationRuns.updateResult(runId, testCaseId, result);
           sendSSE(res, 'testCaseComplete', { testCaseId, result });
         },
       });
 
       const finalStatus = cancellationToken.isCancelled ? 'cancelled' : 'completed';
-      const completedAt = new Date().toISOString();
 
       // Terminal write: merge-if-absent results (+ `cancelled` markers for
-      // never-started cases), recompute stats from the PERSISTED doc, then a
-      // scripted partial status/stats/completedAt update — never a wholesale
-      // `results` overwrite. See services/evaluationRunFinalize.ts.
-      const finalized = await finalizeEvaluationRun(storage, {
-        runId, finalStatus, completedRun, completedAt,
+      // never-started cases), stats recomputed from the PERSISTED doc, then the
+      // benchmark projection (built from the persisted doc, so a mid-run rename
+      // is kept — #465 follow-up). See LocalRunSink.finalize.
+      const finalizedRun = await deps.sink.finalize(runId, {
+        status: finalStatus, completedRun, benchmarkId,
       });
 
-      // Link the terminal projection into the benchmark. addRun is idempotent,
-      // so a crash here can be retried without orphaning the run; the
-      // projection carries the reconciled (persisted) results and stats.
-      // `name`/`description` come from the PERSISTED doc too, not the
-      // in-memory creation-time `run`: a rename issued while the run was still
-      // in flight (before this projection existed) lives only on the doc, and
-      // projecting `run.name` here would resurrect the pre-rename name in
-      // `benchmark.runs[]` (#465 follow-up, codex_review finding).
-      if (benchmarkId) {
-        const persistedName = finalized.run.name ?? run.name;
-        const persistedDescription = finalized.run.description ?? run.description;
-        const benchmarkRun: BenchmarkRun = {
-          id: run.id, name: persistedName, createdAt: run.createdAt, completedAt,
-          status: finalStatus, agentKey: run.agentKey, modelId: run.modelId,
-          judgeModelId: run.judgeModelId, results: finalized.run.results, stats: finalized.stats,
-          ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
-          ...(completedRun.judgeProvider ? { judgeProvider: completedRun.judgeProvider } : {}),
-          ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
-          ...(persistedDescription ? { description: persistedDescription } : {}),
-          ...(run.evaluatorId ? { evaluatorId: run.evaluatorId } : {}),
-          ...(run.headers ? { headers: run.headers } : {}),
-          ...(run.concurrency ? { concurrency: run.concurrency } : {}),
-          ...(run.agentFingerprint ? {
-            agentFingerprint: run.agentFingerprint,
-            agentFingerprintShort: run.agentFingerprintShort,
-            ...(run.agentPromptHash ? { agentPromptHash: run.agentPromptHash } : {}),
-            ...(run.agentConfigSource ? { agentConfigSource: run.agentConfigSource } : {}),
-          } : {}),
-          testCaseSnapshots: run.testCaseSnapshots,
-        };
-        const linked = await storage.benchmarks.addRun(benchmarkId, benchmarkRun);
-        if (!linked) throw new Error(`Benchmark not found while linking completed run: ${benchmarkId}`);
-      }
-
-      sendSSE(res, 'completed', finalized.run);
+      sendSSE(res, 'completed', finalizedRun);
     } catch (error: any) {
       console.error(`[StorageAPI] Evaluation run failed: ${runId}`, error.message);
 
       // Update run status to failed
       try {
-        await storage.evaluationRuns.update(runId, {
-          status: 'failed',
-          completedAt: new Date().toISOString(),
-          error: error.message,
-        });
+        await deps.sink.finalize(runId, { status: 'failed', error: error.message });
       } catch (updateError: any) {
         console.error(`[StorageAPI] Failed to update run status: ${updateError.message}`);
       }
@@ -627,6 +593,11 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
     const { defaultsApplied } = built;
     const { config, modified } = applyRerunOverrides(built.config, overrides);
 
+    // Same per-run re-read of `.env` + config as the create route (#612) —
+    // after the request itself has been validated, so a 404/400/409 about the
+    // source run is never masked by a config that fails to load.
+    const refreshed = await refreshRunEnvironment();
+
     // Resolve sources up front (same as the create route) so a stale/removed
     // benchmark, deleted test case, or missing import file surfaces as a
     // clear error before we commit a new run doc — not as a run that's
@@ -650,10 +621,8 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
     // not the source run's.
     let resolvedModelId = config.modelId;
     try {
-      const cfg = loadConfigSync();
-      const allAgents = [...cfg.agents, ...getCustomAgents()];
-      resolvedModelId = resolveAgentModel(allAgents.find(a => a.key === config.agentKey), config.modelId);
-    } catch { /* loadConfigSync or anything else — keep fallback */ }
+      resolvedModelId = resolveAgentModel(refreshed.agents.find(a => a.key === config.agentKey), config.modelId);
+    } catch { /* keep fallback */ }
 
     const snapshots: TestCaseSnapshot[] = testCases.map(tc => ({
       id: tc.id,
@@ -689,7 +658,8 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
       ...(await resolveAgentProvenance(config.agentKey, { agentEndpoint: config.agentEndpoint })),
     };
 
-    await storage.evaluationRuns.create(newRun);
+    const deps = serverRunnerDeps(storage, { agents: refreshed.agents, models: refreshed.models });
+    await deps.sink.createRun(newRun);
 
     // Respond immediately with the new run's id — the caller (report page)
     // polls GET /:id for progress, matching how it already treats any
@@ -700,28 +670,23 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
     activeCancellationTokens.set(newRunId, cancellationToken);
 
     executeEvaluationRun(newRun, testCases, {
-      storageModule: storage,
+      ...deps,
       cancellationToken,
       evaluateFnMap: resolved.evaluateFnMap,
       hooksByFile: resolved.hooksByFile,
       testHookScopes: resolved.testHookScopes,
       onProgress: () => { /* no SSE client for background rerun execution */ },
-      onTestCaseComplete: async (testCaseId: string, result: any) => {
-        await storage.evaluationRuns.updateResult(newRunId, testCaseId, result);
-      },
     })
       .then(async (completedRun) => {
         const finalStatus = cancellationToken.isCancelled ? 'cancelled' : 'completed';
-        await finalizeEvaluationRun(storage, { runId: newRunId, finalStatus, completedRun });
+        // No benchmark link: a re-run is not projected into `benchmark.runs[]`
+        // (pre-existing behaviour of this route).
+        await deps.sink.finalize(newRunId, { status: finalStatus, completedRun });
       })
       .catch(async (error: any) => {
         console.error(`[StorageAPI] Rerun evaluation run failed: ${newRunId}`, error.message);
         try {
-          await storage.evaluationRuns.update(newRunId, {
-            status: 'failed',
-            completedAt: new Date().toISOString(),
-            error: error.message,
-          });
+          await deps.sink.finalize(newRunId, { status: 'failed', error: error.message });
         } catch (updateError: any) {
           console.error(`[StorageAPI] Failed to update rerun status: ${updateError.message}`);
         }
