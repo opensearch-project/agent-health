@@ -776,6 +776,19 @@ const JudgeRow: React.FC<RowProps> = ({ result }) => {
             );
           })()}
 
+          {/* Which rubric judged this claim. SDK judge() calls with no
+              evaluator used to fall back silently to the RCA rubric and
+              nothing on the page said so (#619) — the frozen snapshot is the
+              one place the evaluator actually used is recorded. */}
+          {result.scoringSnapshot?.evaluatorId && (
+            <div className="text-muted-foreground">
+              <span className="font-semibold text-foreground">evaluator:</span>{' '}
+              <code className="bg-muted px-1 py-0.5 rounded" data-testid="matcher-evaluator" title={result.scoringSnapshot.evaluatorId}>
+                {result.scoringSnapshot.evaluatorName || result.scoringSnapshot.evaluatorId}
+              </code>
+            </div>
+          )}
+
           {result.model && (
             <div className="text-muted-foreground">
               <span className="font-semibold text-foreground">model:</span>{' '}
