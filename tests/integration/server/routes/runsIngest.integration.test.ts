@@ -180,6 +180,32 @@ describe('run ingestion API on a real FILE-storage server (#612)', () => {
     await httpJson('DELETE', `${baseUrl}/api/storage/benchmarks/${benchmarkId}`);
   }, TEST_TIMEOUT);
 
+  it('a re-POSTed createRun (the executor never saw the first answer) re-stamps the SAME run document: one doc, the new token owns it, the superseded one is fenced (#612 step 3)', async () => {
+    const runId = `eval-run-ingest-dup-${Date.now()}`;
+    const doc = () => ({
+      id: runId, docType: 'evaluation-run', name: 'Retried create', createdAt: new Date().toISOString(), status: 'running',
+      agentKey: 'external-agent', modelId: 'external-model', sources: [{ type: 'test-case-ids', ids: ['tc-dup-1'] }], trigger: 'cli',
+      testCaseSnapshots: [{ id: 'tc-dup-1', version: 1, name: 'dup one' }], results: {},
+    });
+    const first = await httpJson('POST', `${baseUrl}/api/runs/ingest`, { run: doc(), executor: { version: 'cli-test' } });
+    expect(first.status).toBe(201);
+    const second = await httpJson('POST', `${baseUrl}/api/runs/ingest`, { run: doc(), executor: { version: 'cli-test' } });
+    expect(second.status).toBe(201);
+    expect(second.body.runId).toBe(runId);
+    expect(second.body.executorToken).not.toBe(first.body.executorToken);
+
+    // Exactly one document, owned by the token the retry received.
+    const list = await httpJson('GET', `${baseUrl}/api/storage/evaluation-runs?size=500`);
+    expect(list.body.evaluationRuns.filter((r: any) => r.id === runId)).toHaveLength(1);
+    const live = await httpJson('POST', `${baseUrl}/api/runs/ingest/${runId}/heartbeat`, {}, { [EXECUTOR_TOKEN_HEADER]: second.body.executorToken });
+    expect(live.status).toBe(200);
+    const stale = await httpJson('POST', `${baseUrl}/api/runs/ingest/${runId}/heartbeat`, {}, { [EXECUTOR_TOKEN_HEADER]: first.body.executorToken });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ error: 'lease-lost', runId });
+
+    await httpJson('DELETE', `${baseUrl}/api/storage/evaluation-runs/${runId}`);
+  }, TEST_TIMEOUT);
+
   it('mutations without the executor token are refused (400) and unknown runs finalize as 404', async () => {
     const noToken = await httpJson('POST', `${baseUrl}/api/runs/ingest/run-x/heartbeat`, {});
     expect(noToken.status).toBe(400);

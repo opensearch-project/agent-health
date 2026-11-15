@@ -23,7 +23,7 @@ import { ensureServer, createServerCleanup } from '@/cli/utils/serverLifecycle.j
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
 import { ApiClient, type EvaluationResult } from '@/cli/utils/apiClient.js';
 import { executeRunLocally } from '@/cli/utils/localExecutor.js';
-import type { AgentConfig } from '@/types/index.js';
+import type { AgentConfig, TestCaseRun } from '@/types/index.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
 import { flagExitCode } from '@/cli/utils/runSummary.js';
 
@@ -146,20 +146,29 @@ async function runForAgent(
       },
     });
 
-    const reportId = outcome.run.results?.[testCase.id]?.reportId;
-    const stored = reportId ? await client.getReportById(reportId) : null;
-    if (!stored) {
+    const entry = outcome.run.results?.[testCase.id];
+    if (!entry?.reportId) {
       spinner.warn(`${agent.name}: ${chalk.yellow('ERRORED')} (the run ${outcome.status} without a report for this test case)`);
       return null;
     }
+    // The verdict is read back from the persisted report. The run itself is
+    // already confirmed, so a read that fails right after (server restarting,
+    // index refresh lag) falls back to the verdict the confirmed run carries
+    // instead of calling a recorded result an error.
+    let stored: Partial<TestCaseRun> | null = null;
+    try {
+      stored = await client.getReportById(entry.reportId);
+    } catch (readError) {
+      console.warn(chalk.gray(`  (could not read report ${entry.reportId} back: ${readError instanceof Error ? readError.message : String(readError)})`));
+    }
     const report: EvaluationResult = {
-      id: stored.id,
-      status: stored.status,
-      passFailStatus: stored.passFailStatus as EvaluationResult['passFailStatus'],
-      metricsStatus: stored.metricsStatus as EvaluationResult['metricsStatus'],
-      metrics: stored.metrics as EvaluationResult['metrics'],
-      trajectorySteps: stored.trajectory?.length || 0,
-      llmJudgeReasoning: stored.llmJudgeReasoning,
+      id: entry.reportId,
+      status: stored?.status ?? entry.status,
+      passFailStatus: (stored ? stored.passFailStatus : (entry as { passFailStatus?: string }).passFailStatus) as EvaluationResult['passFailStatus'],
+      metricsStatus: stored?.metricsStatus as EvaluationResult['metricsStatus'],
+      metrics: stored?.metrics as EvaluationResult['metrics'],
+      trajectorySteps: stored?.trajectory?.length || 0,
+      llmJudgeReasoning: stored?.llmJudgeReasoning,
     };
 
     // Trace-mode reports can time out still awaiting the judge — that state
@@ -174,7 +183,7 @@ async function runForAgent(
     } else if (label === 'FAILED') {
       spinner.fail(`${agent.name}: ${chalk.red('FAILED')}`);
     } else {
-      const reason = (stored as any).judgeError?.message || (stored as any).evaluatorError?.message || stored.llmJudgeReasoning;
+      const reason = (stored as any)?.judgeError?.message || (stored as any)?.evaluatorError?.message || stored?.llmJudgeReasoning;
       spinner.warn(`${agent.name}: ${chalk.yellow('ERRORED')} (not judged — ${report.status === 'completed' ? (reason ? reason : 'the evaluator produced no verdict') : `execution ${report.status}`})`);
     }
 

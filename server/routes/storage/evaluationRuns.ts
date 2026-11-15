@@ -38,6 +38,7 @@ import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
 import { validateRunNameUpdate } from '../../../lib/runName.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 import { serverRunnerDeps } from '../../../services/runnerDeps.js';
+import { buildEvaluationRunDocument } from '../../../services/evaluationRunDocument.js';
 import { refreshRunEnvironment } from '../../services/runEnvironment.js';
 import { refuseWhenDraining } from '../../services/serverDrain.js';
 import { guardFor, isLeaseLive, isLeaseLostError } from '../../../lib/runLease.js';
@@ -307,52 +308,18 @@ router.post('/api/storage/evaluation-runs', refuseWhenDraining, async (req: Requ
       }
     }
 
-    // Create test case snapshots
-    const snapshots: TestCaseSnapshot[] = testCases.map(tc => ({
-      id: tc.id,
-      version: (tc as any).version || 1,
-      name: tc.name,
-    }));
-
-    // Create the evaluation run document
-    const runId = `eval-run-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-    const now = new Date().toISOString();
-
-    // Resolve the agent's model from its own config (connectorConfig) so the
-    // run document records which model the agent ran on — there is no
-    // user-selected agent model. Falls back to any client-supplied modelId
-    // (legacy) then empty. The runner re-resolves the same way at execution.
-    let resolvedModelId: string = modelId || '';
-    try {
-      resolvedModelId = resolveAgentModel(refreshed.agents.find(a => a.key === agentKey), modelId);
-    } catch { /* keep fallback */ }
-
-    const run: any = {
-      id: runId,
-      name: name || `Evaluation Run ${new Date().toLocaleDateString()}`,
-      description,
-      sources: resolved.sources,
-      agentKey,
-      modelId: resolvedModelId,
-      agentEndpoint,
-      headers,
-      // Customer-supplied judge model id (separate from agent's `modelId`).
-      // Forwarded onto the run document so the runner reads it and the UI
-      // can show which judge model graded each test case in this run.
-      judgeModelId: typeof judgeModelId === 'string' && judgeModelId ? judgeModelId : undefined,
-      evaluatorId,
-      concurrency,
-      benchmarkId,
-      trigger: trigger || 'manual',
-      status: 'running',
-      testCaseSnapshots: snapshots,
-      results: {},
-      createdAt: now,
-      // Agent-configuration provenance: WHICH version of this agent's config
-      // produced the numbers (fingerprint + prompt hash + config file/sha).
-      // See lib/agentFingerprint.ts. Spread of `undefined` is a no-op.
-      ...(await resolveAgentProvenance(agentKey, { agentEndpoint })),
-    };
+    // The run document — the same shape the CLI executor mints
+    // (services/evaluationRunDocument.ts): agent model resolved from the
+    // agent's own config, snapshots of the resolved cases, provenance of the
+    // agent configuration as loaded right now.
+    const run: any = buildEvaluationRunDocument({
+      name, description, sources: resolved.sources, agentKey, modelId, judgeModelId, evaluatorId, concurrency, benchmarkId,
+      trigger, agentEndpoint, headers, testCases, agents: refreshed.agents,
+      provenance: await resolveAgentProvenance(agentKey, { agentEndpoint }),
+    });
+    const runId: string = run.id;
+    const now: string = run.createdAt;
+    const snapshots: TestCaseSnapshot[] = run.testCaseSnapshots;
 
     // Benchmark image: content digest of this run's evaluation conditions
     // (find-or-create; failure-safe). See server/services/runBookkeeping.ts.

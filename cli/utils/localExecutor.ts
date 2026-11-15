@@ -31,9 +31,9 @@
  */
 
 import * as path from 'path';
-import type { EvaluationRun, TestCase, TestCaseSnapshot, TestCaseSource } from '@/types/index.js';
+import type { EvaluationRun, TestCaseSnapshot, TestCaseSource } from '@/types/index.js';
 import type { ResolvedConfig } from '@/lib/config/index.js';
-import { resolveAgentModel } from '@/lib/resolveAgentModel.js';
+import { buildEvaluationRunDocument } from '@/services/evaluationRunDocument.js';
 import { resolveTestCaseSources, resolveCodeFnMapForStoredTestCases, type ResolvedSources } from '@/services/sourceResolver.js';
 import { executeEvaluationRun, createCancellationToken } from '@/services/evaluationRunner.js';
 import type { EvaluationRunProgress } from '@/services/evaluationRunner.js';
@@ -154,34 +154,24 @@ export async function resolveSourcesLocally(sources: TestCaseSource[], serverUrl
   return resolved;
 }
 
-/** Build the run document exactly as `POST /api/storage/evaluation-runs` does, from the CALLER's config. */
+/** The run document, minted exactly as `POST /api/storage/evaluation-runs` mints it — from the CALLER's config. */
 export async function buildRunDocument(request: LocalRunRequest, resolved: ResolvedSources, agents: ResolvedConfig['agents']): Promise<EvaluationRun> {
-  const runId = `eval-run-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-  const now = new Date().toISOString();
-  const snapshots: TestCaseSnapshot[] = resolved.testCases.map((tc: TestCase) => ({ id: tc.id, version: (tc as any).version || 1, name: tc.name }));
-  let resolvedModelId = request.modelId || '';
-  try {
-    resolvedModelId = resolveAgentModel(agents.find((a) => a.key === request.agentKey), request.modelId);
-  } catch { /* keep fallback */ }
-  return {
-    id: runId,
+  return buildEvaluationRunDocument({
     name: request.name,
     description: request.description,
     sources: resolved.sources,
     agentKey: request.agentKey,
-    modelId: resolvedModelId,
-    judgeModelId: request.judgeModelId || undefined,
+    modelId: request.modelId,
+    judgeModelId: request.judgeModelId,
     evaluatorId: request.evaluatorId,
     concurrency: request.concurrency,
     benchmarkId: request.benchmarkId,
     trigger: 'cli',
-    status: 'running',
-    testCaseSnapshots: snapshots,
-    results: {},
-    createdAt: now,
+    testCases: resolved.testCases,
+    agents,
     // Agent-configuration provenance from the caller's config file.
-    ...(await resolveAgentProvenance(request.agentKey)),
-  } as EvaluationRun;
+    provenance: await resolveAgentProvenance(request.agentKey),
+  });
 }
 
 export interface ExecuteLocallyOptions {
@@ -207,10 +197,9 @@ export interface ExecuteLocallyOptions {
 export async function executeRunLocally(options: ExecuteLocallyOptions): Promise<LocalRunOutcome> {
   const { serverUrl, config, request, callbacks = {} } = options;
 
-  // The caller's connectors, exactly as the server registers its own at boot.
-  for (const connector of config.connectors ?? []) {
-    try { connectorRegistry.register(connector); } catch { /* already registered */ }
-  }
+  // The caller's connectors, exactly as the server registers its own at boot
+  // (the registry overwrites a duplicate type with a warning, never throws).
+  for (const connector of config.connectors ?? []) connectorRegistry.register(connector);
 
   const agents = [...config.agents, ...getCustomAgents()];
   if (!agents.some((a) => a.key === request.agentKey)) {
@@ -225,9 +214,31 @@ export async function executeRunLocally(options: ExecuteLocallyOptions): Promise
 
   // From here on the runner / connectors / judge log through console.*; keep
   // the info chatter in the per-run log file (terminal only when verbose).
+  // Everything below runs inside ONE try/finally so the console, the signal
+  // handlers and the telemetry provider are always restored / shut down.
   const log: RunLogCapture = startRunLogCapture({ runId: run.id, verbose: options.verbose ?? !!process.env.DEBUG, dir: options.logDir });
-  // Eval telemetry from the caller's config (observability cluster, OTLP).
-  initEvalTelemetryFromConfig(config);
+
+  const cancellationToken = createCancellationToken();
+  let signals = 0;
+  const onSignal = () => {
+    signals++;
+    if (signals === 1) {
+      callbacks.onCancelRequested?.('signal');
+      cancellationToken.cancel();
+      return;
+    }
+    // Second signal: stop waiting for the drain. The lease sweeper fails the
+    // run as "executor lost" once the heartbeats stop.
+    process.exit(130);
+  };
+  // Installed BEFORE the run document exists: a signal while `createRun` is
+  // still being delivered cancels the run (it is then finalized `cancelled`
+  // with every case marked never-started) instead of killing the process
+  // with a leased run left behind.
+  if (options.handleSignals !== false) {
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
+  }
 
   const sink = new HttpRunSink(serverUrl, {
     executorVersion: getVersion(),
@@ -243,68 +254,59 @@ export async function executeRunLocally(options: ExecuteLocallyOptions): Promise
     },
   });
 
-  const getEvaluator = httpEvaluatorLookup(serverUrl);
-  const deps = {
-    sink,
-    agents,
-    models: config.models,
-    judge: createInProcessJudgeTransport({ getEvaluator, config: { models: config.models, judge: config.judge } }),
-    traces: httpTracesClient(serverUrl),
-    getEvaluator,
-  };
-
   try {
-    await sink.createRun(run);
-  } catch (error) {
-    log.stop();
-    throw asFailure(error, undefined, sink.spoolFile, log.logPath);
-  }
-  callbacks.onStarted?.({ runId: run.id, testCases: run.testCaseSnapshots });
+    // Eval telemetry from the caller's config (observability cluster, OTLP).
+    initEvalTelemetryFromConfig(config);
 
-  const cancellationToken = createCancellationToken();
-  let signals = 0;
-  const onSignal = () => {
-    signals++;
-    if (signals === 1) {
-      callbacks.onCancelRequested?.('signal');
-      cancellationToken.cancel();
-      return;
+    const getEvaluator = httpEvaluatorLookup(serverUrl);
+    const deps = {
+      sink,
+      agents,
+      models: config.models,
+      judge: createInProcessJudgeTransport({ getEvaluator, config: { models: config.models, judge: config.judge } }),
+      traces: httpTracesClient(serverUrl),
+      getEvaluator,
+    };
+
+    try {
+      await sink.createRun(run);
+    } catch (error) {
+      throw asFailure(error, undefined, sink.spoolFile, log.logPath);
     }
-    // Second signal: stop waiting for the drain. The lease sweeper fails the
-    // run as "executor lost" once the heartbeats stop.
-    process.exit(130);
-  };
-  if (options.handleSignals !== false) {
-    process.on('SIGINT', onSignal);
-    process.on('SIGTERM', onSignal);
-  }
+    try {
+      callbacks.onStarted?.({ runId: run.id, testCases: run.testCaseSnapshots });
+    } catch { /* an observer never decides the run's fate */ }
 
-  try {
-    const completedRun = await executeEvaluationRun(run, resolved.testCases, {
-      ...deps,
-      cancellationToken,
-      evaluateFnMap: resolved.evaluateFnMap,
-      hooksByFile: resolved.hooksByFile,
-      testHookScopes: resolved.testHookScopes,
-      onProgress: (progress) => callbacks.onProgress?.(progress),
-    });
-    const status = cancellationToken.isCancelled ? 'cancelled' : 'completed';
-    const finalized = await sink.finalize(run.id, { status, completedRun, benchmarkId: request.benchmarkId });
-    return { runId: run.id, run: finalized, status, testCases: run.testCaseSnapshots, logPath: log.logPath };
-  } catch (error) {
-    // Lease lost: the server already failed this run and fenced us out; a
-    // terminal write would be refused. Delivery exhausted: the server never
-    // confirmed — do not pretend. Anything else is this executor's failure,
-    // recorded as such.
-    if (!isLeaseLostError(error) && !(error instanceof RunDeliveryError)) {
+    try {
+      const completedRun = await executeEvaluationRun(run, resolved.testCases, {
+        ...deps,
+        cancellationToken,
+        evaluateFnMap: resolved.evaluateFnMap,
+        hooksByFile: resolved.hooksByFile,
+        testHookScopes: resolved.testHookScopes,
+        onProgress: (progress) => { try { callbacks.onProgress?.(progress); } catch { /* observer */ } },
+      });
+      const status = cancellationToken.isCancelled ? 'cancelled' : 'completed';
+      const finalized = await sink.finalize(run.id, { status, completedRun, benchmarkId: request.benchmarkId });
+      if (sink.unconfirmedWrites > 0) {
+        console.warn(`[LocalExecutor] ${sink.unconfirmedWrites} write(s) of run ${run.id} were refused by the server and are kept in ${sink.spoolFile}`);
+      }
+      return { runId: run.id, run: finalized, status, testCases: run.testCaseSnapshots, logPath: log.logPath };
+    } catch (error) {
+      // Lease lost: the server already failed this run and fenced us out; a
+      // terminal write would be refused. Delivery exhausted: the server never
+      // confirmed — do not pretend. Anything else is this executor's failure,
+      // recorded as such; if even THAT cannot be recorded, say both.
+      if (isLeaseLostError(error) || error instanceof RunDeliveryError) throw asFailure(error, run.id, sink.spoolFile, log.logPath);
       const message = error instanceof Error ? error.message : String(error);
       try {
         await sink.finalize(run.id, { status: 'failed', error: message });
       } catch (finalizeError) {
-        if (!isLeaseLostError(finalizeError) && !(finalizeError instanceof RunDeliveryError)) throw finalizeError;
+        const recorded = asFailure(finalizeError, run.id, sink.spoolFile, log.logPath);
+        throw new LocalRunFailure(`${message} — and the failure could not be recorded on the server: ${recorded.message}`, run.id, recorded.kind, recorded.leaseLost, recorded.spoolPath, log.logPath);
       }
+      throw asFailure(error, run.id, sink.spoolFile, log.logPath);
     }
-    throw asFailure(error, run.id, sink.spoolFile, log.logPath);
   } finally {
     if (options.handleSignals !== false) {
       process.off('SIGINT', onSignal);
