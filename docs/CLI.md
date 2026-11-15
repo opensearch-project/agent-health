@@ -147,11 +147,23 @@ agent-health benchmark [options]
 | `--format <type>` | Report format for `--export`: `json`, `html`, `pdf` | `json` |
 | `-v, --verbose` | Show per-test-case results and errors | - |
 | `--stop-server` | Stop the server after benchmark completes | Keep running |
+| `--force` | With `-f <code file> -n <existing benchmark>`: add the file's test cases to a benchmark that was created from a **different** source file. Without it the CLI refuses (see below) | Refuse |
 
 **Modes:**
 - **Quick mode** (no `-n`, no `-f`): Runs all stored test cases as an **ad-hoc evaluation run** (no benchmark entity is created)
 - **Named mode** (`-n <name>`): Runs a specific existing benchmark
 - **File mode** (`-f <path>`): Imports test cases from a JSON file **or runs a code SDK file** (`.eval.js` / `.eval.ts` — see [SDK.md](./SDK.md)), creates a benchmark, and runs it. `.eval.ts` is executed as synthetic CJS (like `.eval.js`) and works from anywhere on disk; only `.eval.mjs` resolves `@opensearch-project/agent-health` through normal Node module resolution, so an `.eval.mjs` file needs the package reachable as a real dependency from its location (see the note in [SDK.md](./SDK.md#migrating-v1--v2))
+
+**`-f` + `-n <existing benchmark>` — same file only.** A benchmark records
+which eval file it came from through the `sourceFile` of its test cases.
+Re-running the *same* file under its benchmark name adds a run as usual, but
+`benchmark -f b.eval.ts -n "shop"` where `shop` was created from `a.eval.ts`
+is refused with both files named (`Error: benchmark "shop" was created from
+"a.eval.ts"; "b.eval.ts" is a different source file.`) — otherwise the second
+file's cases would be appended to the existing version and two question sets
+would share one pass-rate history. Use a different `-n`, or pass `--force` to
+add the file anyway: the CLI then prints which test cases it added and records
+the addition in the benchmark description.
 
 Every evaluation run is stamped with an **image digest** — a content hash of
 its test-case contents + eval conditions (evaluator, judge model). Runs with

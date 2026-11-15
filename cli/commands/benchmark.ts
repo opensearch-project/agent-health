@@ -41,6 +41,14 @@ import { existsSync, statSync } from 'fs';
 import { isCodeFile, detectSourceLanguage } from '@/lib/testCases/loader.js';
 import { createBenchmarkDoctorCommand } from '@/cli/commands/benchmarkDoctor.js';
 import { collectEvalRootsHints, formatEvalRootsHint } from '@/cli/utils/evalRootsHint.js';
+import {
+  allBenchmarkTestCaseIds,
+  checkBenchmarkSourceMismatch,
+  describeAddedTestCases,
+  formatSourceMismatchForced,
+  formatSourceMismatchRefusal,
+  type BenchmarkSourceMismatch,
+} from '@/cli/utils/benchmarkSourceGuard.js';
 import { computeBenchmarkRepairPlan, applyRepairPlan, computeVersionLinkRepairPlan } from '@/cli/utils/benchmarkDoctor.js';
 
 interface BenchmarkOptions {
@@ -61,6 +69,11 @@ interface BenchmarkOptions {
   testCase?: string[];
   label?: string[];
   concurrency: string;
+  /**
+   * `-f other.eval.ts -n "<existing>"`: add a different source file's test
+   * cases to that benchmark instead of refusing (#620).
+   */
+  force?: boolean;
 }
 
 interface AgentResults {
@@ -705,10 +718,34 @@ async function runUnifiedMode(
   // is new so the run is benchmark-associated (parity with JSON `-f` legacy mode
   // and the documented `benchmark -f foo.eval.js -n "My Benchmark"` behavior).
   let benchmarkId: string | undefined;
+  // #620: when `-n` names an EXISTING benchmark and `-f` brings code files it
+  // was not created from, refuse unless --force; with --force remember what
+  // the benchmark held so the CLI can print exactly what was added.
+  let forcedMismatch: { name: string; mismatch: BenchmarkSourceMismatch; previousIds: string[] } | undefined;
   if (options.name && !isFilePath(options.name)) {
     const existing = await api.findBenchmark(options.name);
     if (existing) {
       benchmarkId = existing.id;
+      const mismatch = await checkBenchmarkSourceMismatch(api, existing, fileArray);
+      if (mismatch && !options.force) {
+        const [first, ...rest] = formatSourceMismatchRefusal(existing.name, mismatch);
+        console.error(chalk.red(`  ${first}`));
+        for (const line of rest) console.log(chalk.gray(`  ${line}`));
+        process.exit(1);
+      }
+      if (mismatch) {
+        console.log(chalk.yellow(`  ${formatSourceMismatchForced(existing.name, mismatch)}`));
+        forcedMismatch = { name: existing.name, mismatch, previousIds: allBenchmarkTestCaseIds(existing) };
+        // The description was written once at creation and still names only
+        // the first file; record the addition so the benchmark page says so.
+        try {
+          const added = mismatch.foreignFiles.join(', ');
+          const description = existing.description
+            ? `${existing.description}; ${added} added with --force`
+            : `CLI benchmark run from ${mismatch.existingSourceFiles.join(', ')}; ${added} added with --force`;
+          await api.updateBenchmark(existing.id, { description });
+        } catch { /* advisory only */ }
+      }
     } else if (hasExplicitSources) {
       const created = await api.createBenchmark({
         name: options.name,
@@ -768,6 +805,7 @@ async function runUnifiedMode(
     let completedCount = 0;
     let runId = '';
     let sseSawTerminal = false;
+    let addedLine: string | null = null;
 
     try {
       while (true) {
@@ -791,6 +829,11 @@ async function runUnifiedMode(
                 // Started event
                 runId = data.runId;
                 totalTestCases = data.testCases.length;
+                if (forcedMismatch) {
+                  // Printed once the spinner is done (writing under an active
+                  // ora spinner garbles the line).
+                  addedLine = describeAddedTestCases(forcedMismatch.previousIds, data.testCases, forcedMismatch.name);
+                }
                 spinner.text = `Running evaluation (0/${totalTestCases})`;
               } else if (data.completedCount !== undefined) {
                 // Progress event
@@ -864,6 +907,7 @@ async function runUnifiedMode(
     }
 
     spinner.succeed(`Evaluation run completed (${outcome.doneCount}/${totalTestCases} test cases)`);
+    if (addedLine) console.log(chalk.yellow(`  ${addedLine}`));
 
     if (run) {
       // Count verdicts the same way the UI does (lib/runStats via
@@ -961,6 +1005,7 @@ export function createBenchmarkCommand(): Command {
     .option('-v, --verbose', 'Show detailed output')
     .option('--stop-server', 'Stop the server after benchmark completes (default: keep running)')
     .option('--agent-path <path>', 'Path to the agent repository to use as judge grounding context (or set AH_AGENT_PATH)')
+    .option('--force', 'With -f <code file> -n <existing benchmark>: add the file\'s test cases to a benchmark that was created from a different source file (default: refuse)')
     .action(async (options: BenchmarkOptions & { name?: string; agentPath?: string }) => {
       console.log(chalk.bold('\nAgent Health - Benchmark Runner\n'));
       applyAgentPathOption(options);
