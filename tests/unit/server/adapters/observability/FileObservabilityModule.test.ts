@@ -94,9 +94,19 @@ describe('FileObservabilityModule', () => {
       expect(r.spans).toHaveLength(0);
     });
 
-    it('matches by sessionId (must-filter)', async () => {
+    it('matches by sessionId alone', async () => {
       const r = await mod.traces.query({ sessionId: 'sess-9' });
       expect(r.spans.map((s) => s.spanId)).toEqual(['d1']);
+    });
+
+    it('sessionId is a correlation clause (unioned), not a must-filter — mirrors the OpenSearch query', async () => {
+      // A stale/mismatched report sessionId must not zero out a traceId match…
+      expect(computeUseUnion({ traceId: 'trace-A', sessionId: 'no-such-session' })).toBe(true);
+      const r = await mod.traces.query({ traceId: 'trace-A', sessionId: 'no-such-session' });
+      expect(r.spans.map((s) => s.spanId)).toEqual(['a1']);
+      // …and a matching one adds its spans to the union.
+      const r2 = await mod.traces.query({ traceId: 'trace-A', sessionId: 'sess-9' });
+      expect(r2.spans.map((s) => s.spanId).sort()).toEqual(['a1', 'd1']);
     });
 
     it("B': matches by OTEL-standard gen_ai.conversation.id == runId (#313)", async () => {
