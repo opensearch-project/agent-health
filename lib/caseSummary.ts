@@ -261,17 +261,20 @@ export function hasVerdictToExplain(report: Parameters<typeof classifyVerdict>[0
   return classifyVerdict(report).verdict !== 'not_judged';
 }
 
-type ChecksOnlyReport = Parameters<typeof classifyVerdict>[0] & Pick<TestCaseRun, 'matcherResults'>;
+type ChecksOnlyReport = Parameters<typeof classifyVerdict>[0] & Pick<TestCaseRun, 'matcherResults' | 'judgeProvider'>;
 
 /**
  * True when the verdict came from deterministic checks alone — code `expect`
  * assertions, trace checks, deterministic evaluators — with no LLM judge
- * reasoning on the report (no `--judge-model`, no `judge()` call). The
- * failing check's own `errorMessage` IS the reason, so the card offers no
- * Summarize and the server never calls a model for such a run (#618).
+ * behind it: the runner recorded `judgeProvider: 'none'` (no `judge()` call
+ * in the body), or the report carries checks but no judge reasoning at all
+ * (no `--judge-model`). The failing check's own `errorMessage` IS the reason,
+ * so the card offers no Summarize and the server never calls a model for
+ * such a run (#618).
  */
 export function isJudgedByChecksOnly(report: ChecksOnlyReport): boolean {
   if (classifyVerdict(report).verdict === 'not_judged') return false;
+  if (report.judgeProvider === 'none') return true;
   return !getJudgeReasoningText(report).trim() && summarizeChecks(report.matcherResults).total > 0;
 }
 

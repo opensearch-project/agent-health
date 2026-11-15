@@ -14,7 +14,8 @@ import { Router, Request, Response } from 'express';
 import { debug } from '@/lib/debug';
 import { getStorageModule } from '../../adapters/index.js';
 import { refreshBenchmarkRunStatsByReportId } from '../../services/benchmarkRunStats.js';
-import { generateCaseSummary, buildCaseSummaryInputs, hashCaseSummaryInputs } from '../../services/caseSummaryService.js';
+import { generateCaseSummary, buildCaseSummaryInputs, hashCaseSummaryInputs, isCaseSummaryCurrent, buildFallbackSummary } from '../../services/caseSummaryService.js';
+import { canRequestModelSummary } from '@/lib/caseSummary';
 import {
   SAMPLE_RUNS,
   getSampleRun,
@@ -549,9 +550,12 @@ router.get('/api/storage/runs/iterations/:benchmarkId/:testCaseId', async (req: 
 
 // POST /api/storage/runs/:id/summary - Case TL;DR model summary (on demand, cached on the report)
 //
-// Body: { force?: boolean }. Returns { summary: CaseSummary, cached: boolean }.
-// Called ONLY when the user clicks Summarize on the card — never on page view
-// (#618); a persisted summary is shown from the report itself. The summary is
+// Body: { generate?: boolean, force?: boolean }. Returns { summary: CaseSummary, cached: boolean }.
+// A model call needs the caller's explicit opt-in — `generate: true` (the
+// card's Summarize button) or `force: true` (Regenerate). Without it the
+// route answers only from the persisted summary or the report's own fields,
+// so a stale bundle in an open tab or a scripted loop over reports can never
+// spend (#618); a persisted summary is shown from the report itself. The summary is
 // regenerated whenever its inputs hash (prompt / answer / judgement) no
 // longer matches the cached one — i.e. after Retry judgement — and never
 // blocks on a dead model: the fallback is field-based text with
@@ -571,6 +575,14 @@ router.post('/api/storage/runs/:id/summary', async (req: Request, res: Response)
     // the summary just lacks the prompt. A FAILING test-case store is not:
     // let it surface as a 500 rather than caching a degraded summary.
     const testCase = report.testCaseId ? await storage.testCases.getById(report.testCaseId) : null;
+    const generate = req.body?.generate === true || force;
+    if (!generate && canRequestModelSummary(report as TestCaseRun)) {
+      const inputs = buildCaseSummaryInputs(report as TestCaseRun, testCase);
+      if (isCaseSummaryCurrent(report.caseSummary, inputs)) {
+        return res.json({ summary: report.caseSummary, cached: true });
+      }
+      return res.json({ summary: buildFallbackSummary(report as TestCaseRun, testCase, inputs, 'not generated: the model is only asked when the request carries {"generate": true}'), cached: false });
+    }
     const result = await generateCaseSummary(report as TestCaseRun, testCase, {
       force,
       persist: isSampleId(id)

@@ -134,6 +134,12 @@ describe('#618 — deterministic-only runs never need a model; the failing check
     // The deterministic verdict already names the condition the model omitted in the issue's example.
     expect(buildCaseSummary(r, testCase()).verdict).toBe('Verdict: FAILED — 1 of 2 checks failed — top-3 results must all carry the requested brand: brand_matches 1 vs ≥ 3.');
   });
+  it('judgeProvider "none" alone marks a run as checks-only, even when the runner left some reasoning text or no matcher results', () => {
+    expect(isJudgedByChecksOnly(report({ judgeProvider: 'none', matcherResults: [] }))).toBe(true);
+    expect(canRequestModelSummary(report({ judgeProvider: 'none' }))).toBe(false);
+    // Without the explicit marker, a judged report with no checks stays summarizable (the user may still click).
+    expect(canRequestModelSummary(report({ llmJudgeReasoning: '', matcherResults: [] }))).toBe(true);
+  });
   it('a judge() call inside a code-SDK body counts as judged by a model', () => {
     const r = report({ ...CHECKS_ONLY, judgeProvider: 'bedrock', matcherResults: [...CHECKS_ONLY.matcherResults, { description: 'judge: answer is grounded', pass: false, method: 'llm-judge', reasoning: 'The answer cites a product that is not in the results.' }] as any });
     expect(isJudgedByChecksOnly(r)).toBe(false);

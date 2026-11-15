@@ -16,7 +16,7 @@
  * States pinned:
  *   - judged by an LLM, nothing persisted → Summarize button, verdict row
  *     deterministic, ZERO requests on mount; click → exactly one POST with
- *     force:false; the AI summary renders as its own labelled row with the
+ *     generate:true, force:false; the AI summary renders as its own labelled row with the
  *     full model id; Regenerate → one more POST with force:true.
  *   - persisted summary on the report → shown at mount ("cached"), zero requests.
  *   - persisted but stale (re-judged later) → not shown; Summarize offered.
@@ -112,7 +112,7 @@ describe('CaseTldrCard — #618 no model call on view', () => {
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toBe('/api/storage/runs/report-1/summary');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body)).toEqual({ force: false });
+    expect(JSON.parse(init.body)).toEqual({ generate: true, force: false });
 
     // The verdict row is untouched (the judge's own reason), the model's text is a separate row.
     expect(screen.getByTestId('case-tldr-verdict').textContent).toContain('Two of the three top results are from a different brand');
@@ -130,7 +130,7 @@ describe('CaseTldrCard — #618 no model call on view', () => {
     fireEvent.click(screen.getByTestId('case-tldr-regenerate'));
     await waitFor(() => expect(screen.getByTestId('case-tldr-model-summary').textContent).toContain('second opinion'));
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ force: true });
+    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ generate: true, force: true });
   });
 
   it('a summary persisted on the report is shown at mount, marked cached, with ZERO requests', async () => {

@@ -24,7 +24,7 @@
  * for the real-route scenario. Scenarios:
  *
  *   1. page view        → ZERO summary requests; deterministic verdict;
- *      Summarize button. Click → exactly ONE request (force:false); the AI
+ *      Summarize button. Click → exactly ONE request (generate:true); the AI
  *      summary renders as its own row labelled with the model id; Regenerate
  *      → one more request with force:true.
  *   2. persisted summary → shown on load, marked cached, ZERO requests.
@@ -252,7 +252,7 @@ test.describe('Case TL;DR card — run inspector', () => {
     await expect(card(page)).toHaveAttribute('data-state', 'ready', { timeout: 10000 });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toContain(`/runs/${s.repFail}/summary`);
-    expect(calls[0].body).toEqual({ force: false });
+    expect(calls[0].body).toEqual({ generate: true, force: false });
     // The judge's verdict row is unchanged; the model's text is a separate, labelled row.
     await expect(page.getByTestId('case-tldr-verdict')).toHaveText('Judge verdict: FAILED (score 30%) — Wrong service: the pool exhaustion comes from the orders service, not inventory.');
     await expect(page.getByTestId('case-tldr-model-label')).toContainText('AI summary');
@@ -270,7 +270,7 @@ test.describe('Case TL;DR card — run inspector', () => {
     await page.getByTestId('case-tldr-regenerate').click();
     await expect(page.getByTestId('case-tldr-model-summary')).toContainText('(v2).', { timeout: 10000 });
     expect(calls).toHaveLength(2);
-    expect(calls[1].body).toEqual({ force: true });
+    expect(calls[1].body).toEqual({ generate: true, force: true });
   });
 
   test('a summary persisted on the report is shown on load, marked cached — ZERO requests', async ({ page }) => {
@@ -351,7 +351,7 @@ test.describe('Case TL;DR card — run inspector', () => {
   test('real route: Summarize on a judged case without model access shows the honest note; the deterministic verdict stays', async ({ page, request }) => {
     test.skip(!seed, 'Could not seed run (storage unavailable)');
     const s = seed!;
-    const probe = await request.post(`/api/storage/runs/${s.repProbe}/summary`, { data: {} });
+    const probe = await request.post(`/api/storage/runs/${s.repProbe}/summary`, { data: { generate: true } });
     expect(probe.ok()).toBeTruthy();
     const probeBody = await probe.json();
     expect(probeBody.summary.parts.verdict).toMatch(/^Judge verdict: FAILED \(score 30%\) — /);

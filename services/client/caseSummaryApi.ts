@@ -16,6 +16,12 @@ export interface CaseSummaryResponse {
   cached: boolean;
 }
 
+/**
+ * Ask the model for a summary (the card's Summarize / Regenerate buttons —
+ * the only callers). `generate: true` is the explicit opt-in the server
+ * requires before it spends a model call (#618); `force` bypasses a current
+ * cached summary.
+ */
 export async function fetchCaseSummary(
   reportId: string,
   options: { force?: boolean; signal?: AbortSignal } = {}
@@ -23,7 +29,7 @@ export async function fetchCaseSummary(
   const response = await fetch(`/api/storage/runs/${encodeURIComponent(reportId)}/summary`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ force: options.force === true }),
+    body: JSON.stringify({ generate: true, force: options.force === true }),
     signal: options.signal,
   });
   if (!response.ok) {
