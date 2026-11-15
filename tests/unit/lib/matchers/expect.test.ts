@@ -144,6 +144,91 @@ describe('custom matchers', () => {
   });
 });
 
+describe('negated chains keep the negation in the recorded description (#617)', () => {
+  beforeEach(() => startSession());
+  afterEach(() => endSession());
+
+  const descriptions = () => {
+    const out = endSession();
+    startSession();
+    return out.map(r => [r.description, r.pass] as const);
+  };
+
+  it('a passing `.to.not.match(re)` is described as "not to match", not as the opposite check', () => {
+    ahExpect('top 3: a; b; c').to.not.match(/^none — /);
+    expect(descriptions()).toEqual([["'top 3: a; b; c' not to match /^none — /", true]]);
+  });
+
+  it('a failing `.to.not.match(re)` with a custom message: description negated, errorMessage is chai\'s', () => {
+    expect(() =>
+      ahExpect('none — top 3: a; b; c', 'no expected item in the top 3').to.not.match(/^none — /)
+    ).toThrow("no expected item in the top 3: expected 'none — top 3: a; b; c' not to match /^none — /");
+    const out = endSession();
+    startSession();
+    expect(out).toHaveLength(1);
+    expect(out[0].pass).toBe(false);
+    expect(out[0].description).toBe("'none — top 3: a; b; c' not to match /^none — /");
+    expect(out[0].errorMessage).toBe("no expected item in the top 3: expected 'none — top 3: a; b; c' not to match /^none — /");
+  });
+
+  it('every built-in `.not` form is reflected: include, be.empty, equal, be.a', () => {
+    ahExpect(['a', 'b']).to.not.include('z');
+    ahExpect(['a']).to.not.be.empty;
+    ahExpect(1).to.not.equal(2);
+    ahExpect('abc').to.not.be.a('number');
+    expect(descriptions().map(([d]) => d)).toEqual([
+      "[ 'a', 'b' ] to not include 'z'",
+      "[ 'a' ] not to be empty",
+      '1 to not equal 2',
+      "'abc' not to be a number",
+    ]);
+  });
+
+  it('custom matchers follow the same rule — `.not.haveCalledTool` uses the matcher\'s negated text', () => {
+    const trajectory = [{ type: 'action', toolName: 'search_logs', toolArgs: {} }];
+    ahExpect(trajectory as any).to.not.haveCalledTool('delete_index');
+    expect(() => ahExpect(trajectory as any).to.not.haveCalledTool('search_logs')).toThrow();
+    expect(descriptions()).toEqual([
+      ["trajectory to NOT have called tool 'delete_index'", true],
+      ["trajectory to NOT have called tool 'search_logs'", false],
+    ]);
+  });
+
+  it('uses chai\'s own negated wording even when it is not a literal complement (`.not.be.true` → "to be false")', () => {
+    expect(() => ahExpect(true).to.not.be.true).toThrow('expected true to be false');
+    expect(descriptions()).toEqual([['true to be false', false]]);
+  });
+
+  it('a custom assertion with no negated template gets a visible NOT instead of the inverted claim', () => {
+    // Our own haveCalledTool guard passes '' as negateMsg; under `.not` the
+    // description must not read as the positive claim.
+    ahExpect('not-an-array' as any).to.not.haveCalledTool('x');
+    expect(descriptions().map(([d]) => d)).toEqual(['NOT an array of TrajectoryStep']);
+  });
+
+  it('an assertion with no message template at all is not recorded, negated or not (unchanged)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const chai = require('chai');
+    chai.Assertion.addMethod('saysNothing', function (this: any) { this.assert(true, '', '', undefined, undefined); });
+    ahExpect(1).to.saysNothing();
+    expect(() => ahExpect(1).to.not.saysNothing()).toThrow(); // negate flips the verdict; still nothing to describe
+    expect(descriptions()).toEqual([]);
+  });
+
+  it('positive chains are unchanged', () => {
+    ahExpect('top 3: a; b; c').to.match(/^top/);
+    ahExpect(['a']).to.include('a');
+    expect(descriptions().map(([d]) => d)).toEqual(["'top 3: a; b; c' to match /^top/", "[ 'a' ] to include 'a'"]);
+  });
+
+  it('soft negated chains record the negated description too', () => {
+    ahExpect.soft('none — x', 'should not start with none').to.not.match(/^none/);
+    const [[description, pass]] = descriptions();
+    expect(pass).toBe(false);
+    expect(description).toBe("'none — x' not to match /^none/");
+  });
+});
+
 describe('expect.soft (RFC 004 roadmap — non-throwing assertions)', () => {
   beforeEach(() => startSession());
   afterEach(() => endSession());
