@@ -105,8 +105,11 @@ export const PARSE_FAILURE_MAX_ATTEMPTS = 2;
 /** Transient-error attempt budget (1 s → 512 s exponential backoff ≈ 17 min). */
 export const DEFAULT_JUDGE_MAX_ATTEMPTS = 10;
 
+/** Hard ceiling on the attempt budget (the backoff is capped at 512 s per attempt). */
+export const MAX_JUDGE_MAX_ATTEMPTS = 100;
+
 /**
- * `AH_JUDGE_MAX_ATTEMPTS` (integer ≥ 1) or the default budget. An operator
+ * `AH_JUDGE_MAX_ATTEMPTS` (integer 1–100) or the default budget. An operator
  * knob for environments where a judge that cannot run should fail fast
  * (CI without credentials, tests) instead of burning the full backoff.
  */
@@ -114,7 +117,7 @@ export function resolveJudgeMaxAttempts(env: NodeJS.ProcessEnv = process.env): n
   const raw = env.AH_JUDGE_MAX_ATTEMPTS;
   if (!raw) return DEFAULT_JUDGE_MAX_ATTEMPTS;
   const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed >= 1 ? parsed : DEFAULT_JUDGE_MAX_ATTEMPTS;
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.min(parsed, MAX_JUDGE_MAX_ATTEMPTS) : DEFAULT_JUDGE_MAX_ATTEMPTS;
 }
 
 /**

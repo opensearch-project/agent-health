@@ -423,6 +423,60 @@ test('cli-exec-body-${uniq}', { prompt: 'say something' }, ({ result }) => {
     expect(stub.requests.length).toBeLessThan(3);
   }, TEST_TIMEOUT);
 
+  it('8. parity: the same cases through the UI route and through the CLI yield the same stored run / report shape, image digest, fingerprint and benchmark link', async () => {
+    const benchName = `cli-exec-parity-${uniq}`;
+    // Benchmark + stored cases the UI route will use (created the way the CLI's -n does).
+    const bench = await httpJson('POST', `${baseUrl}/api/storage/benchmarks`, { name: benchName, description: '', testCaseIds: [] });
+    expect(bench.status).toBe(201);
+    const benchmarkId: string = bench.body.id ?? bench.body.benchmark?.id;
+    const ids: string[] = [];
+    for (const n of ['p1', 'p2']) {
+      const tc = await httpJson('POST', `${baseUrl}/api/storage/test-cases`, { name: `cli-exec-parity-${n}-${uniq}`, category: 'General', difficulty: 'Easy', initialPrompt: `parity ${n}`, expectedOutcomes: ['echoes the environment'] });
+      ids.push(tc.body.testCase?.id ?? tc.body.id);
+    }
+
+    // UI route (server-executed, SSE) — the reference. `modelId: 'demo-model'`
+    // is the legacy catalog-fallback wire value the CLI has always sent for an
+    // agent that declares no model (pinned by tests/unit/cli/commands/
+    // benchmarkModelLabel.test.ts; changing it is #534, not this PR) — given to
+    // the UI request too so the comparison is about execution, not that flag.
+    const sse = await httpJson('POST', `${baseUrl}/api/storage/evaluation-runs`, { sources: [{ type: 'test-case-ids', ids }], agentKey: 'env-echo-agent', modelId: 'demo-model', judgeModelId: 'demo-model', evaluatorId: 'system-rca-default', concurrency: 1, benchmarkId, name: 'ui parity run' }, 120_000);
+    const completedLine = sse.text.split('\n').find(l => l.startsWith('data: ') && l.includes('"status":"completed"') && l.includes('"stats"'));
+    expect(completedLine).toBeDefined();
+    const uiRunId: string = JSON.parse(completedLine!.slice(6)).id;
+
+    // CLI (executed in the CLI process, ingested) — same cases, same benchmark, same conditions.
+    const cli = await spawnCli(projectA, ['benchmark', '-t', ids[0], '-t', ids[1], '-a', 'env-echo-agent', '--judge-model', 'demo-model', '-e', 'system-rca-default', '-n', benchName], { AH_PORT: String(port), AH_TEST_HOOK_VAR: 'parity' }).done;
+    expect(cli.code).toBe(0);
+    const cliRunId = runIdFrom(cli.out);
+
+    const ui = await waitForRun(baseUrl, uiRunId, r => r.status === 'completed', 10_000, 'ui run');
+    const cl = await waitForRun(baseUrl, cliRunId, r => r.status === 'completed', 10_000, 'cli run');
+
+    // Per-run identity / timing fields differ by construction; everything else must agree.
+    const VARIES = new Set(['id', 'name', 'createdAt', 'completedAt', 'trigger', 'results', 'executor', 'lease', 'updatedAt']);
+    const shape = (run: any) => Object.fromEntries(Object.entries(run).filter(([k]) => !VARIES.has(k)).sort(([a], [b]) => a.localeCompare(b)));
+    expect(Object.keys(shape(cl))).toEqual(Object.keys(shape(ui)));
+    expect(shape(cl)).toEqual(shape(ui));                 // sources, snapshots, modelId, judgeModelId, evaluatorId, concurrency, benchmarkId, imageDigest, fingerprint, stats, judge identity…
+    expect(cl.imageDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(ui.trigger).toBe('manual');
+    expect(cl.trigger).toBe('cli');
+    expect(cl.executor).toMatchObject({ kind: 'cli' });
+    expect(ui.executor).toMatchObject({ kind: 'server' });
+    // Per-case verdict entries have the same shape and verdicts.
+    const resultShape = (run: any) => ids.map(id => Object.keys(run.results[id]).sort().join(','));
+    expect(resultShape(cl)).toEqual(resultShape(ui));
+    expect(ids.map(id => cl.results[id].passFailStatus)).toEqual(ids.map(id => ui.results[id].passFailStatus));
+    // Report documents: same key set (minus ids/timestamps/the echoed hook value).
+    const REPORT_VARIES = new Set(['id', 'timestamp', 'experimentRunId', 'createdAt', 'updatedAt', 'trajectory', 'rawEvents', 'performanceMetrics', 'llmJudgeReasoning', 'llmJudgeResponse', 'metrics', 'matcherResults', 'improvementStrategies', 'judgeDurationMs', 'judgeAttempts', 'rawResponse', 'sessionId', 'traceId', 'runId', 'agentRunId']);
+    const reportKeys = async (run: any) => Object.keys(await reportOf(baseUrl, run)).filter(k => !REPORT_VARIES.has(k)).sort();
+    expect(await reportKeys(cl)).toEqual(await reportKeys(ui));
+    // Both runs are linked into the same benchmark.
+    const benchDoc = await httpJson('GET', `${baseUrl}/api/storage/benchmarks/${encodeURIComponent(benchmarkId)}`);
+    expect(benchDoc.body.runs.map((r: any) => r.id).sort()).toEqual([uiRunId, cliRunId].sort());
+    expect(benchDoc.body.testCaseIds).toEqual(ids);
+  }, TEST_TIMEOUT);
+
   it('7. the server is SIGKILLed and restarted on the same port while the CLI delivers the last case → delivered after re-probe, one run', async () => {
     stub.delayMs = 1500;
     const runName = `cli-exec-restart-${uniq}`;

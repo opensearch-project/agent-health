@@ -398,16 +398,29 @@ export const EvalRunsPage: React.FC = () => {
   // documents) every 5 s and reload the page's data only when it names a run
   // this page has not seen yet, so a CLI run shows up within one poll period.
   const knownRunIds = useMemo(() => new Set(evalRuns.map(r => r.id)), [evalRuns]);
+  // Ids the previous probe already reported: a run that stays in flight but
+  // never shows up in the list (e.g. beyond the 500-row page) triggers ONE
+  // reload, not one every tick.
+  const probedRunIds = useRef<Set<string>>(new Set());
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
     const probe = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
       try {
         const res = await fetch(`${ENV_CONFIG.backendUrl}/api/runs/in-flight`);
-        if (!res.ok || cancelled) return;
+        if (!res.ok) return;
         const data = await res.json() as { runs?: Array<{ id: string }> };
-        if ((data.runs ?? []).some(r => !knownRunIds.has(r.id))) loadData(true);
+        if (cancelled) return;
+        const ids = (data.runs ?? []).map(r => r.id);
+        const unseen = ids.some(id => !knownRunIds.has(id) && !probedRunIds.current.has(id));
+        probedRunIds.current = new Set(ids);
+        if (unseen) loadData(true);
       } catch {
         // Best-effort; the next tick tries again.
+      } finally {
+        inFlight = false;
       }
     };
     const interval = setInterval(probe, 5000);

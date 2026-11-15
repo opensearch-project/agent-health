@@ -52,6 +52,7 @@ import { LeaseLostError, resolveLeaseTtlMs, type LeaseLostInfo } from '@/lib/run
 import {
   EXECUTOR_TOKEN_HEADER,
   LEASE_GENERATION_HEADER,
+  mintExecutorToken,
   type CreatedRun,
   type FinalizeInput,
   type LeaseEcho,
@@ -304,8 +305,13 @@ export class HttpRunSink implements RunSink {
   }
 
   async createRun(run: EvaluationRun): Promise<CreatedRun> {
-    this.spool(run.id, 'createRun', { run, executorVersion: this.executorVersion });
-    const created = await this.call<CreatedRun>('createRun', 'POST', '', { run, executor: { version: this.executorVersion } }, false);
+    // The token is minted HERE and sent with the create, so a retried create
+    // (lost answer) is recognised by the server as this same executor and
+    // handed the lease it already opened — never a second lease, never a
+    // take-over of someone else's run (409 `run-exists`).
+    this.executorToken = this.executorToken ?? mintExecutorToken();
+    this.spool(run.id, 'createRun', { run, executorVersion: this.executorVersion, executorToken: this.executorToken });
+    const created = await this.call<CreatedRun>('createRun', 'POST', '', { run, executor: { version: this.executorVersion } }, true);
     this.executorToken = created.executorToken;
     this.leaseGeneration = created.lease?.generation ?? 1;
     this.leaseTtlMs = created.lease?.ttlMs;
