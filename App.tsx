@@ -18,7 +18,6 @@ import { TestCasesPage } from './components/TestCasesPage';
 import { TestCaseRunsPage } from './components/TestCaseRunsPage';
 import { ComparisonPage } from './components/comparison/ComparisonPage';
 import { AgentTracesPage } from './components/traces/AgentTracesPage';
-import { PerformanceOverlay } from './components/PerformanceOverlay';
 import { CodingAgentsPage } from './components/codingAgents/CodingAgentsPage';
 import { EvaluatorsPage } from './components/EvaluatorsPage';
 import { EvaluatorEditPage } from './components/EvaluatorEditPage';
@@ -164,7 +163,6 @@ function App() {
           </Routes>
         </Layout>
       </Router>
-      <PerformanceOverlay />
     </>
   );
 }
