@@ -23,7 +23,7 @@ const stub = (name: string) => ({
   __esModule: true,
   ...Object.fromEntries(
     // Every named export any of these modules is imported by App.tsx.
-    ['Dashboard', 'SettingsPage', 'ComparisonPage', 'AgentTracesPage', 'PerformanceOverlay',
+    ['Dashboard', 'SettingsPage', 'ComparisonPage', 'AgentTracesPage',
       'CodingAgentsPage', 'EvaluatorsPage', 'EvaluatorEditPage', 'AskOpenRedirect', 'SkillsPage',
       'BenchmarksPage4', 'TestCasesPage4', 'BenchmarkRunsPage2', 'TestCaseDetailPage', 'EvalRunsPage',
       'RunInspectorPage', 'NewRunPage', 'Layout',
@@ -38,7 +38,6 @@ jest.mock('@/components/Dashboard', () => stub('dashboard'));
 jest.mock('@/components/SettingsPage', () => stub('settings'));
 jest.mock('@/components/comparison/ComparisonPage', () => stub('compare'));
 jest.mock('@/components/traces/AgentTracesPage', () => stub('agent-traces'));
-jest.mock('@/components/PerformanceOverlay', () => stub('perf'));
 jest.mock('@/components/codingAgents/CodingAgentsPage', () => stub('coding-agents'));
 jest.mock('@/components/EvaluatorsPage', () => stub('evaluators'));
 jest.mock('@/components/EvaluatorEditPage', () => stub('evaluator-edit'));
