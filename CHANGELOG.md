@@ -9,6 +9,9 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+- CI / dev deps: `@playwright/test` bumped from 1.57.0 to 1.65.1 (Chromium 159) and the `e2e-tests` job moved back to `ubuntu-latest` (now ubuntu-26.04) — ubuntu 26.04 host support arrived in Playwright 1.61, so the `ubuntu-24.04` pin from #633 is no longer needed. No e2e spec or `playwright.config.ts` change ([package.json](package.json), [.github/workflows/ci.yml](.github/workflows/ci.yml)) ([#639](https://github.com/opensearch-project/agent-health/pull/639))
+
 ## [0.10.0] - 2026-11-18
 
 Release 0.10.0 is mostly about the CLI and server being safe to live with: upgrading the CLI no longer kills a run in progress, CLI-started servers bind to loopback by default, an unsupported Node.js release is refused up front, and UI-started runs pick up `.env` / config edits without a restart. Code-SDK scoring is more honest — a failing `expect.soft` is a failure, a negated `.not` chain is described as written, a bare `judge(result, claim)` uses a neutral claim evaluator, deterministic evaluators are scored in code on new runs, and the case TL;DR no longer calls a model when a run page is viewed. New: a per-page latency HUD in debug mode and a built-in read-only assistant (highlight any text and ask), replacing the legacy assistant; plus trace/metrics fixes (an errored agent span is not a trace-store failure; a REST agent's non-2xx reply keeps its request id).
