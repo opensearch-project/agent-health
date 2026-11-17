@@ -61,7 +61,8 @@ export interface AskRefs {
  *   /evaluations/benchmarks/:b/cases/:caseId
  *   /evaluations/benchmarks/:b(/runs)
  *   /evaluations/runs/:r(/inspect)
- *   /evaluations/test-cases/:tc      /test-cases/:tc/runs
+ *   /evaluations/reports/:reportId   (one report on its own)
+ *   /evaluations/test-cases/:tc(?run=<reportId>)      /test-cases/:tc/runs
  *   /benchmarks/:b/runs/:r           (legacy: :r is a REPORT id)
  *   /runs/:reportId                  (legacy run details)
  *   /compare/:b?runs=a,b
@@ -86,8 +87,13 @@ export function deriveAskRefs(route: string): AskRefs {
     } else if (parts[1] === 'runs') {
       const id = after('runs');
       if (id && id !== 'new') refs.runId = id;
+    } else if (parts[1] === 'reports') {
+      refs.reportId = after('reports');
     } else if (parts[1] === 'test-cases') {
       refs.testCaseId = after('test-cases');
+      // `?run=<reportId>` preselects one of the test case's runs (a REPORT id).
+      const run = q.get('run');
+      if (run) refs.reportId = run;
     }
   } else if (parts[0] === 'compare') {
     refs.benchmarkId = after('compare');
@@ -140,7 +146,7 @@ export const askLinks = {
   report: (benchmarkId: string | undefined, runId: string | undefined, reportId: string) =>
     runId
       ? `${askLinks.run(benchmarkId, runId)}?reportId=${encodeURIComponent(reportId)}`
-      : `/runs/${encodeURIComponent(reportId)}`,
+      : `/evaluations/reports/${encodeURIComponent(reportId)}`,
   testCase: (testCaseId: string) => `/evaluations/test-cases/${encodeURIComponent(testCaseId)}`,
   compare: (benchmarkId: string, runIds: string[]) =>
     `/compare/${encodeURIComponent(benchmarkId)}?runs=${runIds.map(encodeURIComponent).join(',')}`,

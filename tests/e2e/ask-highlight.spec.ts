@@ -359,7 +359,10 @@ test.describe('Agent Health assistant — highlight & ask', () => {
     await expect(page.locator('[data-testid="ask-panel"]')).toHaveCount(0);
 
     // The run-page nudge opens the panel and asks the route's first suggestion.
-    // A real report (unknown ids redirect away from the run routes).
+    // A real report (unknown ids redirect away from the run routes), opened on
+    // the standalone report page — the evals3 surface for a report with no run
+    // (the retired /runs/:id link redirects a standalone report to its test
+    // case's page, whose nudge is the test-case one).
     const reportRes = await request.post('/api/storage/runs', {
       data: {
         testCaseId: tc.id, testCaseVersion: 1, agentKey: 'demo', agentName: 'Demo agent', modelId: 'demo', status: 'completed',
@@ -371,7 +374,7 @@ test.describe('Agent Health assistant — highlight & ask', () => {
     const report = await reportRes.json();
     testData.run(report.id ?? report.run?.id);
     await page.evaluate(() => window.sessionStorage.clear());
-    await page.goto(`/runs/${report.id ?? report.run?.id}`);
+    await page.goto(`/evaluations/reports/${report.id ?? report.run?.id}`);
     await page.waitForSelector('[data-testid="sidebar"]');
     const nudge = page.locator('[data-testid="ask-nudge"]');
     await expect(nudge).toContainText('Want me to explain this run?');

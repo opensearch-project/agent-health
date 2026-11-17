@@ -178,7 +178,7 @@ export const AskChip: React.FC<{
 
 export function suggestionsFor(route: string, hasSelection: boolean): string[] {
   if (/\/compare\//.test(route)) return ['Which runs regressed and why?', 'Which cases flipped between these runs?'];
-  if (/\/inspect|\/runs\//.test(route)) return hasSelection ? ['Why did this case fail?', 'What does this mean?', 'What should the agent have done?'] : ['Why did this run fail?', 'Summarize this run'];
+  if (/\/inspect|\/runs\/|\/evaluations\/reports\//.test(route)) return hasSelection ? ['Why did this case fail?', 'What does this mean?', 'What should the agent have done?'] : ['Why did this run fail?', 'Summarize this run'];
   if (/agent-traces|trace/.test(route)) return ['What does this span do?', 'Where did the time go?'];
   if (/test-cases/.test(route)) return ['Is this test case well specified?', 'How has this case performed over time?'];
   return hasSelection ? ['Explain this', 'Why?'] : ['What am I looking at?'];
