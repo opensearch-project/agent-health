@@ -64,14 +64,21 @@ export const legacyRouteRedirects: readonly LegacyRouteRedirect[] = [
  * reports) opens in the bare run inspector — the benchmark-scoped inspector
  * would bounce to the Benchmarks list.
  *
+ * When neither page can show the report — the run is unreachable AND the
+ * test case was deleted (`testCaseReachable === false`; the test case page
+ * bounces to the Test Cases list for an unknown id) — the report opens on
+ * the standalone report page (`reportPath`), which needs only the report
+ * document itself. The retired page rendered exactly that: the report, with
+ * or without its test case, never consulting the run.
+ *
  * `search` (the legacy URL's query string) is merged into the destination;
  * keys the destination itself sets win.
  */
 export function resolveReportRedirect(
   report: { id: string; testCaseId: string; experimentId?: string; experimentRunId?: string },
-  options: { runReachable?: boolean; benchmarkReachable?: boolean; search?: string } = {},
+  options: { runReachable?: boolean; benchmarkReachable?: boolean; testCaseReachable?: boolean; search?: string } = {},
 ): string {
-  const { runReachable = true, benchmarkReachable = true, search = '' } = options;
+  const { runReachable = true, benchmarkReachable = true, testCaseReachable = true, search = '' } = options;
   const reportId = encodeURIComponent(report.id);
   let target: string;
   if (report.experimentRunId && runReachable) {
@@ -79,19 +86,33 @@ export function resolveReportRedirect(
     target = report.experimentId && benchmarkReachable
       ? `/evaluations/benchmarks/${encodeURIComponent(report.experimentId)}/runs/${runId}/inspect?reportId=${reportId}`
       : `/evaluations/runs/${runId}/inspect?reportId=${reportId}`;
-  } else {
+  } else if (testCaseReachable) {
     target = `/evaluations/test-cases/${encodeURIComponent(report.testCaseId)}?run=${reportId}`;
+  } else {
+    target = reportPath(report.id);
   }
   return mergeSearch(target, search);
 }
 
-/** Append the params of `search` to `target` without overriding keys `target` already sets. */
-function mergeSearch(target: string, search: string): string {
+/**
+ * Path to the standalone report page — renders one `EvaluationReport` from
+ * its own document alone, so it works when the report's run and/or test case
+ * have been deleted (neither delete cascades to report documents).
+ */
+export const reportPath = (reportId: string): string =>
+  `/evaluations/reports/${encodeURIComponent(reportId)}`;
+
+/**
+ * Append the params of `search` to `target` without overriding keys `target`
+ * already sets (every value of a repeated key is carried over).
+ */
+export function mergeSearch(target: string, search: string): string {
   const extra = new URLSearchParams(search);
   if ([...extra.keys()].length === 0) return target;
   const [path, existing = ''] = target.split('?');
   const merged = new URLSearchParams(existing);
-  extra.forEach((value, key) => { if (!merged.has(key)) merged.append(key, value); });
+  const reserved = new Set(merged.keys());
+  extra.forEach((value, key) => { if (!reserved.has(key)) merged.append(key, value); });
   return `${path}?${merged.toString()}`;
 }
 

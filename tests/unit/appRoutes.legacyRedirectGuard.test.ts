@@ -48,7 +48,7 @@ const stub = (name: string) => ({
     ['Dashboard', 'SettingsPage', 'ComparisonPage', 'AgentTracesPage',
       'CodingAgentsPage', 'EvaluatorsPage', 'EvaluatorEditPage', 'AskOpenRedirect', 'SkillsPage',
       'BenchmarksPage4', 'TestCasesPage4', 'BenchmarkRunsPage2', 'TestCaseDetailPage', 'EvalRunsPage',
-      'RunInspectorPage', 'NewRunPage', 'Layout',
+      'RunInspectorPage', 'NewRunPage', 'ReportPage', 'Layout',
     ].map(exportName => [exportName, function Page() {
       const loc = useLocation();
       // Recorded on commit (not during render) so abandoned renders don't count.
@@ -75,6 +75,7 @@ jest.mock('@/components/evals3/TestCaseDetailPage', () => stub('evals3-test-case
 jest.mock('@/components/evals3/EvalRunsPage', () => stub('evals3-eval-runs'));
 jest.mock('@/components/evals3/RunInspectorPage', () => stub('evals3-run-inspector'));
 jest.mock('@/components/evals3/NewRunPage', () => stub('evals3-new-run'));
+jest.mock('@/components/evals3/ReportPage', () => stub('evals3-report'));
 jest.mock('@/lib/constants', () => ({ refreshConfig: jest.fn(), subscribeConfigChange: jest.fn(() => () => {}), DEFAULT_CONFIG: { agents: [], models: {} } }));
 jest.mock('@/lib/theme', () => ({ initializeTheme: jest.fn() }));
 

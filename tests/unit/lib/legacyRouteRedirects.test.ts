@@ -7,6 +7,7 @@ import { generatePath } from 'react-router-dom';
 import {
   legacyRouteRedirects,
   resolveReportRedirect,
+  reportPath,
   testCaseRunPath,
 } from '@/lib/legacyRouteRedirects';
 
@@ -94,6 +95,39 @@ describe('resolveReportRedirect', () => {
       .toBe('/evaluations/test-cases/tc1?run=rep1');
   });
 
+  // The decision matrix for a report that outlived its pages. Deleting a run
+  // or a test case keeps the report documents, so each combination is real:
+  //   run reachable            → inspector (whatever the test case's state)
+  //   run gone, test case kept → test case page
+  //   run gone, test case gone → standalone report page (the report is all
+  //                              there is — never an explanation page)
+  it('run gone AND test case gone → the standalone report page, which needs only the report itself', () => {
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc-gone', experimentId: 'bm1', experimentRunId: 'gone' },
+      { runReachable: false, testCaseReachable: false }))
+      .toBe('/evaluations/reports/rep1');
+    // Same for a standalone single-case report whose test case was deleted.
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc-gone' }, { testCaseReachable: false }))
+      .toBe('/evaluations/reports/rep1');
+    // The deleted-benchmark flag changes nothing once the run is unreachable.
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc-gone', experimentId: 'bm-gone', experimentRunId: 'gone' },
+      { runReachable: false, benchmarkReachable: false, testCaseReachable: false }))
+      .toBe('/evaluations/reports/rep1');
+  });
+
+  it('a deleted test case does not pull a report away from its run: the inspector shows deleted cases', () => {
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc-gone', experimentId: 'bm1', experimentRunId: 'run1' },
+      { runReachable: true, testCaseReachable: false }))
+      .toBe('/evaluations/benchmarks/bm1/runs/run1/inspect?reportId=rep1');
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc-gone', experimentRunId: 'run1' }, { testCaseReachable: false }))
+      .toBe('/evaluations/runs/run1/inspect?reportId=rep1');
+  });
+
+  it('the report page carries the legacy query string too, and reportPath encodes the id', () => {
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc-gone' }, { testCaseReachable: false, search: '?tab=judge' }))
+      .toBe('/evaluations/reports/rep1?tab=judge');
+    expect(reportPath('r?1')).toBe('/evaluations/reports/r%3F1');
+  });
+
   it('carries the legacy query string over without overriding the keys the destination sets', () => {
     expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc1', experimentRunId: 'run1' }, { search: '?tab=traces&reportId=other' }))
       .toBe('/evaluations/runs/run1/inspect?reportId=rep1&tab=traces');
@@ -101,5 +135,8 @@ describe('resolveReportRedirect', () => {
       .toBe('/evaluations/test-cases/tc1?run=rep1&tab=judge');
     expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc1' }, { search: '' }))
       .toBe('/evaluations/test-cases/tc1?run=rep1');
+    // Every value of a repeated legacy key survives; only destination-owned keys are dropped.
+    expect(resolveReportRedirect({ id: 'rep1', testCaseId: 'tc1' }, { search: '?label=a&label=b&run=other' }))
+      .toBe('/evaluations/test-cases/tc1?run=rep1&label=a&label=b');
   });
 });
