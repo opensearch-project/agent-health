@@ -60,7 +60,7 @@ export interface CloudWatchModuleOptions {
   region: string;
   profile?: string;
   logGroups?: Partial<CloudWatchLogGroups>;
-  /** Scan window for requests that carry an exact id (traceId / runId / session id) or no run window (default 7 days). */
+  /** Minimum scan window for requests that carry an exact id (traceId / runId / session id) or no run window (default 7 days). */
   lookbackMs?: number;
   /** Scan window for id lookups in application log groups (default 24 hours). */
   logsLookbackMs?: number;
@@ -71,8 +71,9 @@ export interface CloudWatchModuleOptions {
 /**
  * Bounds. A request never scans more than `maxWindowMs`; a request that carries
  * an exact id (traceId / runId / session id) or no run window scans the last
- * `lookbackMs`; a request whose ONLY correlator is the run's wall-clock window
- * (Strategy C alone) scans just that window ±5 min.
+ * `lookbackMs` (extended back to cover a run window the request also carries);
+ * a request whose ONLY correlator is the run's wall-clock window (Strategy C
+ * alone) scans just that window ±5 min.
  */
 export const DEFAULT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_MAX_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -236,10 +237,13 @@ class CloudWatchTracesOperations implements ITracesOperations {
   ) {}
 
   /**
-   * Scan window: explicit bounds win; otherwise the union of the agents' run
-   * windows ±5 min (a run's spans cannot fall outside its own wall-clock
-   * window); otherwise the configured lookback. Always clamped to `maxWindowMs`
-   * (the newest part of the range is kept).
+   * Scan window: explicit bounds win; otherwise, when narrowing is allowed, the
+   * union of the agents' run windows ±5 min (a run's spans cannot fall outside
+   * its own wall-clock window); otherwise the configured lookback, EXTENDED
+   * back to cover any agents' window the request carries (a hint may be wrong
+   * — #640 — so it can never narrow an exact-id scan, but when it is right it
+   * is what finds a run older than the lookback). Always clamped to
+   * `maxWindowMs` (the newest part of the range is kept).
    */
   window(
     options: Pick<TracesQueryOptions, 'startTime' | 'endTime' | 'agents'>,
@@ -253,13 +257,14 @@ class CloudWatchTracesOperations implements ITracesOperations {
       endMs = options.endTime ? toMs(options.endTime) : now;
       startMs = options.startTime ? toMs(options.startTime) : endMs - this.lookbackMs;
     } else {
-      const windows = narrowToAgents ? (options.agents || []).filter((a) => Number.isFinite(a.startedAt) && Number.isFinite(a.endedAt)) : [];
-      if (windows.length > 0) {
-        startMs = Math.min(...windows.map((a) => a.startedAt)) - WINDOW_PAD_MS;
+      const windows = (options.agents || []).filter((a) => Number.isFinite(a.startedAt) && Number.isFinite(a.endedAt));
+      const hintStartMs = windows.length > 0 ? Math.min(...windows.map((a) => a.startedAt)) - WINDOW_PAD_MS : Infinity;
+      if (narrowToAgents && windows.length > 0) {
+        startMs = hintStartMs;
         endMs = Math.min(now, Math.max(...windows.map((a) => a.endedAt)) + WINDOW_PAD_MS);
       } else {
         endMs = now;
-        startMs = now - this.lookbackMs;
+        startMs = Math.min(now - this.lookbackMs, hintStartMs);
       }
     }
     // Over-cap ranges are clamped to the newest `maxWindowMs` and reported as
@@ -344,12 +349,13 @@ class CloudWatchTracesOperations implements ITracesOperations {
    * at Insights latency (seconds) instead of a linear scan (tens of seconds).
    *
    * The scan is narrowed to the `agents[]` window ONLY when the window is the
-   * sole correlator: an exact id must be searched over the configured lookback
-   * (parity with the OpenSearch reader and with `forRuns` below), because the
-   * run-report shape sends a window DERIVED from the stored report and a
-   * wrong window (e.g. built around "now" for a report with no timestamp) used
-   * to narrow the exact ids to 0 spans (#640). The Strategy-C clause itself
-   * stays window-bounded inside the Insights query.
+   * sole correlator: an exact id is searched over at least the configured
+   * lookback (parity with the OpenSearch reader and with `forRuns` below),
+   * because the run-report shape sends a window DERIVED from the stored report
+   * and a wrong window (e.g. built around "now" for a report with no
+   * timestamp) used to narrow the exact ids to 0 spans (#640). A window older
+   * than the lookback still extends the scan (see `window`), and the
+   * Strategy-C clause itself stays window-bounded inside the Insights query.
    */
   async fetchSources(options: TracesQueryOptions, useUnion: boolean): Promise<FetchedSources> {
     const exactIds = exactCorrelatorIds(options);

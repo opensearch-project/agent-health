@@ -161,7 +161,10 @@ export interface StorageRun {
   modelId: string;
   iteration: number;
   author?: string;
+  /** Save time. Stamped by the OpenSearch adapter; the file adapter writes `timestamp` instead. */
   createdAt: string;
+  /** The report's own time (the file adapter's only time field; the OpenSearch adapter writes both). */
+  timestamp?: string;
   status: 'running' | 'completed' | 'failed';
   passFailStatus?: 'passed' | 'failed';
   traceId?: string;

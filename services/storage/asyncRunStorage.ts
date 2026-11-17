@@ -117,7 +117,7 @@ function toTestCaseRun(stored: StorageRun): TestCaseRun {
     // the fallback a file-backed report had no timestamp at all, and the run
     // inspector's Strategy-C window was built around Date.now() instead of
     // the run (#640).
-    timestamp: stored.createdAt ?? (stored as { timestamp?: string }).timestamp,
+    timestamp: stored.createdAt ?? stored.timestamp,
     testCaseId: stored.testCaseId,
     testCaseVersion: parseInt(stored.testCaseVersionId?.split('-v')[1] || '1'),
     experimentId: stored.experimentId || undefined,

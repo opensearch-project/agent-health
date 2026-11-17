@@ -438,6 +438,29 @@ describe('CloudWatchObservabilityModule', () => {
       }
     });
 
+    it('a run OLDER than the lookback is still found by its exact id when the request carries its (correct) window: the hint widens the scan, it never narrows it', async () => {
+      // Before #640 the scan was the hint's window, so an 8-day-old run worked
+      // as long as the hint was right; searching "the lookback only" would have
+      // regressed that. The scan is the lookback extended back to the hint.
+      const now = T0_MS + 8 * 24 * 60 * 60 * 1000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      reader.honourInsightsBounds = true;
+      try {
+        const hint = { serviceName: SERVICE, startedAt: T0_MS, endedAt: T0_MS + 12_000 };
+        const res = await mod(reader).traces.query({ runIds: [RUN], agents: [hint], size: 1000 });
+        expect(res.total).toBe(12);
+        expect(res.truncated).toBe(false); // 8 days < maxWindowMs
+        expect(reader.calls.insights[0]).toMatchObject({ startMs: T0_MS - 5 * 60 * 1000, endMs: now });
+        // Without the hint the same id is outside the 7-day lookback and nothing is found (documented bound).
+        reader.calls.insights.length = 0;
+        const bare = await mod(reader).traces.query({ runIds: [RUN], size: 1000 });
+        expect(bare.total).toBe(0);
+        expect(reader.calls.insights[0]).toMatchObject({ startMs: now - DEFAULT_LOOKBACK_MS, endMs: now });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
     it('run-report shape with a STALE agents window (built around "now", the run an hour earlier) still returns the run by its exact ids (#640)', async () => {
       // The file-storage report carried no timestamp, so the client built the
       // window around the moment the Traces tab was opened. CloudWatch honours
