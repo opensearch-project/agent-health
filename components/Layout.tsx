@@ -46,8 +46,9 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { AssistantProvider } from "@/components/assistant-ui/AssistantProvider";
-import { AssistantModal } from "@/components/assistant-ui/AssistantModal";
+import { AskSurface } from "@/components/ask/AskSurface";
+import { AskNudge } from "@/components/ask/AskNudge";
+import { openAskPanel } from "@/components/ask/askState";
 import { RetryJudgementToaster } from "@/components/evals3/RetryJudgementJobs";
 
 interface LayoutProps {
@@ -443,7 +444,12 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                       data-testid={item.testId}
                       className="h-9"
                     >
-                      <Link to={item.to} className={collapsed ? 'justify-center' : ''}>
+                      <Link
+                        to={item.to}
+                        className={collapsed ? 'justify-center' : ''}
+                        // The Assistant is a panel over the current page, not a page of its own.
+                        onClick={item.to === '/assistant' ? (e) => { e.preventDefault(); openAskPanel(); } : undefined}
+                      >
                         <item.icon className="h-3.5 w-3.5" />
                         {!collapsed && <span className="text-xs">{item.label}</span>}
                       </Link>
@@ -533,14 +539,14 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
           <span className="text-sm font-semibold">AgentHealth</span>
           <span className="w-10" aria-hidden="true" />
         </div>
-        <AssistantProvider>
+        <AskSurface>
           {children}
-          <AssistantModal />
+          <AskNudge />
           {/* Background retry-judgement jobs announce their summary here
               (services/client/retryJudgementJobs.ts) — the confirm dialog no
               longer has to stay open while the judge pipeline runs. */}
           <RetryJudgementToaster />
-        </AssistantProvider>
+        </AskSurface>
       </SidebarInset>
       </SidebarProvider>
       {/* position: fixed -- lives outside the sidebar/content tree on purpose. */}

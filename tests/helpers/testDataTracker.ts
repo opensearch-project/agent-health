@@ -67,7 +67,6 @@ export const ENTITY_KINDS = [
   'evaluator', // referenced by benchmarks/runs
   'custom-agent',
   'remote-server',
-  'assistant-session',
 ] as const;
 
 export type EntityKind = (typeof ENTITY_KINDS)[number];
@@ -233,8 +232,6 @@ function deletePath(entity: TrackedEntity): string {
       return `/api/agents/custom/${id}`;
     case 'remote-server':
       return `/api/remote-servers/${id}`;
-    case 'assistant-session':
-      return `/api/assistant/session/${id}`;
     default: {
       const exhaustive: never = entity.kind;
       throw new Error(`Unhandled entity kind: ${String(exhaustive)}`);
@@ -394,9 +391,6 @@ export class TestDataTracker {
   }
   remoteServer(name: string | null | undefined): void {
     this.track('remote-server', name);
-  }
-  assistantSession(id: string | null | undefined): void {
-    this.track('assistant-session', id);
   }
 
   /** How many entities are pending deletion (useful in assertions). */

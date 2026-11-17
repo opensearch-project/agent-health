@@ -246,6 +246,13 @@ export interface UserConfig {
   remoteServers?: RemoteServerConfig[];
 
   /**
+   * The built-in assistant ("highlight & ask" in the web UI). It runs pi's agent
+   * loop in-process with read-only tools over this server's own API; threads
+   * are pi sessions stored locally on this server. See docs/CONFIGURATION.md.
+   */
+  assistant?: AssistantConfig;
+
+  /**
    * Enable or disable the Coding Agent Analytics feature.
    * When false, no coding agent routes are mounted, no background timers
    * run, and the "Coding Agents" nav tab is hidden.
@@ -275,6 +282,45 @@ export interface RemoteServerConfig {
 }
 
 /**
+ * Built-in assistant configuration (see UserConfig.assistant).
+ */
+export interface AssistantConfig {
+  /** Set to false to turn the assistant off (no chip, no panel, /api/ask answers 404). @default true */
+  enabled?: boolean;
+  /**
+   * Pin the underlying LLM: a model id from pi's registry, bare
+   * (`us.anthropic.claude-sonnet-4-6`) or provider-qualified
+   * (`amazon-bedrock/us.anthropic.claude-sonnet-4-6`). Default: the newest
+   * credentialed Claude in the registry. Env override: AH_ASK_MODEL_ID.
+   */
+  model?: string;
+  /**
+   * Directory for the assistant's pi session files (pi JSONL). Relative paths
+   * resolve against the server's cwd. @default .agent-health/ask-sessions
+   * Env override: AH_ASK_SESSIONS_DIR.
+   */
+  sessionsDir?: string;
+  /** How many questions may be answered concurrently; extra requests get 429. @default 4 */
+  maxConcurrent?: number;
+  /**
+   * Deadline for ONE tool lookup (a GET against this server's own API) inside
+   * an answer, in ms. @default 30000. Env override: AH_ASK_TOOL_TIMEOUT_MS.
+   */
+  toolTimeoutMs?: number;
+  /**
+   * Wall-clock budget for one answer (model calls + tool lookups), in ms. The
+   * turn is aborted and reported as an error when it runs out. @default 240000
+   * Env override: AH_ASK_TURN_TIMEOUT_MS.
+   */
+  turnTimeoutMs?: number;
+  /**
+   * Most tool lookups one answer may make before it is aborted. @default 30
+   * Env override: AH_ASK_MAX_TOOL_CALLS.
+   */
+  maxToolCalls?: number;
+}
+
+/**
  * Resolved configuration after loading and merging
  */
 export interface ResolvedConfig {
@@ -294,6 +340,8 @@ export interface ResolvedConfig {
   observabilitySources?: ObservabilitySourceConfig[];
   /** Eval source roots authored in the TS config (optional; see UserConfig.evalRoots). */
   evalRoots?: string[];
+  /** Built-in assistant config (optional; see UserConfig.assistant). */
+  assistant?: AssistantConfig;
 }
 
 /**
