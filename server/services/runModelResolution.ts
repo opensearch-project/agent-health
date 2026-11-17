@@ -81,6 +81,7 @@ export type RunModelResolution = RunModelResolved | RunModelRejected;
 export function getAgentModelOwnership(agent: AgentConfig): AgentModelOwnership {
   const declared = resolveAgentModel(agent);
   if (declared) return { ownsModel: true, declaredModelId: declared };
+  if (agentOwnsModelByConfig(agent)) return { ownsModel: true };
   let connectorOwns = false;
   try {
     connectorOwns = connectorRegistry.getForAgent(agent as any).ownsModel === true;
@@ -88,6 +89,42 @@ export function getAgentModelOwnership(agent: AgentConfig): AgentModelOwnership 
     // No connector registered for this type — treat as a catalog agent.
   }
   return { ownsModel: connectorOwns };
+}
+
+/**
+ * The agent's own config says the model is not Agent Health's to choose:
+ *
+ *   - `connectorConfig.agentOwnsModel: true` — explicit (a search service, a
+ *     hosted agent whose model is fixed on its side), or
+ *   - a `rest` agent whose payload is hook-built (`hooks.beforeRequest`): the
+ *     connector's default payload — the only place a REST request carries the
+ *     run model — is never sent, so a catalog model would be recorded for a
+ *     request that never mentioned one.
+ *
+ * Such a run carries no model until the agent's traces report one
+ * (`lib/observedModel.ts`).
+ */
+export function agentOwnsModelByConfig(agent: AgentConfig): boolean {
+  const cc = (agent.connectorConfig || {}) as Record<string, unknown>;
+  if (cc.agentOwnsModel === true) return true;
+  return agent.connectorType === 'rest' && typeof agent.hooks?.beforeRequest === 'function';
+}
+
+/**
+ * The model id recorded on an evaluation run at creation (`POST
+ * /api/storage/evaluation-runs`, re-run): the agent-declared model, else —
+ * for an agent that owns its model — nothing, even when the caller sent a
+ * catalog fallback (the CLI and the benchmark page used to send the first
+ * catalog key, `demo-model`, which stamped `mock://demo-model` on every report
+ * and silently routed the judge to the mock provider). Catalog agents keep the
+ * caller's value as before.
+ */
+export function resolveEvaluationRunModelId(agent: AgentConfig | undefined, requestedModelId: unknown): string | undefined {
+  const requested = typeof requestedModelId === 'string' && requestedModelId.trim() ? requestedModelId.trim() : undefined;
+  if (!agent) return requested;
+  const ownership = getAgentModelOwnership(agent);
+  if (ownership.ownsModel) return ownership.declaredModelId;
+  return resolveAgentModel(agent, requested) || undefined;
 }
 
 /** Pick the catalog default for catalog-model agents run without a `modelId`. */

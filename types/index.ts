@@ -247,7 +247,7 @@ export interface ConnectorAuthConfig {
 }
 
 /** See {@link TestCaseRun.modelSource}. */
-export type ModelSource = 'agent' | 'request' | 'default';
+export type ModelSource = 'agent' | 'request' | 'default' | 'observed';
 
 export interface AppConfig {
   agents: AgentConfig[];
@@ -885,8 +885,10 @@ export interface TestCaseRun {
    * config, or its connector never forwards one); the recorded id is
    * informational and any caller-supplied `modelId` was ignored.
    * `'request'` — the caller picked a catalog model. `'default'` — no model
-   * was requested and the catalog default was applied. Absent on older runs
-   * and on benchmark / evaluation-run reports.
+   * was requested and the catalog default was applied. `'observed'` — the
+   * agent owns its model and declared none, so the id was read from its
+   * spans once they arrived (`gen_ai.request.model`, lib/observedModel.ts);
+   * absent until then. Absent on older runs.
    */
   modelSource?: ModelSource;
   /**
@@ -1687,7 +1689,11 @@ export interface BenchmarkRun {
   // Configuration snapshot
   agentKey: string;                // Reference to AgentConfig.key
   agentEndpoint?: string;          // Override agent endpoint (optional)
-  modelId: string;                 // Agent's LLM (passed to the connector)
+  /**
+   * Agent's LLM (passed to the connector). Absent for an agent that owns its
+   * model and declares none — see {@link EvaluationRun.modelId}.
+   */
+  modelId?: string;
   /**
    * Optional judge model id, distinct from {@link modelId} (the agent's
    * LLM). Customer input via the run config dialog / CLI `--judge-model` /
@@ -1884,7 +1890,16 @@ export interface EvaluationRun {
   // Execution config
   agentKey: string;
   agentEndpoint?: string;
-  modelId: string;
+  /**
+   * The agent's model: declared in its own connector config, or — for an
+   * agent that owns its model and declares none — absent until the first
+   * report's spans report one (then `modelSource: 'observed'`, with
+   * {@link modelName} as `<provider> · <model>`). Never a catalog fallback
+   * the caller did not choose.
+   */
+  modelId?: string;
+  modelName?: string;
+  modelSource?: ModelSource;
   /**
    * Optional judge model id, distinct from {@link modelId} (the agent's
    * LLM). Same precedence rules as on {@link BenchmarkRun.judgeModelId}.

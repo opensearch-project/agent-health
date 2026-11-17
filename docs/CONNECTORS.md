@@ -605,6 +605,25 @@ The repository includes **Observio**, a reference ReAct agent in `observio-sampl
 
 See `services/connectors/rest/RESTConnector.ts` for a complete example of a non-streaming HTTP connector.
 
+#### Agents that own their model (`connectorConfig.agentOwnsModel`)
+
+Agent Health never picks a model for a REST agent whose request body is
+built by a `hooks.beforeRequest` hook (a search service, a hosted agent — the
+connector's default payload, the only place a REST request carries a run
+model, is never sent), nor for an agent that sets
+`connectorConfig: { agentOwnsModel: true }`. For these agents:
+
+- the run dialogs show no Agent Model picker, `modelId` is not required on
+  `POST /api/evaluate` / `POST /api/storage/evaluation-runs`, and a catalog
+  fallback a client sends (the CLI used to send the catalog's first key,
+  `demo-model`) is dropped — so no report is stamped `mock://demo-model` and
+  the judge never silently falls back to the mock provider;
+- the model is **observed**, not selected: once the agent's traces land, the
+  run and its reports record `gen_ai.request.model` (+
+  `gen_ai.provider.name`) from the agent's LLM-call spans as
+  `modelId` / `modelName` with `modelSource: 'observed'`; the runs list and
+  the compare captions show that value. Without spans the model stays blank.
+
 #### Request timeout (`connectorConfig.timeoutMs`)
 
 The REST connector applies an explicit per-request timeout to the agent call

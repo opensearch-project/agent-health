@@ -33,7 +33,7 @@ import {
 import { isDeterministicEvaluator } from '../../../lib/evaluators/deterministic.js';
 import { isSystemEvaluatorId, getSystemEvaluatorById } from '../../prompts/evaluatorTemplates.js';
 import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
-import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
+import { resolveEvaluationRunModelId } from '../../services/runModelResolution.js';
 import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.js';
 import { validateRunNameUpdate } from '../../../lib/runName.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
@@ -337,11 +337,14 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
 
     // Resolve the agent's model from its own config (connectorConfig) so the
     // run document records which model the agent ran on — there is no
-    // user-selected agent model. Falls back to any client-supplied modelId
-    // (legacy) then empty. The runner re-resolves the same way at execution.
-    let resolvedModelId: string = modelId || '';
+    // user-selected agent model. A client-supplied modelId is kept only for
+    // catalog agents (legacy); for an agent that owns its model it is dropped
+    // and the model stays unset until the agent's traces report one
+    // (server/services/runModelResolution.ts). The runner re-resolves the
+    // same way at execution.
+    let resolvedModelId: string | undefined = typeof modelId === 'string' && modelId ? modelId : undefined;
     try {
-      resolvedModelId = resolveAgentModel(refreshed.agents.find(a => a.key === agentKey), modelId);
+      resolvedModelId = resolveEvaluationRunModelId(refreshed.agents.find(a => a.key === agentKey), modelId);
     } catch { /* keep fallback */ }
 
     const run: any = {
@@ -616,12 +619,12 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
 
     // Resolve the agent's model fresh from its current config — same rule as
     // the create route (the agent owns its model; config.modelId is only the
-    // legacy fallback if resolution comes up empty). Uses `config.agentKey`
-    // (post-override) so an agent-swap override resolves THAT agent's model,
-    // not the source run's.
-    let resolvedModelId = config.modelId;
+    // legacy fallback for catalog agents, and is dropped for agents that own
+    // their model). Uses `config.agentKey` (post-override) so an agent-swap
+    // override resolves THAT agent's model, not the source run's.
+    let resolvedModelId: string | undefined = config.modelId || undefined;
     try {
-      resolvedModelId = resolveAgentModel(refreshed.agents.find(a => a.key === config.agentKey), config.modelId);
+      resolvedModelId = resolveEvaluationRunModelId(refreshed.agents.find(a => a.key === config.agentKey), config.modelId);
     } catch { /* keep fallback */ }
 
     const snapshots: TestCaseSnapshot[] = testCases.map(tc => ({

@@ -172,11 +172,12 @@ describe('benchmark command (unified path) — printed Model line', () => {
     expect(out).not.toContain('Model: demo-model');
     expect(out).not.toMatch(/Model: .*mock/);
     expect(exitSpy).not.toHaveBeenCalled();
-    // Only the printed line changes in this fix: the request still carries the
-    // catalog fallback (the first catalog key) exactly as before. Changing the
-    // wire value is the server-side half of #612 problem 7 (see #534) and is
-    // deliberately not part of this change — this assertion pins that scope.
-    expect(postedBodies[0]).toMatchObject({ agentKey: 'rest-no-model', modelId: 'demo-model' });
+    // The wire half of #612 problem 7: an agent that declares no model sends
+    // NO modelId — not the catalog's first key (`demo-model`), which stamped
+    // `mock://demo-model` on every report and routed the judge to the mock
+    // provider. The server resolves the model (declared → observed from traces).
+    expect(postedBodies[0]).toMatchObject({ agentKey: 'rest-no-model' });
+    expect(postedBodies[0]).not.toHaveProperty('modelId');
   });
 
   it('REST agent with a declared model → prints that model', async () => {

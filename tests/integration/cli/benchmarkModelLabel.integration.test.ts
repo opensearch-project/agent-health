@@ -164,14 +164,23 @@ test('model label case', { prompt: 'fixture question' }, async ({ agent, expect 
       expect(noModelOut).not.toContain('demo-model');
 
       // What the server recorded as the run's model, read back before the
-      // second run stops the server. Only the PRINTED line changes in this
-      // fix: the no-model agent's run still carries the catalog fallback
-      // (`demo-model`, the first key of the built-in catalog) — the wire half
-      // of #612 problem 7 is a separate change.
+      // second run stops the server. The wire half of #612 problem 7: the CLI
+      // no longer sends the catalog fallback (`demo-model`, the first key of
+      // the built-in catalog), so the no-model agent's run and its report
+      // carry NO model — and the judge is never silently the mock provider.
       const list = await fetch(`${baseUrl}/api/storage/evaluation-runs`, { signal: AbortSignal.timeout(15_000) });
-      const { evaluationRuns = [] } = (await list.json()) as { evaluationRuns?: Array<{ agentKey: string; modelId?: string }> };
+      const { evaluationRuns = [] } = (await list.json()) as { evaluationRuns?: Array<{ id: string; agentKey: string; modelId?: string; results: Record<string, { reportId: string }> }> };
       for (const run of evaluationRuns) console.log(`[model-label] stored run agentKey=${run.agentKey} modelId=${JSON.stringify(run.modelId)}`);
-      expect(evaluationRuns.find(r => r.agentKey === 'rest-no-model')?.modelId).toBe('demo-model');
+      const noModelRun = evaluationRuns.find(r => r.agentKey === 'rest-no-model');
+      expect(noModelRun).toBeDefined();
+      expect(noModelRun!.modelId).toBeUndefined();
+      const reportId = Object.values(noModelRun!.results)[0]?.reportId;
+      expect(reportId).toBeTruthy();
+      const report = await (await fetch(`${baseUrl}/api/storage/runs/${encodeURIComponent(reportId)}`, { signal: AbortSignal.timeout(15_000) })).json() as Record<string, unknown>;
+      console.log(`[model-label] stored report modelId=${JSON.stringify(report.modelId)} judgeProvider=${JSON.stringify(report.judgeProvider)}`);
+      expect(JSON.stringify(report)).not.toContain('mock://demo-model');
+      expect(report.modelId).toBeUndefined();
+      expect(report.judgeProvider).toBe('none'); // code assertions only — no judge, and in particular not the mock one
 
       // Second run reuses the server and asks the CLI to stop it on exit.
       const withModelOut = await runBenchmark('rest-with-model', ['--stop-server']);

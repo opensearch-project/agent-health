@@ -17,7 +17,7 @@
  */
 
 import type { AgentConfig, ModelConfig } from '@/types';
-import { resolveRunModel, getAgentModelOwnership, pickDefaultAgentModelKey } from '@/server/services/runModelResolution';
+import { resolveRunModel, getAgentModelOwnership, pickDefaultAgentModelKey, resolveEvaluationRunModelId } from '@/server/services/runModelResolution';
 import { DEFAULT_AGENT_MODEL_ID } from '@/lib/agentModelCatalog';
 
 const CATALOG: Record<string, ModelConfig> = {
@@ -48,6 +48,23 @@ describe('getAgentModelOwnership', () => {
     for (const connectorType of ['subprocess', 'claude-code', 'kiro', 'strands'] as const) {
       expect(getAgentModelOwnership(agent({ connectorType }))).toEqual({ ownsModel: true });
     }
+  });
+
+  it('connectorConfig.agentOwnsModel: true → owns, no declared id (model is observed from traces later)', () => {
+    expect(getAgentModelOwnership(agent({ connectorType: 'rest', connectorConfig: { agentOwnsModel: true } }))).toEqual({ ownsModel: true });
+    expect(getAgentModelOwnership(agent({ connectorType: 'agui-streaming', connectorConfig: { agentOwnsModel: true } }))).toEqual({ ownsModel: true });
+    // Anything but a literal `true` is ignored.
+    expect(getAgentModelOwnership(agent({ connectorType: 'rest', connectorConfig: { agentOwnsModel: 'yes' } }))).toEqual({ ownsModel: false });
+  });
+
+  it('a rest agent whose payload is hook-built (hooks.beforeRequest) owns its model — the default payload with `model` is never sent', () => {
+    expect(getAgentModelOwnership(agent({ connectorType: 'rest', hooks: { beforeRequest: async (c: any) => c } }))).toEqual({ ownsModel: true });
+    // Other hooks don't build the payload; other connector families keep their own rule.
+    expect(getAgentModelOwnership(agent({ connectorType: 'rest', hooks: { afterResponse: async (c: any) => c } as any }))).toEqual({ ownsModel: false });
+    expect(getAgentModelOwnership(agent({ connectorType: 'agui-streaming', hooks: { beforeRequest: async (c: any) => c } }))).toEqual({ ownsModel: false });
+    // A declared model still wins over the inference (and is reported).
+    expect(getAgentModelOwnership(agent({ connectorType: 'rest', connectorConfig: { model: 'm' }, hooks: { beforeRequest: async (c: any) => c } })))
+      .toEqual({ ownsModel: true, declaredModelId: 'm' });
   });
 
   it('connectors that put the requested model on the wire do not own it', () => {
@@ -161,5 +178,32 @@ describe('pickDefaultAgentModelKey', () => {
   it('returns undefined when no entry can serve as an agent model', () => {
     expect(pickDefaultAgentModelKey({ 'demo-model': CATALOG['demo-model'] })).toBeUndefined();
     expect(pickDefaultAgentModelKey({})).toBeUndefined();
+  });
+});
+
+describe('resolveEvaluationRunModelId (POST /evaluation-runs, re-run)', () => {
+  const owning = agent({ key: 'search', connectorType: 'rest', hooks: { beforeRequest: async (c: any) => c } });
+  const catalog = agent({ key: 'plain', connectorType: 'rest' });
+
+  it('agent owns its model and declares none → undefined even when the caller sent the catalog fallback', () => {
+    expect(resolveEvaluationRunModelId(owning, 'demo-model')).toBeUndefined();
+    expect(resolveEvaluationRunModelId(owning, undefined)).toBeUndefined();
+    expect(resolveEvaluationRunModelId(agent({ connectorType: 'rest', connectorConfig: { agentOwnsModel: true } }), 'demo-model')).toBeUndefined();
+  });
+
+  it('agent declares a model → that model, whatever the caller sent', () => {
+    expect(resolveEvaluationRunModelId(agent({ connectorType: 'rest', connectorConfig: { model: 'provider.x' } }), 'demo-model')).toBe('provider.x');
+  });
+
+  it('catalog agent → the caller\'s value as before; nothing → undefined (never \'\')', () => {
+    expect(resolveEvaluationRunModelId(catalog, 'demo-model')).toBe('demo-model');
+    expect(resolveEvaluationRunModelId(catalog, 'claude-sonnet-4.5')).toBe('claude-sonnet-4.5');
+    expect(resolveEvaluationRunModelId(catalog, undefined)).toBeUndefined();
+    expect(resolveEvaluationRunModelId(catalog, '')).toBeUndefined();
+  });
+
+  it('unknown agent → the caller\'s value (the route rejects unknown agents separately)', () => {
+    expect(resolveEvaluationRunModelId(undefined, 'demo-model')).toBe('demo-model');
+    expect(resolveEvaluationRunModelId(undefined, undefined)).toBeUndefined();
   });
 });

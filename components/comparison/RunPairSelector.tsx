@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Check } from 'lucide-react';
 import { BenchmarkRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { getModelName } from '@/lib/utils';
+import { getRunModelLabel } from '@/lib/utils';
 
 export interface RunPairSelectorProps {
   runs: BenchmarkRun[];
@@ -87,7 +87,7 @@ export const RunPairSelector: React.FC<RunPairSelectorProps> = ({
                 <span className="text-xs text-muted-foreground">
                   {getAgentName(run.agentKey)}
                   {' · '}
-                  {getModelName(run.modelId)}
+                  {getRunModelLabel(run)}
                 </span>
               </div>
 
