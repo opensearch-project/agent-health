@@ -57,10 +57,12 @@ jest.mock('@/services/storage', () => ({
 // Judge model select pulls model catalogs; render a plain input so the
 // value round-trip is observable without the real component's fetches.
 jest.mock('@/components/JudgeModelSelect', () => ({
-  JudgeModelSelect: ({ value, onValueChange }: any) =>
+  JudgeModelSelect: ({ value, onValueChange, disabled, defaultLabel }: any) =>
     React.createElement('input', {
       'data-testid': 'run-config-judge-model',
       value,
+      disabled,
+      placeholder: defaultLabel,
       onChange: (e: any) => onValueChange(e.target.value),
     }),
 }));
@@ -82,11 +84,11 @@ jest.mock('@/components/ui/select', () => {
     return out;
   };
   return {
-    Select: ({ value, onValueChange, children }: any) =>
-      R.createElement(Ctx.Provider, { value: { value, onValueChange } }, R.createElement('div', null, children)),
+    Select: ({ value, onValueChange, disabled, children }: any) =>
+      R.createElement(Ctx.Provider, { value: { value, onValueChange, disabled } }, R.createElement('div', null, children)),
     SelectTrigger: ({ children, ...props }: any) => {
       const ctx = R.useContext(Ctx);
-      return R.createElement('div', { ...props, 'data-value': ctx.value }, children);
+      return R.createElement('div', { ...props, 'data-value': ctx.value, 'data-disabled': ctx.disabled ? 'true' : undefined }, children);
     },
     SelectValue: ({ placeholder }: any) => {
       const ctx = R.useContext(Ctx);
@@ -128,6 +130,7 @@ jest.mock('@/components/ui/dialog', () => {
 
 import {
   RunConfigDialog, computeRerunOverrides, valuesFromRun, hasRerunTweaks, DEFAULT_CONCURRENCY,
+  judgeApplicabilityForRerun,
 } from '@/components/evals3/RunConfigDialog';
 import type { EvaluationRun } from '@/types';
 
@@ -402,5 +405,95 @@ describe('RunConfigDialog — rerun mode (prepopulated from the source run)', ()
       rerender(dlg({ mode: 'rerun', open: true, onOpenChange: jest.fn(), onRerun: jest.fn(), sourceRun: sourceRun }));
     });
     expect(concurrencyInput().value).toBe('3');
+  });
+});
+
+// ── Deterministic (code-SDK) source runs: evaluator / judge do not apply ────
+
+/** A code-SDK run whose every case was code assertions only (no judge() call). */
+const deterministicRun: EvaluationRun = {
+  ...sourceRun,
+  id: 'eval-run-det',
+  name: 'Retrieval checks',
+  judgeProvider: 'none',
+  judgeModelId: undefined,
+  evaluatorId: undefined,
+  sources: [{ type: 'code-import', filenames: ['evals/retrieval.eval.ts'], testCaseIds: ['tc-1', 'tc-2'] }] as any,
+} as EvaluationRun;
+
+/** A code-SDK run where some cases called judge() (bedrock) and some did not. */
+const mixedRun: EvaluationRun = {
+  ...deterministicRun,
+  id: 'eval-run-mixed',
+  judgeProvider: 'bedrock',
+  judgeModelId: 'demo-model',
+} as EvaluationRun;
+
+describe('judgeApplicabilityForRerun', () => {
+  it("'none' when the source run's judgeProvider is 'none' (no report called an LLM judge)", () => {
+    expect(judgeApplicabilityForRerun(deterministicRun)).toBe('none');
+  });
+  it("'per-case' for a code-import run that was judged (some cases call judge(), some don't)", () => {
+    expect(judgeApplicabilityForRerun(mixedRun)).toBe('per-case');
+  });
+  it("'all' for classic benchmark / JSON runs and for legacy runs without judgeProvider", () => {
+    expect(judgeApplicabilityForRerun(sourceRun)).toBe('all');
+    expect(judgeApplicabilityForRerun({ ...sourceRun, judgeProvider: undefined } as EvaluationRun)).toBe('all');
+  });
+});
+
+describe('valuesFromRun / computeRerunOverrides on an all-deterministic run', () => {
+  it('never pre-selects an evaluator or judge for a run whose cases never called one', () => {
+    const v = valuesFromRun({ ...deterministicRun, judgeModelId: 'demo-model', evaluatorId: 'system-factuality' } as EvaluationRun);
+    expect(v.evaluatorId).toBeUndefined();
+    expect(v.judgeModelId).toBeUndefined();
+  });
+  it('the empty pickers are not a tweak: a faithful re-run sends no judge / evaluator override', () => {
+    const src = { ...deterministicRun, judgeModelId: 'demo-model', evaluatorId: 'system-factuality' } as EvaluationRun;
+    const o = computeRerunOverrides(src, valuesFromRun(src));
+    expect(o.judgeModelId).toBeUndefined();
+    expect(o.evaluatorId).toBeUndefined();
+    expect(hasRerunTweaks(o)).toBe(false);
+  });
+});
+
+describe('RunConfigDialog — rerun mode, deterministic and mixed code-SDK runs', () => {
+  it('all cases deterministic: evaluator + judge pickers are disabled and empty ("Not used"), with a one-line note', async () => {
+    render(dlg({ mode: 'rerun', open: true, onOpenChange: jest.fn(), onRerun: jest.fn(), sourceRun: deterministicRun }));
+    expect(evaluatorTrigger().getAttribute('data-disabled')).toBe('true');
+    // No "RCA Default" pre-selection: the trigger carries no value and reads "Not used".
+    expect(evaluatorTrigger().getAttribute('data-value')).toBeNull();
+    expect(evaluatorTrigger().textContent).toContain('Not used');
+    const judge = screen.getByTestId('run-config-judge-model') as HTMLInputElement;
+    expect(judge.disabled).toBe(true);
+    expect(judge.value).toBe('');
+    expect(judge.placeholder).toBe('Not used');
+    const note = screen.getByTestId('run-config-judge-applicability');
+    expect(note.getAttribute('data-applicability')).toBe('none');
+    expect(note.textContent).toMatch(/Every case is deterministic/);
+    // Still a faithful duplicate: Re-run enabled, nothing flagged as modified.
+    expect(submitBtn().disabled).toBe(false);
+    expect(screen.queryByTestId('run-config-modified-hint')).toBeNull();
+    mockRerun.mockResolvedValue({ runId: 'eval-run-new' });
+    await act(async () => { fireEvent.click(submitBtn()); });
+    const [, overrides] = mockRerun.mock.calls[0];
+    expect(overrides.judgeModelId).toBeUndefined();
+    expect(overrides.evaluatorId).toBeUndefined();
+  });
+
+  it('mixed run (code-SDK cases, some judged): pickers stay enabled and the note says they apply per case', () => {
+    render(dlg({ mode: 'rerun', open: true, onOpenChange: jest.fn(), onRerun: jest.fn(), sourceRun: mixedRun }));
+    expect(evaluatorTrigger().getAttribute('data-disabled')).toBeNull();
+    expect((screen.getByTestId('run-config-judge-model') as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByTestId('run-config-judge-model') as HTMLInputElement).value).toBe('demo-model');
+    const note = screen.getByTestId('run-config-judge-applicability');
+    expect(note.getAttribute('data-applicability')).toBe('per-case');
+    expect(note.textContent).toMatch(/per case/);
+  });
+
+  it('classic benchmark run: no applicability note, pickers enabled (unchanged behaviour)', () => {
+    render(dlg({ mode: 'rerun', open: true, onOpenChange: jest.fn(), onRerun: jest.fn(), sourceRun }));
+    expect(screen.queryByTestId('run-config-judge-applicability')).toBeNull();
+    expect(evaluatorTrigger().getAttribute('data-disabled')).toBeNull();
   });
 });
