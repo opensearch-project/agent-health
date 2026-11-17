@@ -60,7 +60,7 @@ export interface CloudWatchModuleOptions {
   region: string;
   profile?: string;
   logGroups?: Partial<CloudWatchLogGroups>;
-  /** Scan window for id-only requests that carry no run window (default 7 days). */
+  /** Scan window for requests that carry an exact id (traceId / runId / session id) or no run window (default 7 days). */
   lookbackMs?: number;
   /** Scan window for id lookups in application log groups (default 24 hours). */
   logsLookbackMs?: number;
@@ -69,9 +69,10 @@ export interface CloudWatchModuleOptions {
 }
 
 /**
- * Bounds. A request never scans more than `maxWindowMs`; an id-only request
- * with no run window scans the last `lookbackMs`; a request that carries the
- * run's wall-clock window (the run-report shape) scans just that window ±5 min.
+ * Bounds. A request never scans more than `maxWindowMs`; a request that carries
+ * an exact id (traceId / runId / session id) or no run window scans the last
+ * `lookbackMs`; a request whose ONLY correlator is the run's wall-clock window
+ * (Strategy C alone) scans just that window ±5 min.
  */
 export const DEFAULT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_MAX_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -341,9 +342,18 @@ class CloudWatchTracesOperations implements ITracesOperations {
    * free text) — see `fetchBoth`. On a small account both answer instantly; on
    * a production account with a multi-GB `aws/spans` this keeps a trace lookup
    * at Insights latency (seconds) instead of a linear scan (tens of seconds).
+   *
+   * The scan is narrowed to the `agents[]` window ONLY when the window is the
+   * sole correlator: an exact id must be searched over the configured lookback
+   * (parity with the OpenSearch reader and with `forRuns` below), because the
+   * run-report shape sends a window DERIVED from the stored report and a
+   * wrong window (e.g. built around "now" for a report with no timestamp) used
+   * to narrow the exact ids to 0 spans (#640). The Strategy-C clause itself
+   * stays window-bounded inside the Insights query.
    */
   async fetchSources(options: TracesQueryOptions, useUnion: boolean): Promise<FetchedSources> {
-    return this.fetchBoth(exactCorrelatorIds(options), options, useUnion, this.window(options));
+    const exactIds = exactCorrelatorIds(options);
+    return this.fetchBoth(exactIds, options, useUnion, this.window(options, exactIds.length === 0));
   }
 
   async query(options: TracesQueryOptions) {
