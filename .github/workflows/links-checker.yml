@@ -18,9 +18,12 @@ jobs:
     env:
       # Shared lychee flags for all three passes below (kept in one place so the
       # passes cannot drift). Each pass appends only what is specific to it.
+      # --max-concurrency: most links point at github.com, which answers a burst
+      # of 128 parallel requests from one runner with 502/503 even after retries.
       LYCHEE_ARGS: >-
         --verbose
         --no-progress
+        --max-concurrency 16
         --accept 200,204,301,302,403,429
         --exclude-loopback
         --exclude-private
