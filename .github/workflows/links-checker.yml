@@ -67,8 +67,11 @@ jobs:
         run: |
           # `lychee` was installed on PATH by the action above. `--scheme` limits the
           # check to http(s); repo-file links in released sections are history.
+          rc=0
           eval lychee --format markdown --output ./lychee-report-changelog.md \
-            ${LYCHEE_ARGS} --scheme http --scheme https CHANGELOG.md
+            ${LYCHEE_ARGS} --scheme http --scheme https CHANGELOG.md || rc=$?
+          cat ./lychee-report-changelog.md
+          exit $rc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -79,9 +82,12 @@ jobs:
           # its relative links resolve exactly as they do from CHANGELOG.md, then
           # check only local file links (`--offline`); http(s) were covered above.
           sed -n '/^## \[Unreleased\]/,/^## \[[0-9]/p' CHANGELOG.md | sed '$d' > CHANGELOG.unreleased.tmp.md
+          rc=0
           eval lychee --format markdown --output ./lychee-report-changelog-unreleased.md \
-            ${LYCHEE_ARGS} --offline CHANGELOG.unreleased.tmp.md
+            ${LYCHEE_ARGS} --offline CHANGELOG.unreleased.tmp.md || rc=$?
           rm -f CHANGELOG.unreleased.tmp.md
+          cat ./lychee-report-changelog-unreleased.md
+          exit $rc
 
       - name: Upload link check report
         if: always()
