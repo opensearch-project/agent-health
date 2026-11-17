@@ -52,8 +52,12 @@ router.get('/api/agents', async (req: Request, res: Response) => {
     const config = loadConfigSync();
     // Wait for observio to report its port (non-blocking if already known, 10s timeout)
     await waitForObservioReady();
-    // Strip hooks (functions can't be serialized to JSON) and mark builtIn
-    const configAgents = config.agents.map(({ hooks, ...rest }) => {
+    // Strip hooks (functions can't be serialized to JSON) and mark builtIn.
+    // `auth` is reduced to its non-secret shape: the TS loader now carries it
+    // (incl. static `awsSecretAccessKey` / `token` / `password`), and this
+    // route is read by the browser.
+    const configAgents = config.agents.map(({ hooks, auth, ...agentRest }) => {
+      const rest = auth ? { ...agentRest, auth: { type: auth.type } } : agentRest;
       // Patch observio endpoint with actual port (may have auto-incremented)
       // Only patch when endpoint points to localhost — respect explicit remote overrides
       if (rest.key === 'observio' && rest.endpoint) {
