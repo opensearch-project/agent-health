@@ -30,6 +30,10 @@ describe('useAssistantSuggestions › classifyRoute', () => {
     expect(ctx.nudge).toBeTruthy();
   });
 
+  it('classifies the standalone report page (/evaluations/reports/:id) as run detail', () => {
+    expect(classifyRoute('/evaluations/reports/report-abc-123').key).toBe('run-detail');
+  });
+
   it('classifies the nested benchmark-run-detail path the same as a standalone run', () => {
     const ctx = classifyRoute('/benchmarks/bench-1/runs/run-2');
     expect(ctx.key).toBe('run-detail');
