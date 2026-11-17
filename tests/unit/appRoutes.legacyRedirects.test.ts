@@ -26,7 +26,7 @@ const stub = (name: string) => ({
     ['Dashboard', 'SettingsPage', 'ComparisonPage', 'AgentTracesPage',
       'CodingAgentsPage', 'EvaluatorsPage', 'EvaluatorEditPage', 'AskOpenRedirect', 'SkillsPage',
       'BenchmarksPage4', 'TestCasesPage4', 'BenchmarkRunsPage2', 'TestCaseDetailPage', 'EvalRunsPage',
-      'RunInspectorPage', 'NewRunPage', 'Layout',
+      'RunInspectorPage', 'NewRunPage', 'ReportPage', 'Layout',
     ].map(exportName => [exportName, function Page() {
       const loc = useLocation();
       return React.createElement('div', { 'data-testid': `page-${name}` }, loc.pathname + loc.search);
@@ -51,6 +51,7 @@ jest.mock('@/components/evals3/TestCaseDetailPage', () => stub('evals3-test-case
 jest.mock('@/components/evals3/EvalRunsPage', () => stub('evals3-eval-runs'));
 jest.mock('@/components/evals3/RunInspectorPage', () => stub('evals3-run-inspector'));
 jest.mock('@/components/evals3/NewRunPage', () => stub('evals3-new-run'));
+jest.mock('@/components/evals3/ReportPage', () => stub('evals3-report'));
 jest.mock('@/lib/constants', () => ({ refreshConfig: jest.fn(), subscribeConfigChange: jest.fn(() => () => {}), DEFAULT_CONFIG: { agents: [], models: {} } }));
 jest.mock('@/lib/theme', () => ({ initializeTheme: jest.fn() }));
 
@@ -109,6 +110,7 @@ describe('App routes — retired legacy URLs redirect to their evals3 twin', () 
     await landsOn('/evaluations/runs', 'evals3-eval-runs', '/evaluations/runs');
     await landsOn('/evaluations/runs/new', 'evals3-new-run', '/evaluations/runs/new');
     await landsOn('/evaluations/runs/run-9/inspect', 'evals3-run-inspector', '/evaluations/runs/run-9/inspect');
+    await landsOn('/evaluations/reports/rep-9', 'evals3-report', '/evaluations/reports/rep-9');
     await landsOn('/evaluations/test-cases/tc-9', 'evals3-test-case-detail', '/evaluations/test-cases/tc-9');
     await landsOn('/compare/bm-1?runs=a,b', 'compare', '/compare/bm-1?runs=a,b');
     await landsOn('/agent-traces', 'agent-traces', '/agent-traces');
@@ -152,25 +154,45 @@ describe('App routes — /runs/:reportId resolves the report before redirecting'
     expect(getTestCaseById).not.toHaveBeenCalled();
   });
 
-  it('a transient failure looking the run up shows the error state instead of misrouting to the test case page', async () => {
+  it('a transient failure looking the run up → the standalone report page (never an error page or a misroute while the report exists)', async () => {
     getReportById.mockResolvedValue({ id: 'rep-10', testCaseId: 'tc-1', experimentRunId: 'run-10' });
     getEvaluationRun.mockRejectedValue(Object.assign(new Error('Failed to get evaluation run: Bad Gateway'), { status: 502 }));
-    mount('/runs/rep-10');
-    await waitFor(() => expect(screen.getByTestId('report-redirect-error').textContent).toContain('Bad Gateway'));
+    await landsOn('/runs/rep-10?tab=judge', 'evals3-report', '/evaluations/reports/rep-10?tab=judge');
     expect(screen.queryByTestId('page-evals3-test-case-detail')).toBeNull();
+    expect(screen.queryByTestId('report-redirect-error')).toBeNull();
   });
 
-  it('orphan report (run gone AND test case gone) → an explicit explanation with a way out, never a silent bounce to the Test Cases list', async () => {
+  it('a run that exists but no longer lists the report (re-judged / replaced) is not "reachable": the inspector could not select it', async () => {
+    getReportById.mockResolvedValue({ id: 'rep-old', testCaseId: 'tc-1', experimentRunId: 'run-15' });
+    getEvaluationRun.mockResolvedValue({ id: 'run-15', results: { 'tc-1': { reportId: 'rep-new' } } });
+    await landsOn('/runs/rep-old', 'evals3-test-case-detail', '/evaluations/test-cases/tc-1?run=rep-old');
+    // … while a run whose results DO list it opens the inspector.
+    getReportById.mockResolvedValue({ id: 'rep-new', testCaseId: 'tc-1', experimentRunId: 'run-15' });
+    await landsOn('/runs/rep-new', 'evals3-run-inspector', '/evaluations/runs/run-15/inspect?reportId=rep-new');
+  });
+
+  it('orphan report (run gone AND test case gone) → the standalone report page, never an explanation page or a silent bounce to a list', async () => {
     getReportById.mockResolvedValue({ id: 'rep-11', testCaseId: 'tc-gone', experimentRunId: 'run-gone' });
     getEvaluationRun.mockRejectedValue(Object.assign(new Error('404'), { status: 404 }));
     getTestCaseById.mockResolvedValue(null);
-    mount('/runs/rep-11');
-    const orphan = await screen.findByTestId('report-redirect-orphan');
-    expect(orphan.textContent).toContain('rep-11');
-    expect(orphan.textContent).toContain('deleted');
-    expect(screen.getByTestId('report-redirect-orphan-runs-link').getAttribute('href')).toBe('/evaluations/runs');
+    await landsOn('/runs/rep-11', 'evals3-report', '/evaluations/reports/rep-11');
     expect(getTestCaseById).toHaveBeenCalledWith('tc-gone');
     expect(screen.queryByTestId('page-evals3-test-case-detail')).toBeNull();
+    expect(screen.queryByTestId('report-redirect-orphan')).toBeNull();
+  });
+
+  it('standalone report whose test case was deleted → the standalone report page', async () => {
+    getReportById.mockResolvedValue({ id: 'rep-13', testCaseId: 'tc-gone' });
+    getTestCaseById.mockResolvedValue(null);
+    await landsOn('/runs/rep-13', 'evals3-report', '/evaluations/reports/rep-13');
+    expect(getEvaluationRun).not.toHaveBeenCalled();
+  });
+
+  it('report of a kept run whose test case was deleted → still the run inspector (it renders deleted cases)', async () => {
+    getReportById.mockResolvedValue({ id: 'rep-14', testCaseId: 'tc-gone', experimentId: 'bm-1', experimentRunId: 'run-14' });
+    getTestCaseById.mockResolvedValue(null);
+    await landsOn('/runs/rep-14', 'evals3-run-inspector', '/evaluations/benchmarks/bm-1/runs/run-14/inspect?reportId=rep-14');
+    expect(getTestCaseById).not.toHaveBeenCalled();
   });
 
   it('a standalone report whose test case still exists does not pay for a run or benchmark lookup', async () => {

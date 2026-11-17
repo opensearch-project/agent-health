@@ -130,6 +130,21 @@ export const TestCaseInspectorPanel: React.FC<TestCaseInspectorPanelProps> = ({
           the header opens it to show file path (SDK) or full JSON
           (no truncation). */}
       <CollapsibleTestCaseDefinition testCase={testCase} fullRecord={testCaseFullRecord} />
+      {/* The test case was deleted after this case ran (deleting a test case
+          keeps its reports): say so where its definition would have been,
+          instead of silently omitting the collapsible. */}
+      {!testCase && testCaseFullRecord === 'missing' && (
+        <div
+          className="mx-4 my-2 flex items-start gap-1.5 rounded border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 text-[11px]"
+          data-testid="inspector-test-case-deleted"
+        >
+          <AlertTriangle size={12} className="shrink-0 mt-0.5 text-amber-700 dark:text-amber-400" />
+          <div className="min-w-0">
+            <span className="font-medium">Test case deleted</span>
+            <span className="text-muted-foreground"> — its definition is no longer available; this is the report as stored when the case ran.</span>
+          </div>
+        </div>
+      )}
 
       {/* Tabs — directly into content, no extra chrome */}
       <div className="flex-1 overflow-hidden">

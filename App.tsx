@@ -27,6 +27,7 @@ import { TestCaseDetailPage as Evals3TestCaseDetail } from './components/evals3/
 import { EvalRunsPage as Evals3EvalRuns } from './components/evals3/EvalRunsPage';
 import { RunInspectorPage as Evals3RunInspector } from './components/evals3/RunInspectorPage';
 import { NewRunPage as Evals3NewRun } from './components/evals3/NewRunPage';
+import { ReportPage as Evals3Report } from './components/evals3/ReportPage';
 import { ReportRedirect } from './components/ReportRedirect';
 import { legacyRouteRedirects } from '@/lib/legacyRouteRedirects';
 
@@ -113,6 +114,8 @@ export function AppRoutes() {
       <Route path="/evaluations/runs" element={<Evals3EvalRuns />} />
       <Route path="/evaluations/runs/new" element={<Evals3NewRun />} />
       <Route path="/evaluations/runs/:runId/inspect" element={<Evals3RunInspector />} />
+      {/* One report from its own document — works when its run and/or test case were deleted. */}
+      <Route path="/evaluations/reports/:reportId" element={<Evals3Report />} />
       <Route path="/evaluations/benchmarks/:benchmarkId" element={<Evals3BenchmarkRuns />} />
       <Route path="/evaluations/benchmarks/:benchmarkId/cases/:caseId" element={<Evals3BenchmarkRuns />} />
       <Route path="/evaluations/benchmarks/:benchmarkId/runs" element={<Evals3BenchmarkRuns />} />
@@ -133,8 +136,8 @@ export function AppRoutes() {
       {legacyRouteRedirects.map(({ pattern, to }) => (
         <Route key={pattern} path={pattern} element={<LegacyRedirect to={to} />} />
       ))}
-      {/* `/runs/:runId` took a REPORT id — resolve it to the run inspector
-          (or the test case's detail page) after a lookup. */}
+      {/* `/runs/:runId` took a REPORT id — resolve it to the run inspector,
+          the test case's detail page, or the standalone report page after a lookup. */}
       <Route path="/runs/:runId" element={<ReportRedirect />} />
 
       {/* Catch-all */}
