@@ -19,7 +19,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Check links
+      # Two lychee passes. CHANGELOG.md's released sections are immutable history
+      # and link repo files by relative path; later PRs legitimately delete those
+      # files (e.g. #583 removed server/services/assistantService.ts), which turned
+      # every PR touching any .md file red. Pass 1 checks every other Markdown file
+      # exactly as before (local file links included); pass 2 checks CHANGELOG.md
+      # alone with repo-file (file://) links excluded — its http(s) links still count.
+      - name: Check links (all Markdown except CHANGELOG.md)
         uses: lycheeverse/lychee-action@7cd0af4c74a61395d455af97419279d86aafaede # v2.0.2
         with:
           fail: true
@@ -38,10 +44,36 @@ jobs:
             --exclude-path 'node_modules'
             --exclude-path 'coverage'
             --exclude-path 'dist'
+            --exclude-path 'CHANGELOG.md'
             --retry-wait-time 5
             --max-retries 3
             --timeout 30
             '**/*.md'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check links (CHANGELOG.md, http(s) only — repo-file links are history)
+        if: always()
+        uses: lycheeverse/lychee-action@7cd0af4c74a61395d455af97419279d86aafaede # v2.0.2
+        with:
+          fail: true
+          output: ./lychee-report-changelog.md
+          args: |
+            --verbose
+            --no-progress
+            --accept 200,204,301,302,403,429
+            --exclude-loopback
+            --exclude-private
+            --exclude 'localhost'
+            --exclude '127.0.0.1'
+            --exclude '.*xenproject\.org.*'
+            --exclude '.*opentelemetry\.io.*'
+            --exclude '.*star-history\.com.*'
+            --exclude '^file://'
+            --retry-wait-time 5
+            --max-retries 3
+            --timeout 30
+            'CHANGELOG.md'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -50,4 +82,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: lychee-report
-          path: ./lychee-report.md
+          path: |
+            ./lychee-report.md
+            ./lychee-report-changelog.md
