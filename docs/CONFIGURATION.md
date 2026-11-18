@@ -310,8 +310,9 @@ kept. Every query is bounded, and a result that hit a bound is reported as parti
 
 | Bound | Default | Where |
 |---|---|---|
-| Scan window for id-only requests with no run window | 7 days (`lookbackMs`) | request time → back |
-| Scan window when the request carries the run's window | the run window ± 5 min | run-report Traces tab |
+| Scan window for a request that carries an exact id (trace id / run id / session id), or no run window at all | the last 7 days (`lookbackMs`), extended back to cover a run window the request also carries | request time → back; the run-report Traces tab (a run-window hint can widen an exact-id scan, never narrow it — #640) |
+| Scan window when the request's only correlator is the run's service-name window (Strategy C alone) | the run window ± 5 min | run-report Traces tab for a run with no exact id |
+| Explicit `startTime` / `endTime` on the request | exactly those bounds | Agent Traces page browse |
 | Hard cap on any window, explicit or derived | 30 days (`maxWindowMs`) | newest 30 days are scanned and the result is marked partial (Traces tab warning / `truncated` on logs / `partial` on metrics) |
 | FilterLogEvents slice for exact ids in `aws/spans` | newest 20 min of the window, 5-min partitions newest first, ≤ 10 pages (≈ 10 MB) | the Insights query covers the rest; an exhausted budget is partial |
 | FilterLogEvents pages per application-log-group scan | 50 (≈ 50 MB) | partial beyond |
