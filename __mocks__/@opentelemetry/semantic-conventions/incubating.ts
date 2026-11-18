@@ -55,6 +55,27 @@ export const ATTR_GEN_AI_EVALUATION_EXPLANATION = 'gen_ai.evaluation.explanation
 // GenAI evaluation event name
 export const EVENT_GEN_AI_EVALUATION_RESULT = 'gen_ai.evaluation.result';
 
+// OTel DB semantic conventions (stable + legacy) — used by RETRIEVAL categorization
+export const ATTR_DB_SYSTEM_NAME = 'db.system.name';
+export const ATTR_DB_SYSTEM = 'db.system';
+export const ATTR_DB_QUERY_TEXT = 'db.query.text';
+export const ATTR_DB_STATEMENT = 'db.statement';
+export const ATTR_DB_OPERATION_NAME = 'db.operation.name';
+export const ATTR_DB_NAMESPACE = 'db.namespace';
+export const ATTR_DB_COLLECTION_NAME = 'db.collection.name';
+export const ATTR_DB_RESPONSE_RETURNED_ROWS = 'db.response.returned_rows';
+export const ATTR_DB_RESPONSE_STATUS_CODE = 'db.response.status_code';
+
+// OTel HTTP semantic conventions (stable + legacy) — used for entrypoint detection
+export const ATTR_HTTP_REQUEST_METHOD = 'http.request.method';
+export const ATTR_HTTP_METHOD = 'http.method';
+export const ATTR_HTTP_ROUTE = 'http.route';
+export const ATTR_URL_PATH = 'url.path';
+export const ATTR_HTTP_TARGET = 'http.target';
+export const ATTR_HTTP_RESPONSE_STATUS_CODE = 'http.response.status_code';
+export const ATTR_HTTP_STATUS_CODE = 'http.status_code';
+export const GEN_AI_OPERATION_NAME_VALUE_EMBEDDINGS = 'embeddings';
+
 export default {
   ATTR_GEN_AI_OPERATION_NAME,
   ATTR_GEN_AI_AGENT_NAME,
@@ -85,4 +106,21 @@ export default {
   ATTR_GEN_AI_EVALUATION_SCORE_LABEL,
   ATTR_GEN_AI_EVALUATION_EXPLANATION,
   EVENT_GEN_AI_EVALUATION_RESULT,
+  ATTR_DB_SYSTEM_NAME,
+  ATTR_DB_SYSTEM,
+  ATTR_DB_QUERY_TEXT,
+  ATTR_DB_STATEMENT,
+  ATTR_DB_OPERATION_NAME,
+  ATTR_DB_NAMESPACE,
+  ATTR_DB_COLLECTION_NAME,
+  ATTR_DB_RESPONSE_RETURNED_ROWS,
+  ATTR_DB_RESPONSE_STATUS_CODE,
+  ATTR_HTTP_REQUEST_METHOD,
+  ATTR_HTTP_METHOD,
+  ATTR_HTTP_ROUTE,
+  ATTR_URL_PATH,
+  ATTR_HTTP_TARGET,
+  ATTR_HTTP_RESPONSE_STATUS_CODE,
+  ATTR_HTTP_STATUS_CODE,
+  GEN_AI_OPERATION_NAME_VALUE_EMBEDDINGS,
 };

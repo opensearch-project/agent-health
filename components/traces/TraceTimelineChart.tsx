@@ -8,19 +8,36 @@
  *
  * ECharts-based Gantt timeline for trace visualization.
  * Renders spans as horizontal bars with expand/collapse tree hierarchy.
+ *
+ * The label column on the left is plain HTML (not ECharts axis labels) so each
+ * row can carry real controls: a caret button to expand/collapse, the span
+ * name as a button that opens the details drawer (click / Enter / Space, full
+ * name in `title`), and the span's absolute start time + offset from the trace
+ * root. The column is drag-resizable; the chart grid starts where it ends. The
+ * time axis stays relative (`0ms … 14.4s`) and the header pins t=0 to the
+ * root's wall-clock start.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as echarts from 'echarts';
-import { ZoomIn, ZoomOut, ChevronRight, ChevronDown } from 'lucide-react';
+import { ZoomIn, ZoomOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Span, TimeRange } from '@/types';
 import { getSpanColor, flattenVisibleSpans } from '@/services/traces';
 import { formatDuration } from '@/services/traces/utils';
-import { truncate } from '@/lib/utils';
+import { getTraceAnchorMs, getSpanTimeLabels, formatClockTime, formatIsoTime } from '@/services/traces/spanTime';
 import { getTheme } from '@/lib/theme';
+import { cn } from '@/lib/utils';
+import { useResizableColumn, estimateNameColumnWidth } from './useResizableColumn';
 
 const ROW_HEIGHT = 20;
+/** Header strip above the rows: column title + t=0 anchor. Also the grid's top padding. */
+const HEADER_HEIGHT = 22;
+/** Room for the relative time axis under the last row. */
+const AXIS_HEIGHT = 30;
+const INDENT_PX = 12;
+/** Sizing for the initial label-column width (see estimateNameColumnWidth). */
+const LABEL_ESTIMATE = { indentPx: INDENT_PX, fixedPx: 150, charPx: 6.5, min: 300, max: 560 };
 
 interface TraceTimelineChartProps {
   spanTree: Span[];
@@ -70,8 +87,25 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
     return map;
   }, [visibleSpans]);
 
-  // Dynamic chart height based on visible spans
-  const chartHeight = Math.max(100, visibleSpans.length * ROW_HEIGHT + 40);
+  // Dynamic chart height: exactly one ROW_HEIGHT band per visible span plus
+  // header and axis, so the HTML label rows and the ECharts category bands
+  // share the same geometry (no minimum-height floor — that would stretch the
+  // bands of a 1–2 row trace away from the labels).
+  const chartHeight = Math.max(1, visibleSpans.length) * ROW_HEIGHT + HEADER_HEIGHT + AXIS_HEIGHT;
+
+  // t=0 for per-row offsets and the header anchor: the trace root's start.
+  const anchorMs = useMemo(
+    () => getTraceAnchorMs(spanTree) ?? (timeRange.startTime > 0 ? timeRange.startTime : null),
+    [spanTree, timeRange.startTime]
+  );
+
+  // Resizable label column; the ECharts grid begins at its right edge. The
+  // initial width is sized from the longest name in the tree (≈6.5px per
+  // character at this font size, plus indent and the time cell) so typical
+  // `execute_tool <name>` rows are not ellipsized out of the box; the cap
+  // keeps the bars visible on a laptop width. Dragging overrides it.
+  const defaultLabelWidth = useMemo(() => estimateNameColumnWidth(spanTree, LABEL_ESTIMATE), [spanTree]);
+  const labelCol = useResizableColumn(defaultLabelWidth, 200, 760, 'Resize span name column');
 
   // Handle zoom via CSS transform
   const handleZoomIn = () => {
@@ -166,8 +200,12 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
         formatter: (params: any) => {
           const span = params.data.span as Span;
           const duration = new Date(span.endTime).getTime() - new Date(span.startTime).getTime();
-          return `<div style="font-size:12px;font-family:'Rubik',sans-serif">
-            <div style="font-weight:600;margin-bottom:4px">${span.name}</div>
+          const t = getSpanTimeLabels(span, anchorMs);
+          const esc = (v: string) => v.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+          return `<div style="font-size:12px;font-family:'Rubik',sans-serif;max-width:480px;word-break:break-word">
+            <div style="font-weight:600;margin-bottom:4px">${esc(span.name)}</div>
+            <div>Start: ${esc(t.clock)}${t.offset ? ` (${esc(t.offset)})` : ''}</div>
+            <div style="opacity:.7">${esc(t.iso)}</div>
             <div>Duration: ${formatDuration(duration)}</div>
             <div>Status: ${span.status || 'UNSET'}</div>
           </div>`;
@@ -180,10 +218,10 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
         }
       },
       grid: {
-        left: 180,
+        left: labelCol.width,
         right: 20,
-        top: 10,
-        bottom: 30,
+        top: HEADER_HEIGHT,
+        bottom: AXIS_HEIGHT,
         containLabel: false
       },
       xAxis: {
@@ -205,49 +243,12 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
         data: visibleSpans.map((_, idx) => idx),
         inverse: true,
         position: 'left',
-        axisLabel: {
-          inside: false,
-          formatter: (value: string | number) => {
-            const idx = typeof value === 'string' ? parseInt(value, 10) : value;
-            const span = spanMap[idx];
-            if (!span) return '';
-            const indent = '  '.repeat(span.depth || 0);
-            // Use rich text formatting for bigger caret
-            const icon = span.hasChildren 
-              ? (expandedSpans.has(span.spanId) ? '{caret|▾}' : '{caret|▸}') 
-              : ' ';
-            const label = span.name?.split('.').pop() || 'span';
-            const truncatedLabel = truncate(label, 25);
-            // Error spans get a red, marked label so they stand out in the
-            // long list of neutral span names.
-            if (span.status === 'ERROR') {
-              return `${indent}${icon} {err|⚠ ${truncatedLabel}}`;
-            }
-            return `${indent}${icon} ${truncatedLabel}`;
-          },
-          fontSize: 12,
-          color: labelColor,
-          fontFamily: 'Rubik, sans-serif',
-          fontWeight: 500,
-          margin: 12,
-          // Rich text styles for bigger, more visible caret
-          rich: {
-            caret: {
-              color: isDarkMode ? 'rgb(96, 165, 250)' : 'rgb(59, 130, 246)',
-              fontSize: 14,
-              fontWeight: 'bold',
-              padding: [0, 2, 0, 0]
-            },
-            err: {
-              color: '#ef4444',
-              fontWeight: 'bold'
-            }
-          }
-        },
+        // Labels are rendered as HTML in the overlay column (see below) so
+        // the name is a real button and the time cell has a real tooltip.
+        axisLabel: { show: false },
         axisLine: { show: false },
         axisTick: { show: false },
         splitLine: { show: false },
-        triggerEvent: true // Enable click events on axis labels
       },
       series: [{
         type: 'custom',
@@ -267,27 +268,6 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
     chart.on('click', (params: any) => {
       if (params.componentType === 'series' && params.data?.span) {
         onSelectSpan(params.data.span);
-      } else if (params.componentType === 'yAxis') {
-        // Click on y-axis label to toggle expand
-        const span = spanMap[params.value];
-        if (span?.hasChildren) {
-          onToggleExpand(span.spanId);
-        }
-      }
-    });
-
-    // Change cursor on hover over y-axis labels with children
-    chart.off('mousemove');
-    chart.on('mousemove', (params: any) => {
-      if (params.componentType === 'yAxis') {
-        const span = spanMap[params.value];
-        if (span?.hasChildren) {
-          chartRef.current!.style.cursor = 'pointer';
-        } else {
-          chartRef.current!.style.cursor = isDragging ? 'grabbing' : 'grab';
-        }
-      } else {
-        chartRef.current!.style.cursor = isDragging ? 'grabbing' : 'grab';
       }
     });
 
@@ -298,7 +278,7 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
     return () => {
       window.removeEventListener('resize', handleResize);
     };
-  }, [visibleSpans, timeRange, selectedSpan, expandedSpans, spanMap, onSelectSpan, onToggleExpand]);
+  }, [visibleSpans, timeRange, selectedSpan, expandedSpans, spanMap, onSelectSpan, onToggleExpand, anchorMs, labelCol.width]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -356,6 +336,7 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
       </div>
 
       <div
+        className="relative"
         style={{ 
           transform: `scale(${zoomLevel}) translate(${panOffset.x / zoomLevel}px, ${panOffset.y / zoomLevel}px)`,
           transformOrigin: 'top left',
@@ -370,6 +351,114 @@ const TraceTimelineChart: React.FC<TraceTimelineChartProps> = ({
           className="bg-background"
           data-testid="trace-timeline-chart"
         />
+
+        {/* HTML label column, aligned row-for-row with the ECharts category
+            axis (HEADER_HEIGHT + idx * ROW_HEIGHT). Lives inside the same
+            transformed wrapper so zoom/pan keep it glued to the bars. */}
+        <div
+          className="absolute top-0 left-0 select-none"
+          style={{ width: labelCol.width, height: chartHeight }}
+          data-testid="trace-timeline-labels"
+        >
+          <div
+            className="flex items-center gap-2 px-2 text-[10px] font-mono text-muted-foreground border-b border-border/60 bg-background/80"
+            style={{ height: HEADER_HEIGHT }}
+            data-testid="trace-list-header"
+          >
+            <span className="uppercase tracking-wide">Span</span>
+            <span>·</span>
+            <span data-testid="trace-list-sort-hint" title="Rows are ordered by span start time (ties by span id), at every depth">
+              sorted by start time
+            </span>
+          </div>
+          {visibleSpans.map((span, idx) => {
+            const isSelected = selectedSpan?.spanId === span.spanId;
+            const isError = span.status === 'ERROR';
+            const isExpanded = expandedSpans.has(span.spanId);
+            const time = getSpanTimeLabels(span, anchorMs);
+            return (
+              <div
+                key={span.spanId}
+                className={cn(
+                  'absolute left-0 right-0 flex items-center gap-1 pr-1 text-xs cursor-pointer',
+                  isSelected ? 'bg-opensearch-blue/20 dark:bg-opensearch-blue/30' : 'hover:bg-muted/50'
+                )}
+                style={{ top: HEADER_HEIGHT + idx * ROW_HEIGHT, height: ROW_HEIGHT, paddingLeft: 4 + (span.depth || 0) * INDENT_PX }}
+                data-testid="timeline-row"
+                data-span-id={span.spanId}
+                // Clicking anywhere on the label row selects the span (same as
+                // the tree table); the caret and name buttons stop propagation.
+                onClick={() => onSelectSpan(span)}
+              >
+                {span.hasChildren ? (
+                  <button
+                    type="button"
+                    className="w-4 h-4 shrink-0 flex items-center justify-center rounded text-opensearch-blue hover:bg-muted font-bold leading-none"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleExpand(span.spanId);
+                    }}
+                    aria-label={isExpanded ? 'Collapse children' : 'Expand children'}
+                    aria-expanded={isExpanded}
+                    data-testid="span-row-expand"
+                  >
+                    {isExpanded ? '▾' : '▸'}
+                  </button>
+                ) : (
+                  <span className="w-4 h-4 shrink-0" aria-hidden="true" />
+                )}
+                <button
+                  type="button"
+                  className={cn(
+                    'flex-1 min-w-0 truncate text-left bg-transparent border-0 p-0 cursor-pointer font-medium',
+                    'hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-opensearch-blue rounded-sm',
+                    isError ? 'text-red-500 dark:text-red-400' : 'text-foreground'
+                  )}
+                  title={span.name}
+                  aria-label={`Open details for ${span.name}`}
+                  data-testid="span-row-name"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectSpan(span);
+                  }}
+                >
+                  {isError ? '⚠ ' : ''}{span.name}
+                </button>
+                {time.clock && (
+                  <span
+                    className="font-mono text-[10px] text-muted-foreground whitespace-nowrap shrink-0 tabular-nums"
+                    title={`Started ${time.iso}${time.offset ? ` (${time.offset} from trace start)` : ''}`}
+                    data-testid="span-row-time"
+                  >
+                    <span data-testid="span-row-clock">{time.clock}</span>
+                    {time.offset && <span className="ml-1.5 opacity-80" data-testid="span-row-offset">{time.offset}</span>}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+          {/* Column resize handle on the label/grid boundary. */}
+          <div
+            {...labelCol.handleProps}
+            className={cn(
+              'absolute top-0 bottom-0 w-1 -right-0.5 cursor-col-resize rounded hover:bg-opensearch-blue/50 focus-visible:outline-none focus-visible:bg-opensearch-blue/70',
+              labelCol.isResizing && 'bg-opensearch-blue'
+            )}
+            data-testid="span-name-col-resize"
+          />
+        </div>
+
+        {/* Absolute anchor for the relative axis: t=0 is the root's start. */}
+        {anchorMs !== null && (
+          <div
+            className="absolute top-0 flex items-center px-1.5 text-[10px] font-mono text-muted-foreground whitespace-nowrap"
+            style={{ left: labelCol.width + 4, height: HEADER_HEIGHT }}
+            title={`t=0 is the trace root's start: ${formatIsoTime(anchorMs)}`}
+            data-testid="trace-anchor-time"
+          >
+            t=0 = {formatClockTime(anchorMs)}
+          </div>
+        )}
       </div>
     </div>
   );
