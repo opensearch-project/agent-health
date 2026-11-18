@@ -6,7 +6,9 @@
 /**
  * `RunSink` over HTTP — the client side of `/api/runs/ingest/*`
  * (server/routes/runsIngest.ts). One request per sink call; the executor
- * token minted by `createRun` is remembered and sent on every later call.
+ * token minted by `createRun` is remembered and sent on every later call,
+ * with the lease generation it opened; a `409 lease-lost` answer surfaces as
+ * `LeaseLostError` (lib/runLease.ts) so the executor can stop.
  *
  * Deliberately minimal: no retry, no on-disk spool, no server re-discovery.
  * Those belong to the CLI executor that will use this sink (#612) and are
@@ -16,8 +18,11 @@
 
 import type { EvaluationReport, EvaluationRun } from '@/types';
 import type { EvaluationRunResultEntry } from '@/server/adapters/types';
+import { LeaseLostError, type LeaseLostInfo } from '@/lib/runLease';
 import {
   EXECUTOR_TOKEN_HEADER,
+  LEASE_GENERATION_HEADER,
+  type CreatedRun,
   type FinalizeInput,
   type LeaseEcho,
   type RunHeartbeat,
@@ -36,17 +41,25 @@ export class HttpRunSinkError extends Error {
 export interface HttpRunSinkOptions {
   /** Executor token to resume with (e.g. after a process restart). */
   executorToken?: string;
+  /** Lease generation to resume with (default 1, the generation `createRun` opens). */
+  leaseGeneration?: number;
+  /** Version reported as the executor's (`executor.version` on the run). */
+  executorVersion?: string;
   fetch?: typeof fetch;
 }
 
 export class HttpRunSink implements RunSink {
   private executorToken: string | undefined;
+  private leaseGeneration: number;
+  private readonly executorVersion: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly base: string;
 
   constructor(serverUrl: string, options: HttpRunSinkOptions = {}) {
     this.base = `${serverUrl.replace(/\/$/, '')}/api/runs/ingest`;
     this.executorToken = options.executorToken;
+    this.leaseGeneration = options.leaseGeneration ?? 1;
+    this.executorVersion = options.executorVersion;
     this.fetchImpl = options.fetch ?? fetch;
   }
 
@@ -60,19 +73,26 @@ export class HttpRunSink implements RunSink {
     if (withToken) {
       if (!this.executorToken) throw new HttpRunSinkError(0, 'HttpRunSink: createRun() must succeed before other calls');
       headers[EXECUTOR_TOKEN_HEADER] = this.executorToken;
+      headers[LEASE_GENERATION_HEADER] = String(this.leaseGeneration);
     }
     const res = await this.fetchImpl(`${this.base}${path}`, { method, headers, body: JSON.stringify(body) });
     const text = await res.text();
     const json = text ? safeJson(text) : undefined;
     if (!res.ok) {
+      if (res.status === 409 && json?.error === 'lease-lost') throw new LeaseLostError(json as LeaseLostInfo);
       throw new HttpRunSinkError(res.status, json?.error ?? `${method} ${path} failed with HTTP ${res.status}`);
     }
     return json as T;
   }
 
-  async createRun(run: EvaluationRun): Promise<{ runId: string; executorToken: string }> {
-    const created = await this.call<{ runId: string; executorToken: string }>('POST', '', { run }, false);
+  async createRun(run: EvaluationRun): Promise<CreatedRun> {
+    const created = await this.call<CreatedRun>('POST', '', { run, executor: { version: this.executorVersion } }, false);
     this.executorToken = created.executorToken;
+    this.leaseGeneration = created.lease?.generation ?? 1;
+    // Mirror what the server stamped so the caller's run matches the document.
+    run.executor = { id: created.executorToken, kind: 'cli', version: this.executorVersion ?? 'unknown' };
+    run.lease = created.lease;
+    run.status = 'running';
     return created;
   }
 

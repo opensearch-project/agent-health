@@ -168,6 +168,23 @@ export function getIndexMappings(): IndexMappings {
               at: { type: 'date' },
             },
           },
+          // EvaluationRun only: executor lease (#612, lib/runLease.ts). Explicit
+          // so `heartbeatAt` is a date (the sweeper compares it to now) and the
+          // fencing token stays an exact-match keyword.
+          executor: {
+            properties: {
+              id: { type: 'keyword' },
+              kind: { type: 'keyword' },
+              version: { type: 'keyword' },
+            },
+          },
+          lease: {
+            properties: {
+              generation: { type: 'long' },
+              heartbeatAt: { type: 'date' },
+              ttlMs: { type: 'long' },
+            },
+          },
           runs: {
             type: 'nested',
             properties: {

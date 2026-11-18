@@ -1836,6 +1836,35 @@ export type TestCaseSource =
   | { type: 'directory-import'; dirPaths: string[]; testCaseIds: string[] }
   | { type: 'label-filter'; labels: string[] };
 
+/** Who is executing an {@link EvaluationRun} (see `EvaluationRun.executor`). */
+export interface RunExecutor {
+  /**
+   * 128-bit random fencing token (hex), server-minted on `createRun`.
+   * `null` once the lease sweeper has taken the run over: the old executor's
+   * token no longer matches anything, so its late writes are refused (409).
+   */
+  id: string | null;
+  /** In-process server executor (UI / API runs) or an out-of-process CLI. */
+  kind: 'cli' | 'server';
+  /** agent-health version of the executor. */
+  version: string;
+}
+
+/**
+ * Liveness lease of a run's executor. The executor heartbeats
+ * (`RunSink.heartbeat`) well within `ttlMs`; the server's lease sweeper
+ * fails a `running` run whose `heartbeatAt` is older than `ttlMs`, bumping
+ * `generation` so a late write from the lost executor is fenced out.
+ */
+export interface RunLease {
+  /** Starts at 1; bumped by every takeover. Part of the CAS guard. */
+  generation: number;
+  /** ISO timestamp of the last heartbeat (or of creation). */
+  heartbeatAt: string;
+  /** The lease expires when `now - heartbeatAt > ttlMs`. */
+  ttlMs: number;
+}
+
 /**
  * EvaluationRun — first-class execution record.
  * Stored as top-level doc in evals_benchmarks index with docType: 'evaluation-run'.
@@ -1960,6 +1989,19 @@ export interface EvaluationRun {
    * doc-status-only fallback cancel. See POST .../:id/cancel.
    */
   cancelNote?: string;
+
+  /**
+   * The process executing this run (#612). Minted by the storage side on
+   * `RunSink.createRun`; every executor mutation on the doc is a
+   * compare-and-swap on `executor.id` + `lease.generation` + `status ===
+   * 'running'`, so a stale executor (crashed and swept, or fenced out) can
+   * never resurrect a terminal run. `id` is a fencing token, not a secret;
+   * no host/pid is ever stored (the executor logs its own token locally).
+   * Absent on runs created before leases existed.
+   */
+  executor?: RunExecutor;
+  /** Liveness lease of {@link executor}; see {@link RunLease}. */
+  lease?: RunLease;
 
   /** Agent-configuration provenance (see {@link AgentProvenanceFields}). */
   agentFingerprint?: string;

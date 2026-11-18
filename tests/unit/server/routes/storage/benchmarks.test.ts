@@ -218,7 +218,8 @@ function getRouteHandler(router: any, method: string, path: string) {
       layer.route.path === path &&
       layer.route.methods[method.toLowerCase()]
   );
-  return route?.route.stack[0].handle;
+  // Last layer = the handler (earlier layers are route middleware such as the drain guard).
+  return route?.route.stack[route.route.stack.length - 1].handle;
 }
 
 describe('Experiments Storage Routes', () => {

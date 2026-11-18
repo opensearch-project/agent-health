@@ -22,6 +22,7 @@ import { getBackendUrl } from '@/lib/portConfig';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { defaultJudgeTransport, type JudgeTransport } from '@/lib/judge/transport';
 import { fetchTracesForRun, type TracesClient } from '@/services/traces/index';
+import { getVersion } from '@/server/utils/version';
 import { LocalRunSink, type RunSink } from './runSink';
 
 export interface RunnerDeps {
@@ -76,7 +77,8 @@ export function serverRunnerDeps(storage: IStorageModule, overrides: Partial<Run
   const needsConfig = !overrides.agents || !overrides.models;
   const fromProcess = needsConfig ? processAgentsAndModels() : undefined;
   return {
-    sink: overrides.sink ?? new LocalRunSink(storage),
+    // Runs this sink creates are leased to THIS process (lib/runLease.ts).
+    sink: overrides.sink ?? new LocalRunSink(storage, { executorKind: 'server', executorVersion: getVersion() }),
     agents: overrides.agents ?? fromProcess!.agents,
     models: overrides.models ?? fromProcess!.models,
     judge: overrides.judge ?? defaultJudgeTransport(),

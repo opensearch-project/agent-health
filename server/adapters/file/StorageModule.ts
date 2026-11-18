@@ -49,6 +49,7 @@ import type {
   TestCaseSearchFilters,
   RunSearchFilters,
 } from '../types.js';
+import { LeaseLostError, leaseGuardHolds, leaseLostInfo, type LeaseGuard } from '../../../lib/runLease.js';
 import { stripTestCaseSummaryFields } from '../../services/testCaseSummary.js';
 
 // ============================================================================
@@ -1016,9 +1017,20 @@ class FileEvaluationRunOperations implements IEvaluationRunOperations {
     return doc as EvaluationRun;
   }
 
-  async update(id: string, updates: Partial<EvaluationRun>): Promise<EvaluationRun> {
+  /**
+   * Lease fence (lib/runLease.ts), evaluated between the synchronous read and
+   * the write of one mutation — the file backend's equivalent of the
+   * OpenSearch adapter's in-script check: nothing else in this process can
+   * interleave, so a guard that holds here still holds when the file lands.
+   */
+  private assertGuard(existing: EvaluationRun, guard: LeaseGuard | undefined): void {
+    if (guard && !leaseGuardHolds(existing, guard)) throw new LeaseLostError(leaseLostInfo(existing));
+  }
+
+  async update(id: string, updates: Partial<EvaluationRun>, guard?: LeaseGuard): Promise<EvaluationRun> {
     const existing = this.readSync(id);
     if (!existing) throw new Error(`Evaluation run ${id} not found`);
+    this.assertGuard(existing, guard);
     const { id: _id, docType: _docType, ...fields } = updates as any;
     const updated = { ...existing, ...fields } as EvaluationRun;
     writeJsonFile(path.join(this.dir, `${id}.json`), updated);
@@ -1070,18 +1082,20 @@ class FileEvaluationRunOperations implements IEvaluationRunOperations {
     return paginate(filtered, options);
   }
 
-  async updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry): Promise<boolean> {
+  async updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry, guard?: LeaseGuard): Promise<boolean> {
     const existing = this.readSync(runId);
     if (!existing) return false;
+    this.assertGuard(existing, guard);
     existing.results = existing.results || {};
     existing.results[testCaseId] = result;
     writeJsonFile(path.join(this.dir, `${runId}.json`), existing);
     return true;
   }
 
-  async mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>): Promise<boolean> {
+  async mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>, guard?: LeaseGuard): Promise<boolean> {
     const existing = this.readSync(runId);
     if (!existing) return false;
+    this.assertGuard(existing, guard);
     existing.results = existing.results || {};
     let changed = false;
     for (const [testCaseId, entry] of Object.entries(results)) {

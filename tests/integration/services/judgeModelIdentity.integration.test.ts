@@ -142,7 +142,7 @@ function createStorage(): { storage: IStorageModule; docs: Map<string, any> } {
     },
     testCases: { getById: jest.fn().mockResolvedValue(null) },
     benchmarks: { getById: jest.fn().mockResolvedValue(null), updateRun: jest.fn().mockResolvedValue(true) },
-    evaluationRuns: { update: jest.fn().mockResolvedValue({}), updateResult: jest.fn().mockResolvedValue({}) },
+    evaluationRuns: { update: jest.fn().mockResolvedValue({}), updateResult: jest.fn().mockResolvedValue({}), getById: jest.fn().mockResolvedValue(null) },
   } as unknown as IStorageModule;
   return { storage, docs };
 }

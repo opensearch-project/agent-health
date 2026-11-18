@@ -66,7 +66,8 @@ import { computeAgentFingerprint } from '@/lib/agentFingerprint';
 
 function getRouteHandler(router: any, method: string, path: string) {
   const route = router.stack.find((l: any) => l.route && l.route.path === path && l.route.methods[method]);
-  return route?.route.stack[0].handle;
+  // Last layer = the handler (earlier layers are route middleware such as the drain guard).
+  return route?.route.stack[route.route.stack.length - 1].handle;
 }
 
 function createMocks(params: any, body: any) {

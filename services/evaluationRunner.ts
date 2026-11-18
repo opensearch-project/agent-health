@@ -64,7 +64,8 @@ import { resolveDeterministicEvaluator, buildDeterministicFirstJudgement } from 
 import { buildJudgeIdentityPatch, buildLlmJudgeResponseIdentity, buildSdkJudgeIdentityPatch, assertJudgeIdentityConsistent, JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
 import { reportProvenanceFrom } from '@/server/services/agentProvenance';
 import { serverRunnerDeps, type RunnerDeps } from './runnerDeps';
-import { mintReportId } from './runSink';
+import { mintReportId, type LeaseEcho } from './runSink';
+import { heartbeatIntervalMs, resolveLeaseTtlMs, isLeaseLostError, LeaseLostError, type LeaseLostInfo } from '@/lib/runLease';
 import { debug } from '@/lib/debug';
 import { tracePollingManager } from './traces/tracePoller';
 import { fetchSpansForRun, type TraceWindowAgent } from './traces/fetchSpansForRun';
@@ -258,6 +259,52 @@ export async function executeEvaluationRun(
   let completedCount = 0;
   let startedCount = 0;
 
+  // Executor lease (#612, lib/runLease.ts). The run document carries a lease
+  // the sink opened in `createRun`; this executor renews it on a timer and
+  // every renewal / case-result write echoes a cancel requested through the
+  // server (UI "Cancel" on a run executing in another process). Losing the
+  // lease — the sweeper failed the run after missed heartbeats — stops this
+  // executor: no new cases start, and the caller gets a `LeaseLostError`
+  // instead of a completed run it could never persist.
+  let leaseLost: LeaseLostInfo | undefined;
+  const noteLeaseLost = (error: unknown): boolean => {
+    if (!isLeaseLostError(error)) return false;
+    if (!leaseLost) {
+      leaseLost = error.info;
+      console.error(`[EvaluationRunner] Run ${run.id}: lease lost — ${error.message}. Stopping; results after this point are not recorded.`);
+    }
+    cancellationToken?.cancel();
+    return true;
+  };
+  const onLeaseEcho = (echo: LeaseEcho): void => {
+    if (echo.cancelRequestedAt && cancellationToken && !cancellationToken.isCancelled) {
+      console.log(`[EvaluationRunner] Run ${run.id}: cancel requested at ${echo.cancelRequestedAt} (via lease) — draining in-flight cases`);
+      cancellationToken.cancel();
+    }
+  };
+  // One beat in flight at a time (a slow storage round-trip never stacks
+  // beats, and an older beat can never land after a newer one); the caller's
+  // terminal write only starts once the last beat has settled (`stopHeartbeat`).
+  let heartbeatInFlight: Promise<void> | undefined;
+  const beat = async (): Promise<void> => {
+    try {
+      onLeaseEcho(await sink.heartbeat(run.id, { startedCount, completedCount, totalTestCases }));
+    } catch (error) {
+      if (noteLeaseLost(error)) clearInterval(heartbeatTimer);
+      else console.warn(`[EvaluationRunner] Run ${run.id}: heartbeat failed (lease still assumed live): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  const heartbeatTimer = setInterval(() => {
+    if (heartbeatInFlight) return;
+    heartbeatInFlight = beat().finally(() => { heartbeatInFlight = undefined; });
+  }, heartbeatIntervalMs(run.lease?.ttlMs ?? resolveLeaseTtlMs()));
+  // Never keep a process alive just to heartbeat a run that is otherwise done.
+  heartbeatTimer.unref?.();
+  const stopHeartbeat = async (): Promise<void> => {
+    clearInterval(heartbeatTimer);
+    await heartbeatInFlight;
+  };
+
   // Shared throttle signal for rate-limit backoff
   let throttleUntil = 0;
   let consecutiveThrottles = 0;
@@ -310,9 +357,10 @@ export async function executeEvaluationRun(
     // the in-memory map into the doc at the end, so nothing is lost.
     const persistResult = async (testCaseId: string): Promise<void> => {
       try {
-        await sink.setCaseResult(run.id, testCaseId, run.results[testCaseId]);
+        onLeaseEcho(await sink.setCaseResult(run.id, testCaseId, run.results[testCaseId]));
         await onTestCaseComplete?.(testCaseId, run.results[testCaseId]);
       } catch (persistErr) {
+        if (noteLeaseLost(persistErr)) return;
         const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
         console.warn(`[EvaluationRunner] [${testCaseId}] Failed to persist result (verdict kept in memory; finalization will reconcile): ${msg}`);
       }
@@ -406,6 +454,7 @@ export async function executeEvaluationRun(
           reportId = placeholder.reportId;
           debug('EvaluationRunner', `[${testCaseId}] Pre-persisted placeholder run: ${placeholderRunId}`);
         } catch (placeholderErr: any) {
+          if (noteLeaseLost(placeholderErr)) return;
           // Storage may not be configured / may be transiently unavailable.
           // Log and proceed — we'll fall through to the legacy create path
           // after the run completes, which preserves backwards compatibility.
@@ -981,6 +1030,13 @@ export async function executeEvaluationRun(
       () => cancellationToken?.isCancelled ?? false
     );
 
+    await stopHeartbeat();
+    if (leaseLost) {
+      // The server already marked this run failed (executor lost) and fenced
+      // this executor out; there is no terminal write left for us to make.
+      throw new LeaseLostError(leaseLost);
+    }
+
     // Determine final status
     const wasCancelled = cancellationToken?.isCancelled ?? false;
     const finalStatus: BenchmarkRunStatus = wasCancelled ? 'cancelled' : 'completed';
@@ -1050,6 +1106,7 @@ export async function executeEvaluationRun(
 
     return run;
   } catch (error) {
+    await stopHeartbeat();
     // Mark any pending test cases as failed
     const errorMsg = error instanceof Error ? error.message : String(error);
     for (const testCase of testCases) {
