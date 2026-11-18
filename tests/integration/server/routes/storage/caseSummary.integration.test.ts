@@ -23,6 +23,12 @@
  *   4. model 500s     → `source: 'fallback'` + error text; the persisted LLM summary is left untouched
  *   5. model hangs    → timeout → fallback says so
  *   6. unknown report → 404
+ *   9. #618: a deterministic-only report (code checks, no LLM judge) never
+ *      reaches the model — not even with force — and GET /runs/:id carries
+ *      the persisted summary so the UI can show it without any request
+ *  10. #618: without `generate: true` the route never calls the model — a
+ *      current cached summary is served, otherwise the field-based text with
+ *      a note — so an outdated client bundle cannot spend
  *
  * The verdict sentence's label is always composed server-side from the
  * report (the model supplies only the "why"), which 1) and 3) assert.
@@ -178,7 +184,7 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
   it('1) first view: calls the model once through a SigV4-signed request and persists the LLM summary', async () => {
     fake.mode = 'ok';
     fake.nextParts = { why: 'both expected outcomes were met' };
-    const res = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({});
+    const res = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({ generate: true });
     expect(res.status).toBe(200);
     expect(res.body.cached).toBe(false);
     expect(res.body.summary.source).toBe('llm');
@@ -190,6 +196,8 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
     });
     expect(res.body.summary.inputsHash).toMatch(/^[0-9a-f]{16}$/);
     expect(res.body.summary.model).toMatch(/anthropic\.claude/);
+    // The model's sentence on its own (#618: rendered as a separate labelled row).
+    expect(res.body.summary.reason).toBe('both expected outcomes were met');
 
     // The REAL SDK signed the request with the credential the REAL provider resolved.
     expect(fake.calls).toHaveLength(1);
@@ -217,8 +225,8 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
     try {
       const before = fake.calls.length;
       const [a, b] = await Promise.all([
-        request(app).post(`/api/storage/runs/${id}/summary`).send({}),
-        request(app).post(`/api/storage/runs/${id}/summary`).send({}),
+        request(app).post(`/api/storage/runs/${id}/summary`).send({ generate: true }),
+        request(app).post(`/api/storage/runs/${id}/summary`).send({ generate: true }),
       ]);
       expect(a.status).toBe(200);
       expect(b.status).toBe(200);
@@ -233,7 +241,7 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
 
   it('2) second view: served from the report cache, no model call', async () => {
     const before = fake.calls.length;
-    const res = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({});
+    const res = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({ generate: true });
     expect(res.status).toBe(200);
     expect(res.body.cached).toBe(true);
     expect(res.body.summary.parts.verdict).toContain('both expected outcomes were met');
@@ -253,7 +261,7 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
     expect(patch.status).toBe(200);
 
     fake.nextParts = { why: 'the proposed rotation would run after the job starts' };
-    const res = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({});
+    const res = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({ generate: true });
     expect(res.status).toBe(200);
     expect(res.body.cached).toBe(false);
     expect(res.body.summary.source).toBe('llm');
@@ -275,7 +283,7 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
     const stored = (await request(app).get(`/api/storage/runs/${reportId}`)).body.caseSummary;
     fake.mode = 'hold';
     // supertest requests are lazy — `.then` is what actually sends it.
-    const pending = request(app).post(`/api/storage/runs/${reportId}/summary`).send({}).then(r => r);
+    const pending = request(app).post(`/api/storage/runs/${reportId}/summary`).send({ generate: true }).then(r => r);
     await new Promise<void>((resolve, reject) => {
       const started = Date.now();
       const t = setInterval(() => {
@@ -297,7 +305,7 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
     expect(after).toEqual(stored);
     const before = fake.calls.length;
     fake.nextParts = { why: 'written against v4' };
-    const next = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({});
+    const next = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({ generate: true });
     expect(next.body.cached).toBe(false);
     expect(next.body.summary.parts.verdict).toContain('written against v4');
     expect(fake.calls).toHaveLength(before + 1);
@@ -311,7 +319,7 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
 
     fake.mode = 'error';
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    const res = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({});
+    const res = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({ generate: true });
     warn.mockRestore();
     expect(res.status).toBe(200);
     expect(res.body.cached).toBe(false);
@@ -361,12 +369,84 @@ describe('POST /api/storage/runs/:id/summary — case TL;DR (integration, real S
       const guarded = await request(app).post('/api/coding-agents/anything').send({});
       expect(guarded.status).toBe(401);
       // The summary route: no Bearer token, still answered (same as GET /api/storage/runs/:id).
-      const open = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({});
+      const open = await request(app).post(`/api/storage/runs/${reportId}/summary`).send({ generate: true });
       expect(open.status).toBe(200);
       const sibling = await request(app).get(`/api/storage/runs/${reportId}`);
       expect(sibling.status).toBe(200);
     } finally {
       delete process.env.AH_API_KEY;
+    }
+  });
+
+  it('9) #618: a deterministic-only report (code checks, no LLM judge) never reaches the model, even with force; the reason is the failing check\'s own message', async () => {
+    fake.mode = 'ok';
+    const rep = await request(app).post('/api/storage/runs').send({
+      testCaseId: tcId, agentName: 'Example search agent', modelName: 'demo-model',
+      status: 'completed', metricsStatus: 'ready', passFailStatus: 'failed',
+      judgeProvider: 'none', judgeModel: null, judgeModelId: null, evaluatorId: null, llmJudgeReasoning: '',
+      trajectory: [{ id: 's1', type: 'response', content: 'Here are three running shoes under 120.', timestamp: 1 }],
+      matcherResults: [
+        { description: '[ Array(3) ] to have a length of 3', pass: true, method: 'code-assertion' },
+        { description: 'false to equal true', pass: false, method: 'code-assertion', errorMessage: 'top-3 results must all carry the requested brand: brand_matches=1 (need ≥ 3), documents=3 (request 7f1a): expected false to equal true' },
+      ],
+      metrics: {},
+    });
+    expect(rep.status).toBe(201);
+    const id = rep.body.id as string;
+    try {
+      const before = fake.calls.length;
+      for (const body of [{}, { generate: true }, { generate: true, force: true }]) {
+        const res = await request(app).post(`/api/storage/runs/${id}/summary`).send(body);
+        expect(res.status).toBe(200);
+        expect(res.body.cached).toBe(false);
+        expect(res.body.summary.source).toBe('fallback');
+        expect(res.body.summary.error).toBeUndefined();
+        expect(res.body.summary.parts.verdict).toBe('Verdict: FAILED — 1 of 2 checks failed — top-3 results must all carry the requested brand: brand_matches 1 vs ≥ 3.');
+      }
+      expect(fake.calls).toHaveLength(before);
+      expect((await request(app).get(`/api/storage/runs/${id}`)).body.caseSummary).toBeUndefined();
+    } finally {
+      await request(app).delete(`/api/storage/runs/${id}`);
+    }
+  });
+
+  it('10) #618: a request WITHOUT generate:true never calls the model — cached summary when current, else the field-based text with a note (old bundles cannot spend)', async () => {
+    fake.mode = 'ok';
+    const rep = await request(app).post('/api/storage/runs').send({
+      testCaseId: tcId, agentName: 'Example ops agent', modelName: 'demo-model',
+      status: 'completed', metricsStatus: 'ready', passFailStatus: 'passed', score: 0.7,
+      trajectory: [{ id: 's1', type: 'response', content: 'Rotate the token before the job.', timestamp: 1 }],
+      llmJudgeReasoning: 'Found the expired token and the fix.', metrics: { accuracy: 70 },
+    });
+    expect(rep.status).toBe(201);
+    const id = rep.body.id as string;
+    try {
+      const before = fake.calls.length;
+      // The legacy body (what the pre-#618 card sent on every page view).
+      for (const body of [{}, { force: false }]) {
+        const res = await request(app).post(`/api/storage/runs/${id}/summary`).send(body);
+        expect(res.status).toBe(200);
+        expect(res.body.cached).toBe(false);
+        expect(res.body.summary.source).toBe('fallback');
+        expect(res.body.summary.error).toMatch(/not generated.*"generate": true/);
+        expect(res.body.summary.parts.verdict).toBe('Judge verdict: PASSED (score 70%) — Found the expired token and the fix.');
+      }
+      expect(fake.calls).toHaveLength(before);
+      expect((await request(app).get(`/api/storage/runs/${id}`)).body.caseSummary).toBeUndefined();
+
+      // Explicit opt-in: one model call, persisted …
+      fake.nextParts = { why: 'the expired token was found' };
+      const gen = await request(app).post(`/api/storage/runs/${id}/summary`).send({ generate: true });
+      expect(gen.body.summary.source).toBe('llm');
+      expect(gen.body.summary.reason).toBe('the expired token was found');
+      expect(fake.calls).toHaveLength(before + 1);
+      // … after which a no-opt-in request is served from the cache, still with no call.
+      const peek = await request(app).post(`/api/storage/runs/${id}/summary`).send({});
+      expect(peek.body.cached).toBe(true);
+      expect(peek.body.summary).toEqual(gen.body.summary);
+      expect(fake.calls).toHaveLength(before + 1);
+    } finally {
+      await request(app).delete(`/api/storage/runs/${id}`);
     }
   });
 

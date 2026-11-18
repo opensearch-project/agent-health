@@ -8,22 +8,24 @@
  * in the run inspector: what the test asked → what the agent did → the
  * judgement and its main reason.
  *
- * Hybrid: ASKED and AGENT are computed here, instantly, from the report and
- * test case (lib/caseSummary.ts). The VERDICT label is computed too; only
- * its REASON is model-written — fetched lazily from
- * `POST /api/storage/runs/:id/summary` (cached on the report, regenerated
- * when the judgement changes). While that request is in flight the verdict
- * row shows the deterministic sentence greyed as "writing…"; the page is
- * never blocked. When the model is unavailable the deterministic verdict
- * stays, with an honest note. Unjudged runs never call the model.
+ * All three sentences are deterministic (lib/caseSummary.ts), computed here
+ * from the report and test case: the VERDICT row always carries the report's
+ * own label and the judge's first sentence or the failing check's own
+ * `errorMessage`. Nothing on this card calls a model when a page is viewed
+ * (#618). A model-written summary is a SEPARATE, labelled row the user asks
+ * for with the Summarize button (`POST /api/storage/runs/:id/summary`,
+ * cached on the report); a summary already persisted on the report is shown
+ * from the report itself, with no request. Deterministic-only runs (code
+ * checks, no LLM judge) and unjudged runs offer no Summarize at all — their
+ * deterministic sentences are the whole answer.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Sparkles, RefreshCw, AlertTriangle, ListChecks } from 'lucide-react';
+import { Sparkles, RefreshCw, Loader2 } from 'lucide-react';
 import type { EvaluationReport, CaseSummary, TestCase } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { fetchCaseSummary } from '@/services/client/caseSummaryApi';
-import { buildCaseSummary, hasVerdictToExplain } from '@/lib/caseSummary';
+import { buildCaseSummary, canRequestModelSummary, modelReasonOf, usableCachedSummary } from '@/lib/caseSummary';
 import type { ResultStatus } from './ResultStatus';
 
 interface CaseTldrCardProps {
@@ -34,17 +36,16 @@ interface CaseTldrCardProps {
 }
 
 type CardState =
+  | { kind: 'idle'; key: string }
   | { kind: 'loading'; key: string }
   | { kind: 'ready'; key: string; summary: CaseSummary; cached: boolean }
   | { kind: 'error'; key: string; message: string };
 
 /**
- * Everything on the report that, if it changes, must refetch the summary.
- * The SERVER decides freshness via its inputs hash; this key only makes the
- * client ask again when the judgement visibly changed (Retry judgement
- * reloads the report with a new `judgementRetriedAt`) and tags each state
- * with the report it belongs to, so a report switch never shows the previous
- * report's text for a frame.
+ * Everything on the report that, if it changes, resets the card's request
+ * state: a report switch never shows the previous report's text for a frame,
+ * and a changed judgement (Retry judgement reloads the report with a new
+ * `judgementRetriedAt`) drops a summary fetched for the old one.
  */
 function judgementKey(report: EvaluationReport): string {
   return [
@@ -61,7 +62,7 @@ function judgementKey(report: EvaluationReport): string {
   ].join('|');
 }
 
-/** Client-side ceiling for the reason request (server deadline is 20 s + 10 s grace). */
+/** Client-side ceiling for the summary request (server deadline is 20 s + 10 s grace). */
 const CLIENT_TIMEOUT_MS = 45_000;
 
 function shortModel(model?: string): string | undefined {
@@ -75,11 +76,14 @@ export const CaseTldrCard: React.FC<CaseTldrCardProps> = ({ report, testCase, st
   const key = judgementKey(report);
   // Deterministic sentences — available on first paint, no request needed.
   const det = buildCaseSummary(report, testCase);
-  const needsModel = hasVerdictToExplain(report);
-  const [stored, setStored] = useState<CardState>({ kind: 'loading', key });
-  // A state tagged with another report's key is never rendered — show the
-  // skeleton until this report's own request settles.
-  const state: CardState = stored.key === key ? stored : { kind: 'loading', key };
+  const summarizable = canRequestModelSummary(report);
+  // A summary persisted on the report is shown as-is: no request, no model.
+  const persisted = summarizable ? usableCachedSummary(report, det) : undefined;
+  const initial = (): CardState => (persisted ? { kind: 'ready', key, summary: persisted, cached: true } : { kind: 'idle', key });
+  const [stored, setStored] = useState<CardState>(initial);
+  // A state tagged with another report's key is never rendered: a report
+  // switch starts again from what THAT report carries.
+  const state: CardState = stored.key === key ? stored : initial();
   const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(
@@ -88,7 +92,7 @@ export const CaseTldrCard: React.FC<CaseTldrCardProps> = ({ report, testCase, st
       const controller = new AbortController();
       abortRef.current = controller;
       // The server gives up at its own deadline (~30 s); never leave the row
-      // "writing…" forever if the request itself stalls.
+      // "summarizing…" forever if the request itself stalls.
       const timer = setTimeout(() => controller.abort(), CLIENT_TIMEOUT_MS);
       setStored({ kind: 'loading', key });
       try {
@@ -109,12 +113,9 @@ export const CaseTldrCard: React.FC<CaseTldrCardProps> = ({ report, testCase, st
     [key]
   );
 
-  useEffect(() => {
-    if (!needsModel) return; // unjudged: the verdict sentence is complete without a model
-    void load(false);
-    return () => abortRef.current?.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load, needsModel]);
+  // Nothing is requested on mount or on report change — only Summarize /
+  // Regenerate call `load`. Leaving the card cancels an in-flight request.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const verdictTone =
     status === 'passed'
@@ -125,54 +126,59 @@ export const CaseTldrCard: React.FC<CaseTldrCardProps> = ({ report, testCase, st
           ? 'text-amber-700 dark:text-amber-400'
           : 'text-foreground';
 
-  // What the verdict row shows: the model-written reason once it arrived,
-  // else the deterministic sentence (greyed while the model is still writing).
-  const verdictText = state.kind === 'ready' ? state.summary.parts.verdict : det.verdict;
-  const writing = needsModel && state.kind === 'loading';
-  const modelOk = state.kind === 'ready' && state.summary.source === 'llm';
-  const modelUnavailable = (state.kind === 'ready' && state.summary.source === 'fallback' && !!state.summary.error) || state.kind === 'error';
+  const writing = state.kind === 'loading';
+  const modelSummary = state.kind === 'ready' && state.summary.source === 'llm' ? state.summary : undefined;
+  const modelUnavailable = (state.kind === 'ready' && state.summary.source === 'fallback') || state.kind === 'error';
   const unavailableReason = state.kind === 'error' ? state.message : state.kind === 'ready' ? state.summary.error : undefined;
+  const modelId = modelSummary?.model || 'the summary model';
 
   return (
     <div
       className={`border-b bg-card/60 shrink-0 px-4 py-2.5 ${className || ''}`}
       data-testid="case-tldr"
-      data-state={needsModel ? state.kind : 'ready'}
-      data-source={!needsModel ? 'deterministic' : state.kind === 'ready' ? state.summary.source : undefined}
+      data-state={state.kind}
+      data-source={modelSummary ? 'llm' : 'deterministic'}
+      data-summarizable={summarizable ? 'true' : 'false'}
     >
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">TL;DR</span>
-        {modelOk && state.kind === 'ready' && (
+        {modelSummary && (
           <Badge
             variant="secondary"
-            className="text-[9px] px-1.5 py-0 gap-1 shrink-0"
-            title={`The verdict is computed from the report; its reason was written by ${state.summary.model || 'the summary model'} · ${new Date(state.summary.generatedAt).toLocaleString()}`}
+            className="text-[9px] px-1.5 py-0 gap-1 shrink-0 bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-500/15 dark:text-violet-300 dark:border-violet-500/30"
+            title={`Model-generated summary by ${modelId} · ${new Date(modelSummary.generatedAt).toLocaleString()} — not the judge's verdict`}
             data-testid="case-tldr-source"
           >
-            <Sparkles size={9} /> AI reason{shortModel(state.summary.model) ? ` · ${shortModel(state.summary.model)}` : ''}
-          </Badge>
-        )}
-        {modelUnavailable && (
-          <Badge
-            variant="secondary"
-            className="text-[9px] px-1.5 py-0 gap-1 shrink-0 bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30"
-            title={unavailableReason ? `AI reason unavailable: ${unavailableReason}` : 'AI reason unavailable'}
-            data-testid="case-tldr-source"
-          >
-            <ListChecks size={9} /> Field summary
+            <Sparkles size={9} /> Model summary{shortModel(modelSummary.model) ? ` · ${shortModel(modelSummary.model)}` : ''}
           </Badge>
         )}
         <div className="flex-1" />
-        {needsModel && !writing && (
+        {summarizable && writing && (
+          <span className="inline-flex items-center gap-1 text-[10px] italic text-muted-foreground" role="status" aria-label="Summarizing" data-testid="case-tldr-skeleton">
+            <Loader2 size={11} className="animate-spin" /> summarizing…
+          </span>
+        )}
+        {summarizable && !writing && modelSummary && (
           <button
             type="button"
             onClick={() => void load(true)}
             className="text-muted-foreground hover:text-foreground transition-colors"
-            title="Regenerate the verdict reason"
+            title={`Ask ${modelId} again (one model call)`}
             aria-label="Regenerate summary"
             data-testid="case-tldr-regenerate"
           >
             <RefreshCw size={11} />
+          </button>
+        )}
+        {summarizable && !writing && !modelSummary && (
+          <button
+            type="button"
+            onClick={() => void load(false)}
+            className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            title="Ask the summary model to explain the verdict in one sentence — makes one model call (Bedrock), billed to the server's account. Nothing is sent until you click."
+            data-testid="case-tldr-summarize"
+          >
+            <Sparkles size={10} /> {modelUnavailable ? 'Retry summary' : 'Summarize'}
           </button>
         )}
       </div>
@@ -183,21 +189,27 @@ export const CaseTldrCard: React.FC<CaseTldrCardProps> = ({ report, testCase, st
         <dt className="text-muted-foreground font-medium">Agent</dt>
         <dd data-testid="case-tldr-agent">{det.agent}</dd>
         <dt className="text-muted-foreground font-medium">Verdict</dt>
-        <dd
-          className={`font-medium ${writing ? 'text-muted-foreground' : verdictTone}`}
-          data-testid="case-tldr-verdict"
-          data-writing={writing ? 'true' : undefined}
-        >
-          {verdictText}
-          {writing && (
-            <span className="ml-2 text-[10px] font-normal italic text-muted-foreground" data-testid="case-tldr-skeleton" role="status" aria-label="Writing the verdict reason">
-              writing the reason…
-            </span>
-          )}
+        <dd className={`font-medium ${verdictTone}`} data-testid="case-tldr-verdict">
+          {det.verdict}
         </dd>
+        {modelSummary && (
+          <>
+            <dt className="text-violet-700 dark:text-violet-300 font-medium inline-flex items-center gap-1" data-testid="case-tldr-model-label">
+              <Sparkles size={10} /> AI summary
+            </dt>
+            <dd className="border-l-2 border-violet-300 dark:border-violet-500/40 pl-2" data-testid="case-tldr-model-summary">
+              <span className="italic">{modelReasonOf(modelSummary)}</span>
+              <div className="mt-0.5 text-[10px] text-muted-foreground" data-testid="case-tldr-model-attribution">
+                Model-generated summary by <code className="font-mono">{modelSummary.model || 'unknown model'}</code>
+                {' · '}{new Date(modelSummary.generatedAt).toLocaleString()}
+                {state.kind === 'ready' && state.cached ? ' · cached' : ''} — not the judge's verdict.
+              </div>
+            </dd>
+          </>
+        )}
         {modelUnavailable && (
           <dd className="col-span-2 text-[10px] text-muted-foreground italic" data-testid="case-tldr-fallback-note">
-            AI reason unavailable{unavailableReason ? ` (${unavailableReason})` : ''} — showing the field-based reason.
+            Model summary unavailable{unavailableReason ? ` (${unavailableReason})` : ''} — the verdict above is from the report's own fields.
           </dd>
         )}
       </dl>

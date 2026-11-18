@@ -4,18 +4,22 @@
  */
 
 /**
- * Case TL;DR service — the model-written part of the 3-sentence summary shown
- * above the "Test Case Definition" in the run inspector (hybrid design):
+ * Case TL;DR service — the model-written summary of one test-case run,
+ * shown as its own labelled row under the deterministic TL;DR (Asked /
+ * Agent / Verdict, lib/caseSummary.ts) in the run inspector.
  *
- *   1. ASKED   — deterministic (lib/caseSummary.ts): prompt + expectation
- *   2. AGENT   — deterministic: tools used + final response
- *   3. VERDICT — label computed from the report; only the REASON after the
- *               dash is written by the model (this service). Unjudged runs
- *               get a deterministic verdict and never reach the model.
+ * ON DEMAND ONLY (#618): nothing here runs when a run page is viewed. The
+ * card's Summarize button is the only UI caller; a persisted summary is shown
+ * from the report itself without any request. Runs that were never judged
+ * by a model — unjudged (agent / judge / trace error, pending) and
+ * deterministic-only (code `expect` checks, no judge) — never reach the
+ * model at all: their deterministic sentences are the whole answer and the
+ * route returns them with `source: 'fallback'`.
  *
  * The reason is written by an LLM (same Bedrock Converse path as the judge,
- * through the refreshing credential provider — #569), generated lazily on
- * first view and cached on the report as `report.caseSummary`. The cache key
+ * through the refreshing credential provider — #569) and cached on the report
+ * as `report.caseSummary` (`parts.verdict` = the report's own label + the
+ * model's `reason`). The cache key
  * is a hash of the exact inputs the prompt was built from (prompt, expected
  * outcomes, final answer, tools, verdict, reasoning, error), so whenever the
  * judgement changes — e.g. after "Retry judgement" — the stored summary no
@@ -43,7 +47,7 @@ import { createRefreshingCredentialProvider } from '@/lib/aws/refreshingCredenti
 import { getJudgeReasoningText } from '@/lib/matchers/judgeAccessor';
 import { getFailureStage, getFailureCause } from '@/lib/reportFailure';
 import type { CaseSummary, CaseSummaryParts, TestCase, TestCaseRun } from '@/types';
-import { buildCaseSummary, hasVerdictToExplain } from '@/lib/caseSummary';
+import { buildCaseSummary, canRequestModelSummary } from '@/lib/caseSummary';
 
 // ─── Input bounding ──────────────────────────────────────────────────────────
 
@@ -448,8 +452,11 @@ export async function generateCaseSummary(
 
   // Unjudged runs (agent / judge / trace error, pending): the verdict sentence
   // is fully deterministic ("Not judged: … — <cause>") — nothing for a model
-  // to add, so no call is made. Decided before any cache / in-flight lookup.
-  if (!hasVerdictToExplain(report)) {
+  // to add. Deterministic-only runs (code checks, no LLM judge): the failing
+  // check's own errorMessage is the reason, and the user chose a model-free
+  // grading — the model is never consulted for them (#618). Both decided
+  // before any cache / in-flight lookup, whatever `force` says.
+  if (!canRequestModelSummary(report)) {
     return { summary: buildFallbackSummary(report, testCase, inputs), cached: false };
   }
   // Coalesce next: whatever the caller asked for, a generation already
@@ -559,6 +566,7 @@ async function generateFresh(
     const summary: CaseSummary = {
       source: 'llm',
       parts,
+      reason: reply.why,
       model: modelId,
       generatedAt: new Date().toISOString(),
       inputsHash,

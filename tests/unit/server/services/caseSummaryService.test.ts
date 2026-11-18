@@ -334,6 +334,8 @@ describe('caseSummaryService — generateCaseSummary (cache, invalidation, failu
     expect(first.cached).toBe(false);
     expect(first.summary.source).toBe('llm');
     expect(first.summary.parts).toEqual(GOOD_PARTS);
+    // The model's sentence is stored on its own too, so the card can show it in a separate labelled row (#618).
+    expect(first.summary.reason).toBe(GOOD_REPLY.why);
     expect(first.summary.inputsHash).toBe(hashCaseSummaryInputs(buildCaseSummaryInputs(report, tc)));
     expect(persist).toHaveBeenCalledWith(first.summary);
     expect(mockSend).toHaveBeenCalledTimes(1);
@@ -434,6 +436,26 @@ describe('caseSummaryService — generateCaseSummary (cache, invalidation, failu
       expect(res.summary.source).toBe('fallback');
       expect(res.summary.error).toBeUndefined();
       expect(res.summary.parts.verdict).toMatch(/^Not judged/);
+    }
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('#618: a deterministic-only run (code checks, no LLM judge) never calls the model — not even with force — the failing check\'s own message is the reason', async () => {
+    const persist = jest.fn();
+    const checksOnly = passedReport({
+      passFailStatus: 'failed', score: undefined, llmJudgeReasoning: '', judgeProvider: 'none', judgeModel: undefined, judgeModelId: undefined, evaluatorId: undefined,
+      matcherResults: [
+        { description: '[ Array(3) ] to have a length of 3', pass: true, method: 'code-assertion' },
+        { description: 'false to equal true', pass: false, method: 'code-assertion', errorMessage: 'top-3 results must all carry the requested brand: brand_matches=1 (need ≥ 3), documents=3 (request 7f1a): expected false to equal true' },
+      ] as any,
+    });
+    for (const force of [false, true]) {
+      const res = await generateCaseSummary(checksOnly, testCase(), { persist, force });
+      expect(res.cached).toBe(false);
+      expect(res.summary.source).toBe('fallback');
+      expect(res.summary.error).toBeUndefined();
+      expect(res.summary.parts.verdict).toBe('Verdict: FAILED — 1 of 2 checks failed — top-3 results must all carry the requested brand: brand_matches 1 vs ≥ 3.');
     }
     expect(mockSend).not.toHaveBeenCalled();
     expect(persist).not.toHaveBeenCalled();
