@@ -288,6 +288,26 @@ describe('AsyncRunStorage', () => {
       expect(result?.id).toBe('run-1');
     });
 
+    it('maps timestamp from a FILE-storage doc (which carries `timestamp` but no `createdAt`) so the run inspector builds its Strategy-C window around the run, not around now (#640)', async () => {
+      // server/adapters/file/StorageModule.ts create() writes only `timestamp`;
+      // the OpenSearch adapter writes both. The read side used to map
+      // createdAt alone → file-backed reports had timestamp === undefined.
+      const { createdAt: _omit, ...fileShaped } = createMockStorageRun('run-file');
+      mockOsRuns.getById.mockResolvedValue({ ...fileShaped, timestamp: '2026-11-17T18:32:31.589Z' } as any);
+
+      const result = await asyncRunStorage.getReportById('run-file');
+
+      expect(result?.timestamp).toBe('2026-11-17T18:32:31.589Z');
+    });
+
+    it('keeps createdAt as the timestamp for an OpenSearch-storage doc that carries both', async () => {
+      mockOsRuns.getById.mockResolvedValue({ ...createMockStorageRun('run-os'), timestamp: '2024-01-01T00:00:00Z', createdAt: '2024-01-01T00:05:00Z' } as any);
+
+      const result = await asyncRunStorage.getReportById('run-os');
+
+      expect(result?.timestamp).toBe('2024-01-01T00:05:00Z');
+    });
+
     it('reads back sessionId from storage for Strategy D (#313)', async () => {
       const mockRun = { ...createMockStorageRun('run-1'), sessionId: 'sess-read' } as any;
       mockOsRuns.getById.mockResolvedValue(mockRun);

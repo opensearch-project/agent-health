@@ -87,12 +87,18 @@ class FakeReader implements ICloudWatchReader {
   /** Records newer than this are not yet indexed by Insights (ingestion lag). */
   insightsLagMs = 0;
 
+  /** When set, Insights honours the query's [startMs, endMs] like CloudWatch does (default: whole group, so the module's predicate is what is under test). */
+  honourInsightsBounds = false;
+
   async insights(opts: { logGroups: string[]; query: string; startMs: number; endMs: number }): Promise<InsightsResult> {
     this.calls.insights.push(opts);
     if (this.failInsights) throw this.failInsights;
     // The fake returns the whole group (minus the lag); the module's in-memory predicate must do the filtering.
     const cutoff = Date.now() - this.insightsLagMs;
-    const rows = opts.logGroups.flatMap((g) => (this.groups[g] || []).filter((m) => (recordMs(m) ?? 0) <= cutoff).map((m) => ({ '@message': m })));
+    const rows = opts.logGroups
+      .flatMap((g) => (this.groups[g] || []).filter((m) => (recordMs(m) ?? 0) <= cutoff))
+      .filter((m) => { if (!this.honourInsightsBounds) return true; const t = recordMs(m); return t === undefined || (t >= opts.startMs && t <= opts.endMs); })
+      .map((m) => ({ '@message': m }));
     return { rows, truncated: this.insightsTruncated };
   }
 
@@ -405,17 +411,82 @@ describe('CloudWatchObservabilityModule', () => {
       expect(res.spans.some((s) => s.spanId === 'decoy000decoy000')).toBe(false);
     });
 
-    it('scans only the agents\' run window (±5 min) when no explicit bounds are given', async () => {
-      await mod(reader).traces.query({ traceId: TRACE, agents: [{ serviceName: SERVICE, startedAt: T0_MS, endedAt: T0_MS + 12_000 }] });
+    it('scans only the agents\' run window (±5 min) when the window is the ONLY correlator and no explicit bounds are given', async () => {
+      await mod(reader).traces.query({ agents: [{ serviceName: SERVICE, startedAt: T0_MS, endedAt: T0_MS + 12_000 }] });
       const call = reader.calls.insights[0];
       expect(call.startMs).toBe(T0_MS - 5 * 60 * 1000);
       expect(call.endMs).toBe(T0_MS + 12_000 + 5 * 60 * 1000);
-      // the fresh slice is the newest 20 min of that window (here: the window is shorter, so all of it)
-      expect(scanSpan(spanScans(reader))).toEqual({ startMs: call.startMs, endMs: call.endMs });
+      expect(spanScans(reader)).toHaveLength(0); // no exact ids → nothing for FilterLogEvents to scan
       // explicit bounds win over the agents window
       await mod(reader).traces.query({ traceId: TRACE, startTime: 1000, endTime: 2000, agents: [{ serviceName: SERVICE, startedAt: T0_MS, endedAt: T0_MS + 12_000 }] });
       expect(reader.calls.insights[1]).toMatchObject({ startMs: 1000, endMs: 2000 });
       expect(spanScans(reader).at(-1)).toMatchObject({ startMs: 1000, endMs: 2000 });
+    });
+
+    it('an exact id (traceId / runId / session id) is searched over the lookback, not narrowed to the agents\' window (#640)', async () => {
+      const now = T0_MS + 60 * 60 * 1000; // the tab is opened an hour after the run
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      try {
+        for (const exact of [{ traceId: TRACE }, { runIds: [RUN] }, { sessionId: 'cw-sess-2' }]) {
+          reader.calls.insights.length = 0;
+          await mod(reader).traces.query({ ...exact, agents: [{ serviceName: SERVICE, startedAt: T0_MS, endedAt: T0_MS + 12_000 }] });
+          expect(reader.calls.insights[0]).toMatchObject({ startMs: now - DEFAULT_LOOKBACK_MS, endMs: now });
+          expect(scanSpan(spanScans(reader))).toEqual({ startMs: now - FRESH_SCAN_MS, endMs: now });
+        }
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('a run OLDER than the lookback is still found by its exact id when the request carries its (correct) window: the hint widens the scan, it never narrows it', async () => {
+      // Before #640 the scan was the hint's window, so an 8-day-old run worked
+      // as long as the hint was right; searching "the lookback only" would have
+      // regressed that. The scan is the lookback extended back to the hint.
+      const now = T0_MS + 8 * 24 * 60 * 60 * 1000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      reader.honourInsightsBounds = true;
+      try {
+        const hint = { serviceName: SERVICE, startedAt: T0_MS, endedAt: T0_MS + 12_000 };
+        const res = await mod(reader).traces.query({ runIds: [RUN], agents: [hint], size: 1000 });
+        expect(res.total).toBe(12);
+        expect(res.truncated).toBe(false); // 8 days < maxWindowMs
+        expect(reader.calls.insights[0]).toMatchObject({ startMs: T0_MS - 5 * 60 * 1000, endMs: now });
+        // Without the hint the same id is outside the 7-day lookback and nothing is found (documented bound).
+        reader.calls.insights.length = 0;
+        const bare = await mod(reader).traces.query({ runIds: [RUN], size: 1000 });
+        expect(bare.total).toBe(0);
+        expect(reader.calls.insights[0]).toMatchObject({ startMs: now - DEFAULT_LOOKBACK_MS, endMs: now });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('run-report shape with a STALE agents window (built around "now", the run an hour earlier) still returns the run by its exact ids (#640)', async () => {
+      // The file-storage report carried no timestamp, so the client built the
+      // window around the moment the Traces tab was opened. CloudWatch honours
+      // the bounds it is given — narrowing the exact-id scan to that window
+      // returned 0 spans and the tab read "No traces available".
+      const now = T0_MS + 60 * 60 * 1000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      reader.honourInsightsBounds = true;
+      try {
+        const stale = { serviceName: SERVICE, startedAt: now - 3 * 60 * 1000, endedAt: now + 60_000, sessionId: RUN };
+        const byRunId = await mod(reader).traces.query({ runIds: [RUN], agents: [stale], size: 1000 });
+        expect(byRunId.total).toBe(12);
+        expect(byRunId.truncated).toBe(false);
+        const byTraceId = await mod(reader).traces.query({ traceId: TRACE, agents: [stale], size: 1000 });
+        expect(byTraceId.total).toBe(12);
+        // The Strategy-C clause itself stays bounded to the window inside the Insights query.
+        expect(reader.calls.insights.at(-1).query).toContain(`startTimeUnixNano >= ${stale.startedAt}000000`);
+        // Window-only requests (no exact id — a hint's sessionId counts as one) are still narrowed: the lookback is NOT scanned for a bare service name.
+        reader.calls.insights.length = 0;
+        const { sessionId: _s, ...bareWindow } = stale;
+        const windowOnly = await mod(reader).traces.query({ agents: [bareWindow], size: 1000 });
+        expect(windowOnly.total).toBe(0);
+        expect(reader.calls.insights[0]).toMatchObject({ startMs: stale.startedAt - 5 * 60 * 1000, endMs: now });
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     it('an over-cap explicit range is clamped to the newest 30 days AND reported truncated (never silently narrowed)', async () => {
