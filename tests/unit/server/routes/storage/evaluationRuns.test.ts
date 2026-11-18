@@ -76,8 +76,13 @@ jest.mock('@/server/services/customAgentStore', () => ({
   getCustomAgents: jest.fn().mockReturnValue([]),
 }));
 
-jest.mock('@/lib/resolveAgentModel', () => ({
-  resolveAgentModel: jest.fn().mockReturnValue('resolved-model'),
+// The route records the model through the server's per-agent resolution
+// (agent-declared → agent-owned → caller's catalog value); stubbed here so the
+// route test asserts the plumbing, not the resolution table (which has its own
+// unit tests in runModelResolution.test.ts).
+jest.mock('@/server/services/runModelResolution', () => ({
+  ...jest.requireActual('@/server/services/runModelResolution'),
+  resolveEvaluationRunModelId: jest.fn().mockReturnValue('resolved-model'),
 }));
 
 const mockRetryJudgementForRun = jest.fn();

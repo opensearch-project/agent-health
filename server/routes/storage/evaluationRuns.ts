@@ -34,7 +34,7 @@ import {
 import { isDeterministicEvaluator } from '../../../lib/evaluators/deterministic.js';
 import { isSystemEvaluatorId, getSystemEvaluatorById } from '../../prompts/evaluatorTemplates.js';
 import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
-import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
+import { resolveEvaluationRunModelId } from '../../services/runModelResolution.js';
 import { validateRunNameUpdate } from '../../../lib/runName.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 import { serverRunnerDeps } from '../../../services/runnerDeps.js';
@@ -598,12 +598,12 @@ router.post('/api/storage/evaluation-runs/:id/rerun', refuseWhenDraining, async 
 
     // Resolve the agent's model fresh from its current config — same rule as
     // the create route (the agent owns its model; config.modelId is only the
-    // legacy fallback if resolution comes up empty). Uses `config.agentKey`
-    // (post-override) so an agent-swap override resolves THAT agent's model,
-    // not the source run's.
-    let resolvedModelId = config.modelId;
+    // legacy fallback for catalog agents, and is dropped for agents that own
+    // their model). Uses `config.agentKey` (post-override) so an agent-swap
+    // override resolves THAT agent's model, not the source run's.
+    let resolvedModelId: string | undefined = config.modelId || undefined;
     try {
-      resolvedModelId = resolveAgentModel(refreshed.agents.find(a => a.key === config.agentKey), config.modelId);
+      resolvedModelId = resolveEvaluationRunModelId(refreshed.agents.find(a => a.key === config.agentKey), config.modelId);
     } catch { /* keep fallback */ }
 
     const snapshots: TestCaseSnapshot[] = testCases.map(tc => ({

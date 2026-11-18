@@ -110,12 +110,15 @@ function getEvaluateHandler(): (req: Request, res: Response) => Promise<void> {
 // Standard fixtures
 // ---------------------------------------------------------------------------
 
+// A catalog-model agent (AG-UI streaming, no declared model): the caller's
+// `modelId` is honoured and recorded. Agent-owned-model cases live in
+// tests/unit/server/routes/evaluationModelResolution.test.ts.
 const FIXTURE_AGENT = {
-  key: 'claude-code',
-  name: 'Claude Code',
-  endpoint: 'claude',
-  description: 'CC',
-  connectorType: 'claude-code',
+  key: 'sample-agent',
+  name: 'Sample Agent',
+  endpoint: 'http://localhost:9999/run-agent',
+  description: 'sample',
+  connectorType: 'agui-streaming',
   headers: {},
   builtIn: true,
 };
@@ -198,7 +201,7 @@ describe('POST /api/evaluate — disconnect recovery contract', () => {
 
     const req = createMockReq({
       testCase: FIXTURE_TEST_CASE,
-      agentKey: 'claude-code',
+      agentKey: 'sample-agent',
       modelId: 'claude-sonnet-4.5',
     });
     const res = createMockRes();
@@ -209,10 +212,10 @@ describe('POST /api/evaluate — disconnect recovery contract', () => {
     expect(captured).toMatchObject({
       testCaseId: 'inline-tc-1',
       testCaseVersion: 2,
-      agentKey: 'claude-code',
-      agentName: 'Claude Code',
+      agentKey: 'sample-agent',
+      agentName: 'Sample Agent',
       // Both names are populated so app-side and storage-side queries find the record
-      agentId: 'claude-code',
+      agentId: 'sample-agent',
       modelId: 'claude-sonnet-4.5',
       modelName: 'Claude Sonnet 4.5',
       status: 'running',
@@ -251,7 +254,7 @@ describe('POST /api/evaluate — disconnect recovery contract', () => {
 
     const req = createMockReq({
       testCase: FIXTURE_TEST_CASE,
-      agentKey: 'claude-code',
+      agentKey: 'sample-agent',
       modelId: 'claude-sonnet-4.5',
     });
     const res = createMockRes();
@@ -290,7 +293,7 @@ describe('POST /api/evaluate — disconnect recovery contract', () => {
 
     const req = createMockReq({
       testCase: FIXTURE_TEST_CASE,
-      agentKey: 'claude-code',
+      agentKey: 'sample-agent',
       modelId: 'claude-sonnet-4.5',
     });
     const res = createMockRes();
@@ -341,7 +344,7 @@ describe('POST /api/evaluate — disconnect recovery contract', () => {
 
     const req = createMockReq({
       testCase: FIXTURE_TEST_CASE,
-      agentKey: 'claude-code',
+      agentKey: 'sample-agent',
       modelId: 'claude-sonnet-4.5',
     });
     const res = createMockRes();
@@ -382,7 +385,7 @@ describe('POST /api/evaluate — disconnect recovery contract', () => {
 
     const req = createMockReq({
       testCase: FIXTURE_TEST_CASE,
-      agentKey: 'claude-code',
+      agentKey: 'sample-agent',
       modelId: 'claude-sonnet-4.5',
     });
     const res = createMockRes();
@@ -467,7 +470,7 @@ describe('POST /api/evaluate — run name persistence', () => {
 
     const req = createMockReq({
       testCase: FIXTURE_TEST_CASE,
-      agentKey: 'claude-code',
+      agentKey: 'sample-agent',
       modelId: 'claude-sonnet-4.5',
       runName: 'Baseline',
       runDescription: 'Smoke test of the v2 prompt',
@@ -507,7 +510,7 @@ describe('POST /api/evaluate — run name persistence', () => {
     await getEvaluateHandler()(
       createMockReq({
         testCase: FIXTURE_TEST_CASE,
-        agentKey: 'claude-code',
+        agentKey: 'sample-agent',
         modelId: 'claude-sonnet-4.5',
         runName: '   ',
       }),
@@ -547,7 +550,7 @@ describe('POST /api/evaluate — run name persistence', () => {
     await getEvaluateHandler()(
       createMockReq({
         testCase: FIXTURE_TEST_CASE,
-        agentKey: 'claude-code',
+        agentKey: 'sample-agent',
         modelId: 'claude-sonnet-4.5',
         // no runName — we expect the server to fill one in
       }),

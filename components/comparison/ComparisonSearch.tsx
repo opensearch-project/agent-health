@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Benchmark, BenchmarkRun } from '@/types';
-import { getModelName } from '@/lib/utils';
+import { getRunModelLabel } from '@/lib/utils';
 import { recordUiEvent } from '@/lib/uiTelemetry';
 
 export type SearchScope = 'benchmark' | 'run' | 'testCase';
@@ -67,7 +67,7 @@ export const ComparisonSearch: React.FC<Props> = ({
         .filter(r => !q || r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
         .slice()
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .map(r => ({ id: r.id, primary: r.name, secondary: `${r.agentKey} · ${getModelName(r.modelId)}`, selected: selectedRunIds.includes(r.id) }));
+        .map(r => ({ id: r.id, primary: r.name, secondary: getRunModelLabel(r) ? `${r.agentKey} · ${getRunModelLabel(r)}` : r.agentKey, selected: selectedRunIds.includes(r.id) }));
     }
     return testCases
       .filter(t => !q || t.name.toLowerCase().includes(q) || t.id.toLowerCase().includes(q))

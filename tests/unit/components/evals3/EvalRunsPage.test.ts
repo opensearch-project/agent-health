@@ -60,6 +60,7 @@ jest.mock('@/lib/constants', () => ({
 jest.mock('@/lib/utils', () => ({
   formatRelativeTime: jest.fn(() => 'just now'),
   getModelName: jest.fn((id: string) => id),
+  getRunModelLabel: jest.fn((run: { modelId?: string; modelName?: string; modelSource?: string }) => (run?.modelSource === 'observed' && run.modelName) || run?.modelId || ''),
   cn: jest.fn((...args: unknown[]) => args.filter(Boolean).join(' ')),
   // Defensive: a separately-merged feature (Judge/Evaluator columns) added a
   // fetch(`${ENV_CONFIG.backendUrl}/api/storage/evaluators`) call inside

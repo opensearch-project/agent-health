@@ -64,10 +64,10 @@ describe('buildRunDocument', () => {
     expect(Date.parse(run.createdAt)).not.toBeNaN();
   });
 
-  it('falls back to the legacy modelId when the agent declares none, and to empty when neither is known', async () => {
+  it('falls back to the legacy modelId when the agent declares none, and leaves it ABSENT (never \'\') when neither is known', async () => {
     const plain = [{ key: 'a1', name: 'A1', connectorType: 'rest', endpoint: 'http://x' }] as any[];
     expect((await buildRunDocument({ name: 'r', sources: [], agentKey: 'a1', modelId: 'legacy' }, resolved, plain)).modelId).toBe('legacy');
-    expect((await buildRunDocument({ name: 'r', sources: [], agentKey: 'a1' }, resolved, plain)).modelId).toBe('');
+    expect((await buildRunDocument({ name: 'r', sources: [], agentKey: 'a1' }, resolved, plain)).modelId).toBeUndefined();
     expect((await buildRunDocument({ name: 'r', sources: [], agentKey: 'a1' }, resolved, plain)).judgeModelId).toBeUndefined();
   });
 });

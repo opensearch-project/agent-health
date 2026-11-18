@@ -11,7 +11,7 @@
  */
 
 import type { AgentConfig, AgentProvenanceFields, EvaluationRun, TestCase, TestCaseSnapshot, TestCaseSource } from '@/types';
-import { resolveAgentModel } from '@/lib/resolveAgentModel';
+import { resolveEvaluationRunModelId } from '@/server/services/runModelResolution';
 
 export interface EvaluationRunDocumentInput {
   name?: string;
@@ -48,13 +48,16 @@ export function snapshotTestCases(testCases: TestCase[]): TestCaseSnapshot[] {
 /**
  * Resolve the agent's model from its own config (connectorConfig) so the run
  * records which model the agent ran on — there is no user-selected agent
- * model. Falls back to the client-supplied id (legacy) then empty.
+ * model. A client-supplied id is kept only for catalog agents (legacy); for
+ * an agent that owns its model it is dropped and the model stays unset until
+ * the agent's traces report one (server/services/runModelResolution.ts).
+ * Never `''`.
  */
-export function resolveRunModelId(agents: AgentConfig[], agentKey: string, modelId?: string): string {
+export function resolveRunModelId(agents: AgentConfig[], agentKey: string, modelId?: string): string | undefined {
   try {
-    return resolveAgentModel(agents.find((a) => a.key === agentKey), modelId);
+    return resolveEvaluationRunModelId(agents.find((a) => a.key === agentKey), modelId);
   } catch {
-    return modelId || '';
+    return modelId || undefined;
   }
 }
 

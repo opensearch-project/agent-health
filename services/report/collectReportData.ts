@@ -52,7 +52,10 @@ export function collectReportData(
     description: run.description,
     createdAt: run.createdAt,
     agentKey: run.agentKey,
-    modelId: run.modelId,
+    // Observed `<provider> · <model>` when the run's model came from the agent's
+    // traces, else the id; '' for an agent-owned model with no spans yet
+    // (escapeHtml in the HTML template takes a string).
+    modelId: (run.modelSource === 'observed' && run.modelName) || run.modelId || '',
     status: run.status,
     aggregates: calculateRunAggregates(run, reports),
   }));
