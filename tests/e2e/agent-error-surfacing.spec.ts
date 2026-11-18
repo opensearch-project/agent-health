@@ -182,14 +182,19 @@ test.describe('Agent-error surfacing — inspector + run detail', () => {
     await expect(card).toContainText('Retry judgement');
   });
 
-  test('standalone run detail page renders the agent-error card (not an empty output tab)', async ({ page }) => {
+  test('legacy /runs/:reportId link for a standalone report lands on the test case detail page with the agent-error card (not an empty output tab)', async ({ page }) => {
     test.skip(!seeded, 'Could not seed run (storage unavailable)');
+    // The retired standalone run-detail route redirects: a report with no
+    // `experimentRunId` opens on its test case's detail page with `?run=`.
     await page.goto(`/runs/${repAgent}`);
+    await page.waitForURL(`**/evaluations/test-cases/${tcAgent}?run=${repAgent}`, { timeout: 15000 });
     const card = page.getByTestId('run-failure-card').first();
     await expect(card).toBeVisible({ timeout: 15000 });
     await expect(card).toHaveAttribute('data-stage', 'agent');
     await expect(card.getByTestId('run-failure-cause')).toContainText('UND_ERR_HEADERS_TIMEOUT');
-    await expect(page.getByTestId('status-label').first()).toHaveText('AGENT ERROR');
+    const badge = page.getByTestId('inspector-status-badge');
+    await expect(badge).toHaveText('AGENT ERROR');
+    await expect(badge).toHaveAttribute('data-stage', 'agent');
     await expect(page.getByText('Failed to fetch traces')).toHaveCount(0);
   });
 });

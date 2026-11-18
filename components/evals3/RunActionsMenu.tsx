@@ -24,7 +24,7 @@
  */
 
 import React, { useState } from 'react';
-import { MoreHorizontal, Trash2, StopCircle, RefreshCw, RotateCcw, Loader2 } from 'lucide-react';
+import { MoreHorizontal, Trash2, StopCircle, RefreshCw, RotateCcw, Loader2, SlidersHorizontal, Bookmark } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -50,6 +50,19 @@ export interface RunActionsMenuProps {
   canRerun?: boolean;
   /** Tooltip/title shown on the disabled Re-run item when applicable. */
   rerunDisabledReason?: string;
+  /**
+   * Render a "Customize before re-running…" item (opens the New-Run composer
+   * pre-filled from this run). Omitted → not rendered. Moved here from the
+   * retired eval-run detail page's header.
+   */
+  onCustomizeRerun?: () => void;
+  /**
+   * Render a "Convert to Benchmark" item (promotes an ad-hoc evaluation run
+   * to a named benchmark). Omitted → not rendered; callers gate it on the
+   * run being ad-hoc (no benchmarkId) and completed. Moved here from the
+   * retired eval-run detail page's header.
+   */
+  onPromote?: () => void;
   canRetryJudgement: boolean;
   /** Tooltip/title shown on the disabled Retry Judgement item when applicable. */
   retryJudgementDisabledReason?: string;
@@ -75,6 +88,8 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
   onRerun,
   canRerun = true,
   rerunDisabledReason,
+  onCustomizeRerun,
+  onPromote,
   canRetryJudgement,
   retryJudgementDisabledReason,
   retryJudgementCount,
@@ -139,6 +154,24 @@ export const RunActionsMenu: React.FC<RunActionsMenuProps> = ({
               onSelect={e => { e.preventDefault(); if (canRerun) { setMenuOpen(false); onRerun(); } }}
             >
               <RotateCcw size={14} className="mr-2" /> Re-run
+            </DropdownMenuItem>
+          )}
+          {onCustomizeRerun && (
+            <DropdownMenuItem
+              data-testid="rerun-customize-btn"
+              disabled={busy !== null}
+              onSelect={e => { e.preventDefault(); setMenuOpen(false); onCustomizeRerun(); }}
+            >
+              <SlidersHorizontal size={14} className="mr-2" /> Customize before re-running…
+            </DropdownMenuItem>
+          )}
+          {onPromote && (
+            <DropdownMenuItem
+              data-testid={`run-action-promote-${runId}`}
+              disabled={busy !== null}
+              onSelect={e => { e.preventDefault(); setMenuOpen(false); onPromote(); }}
+            >
+              <Bookmark size={14} className="mr-2" /> Convert to Benchmark
             </DropdownMenuItem>
           )}
           {isRunning && (

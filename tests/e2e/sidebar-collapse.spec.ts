@@ -51,7 +51,7 @@ test.describe('Sidebar collapse — persistence + run URLs', () => {
 
     // A specific run URL collapses the nav (route-driven; holds even if the
     // run doesn't exist — the collapse fires on landing and is persisted).
-    await page.goto('/runs/e2e-nonexistent-run');
+    await page.goto('/evaluations/runs/e2e-nonexistent-run/inspect');
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await expect(page.locator(COLLAPSED)).toBeVisible();
   });
