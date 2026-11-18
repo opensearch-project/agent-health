@@ -93,6 +93,7 @@ const EVALUATOR_ICONS: Record<string, React.ComponentType<any>> = {
   'system-tool-usage': ListChecks,
   'system-reasoning-depth': Brain,
   'system-safety': Shield,
+  'system-claim': CheckCircle2,
 };
 
 const getEvaluatorIcon = (evaluatorId: string) => {

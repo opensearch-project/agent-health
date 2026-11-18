@@ -383,14 +383,42 @@ for the old bail-on-first-failure behaviour at a specific point.
   when `AH_SKIP_JUDGE` is set.
 
 The legacy form `judge(trajectory, [...claims])` is preserved for backward
-compatibility with code written against the original PR.
+compatibility with code written against the original PR. Note that under the
+default `system-claim` evaluator (below) a multi-claim call passes only when
+**every** claim is satisfied; the RCA default's partial credit (pass at ≥ 70 %)
+applies only when you select it explicitly.
+
+#### Which evaluator judges the claim
+
+`judge()` always tells the server which evaluator (rubric) to apply, in this
+order:
+
+1. the per-call `evaluatorId` option, if given;
+2. otherwise the run-level evaluator (`-e <id>` on the CLI, or the evaluator
+   picked in the run config), which the runner binds into the `judge` fixture;
+3. otherwise the built-in **`system-claim`** evaluator.
+
+`system-claim` is domain-neutral: it asks only "does the trajectory satisfy
+each stated claim?", rates every claim satisfied / not satisfied (no partial
+credit), reports `accuracy` as the share of claims satisfied, and passes only
+when every claim holds. It exists because the inline claim *is* the rubric —
+previously a run without `-e` silently judged SDK claims with the server's
+RCA default (`system-rca-default`), whose root-cause-analysis prompt produced
+odd reasoning on claims like "every returned item is a running shoe under
+$100". The evaluator that actually judged a claim is recorded on the matcher's
+`scoringSnapshot.evaluatorId` and shown as **evaluator:** in the run page's
+matcher panel. An explicit `-e` is never overridden — pass
+`-e system-rca-default` to get the previous behaviour. The id is resolved by
+the server, so a `serverUrl` pointing at an agent-health server older than the
+SDK (one without `system-claim`) answers `400 System evaluator not found` —
+pass an explicit `evaluatorId` in that case.
 
 #### Per-call options
 
 | Option        | Forwarded as | What it does |
 |---------------|--------------|--------------|
 | `model`       | `modelId`    | Override the judge model. Same provider routing (`bedrock`, `litellm`, `claude-code`, `pi`, `openai-compatible`, `agentic`, `demo`) the UI uses. |
-| `evaluatorId` | `evaluatorId`| Pick a stored evaluator. Same shape the UI sends — built-in ids are prefixed `system-` (e.g. `system-rca-default`, `system-factuality`) and resolve via `getSystemEvaluatorById`; anything else is a storage id resolved via `storage.evaluators.getById`. |
+| `evaluatorId` | `evaluatorId`| Pick a stored evaluator. Same shape the UI sends — built-in ids are prefixed `system-` (e.g. `system-rca-default`, `system-factuality`, `system-claim`) and resolve via `getSystemEvaluatorById`; anything else is a storage id resolved via `storage.evaluators.getById`. Omitted on both the call and the run → `system-claim`. |
 | `serverUrl`   | (request URL)| Point at a non-default agent-health server (defaults to `http://localhost:${AGENT_HEALTH_PORT ?? 4001}`). |
 | `skip`        | (no request) | Tri-state. `true` → skip the judge (records a non-gating `skipped` verdict, no HTTP call). `false` → force the judge to run **even if `AH_SKIP_JUDGE` is set**. Omitted → defer to `AH_SKIP_JUDGE`. |
 
@@ -424,12 +452,12 @@ await judge(result, 'meets product gap criteria', { evaluatorId: 'product-gap-ev
 ```
 
 The **imported** `judge` (from `require('@opensearch-project/agent-health')`)
-is always the unbound version — use it when you genuinely want the server's
-default evaluator regardless of run config:
+is always the unbound version — use it when you want the neutral `system-claim`
+evaluator regardless of run config:
 
 ```javascript
 const { judge } = require('@opensearch-project/agent-health');
-// Always uses the server default evaluator; bypasses any run-level binding.
+// Always uses `system-claim`; bypasses any run-level binding.
 await judge(result, 'baseline check');
 ```
 

@@ -22,7 +22,7 @@
  * exercise that here.
  */
 
-import { judge, bindJudge, clearJudgeCache } from '@/lib/testCases/judge';
+import { judge, bindJudge, clearJudgeCache, CLAIM_EVALUATOR_ID } from '@/lib/testCases/judge';
 import { startSession, endSession } from '@/lib/matchers/session';
 
 type JsonBody = {
@@ -83,12 +83,48 @@ describe('judge() — per-call options', () => {
     expect(lastBody().evaluatorId).toBe('system-rca-default');
   });
 
-  it('omits evaluatorId from the body when not set (server default applies)', async () => {
+  // #619: with no evaluator on the call or the run, the inline claim used to
+  // be judged by whatever the server defaults to (the RCA rubric) and nothing
+  // said so. The SDK now always names the neutral claim evaluator instead.
+  it('sends the neutral claim evaluator (system-claim) when no evaluatorId is set — never the server default (#619)', async () => {
     const { lastBody } = mockJudgeFetch();
-    await judge({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim');
+    await judge({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'every returned item is a running shoe under $100');
 
-    const body = lastBody();
-    expect('evaluatorId' in body).toBe(false);
+    expect(lastBody().evaluatorId).toBe('system-claim');
+    expect(CLAIM_EVALUATOR_ID).toBe('system-claim');
+  });
+
+  it('an explicit per-call evaluatorId is forwarded unchanged (not replaced by system-claim)', async () => {
+    const { lastBody } = mockJudgeFetch();
+    await judge({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim', { evaluatorId: 'user-eval-7' });
+    expect(lastBody().evaluatorId).toBe('user-eval-7');
+  });
+
+  it('judge.observe() also defaults to system-claim', async () => {
+    const { lastBody } = mockJudgeFetch();
+    await judge.observe({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim');
+    expect(lastBody().evaluatorId).toBe('system-claim');
+  });
+
+  it('an empty-string evaluatorId (the documented "clear the bound default") means system-claim, like the unbound judge', async () => {
+    const { lastBody } = mockJudgeFetch();
+    const bound = bindJudge({ evaluatorId: 'system-rca-default' });
+    await bound({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim', { evaluatorId: '' });
+    expect(lastBody().evaluatorId).toBe('system-claim');
+  });
+
+  it('a bound run-level evaluator (-e) still wins over the claim default', async () => {
+    const { lastBody } = mockJudgeFetch();
+    const bound = bindJudge({ evaluatorId: 'system-rca-default' });
+    await bound({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim');
+    expect(lastBody().evaluatorId).toBe('system-rca-default');
+  });
+
+  it('bindJudge with only a model (run without -e) falls through to system-claim', async () => {
+    const { lastBody } = mockJudgeFetch();
+    const bound = bindJudge({ model: 'demo-model' });
+    await bound({ trajectory: [{ type: 'response', content: 'ok' }] } as any, 'claim');
+    expect(lastBody()).toMatchObject({ modelId: 'demo-model', evaluatorId: 'system-claim' });
   });
 
   it('forwards model as modelId on the body when set', async () => {
@@ -370,13 +406,13 @@ describe('bindJudge() — run-level defaults (UI-equivalent)', () => {
     expect(body.evaluatorId).toBe('system:rca');
   });
 
-  it('omits evaluatorId from the body when nothing is bound and no per-call override', async () => {
+  it('sends the neutral claim evaluator when nothing is bound and no per-call override (#619)', async () => {
     const { lastBody } = mockJudgeFetch();
     const bound = bindJudge({ model: 'claude-sonnet-4' });
 
     await bound({ trajectory: [{ type: 'response', content: 'x' }] } as any, 'claim');
 
-    expect('evaluatorId' in lastBody()).toBe(false);
+    expect(lastBody().evaluatorId).toBe('system-claim');
   });
 
   it('returns the unbound judge when given undefined (zero-overhead path)', () => {

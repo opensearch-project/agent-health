@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, History as HistoryIcon, RefreshCw, FlaskConical, Shield, Target, Brain, ListChecks, Clock } from 'lucide-react';
+import { Plus, Trash2, History as HistoryIcon, RefreshCw, FlaskConical, Shield, Target, Brain, ListChecks, Clock, CheckCircle2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +28,7 @@ const EVALUATOR_ICONS: Record<string, React.ComponentType<any>> = {
   'system-tool-usage': ListChecks,
   'system-reasoning-depth': Brain,
   'system-safety': Shield,
+  'system-claim': CheckCircle2,
 };
 
 function formatRelativeTime(dateStr: string | undefined): string {
