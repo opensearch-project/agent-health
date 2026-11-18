@@ -51,6 +51,17 @@ function ensurePluginsInstalled(): void {
     showDiff: boolean
   ): any {
     const negate = utils.flag(this, 'negate');
+    // chai's own verdict (util.test: `negate ? !expr : expr`). THIS decides
+    // pass/fail below — not "did assert() throw". The same process can hold
+    // two compiled copies of this module wrapping the same chai (#621: the
+    // package entry `lib/dist`, imported by `agent-health.config.ts` or an
+    // `.eval.mjs` file, next to the runner's `server/dist` / `cli/dist`
+    // bundle). The copy installed first sits BENEATH this one and, on a
+    // failing `expect.soft(...)`, swallows chai's error before it reaches
+    // us — so a normal return from `originalAssert` does not mean the
+    // assertion held, and recording `pass: true` on return reported every
+    // failing soft check as a pass. (Any wrapper beneath us that neutralises
+    // a failure is treated the same way: the recorded verdict is chai's.)
     const ok = negate ? !expr : !!expr;
     // chai resolves #{this}, #{exp}, #{act} placeholders only when it builds
     // its own error message. We resolve them here so the recorded
@@ -63,10 +74,14 @@ function ensurePluginsInstalled(): void {
       if (description) {
         recordVerdict({
           description,
-          pass: true,
+          pass: ok,
           method: 'code-assertion',
           actual: safeClone(actual ?? utils.flag(this, 'object')),
           expected: safeClone(expected),
+          // Failed, yet nothing was thrown: the error was swallowed beneath
+          // us. Ask chai for the message it would have thrown (custom
+          // message, negation and `#{…}` placeholders included).
+          ...(ok ? {} : { errorMessage: utils.getMessage(this, [expr, msg, negateMsg, expected, actual]) }),
         });
       }
       return result;
