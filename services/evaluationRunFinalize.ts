@@ -78,7 +78,7 @@ export interface FinalizeEvaluationRunInput {
    * plain top-level fields the runner computes and are carried through onto
    * the doc when present.
    */
-  completedRun: Pick<EvaluationRun, 'results' | 'testCaseSnapshots'> & Partial<Pick<EvaluationRun, 'judgeFailureSummary' | 'judgeModel' | 'judgeProvider'>>;
+  completedRun: Pick<EvaluationRun, 'results' | 'testCaseSnapshots'> & Partial<Pick<EvaluationRun, 'judgeFailureSummary' | 'judgeModel' | 'judgeProvider' | 'modelId' | 'modelName' | 'modelSource'>>;
   completedAt?: string;
 }
 
@@ -90,6 +90,23 @@ export interface FinalizeEvaluationRunOutput {
   stats: RunStats;
   /** Never-started cases stamped `cancelled` by this call (empty unless cancelled). */
   cancelledMarkers: Record<string, EvaluationRunResultEntry>;
+}
+
+/**
+ * Run-level model fields the runner observed from the agent's spans
+ * (`modelSource: 'observed'`, first report wins — see evaluationRunner).
+ * Only an OBSERVED model is written here: a declared / requested model was
+ * stamped at creation and must not be re-stamped by the terminal update.
+ */
+export function observedModelFields(
+  completedRun: Partial<Pick<EvaluationRun, 'modelId' | 'modelName' | 'modelSource'>>,
+): Partial<Pick<EvaluationRun, 'modelId' | 'modelName' | 'modelSource'>> {
+  if (completedRun.modelSource !== 'observed' || !completedRun.modelId) return {};
+  return {
+    modelId: completedRun.modelId,
+    ...(completedRun.modelName ? { modelName: completedRun.modelName } : {}),
+    modelSource: 'observed',
+  };
 }
 
 export async function finalizeEvaluationRun(
@@ -133,6 +150,7 @@ export async function finalizeEvaluationRun(
     ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
     ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
     ...(completedRun.judgeProvider ? { judgeProvider: completedRun.judgeProvider } : {}),
+    ...observedModelFields(completedRun),
   });
   return { run, persisted, stats, cancelledMarkers };
 }

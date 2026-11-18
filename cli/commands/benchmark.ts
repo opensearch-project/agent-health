@@ -109,10 +109,17 @@ function findAgent(identifier: string, config: ResolvedConfig): AgentConfig | un
 }
 
 /**
- * Get default model key from config
+ * The model id the CLI sends with a run: the one the agent declares in its
+ * own connector config, or NOTHING. Never the catalog's first key
+ * (`demo-model` in the built-in catalog): that fallback stamped
+ * `mock://demo-model` on every report of an agent that declares no model and
+ * — because the judge model falls back to the agent's — silently judged the
+ * run with the MOCK provider (`judgeProvider: 'demo'`). The server resolves
+ * what it can (agent-declared → observed from traces) and the judge falls
+ * back to the configured default judge model, never to the mock.
  */
-function getDefaultModel(config: ResolvedConfig): string {
-  return Object.keys(config.models)[0] || 'claude-sonnet';
+function agentModelIdForRun(agent: AgentConfig | undefined): string | undefined {
+  return resolveAgentModel(agent) || undefined;
 }
 
 /** Printed in place of a model when the agent declares none. */
@@ -124,11 +131,11 @@ export const NO_AGENT_MODEL_LABEL = '—';
  * `env.ANTHROPIC_MODEL`, a `--model` arg — see {@link resolveAgentModel}),
  * or `—` when it declares none.
  *
- * Never the catalog fallback: `getDefaultModel()` returns the FIRST key of
- * `config.models`, which in the built-in catalog is `demo-model`, so a REST
- * agent without a model printed `Model: demo-model` and users read that as
- * "the mock judge is on" (#612, problem 7). The agent's model is owned by its
- * own config; when it is not declared there, agent-health does not know it.
+ * Never the catalog fallback: the first key of `config.models` is `demo-model`
+ * in the built-in catalog, so a REST agent without a model printed
+ * `Model: demo-model` and users read that as "the mock judge is on" (#612,
+ * problem 7). The agent's model is owned by its own config; when it is not
+ * declared there, agent-health does not know it until its traces say.
  */
 export function formatAgentModelLabel(agent: AgentConfig | undefined): string {
   return resolveAgentModel(agent) || NO_AGENT_MODEL_LABEL;
@@ -222,7 +229,7 @@ async function fetchReportsForRun(
 async function runBenchmarkForAgent(
   api: ApiClient,
   agent: AgentConfig,
-  modelId: string,
+  modelId: string | undefined,
   benchmark: Benchmark,
   verbose: boolean,
   concurrency?: number,
@@ -248,7 +255,7 @@ async function runBenchmarkForAgent(
       {
         name: `CLI Run - ${agent.name}`,
         agentKey: agent.key,
-        modelId: modelId,
+        ...(modelId ? { modelId } : {}),
         ...(concurrency && concurrency > 1 ? { concurrency } : {}),
         ...(evaluatorId ? { evaluatorId } : {}),
         // Forward customer-supplied judge model id alongside agent model.
@@ -708,11 +715,9 @@ async function runUnifiedMode(
   }
 
   // The agent's model comes from its agent-health.config.ts connectorConfig;
-  // there is no --model flag. getDefaultModel is a last-resort fallback for
-  // the wire value only — it is never shown to the user (see
-  // formatAgentModelLabel).
+  // there is no --model flag and no catalog fallback (see agentModelIdForRun).
   const agent = config.agents.find(a => a.key === agentKey);
-  const modelId = resolveAgentModel(agent, getDefaultModel(config));
+  const modelId = agentModelIdForRun(agent);
   const concurrency = Math.max(1, Math.min(20, parseInt(options.concurrency, 10) || 1));
 
   // Determine benchmark association. With explicit sources (-f/-d/-t/--label),
@@ -777,7 +782,7 @@ async function runUnifiedMode(
         name: `CLI Run - ${agentKey} - ${new Date().toISOString()}`,
         sources,
         agentKey,
-        modelId,
+        ...(modelId ? { modelId } : {}),
         // Customer-supplied judge model id, distinct from `modelId`.
         ...(options.judgeModel ? { judgeModelId: options.judgeModel } : {}),
         evaluatorId: options.evaluator,
@@ -1449,7 +1454,7 @@ export function createBenchmarkCommand(): Command {
           }
           totalTestCasesAcrossBenchmarks += benchmark.testCaseIds.length;
           for (const agent of agents) {
-            const modelId = resolveAgentModel(agent, getDefaultModel(config));
+            const modelId = agentModelIdForRun(agent);
             const results = await runBenchmarkForAgent(
               api,
               agent,

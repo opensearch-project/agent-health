@@ -91,6 +91,7 @@ jest.mock('@/lib/constants', () => ({
 jest.mock('@/lib/utils', () => ({
   formatDate: jest.fn().mockReturnValue('2024-01-01'),
   getModelName: jest.fn((id: string) => id),
+  getRunModelLabel: jest.fn((run: { modelId?: string; modelName?: string; modelSource?: string }) => (run?.modelSource === 'observed' && run.modelName) || run?.modelId || ''),
   cn: jest.fn((...args: unknown[]) => args.filter(Boolean).join(' ')),
 }));
 

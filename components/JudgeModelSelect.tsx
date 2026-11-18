@@ -82,6 +82,8 @@ interface JudgeModelSelectProps {
   allowDefault?: boolean;
   /** Label for the default sentinel. Default: "Use evaluator default". */
   defaultLabel?: string;
+  /** Disable the picker (e.g. a re-run whose cases never call a judge). */
+  disabled?: boolean;
 }
 
 /**
@@ -96,6 +98,7 @@ export function JudgeModelSelect({
   filterToAgentLLMs = false,
   allowDefault = false,
   defaultLabel = 'Use evaluator default',
+  disabled = false,
 }: JudgeModelSelectProps) {
   // For `provider: 'agent'` entries the model_id (`agent-trace-judge`) names
   // a judge KIND whose LLM is picked at run time -- GET /api/judge/models
@@ -141,7 +144,7 @@ export function JudgeModelSelect({
   };
 
   return (
-    <Select value={renderedValue} onValueChange={handleChange}>
+    <Select value={renderedValue} onValueChange={handleChange} disabled={disabled}>
       <SelectTrigger className={triggerClassName}>
         <SelectValue placeholder={allowDefault ? defaultLabel : undefined} />
       </SelectTrigger>

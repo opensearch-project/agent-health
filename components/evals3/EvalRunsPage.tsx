@@ -42,7 +42,7 @@ import { ENV_CONFIG } from '@/lib/config';
 import { computeRunStats, getEffectiveRunStatus } from '@/lib/runStats';
 import { sortGroupsByRecency } from '@/lib/runSort';
 import { getRunActionVisibility } from '@/lib/runActions';
-import { formatRelativeTime, getModelName, getEvaluatorLabel } from '@/lib/utils';
+import { formatRelativeTime, getRunModelLabel, getEvaluatorLabel } from '@/lib/utils';
 import { JudgeModelLabel, judgeModelText } from '@/components/JudgeModelLabel';
 import { Breadcrumbs } from './Breadcrumbs';
 import { InlineRenameField } from './InlineRenameField';
@@ -400,7 +400,7 @@ export const EvalRunsPage: React.FC = () => {
 
   const availableModels = useMemo(() => {
     const models = new Set<string>();
-    for (const rr of allRunRows) models.add(getModelName(rr.run.modelId));
+    for (const rr of allRunRows) models.add(getRunModelLabel(rr.run));
     return Array.from(models).sort();
   }, [allRunRows]);
 
@@ -427,7 +427,7 @@ export const EvalRunsPage: React.FC = () => {
 
     // Model filter
     if (filterModels.size > 0) {
-      rows = rows.filter(rr => filterModels.has(getModelName(rr.run.modelId)));
+      rows = rows.filter(rr => filterModels.has(getRunModelLabel(rr.run)));
     }
 
     // Pass rate range
@@ -835,7 +835,7 @@ export const EvalRunsPage: React.FC = () => {
               config produced these numbers. Renders nothing for legacy runs. */}
           <AgentFingerprintChip run={rr.run} compact className="mt-0.5" data-testid={`run-row-fingerprint-${rr.run.id}`} />
         </td>
-        <td className="px-2 py-1.5 align-middle text-[11px]">{getModelName(rr.run.modelId)}</td>
+        <td className="px-2 py-1.5 align-middle text-[11px]" data-testid="run-row-model">{getRunModelLabel(rr.run) || '—'}</td>
         <td className="px-2 py-1.5 align-middle text-right text-[11px] text-muted-foreground" data-testid="run-concurrency-cell" title="Concurrency — parallel test cases">
           {rr.run.concurrency === undefined ? '—' : rr.run.concurrency}
         </td>

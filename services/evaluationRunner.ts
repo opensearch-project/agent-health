@@ -27,6 +27,8 @@ import {
   appendNotReachedMarker,
 } from '@/services/evaluation';
 import { resolveAgentModel } from '@/lib/resolveAgentModel';
+import { observeModelFromSpans } from '@/lib/observedModel';
+import { getAgentModelOwnership } from '@/server/services/runModelResolution';
 import { readEnv } from '@/lib/envCompat';
 import { buildJudgeAgentsHints, resolveJudgeRunId } from '@/services/traces/judgeAgentsHints';
 import { buildEvaluatorErrorPatch } from '@/services/evaluation/evaluatorError';
@@ -215,6 +217,31 @@ export async function executeEvaluationRun(
   const effectiveModelId = resolveAgentModel(baseAgent, run.modelId);
   const modelConfig = deps.models[effectiveModelId];
   const bedrockModelId = modelConfig?.model_id || effectiveModelId;
+  // An agent that owns its model and declares none (a hook-built REST agent,
+  // `connectorConfig.agentOwnsModel`) runs with NO model id: never '' on a
+  // report (indexed and rendered as a value) and never a catalog fallback.
+  // Once its spans arrive, the model they report is stamped on the report
+  // (`modelSource: 'observed'`) and — first report wins, like `judgeModel` —
+  // on the run, so the runs column and compare grouping show what ran.
+  const modelObservedFromTraces = !effectiveModelId && getAgentModelOwnership(baseAgent).ownsModel;
+  const modelFields = effectiveModelId
+    ? { modelId: effectiveModelId, modelName: modelConfig?.display_name || effectiveModelId }
+    : {};
+  const noteObservedModel = (observed: { modelId: string; modelName: string } | undefined) => {
+    if (observed && !run.modelId) {
+      run.modelId = observed.modelId;
+      (run as any).modelName = observed.modelName;
+      (run as any).modelSource = 'observed';
+    }
+  };
+  /** Patch fields for a report whose spans have just arrived (no-op unless the model is observed). */
+  const observedModelPatch = (spans: unknown): Partial<EvaluationReport> => {
+    if (!modelObservedFromTraces || !Array.isArray(spans)) return {};
+    const observed = observeModelFromSpans(spans as any);
+    if (!observed) return {};
+    noteObservedModel(observed);
+    return { modelId: observed.modelId, modelName: observed.modelName, modelSource: 'observed' } as Partial<EvaluationReport>;
+  };
 
   // Agent-configuration provenance mirrored from the run onto every report
   // (case-level comparisons need it too). The run doc is the source of
@@ -376,8 +403,7 @@ export async function executeEvaluationRun(
             agentName: agentConfig.name,
             agentId: agentConfig.key,
             agentEndpoint: agentConfig.endpoint,
-            modelId: effectiveModelId,
-            modelName: modelConfig?.display_name || effectiveModelId,
+            ...modelFields,
             // Inherit run-level judgeModelId onto the per-test-case run.
             // Same pattern as `evaluatorId` below — the run-detail UI
             // and the audit trail need to know which judge model graded
@@ -736,6 +762,7 @@ export async function executeEvaluationRun(
                 if (!(report as any).traceId) {
                   (report as any).traceId = fetchedSpans[0]?.traceId;
                 }
+                Object.assign(report as any, observedModelPatch(fetchedSpans));
               }
             } catch { /* traces fixture unavailable — leave traceId/spans unset */ }
           } else {
@@ -806,6 +833,12 @@ export async function executeEvaluationRun(
           // (the connector path predates the cross-surface parity work),
           // so we stamp it onto the doc here.
           (report as any).evaluatorId = (report as any).evaluatorId ?? run.evaluatorId;
+          // The connector path stamps the run model it was handed; with no
+          // model that is '' — drop it (absent, never an empty value).
+          if (!effectiveModelId) {
+            if (!(report as any).modelId) delete (report as any).modelId;
+            if (!(report as any).modelName) delete (report as any).modelName;
+          }
           // Stamp the eval test_case span's traceId (Strategy A correlator).
           // Agents that adopt the propagated traceparent (REST via header,
           // pi via TRACEPARENT env) emit their spans under this exact
@@ -864,7 +897,7 @@ export async function executeEvaluationRun(
             judgeOutcome = await waitForTracesAndJudge(savedReport, testCase, run.id, deps, agentConfig, (judgeModel, judgeProvider) => {
               noteJudgeModel(judgeModel);
               noteJudgeProvider(judgeProvider);
-            }, deterministicEvaluator);
+            }, deterministicEvaluator, observedModelPatch);
           } else if ((savedReport as any).failureStage === 'agent') {
             // The agent request failed (timeout / connection / non-2xx): the
             // report is already final with the real cause. Log it at the
@@ -1077,7 +1110,9 @@ async function waitForTracesAndJudge(
   deps: RunnerDeps,
   agentConfig: AgentConfig,
   onJudgeModel?: (judgeModel: string | undefined, judgeProvider: string | undefined) => void,
-  deterministicEvaluator: Evaluator | null = null
+  deterministicEvaluator: Evaluator | null = null,
+  /** Report fields derived from the spans that just arrived (observed model); `{}` when none apply. */
+  patchFromSpans: (spans: unknown) => Partial<EvaluationReport> = () => ({}),
 ): Promise<PassFailStatus | null> {
   const { sink } = deps;
   // Deterministic evaluator (services/evaluation/deterministicJudgement.ts):
@@ -1087,9 +1122,9 @@ async function waitForTracesAndJudge(
   // judgement scores — instead of leaving the trace poller's error as the
   // final word. Never calls an LLM. The judgement is written through the
   // sink (the runner's only write channel); sink errors propagate to the runner.
-  const scoreDeterministically = async (target: EvaluationReport, label: string): Promise<PassFailStatus | null> => {
+  const scoreDeterministically = async (target: EvaluationReport, label: string, extra: Partial<EvaluationReport> = {}): Promise<PassFailStatus | null> => {
     const { patch, ...outcome } = buildDeterministicFirstJudgement(target, testCase, deterministicEvaluator!);
-    await sink.patchCaseReport(runId, target.id, patch as any);
+    await sink.patchCaseReport(runId, target.id, { ...patch, ...extra } as any);
     if (outcome.error) {
       console.warn(`[EvaluationRunner] [${testCase.id}] Deterministic evaluator "${deterministicEvaluator!.name}" could not score this case (${label}): ${outcome.error}`);
     }
@@ -1105,9 +1140,10 @@ async function waitForTracesAndJudge(
         // terminal state through another path — resolve or this hangs the
         // run's test-case worker forever.
         onStopped: () => resolve(null),
-        onTracesFound: async (_spans, updatedReport) => {
+        onTracesFound: async (spans, updatedReport) => {
+          const spanDerived = patchFromSpans(spans);
           if (deterministicEvaluator) {
-            scoreDeterministically(updatedReport, 'span-built trajectory').then(resolve, reject);
+            scoreDeterministically(updatedReport, 'span-built trajectory', spanDerived).then(resolve, reject);
             return;
           }
           try {
@@ -1149,6 +1185,7 @@ async function waitForTracesAndJudge(
             const judgedUpdate = {
               trajectory: finalTrajectory,
               metricsStatus: 'ready',
+              ...spanDerived,
               ...scoringFieldsFromJudgment(judgment),
               llmJudgeReasoning: judgment.llmJudgeReasoning,
               // Set only by the agent (trace) judge provider -- see

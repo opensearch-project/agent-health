@@ -28,7 +28,12 @@ import { debug } from '@/lib/debug';
  */
 export interface ServerEvaluationRequest {
   agentKey: string;
-  modelId: string;
+  /**
+   * Catalog model key for agents that take one. Optional: omit it for agents
+   * that own their model (`agent.modelOwnership.ownsModel`) — the server
+   * ignores it for those anyway and records the agent-declared model.
+   */
+  modelId?: string;
   /**
    * Optional judge model id, distinct from `modelId` (the agent's LLM).
    * Customer input via the run config dialog. Forwarded as `judgeModelId`
@@ -95,6 +100,23 @@ export interface ServerEvaluationHooks {
   onPoll?: (report: { id: string; status?: string }) => void;
 }
 
+/**
+ * Thrown when `/api/evaluate` rejects the request before streaming (4xx/5xx
+ * JSON body). Carries the server's machine-readable `code` (e.g.
+ * `MODEL_NOT_FOUND`, `AGENT_NOT_FOUND`) alongside the human message so UIs
+ * can render the server's own explanation instead of a generic failure.
+ */
+export class EvaluationRequestError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'EvaluationRequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 /** Default polling timeout (10 minutes) once SSE has dropped */
 const POLL_TIMEOUT_MS = 600_000;
 /** Polling interval while waiting for a terminal status */
@@ -130,7 +152,8 @@ export async function runServerEvaluation(
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(errorBody.error || `Evaluation request failed: ${response.statusText}`);
+    const message = errorBody.error || `Evaluation request failed: ${response.statusText}`;
+    throw new EvaluationRequestError(message, response.status, errorBody.code);
   }
 
   const reader = response.body?.getReader();

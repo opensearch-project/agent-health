@@ -674,7 +674,7 @@ export class ApiClient {
   async runEvaluation(
     testCaseId: string,
     agentKey: string,
-    modelId: string,
+    modelId: string | undefined,
     onProgress?: (event: EvaluationProgressEvent) => void,
     evaluatorId?: string,
     judgeModelId?: string
@@ -685,7 +685,9 @@ export class ApiClient {
       body: JSON.stringify({
         testCaseId,
         agentKey,
-        modelId,
+        // Only the agent-declared model; `/api/evaluate` resolves the rest
+        // (server/services/runModelResolution.ts). Never a catalog fallback.
+        ...(modelId ? { modelId } : {}),
         evaluatorId,
         // Customer-supplied judge model id, distinct from `modelId` (the
         // agent's LLM). When unset the server defaults to BEDROCK_MODEL_ID.

@@ -149,10 +149,19 @@ function buildConnectorAuth(agent: AgentConfig): ConnectorAuth {
 // `evalError` (the bench body itself threw — includes a chai `expect()`
 // fail-fast assertion) bypasses the aggregate and returns `{0,0,0,0}` — the
 // run never reached its conclusion so a partial aggregate is misleading.
+//
+// A body that never called `judge()` (code assertions only — `skipJudge:
+// true`, `judgeProvider: 'none'`) gets NO metrics at all: the four keys are
+// the RCA Default judge's rubric, so a `{accuracy: 100, faithfulness: 100,
+// …}` placeholder on such a report rendered as "Score 100%" with judge
+// metric names for a case no judge ever scored. The verdict lives in
+// `passFailStatus` + `matcherResults`; `metrics` stays `{}`.
 export function computeSdkMatcherSessionMetrics(
   matcherResults: MatcherResult[],
   opts?: { hasEvalError?: boolean },
 ): Record<string, number> {
+  const judgeRan = matcherResults.some(m => m.method === 'llm-judge' && !m.notReached && !m.skipped);
+  if (!judgeRan) return {};
   if (opts?.hasEvalError) {
     return {
       accuracy: 0,
