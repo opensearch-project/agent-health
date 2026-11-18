@@ -18,6 +18,7 @@ import { runSingleUseCase } from '@/services/benchmarkRunner';
 import { loadConfigSync } from '@/lib/config/index';
 import { getCustomAgents } from '@/server/services/customAgentStore';
 import { refreshRunEnvironment } from '@/server/services/runEnvironment';
+import { refuseWhenDraining } from '@/server/services/serverDrain';
 import { debug } from '@/lib/debug';
 import type { BenchmarkRun, TestCase, TestCaseRun } from '@/types';
 
@@ -103,7 +104,7 @@ function toTestCase(sample: typeof SAMPLE_TEST_CASES[0]): TestCase {
  * Returns the evaluation report with trajectory, metrics, and judge results.
  * Report is automatically saved to storage if configured.
  */
-router.post('/api/evaluate', async (req: Request, res: Response) => {
+router.post('/api/evaluate', refuseWhenDraining, async (req: Request, res: Response) => {
   debug('EvalAPI', 'Received evaluation request');
 
   const validationError = validateRequest(req.body);

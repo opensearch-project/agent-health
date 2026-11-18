@@ -25,8 +25,11 @@ import { nonLoopbackBindWarning, resolveBindHost } from '../../lib/bindHost.js';
 import {
   decideVersionMismatchRestart,
   parseActiveRuns,
+  parseInFlightRuns,
+  pickActiveRuns,
   restartRefusedError,
   type ActiveRunsSummary,
+  type InFlightProbe,
 } from './versionMismatch.js';
 
 // Get CLI version from package.json
@@ -88,12 +91,30 @@ export interface ServerStatus {
   /** PID of the running server (from /health `instance.pid`). */
   pid?: number;
   /**
-   * Runs the server process is executing right now (from /health
-   * `activeRuns`, read from its in-memory executor registries). Absent for
-   * older servers that predate the field — then we cannot tell, and a
+   * Runs executing against this server right now: `GET /api/runs/in-flight`
+   * (leased runs of any executor ∪ the process registries) when the server
+   * has it, else /health `activeRuns` (in-memory registries only). Absent
+   * for older servers that report neither — then we cannot tell, and a
    * version-mismatch restart is refused rather than risked.
    */
   activeRuns?: ActiveRunsSummary;
+}
+
+/** `GET /api/runs/in-flight`: `absent` on 404 (older build), `unknown` on any other failure, else the parsed answer. */
+async function fetchInFlightRuns(port: number): Promise<InFlightProbe> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    const response = await fetch(`http://localhost:${port}/api/runs/in-flight`, { signal: controller.signal });
+    if (response.status === 404) return { kind: 'absent' };
+    if (!response.ok) return { kind: 'unknown' };
+    const runs = parseInFlightRuns(await response.json());
+    return runs ? { kind: 'ok', runs } : { kind: 'unknown' };
+  } catch {
+    return { kind: 'unknown' };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /**
@@ -174,7 +195,7 @@ export async function checkServerStatus(port: number): Promise<ServerStatus> {
         version: data.version,
         cwd: data.instance?.cwd,
         pid: data.instance?.pid,
-        activeRuns: parseActiveRuns(data.activeRuns),
+        activeRuns: pickActiveRuns(parseActiveRuns(data.activeRuns), await fetchInFlightRuns(port)),
       };
     }
   } catch {

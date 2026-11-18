@@ -128,7 +128,7 @@ describe('run ingestion API on a real FILE-storage server (#612)', () => {
       testCaseSnapshots: [{ id: 'tc-ingest-1', version: 1, name: 'ingest one' }], results: {},
     };
     const created = await sink.createRun(run);
-    expect(created).toEqual({ runId, executorToken: expect.stringMatching(/^[0-9a-f]{32}$/) });
+    expect(created).toEqual({ runId, executorToken: expect.stringMatching(/^[0-9a-f]{32}$/), lease: { generation: 1, heartbeatAt: expect.any(String), ttlMs: 5 * 60 * 1000 } });
 
     // The run is visible (and `running`) as soon as it is created.
     const running = await httpJson('GET', `${baseUrl}/api/storage/evaluation-runs/${runId}`);
@@ -148,8 +148,8 @@ describe('run ingestion API on a real FILE-storage server (#612)', () => {
     });
     expect(final.report).toMatchObject({ id: reportId, status: 'completed', passFailStatus: 'passed', agentKey: 'external-agent' });
 
-    expect(await sink.setCaseResult(runId, 'tc-ingest-1', { reportId, status: 'completed', passFailStatus: 'passed' })).toEqual({ generation: 0 });
-    expect(await sink.heartbeat(runId, { startedCount: 1, completedCount: 1, totalTestCases: 1 })).toEqual({ generation: 0 });
+    expect(await sink.setCaseResult(runId, 'tc-ingest-1', { reportId, status: 'completed', passFailStatus: 'passed' })).toEqual({ generation: 1 });
+    expect(await sink.heartbeat(runId, { startedCount: 1, completedCount: 1, totalTestCases: 1 })).toEqual({ generation: 1 });
 
     const finalized = await sink.finalize(runId, {
       status: 'completed', benchmarkId,
@@ -178,6 +178,48 @@ describe('run ingestion API on a real FILE-storage server (#612)', () => {
     await httpJson('DELETE', `${baseUrl}/api/storage/runs/${reportId}`);
     await httpJson('DELETE', `${baseUrl}/api/storage/evaluation-runs/${runId}`);
     await httpJson('DELETE', `${baseUrl}/api/storage/benchmarks/${benchmarkId}`);
+  }, TEST_TIMEOUT);
+
+  it('createRun idempotency (#612 step 3): the same executor token re-POSTing its run gets its existing lease back; another token, or none, is refused 409 run-exists — a run is never taken over or reset', async () => {
+    const runId = `eval-run-ingest-dup-${Date.now()}`;
+    const doc = () => ({
+      id: runId, docType: 'evaluation-run', name: 'Retried create', createdAt: new Date().toISOString(), status: 'running',
+      agentKey: 'external-agent', modelId: 'external-model', sources: [{ type: 'test-case-ids', ids: ['tc-dup-1'] }], trigger: 'cli',
+      testCaseSnapshots: [{ id: 'tc-dup-1', version: 1, name: 'dup one' }], results: {},
+    });
+    const token = 'a1b2c3d4e5f60718a1b2c3d4e5f60718';
+    const first = await httpJson('POST', `${baseUrl}/api/runs/ingest`, { run: doc(), executor: { version: 'cli-test' } }, { [EXECUTOR_TOKEN_HEADER]: token });
+    expect(first.status).toBe(201);
+    expect(first.body.executorToken).toBe(token);
+
+    // The answer to the first create was lost; the executor asks again with the same token.
+    const again = await httpJson('POST', `${baseUrl}/api/runs/ingest`, { run: doc(), executor: { version: 'cli-test' } }, { [EXECUTOR_TOKEN_HEADER]: token });
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual({ runId, executorToken: token, lease: first.body.lease });
+
+    // Another executor (or a tokenless legacy caller) cannot create over an existing run.
+    const other = await httpJson('POST', `${baseUrl}/api/runs/ingest`, { run: doc() }, { [EXECUTOR_TOKEN_HEADER]: 'ffffffffffffffffffffffffffffffff' });
+    expect(other.status).toBe(409);
+    expect(other.body).toMatchObject({ error: 'run-exists', runId, status: 'running' });
+    const tokenless = await httpJson('POST', `${baseUrl}/api/runs/ingest`, { run: doc() });
+    expect(tokenless.status).toBe(409);
+    const badToken = await httpJson('POST', `${baseUrl}/api/runs/ingest`, { run: { ...doc(), id: `${runId}-x` } }, { [EXECUTOR_TOKEN_HEADER]: 'not-hex' });
+    expect(badToken.status).toBe(400);
+
+    // Exactly one document, still owned by the original token.
+    const list = await httpJson('GET', `${baseUrl}/api/storage/evaluation-runs?size=500`);
+    expect(list.body.evaluationRuns.filter((r: any) => r.id === runId)).toHaveLength(1);
+    const live = await httpJson('POST', `${baseUrl}/api/runs/ingest/${runId}/heartbeat`, {}, { [EXECUTOR_TOKEN_HEADER]: token });
+    expect(live.status).toBe(200);
+
+    // A finished run cannot be reset to running by a create either.
+    const done = await httpJson('POST', `${baseUrl}/api/runs/ingest/${runId}/finalize`, { status: 'failed', error: 'x' }, { [EXECUTOR_TOKEN_HEADER]: token });
+    expect(done.status).toBe(200);
+    const afterTerminal = await httpJson('POST', `${baseUrl}/api/runs/ingest`, { run: doc() }, { [EXECUTOR_TOKEN_HEADER]: token });
+    expect(afterTerminal.status).toBe(200); // same executor, same lease handed back — the run stays failed
+    expect(((await httpJson('GET', `${baseUrl}/api/storage/evaluation-runs/${runId}`)).body.evaluationRun ?? {}).status ?? (await httpJson('GET', `${baseUrl}/api/storage/evaluation-runs/${runId}`)).body.status).toBe('failed');
+
+    await httpJson('DELETE', `${baseUrl}/api/storage/evaluation-runs/${runId}`);
   }, TEST_TIMEOUT);
 
   it('mutations without the executor token are refused (400) and unknown runs finalize as 404', async () => {

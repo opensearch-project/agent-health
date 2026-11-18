@@ -14,13 +14,13 @@ import {
   describeDefaultAgentJudgeModel,
   AGENT_JUDGE_MODEL_ENV,
 } from '@/server/services/piAgenticJudgeService';
-import { isJudgeParseError } from '@/server/services/judgeResponseParser';
 import { loadConfigSync } from '@/lib/config/index';
 import serverConfig from '@/server/config';
 import { debug } from '@/lib/debug';
 import { readEnv } from '@/lib/envCompat';
 import { getStorageModule } from '@/server/adapters';
-import { runJudge, JudgeRequestError, describeJudgeFailure, isProviderRequestRejection } from '@/services/judge/runJudge';
+import { JudgeRequestError } from '@/services/judge/runJudge';
+import { runJudgeAsHttp } from '@/services/judge/judgeHttpContract';
 
 export { isProviderRequestRejection } from '@/services/judge/runJudge';
 
@@ -324,63 +324,16 @@ router.get('/api/judge/models', async (_req: Request, res: Response) => {
  * HTTP responses callers have always received.
  */
 router.post('/api/judge', async (req: Request, res: Response) => {
-  try {
-    const result = await runJudge(req.body, {
-      // Lazy: only a stored (non-system) evaluator id needs the storage module.
-      getEvaluator: (id) => getStorageModule().evaluators.getById(id),
-      config: loadConfigSync(),
-    });
-    res.json(result);
-  } catch (error: any) {
-    if (error instanceof JudgeRequestError) {
-      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
-    }
-
-    console.error('[JudgeAPI] Error during evaluation:', error);
-
-    // A judge reply with no parseable verdict (empty final turn, malformed
-    // JSON) is NOT a transient provider error — retrying the same prompt ten
-    // times with exponential backoff just burns ~8 minutes per case (owner
-    // incident). Return a distinct 422 + code so the client caps retries and
-    // keeps the raw text for the report. Provider-agnostic: every provider
-    // funnels through parseJudgeResponse, so the wording can't misattribute
-    // the failure to the wrong CLI (pre-fix the `agent` provider's empty
-    // reply was reported as "Failed to parse Pi judge response. The CLI may
-    // have returned invalid JSON.").
-    if (isJudgeParseError(error)) {
-      return res.status(422).json({
-        error: `Judge evaluation failed: ${error.message}`,
-        code: error.code,
-        rawResponse: error.rawResponse,
-        details: error.message,
-      });
-    }
-
-    // The model provider REJECTED the request (AWS SDK `ValidationException`,
-    // `$fault: 'client'` with HTTP 400 — blank system prompt, unsupported
-    // inference parameter, malformed body). The same request will be rejected
-    // again; retrying it ten times with exponential back-off only burns
-    // ~8.5 min per case. Answer 400 so `callBedrockJudge` fails fast (it
-    // treats every 4xx as non-retryable) and the report carries the real
-    // provider message. Throttling (429) and server faults keep the 500 path
-    // below and stay retryable.
-    if (isProviderRequestRejection(error)) {
-      return res.status(400).json({
-        error: `Judge evaluation failed: the judge model provider rejected the request (${error.name}): ${error.message}`,
-        code: 'JUDGE_REQUEST_REJECTED',
-        details: error.message,
-      });
-    }
-
-    let config: ReturnType<typeof loadConfigSync> | undefined;
-    try { config = loadConfigSync(); } catch { config = undefined; }
-    const errorMessage = describeJudgeFailure(error, req.body?.modelId, config);
-
-    res.status(500).json({
-      error: `Judge evaluation failed: ${errorMessage}`,
-      details: error.message
-    });
+  const outcome = await runJudgeAsHttp(req.body, {
+    // Lazy: only a stored (non-system) evaluator id needs the storage module.
+    getEvaluator: (id) => getStorageModule().evaluators.getById(id),
+    config: loadConfigSync(),
+  });
+  // Request-level refusals (400/403) are the caller's problem, not an incident.
+  if (outcome.error && !(outcome.error instanceof JudgeRequestError)) {
+    console.error('[JudgeAPI] Error during evaluation:', outcome.error);
   }
+  res.status(outcome.status).json(outcome.body);
 });
 
 export default router;

@@ -167,6 +167,33 @@ different `-n`, or pass `--force` to run anyway: the CLI then prints which test
 cases it added and records the added file in the benchmark description. If the
 stored test cases cannot be read the check is skipped with a warning.
 
+**Where the run executes.** `run` and the `-t` / `-d` / `--label` / code-SDK
+(`-f *.eval.*`) modes of `benchmark` execute **in the CLI process**: the agent
+connector and its hooks, the SDK test bodies and the LLM judge all run with the
+shell environment, `.env` and `agent-health.config.*` of the directory you ran
+the command from — so two projects can share one server and each sees its own
+`.env`, and judge credentials are the ones in your shell (if the judge cannot
+run locally the case is recorded as errored with the provider's message; the
+server's judge is never used as a fallback). The server keeps storage,
+observability and the UI: the run is created with an executor lease that the
+CLI heartbeats, every result is written through the run-ingestion API with
+retry-until-confirmed delivery (unconfirmed writes are spooled at
+`.agent-health/spool/<runId>.ndjson` until the server confirms; a server
+restarted on the same port is found again), and a **Cancel** in the UI reaches
+the CLI within one heartbeat. `Ctrl-C` cancels the run the same way (in-flight
+cases finish, the run ends `cancelled`); a second `Ctrl-C` exits at once and the
+server marks the run failed ("executor lost") once its lease expires. The
+runner's and judge's log lines go to `.agent-health/logs/<runId>.log` (`-v` or
+`DEBUG=true` echo them). **Consequences of executing in the CLI:** the run lives
+and dies with the CLI process — closing the terminal, losing an SSH session or
+killing the CLI abandons the run (the server marks it failed, "executor lost",
+once its lease expires; use `nohup` / `tmux` for long runs) — and the spool and
+log files under `.agent-health/` contain prompts, trajectories and model output
+(written owner-only, `0600`; the spool is deleted once the server has confirmed
+every write; keep `.agent-health/` out of version control). The legacy
+single-JSON-file mode (`-f cases.json` alone) and `-n <benchmark>` alone still
+execute on the server.
+
 Every evaluation run is stamped with an **image digest** — a content hash of
 its test-case contents + eval conditions (evaluator, judge model). Runs with
 the same digest ran under identical conditions and are directly comparable;
@@ -481,6 +508,8 @@ agent-health kill <target>      # target: sample-agent
 | `AWS_PROFILE` | AWS profile for Bedrock judge |
 | `AWS_REGION` | AWS region |
 | `DEBUG` | Enable verbose debug logging (`true`/`false`) |
+| `AH_JUDGE_MAX_ATTEMPTS` | Transient-error retry budget of the LLM judge (default `10`, exponential backoff 1 s → 512 s); set `1` where a judge that cannot run should fail fast |
+| `AH_RUN_LEASE_TTL_MS` | Executor lease TTL for evaluation runs (default 5 min); a run whose executor stops heartbeating for longer is marked failed |
 | `MLCOMMONS_ENDPOINT` | ML-Commons agent URL |
 | **Storage (Basic Auth)** | |
 | `OPENSEARCH_STORAGE_ENDPOINT` | Storage cluster URL |

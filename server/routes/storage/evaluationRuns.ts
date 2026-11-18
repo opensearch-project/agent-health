@@ -14,7 +14,8 @@ import {
   createCancellationToken,
   CancellationToken,
 } from '../../../services/evaluationRunner.js';
-import { promoteRunToBenchmark, linkTestCaseIdsToBenchmark } from '../../../services/benchmarkPromotion.js';
+import { promoteRunToBenchmark } from '../../../services/benchmarkPromotion.js';
+import { linkRunTestCasesToBenchmark, stampRunImage, BenchmarkNotFoundError } from '../../services/runBookkeeping.js';
 import {
   checkBenchmarkSourcesStillExist,
   buildRerunConfig,
@@ -34,11 +35,13 @@ import { isDeterministicEvaluator } from '../../../lib/evaluators/deterministic.
 import { isSystemEvaluatorId, getSystemEvaluatorById } from '../../prompts/evaluatorTemplates.js';
 import { isOldEnoughForZombieCancel, ZOMBIE_CANCEL_MIN_AGE_MS } from '../../../lib/runActions.js';
 import { resolveAgentModel } from '../../../lib/resolveAgentModel.js';
-import { computeImageDigest, buildImageDoc } from '../../../lib/benchmarkImage.js';
 import { validateRunNameUpdate } from '../../../lib/runName.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 import { serverRunnerDeps } from '../../../services/runnerDeps.js';
+import { buildEvaluationRunDocument } from '../../../services/evaluationRunDocument.js';
 import { refreshRunEnvironment } from '../../services/runEnvironment.js';
+import { refuseWhenDraining } from '../../services/serverDrain.js';
+import { guardFor, isLeaseLive, isLeaseLostError } from '../../../lib/runLease.js';
 
 const router = Router();
 
@@ -243,7 +246,7 @@ router.get('/api/storage/evaluation-runs/:id', async (req: Request, res: Respons
 });
 
 // POST /api/storage/evaluation-runs - Create and execute an evaluation run (SSE streaming)
-router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) => {
+router.post('/api/storage/evaluation-runs', refuseWhenDraining, async (req: Request, res: Response) => {
   try {
     const { sources, agentKey, modelId, judgeModelId, name, description, evaluatorId, concurrency, benchmarkId, trigger, agentEndpoint, headers } = req.body;
 
@@ -291,105 +294,40 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     const hooksByFile = resolved.hooksByFile;
     const testHookScopes = resolved.testHookScopes;
 
-    // Keep an explicitly associated benchmark linked to the canonical test
-    // case documents resolved above. Repeated CLI imports therefore reuse one
-    // benchmark and one stable set of testCaseIds instead of creating rows
-    // whose definitions and runs live only in evaluation-run documents.
+    // Benchmark link (top level + current version) — the same bookkeeping an
+    // ingested CLI run gets (server/services/runBookkeeping.ts). Refused only
+    // when the benchmark does not exist; a link failure never aborts the run.
     if (benchmarkId) {
-      const benchmark = await storage.benchmarks.getById(benchmarkId);
-      if (!benchmark) {
-        sendSSE(res, 'error', { error: `Benchmark not found: ${benchmarkId}` });
+      try {
+        await linkRunTestCasesToBenchmark(storage, benchmarkId, resolvedTestCaseIds);
+      } catch (linkError: any) {
+        if (!(linkError instanceof BenchmarkNotFoundError)) throw linkError;
+        sendSSE(res, 'error', { error: linkError.message });
         res.end();
         return;
       }
-      const idsChanged = JSON.stringify(benchmark.testCaseIds || []) !== JSON.stringify(resolvedTestCaseIds);
-      if (idsChanged) {
-        await storage.benchmarks.update(benchmarkId, { testCaseIds: resolvedTestCaseIds });
-      }
     }
 
-    // Create test case snapshots
-    const snapshots: TestCaseSnapshot[] = testCases.map(tc => ({
-      id: tc.id,
-      version: (tc as any).version || 1,
-      name: tc.name,
-    }));
+    // The run document — the same shape the CLI executor mints
+    // (services/evaluationRunDocument.ts): agent model resolved from the
+    // agent's own config, snapshots of the resolved cases, provenance of the
+    // agent configuration as loaded right now.
+    const run: any = buildEvaluationRunDocument({
+      name, description, sources: resolved.sources, agentKey, modelId, judgeModelId, evaluatorId, concurrency, benchmarkId,
+      trigger, agentEndpoint, headers, testCases, agents: refreshed.agents,
+      provenance: await resolveAgentProvenance(agentKey, { agentEndpoint }),
+    });
+    const runId: string = run.id;
+    const now: string = run.createdAt;
+    const snapshots: TestCaseSnapshot[] = run.testCaseSnapshots;
 
-    // Link the resolved test case ids into the referenced benchmark's
-    // testCaseIds (top level AND current version) immediately — independent
-    // of whether the run itself succeeds. Without this, a run against a
-    // fresh `benchmarkId` (created with testCaseIds: [] by the CLI) leaves
-    // the benchmark a permanent shell, and the benchmark page's test-case
-    // panel keeps rendering "No test cases in this version" even after the
-    // top level is populated by some other path. Best-effort: a failure
-    // here must not abort the run.
-    if (benchmarkId && snapshots.length > 0) {
-      try {
-        await linkTestCaseIdsToBenchmark(benchmarkId, snapshots.map(s => s.id), storage);
-      } catch (linkError: any) {
-        console.error(`[StorageAPI] Failed to link test cases into benchmark ${benchmarkId}:`, linkError.message);
-      }
-    }
-
-    // Create the evaluation run document
-    const runId = `eval-run-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-    const now = new Date().toISOString();
-
-    // Resolve the agent's model from its own config (connectorConfig) so the
-    // run document records which model the agent ran on — there is no
-    // user-selected agent model. Falls back to any client-supplied modelId
-    // (legacy) then empty. The runner re-resolves the same way at execution.
-    let resolvedModelId: string = modelId || '';
-    try {
-      resolvedModelId = resolveAgentModel(refreshed.agents.find(a => a.key === agentKey), modelId);
-    } catch { /* keep fallback */ }
-
-    const run: any = {
-      id: runId,
-      name: name || `Evaluation Run ${new Date().toLocaleDateString()}`,
-      description,
-      sources: resolved.sources,
-      agentKey,
-      modelId: resolvedModelId,
-      agentEndpoint,
-      headers,
-      // Customer-supplied judge model id (separate from agent's `modelId`).
-      // Forwarded onto the run document so the runner reads it and the UI
-      // can show which judge model graded each test case in this run.
-      judgeModelId: typeof judgeModelId === 'string' && judgeModelId ? judgeModelId : undefined,
-      evaluatorId,
-      concurrency,
-      benchmarkId,
-      trigger: trigger || 'manual',
-      status: 'running',
-      testCaseSnapshots: snapshots,
-      results: {},
-      createdAt: now,
-      // Agent-configuration provenance: WHICH version of this agent's config
-      // produced the numbers (fingerprint + prompt hash + config file/sha).
-      // See lib/agentFingerprint.ts. Spread of `undefined` is a no-op.
-      ...(await resolveAgentProvenance(agentKey, { agentEndpoint })),
-    };
-
-    // Stamp the content digest of this run's evaluation conditions and
-    // find-or-create the corresponding benchmark image. Content-addressed
-    // identity is the inherent dedup: re-running the same command yields the
-    // same digest → the same image doc — never a duplicate entity. Runs with
-    // equal digests are comparable by construction (same test-case contents,
-    // same evaluator/judge conditions; only the agent varies).
-    // Failure-safe: image bookkeeping must never block run execution.
-    try {
-      const evalConditions = {
-        evaluatorId: evaluatorId || undefined,
-        judgeModelId: run.judgeModelId || undefined,
-      };
-      const digest = computeImageDigest({ testCases, evalConditions });
-      run.imageDigest = digest;
-      await storage.images.create(buildImageDoc({ testCases, evalConditions }));
-      await storage.images.update(digest, { lastRunAt: now }).catch(() => {});
-    } catch (imageErr: any) {
-      console.warn('[StorageAPI] Image digest stamping failed (run continues):', imageErr?.message);
-    }
+    // Benchmark image: content digest of this run's evaluation conditions
+    // (find-or-create; failure-safe). See server/services/runBookkeeping.ts.
+    const imageDigest = await stampRunImage(storage, testCases, {
+      evaluatorId: evaluatorId || undefined,
+      judgeModelId: run.judgeModelId || undefined,
+    }, now);
+    if (imageDigest) run.imageDigest = imageDigest;
 
     // Every write of this run — the run doc, per-case reports, verdicts, the
     // terminal status and the benchmark link — goes through ONE sink
@@ -437,14 +375,18 @@ router.post('/api/storage/evaluation-runs', async (req: Request, res: Response) 
     } catch (error: any) {
       console.error(`[StorageAPI] Evaluation run failed: ${runId}`, error.message);
 
-      // Update run status to failed
-      try {
-        await deps.sink.finalize(runId, { status: 'failed', error: error.message });
-      } catch (updateError: any) {
-        console.error(`[StorageAPI] Failed to update run status: ${updateError.message}`);
+      // Lease lost: the sweeper already marked the run failed and fenced this
+      // executor out — a terminal write from here would be refused (409) and
+      // must not be attempted. Every other failure is persisted as `failed`.
+      if (!isLeaseLostError(error)) {
+        try {
+          await deps.sink.finalize(runId, { status: 'failed', error: error.message });
+        } catch (updateError: any) {
+          console.error(`[StorageAPI] Failed to update run status: ${updateError.message}`);
+        }
       }
 
-      sendSSE(res, 'error', { error: error.message, runId });
+      sendSSE(res, 'error', { error: error.message, runId, ...(isLeaseLostError(error) ? { leaseLost: error.info } : {}) });
     } finally {
       stopHeartbeat();
       // Clean up cancellation token
@@ -510,6 +452,33 @@ router.post('/api/storage/evaluation-runs/:id/cancel', async (req: Request, res:
     if (run.status !== 'running') {
       return res.status(400).json({ error: `Run is not currently running (status: ${run.status})` });
     }
+
+    // Cancel by lease (#612): the run is executing in ANOTHER process (a CLI,
+    // or a server instance sharing this storage) that is still heartbeating.
+    // Stamp the request; the executor sees `cancelRequestedAt` in its next
+    // lease echo (≤ one heartbeat period), stops starting cases and finalizes
+    // `cancelled` with explicit markers — the same drain semantics as the
+    // in-process path above. The UI shows "Cancelling…" meanwhile. An
+    // EXPIRED lease falls through to the zombie fallback below (the sweeper
+    // will fail the run within a minute anyway).
+    if (run.lease && isLeaseLive(run.lease)) {
+      const cancelRequestedAt = run.cancelRequestedAt ?? new Date().toISOString();
+      if (!run.cancelRequestedAt) {
+        // Guarded on token + generation + running (not on the heartbeat, which
+        // the executor legitimately renews meanwhile): a run that finished or
+        // was swept between the read and this write is not stamped.
+        try {
+          await storage.evaluationRuns.update(id, { cancelRequestedAt }, guardFor(run));
+        } catch (error: any) {
+          if (isLeaseLostError(error)) {
+            return res.status(409).json({ error: `Run changed state while cancelling (now ${error.info.status}); refresh and retry if it is still running.`, leaseLost: error.info });
+          }
+          throw error;
+        }
+      }
+      return res.json({ success: true, draining: true, viaLease: true, cancelRequestedAt });
+    }
+
     if (!isOldEnoughForZombieCancel(run.createdAt)) {
       // Too close to creation to safely assume "no token yet" means "no
       // executor anywhere" — the executor may simply not have registered
@@ -526,11 +495,24 @@ router.post('/api/storage/evaluation-runs/:id/cancel', async (req: Request, res:
     // REQUEST — it stamps cancelRequestedAt and lets finalization publish
     // the terminal status once the executor has drained.)
     const cancelNote = 'Cancelled: no active executor found for this run (process restarted or crashed) — marked cancelled directly.';
-    await storage.evaluationRuns.update(id, {
-      status: 'cancelled',
-      completedAt: new Date().toISOString(),
-      cancelNote,
-    } as any);
+    // For a leased run this terminal write is a CAS on the exact state just
+    // read (token, generation, the expired heartbeat): if the executor came
+    // back, finished, or the sweeper took the run over in between, the write
+    // is refused and nothing is overwritten. Pre-lease docs have no guard.
+    const observed = guardFor(run);
+    const guard = observed && run.lease ? { ...observed, heartbeatAt: run.lease.heartbeatAt } : undefined;
+    try {
+      await storage.evaluationRuns.update(id, {
+        status: 'cancelled',
+        completedAt: new Date().toISOString(),
+        cancelNote,
+      } as any, guard);
+    } catch (error: any) {
+      if (isLeaseLostError(error)) {
+        return res.status(409).json({ error: `Run changed state while cancelling (now ${error.info.status}); refresh and retry if it is still running.`, leaseLost: error.info });
+      }
+      throw error;
+    }
 
     res.json({ success: true, viaFallback: true, note: cancelNote });
   } catch (error: any) {
@@ -548,7 +530,7 @@ router.post('/api/storage/evaluation-runs/:id/cancel', async (req: Request, res:
 // any override actually changes the effective config, the new run is
 // flagged `modified: true` in addition to recording `rerunOf` -- so a
 // tweaked re-run is never mistaken for a faithful duplicate.
-router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: Response) => {
+router.post('/api/storage/evaluation-runs/:id/rerun', refuseWhenDraining, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const storage = getStorageModule();
@@ -685,6 +667,7 @@ router.post('/api/storage/evaluation-runs/:id/rerun', async (req: Request, res: 
       })
       .catch(async (error: any) => {
         console.error(`[StorageAPI] Rerun evaluation run failed: ${newRunId}`, error.message);
+        if (isLeaseLostError(error)) return; // already `failed` by the sweeper; this executor is fenced out
         try {
           await deps.sink.finalize(newRunId, { status: 'failed', error: error.message });
         } catch (updateError: any) {

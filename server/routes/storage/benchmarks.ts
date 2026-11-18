@@ -32,6 +32,7 @@ import { getCustomAgents } from '../../services/customAgentStore.js';
 import { extractJudgeFailureReason, computeJudgeFailureSummary } from '../../../lib/judgeFailureSummary.js';
 import { deleteRunEverywhere } from '../../services/runDelete.js';
 import { registerRunCanceller, registerActiveRunLister, cancelActiveRun } from '../../services/runCancellation.js';
+import { refuseWhenDraining } from '../../services/serverDrain.js';
 import { resolveAgentProvenance } from '../../services/agentProvenance.js';
 
 /**
@@ -1081,7 +1082,7 @@ router.post('/api/storage/benchmarks/bulk', async (req: Request, res: Response) 
 });
 
 // POST /api/storage/benchmarks/:id/execute - Execute benchmark and stream progress via SSE
-router.post('/api/storage/benchmarks/:id/execute', async (req: Request, res: Response) => {
+router.post('/api/storage/benchmarks/:id/execute', refuseWhenDraining, async (req: Request, res: Response) => {
   debug('StorageAPI', '========== BENCHMARK EXECUTION STARTED ==========');
   debug('StorageAPI', 'Execute request params:', req.params);
   debug('StorageAPI', 'Execute request body:', JSON.stringify(req.body, null, 2));

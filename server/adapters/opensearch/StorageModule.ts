@@ -50,6 +50,7 @@ import { assertNotMigrating } from '../../services/migrationLock.js';
 import { deterministicVersionFields } from '../evaluatorVersionFields.js';
 import { describeOpenSearchError } from '../../services/opensearchClientFactory.js';
 import { TEST_CASE_SUMMARY_EXCLUDED_FIELDS } from '../../services/testCaseSummary.js';
+import { LeaseLostError, leaseGuardHolds, leaseLostInfo, type LeaseGuard } from '../../../lib/runLease.js';
 
 // ============================================================================
 // Helpers
@@ -1412,6 +1413,29 @@ class OpenSearchEvaluatorOperations implements IEvaluatorOperations {
  */
 const RUN_DOC_RETRY_ON_CONFLICT = 10;
 
+/**
+ * Lease fence (lib/runLease.ts) as a Painless prologue: with `params.guard`
+ * set, the mutation applies only while the LIVE document still names this
+ * executor at this lease generation and is still `running`; otherwise the
+ * script is a no-op (`ctx.op = 'none'`). The caller turns a guarded no-op
+ * into a `LeaseLostError` after re-reading the document (a plain read, so
+ * the refusal reports the generation/status that fenced it out). Running
+ * inside the scripted `_update` (under OpenSearch's own version check +
+ * `retry_on_conflict`) is what makes the check-and-write atomic.
+ */
+const LEASE_GUARD_SCRIPT = `
+  if (params.guard != null) {
+    def ex = ctx._source.executor;
+    def ls = ctx._source.lease;
+    if (ctx._source.status != 'running' || ex == null || ex.id == null || ex.id != params.guard.executorId
+        || ls == null || ls.generation != params.guard.generation
+        || (params.guard.heartbeatAt != null && ls.heartbeatAt != params.guard.heartbeatAt)) {
+      ctx.op = 'none';
+      return;
+    }
+  }
+`;
+
 class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
   constructor(private client: Client) {}
 
@@ -1473,7 +1497,7 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
    * side effect. `retry_on_conflict` absorbs the version_conflict a
    * simultaneous `updateResult` would otherwise raise.
    */
-  async update(id: string, updates: Partial<EvaluationRun>): Promise<EvaluationRun> {
+  async update(id: string, updates: Partial<EvaluationRun>, guard?: LeaseGuard): Promise<EvaluationRun> {
     assertNotMigrating(this.index);
     // Drop `id`/`docType`/undefined so the script can't rename the doc or
     // flip its discriminator; JSON transport would drop undefined anyway.
@@ -1482,8 +1506,9 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
       if (k === 'id' || k === 'docType' || v === undefined) continue;
       fields[k] = v;
     }
+    let result: string | undefined;
     try {
-      await this.client.update({
+      const response = await this.client.update({
         index: this.index,
         id,
         retry_on_conflict: RUN_DOC_RETRY_ON_CONFLICT,
@@ -1491,22 +1516,27 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
           script: {
             source: `
               if (ctx._source.docType != 'evaluation-run') { ctx.op = 'none'; return; }
+              ${LEASE_GUARD_SCRIPT}
               for (def entry : params.fields.entrySet()) {
                 ctx._source[entry.getKey()] = entry.getValue();
               }
             `,
             lang: 'painless',
-            params: { fields },
+            params: { fields, guard: guard ?? null },
           },
         },
         refresh: 'wait_for',
       });
+      result = response?.body?.result;
     } catch (error: any) {
       if (error.meta?.statusCode === 404) throw new Error(`Evaluation run ${id} not found`);
       throw error;
     }
     const updated = await this.getById(id);
     if (!updated) throw new Error(`Evaluation run ${id} not found`);
+    // A guarded write that the script skipped: the live doc no longer
+    // satisfies the guard (swept, finished, or taken over).
+    if (guard && result === 'noop' && !leaseGuardHolds(updated, guard)) throw new LeaseLostError(leaseLostInfo(updated));
     return updated;
   }
 
@@ -1595,22 +1625,24 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
    * the whole run went `failed`. `retry_on_conflict` + an outer 409 retry
    * (same pattern as `linkTestCaseIds`) make the write converge.
    */
-  async updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry): Promise<boolean> {
+  async updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry, guard?: LeaseGuard): Promise<boolean> {
     assertNotMigrating(this.index);
     return this.scriptedResultsWrite(runId, {
       source: `
+        ${LEASE_GUARD_SCRIPT}
         if (ctx._source.results == null) { ctx._source.results = new HashMap(); }
         ctx._source.results.put(params.testCaseId, params.result);
       `,
-      params: { testCaseId, result },
-    });
+      params: { testCaseId, result, guard: guard ?? null },
+    }, guard);
   }
 
-  async mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>): Promise<boolean> {
+  async mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>, guard?: LeaseGuard): Promise<boolean> {
     assertNotMigrating(this.index);
     if (Object.keys(results).length === 0) return true;
     return this.scriptedResultsWrite(runId, {
       source: `
+        ${LEASE_GUARD_SCRIPT}
         if (ctx._source.results == null) { ctx._source.results = new HashMap(); }
         boolean changed = false;
         for (def entry : params.results.entrySet()) {
@@ -1621,26 +1653,35 @@ class OpenSearchEvaluationRunOperations implements IEvaluationRunOperations {
         }
         if (!changed) { ctx.op = 'none'; }
       `,
-      params: { results },
-    });
+      params: { results, guard: guard ?? null },
+    }, guard);
   }
 
   private async scriptedResultsWrite(
     runId: string,
     script: { source: string; params: Record<string, unknown> },
+    guard?: LeaseGuard,
   ): Promise<boolean> {
     const MAX_OUTER_ATTEMPTS = 3;
     for (let attempt = 1; attempt <= MAX_OUTER_ATTEMPTS; attempt++) {
       try {
-        await this.client.update({
+        const response = await this.client.update({
           index: this.index,
           id: runId,
           retry_on_conflict: RUN_DOC_RETRY_ON_CONFLICT,
           body: { script: { ...script, lang: 'painless' } },
           refresh: 'wait_for',
         });
+        if (guard && response?.body?.result === 'noop') {
+          // Either nothing to change (mergeMissingResults) or the lease
+          // fence skipped the write — the live document tells which.
+          const live = await this.getById(runId);
+          if (!live) return false;
+          if (!leaseGuardHolds(live, guard)) throw new LeaseLostError(leaseLostInfo(live));
+        }
         return true;
       } catch (error: any) {
+        if (error instanceof LeaseLostError) throw error;
         if (error.meta?.statusCode === 404) return false;
         const isConflict = error.meta?.statusCode === 409;
         if (!isConflict || attempt === MAX_OUTER_ATTEMPTS) throw error;

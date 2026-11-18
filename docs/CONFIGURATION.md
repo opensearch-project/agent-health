@@ -448,6 +448,10 @@ nothing rendered. See `lib/pageLatency.ts` and
 | `CASE_SUMMARY_MODEL_ID` | Model for the TL;DR card | `BEDROCK_MODEL_ID` |
 | `CASE_SUMMARY_TIMEOUT_MS` | Per-summary model timeout (then the field-based summary is shown) | `20000` |
 | `CASE_SUMMARY_MAX_CONCURRENT` | Max model summaries in flight per server; extra requests get the field-based summary | `4` |
+| `AH_RUN_LEASE_TTL_MS` | Executor lease TTL for evaluation runs (see [Run leases](#run-leases-what-happens-when-an-executor-dies)). The executor heartbeats 15× per TTL (every 20 s at the default), so a run whose executor has not been heard from for this long is marked `failed` | `300000` (5 min) |
+| `AH_RUN_LEASE_SWEEP_INTERVAL_MS` | How often the server looks for expired leases (it also sweeps once at boot) | `60000` |
+| `AH_RUN_LEASE_SWEEP_LEGACY` | `1` applies the 1 h age rule (`BENCHMARK_RUN_STALE_AFTER_MS`) to `running` evaluation runs created before leases existed, which the sweeper otherwise never touches. Meant for a one-off, reviewed clean-up | unset |
+| `AH_RUN_LEASE_SWEEP_DISABLED` | `1` turns the lease sweeper off | unset |
 
 ## The built-in assistant (`assistant`)
 
@@ -761,6 +765,41 @@ Still requires a restart:
 The environment is process-wide: a run already in progress when another run
 re-reads `.env` sees the new values from that moment. Runs that must be
 isolated from each other's environment should not share a server.
+
+## Run leases: what happens when an executor dies
+
+Every evaluation run carries an **executor lease** on its document:
+`executor: { id, kind: 'cli' | 'server', version }` and
+`lease: { generation, heartbeatAt, ttlMs }`. The process executing the run
+(the server for UI-started runs; a CLI for runs ingested through
+`/api/runs/ingest/*`) renews `heartbeatAt` every 20 s, and every write it
+makes is a compare-and-swap on its token, the lease generation and
+`status === 'running'`.
+
+- **Executor crash / kill / lost laptop:** the heartbeat stops. The server's
+  lease sweeper (at boot and every minute) marks a `running` run whose last
+  heartbeat is older than the TTL as `failed` — error `executor lost (no
+  heartbeat since …)` — stamps `cancelled` markers on the planned cases that
+  never started, bumps the lease generation and clears the token. If the old
+  executor ever comes back, its writes are refused with
+  `409 { error: 'lease-lost', generation, at, status }` and cannot resurrect
+  the run. Previously such a run stayed `running` forever ("Not able to
+  cancel this run").
+- **Cancel from the UI** while the executor is another process: the server
+  stamps `cancelRequestedAt` (the row shows *Cancelling…*), the executor sees
+  it on its next heartbeat, stops starting cases, and finalizes `cancelled`
+  with explicit markers — the same drain semantics as an in-process cancel.
+- **Slow but alive** executors are safe: the TTL is 15 heartbeats, so even a
+  synchronous hook that blocks the process for a couple of minutes does not
+  lose the run. Runs created before leases existed have no `lease` and are
+  left alone unless `AH_RUN_LEASE_SWEEP_LEGACY=1`.
+- **Before a restart:** `GET /api/runs/in-flight` lists every leased run
+  still executing against this server (CLI runs included) together with the
+  runs this process executes in memory; `POST /api/server/drain` makes the
+  server refuse new runs and new leases with `503 draining` while the
+  listed runs finish. The CLI's version-mismatch restart reads
+  `/api/runs/in-flight` (falling back to `/health` for older servers) before
+  it stops a server.
 
 ## Validation
 

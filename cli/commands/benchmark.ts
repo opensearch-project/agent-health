@@ -51,6 +51,7 @@ import {
   formatSourceMismatchRefusal,
   type BenchmarkSourceMismatch,
 } from '@/cli/utils/benchmarkSourceGuard.js';
+import { executeRunLocally, LocalRunFailure } from '@/cli/utils/localExecutor.js';
 import { computeBenchmarkRepairPlan, applyRepairPlan, computeVersionLinkRepairPlan } from '@/cli/utils/benchmarkDoctor.js';
 
 interface BenchmarkOptions {
@@ -758,161 +759,100 @@ async function runUnifiedMode(
   if (benchmarkId) console.log(chalk.gray(`  Benchmark: ${options.name}`));
   else console.log(chalk.gray(`  Mode: Ad-hoc (no benchmark association)`));
 
-  // Stored code-SDK test cases (-n / -t) whose `sourceFile` the server's eval
-  // roots do not contain: say where the server looks BEFORE the run starts.
-  // Best-effort and advisory only (see cli/utils/evalRootsHint.ts).
-  for (const hint of await collectEvalRootsHints(api, sources)) {
-    console.log(chalk.yellow(`  ${formatEvalRootsHint(hint)}`));
-  }
   console.log('');
 
-  // Execute via evaluation-runs API (SSE)
+  // Execute IN THIS PROCESS (#612): hooks, connector, SDK bodies and the judge
+  // run with the caller's cwd / env / config; results reach the server through
+  // the run-ingestion API (cli/utils/localExecutor.ts). Code-SDK sources are
+  // read from the caller's files, so no eval-roots hint is needed here.
   const spinner = ora('Starting evaluation run...').start();
+  let totalTestCases = 0;
+  let completedCount = 0;
+  let runId = '';
+  let run: EvaluationRun | null = null;
+  let logPath: string | undefined;
 
   try {
-    const response = await fetch(`${serverResult.baseUrl}/api/storage/evaluation-runs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const outcome = await executeRunLocally({
+      serverUrl: serverResult.baseUrl,
+      config,
+      request: {
         name: `CLI Run - ${agentKey} - ${new Date().toISOString()}`,
         sources,
         agentKey,
         modelId,
-        // Customer-supplied judge model id, distinct from `modelId`.
-        ...(options.judgeModel ? { judgeModelId: options.judgeModel } : {}),
+        judgeModelId: options.judgeModel,
         evaluatorId: options.evaluator,
         concurrency,
         benchmarkId,
-        trigger: 'cli',
-      }),
-    });
-
-    if (!response.ok || !response.body) {
-      const errText = await response.text();
-      spinner.fail(`Evaluation run failed: ${errText}`);
-      process.exit(1);
-    }
-
-    // Parse SSE stream
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let totalTestCases = 0;
-    let completedCount = 0;
-    let runId = '';
-    let sseSawTerminal = false;
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            const eventType = line.slice(7);
-            continue;
-          }
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.runId && data.testCases) {
-                // Started event
-                runId = data.runId;
-                totalTestCases = data.testCases.length;
-                if (forcedMismatch) {
-                  // The server has linked this run's cases into the benchmark
-                  // by now (before executing anything), so say what --force
-                  // added even if the run later fails, and record the added
-                  // file on the benchmark's description (metadata PATCH: no
-                  // version bump, no full-document rewrite).
-                  const { benchmark: bm, mismatch, previousIds } = forcedMismatch;
-                  const added = describeAddedTestCases(previousIds, data.testCases, bm.name);
-                  if (added) spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: chalk.yellow(added) });
-                  if (mismatch.foreignFiles.length > 0) {
-                    try {
-                      await api.patchBenchmarkMetadata(bm.id, { description: describeForcedAddition(bm.description, mismatch) });
-                    } catch (e) {
-                      spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: chalk.yellow(`Could not record the addition on the benchmark description: ${e instanceof Error ? e.message : String(e)}`) });
-                    }
-                  }
-                  spinner.start();
-                }
-                spinner.text = `Running evaluation (0/${totalTestCases})`;
-              } else if (data.completedCount !== undefined) {
-                // Progress event
-                completedCount = data.completedCount;
-                spinner.text = `Running evaluation (${completedCount}/${totalTestCases})`;
-              } else if (data.status === 'completed' || data.status === 'cancelled') {
-                // Completed event
-                sseSawTerminal = true;
-                break;
-              } else if (data.error) {
-                spinner.fail(`Run failed: ${data.error}`);
-                process.exit(1);
+      },
+      verbose: options.verbose || !!process.env.DEBUG,
+      callbacks: {
+        onStarted: async ({ runId: id, testCases }) => {
+          runId = id;
+          totalTestCases = testCases.length;
+          if (forcedMismatch) {
+            // The server has linked this run's cases into the benchmark when
+            // it created the run (before anything executes), so say what
+            // --force added even if the run later fails, and record the
+            // added file on the benchmark's description (metadata PATCH: no
+            // version bump, no full-document rewrite). #620
+            const { benchmark: bm, mismatch, previousIds } = forcedMismatch;
+            const added = describeAddedTestCases(previousIds, testCases, bm.name);
+            if (added) spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: chalk.yellow(added) });
+            if (mismatch.foreignFiles.length > 0) {
+              try {
+                await api.patchBenchmarkMetadata(bm.id, { description: describeForcedAddition(bm.description, mismatch) });
+              } catch (e) {
+                spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: chalk.yellow(`Could not record the addition on the benchmark description: ${e instanceof Error ? e.message : String(e)}`) });
               }
-            } catch {
-              // Skip malformed SSE data
             }
+            spinner.start();
           }
-        }
-      }
-    } catch (streamErr) {
-      // The progress stream dropped (proxy idle-timeout ~4 min, network blip)
-      // BEFORE the run finished. This is expected on long runs. The server
-      // keeps executing and persisting results, so as long as we captured the
-      // runId we recover the true result by polling storage below rather than
-      // aborting the whole command (the old behavior surfaced "0/0 / fetch
-      // failed" even though the run finished server-side).
-      if (!runId) {
-        spinner.fail(`Lost connection before the run started: ${streamErr instanceof Error ? streamErr.message : String(streamErr)}`);
-        process.exit(1);
-      }
+          spinner.text = `Running evaluation (0/${totalTestCases})`;
+        },
+        onProgress: (progress) => {
+          completedCount = progress.completedCount;
+          spinner.text = `Running evaluation (${completedCount}/${totalTestCases})`;
+        },
+        onDeliveryRetry: ({ operation, attempt, delayMs, error }) => {
+          spinner.text = `Server unreachable while recording ${operation} (attempt ${attempt}: ${error}) — retrying in ${Math.round(delayMs / 1000)}s`;
+        },
+        onCancelRequested: () => {
+          spinner.text = 'Cancel requested — letting in-flight test cases finish…';
+        },
+      },
+    });
+    runId = outcome.runId;
+    run = outcome.run;
+    logPath = outcome.logPath;
+  } catch (error) {
+    const failure = error instanceof LocalRunFailure ? error : undefined;
+    if (failure?.runId) runId = failure.runId;
+    const message = error instanceof Error ? error.message : String(error);
+    spinner.fail(`Run failed: ${message}`);
+    if (failure?.kind === 'delivery' && failure.spoolPath) {
+      console.log(chalk.gray(`  Unconfirmed writes are spooled at ${failure.spoolPath}`));
     }
+    if (failure?.logPath) console.log(chalk.gray(`  Log: ${failure.logPath}`));
+    if (runId) console.log(chalk.gray(`  Check status: ${serverResult.baseUrl}/api/storage/evaluation-runs/${runId}`));
+    process.exit(1);
+  }
 
-    // Read the TRUE final state from storage. If the SSE stream ended before
-    // the run reached a terminal state (long run + dropped stream), poll until
-    // it does — the server finishes independently of the client connection.
-    let run: EvaluationRun | null = null;
-    if (runId && !sseSawTerminal) {
-      spinner.text = 'Stream ended; waiting for the run to finish server-side…';
-      run = await api.pollEvaluationRunStatus(runId, (r) => {
-        const done = Object.values(r.results || {}).filter((x: any) => x.status !== 'pending' && x.status !== 'running').length;
-        spinner.text = `Waiting for run to finish server-side (${done}/${totalTestCases || Object.keys(r.results || {}).length})…`;
-      });
-    } else if (runId) {
-      run = await api.getEvaluationRun(runId);
-    }
-
-    // The run object we now hold may not actually be terminal: a poll can give
-    // up after its (generous, but finite) timeout while the server is still
-    // working, and 'failed'/'cancelled' are legitimate distinct terminal
-    // states from 'completed'. Report each case honestly instead of always
-    // succeeding — this is the same class of bug this fix addresses, one
-    // layer up. See cli/utils/evaluationRunOutcome.ts for the (unit-tested)
-    // decision logic.
-    if (runId && !run) {
-      // We know a run was started but could not read its final state back:
-      // nothing to summarize, so don't claim success.
-      spinner.fail(`Could not read the final state of run ${runId} from the server.`);
-      console.log(chalk.gray(`  Check status: ${serverResult.baseUrl}/api/storage/evaluation-runs/${runId}`));
-      process.exit(1);
-    }
+  try {
+    // The run object we hold is what `finalize` confirmed. Report each
+    // terminal state honestly ('failed' / 'cancelled' are distinct from
+    // 'completed') — see cli/utils/evaluationRunOutcome.ts.
     const outcome = resolveUnifiedRunOutcome(run, completedCount);
     if (outcome.kind === 'failed') {
       spinner.fail(outcome.message);
       process.exit(1);
     }
     if (outcome.kind === 'timeout') {
-      spinner.warn('Timed out waiting for the run to finish server-side — it may still be in progress.');
+      spinner.warn('The run did not reach a terminal state.');
       console.log(chalk.gray(`  Check status: ${serverResult.baseUrl}/api/storage/evaluation-runs/${runId}`));
       process.exit(1);
     }
-
     spinner.succeed(`Evaluation run completed (${outcome.doneCount}/${totalTestCases} test cases)`);
 
     if (run) {
@@ -945,6 +885,7 @@ async function runUnifiedMode(
         if (reason) {
           console.log(chalk.yellow(`  ${reason}`));
           console.log(chalk.gray('  Inspect the run below for the per-case error (e.g. expired credentials → 403 from the agent).'));
+          if (logPath) console.log(chalk.gray(`  Log: ${logPath}`));
         }
       }
       if (benchmarkId) {

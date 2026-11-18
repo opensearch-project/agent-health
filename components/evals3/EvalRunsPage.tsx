@@ -40,6 +40,7 @@ import { Benchmark, TestCase, BenchmarkRun, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { computeRunStats, getEffectiveRunStatus } from '@/lib/runStats';
+import { isExecutorLostError } from '@/lib/runLease';
 import { sortGroupsByRecency } from '@/lib/runSort';
 import { getRunActionVisibility } from '@/lib/runActions';
 import { formatRelativeTime, getModelName, getEvaluatorLabel } from '@/lib/utils';
@@ -390,6 +391,41 @@ export const EvalRunsPage: React.FC = () => {
     const interval = setInterval(() => { loadData(); }, 5000);
     return () => clearInterval(interval);
   }, [hasInProgressRuns, loadData]);
+
+  // A run started OUTSIDE this page — the CLI executing in its own process
+  // (#612), another browser tab — is unknown to the poll above until a manual
+  // reload. Probe the cheap in-flight list (lease data, not the full run
+  // documents) every 5 s and reload the page's data only when it names a run
+  // this page has not seen yet, so a CLI run shows up within one poll period.
+  const knownRunIds = useMemo(() => new Set(evalRuns.map(r => r.id)), [evalRuns]);
+  // Ids the previous probe already reported: a run that stays in flight but
+  // never shows up in the list (e.g. beyond the 500-row page) triggers ONE
+  // reload, not one every tick.
+  const probedRunIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    const probe = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        const res = await fetch(`${ENV_CONFIG.backendUrl}/api/runs/in-flight`);
+        if (!res.ok) return;
+        const data = await res.json() as { runs?: Array<{ id: string }> };
+        if (cancelled) return;
+        const ids = (data.runs ?? []).map(r => r.id);
+        const unseen = ids.some(id => !knownRunIds.has(id) && !probedRunIds.current.has(id));
+        probedRunIds.current = new Set(ids);
+        if (unseen) loadData(true);
+      } catch {
+        // Best-effort; the next tick tries again.
+      } finally {
+        inFlight = false;
+      }
+    };
+    const interval = setInterval(probe, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [knownRunIds, loadData]);
 
   // Available filter options (derived from data)
   const availableBenchmarks = useMemo(() => {
@@ -806,10 +842,13 @@ export const EvalRunsPage: React.FC = () => {
             {rr.status === 'failed' && (
               <span
                 data-testid="run-row-status-failed"
-                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30"
+                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium whitespace-nowrap bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30"
                 title={rr.run.error ? `Run failed: ${rr.run.error}` : 'This run failed before finishing'}
               >
-                <XCircle size={9} /> Failed
+                {/* A run the lease sweeper failed (its executor stopped
+                    heartbeating — crashed server / killed CLI) says so in the
+                    badge itself; the full "no heartbeat since …" is the title. */}
+                <XCircle size={9} /> {isExecutorLostError(rr.run.error) ? 'Failed · executor lost' : 'Failed'}
               </span>
             )}
           </div>

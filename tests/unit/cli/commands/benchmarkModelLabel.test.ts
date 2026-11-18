@@ -14,8 +14,8 @@
  * the agent was not configured with.
  *
  * Two levels: the pure label helper, and the real `benchmark` command driven
- * through its unified (evaluation-runs) path with the server mocked at the
- * HTTP boundary, asserting what is actually printed.
+ * through its unified path with the local executor (#612) mocked at its
+ * boundary, asserting what is actually printed and what the run request carries.
  */
 
 import type { AgentConfig } from '@/types/index.js';
@@ -26,6 +26,9 @@ jest.mock('@/lib/config/index.js', () => ({
   DEFAULT_SERVER_CONFIG: { port: 4001, reuseExistingServer: true, startTimeout: 30000 },
 }));
 
+// The local executor (#612) pulls in the runner, connectors and the AWS SDK;
+// this suite covers the command's option handling / summary only.
+jest.mock('@/cli/utils/localExecutor.js', () => ({ __esModule: true, executeRunLocally: jest.fn(), LocalRunFailure: class LocalRunFailure extends Error {} }));
 jest.mock('@/cli/utils/serverLifecycle.js', () => ({
   __esModule: true,
   ensureServer: jest.fn(),
@@ -56,6 +59,7 @@ jest.mock('ora', () => ({
 
 import { loadConfig } from '@/lib/config/index.js';
 import { ApiClient } from '@/cli/utils/apiClient.js';
+import { executeRunLocally } from '@/cli/utils/localExecutor.js';
 import { createServerCleanup, ensureServer, isServerRunning } from '@/cli/utils/serverLifecycle.js';
 import { createBenchmarkCommand, formatAgentModelLabel, NO_AGENT_MODEL_LABEL } from '@/cli/commands/benchmark.js';
 
@@ -64,6 +68,7 @@ const mockEnsureServer = ensureServer as jest.MockedFunction<typeof ensureServer
 const mockCreateServerCleanup = createServerCleanup as jest.MockedFunction<typeof createServerCleanup>;
 const mockIsServerRunning = isServerRunning as jest.MockedFunction<typeof isServerRunning>;
 const MockApiClientClass = ApiClient as unknown as jest.Mock;
+const mockExecuteRunLocally = executeRunLocally as jest.MockedFunction<typeof executeRunLocally>;
 
 const REST_AGENT_NO_MODEL: AgentConfig = {
   key: 'rest-no-model',
@@ -107,20 +112,18 @@ describe('benchmark command (unified path) — printed Model line', () => {
   let errorSpy: jest.SpyInstance;
   let exitSpy: jest.SpyInstance;
   let postedBodies: any[];
-  const originalFetch = global.fetch;
 
-  /** Server mocked at the HTTP boundary: an SSE stream that starts and completes one case. */
-  function mockEvaluationRunsEndpoint() {
+  /** The local executor mocked at its boundary: records the run request, completes one case. */
+  function mockLocalExecutor() {
     postedBodies = [];
-    const sse = [
-      `data: ${JSON.stringify({ runId: 'eval-run-1', testCases: [{ id: 'tc-1', name: 'case 1', status: 'pending' }] })}\n\n`,
-      `data: ${JSON.stringify({ completedCount: 1, totalTestCases: 1 })}\n\n`,
-      `data: ${JSON.stringify({ status: 'completed' })}\n\n`,
-    ].join('');
-    global.fetch = jest.fn(async (_url: any, init?: any) => {
-      postedBodies.push(JSON.parse(init?.body ?? '{}'));
-      return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
-    }) as any;
+    mockExecuteRunLocally.mockImplementation(async ({ request, callbacks }) => {
+      postedBodies.push(request);
+      const testCases = [{ id: 'tc-1', version: 1, name: 'case 1' }];
+      callbacks?.onStarted?.({ runId: 'eval-run-1', testCases });
+      callbacks?.onProgress?.({ runId: 'eval-run-1', testCaseId: 'tc-1', startedCount: 1, completedCount: 1, totalTestCases: 1, status: 'completed' });
+      const run: any = { id: 'eval-run-1', status: 'completed', results: { 'tc-1': { reportId: 'rep-1', status: 'completed', passFailStatus: 'passed' } } };
+      return { runId: 'eval-run-1', run, status: 'completed', testCases, logPath: '/tmp/x.log' };
+    });
   }
 
   beforeEach(() => {
@@ -144,7 +147,7 @@ describe('benchmark command (unified path) — printed Model line', () => {
         results: { 'tc-1': { reportId: 'rep-1', status: 'completed', passFailStatus: 'passed' } },
       }),
     }));
-    mockEvaluationRunsEndpoint();
+    mockLocalExecutor();
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     exitSpy = jest.spyOn(process, 'exit').mockImplementation(((code?: number) => {
@@ -156,7 +159,6 @@ describe('benchmark command (unified path) — printed Model line', () => {
 
   afterEach(() => {
     process.exitCode = undefined;
-    global.fetch = originalFetch;
     logSpy.mockRestore();
     errorSpy.mockRestore();
     exitSpy.mockRestore();

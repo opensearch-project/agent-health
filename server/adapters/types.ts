@@ -31,6 +31,7 @@ import type {
   ObservabilityBackendType,
 } from '../../types/index.js';
 import type { ServiceWindowHint } from '../services/tracesService.js';
+import type { LeaseGuard } from '../../lib/runLease.js';
 
 // ============================================================================
 // Query Types
@@ -172,7 +173,15 @@ export interface IBenchmarkOperations {
 export interface IEvaluationRunOperations {
   create(run: EvaluationRun): Promise<EvaluationRun>;
   getById(id: string): Promise<EvaluationRun | null>;
-  update(id: string, updates: Partial<EvaluationRun>): Promise<EvaluationRun>;
+  /**
+   * Partial update of top-level fields. With `guard`, the write is a
+   * compare-and-swap evaluated INSIDE the adapter's atomic write (Painless
+   * script / process-serialized file write): it applies only while
+   * `executor.id`, `lease.generation` and `status === 'running'` match, and
+   * rejects with `LeaseLostError` (lib/runLease.ts) otherwise — the fence that
+   * keeps a stale executor from resurrecting a swept or finished run (#612).
+   */
+  update(id: string, updates: Partial<EvaluationRun>, guard?: LeaseGuard): Promise<EvaluationRun>;
   delete(id: string): Promise<{ deleted: boolean }>;
   list(options?: PaginationOptions & {
     benchmarkId?: string;
@@ -189,7 +198,7 @@ export interface IEvaluationRunOperations {
    * never a read-modify-write of the whole map). Safe to call concurrently
    * for different test cases of the same run.
    */
-  updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry): Promise<boolean>;
+  updateResult(runId: string, testCaseId: string, result: EvaluationRunResultEntry, guard?: LeaseGuard): Promise<boolean>;
   /**
    * Atomically add every entry of `results` whose key is NOT already present
    * on the persisted doc. Existing entries are never overwritten — this is
@@ -197,7 +206,7 @@ export interface IEvaluationRunOperations {
    * never-started cases and (b) heals any per-case `updateResult` that was
    * lost, without ever clobbering a concurrently persisted verdict.
    */
-  mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>): Promise<boolean>;
+  mergeMissingResults(runId: string, results: Record<string, EvaluationRunResultEntry>, guard?: LeaseGuard): Promise<boolean>;
 }
 
 /** One `EvaluationRun.results[testCaseId]` entry (see types/index.ts). */
