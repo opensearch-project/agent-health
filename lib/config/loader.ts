@@ -85,6 +85,10 @@ function toAgentConfig(userAgent: UserAgentConfig): AgentConfig {
     description: userAgent.description,
     enabled: userAgent.enabled ?? true,
     headers: userAgent.headers ?? {},
+    // Explicit connector auth (incl. `aws-sigv4`). Dropping it sent every
+    // request of a documented sigv4 agent unsigned (403 Missing
+    // Authentication Token) — only header-inferred auth survived.
+    auth: userAgent.auth,
     useTraces: userAgent.useTraces ?? false,
     // Trace-correlation fields — dropping these silently broke per-agent
     // service-window correlation (fell back to protocol defaults, colliding

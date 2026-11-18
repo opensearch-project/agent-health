@@ -214,6 +214,17 @@ export interface AgentConfig {
   hooks?: AgentHooks; // Lifecycle hooks for custom setup/transform logic
   isCustom?: boolean; // True for user-added custom endpoints (not from config file)
   builtIn?: boolean; // True for built-in agents shipped with the tool
+  /**
+   * Read-only, server-computed on `GET /api/agents` (never authored in
+   * config): who picks this agent's model. `ownsModel: true` when the agent
+   * declares one in its own connector config or its connector never forwards
+   * a run-level model — run dialogs then hide the Agent Model picker and
+   * `POST /api/evaluate` ignores any `modelId` sent for it.
+   */
+  modelOwnership?: {
+    ownsModel: boolean;
+    declaredModelId?: string;
+  };
 }
 
 /**
@@ -234,6 +245,9 @@ export interface ConnectorAuthConfig {
   awsProfile?: string;
   headers?: Record<string, string>;
 }
+
+/** See {@link TestCaseRun.modelSource}. */
+export type ModelSource = 'agent' | 'request' | 'default' | 'observed';
 
 export interface AppConfig {
   agents: AgentConfig[];
@@ -868,6 +882,18 @@ export interface TestCaseRun {
   agentKey?: string;
   modelName: string;
   modelId?: string;
+  /**
+   * Where {@link modelId} came from on runs started via `POST /api/evaluate`:
+   * `'agent'` — the agent owns its model (declared in its own connector
+   * config, or its connector never forwards one); the recorded id is
+   * informational and any caller-supplied `modelId` was ignored.
+   * `'request'` — the caller picked a catalog model. `'default'` — no model
+   * was requested and the catalog default was applied. `'observed'` — the
+   * agent owns its model and declared none, so the id was read from its
+   * spans once they arrived (`gen_ai.request.model`, lib/observedModel.ts);
+   * absent until then. Absent on older runs.
+   */
+  modelSource?: ModelSource;
   /**
    * Optional judge model id, separate from {@link modelId} (which is the
    * agent's LLM). Set explicitly via the run config (UI dropdown / CLI
@@ -1667,7 +1693,15 @@ export interface BenchmarkRun {
   // Configuration snapshot
   agentKey: string;                // Reference to AgentConfig.key
   agentEndpoint?: string;          // Override agent endpoint (optional)
-  modelId: string;                 // Agent's LLM (passed to the connector)
+  /**
+   * Agent's LLM (passed to the connector). Absent for an agent that owns its
+   * model and declares none — see {@link EvaluationRun.modelId}; once its
+   * traces report one, `modelName` / `modelSource: 'observed'` mirror the
+   * evaluation run (benchmark projection).
+   */
+  modelId?: string;
+  modelName?: string;
+  modelSource?: ModelSource;
   /**
    * Optional judge model id, distinct from {@link modelId} (the agent's
    * LLM). Customer input via the run config dialog / CLI `--judge-model` /
@@ -1864,7 +1898,16 @@ export interface EvaluationRun {
   // Execution config
   agentKey: string;
   agentEndpoint?: string;
-  modelId: string;
+  /**
+   * The agent's model: declared in its own connector config, or — for an
+   * agent that owns its model and declares none — absent until the first
+   * report's spans report one (then `modelSource: 'observed'`, with
+   * {@link modelName} as `<provider> · <model>`). Never a catalog fallback
+   * the caller did not choose.
+   */
+  modelId?: string;
+  modelName?: string;
+  modelSource?: ModelSource;
   /**
    * Optional judge model id, distinct from {@link modelId} (the agent's
    * LLM). Same precedence rules as on {@link BenchmarkRun.judgeModelId}.

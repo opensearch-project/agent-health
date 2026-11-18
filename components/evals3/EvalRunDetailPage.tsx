@@ -29,7 +29,7 @@ import { EvaluationRun, TestCaseSnapshot } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { computeRunStats, passRateOverJudged } from '@/lib/runStats';
 import { getRunActionVisibility } from '@/lib/runActions';
-import { formatRelativeTime, getModelName } from '@/lib/utils';
+import { formatRelativeTime, getRunModelLabel } from '@/lib/utils';
 import {
   getEvaluationRun,
   cancelEvaluationRun,
@@ -206,7 +206,7 @@ export const EvalRunDetailPage: React.FC = () => {
   }
 
   const agentName = DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey)?.name || run.agentKey;
-  const modelName = getModelName(run.modelId);
+  const modelName = getRunModelLabel(run);
   // Recompute from the persisted per-test-case verdicts (run.results) rather
   // than trusting the denormalized run.stats directly — the same defensive
   // pattern EvalRunsPage uses. run.stats can be stale/wrong for trace-judged
@@ -438,7 +438,7 @@ export const EvalRunDetailPage: React.FC = () => {
                   )}
                 </div>
               )}
-              <div><span className="text-muted-foreground">Model:</span> {modelName} ({run.modelId})</div>
+              <div><span className="text-muted-foreground">Model:</span> {modelName ? `${modelName}${run.modelId && run.modelId !== modelName ? ` (${run.modelId})` : ''}${run.modelSource === 'observed' ? ' · observed from traces' : ''}` : '— (not reported by the agent\'s traces)'}</div>
               {run.evaluatorId && <div><span className="text-muted-foreground">Evaluator:</span> {run.evaluatorId}</div>}
               <div><span className="text-muted-foreground">Concurrency:</span> {run.concurrency || 1}</div>
               {run.benchmarkId && <div><span className="text-muted-foreground">Benchmark:</span> {run.benchmarkId}</div>}

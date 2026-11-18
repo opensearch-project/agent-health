@@ -29,7 +29,7 @@
 
 import type { EvaluationReport, EvaluationRun, BenchmarkRun, BenchmarkRunStatus } from '@/types';
 import type { IStorageModule, EvaluationRunResultEntry } from '@/server/adapters/types';
-import { finalizeEvaluationRun, type FinalRunStatus } from './evaluationRunFinalize';
+import { finalizeEvaluationRun, observedModelFields, type FinalRunStatus } from './evaluationRunFinalize';
 
 /** Progress a heartbeat carries. Advisory in this version (no leases yet). */
 export interface RunHeartbeat {
@@ -75,7 +75,7 @@ export interface FinalizeCompletedInput {
   status: FinalRunStatus;
   /** The runner's in-memory run at completion (results, stats, judge identity). */
   completedRun: Pick<EvaluationRun, 'results' | 'testCaseSnapshots'> &
-    Partial<Pick<EvaluationRun, 'judgeFailureSummary' | 'judgeModel' | 'judgeProvider'>>;
+    Partial<Pick<EvaluationRun, 'judgeFailureSummary' | 'judgeModel' | 'judgeProvider' | 'modelId' | 'modelName' | 'modelSource'>>;
   completedAt?: string;
   /** When set, the terminal projection is linked into this benchmark's `runs[]`. */
   benchmarkId?: string;
@@ -145,6 +145,7 @@ function buildBenchmarkRunProjection(
     judgeModelId: run.judgeModelId, results: run.results, stats,
     ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
     ...(completedRun.judgeProvider ? { judgeProvider: completedRun.judgeProvider } : {}),
+    ...observedModelFields(completedRun),
     ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
     ...(run.description ? { description: run.description } : {}),
     ...(run.evaluatorId ? { evaluatorId: run.evaluatorId } : {}),

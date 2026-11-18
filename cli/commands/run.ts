@@ -52,12 +52,6 @@ function findAgent(identifier: string, config: ResolvedConfig): AgentConfig | un
   );
 }
 
-/**
- * Get default model key from config
- */
-function getDefaultModel(config: ResolvedConfig): string {
-  return Object.keys(config.models)[0] || 'claude-sonnet';
-}
 
 /**
  * Check if a command exists in PATH
@@ -104,7 +98,7 @@ async function runForAgent(
   client: ApiClient,
   testCaseId: string,
   agent: AgentConfig,
-  modelId: string,
+  modelId: string | undefined,
   verbose: boolean,
   evaluatorId?: string,
   judgeModelId?: string
@@ -316,9 +310,10 @@ export function createRunCommand(): Command {
 
         for (const agent of agents) {
           // The agent's model is owned by its agent-health.config.ts
-          // connectorConfig; there is no --model flag. getDefaultModel is a
-          // last-resort fallback for agents that don't configure one.
-          const modelId = resolveAgentModel(agent, getDefaultModel(config));
+          // connectorConfig; there is no --model flag and no catalog fallback
+          // (the first catalog key is `demo-model`, which also routed the judge
+          // to the mock provider). Undeclared → the server resolves it.
+          const modelId = resolveAgentModel(agent) || undefined;
 
           // Validate agent requirements before running
           const validationError = await validateAgentRequirements(agent);

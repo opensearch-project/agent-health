@@ -118,11 +118,25 @@ export const formatRelativeTime = (timestamp: string): string => {
 // ==================== Model Utilities ====================
 
 /**
- * Gets the display name for a model ID from config
+ * Gets the display name for a model ID from config. `''` when there is no id
+ * (a run of an agent that owns its model and whose traces reported none yet).
  */
-export const getModelName = (modelId: string): string => {
+export const getModelName = (modelId: string | undefined | null): string => {
+  if (!modelId) return '';
   const model = DEFAULT_CONFIG.models[modelId];
   return model?.display_name || modelId;
+};
+
+/**
+ * The model label for a run row / header: the observed `<provider> · <model>`
+ * when the run's model was read from the agent's traces
+ * (`modelSource: 'observed'`, lib/observedModel.ts), else the catalog display
+ * name of its declared / requested id, else `''`.
+ */
+export const getRunModelLabel = (run: { modelId?: string; modelName?: string; modelSource?: string } | null | undefined): string => {
+  if (!run) return '';
+  if (run.modelSource === 'observed' && run.modelName) return run.modelName;
+  return getModelName(run.modelId);
 };
 
 /**

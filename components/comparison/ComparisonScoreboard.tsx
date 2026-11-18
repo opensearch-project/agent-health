@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronUp, ExternalLink, X, ArrowUpDown } from 'lucide-react';
-import { cn, formatRelativeTime, getModelName } from '@/lib/utils';
+import { cn, formatRelativeTime, getModelName, getRunModelLabel } from '@/lib/utils';
 import { formatCost, formatDuration, formatTokens } from '@/services/metrics';
 import type { RunAggregateMetrics, BenchmarkRun, RunScoringSummary } from '@/types';
 import type { TestCaseOverlap } from '@/services/comparisonService';
@@ -575,7 +575,7 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                                 {run.runName || getAgentName(run.agentKey)}
                               </Link>
                               <div className="text-muted-foreground text-[10px] truncate max-w-[220px]">
-                                {getAgentName(run.agentKey)} — {getModelName(run.modelId)} · {formatRelativeTime(run.createdAt)}
+                                {getAgentName(run.agentKey)}{getRunModelLabel(run) ? ` — ${getRunModelLabel(run)}` : ''} · {formatRelativeTime(run.createdAt)}
                               </div>
                               {/* Agent-config provenance: the chip names WHICH
                                   config version each row measured; the amber

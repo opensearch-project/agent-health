@@ -18,6 +18,7 @@ import type {
   ObservabilitySourceConfig,
 } from '@/types/index.js';
 import type { AgentConnector } from '@/services/connectors/types.js';
+import type { ConnectorAuthConfig } from '@/types';
 
 /**
  * Agent configuration for user config files
@@ -30,6 +31,12 @@ export interface UserAgentConfig {
   description?: string;
   enabled?: boolean;
   headers?: Record<string, string>;
+  /**
+   * Explicit connector auth (`basic` / `bearer` / `api-key` / `aws-sigv4`),
+   * preferred over header inference — see docs/CONNECTORS.md → "AWS SigV4
+   * Authentication". Carried verbatim onto the resolved AgentConfig.
+   */
+  auth?: ConnectorAuthConfig;
   useTraces?: boolean;
   /**
    * OTel `service.name` this agent's spans are emitted under — used by the

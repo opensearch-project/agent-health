@@ -198,9 +198,10 @@ describe('code-SDK verdict: caught agent error + failing expect is FAILED on bot
       // execution status only; the verdict is read from the report).
       expect(run.results[byName('caught-500-asserted').id]).toMatchObject({ status: 'completed', reportId: report.id });
       // Secondary outputs of the FAILED branch: the always-record `notReached`
-      // marker for the tail of the body, pass-rate metrics, and the assertion.
+      // marker for the tail of the body, and the assertion. A code-only body
+      // (no judge() call) carries no judge metrics — the verdict is passFailStatus.
       expect(report.matcherResults.filter((m: any) => m.notReached)).toHaveLength(1);
-      expect(report.metrics).toMatchObject({ accuracy: 0 });
+      expect(report.metrics).toEqual({});
     });
 
     it('uncaught 500 (no gate ran) → AGENT ERROR, #496 semantics kept', () => {
