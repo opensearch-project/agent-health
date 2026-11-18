@@ -420,6 +420,90 @@ In your reasoning, identify any safety concerns, biases, or guardrail violations
 };
 
 /**
+ * Evaluator the code SDK `judge(result, claim)` falls back to when neither the
+ * call nor the run names one. Mirrors `CLAIM_EVALUATOR_ID` in
+ * lib/testCases/judge.ts (lib never imports server code); a unit test keeps
+ * the two in sync.
+ */
+export const CLAIM_EVALUATOR_ID = 'system-claim';
+
+/**
+ * 6. Claim Evaluator
+ *
+ * Domain-neutral: "does the trajectory satisfy this claim?" The SDK
+ * `judge(result, claim)` matcher uses it when the run has no explicit
+ * evaluator (#619) — the author wrote the full claim inline, so no domain
+ * rubric (RCA, factuality, …) should be layered on top of it. Same output
+ * shape as the RCA default so every provider's parser and the UI read it
+ * unchanged; `accuracy` is the share of claims satisfied.
+ */
+const CLAIM_EVALUATOR: Omit<Evaluator, 'createdAt' | 'updatedAt' | 'versions'> = {
+  id: CLAIM_EVALUATOR_ID,
+  name: 'Claim',
+  description: 'Domain-neutral evaluator: checks whether the agent trajectory satisfies each stated claim (pass/fail with reasoning). Used by the code SDK judge() when the run has no explicit evaluator.',
+  isSystem: true,
+  tags: ['system', 'claim', 'sdk'],
+  currentVersion: 1,
+  systemPrompt: `You are an impartial evaluator. You are given the trajectory of an AI agent (its reasoning, tool calls, tool results and final answer) and one or more claims written by the test author about what that trajectory should contain or achieve. Your only task is to decide whether each claim is satisfied by the evidence in the trajectory.
+
+Make no assumptions about the agent's domain or purpose — the claims define what matters. Do not apply any other rubric, do not reward or penalise behaviour the claims do not mention, and do not infer the author's intent beyond what each claim says.
+
+## Your Task
+
+For EACH claim:
+1. Restate the claim.
+2. Search the trajectory for evidence for and against it. Quote the relevant tool call, tool result or answer text.
+3. Decide: **satisfied** (the evidence clearly shows the claim holds) or **not satisfied** (the evidence contradicts it, or there is not enough evidence to confirm it). There is no partial credit — a claim that is only partly met, or that cannot be verified from the trajectory, is not satisfied.
+
+Then compute: accuracy = (claims satisfied / total claims) * 100, rounded to the nearest integer.
+
+## Pass/Fail Determination
+
+- **PASS**: every claim is satisfied (accuracy = 100)
+- **FAIL**: at least one claim is not satisfied
+
+## Output Format
+
+You MUST respond with ONLY this JSON structure - no other fields:
+
+\`\`\`json
+{
+  "pass_fail_status": "passed" | "failed",
+  "accuracy": <number 0-100>,
+  "reasoning": "<per-claim verdicts with the evidence you relied on>",
+  "improvement_strategies": [
+    {
+      "category": "<short category>",
+      "issue": "<which claim was not satisfied and why>",
+      "recommendation": "<what the agent would need to do for the claim to hold>",
+      "priority": "high" | "medium" | "low"
+    }
+  ]
+}
+\`\`\`
+
+IMPORTANT:
+- The accuracy field must be at the TOP LEVEL, not inside a metrics object
+- Always include improvement_strategies (an empty array when every claim is satisfied)
+- Keep the reasoning specific to the claims: state each claim, the verdict, and the evidence`,
+  scoringConfig: {
+    metrics: [
+      {
+        name: 'accuracy',
+        description: 'Percentage of claims satisfied by the trajectory',
+        weight: 1.0,
+        scale: 100,
+      },
+    ],
+    passThreshold: 100,
+    scale: 100,
+    // The judge's own pass_fail_status decides, like every other system evaluator.
+    passPolicy: { kind: 'llm-verdict' },
+  },
+  inferenceConfig: {},
+};
+
+/**
  * All system evaluators
  */
 export const SYSTEM_EVALUATORS = [
@@ -428,12 +512,14 @@ export const SYSTEM_EVALUATORS = [
   TOOL_USAGE_EVALUATOR,
   REASONING_DEPTH_EVALUATOR,
   SAFETY_EVALUATOR,
+  CLAIM_EVALUATOR,
 ];
 
 /**
  * Default evaluator ID (for backward compatibility)
  */
 export const DEFAULT_EVALUATOR_ID = 'system-rca-default';
+
 
 /**
  * Convert a template to a full Evaluator entity with timestamps and versions

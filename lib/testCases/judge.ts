@@ -39,6 +39,12 @@
  * automatically picks up the run's evaluator with no per-call argument.
  * Code that imports `judge` from the package gets the unbound version
  * and must pass `evaluatorId` explicitly.
+ *
+ * When NEITHER the call nor the run names an evaluator, the claim is judged
+ * with the domain-neutral built-in {@link CLAIM_EVALUATOR_ID} ("does the
+ * trajectory satisfy this claim?"), not the server's RCA default (#619): the
+ * author wrote the full claim inline, so an RCA rubric only distorts the
+ * verdict. An explicit `-e` / per-call `evaluatorId` is forwarded unchanged.
  */
 
 import type { TrajectoryStep } from '@/types';
@@ -50,6 +56,14 @@ import { createHttpJudgeTransport, type JudgeRequestBody, type JudgeTransport, t
 
 /** Whether a judge signal gates the test verdict or is observational only. */
 export type JudgeRole = 'gate' | 'observe';
+
+/**
+ * Built-in domain-neutral evaluator used when `judge()` is called with an
+ * inline claim and no evaluator is set on the call or bound from the run.
+ * Defined server-side in server/prompts/evaluatorTemplates.ts (lib never
+ * imports server code; a unit test keeps the two ids in sync).
+ */
+export const CLAIM_EVALUATOR_ID = 'system-claim';
 
 // Warn at most once per process when judge() falls back to the default
 // backend port. Defaulting to 4001 is dangerous when a *foreign* agent-health
@@ -144,8 +158,9 @@ export interface JudgeOptions {
    * Stored evaluator id (system or user). Forwarded as `evaluatorId` on
    * the request body. The server resolves system evaluators via
    * `getSystemEvaluatorById(...)` and user evaluators via
-   * `storage.evaluators.getById(...)` — identical to the UI path. Falls
-   * back to the default evaluator when omitted on both call and bind.
+   * `storage.evaluators.getById(...)` — identical to the UI path. When
+   * omitted on both call and bind, the domain-neutral
+   * {@link CLAIM_EVALUATOR_ID} is sent (never the server's RCA default).
    */
   evaluatorId?: string;
   /**
@@ -357,17 +372,21 @@ async function runJudge(
     claims.length === 1 ? `judge: ${claims[0]}` : `judge: ${claims.length} claims`;
 
   // Body shape matches the UI's /api/judge POST exactly: trajectory,
-  // expectedOutcomes, expectedTrajectory, optional modelId, optional
-  // evaluatorId. The server applies the same evaluator-resolution and
-  // provider-routing logic regardless of caller, so SDK and UI runs
-  // produce comparable verdicts.
+  // expectedOutcomes, expectedTrajectory, optional modelId, evaluatorId.
+  // The server applies the same evaluator-resolution and provider-routing
+  // logic regardless of caller, so SDK and UI runs produce comparable
+  // verdicts. The evaluator is always sent: with no call-level or bound id
+  // the inline claim is judged by the neutral claim evaluator (#619) — the
+  // server-side default is the RCA rubric, which was never chosen by the
+  // author and reads oddly on non-RCA claims.
+  const evaluatorId = options?.evaluatorId || CLAIM_EVALUATOR_ID;
   const requestBody: Record<string, unknown> = {
     trajectory,
     expectedOutcomes: claims,
     expectedTrajectory: [],
+    evaluatorId,
   };
   if (options?.model) requestBody.modelId = options.model;
-  if (options?.evaluatorId) requestBody.evaluatorId = options.evaluatorId;
   if (runId) requestBody.runId = runId;
   if (Array.isArray(judgeAgents) && judgeAgents.length > 0) requestBody.agents = judgeAgents;
 
@@ -470,7 +489,7 @@ async function runJudge(
 
   // CACHE: identical (evaluator, model, claims, trajectory) → reuse verdict.
   const cacheKey = judgeCacheKey({
-    evaluatorId: options?.evaluatorId,
+    evaluatorId,
     model: options?.model,
     claims,
     trajectory,
@@ -626,7 +645,8 @@ export function bindJudge(defaults?: {
     // Per-call options win on every field that's actually set. We treat
     // an explicit `undefined` the same as a missing field — callers who
     // want to *clear* a bound default should pass an empty string or
-    // call the unbound `judge` directly.
+    // call the unbound `judge` directly; a cleared evaluator means the
+    // neutral CLAIM_EVALUATOR_ID, exactly like the unbound judge.
     serverUrl: options?.serverUrl ?? defaults.serverUrl,
     // A per-call `serverUrl` is an explicit "dial THAT server": it wins over
     // a bound transport (which would otherwise silently ignore it).

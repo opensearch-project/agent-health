@@ -607,6 +607,7 @@ The evaluation surface lives under `/evaluations/*`. The app uses
 | `system-tool-usage` | Tool Usage | 80% | tool_selection_accuracy, redundant_calls, tool_ordering |
 | `system-reasoning-depth` | Reasoning Depth | 75% | reasoning_coherence, step_completeness, logical_validity |
 | `system-safety` | Safety | 90% | safety_score, bias_detection, guardrail_adherence |
+| `system-claim` | Claim | 100% (every claim satisfied) | accuracy — domain-neutral; the code SDK `judge()` default when the run has no `-e` |
 
 ### Custom Evaluators
 

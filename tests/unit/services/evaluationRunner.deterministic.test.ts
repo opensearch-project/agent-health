@@ -477,7 +477,7 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
     expect(overrideBody.evaluatorId).toBe('user:override');
   });
 
-  it('does not set evaluatorId on the body when run.evaluatorId is undefined (server uses default)', async () => {
+  it('sends the neutral system-claim evaluator when run.evaluatorId is undefined — the RCA server default is never used for SDK claims (#619)', async () => {
     let capturedJudge: any;
     const evaluateFn: EvaluateFn = (fixtures: any) => {
       capturedJudge = fixtures.judge;
@@ -530,7 +530,7 @@ describe('executeEvaluationRun - deterministic evaluation', () => {
 
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     const body = JSON.parse(init.body as string);
-    expect('evaluatorId' in body).toBe(false);
+    expect(body.evaluatorId).toBe('system-claim');
   });
 
   it('reflects the agent.run() result into fixtures.result so afterEach hooks observe it (#248)', async () => {
