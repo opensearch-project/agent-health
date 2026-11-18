@@ -726,6 +726,21 @@ describe('AsyncRunStorage', () => {
       });
     });
 
+    // #618: the persisted model summary must reach the browser, otherwise the
+    // TL;DR card has to call the summary route (and, uncached, a model) on
+    // every view just to learn one exists.
+    it('preserves the persisted caseSummary from the stored document', async () => {
+      const caseSummary = { source: 'llm', parts: { asked: 'a', agent: 'b', verdict: 'Judge verdict: PASSED — fine.' }, reason: 'fine', model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', generatedAt: '2026-11-05T12:00:00.000Z', inputsHash: 'abc' };
+      mockOsRuns.getById.mockResolvedValue({ ...createMockStorageRun('run-cs'), caseSummary });
+
+      const result = await asyncRunStorage.getReportById('run-cs');
+
+      expect(result?.caseSummary).toEqual(caseSummary);
+      expect((await asyncRunStorage.getReportById('run-cs'))?.caseSummary).toEqual(caseSummary);
+      mockOsRuns.getById.mockResolvedValue(createMockStorageRun('run-no-cs'));
+      expect((await asyncRunStorage.getReportById('run-no-cs'))?.caseSummary).toBeUndefined();
+    });
+
     it('leaves performanceMetrics undefined when the stored document has none', async () => {
       const mockStorageRun = createMockStorageRun('run-no-perf');
       mockOsRuns.getById.mockResolvedValue(mockStorageRun);

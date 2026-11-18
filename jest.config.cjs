@@ -165,6 +165,10 @@ module.exports = {
     'components/ask/AskShared.tsx',
     'components/ask/AskPanel.tsx',
     'components/ask/AskPopover.tsx',
+    // #618: the case TL;DR card (no model call on view; Summarize on demand;
+    // persisted / stale / deterministic-only / unjudged states) has a focused
+    // jsdom/RTL suite (tests/unit/components/evals3/CaseTldrCard.test.ts).
+    'components/evals3/CaseTldrCard.tsx',
     '!**/__tests__/**',
     '!**/*.test.ts',
     '!**/dist/**',
