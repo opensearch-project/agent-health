@@ -278,7 +278,16 @@ function describeAssertion(
 ): string {
   const rawMsg = typeof msg === 'function' ? msg() : msg;
   const rawNeg = typeof negateMsg === 'function' ? negateMsg() : negateMsg;
-  const template: string = rawMsg || rawNeg || '';
+  // Same choice chai makes in util.getMessage: a `.not` chain is described by
+  // the negated template ("expected #{this} not to match #{exp}"). The
+  // positive template was used unconditionally before, so a negated check was
+  // stored and shown as the opposite assertion (#617). A custom assertion
+  // that supplies no negated text gets a visible NOT rather than the
+  // inverted claim.
+  const negate = !!utils.flag(ctx, 'negate');
+  const template: string = negate
+    ? rawNeg || (rawMsg ? rawMsg.replace(/^(expected\s+)?/i, 'expected NOT ') : '')
+    : rawMsg || rawNeg || '';
   if (!template) return '';
   const obj = utils.flag(ctx, 'object');
   const resolved = template
