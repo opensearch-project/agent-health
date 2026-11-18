@@ -468,6 +468,34 @@ describe('RunDetailsContent', () => {
     });
   });
 
+  describe('malformed persisted trajectory (inspector blank-page regression)', () => {
+    it('renders the tab strip when the trajectory array contains a literal `null` entry', async () => {
+      // The total-latency reduce runs in the (boundary-less) page render; a
+      // `null` step used to throw `Cannot read properties of null (reading
+      // 'latencyMs')` there and React unmounted the whole inspector.
+      const report = createReport({
+        metricsStatus: 'completed',
+        trajectory: [
+          { id: 's0', timestamp: 1, type: 'user', content: 'q', latencyMs: 10 },
+          null,
+          { id: 's2', timestamp: 3, type: 'response', content: 'r', latencyMs: 20 },
+        ] as unknown as EvaluationReport['trajectory'],
+      });
+      mockGetReportById.mockResolvedValue(report);
+
+      await renderAndWait(report);
+
+      // The inspector stayed up: tab strip + the answer-first Output tab.
+      expect(screen.getByRole('tab', { name: /Test Case Output/ })).toBeTruthy();
+      expect(screen.getByTestId('response-first-output')).toBeTruthy();
+      // The steps list (collapsed by default since #596) renders the hardened
+      // TrajectoryView over the array that still contains the `null` entry.
+      fireEvent.click(screen.getByTestId('steps-toggle'));
+      expect(screen.getByTestId('steps-body')).toBeTruthy();
+      expect(screen.getByTestId('trajectory-view')).toBeTruthy();
+    });
+  });
+
   // ── Judge Evaluation tab: judge identity for code-SDK reports ────────────
   //
   // SDK reports carry their judge data in `matcherResults` and have no

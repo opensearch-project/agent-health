@@ -6,6 +6,7 @@
 import type { ReportData, ReportRunData, FormatterOptions } from '@/services/report/types';
 import type { TestCaseComparisonRow, TrajectoryStep, EvaluationReport, ImprovementStrategy } from '@/types';
 import { getJudgeReasoningText } from '@/lib/matchers/judgeAccessor';
+import { stepContentText } from '@/lib/trajectoryStepDisplay';
 
 // ============ Utility Functions ============
 
@@ -713,7 +714,7 @@ function renderTrajectoryStep(step: TrajectoryStep): string {
   return `
     <div class="step ${typeClass}${failedClass}">
       <div class="step-type">${escapeHtml(step.type)}${toolInfo}</div>
-      <div class="step-content">${escapeHtml(step.content || '')}</div>
+      <div class="step-content">${escapeHtml(stepContentText(step))}</div>
     </div>
   `;
 }
