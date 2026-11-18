@@ -18,6 +18,13 @@
  * precisely about asking for the wrong bounds — and matches FilterLogEvents
  * term patterns (`"id"` / `?"a" ?"b"`) and the quoted literals of a Logs
  * Insights `filter` clause as substrings of the record.
+ *
+ * It does NOT evaluate the Insights query language (fields, and/or,
+ * parentheses): it is deliberately MORE permissive than the service, so it can
+ * only ever hand the module extra records — which the module's in-memory
+ * `matchesQuery` then drops — and it can never hide a record the real service
+ * would return. Query construction itself is pinned by the module's unit tests
+ * (`buildTracesInsightsQuery`); this stub is about bounds and transport.
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -39,6 +46,8 @@ export interface CloudWatchSpanRecordInput {
 export interface RecordedCall {
   target: string;
   input: any;
+  /** Scheme of the request's `Authorization` header (`AWS4-HMAC-SHA256` when the real SDK signed it). */
+  authScheme?: string;
 }
 
 export interface CloudWatchLogsStub {
@@ -137,7 +146,8 @@ export async function startCloudWatchLogsStub(options: { logGroup?: string } = {
     } catch {
       return awsError(res, 'SerializationException', 'malformed JSON body');
     }
-    calls.push({ target: op, input });
+    const authorization = String(req.headers.authorization ?? '');
+    calls.push({ target: op, input, authScheme: authorization.split(' ')[0] || undefined });
 
     switch (op) {
       case 'DescribeLogGroups': {

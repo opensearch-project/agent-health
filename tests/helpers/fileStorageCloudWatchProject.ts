@@ -86,6 +86,8 @@ export function httpJson<T = any>(url: string, init: { method?: string; body?: u
       }
     );
     req.on('error', reject);
+    // A listener that accepts but never answers must not hang the suite.
+    req.setTimeout(15_000, () => req.destroy(new Error(`${init.method ?? 'GET'} ${url}: no response within 15 s`)));
     if (payload !== undefined) req.write(payload);
     req.end();
   });
@@ -193,20 +195,31 @@ export const EVAL_FILE_RELATIVE = 'evals/retrieval.eval.js';
 
 export async function createFileStorageCloudWatchProject(options: { prefix?: string } = {}): Promise<FileStorageCloudWatchProject> {
   const cloudWatch = await startCloudWatchLogsStub();
-  const agent = await startDemoRetrievalAgent(cloudWatch, { serviceName: DEMO_AGENT_SERVICE_NAME });
-  const port = await reservePort();
-  const dir = mkdtempSync(join(tmpdir(), `${options.prefix ?? 'ah-file-cw'}-`));
-  const env = projectEnv(port, cloudWatch.url);
-
-  writeFileSync(join(dir, 'agent-health.config.mjs'), configSource(agent.url));
-  writeFileSync(
-    join(dir, '.env'),
-    ['PORT', 'AH_PORT', 'AGENT_HEALTH_STORAGE', 'BENCHMARK_RUN_RECOVERY_DISABLED', 'EVALUATION_RUN_RECOVERY_DISABLED', 'AWS_REGION', 'AWS_ENDPOINT_URL_CLOUDWATCH_LOGS']
-      .map((k) => `${k}=${env[k]}`)
-      .join('\n') + '\n'
-  );
-  mkdirSync(join(dir, 'evals'));
-  writeFileSync(join(dir, EVAL_FILE_RELATIVE), RETRIEVAL_EVAL_SOURCE);
+  let agent: DemoRetrievalAgent | undefined;
+  let dir: string | undefined;
+  let port: number;
+  let env: Record<string, string>;
+  try {
+    agent = await startDemoRetrievalAgent(cloudWatch, { serviceName: DEMO_AGENT_SERVICE_NAME });
+    port = await reservePort();
+    dir = mkdtempSync(join(tmpdir(), `${options.prefix ?? 'ah-file-cw'}-`));
+    env = projectEnv(port, cloudWatch.url);
+    writeFileSync(join(dir, 'agent-health.config.mjs'), configSource(agent.url));
+    writeFileSync(
+      join(dir, '.env'),
+      ['PORT', 'AH_PORT', 'AGENT_HEALTH_STORAGE', 'BENCHMARK_RUN_RECOVERY_DISABLED', 'EVALUATION_RUN_RECOVERY_DISABLED', 'AWS_REGION', 'AWS_ENDPOINT_URL_CLOUDWATCH_LOGS']
+        .map((k) => `${k}=${env[k]}`)
+        .join('\n') + '\n'
+    );
+    mkdirSync(join(dir, 'evals'));
+    writeFileSync(join(dir, EVAL_FILE_RELATIVE), RETRIEVAL_EVAL_SOURCE);
+  } catch (e) {
+    // Nothing leaks when scaffolding fails: both listeners and the half-written directory go.
+    await agent?.close();
+    await cloudWatch.close();
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    throw e;
+  }
 
   let child: ChildProcess | undefined;
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -250,14 +263,16 @@ export async function createFileStorageCloudWatchProject(options: { prefix?: str
     },
     async cleanup() {
       if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = new Promise<void>((resolve) => child!.once('close', () => resolve()));
         child.kill('SIGTERM');
-        const deadline = Date.now() + 5_000;
-        while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(50);
-        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        const forceKill = setTimeout(() => { if (child!.exitCode === null && child!.signalCode === null) child!.kill('SIGKILL'); }, 5_000);
+        // Wait for the child AND its stdio pipes to be gone before the project directory is removed.
+        await Promise.race([exited, sleep(10_000)]);
+        clearTimeout(forceKill);
       }
-      await agent.close();
+      await agent!.close();
       await cloudWatch.close();
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir!, { recursive: true, force: true });
     },
   };
   return project;

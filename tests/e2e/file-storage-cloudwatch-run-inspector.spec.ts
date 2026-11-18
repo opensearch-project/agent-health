@@ -31,6 +31,7 @@ import {
   createFileStorageCloudWatchProject,
   httpJson,
   DEMO_AGENT_KEY,
+  DEMO_AGENT_SERVICE_NAME,
   EVAL_FILE_RELATIVE,
   SERVER_BUNDLE,
   type FileStorageCloudWatchProject,
@@ -40,14 +41,24 @@ import { DEMO_AGENT_SPANS, DEMO_AGENT_TOKENS, DEMO_AGENT_TOOL } from '../helpers
 const CASE_OK = 'answers from the knowledge base';
 const CASE_TOOL_ERROR = 'a failed tool attempt is retried';
 const TOTAL_TOKENS = DEMO_AGENT_TOKENS.input + DEMO_AGENT_TOKENS.output; // 4 050 per case
+const SLACK_MS = 60_000; // RunDetailsContent's window slack
+
 /**
- * Spans the Traces tab shows for ONE case: the inspector unions the case's
- * exact ids with the always-on Strategy-C clause (agent service.name + run
- * window), and the three cases of this run executed within the same seconds —
- * so the sibling cases' traces ride along (the documented concurrency noise of
- * Strategy C, AGENTS.md → Trace correlation; identical on OpenSearch).
+ * The exact `/api/traces` request the run inspector sends for a report
+ * (components/RunDetailsContent.tsx, fetchTracesForReport). The inspector
+ * unions the case's exact ids with the always-on Strategy-C clause (agent
+ * service.name + run window), so sibling cases of the same agent that ran in
+ * the same minute ride along — the documented concurrency noise of Strategy C
+ * (AGENTS.md → Trace correlation; identical on OpenSearch). The tab's badge is
+ * therefore compared with what the server answers for THIS request, not with a
+ * hard-coded count.
  */
-const SPANS_IN_WINDOW = 2 * DEMO_AGENT_SPANS.normal + DEMO_AGENT_SPANS.withToolError; // 13
+function inspectorTracesRequest(report: any) {
+  const endedAt = Date.parse(report.timestamp);
+  const durationMs = report.performanceMetrics?.durationMs ?? 0;
+  const lookbackMs = durationMs > 0 ? durationMs + SLACK_MS : 30 * 60_000;
+  return { size: 1000, runIds: [report.runId], agents: [{ serviceName: DEMO_AGENT_SERVICE_NAME, startedAt: endedAt - lookbackMs, endedAt: endedAt + SLACK_MS, sessionId: report.sessionId }] };
+}
 /** When set, screenshots of the rendered inspector land here (proof pack); never in CI. */
 const SHOTS_DIR = process.env.AH_E2E_SHOTS_DIR || '';
 async function shot(page: import('@playwright/test').Page, name: string): Promise<void> {
@@ -89,7 +100,9 @@ test.describe('file storage + CloudWatch: run inspector metrics strip and Traces
   const tcIdByCase = new Map<string, string>();
 
   test.beforeAll(async ({ playwright }) => {
-    test.skip(!existsSync(SERVER_BUNDLE), `${SERVER_BUNDLE} missing — run npm run build:server`);
+    test.setTimeout(240_000); // server boot (≤ 90 s) + the run (≤ 120 s); the default hook budget is 30 s
+    // Fail, never skip: a missing build must not turn this coverage into a green no-op.
+    if (!existsSync(SERVER_BUNDLE)) throw new Error(`${SERVER_BUNDLE} missing — run npm run build:server`);
     project = await createFileStorageCloudWatchProject({ prefix: 'ah-e2e-file-cw' });
     await project.startServer('server-bundle');
 
@@ -152,17 +165,21 @@ test.describe('file storage + CloudWatch: run inspector metrics strip and Traces
     await expect(page.getByTestId('strip-spans')).toContainText('spans: 3/3 cases');
     await expect(page.getByTestId('strip-spans')).not.toHaveAttribute('title', 'Metrics unavailable');
 
-    // The case's Traces tab: spans from CloudWatch, by the run's exact ids.
+    // The case's Traces tab: spans from CloudWatch, by the run's exact ids. The badge must equal what the
+    // server answers for the inspector's own request (≥ this case's 4 spans; siblings in the window ride along).
+    const expected = await httpJson(`${project.baseUrl}/api/traces`, { method: 'POST', body: inspectorTracesRequest(ok) });
+    expect(expected.body.total).toBeGreaterThanOrEqual(DEMO_AGENT_SPANS.normal);
+    const ownRoots = expected.body.spans.filter((s: any) => s.name === 'POST /invoke').length;
     await page.getByRole('tab', { name: /^Traces/ }).click();
-    await expect(page.getByRole('tab', { name: /^Traces/ })).toContainText(String(SPANS_IN_WINDOW), { timeout: 30_000 });
+    await expect(page.getByRole('tab', { name: /^Traces/ })).toHaveText(`Traces${expected.body.total}`, { timeout: 30_000 });
     await expect(page.getByText('No traces available')).toHaveCount(0);
     await expect(page.getByText('No traces found')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Fullscreen' })).toBeVisible();
     // The default Timeline view draws on a canvas; the Trace Tree view renders span names as text.
     await page.getByRole('button', { name: 'Trace Tree' }).click();
-    await expect(page.getByText('POST /invoke')).toHaveCount(3); // one root per trace in the window
-    await expect(page.getByText(`execute_tool ${DEMO_AGENT_TOOL}`)).toHaveCount(4); // 1 + 1 + (failed attempt + retry)
-    await expect(page.getByText(/^chat demo-provider\.demo-model-v1$/)).toHaveCount(6);
+    await expect(page.getByText('POST /invoke')).toHaveCount(ownRoots); // one root per trace returned
+    await expect(page.getByText(`execute_tool ${DEMO_AGENT_TOOL}`).first()).toBeVisible();
+    await expect(page.getByText(/^chat demo-provider\.demo-model-v1$/).first()).toBeVisible();
     await shot(page, 'after-traces-tab-file-storage-cloudwatch');
 
     // The request the inspector sent carries the exact ids and a window built around the RUN (file storage: from `timestamp`).
@@ -173,13 +190,22 @@ test.describe('file storage + CloudWatch: run inspector metrics strip and Traces
     expect(req.agents?.[0]?.endedAt).toBe(Date.parse(ok.timestamp) + 60_000);
   });
 
-  test('a case whose tool call failed once still shows its spans and is not an errored run', async ({ page }) => {
+  test('a case whose tool call failed once: PASSED, per-case tokens from its spans (not "—"), spans rendered (#599)', async ({ page }) => {
     const toolError = reportByCase.get(CASE_TOOL_ERROR);
     await page.goto(`${project.baseUrl}/evaluations/benchmarks/${benchmarkId}/runs/${evalRunId}/inspect?reportId=${toolError.id}`);
     await expect(page.getByTestId('inspector-status-badge')).toHaveText('PASSED', { timeout: 30_000 });
     await expect(page.getByTestId('run-failure-card')).toHaveCount(0);
+    // The run-level strip counts this case among the cases with spans.
+    await expect(page.getByTestId('strip-spans')).toContainText('spans: 3/3 cases', { timeout: 30_000 });
+
+    // The report page shows the per-case trace metrics (GET /api/metrics/:runId) for THIS case: 4 050 tokens → "4.0K"/"4.1K", never "—".
+    await page.goto(`${project.baseUrl}/runs/${toolError.id}`);
+    await expect(page.getByText('Total Tokens', { exact: true }).locator('..')).toHaveText(/^Total Tokens4\.[01]K$/, { timeout: 30_000 });
+    await expect(page.getByText('LLM Calls', { exact: true }).locator('..')).toHaveText(/^LLM Calls2$/);
     await page.getByRole('tab', { name: /^Traces/ }).click();
-    await expect(page.getByRole('tab', { name: /^Traces/ })).toContainText(String(SPANS_IN_WINDOW), { timeout: 30_000 });
+    const expected = await httpJson(`${project.baseUrl}/api/traces`, { method: 'POST', body: inspectorTracesRequest(toolError) });
+    expect(expected.body.total).toBeGreaterThanOrEqual(DEMO_AGENT_SPANS.withToolError);
+    await expect(page.getByRole('tab', { name: /^Traces/ })).toHaveText(`Traces${expected.body.total}`, { timeout: 30_000 });
     await expect(page.getByText('No traces found')).toHaveCount(0);
   });
 });

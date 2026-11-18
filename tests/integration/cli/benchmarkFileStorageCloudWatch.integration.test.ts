@@ -42,6 +42,7 @@ import {
 } from '../../helpers/fileStorageCloudWatchProject';
 import { DEMO_AGENT_COST_USD, DEMO_AGENT_LLM_CALLS, DEMO_AGENT_SPANS, DEMO_AGENT_TOKENS, DEMO_AGENT_TOOL } from '../../helpers/demoRetrievalAgentStub';
 import { aggregateRunTelemetry, buildRunTelemetryCorrelation } from '@/lib/runTelemetry';
+import { MODEL_PRICING } from '@/server/services/metricsService';
 import type { EvaluationReport } from '@/types';
 
 const SUITE_TIMEOUT = 240_000;
@@ -129,9 +130,10 @@ describe('CLI benchmark → file storage + CloudWatch observability (the #640 ro
     const traces = await httpJson(`${project.baseUrl}/api/traces`, { method: 'POST', body: { size: 1, runIds: ['no-such-run'] } });
     expect(traces.status).toBe(200);
     expect(traces.body.backend).toBe('cloudwatch');
-    // Every AWS call went to the local stub (signed by the real SDK), none anywhere else.
+    // The stub received CloudWatch Logs API calls carrying a SigV4 signature — the unmodified AWS SDK is on the wire.
     expect(project.cloudWatch.calls.length).toBeGreaterThan(0);
     expect(project.cloudWatch.calls.every((c) => ['FilterLogEvents', 'StartQuery', 'GetQueryResults', 'DescribeLogGroups', 'StopQuery'].includes(c.target))).toBe(true);
+    expect(project.cloudWatch.calls.every((c) => c.authScheme === 'AWS4-HMAC-SHA256')).toBe(true);
   });
 
   // ─── what the CLI user saw ────────────────────────────────────────────────
@@ -226,17 +228,32 @@ describe('CLI benchmark → file storage + CloudWatch observability (the #640 ro
     const r = reports.get(CASE_OK);
     const now = Date.now();
     // The window a client with the wrong run time builds — here one that lies entirely before the run.
-    const staleHint = { serviceName: DEMO_AGENT_SERVICE_NAME, startedAt: now - 3 * HOUR_MS, endedAt: now - 2 * HOUR_MS, sessionId: r.sessionId };
-    const callsBefore = project.cloudWatch.calls.length;
-    const res = await httpJson(`${project.baseUrl}/api/traces`, { method: 'POST', body: { size: 1000, runIds: [r.runId], traceId: r.traceId, sessionId: r.sessionId, agents: [staleHint] } });
-    expect(res.status).toBe(200);
-    expect(res.body.total).toBe(DEMO_AGENT_SPANS.normal); // red on main: 0 — the scan was narrowed to the hint
-    expect(res.body.warning).toBeUndefined();
-    // The CloudWatch stub saw an Insights query over (at least) the configured lookback, not the 1-hour hint.
-    const insights = project.cloudWatch.calls.slice(callsBefore).filter((c) => c.target === 'StartQuery');
-    expect(insights.length).toBeGreaterThanOrEqual(1);
-    const { startTime, endTime } = insights[0].input as { startTime: number; endTime: number };
-    expect(endTime - startTime).toBeGreaterThanOrEqual(7 * 86_400 - 60);
+    const staleWindow = { serviceName: DEMO_AGENT_SERVICE_NAME, startedAt: now - 3 * HOUR_MS, endedAt: now - 2 * HOUR_MS };
+    // Each exact correlator ON ITS OWN, so a broken path cannot hide behind a working one.
+    const requests: Array<[string, Record<string, unknown>]> = [
+      ['runIds (Strategy B)', { runIds: [r.runId], agents: [staleWindow] }],
+      ['traceId (Strategy A)', { traceId: r.traceId, agents: [staleWindow] }],
+      ['agents[].sessionId (Strategy D, the inspector\'s shape — the request the issue captured)', { runIds: [r.runId], agents: [{ ...staleWindow, sessionId: r.sessionId }] }],
+    ];
+    for (const [label, body] of requests) {
+      const callsBefore = project.cloudWatch.calls.length;
+      const res = await httpJson(`${project.baseUrl}/api/traces`, { method: 'POST', body: { size: 1000, ...body } });
+      expect(res.status).toBe(200);
+      expect([label, res.body.total]).toEqual([label, DEMO_AGENT_SPANS.normal]); // red on main: 0 — the scan was narrowed to the hint
+      expect(res.body.spans.every((s: any) => s.traceId === r.traceId)).toBe(true);
+      expect(res.body.warning).toBeUndefined();
+      // The CloudWatch stub saw an Insights query over (at least) the configured lookback, not the 1-hour hint.
+      const insights = project.cloudWatch.calls.slice(callsBefore).filter((c) => c.target === 'StartQuery');
+      expect(insights.length).toBeGreaterThanOrEqual(1);
+      const { startTime, endTime } = insights[0].input as { startTime: number; endTime: number };
+      expect([label, endTime - startTime >= 7 * 86_400 - 60]).toEqual([label, true]);
+    }
+    // Contract check, not a #640 pin: a TOP-LEVEL `sessionId` is a must-FILTER ("spans of this session"),
+    // not an OR'd correlator — so with a window as the only correlator the window still applies, on
+    // CloudWatch exactly as on the OpenSearch DSL it mirrors (`matchesQuery`). No UI client sends this shape
+    // (the inspector carries the session id inside `agents[]`); it is asserted here so a change is deliberate.
+    const filtered = await httpJson(`${project.baseUrl}/api/traces`, { method: 'POST', body: { size: 1000, sessionId: r.sessionId, agents: [staleWindow] } });
+    expect(filtered.body.total).toBe(0);
   });
 
   it('a window-only request (no exact id) IS still narrowed to its window — a bare service name does not scan the lookback', async () => {
@@ -273,7 +290,9 @@ describe('CLI benchmark → file storage + CloudWatch observability (the #640 ro
       status: 'success',
       hasSpans: true,
     });
-    expect(res.body.costUsd).toBeGreaterThan(0);
+    // The route prices tokens from its table (the fixture's model is not listed → `default` rates).
+    const rates = MODEL_PRICING.default;
+    expect(res.body.costUsd).toBeCloseTo((DEMO_AGENT_TOKENS.input / 1e6) * rates.input + (DEMO_AGENT_TOKENS.output / 1e6) * rates.output, 9);
     expect(res.body.error).toBeUndefined();
     expect(res.body.agentErrorSpans).toBeUndefined();
   });
@@ -306,6 +325,7 @@ describe('CLI benchmark → file storage + CloudWatch observability (the #640 ro
     expect(res.body.aggregate.totalRuns).toBe(3);
     const telemetry = aggregateRunTelemetry(evaluationRun, reportsById, byKey);
     expect(telemetry).toMatchObject({ totalTokens: 3 * TOTAL_TOKENS, llmCalls: 3 * DEMO_AGENT_LLM_CALLS, toolCalls: 3, spansCases: 3, totalCases: 3, errorCases: 0, unavailable: false, hasSpans: true });
-    expect(telemetry!.costUsd).toBeGreaterThan(0);
+    const rates = MODEL_PRICING.default;
+    expect(telemetry!.costUsd).toBeCloseTo(3 * ((DEMO_AGENT_TOKENS.input / 1e6) * rates.input + (DEMO_AGENT_TOKENS.output / 1e6) * rates.output), 9);
   });
 });

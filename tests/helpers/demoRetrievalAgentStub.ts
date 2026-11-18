@@ -63,11 +63,18 @@ export async function startDemoRetrievalAgent(cloudWatch: CloudWatchLogsStub, op
     const chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
     req.on('end', () => {
-      let prompt = '';
+      // The REST connector's contract: POST, JSON body, `prompt` string. Anything else is a 400, never a span.
+      let prompt: unknown;
       try {
-        prompt = String(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}').prompt ?? '');
+        prompt = req.method === 'POST' ? JSON.parse(Buffer.concat(chunks).toString('utf8')).prompt : undefined;
       } catch {
-        /* a body we cannot read is just an empty prompt */
+        prompt = undefined;
+      }
+      if (typeof prompt !== 'string') {
+        res.statusCode = 400;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ message: 'expected POST with a JSON body carrying a string `prompt`' }));
+        return;
       }
       const n = invocations.length + 1;
       // Not `demo-…`: the metrics routes treat `demo-*` run ids as the bundled sample data.
@@ -113,7 +120,7 @@ export async function startDemoRetrievalAgent(cloudWatch: CloudWatchLogsStub, op
         attributes: { ...common, 'gen_ai.operation.name': 'chat', 'gen_ai.provider.name': 'demo-provider', 'gen_ai.request.model': DEMO_AGENT_MODEL, 'gen_ai.usage.input_tokens': 2400, 'gen_ai.usage.output_tokens': 150, 'gen_ai.usage.cost_usd': 0.0066 },
       });
 
-      invocations.push({ prompt, runId, sessionId, traceId, startedAt, endedAt, spanCount });
+      invocations.push({ prompt: prompt as string, runId, sessionId, traceId, startedAt, endedAt, spanCount });
       res.setHeader('content-type', 'application/json');
       res.end(
         JSON.stringify({
