@@ -41,6 +41,16 @@ import { existsSync, statSync } from 'fs';
 import { isCodeFile, detectSourceLanguage } from '@/lib/testCases/loader.js';
 import { createBenchmarkDoctorCommand } from '@/cli/commands/benchmarkDoctor.js';
 import { collectEvalRootsHints, formatEvalRootsHint } from '@/cli/utils/evalRootsHint.js';
+import {
+  currentBenchmarkTestCaseIds,
+  checkBenchmarkSourceMismatch,
+  describeAddedTestCases,
+  describeForcedAddition,
+  formatSourceCheckUnverified,
+  formatSourceMismatchForced,
+  formatSourceMismatchRefusal,
+  type BenchmarkSourceMismatch,
+} from '@/cli/utils/benchmarkSourceGuard.js';
 import { computeBenchmarkRepairPlan, applyRepairPlan, computeVersionLinkRepairPlan } from '@/cli/utils/benchmarkDoctor.js';
 
 interface BenchmarkOptions {
@@ -61,6 +71,11 @@ interface BenchmarkOptions {
   testCase?: string[];
   label?: string[];
   concurrency: string;
+  /**
+   * `-f other.eval.ts -n "<existing>"`: add a different source file's test
+   * cases to that benchmark instead of refusing (#620).
+   */
+  force?: boolean;
 }
 
 interface AgentResults {
@@ -705,10 +720,28 @@ async function runUnifiedMode(
   // is new so the run is benchmark-associated (parity with JSON `-f` legacy mode
   // and the documented `benchmark -f foo.eval.js -n "My Benchmark"` behavior).
   let benchmarkId: string | undefined;
+  // #620: when `-n` names an EXISTING benchmark and the `-f` code files are
+  // not exactly the files it holds, refuse unless --force; with --force
+  // remember what the benchmark held so the CLI can print exactly what was
+  // added once the server has linked the run's cases.
+  let forcedMismatch: { benchmark: Benchmark; mismatch: BenchmarkSourceMismatch; previousIds: string[] } | undefined;
   if (options.name && !isFilePath(options.name)) {
     const existing = await api.findBenchmark(options.name);
     if (existing) {
       benchmarkId = existing.id;
+      const check = await checkBenchmarkSourceMismatch(api, existing, fileArray);
+      if (check.kind === 'unverified') {
+        console.log(chalk.yellow(`  ${formatSourceCheckUnverified(existing.name, check.reason)}`));
+      } else if (check.kind === 'mismatch' && !options.force) {
+        const [first, ...rest] = formatSourceMismatchRefusal(existing.name, check.mismatch);
+        console.error(chalk.red(`  ${first}`));
+        for (const line of rest) console.log(chalk.gray(`  ${line}`));
+        cleanup();
+        process.exit(1);
+      } else if (check.kind === 'mismatch') {
+        console.log(chalk.yellow(`  ${formatSourceMismatchForced(existing.name, check.mismatch)}`));
+        forcedMismatch = { benchmark: existing, mismatch: check.mismatch, previousIds: currentBenchmarkTestCaseIds(existing) };
+      }
     } else if (hasExplicitSources) {
       const created = await api.createBenchmark({
         name: options.name,
@@ -791,6 +824,24 @@ async function runUnifiedMode(
                 // Started event
                 runId = data.runId;
                 totalTestCases = data.testCases.length;
+                if (forcedMismatch) {
+                  // The server has linked this run's cases into the benchmark
+                  // by now (before executing anything), so say what --force
+                  // added even if the run later fails, and record the added
+                  // file on the benchmark's description (metadata PATCH: no
+                  // version bump, no full-document rewrite).
+                  const { benchmark: bm, mismatch, previousIds } = forcedMismatch;
+                  const added = describeAddedTestCases(previousIds, data.testCases, bm.name);
+                  if (added) spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: chalk.yellow(added) });
+                  if (mismatch.foreignFiles.length > 0) {
+                    try {
+                      await api.patchBenchmarkMetadata(bm.id, { description: describeForcedAddition(bm.description, mismatch) });
+                    } catch (e) {
+                      spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: chalk.yellow(`Could not record the addition on the benchmark description: ${e instanceof Error ? e.message : String(e)}`) });
+                    }
+                  }
+                  spinner.start();
+                }
                 spinner.text = `Running evaluation (0/${totalTestCases})`;
               } else if (data.completedCount !== undefined) {
                 // Progress event
@@ -826,7 +877,6 @@ async function runUnifiedMode(
     // Read the TRUE final state from storage. If the SSE stream ended before
     // the run reached a terminal state (long run + dropped stream), poll until
     // it does — the server finishes independently of the client connection.
-    const api = new ApiClient(serverResult.baseUrl);
     let run: EvaluationRun | null = null;
     if (runId && !sseSawTerminal) {
       spinner.text = 'Stream ended; waiting for the run to finish server-side…';
@@ -961,6 +1011,7 @@ export function createBenchmarkCommand(): Command {
     .option('-v, --verbose', 'Show detailed output')
     .option('--stop-server', 'Stop the server after benchmark completes (default: keep running)')
     .option('--agent-path <path>', 'Path to the agent repository to use as judge grounding context (or set AH_AGENT_PATH)')
+    .option('--force', 'With -f <code file> -n <existing benchmark>: run even when the files are not exactly the ones the benchmark was created from (adds a new file\'s test cases to it; default: refuse)')
     .action(async (options: BenchmarkOptions & { name?: string; agentPath?: string }) => {
       console.log(chalk.bold('\nAgent Health - Benchmark Runner\n'));
       applyAgentPathOption(options);

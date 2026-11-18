@@ -926,6 +926,22 @@ export class ApiClient {
   }
 
   /**
+   * Update name and/or description only (`PATCH /metadata`): no version
+   * change and no full-document rewrite, so concurrent run links are safe.
+   */
+  async patchBenchmarkMetadata(id: string, input: { name?: string; description?: string }): Promise<Benchmark> {
+    const res = await fetch(`${this.baseUrl}/api/storage/benchmarks/${encodeURIComponent(id)}/metadata`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to update benchmark metadata: ${await res.text()}`);
+    }
+    return res.json();
+  }
+
+  /**
    * Union test case ids into a benchmark's top-level testCaseIds AND its
    * current version's testCaseIds, in place (no version bump). Server-side
    * counterpart of services/benchmarkPromotion.ts:linkTestCaseIdsToBenchmark

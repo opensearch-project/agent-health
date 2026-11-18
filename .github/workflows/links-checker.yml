@@ -15,39 +15,86 @@ on:
 jobs:
   link-check:
     runs-on: ubuntu-latest
+    env:
+      # Shared lychee flags for all three passes below (kept in one place so the
+      # passes cannot drift). Each pass appends only what is specific to it.
+      # --max-concurrency: most links point at github.com, which answers a burst
+      # of 128 parallel requests from one runner with 502/503 even after retries.
+      LYCHEE_ARGS: >-
+        --verbose
+        --no-progress
+        --max-concurrency 16
+        --accept 200,204,301,302,403,429
+        --exclude-loopback
+        --exclude-private
+        --exclude 'localhost'
+        --exclude '127.0.0.1'
+        --exclude '.*xenproject\.org.*'
+        --exclude '.*opentelemetry\.io.*'
+        --exclude '.*star-history\.com.*'
+        --retry-wait-time 5
+        --max-retries 3
+        --timeout 30
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Check links
+      # CHANGELOG.md is checked separately. Its released sections are immutable
+      # history and link repo files by relative path; later PRs legitimately delete
+      # those files (e.g. #583 removed server/services/assistantService.ts), which
+      # turned link-check red on every PR that touches any .md file. So: pass 1
+      # checks every other Markdown file exactly as before (local file links
+      # included); pass 2 checks CHANGELOG.md's http(s) links only; pass 3 checks
+      # the local file links of the `## [Unreleased]` section — the one part of the
+      # changelog that is still being written and must point at files that exist.
+      - name: Check links (all Markdown except CHANGELOG.md)
         uses: lycheeverse/lychee-action@7cd0af4c74a61395d455af97419279d86aafaede # v2.0.2
         with:
           fail: true
           output: ./lychee-report.md
-          args: |
-            --verbose
-            --no-progress
-            --accept 200,204,301,302,403,429
-            --exclude-loopback
-            --exclude-private
-            --exclude 'localhost'
-            --exclude '127.0.0.1'
-            --exclude '.*xenproject\.org.*'
-            --exclude '.*opentelemetry\.io.*'
-            --exclude '.*star-history\.com.*'
+          args: >-
+            ${{ env.LYCHEE_ARGS }}
             --exclude-path 'node_modules'
             --exclude-path 'coverage'
             --exclude-path 'dist'
-            --retry-wait-time 5
-            --max-retries 3
-            --timeout 30
+            --exclude-path 'CHANGELOG.md'
             '**/*.md'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check links (CHANGELOG.md, http(s) links only)
+        if: ${{ !cancelled() }}
+        run: |
+          # `lychee` was installed on PATH by the action above. `--scheme` limits the
+          # check to http(s); repo-file links in released sections are history.
+          rc=0
+          eval lychee --format markdown --output ./lychee-report-changelog.md \
+            ${LYCHEE_ARGS} --scheme http --scheme https CHANGELOG.md || rc=$?
+          cat ./lychee-report-changelog.md
+          exit $rc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check links (CHANGELOG.md `## [Unreleased]` section, local file links)
+        if: ${{ !cancelled() }}
+        run: |
+          # Extract the Unreleased section into a sibling file at the repo root so
+          # its relative links resolve exactly as they do from CHANGELOG.md, then
+          # check only local file links (`--offline`); http(s) were covered above.
+          sed -n '/^## \[Unreleased\]/,/^## \[[0-9]/p' CHANGELOG.md | sed '$d' > CHANGELOG.unreleased.tmp.md
+          rc=0
+          eval lychee --format markdown --output ./lychee-report-changelog-unreleased.md \
+            ${LYCHEE_ARGS} --offline CHANGELOG.unreleased.tmp.md || rc=$?
+          rm -f CHANGELOG.unreleased.tmp.md
+          cat ./lychee-report-changelog-unreleased.md
+          exit $rc
 
       - name: Upload link check report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: lychee-report
-          path: ./lychee-report.md
+          path: |
+            ./lychee-report.md
+            ./lychee-report-changelog.md
+            ./lychee-report-changelog-unreleased.md
