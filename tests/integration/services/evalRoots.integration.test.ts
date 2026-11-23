@@ -373,7 +373,10 @@ describe('eval roots + describePath (own headless servers, FILE storage)', () =>
       expect(hint).toContain(JSON.stringify(serverCwd));
       expect(hint).toContain('AGENT_HEALTH_EVAL_ROOTS');
 
-      // Same hint on the unified (`-t <id>`, evaluation-runs API) path.
+      // The unified path (`-t <id>`) EXECUTES IN THE CLI PROCESS since #612
+      // step 3: the stored `sourceFile` is resolved against the CLI's own cwd
+      // (the eval repo, where the file is), so the server's eval roots are
+      // irrelevant and no hint is printed — the run simply completes.
       const cliUnified = spawnSync(
         'node',
         [CLI_BUNDLE, 'benchmark', '-t', tc.body.id, '-a', 'demo', '--judge-model', 'demo-model'],
@@ -385,9 +388,9 @@ describe('eval roots + describePath (own headless servers, FILE storage)', () =>
         },
       );
       const outUnified = `${cliUnified.stdout}\n${cliUnified.stderr}`.replace(/\u001b\[[0-9;]*m/g, '');
-      const hintUnified = outUnified.split('\n').find(l => l.includes('Hint:'));
-      if (!hintUnified) throw new Error(`no hint in unified CLI output:\n${outUnified}`);
-      expect(hintUnified).toContain(`"${EVAL_FILE_REL}"`);
+      expect(cliUnified.status).toBe(0);
+      expect(outUnified).toMatch(/Evaluation run completed \(1\/1 test cases\)/);
+      expect(outUnified.split('\n').find(l => l.includes('Hint:'))).toBeUndefined();
     },
     TEST_TIMEOUT,
   );

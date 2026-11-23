@@ -10,16 +10,22 @@
  * these routes; each one is a thin wrapper over the server's `LocalRunSink`,
  * so a run ingested here is stored exactly like a run executed in-process.
  *
- *   POST  /api/runs/ingest                                  createRun       → { runId, executorToken }
+ *   POST  /api/runs/ingest                                  createRun       → { runId, executorToken, lease }
+ *         (also links the run's cases into `run.benchmarkId` and stamps the
+ *         benchmark image — server/services/runBookkeeping.ts)
  *   PUT   /api/runs/ingest/:runId/cases/:caseId/report      upsertCaseReport → { reportId, report }
  *   PATCH /api/runs/ingest/:runId/reports/:reportId         patchCaseReport → { ok: true }
  *   PATCH /api/runs/ingest/:runId/cases/:caseId/result      setCaseResult   → LeaseEcho
  *   POST  /api/runs/ingest/:runId/heartbeat                 heartbeat       → LeaseEcho
  *   POST  /api/runs/ingest/:runId/finalize                  finalize        → EvaluationRun
  *
- * Every mutation after `createRun` carries the executor token minted by
- * `createRun` in `X-AH-Executor` (and the lease generation it holds in
- * `X-AH-Lease-Generation`, default 1). Each write is FENCED on them
+ * Every mutation after `createRun` carries the executor token in
+ * `X-AH-Executor` (and the lease generation it holds in
+ * `X-AH-Lease-Generation`, default 1). The token is minted by the server on
+ * `createRun` unless the executor sends its own (32-hex) in the same header:
+ * then a retried create with that token is answered with the existing lease
+ * (200), and a create for a run id that already exists under another token
+ * — or with no token — is refused with 409 `run-exists`. Each write is FENCED on them
  * (lib/runLease.ts): the sink's compare-and-swap refuses a write whose
  * token/generation no longer match the run, or whose run is no longer
  * `running`, with `409 { error: 'lease-lost', generation, at, status }`.
@@ -33,9 +39,10 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { getStorageModule } from '../adapters/index.js';
-import { LocalRunSink, EXECUTOR_TOKEN_HEADER, LEASE_GENERATION_HEADER, type FinalizeInput } from '../../services/runSink.js';
+import { LocalRunSink, EXECUTOR_TOKEN_HEADER, LEASE_GENERATION_HEADER, type CreatedRun, type FinalizeInput } from '../../services/runSink.js';
 import { isLeaseLostError } from '../../lib/runLease.js';
 import { refuseWhenDraining } from '../services/serverDrain.js';
+import { performIngestedRunBookkeeping } from '../services/runBookkeeping.js';
 
 const router = Router();
 
@@ -87,6 +94,9 @@ const isObject = (v: unknown): v is Record<string, any> => !!v && typeof v === '
 /** `EvaluationRun.results[*].status` values (types/index.ts `RunResultStatus`). */
 const CASE_RESULT_STATUSES: ReadonlySet<string> = new Set(['pending', 'running', 'completed', 'failed', 'cancelled']);
 
+/** Executor tokens are 128-bit hex (`mintExecutorToken`); anything else is refused. */
+const EXECUTOR_TOKEN_RE = /^[0-9a-f]{32}$/;
+
 router.post('/api/runs/ingest', refuseWhenDraining, async (req: Request, res: Response) => {
   const run = req.body?.run;
   if (!isObject(run) || typeof run.id !== 'string' || !run.id) {
@@ -96,8 +106,33 @@ router.post('/api/runs/ingest', refuseWhenDraining, async (req: Request, res: Re
   if (executorVersion !== undefined && !(typeof executorVersion === 'string' && /^[\x21-\x7e]{1,64}$/.test(executorVersion))) {
     return res.status(400).json({ error: 'body.executor.version must be a printable string of at most 64 characters when given' });
   }
+  // An executor may mint its own token and send it on create. That is what
+  // makes a RETRIED create (the answer to the first one was lost) safe: the
+  // same token on an existing document is the same executor asking again
+  // and gets its lease back; any other token — or none — on an existing
+  // document is a different caller and is refused, so a create can never
+  // take over a run that is executing, nor reset one that has finished.
+  const token = req.header(EXECUTOR_TOKEN_HEADER);
+  if (token !== undefined && !EXECUTOR_TOKEN_RE.test(token)) {
+    return res.status(400).json({ error: `${EXECUTOR_TOKEN_HEADER} must be a 32-character lowercase hex token when given on create` });
+  }
   try {
-    const sink = new LocalRunSink(getStorageModule(), { executorKind: 'cli', executorVersion });
+    const storage = getStorageModule();
+    const existing = await storage.evaluationRuns.getById(run.id);
+    if (existing) {
+      if (token && existing.executor?.id === token && existing.lease) {
+        res.setHeader(EXECUTOR_TOKEN_HEADER, token);
+        return res.status(200).json({ runId: existing.id, executorToken: token, lease: existing.lease } satisfies CreatedRun);
+      }
+      return res.status(409).json({ error: 'run-exists', runId: existing.id, status: existing.status });
+    }
+    // Same storage-side bookkeeping a server-executed run gets at creation:
+    // the parent benchmark stays linked to the run's cases and the run's
+    // judge conditions are stamped as a benchmark image. The executor only
+    // ever ships the run document; the links are the server's job.
+    const { imageDigest } = await performIngestedRunBookkeeping(storage, run as any);
+    if (imageDigest) run.imageDigest = imageDigest;
+    const sink = new LocalRunSink(storage, { executorKind: 'cli', executorVersion, executorToken: token });
     const created = await sink.createRun(run as any);
     res.setHeader(EXECUTOR_TOKEN_HEADER, created.executorToken);
     res.status(201).json(created);

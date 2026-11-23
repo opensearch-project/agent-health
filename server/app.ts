@@ -14,14 +14,14 @@ import routes from './routes/index.js';
 import { setupMiddleware, setupSpaFallback, setupFinalErrorHandler } from './middleware/index.js';
 import { loadConfig } from '@/lib/config/index';
 import { migrateYamlToJsonIfNeeded } from './services/configMigration.js';
-import { getStorageConfigFromFile, getObservabilityConfigFromFile, getStorageConfigFromTs, getObservabilityConfigFromTs, setTsClusterConfig } from './services/configService.js';
+import { getStorageConfigFromFile, getStorageConfigFromTs, setTsClusterConfig } from './services/configService.js';
+import { initEvalTelemetryFromConfig } from './services/evalTelemetryBoot.js';
 import { setConfiguredEvalRoots } from '@/lib/config/evalRoots';
-import { getStorageConfigFromEnv, getObservabilityConfigFromEnv } from './middleware/dataSourceConfig.js';
+import { getStorageConfigFromEnv } from './middleware/dataSourceConfig.js';
 import { initializeStorageFromConfig } from './services/storageInitializer.js';
 import { runColdStartMigrations } from './services/coldStartMigrations.js';
 import { getStorageModule } from './adapters/index.js';
-import { initEvalTracerProvider, resolveEvalTelemetryConfig, shutdownEvalTracer } from '@/lib/telemetry';
-import type { OpenSearchExporterConfig } from '@/lib/telemetry';
+import { shutdownEvalTracer } from '@/lib/telemetry';
 import { installGracefulShutdown, type GracefulShutdownHandle, type GracefulShutdownOptions } from './utils/gracefulShutdown.js';
 
 // Register server-side connectors (subprocess, claude-code)
@@ -84,24 +84,9 @@ export async function createApp(): Promise<Express> {
     console.log(`[app] Registered ${config.connectors.length} user connector(s) from config`);
   }
 
-  // Initialize evaluation telemetry (OTel span emission).
-  // Prefer the observability data source for direct OpenSearch export — this
-  // ensures eval spans land in the same cluster/index as agent spans.
-  const obsConfig = getObservabilityConfigFromFile() ?? getObservabilityConfigFromTs() ?? getObservabilityConfigFromEnv();
-  let opensearchExporterConfig: OpenSearchExporterConfig | undefined;
-  if (obsConfig?.endpoint) {
-    opensearchExporterConfig = {
-      endpoint: obsConfig.endpoint,
-      username: obsConfig.username,
-      password: obsConfig.password,
-      tlsSkipVerify: obsConfig.tlsSkipVerify,
-      indexName: 'otel-v1-apm-span',
-    };
-  }
-  initEvalTracerProvider(resolveEvalTelemetryConfig({
-    ...config.telemetry,
-    opensearch: opensearchExporterConfig,
-  }));
+  // Initialize evaluation telemetry (OTel span emission) from the project
+  // config — shared with the CLI executor (server/services/evalTelemetryBoot.ts).
+  initEvalTelemetryFromConfig(config);
   // Telemetry is flushed by installAppShutdown(); createApp() itself must not
   // register signal listeners — a bare SIGTERM listener suppresses Node's
   // default termination, and a caller that only listens would never exit.

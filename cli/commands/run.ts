@@ -7,9 +7,10 @@
  * Run Command
  * Run a single test case against one or more agents
  *
- * Architecture: CLI → Server HTTP API → OpenSearch
- * This command uses the server API for all operations to follow
- * the server-mediated architecture pattern.
+ * Architecture (#612): the test case is looked up on the project server, then
+ * EXECUTED IN THIS PROCESS — connector, hooks and judge run with the caller's
+ * cwd / env / config — and the resulting ad-hoc evaluation run is persisted
+ * through the server's run-ingestion API (cli/utils/localExecutor.ts).
  */
 
 import { Command } from 'commander';
@@ -20,8 +21,9 @@ import { loadConfig, type ResolvedConfig } from '@/lib/config/index.js';
 import { resolveAgentModel } from '@/lib/resolveAgentModel.js';
 import { ensureServer, createServerCleanup } from '@/cli/utils/serverLifecycle.js';
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
-import { ApiClient, type EvaluationResult, type EvaluationProgressEvent } from '@/cli/utils/apiClient.js';
-import type { AgentConfig, TrajectoryStep } from '@/types/index.js';
+import { ApiClient, type EvaluationResult } from '@/cli/utils/apiClient.js';
+import { executeRunLocally } from '@/cli/utils/localExecutor.js';
+import type { AgentConfig, TestCaseRun } from '@/types/index.js';
 import { formatJson, formatMarkdownTable, parseOutputFormat, OUTPUT_FORMAT_DESCRIPTION, type OutputFormat } from '@/cli/utils/formatOutput.js';
 import { flagExitCode } from '@/cli/utils/runSummary.js';
 
@@ -98,11 +100,18 @@ async function validateAgentRequirements(agent: AgentConfig): Promise<string | u
 }
 
 /**
- * Run evaluation for a single agent via server API
+ * Run one test case against one agent IN THIS PROCESS (#612): the connector,
+ * hooks and judge execute with the caller's cwd / env / config and the run
+ * is persisted through the server's run-ingestion API as an ad-hoc evaluation
+ * run (it shows up in Evaluation Runs like any other run). The per-agent
+ * verdict is read back from the persisted report so the table shows what
+ * the server stored, not what this process believes.
  */
 async function runForAgent(
   client: ApiClient,
-  testCaseId: string,
+  serverUrl: string,
+  config: ResolvedConfig,
+  testCase: { id: string; name: string },
   agent: AgentConfig,
   modelId: string,
   verbose: boolean,
@@ -112,23 +121,55 @@ async function runForAgent(
   const spinner = ora(`Running ${agent.name}...`).start();
 
   try {
-    const report = await client.runEvaluation(
-      testCaseId,
-      agent.key,
-      modelId,
-      (event: EvaluationProgressEvent) => {
-        if (event.type === 'step' && verbose) {
-          spinner.text = `${agent.name}: Step ${event.stepIndex + 1} (${event.step.type})`;
-        } else if (event.type === 'started') {
-          spinner.text = `${agent.name}: Started evaluation...`;
-        } else if (event.type === 'awaiting-judge' || event.type === 'polling') {
-          // Trace-mode agents: judge runs in the background after traces land
-          spinner.text = `${agent.name}: Waiting for traces / judge verdict...`;
-        }
+    const outcome = await executeRunLocally({
+      serverUrl,
+      config,
+      request: {
+        name: `CLI Run - ${agent.name} - ${testCase.name}`,
+        sources: [{ type: 'test-case-ids', ids: [testCase.id] }],
+        agentKey: agent.key,
+        modelId,
+        judgeModelId,
+        evaluatorId,
+        concurrency: 1,
       },
-      evaluatorId,
-      judgeModelId
-    );
+      verbose: verbose || !!process.env.DEBUG,
+      callbacks: {
+        onStarted: () => { spinner.text = `${agent.name}: Started evaluation...`; },
+        onProgress: (progress) => {
+          if (verbose) spinner.text = `${agent.name}: ${progress.status} (${progress.completedCount}/${progress.totalTestCases})`;
+        },
+        onDeliveryRetry: ({ operation, attempt, delayMs }) => {
+          spinner.text = `${agent.name}: server unreachable while recording ${operation} (attempt ${attempt}) — retrying in ${Math.round(delayMs / 1000)}s`;
+        },
+        onCancelRequested: () => { spinner.text = `${agent.name}: cancel requested — finishing the in-flight case…`; },
+      },
+    });
+
+    const entry = outcome.run.results?.[testCase.id];
+    if (!entry?.reportId) {
+      spinner.warn(`${agent.name}: ${chalk.yellow('ERRORED')} (the run ${outcome.status} without a report for this test case)`);
+      return null;
+    }
+    // The verdict is read back from the persisted report. The run itself is
+    // already confirmed, so a read that fails right after (server restarting,
+    // index refresh lag) falls back to the verdict the confirmed run carries
+    // instead of calling a recorded result an error.
+    let stored: Partial<TestCaseRun> | null = null;
+    try {
+      stored = await client.getReportById(entry.reportId);
+    } catch (readError) {
+      console.warn(chalk.gray(`  (could not read report ${entry.reportId} back: ${readError instanceof Error ? readError.message : String(readError)})`));
+    }
+    const report: EvaluationResult = {
+      id: entry.reportId,
+      status: stored?.status ?? entry.status,
+      passFailStatus: (stored ? stored.passFailStatus : (entry as { passFailStatus?: string }).passFailStatus) as EvaluationResult['passFailStatus'],
+      metricsStatus: stored?.metricsStatus as EvaluationResult['metricsStatus'],
+      metrics: stored?.metrics as EvaluationResult['metrics'],
+      trajectorySteps: stored?.trajectory?.length || 0,
+      llmJudgeReasoning: stored?.llmJudgeReasoning,
+    };
 
     // Trace-mode reports can time out still awaiting the judge — that state
     // is neither PASSED nor FAILED (issue #333): show it as pending. A report
@@ -142,7 +183,8 @@ async function runForAgent(
     } else if (label === 'FAILED') {
       spinner.fail(`${agent.name}: ${chalk.red('FAILED')}`);
     } else {
-      spinner.warn(`${agent.name}: ${chalk.yellow('ERRORED')} (not judged — ${report.status === 'completed' ? 'the evaluator produced no verdict' : `execution ${report.status}`})`);
+      const reason = (stored as any)?.judgeError?.message || (stored as any)?.evaluatorError?.message || stored?.llmJudgeReasoning;
+      spinner.warn(`${agent.name}: ${chalk.yellow('ERRORED')} (not judged — ${report.status === 'completed' ? (reason ? reason : 'the evaluator produced no verdict') : `execution ${report.status}`})`);
     }
 
     return report;
@@ -329,7 +371,7 @@ export function createRunCommand(): Command {
           }
 
           try {
-            const report = await runForAgent(client, testCase.id, agent, modelId, options.verbose || false, options.evaluator, options.judgeModel);
+            const report = await runForAgent(client, serverResult.baseUrl, config, testCase, agent, modelId, options.verbose || false, options.evaluator, options.judgeModel);
             results.push({ agent, report });
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
