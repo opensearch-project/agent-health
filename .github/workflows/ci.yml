@@ -574,10 +574,7 @@ jobs:
           retention-days: 30
 
   e2e-tests:
-    # Pinned: ubuntu-latest now resolves to ubuntu-26.04, which Playwright 1.57
-    # does not support ("Playwright does not support chromium on ubuntu26.04-x64").
-    # Keep E2E on 24.04 until @playwright/test is bumped to >= 1.61 (see #633).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
