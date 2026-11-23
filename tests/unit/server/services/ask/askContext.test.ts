@@ -44,6 +44,11 @@ describe('deriveAskRefs — ids from PATH routes', () => {
     expect(deriveAskRefs('/compare')).toEqual({});
   });
 
+  it('the standalone report page and the test-case page\'s ?run= carry a REPORT id', () => {
+    expect(deriveAskRefs('/evaluations/reports/report-9')).toEqual({ reportId: 'report-9' });
+    expect(deriveAskRefs('/evaluations/test-cases/tc-1?run=report-9')).toEqual({ testCaseId: 'tc-1', reportId: 'report-9' });
+  });
+
   it('legacy run details routes carry a REPORT id', () => {
     expect(deriveAskRefs('/runs/report-3')).toEqual({ reportId: 'report-3' });
     expect(deriveAskRefs('/benchmarks/bench-1/runs/report-3')).toEqual({ benchmarkId: 'bench-1', reportId: 'report-3' });
@@ -79,7 +84,8 @@ describe('askLinks — PATH-routed, never hash routes', () => {
   it('builds inspector / compare / test-case links', () => {
     expect(askLinks.report('b', 'r', 'rep')).toBe('/evaluations/benchmarks/b/runs/r/inspect?reportId=rep');
     expect(askLinks.report(undefined, 'r', 'rep')).toBe('/evaluations/runs/r/inspect?reportId=rep');
-    expect(askLinks.report(undefined, undefined, 'rep')).toBe('/runs/rep');
+    // A report with no run has its own evals3 page (the legacy /runs/:id only redirects).
+    expect(askLinks.report(undefined, undefined, 'rep')).toBe('/evaluations/reports/rep');
     expect(askLinks.compare('b', ['x', 'y'])).toBe('/compare/b?runs=x,y');
     expect(askLinks.testCase('tc')).toBe('/evaluations/test-cases/tc');
     for (const l of [askLinks.report('b', 'r', 'rep'), askLinks.compare('b', ['x']), askLinks.run('b', 'r'), askLinks.benchmark('b')]) {

@@ -101,7 +101,7 @@ test.describe('Re-run an evaluation run', () => {
   test('Re-run lives in the report page header kebab (no standalone Re-run button)', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
-    await page.goto(`/evaluations/runs/${sourceRunId}`);
+    await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     // Owner papercut: standalone lifecycle buttons removed; kebab is the only home.
     await expect(page.locator('[data-testid="rerun-run-btn"]')).toHaveCount(0);
@@ -114,7 +114,7 @@ test.describe('Re-run an evaluation run', () => {
   test('clicking Re-run opens a confirm dialog with name preview + agent/judge summary', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
-    await page.goto(`/evaluations/runs/${sourceRunId}`);
+    await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
@@ -156,7 +156,7 @@ test.describe('Re-run an evaluation run', () => {
       });
     });
 
-    await page.goto(`/evaluations/runs/${sourceRunId}`);
+    await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
@@ -164,14 +164,15 @@ test.describe('Re-run an evaluation run', () => {
 
     await page.locator('[data-testid="run-config-submit-btn"]').click();
 
-    await expect(page).toHaveURL(/\/evaluations\/runs\/mocked-rerun-target$/, { timeout: 10000 });
+    // Re-running from the inspector lands on the new run's inspector.
+    await expect(page).toHaveURL(/\/evaluations\/runs\/mocked-rerun-target\/inspect$/, { timeout: 10000 });
     expect(rerunRequested).toBe(true);
   });
 
   test('provenance chip renders "re-run of <source>" on a run created as a re-run', async ({ page }) => {
     test.skip(!seeded, 'Could not seed child run (storage not configured?)');
 
-    await page.goto(`/evaluations/runs/${childRunId}`);
+    await page.goto(`/evaluations/runs/${childRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
     const chip = page.locator('[data-testid="rerun-provenance-chip"]');
@@ -179,16 +180,16 @@ test.describe('Re-run an evaluation run', () => {
     await expect(chip).toContainText('re-run of');
     await expect(chip).toContainText(SOURCE_NAME);
 
-    // The chip links back to the source run's report page.
+    // The chip links back to the source run's inspector.
     await chip.click();
-    await expect(page).toHaveURL(new RegExp(`/evaluations/runs/${sourceRunId}$`), { timeout: 10000 });
-    await expect(page.getByRole('heading', { name: SOURCE_NAME })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/evaluations/runs/${sourceRunId}/inspect$`), { timeout: 10000 });
+    await expect(page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`)).toBeVisible({ timeout: 15000 });
   });
 
   test('source run has no provenance chip (it was not itself a re-run)', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
-    await page.goto(`/evaluations/runs/${sourceRunId}`);
+    await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await expect(page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`)).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="rerun-provenance-chip"]')).toHaveCount(0);
@@ -219,9 +220,11 @@ test.describe('Re-run an evaluation run', () => {
   test('"Customize before re-running" opens the New-Run composer pre-filled from the source run', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
-    await page.goto(`/evaluations/runs/${sourceRunId}`);
+    await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
 
+    // "Customize before re-running…" lives in the header kebab on the inspector.
+    await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
     const customizeBtn = page.locator('[data-testid="rerun-customize-btn"]');
     await expect(customizeBtn).toBeVisible({ timeout: 15000 });
     await customizeBtn.click();
@@ -289,7 +292,7 @@ test.describe('Re-run dialog — source-run evaluator no longer in config (real 
   test('shows the missing-evaluator hint, blocks submit, and re-enables after picking a configured evaluator', async ({ page }) => {
     test.skip(!seeded, 'Could not seed source run (storage not configured?)');
 
-    await page.goto(`/evaluations/runs/${sourceRunId}`);
+    await page.goto(`/evaluations/runs/${sourceRunId}/inspect`);
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 30000 });
     await page.locator(`[data-testid="run-actions-menu-trigger-${sourceRunId}"]`).click();
     await page.locator(`[data-testid="run-action-rerun-${sourceRunId}"]`).click();
@@ -431,7 +434,7 @@ test.describe('Run inspector — Re-run button (eval-run mode)', () => {
     await expect(chip).toContainText(SOURCE_NAME);
 
     await chip.click();
-    await expect(page).toHaveURL(new RegExp(`/evaluations/runs/${sourceRunId}$`), { timeout: 10000 });
+    await expect(page).toHaveURL(new RegExp(`/evaluations/runs/${sourceRunId}/inspect$`), { timeout: 10000 });
   });
 });
 

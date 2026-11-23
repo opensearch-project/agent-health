@@ -16,7 +16,7 @@ test.describe('Agent Selection', () => {
 
   test.describe('QuickRunModal', () => {
     test.beforeEach(async ({ page }) => {
-      await page.goto('/test-cases');
+      await page.goto('/evaluations/test-cases');
       await page.waitForSelector('[data-testid="test-cases-page"]', { timeout: 30000 });
       await page.waitForTimeout(2000);
     });
@@ -59,9 +59,9 @@ test.describe('Agent Selection', () => {
     });
   });
 
-  test.describe('BenchmarkRunsPage', () => {
+  test.describe('Benchmark runs page (evals3)', () => {
     test.beforeEach(async ({ page }) => {
-      await page.goto('/benchmarks');
+      await page.goto('/evaluations/benchmarks');
       await page.waitForSelector('[data-testid="benchmarks-page"]', { timeout: 30000 });
       await page.waitForTimeout(2000);
     });

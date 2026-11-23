@@ -49,11 +49,13 @@ export const DEFAULT_SUGGESTIONS: string[] = [
 export function classifyRoute(pathname: string): RouteContext {
   // Order matters — match more specific routes first.
   // Run detail across both legacy (/runs/:id, /benchmarks/:b/runs/:r) and
-  // evals3 (/evaluations/runs/:id, /evaluations/benchmarks/:b/runs/:r/inspect) shapes.
+  // evals3 (/evaluations/runs/:id, /evaluations/benchmarks/:b/runs/:r/inspect,
+  // /evaluations/reports/:reportId — one report on its own) shapes.
   if (
     /^\/runs\/[^/]+\/?$/.test(pathname) ||
     /^\/benchmarks\/[^/]+\/runs\/[^/]+/.test(pathname) ||
     /^\/evaluations\/runs\/[^/]+/.test(pathname) ||
+    /^\/evaluations\/reports\/[^/]+/.test(pathname) ||
     /^\/evaluations\/benchmarks\/[^/]+\/runs\/[^/]+/.test(pathname)
   ) {
     return {

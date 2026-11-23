@@ -136,7 +136,7 @@ test.describe('Comparison page \u2014 run-name prominence, no summary line, cove
     await expect(runNameCell).toHaveCount(1);
     // These fixtures are first-class eval-run docs (the benchmark's runs[] is
     // empty), so the canonical target is the bare eval-run route.
-    await expect(runNameCell).toHaveAttribute('href', `/evaluations/runs/${RUN_A}`);
+    await expect(runNameCell).toHaveAttribute('href', `/evaluations/runs/${RUN_A}/inspect`);
   });
 
   test('does NOT render a "Comparing A vs B" summary line (iteration 5: removed, no new vertical space) -- benchmark identity lives only in the breadcrumb', async ({ page }) => {
