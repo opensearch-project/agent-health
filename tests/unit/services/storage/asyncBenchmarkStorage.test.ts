@@ -147,6 +147,19 @@ describe('AsyncBenchmarkStorage', () => {
       expect(legacyResult?.runs[0].concurrency).toBeUndefined();
     });
 
+    it('carries a run\'s agentEndpoint override through the storage mapper (the allow-list dropped it, so two endpoints of one agentKey looked like one agent)', async () => {
+      const withEndpoint = createMockStorageExperiment();
+      (withEndpoint.runs[0] as any).agentEndpoint = 'https://staging.example.com/agent';
+      mockOsExperiments.getById.mockResolvedValueOnce(withEndpoint);
+
+      const result = await asyncBenchmarkStorage.getById('exp-1');
+      expect(result?.runs[0].agentEndpoint).toBe('https://staging.example.com/agent');
+
+      mockOsExperiments.getById.mockResolvedValueOnce(createMockStorageExperiment());
+      const legacyResult = await asyncBenchmarkStorage.getById('exp-1');
+      expect(legacyResult?.runs[0].agentEndpoint).toBeUndefined();
+    });
+
     it('normalizes a schemaless stored `null` concurrency to `undefined` (codex_review finding: render sites only check `=== undefined`)', async () => {
       const withNullConcurrency = createMockStorageExperiment();
       (withNullConcurrency.runs[0] as any).concurrency = null;

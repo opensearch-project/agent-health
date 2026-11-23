@@ -33,7 +33,8 @@ import { asyncBenchmarkStorage, asyncTestCaseStorage } from '@/services/storage'
 import { executeBenchmarkRun } from '@/services/client';
 import { Benchmark, BenchmarkRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { formatRelativeTime, getModelName } from '@/lib/utils';
+import { formatRelativeTime } from '@/lib/utils';
+import { summarizeRunsByAgent, AgentRunSummary, TrendDir } from '@/lib/benchmarkAgentSummary';
 import { BenchmarkEditor, RunConfigForExecution } from '@/components/BenchmarkEditor';
 import { Breadcrumbs } from '@/components/evals3/Breadcrumbs';
 import { validateTestCasesArrayJson } from '@/lib/testCaseValidation';
@@ -60,42 +61,6 @@ function getTimeThreshold(range: TimeRange): Date | null {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function computeScore(run: BenchmarkRun): number | null {
-  if (run.stats && run.stats.total > 0) {
-    // Issue #242: errored runs (evaluator couldn't produce a verdict) are
-    // excluded from both numerator and denominator so a misconfigured
-    // judge doesn't drag the score down to 0%.
-    const errored = run.stats.errored ?? 0;
-    const evaluable = Math.max(0, run.stats.total - errored);
-    if (evaluable === 0) return null;
-    return Math.round((run.stats.passed / evaluable) * 100);
-  }
-  const results = Object.values(run.results || {});
-  if (results.length === 0) return null;
-  const completed = results.filter(r => r.status === 'completed').length;
-  return Math.round((completed / results.length) * 100);
-}
-
-function ScoreBadge({ score }: { score: number | null }) {
-  if (score === null) return <span className="text-xs text-muted-foreground">—</span>;
-  const cls = score >= 80 ? 'text-green-700 dark:text-green-400' : score >= 50 ? 'text-amber-700 dark:text-amber-400' : 'text-red-700 dark:text-red-400';
-  return <span className={`text-xs font-semibold tabular-nums ${cls}`}>{score}%</span>;
-}
-
-type TrendDir = 'improving' | 'stable' | 'regressing' | 'unknown';
-
-function getTrend(runs: BenchmarkRun[]): TrendDir {
-  if (runs.length < 2) return 'unknown';
-  const sorted = [...runs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  const latest = computeScore(sorted[0]);
-  const prev = computeScore(sorted[1]);
-  if (latest === null || prev === null) return 'unknown';
-  const diff = latest - prev;
-  if (diff > 5) return 'improving';
-  if (diff < -5) return 'regressing';
-  return 'stable';
-}
-
 function TrendBadge({ trend }: { trend: TrendDir }) {
   const config: Record<TrendDir, { icon: React.ReactNode; label: string; cls: string }> = {
     improving: { icon: <TrendingUp size={12} />, label: 'Improving', cls: 'text-green-600 dark:text-green-400' },
@@ -104,13 +69,26 @@ function TrendBadge({ trend }: { trend: TrendDir }) {
     unknown: { icon: <Minus size={12} />, label: '—', cls: 'text-muted-foreground' },
   };
   const c = config[trend];
-  return <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${c.cls}`}>{c.icon} {c.label}</span>;
+  return <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${c.cls}`} data-testid="agent-trend">{c.icon} {c.label}</span>;
 }
 
+/** Agents shown per row before the "+N more" toggle. */
+const AGENT_LINES_COLLAPSED = 3;
+
 interface BenchmarkStats {
-  runCount: number; latestRun: BenchmarkRun | null; latestScore: number | null;
-  bestScore: number | null; worstScore: number | null; trend: TrendDir;
-  passRateHistory: number[]; // pass rates of last N runs, oldest first
+  runCount: number;
+  /** Newest run of ANY agent — drives "Last Activity" only, never a score. */
+  latestRun: BenchmarkRun | null;
+  /**
+   * One entry per agent (agentKey + endpoint override) that ran this
+   * benchmark, most recently active first. Latest result, trend and
+   * sparkline are per agent — a run is only ever compared with a run of the
+   * same agent (owner bug 11-18: two agents on one benchmark rendered as one
+   * "latest" with a trend against the other agent's score).
+   */
+  agents: AgentRunSummary[];
+  /** Best per-agent latest score — the "Latest Result" sort key. */
+  bestLatestScore: number | null;
   /**
    * Epoch ms of the most recent activity, defined as
    * `max(latestRun.createdAt, benchmark.updatedAt)`.
@@ -123,12 +101,14 @@ interface BenchmarkStats {
 }
 
 // Sort types
-type BmSortField = 'name' | 'tcs' | 'runs' | 'lastTouched' | 'score' | 'best' | 'worst' | 'trend';
+type BmSortField = 'name' | 'tcs' | 'runs' | 'lastTouched' | 'score';
 type SortDir = 'asc' | 'desc';
 
 /** Tiny inline sparkline for pass rate trend */
 function MiniSparkline({ values }: { values: number[] }) {
-  if (values.length < 2) return <span className="text-[9px] text-muted-foreground">—</span>;
+  // Fixed-width spacer when there is nothing to draw so the trend badges of a
+  // row's agent lines stay aligned (the badge itself shows the "—").
+  if (values.length < 2) return <span className="inline-block w-12" aria-hidden="true" />;
   const max = 100;
   const w = 48;
   const h = 16;
@@ -223,11 +203,15 @@ export const BenchmarksPage4: React.FC = () => {
     return () => el.removeEventListener('scroll', handler);
   }, []);
 
-  // Agent options from config
+  // Agent options from config. (Listing agent keys only seen in runs is a
+  // follow-up: this preference is shared with the Runs and Traces pages,
+  // whose dropdowns/filters would not recognise an unconfigured key.)
   const agentOptions = useMemo(() => {
     const agents = DEFAULT_CONFIG.agents.filter(a => a.enabled !== false).map(a => ({ value: a.key, label: a.name }));
     return [{ value: 'all', label: 'All Agents' }, ...agents];
   }, []);
+  const agentNameFor = useCallback(
+    (key: string) => DEFAULT_CONFIG.agents.find(a => a.key === key)?.name || key || 'Unknown', []);
 
   // Time-filter + agent-filter runs
   const timeFilteredBenchmarks = useMemo(() => {
@@ -245,35 +229,48 @@ export const BenchmarksPage4: React.FC = () => {
     const map = new Map<string, BenchmarkStats>();
     for (const bm of timeFilteredBenchmarks) {
       const runs = bm.runs || [];
-      const scores = runs.map(r => computeScore(r)).filter((s): s is number => s !== null);
-      const sorted = [...runs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      const latestRun = sorted[0] || null;
+      const agents = summarizeRunsByAgent(runs, agentNameFor);
+      const latestRun = agents[0]?.latestRun ?? null;
       // "Last Activity" = whichever is more recent: the latest run's createdAt or the
       // benchmark's own updatedAt (test cases changed, renamed, etc.). Explicitly NOT
       // createdAt — a brand-new benchmark with no runs is still "touched now" via updatedAt.
-      const latestRunMs = latestRun ? new Date(latestRun.createdAt).getTime() : 0;
+      const latestRunMs = agents[0]?.latestAt ?? 0;
       const updatedMs = bm.updatedAt ? new Date(bm.updatedAt).getTime() : 0;
       const lastTouched = Math.max(latestRunMs, updatedMs);
       const lastTouchedKind: 'run' | 'updated' = latestRunMs > updatedMs ? 'run' : 'updated';
+      const latestScores = agents.map(a => a.latestScore).filter((x): x is number => x !== null);
       map.set(bm.id, {
-        runCount: runs.length, latestRun,
-        latestScore: latestRun ? computeScore(latestRun) : null,
-        bestScore: scores.length > 0 ? Math.max(...scores) : null,
-        worstScore: scores.length > 0 ? Math.min(...scores) : null,
-        trend: getTrend(runs),
-        passRateHistory: sorted.slice(0, 10).reverse().map(r => computeScore(r) ?? 0),
+        runCount: runs.length, latestRun, agents,
+        bestLatestScore: latestScores.length > 0 ? Math.max(...latestScores) : null,
         lastTouched,
         lastTouchedKind,
       });
     }
     return map;
-  }, [timeFilteredBenchmarks]);
+  }, [timeFilteredBenchmarks, agentNameFor]);
 
-  // Summary cards
+  // Summary cards. The pass-rate card averages each benchmark's latest score
+  // ONLY when every run shown belongs to one agent (a single configured agent,
+  // or the agent filter is set) — averaging across agents hid which agent a
+  // number belonged to. With several agents it shows the agent count instead.
   const totalBenchmarks = benchmarks.length;
   const totalRuns = Array.from(benchmarkStats.values()).reduce((s, bs) => s + bs.runCount, 0);
-  const allScores = Array.from(benchmarkStats.values()).map(bs => bs.latestScore).filter((s): s is number => s !== null);
+  const distinctAgents = useMemo(() => {
+    const ids = new Set<string>();
+    for (const bs of benchmarkStats.values()) for (const a of bs.agents) ids.add(a.agentId);
+    return ids.size;
+  }, [benchmarkStats]);
+  const singleAgentView = distinctAgents <= 1;
+  const allScores = Array.from(benchmarkStats.values()).map(bs => bs.bestLatestScore).filter((x): x is number => x !== null);
   const avgPassRate = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0;
+
+  // Rows whose per-agent list is expanded past AGENT_LINES_COLLAPSED.
+  const [expandedAgentRows, setExpandedAgentRows] = useState<Set<string>>(() => new Set());
+  const toggleAgentRows = (bmId: string) => setExpandedAgentRows(prev => {
+    const next = new Set(prev);
+    if (next.has(bmId)) next.delete(bmId); else next.add(bmId);
+    return next;
+  });
 
   // Filtered + sorted benchmarks
   const sortedBenchmarks = useMemo(() => {
@@ -291,10 +288,7 @@ export const BenchmarksPage4: React.FC = () => {
         case 'tcs': return dir * ((a.testCaseIds || []).length - (b.testCaseIds || []).length);
         case 'runs': return dir * ((sa?.runCount || 0) - (sb?.runCount || 0));
         case 'lastTouched': return dir * ((sa?.lastTouched || 0) - (sb?.lastTouched || 0));
-        case 'score': return dir * ((sa?.latestScore ?? -1) - (sb?.latestScore ?? -1));
-        case 'best': return dir * ((sa?.bestScore ?? -1) - (sb?.bestScore ?? -1));
-        case 'worst': return dir * ((sa?.worstScore ?? -1) - (sb?.worstScore ?? -1));
-        case 'trend': return dir * ((sa?.trend || '').localeCompare(sb?.trend || ''));
+        case 'score': return dir * ((sa?.bestLatestScore ?? -1) - (sb?.bestLatestScore ?? -1));
         default: return 0;
       }
     });
@@ -423,11 +417,20 @@ export const BenchmarksPage4: React.FC = () => {
             <span className="font-semibold">{totalRuns}</span>
             <span className="text-muted-foreground">runs</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <BarChart3 size={13} className="text-green-500" />
-            <span className={`font-semibold ${avgPassRate >= 50 ? 'text-green-500' : 'text-red-500'}`}>{avgPassRate}%</span>
-            <span className="text-muted-foreground">avg pass rate</span>
-          </div>
+          {singleAgentView ? (
+            <div className="flex items-center gap-1.5" data-testid="summary-avg-pass-rate">
+              <BarChart3 size={13} className="text-green-500" />
+              <span className={`font-semibold ${avgPassRate >= 50 ? 'text-green-500' : 'text-red-500'}`}>{avgPassRate}%</span>
+              <span className="text-muted-foreground">avg pass rate</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5" data-testid="summary-agent-count"
+              title="Pass rates are per agent — pick an agent in the filter to see its average">
+              <BarChart3 size={13} className="text-green-500" />
+              <span className="font-semibold">{distinctAgents}</span>
+              <span className="text-muted-foreground">agents</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -441,8 +444,8 @@ export const BenchmarksPage4: React.FC = () => {
                   <SortHeader label="# TCs" active={bmSort.field === 'tcs'} dir={bmSort.dir} onClick={() => handleBmSort('tcs')} className="text-center" />
                   <SortHeader label="Runs" active={bmSort.field === 'runs'} dir={bmSort.dir} onClick={() => handleBmSort('runs')} className="text-center" />
                   <SortHeader label="Last Activity" active={bmSort.field === 'lastTouched'} dir={bmSort.dir} onClick={() => handleBmSort('lastTouched')} />
-                  <SortHeader label="Latest Result" active={bmSort.field === 'score'} dir={bmSort.dir} onClick={() => handleBmSort('score')} className="text-center" />
-                  <th className="h-7 px-2 text-center align-middle font-medium text-xs text-muted-foreground bg-background border-b whitespace-nowrap">Trend</th>
+                  <SortHeader label="Latest Result" active={bmSort.field === 'score'} dir={bmSort.dir} onClick={() => handleBmSort('score')} />
+                  <th className="h-7 px-2 text-left align-middle font-medium text-xs text-muted-foreground bg-background border-b whitespace-nowrap">Trend</th>
                   <th className="h-7 px-2 text-right align-middle font-medium text-xs text-muted-foreground bg-background border-b whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
@@ -499,32 +502,57 @@ export const BenchmarksPage4: React.FC = () => {
                             return <span className="text-[10px] text-muted-foreground">—</span>;
                           })()}
                         </td>
-                        <td className="px-2 py-1.5 align-middle text-center">
-                          {lr ? (() => {
-                            const passed = lr.stats?.passed ?? 0;
-                            const failed = lr.stats?.failed ?? 0;
-                            const total = lr.stats?.total ?? Object.keys(lr.results || {}).length;
-                            return (
-                              <div className="inline-flex items-center gap-1.5 text-[11px]">
-                                <span className="inline-flex items-center gap-0.5">
-                                  <CheckCircle2 size={11} className="text-green-500" />
-                                  <span className="text-green-500 font-medium">{passed}</span>
-                                </span>
-                                <span className="inline-flex items-center gap-0.5">
-                                  <XCircle size={11} className="text-red-400" />
-                                  <span className="text-red-400 font-medium">{failed}</span>
-                                </span>
-                                <span className="text-muted-foreground">/ {total}</span>
+                        {(() => {
+                          // One line per agent in BOTH cells, same order and a fixed
+                          // line height so result and trend stay side by side.
+                          const agents = stats?.agents ?? [];
+                          const expanded = expandedAgentRows.has(bm.id);
+                          const shown = expanded ? agents : agents.slice(0, AGENT_LINES_COLLAPSED);
+                          const hidden = agents.length - shown.length;
+                          const line = 'h-5 flex items-center gap-1.5 text-[11px]';
+                          return (<>
+                            <td className="px-2 py-1.5 align-middle" data-testid="latest-result-cell">
+                              {agents.length === 0 ? <span className="text-[11px] text-muted-foreground">—</span> : (
+                                <div className="flex flex-col">
+                                  {shown.map(a => (
+                                    <div key={a.agentId} className={line} data-testid="agent-latest-line" data-agent-id={a.agentId}>
+                                      <span className="text-muted-foreground truncate max-w-[240px]" title={a.agentEndpoint ? `${a.label} — ${a.agentEndpoint}` : a.label} data-testid="agent-label">{a.label}</span>
+                                      <span className="inline-flex items-center gap-0.5">
+                                        <CheckCircle2 size={11} className="text-green-500" />
+                                        <span className="text-green-500 font-medium">{a.passed}</span>
+                                      </span>
+                                      <span className="inline-flex items-center gap-0.5">
+                                        <XCircle size={11} className="text-red-400" />
+                                        <span className="text-red-400 font-medium">{a.failed}</span>
+                                      </span>
+                                      <span className="text-muted-foreground">/ {a.total}</span>
+                                    </div>
+                                  ))}
+                                  {agents.length > AGENT_LINES_COLLAPSED && (
+                                    <button
+                                      data-testid="agent-lines-toggle"
+                                      className="h-5 text-left text-[10px] text-blue-600 hover:underline dark:text-blue-400"
+                                      onClick={e => { e.stopPropagation(); toggleAgentRows(bm.id); }}
+                                    >
+                                      {expanded ? 'Show less' : `+${hidden} more`}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 align-middle" data-testid="trend-cell">
+                              <div className="flex flex-col">
+                                {shown.map(a => (
+                                  <div key={a.agentId} className={line} data-testid="agent-trend-line" data-agent-id={a.agentId}>
+                                    <MiniSparkline values={a.passRateHistory} />
+                                    <TrendBadge trend={a.trend} />
+                                  </div>
+                                ))}
+                                {agents.length === 0 && <TrendBadge trend="unknown" />}
                               </div>
-                            );
-                          })() : <span className="text-[11px] text-muted-foreground">—</span>}
-                        </td>
-                        <td className="px-2 py-1.5 align-middle text-center">
-                          <div className="inline-flex items-center gap-1.5">
-                            <MiniSparkline values={stats?.passRateHistory || []} />
-                            <TrendBadge trend={stats?.trend || 'unknown'} />
-                          </div>
-                        </td>
+                            </td>
+                          </>);
+                        })()}
                         <td className="px-2 py-1.5 align-middle text-right">
                           <div className="inline-flex items-center gap-1">
                             {/* Edit benchmark — opens BenchmarkEditor in edit mode.

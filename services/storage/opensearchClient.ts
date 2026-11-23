@@ -93,6 +93,8 @@ export interface StorageBenchmarkRunConfig {
   description?: string;
   agentKey: string;  // Agent key (matches server route behavior)
   agentId?: string;  // Legacy field name (for backwards compatibility)
+  /** Run-level endpoint override; see BenchmarkRun.agentEndpoint. */
+  agentEndpoint?: string;
   modelId: string;
   /**
    * Judge model id and evaluator id, distinct from the agent's `modelId`.

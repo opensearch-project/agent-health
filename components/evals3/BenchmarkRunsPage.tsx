@@ -61,7 +61,7 @@ import { BenchmarkCasesTab } from '@/components/evals3/BenchmarkCasesTab';
 import { BenchmarkRunsTable, RunFilterPills } from '@/components/evals3/BenchmarkRunsTable';
 import { BenchmarkPassRateChart } from '@/components/evals3/BenchmarkPassRateChart';
 import {
-  buildRunTableRow, applyRunFilters, toggleRunFilter, removeRunFilter,
+  buildRunTableRows, applyRunFilters, toggleRunFilter, removeRunFilter,
   sortRunRows, toggleRunSort, buildPassRateSeries, latestRunId, DEFAULT_RUN_SORT,
   RunFilter, RunSort, RunSortField, RunTableRow,
 } from '@/lib/benchmarkRunsTable';
@@ -447,7 +447,10 @@ export const BenchmarkRunsPage2: React.FC = () => {
   // One row per version-filtered run, with pass/fail/errored recomputed from
   // run.results (single source of truth, issue #242) rather than the
   // denormalized run.stats.
-  const allRows = useMemo<RunTableRow[]>(() => filteredRuns.map(run => buildRunTableRow(run, {
+  // Agent identity = agentKey + endpoint override: two endpoints of one key
+  // are two agents here (own column label `Name (host)`, own filter value,
+  // own chart line) — see lib/benchmarkAgentSummary.
+  const allRows = useMemo<RunTableRow[]>(() => buildRunTableRows(filteredRuns, {
     agentName: key => DEFAULT_CONFIG.agents.find(a => a.key === key)?.name || key || 'Unknown',
     modelName: id => getModelName(id),
     // Full judge identity: judge kind · underlying LLM (lib/judgeIdentity),
@@ -455,7 +458,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
     // called judge(), '—' when the run recorded no judge at all.
     judgeLabel: (_id, run) => judgeModelText(run),
     evaluatorLabel: id => (id ? evaluatorNames.get(id) || id : '—'),
-  })), [filteredRuns, evaluatorNames]);
+  }), [filteredRuns, evaluatorNames]);
 
   const visibleRows = useMemo(
     () => sortRunRows(applyRunFilters(allRows, runFilters), runSort, telemetryByRunId),
@@ -972,7 +975,7 @@ export const BenchmarkRunsPage2: React.FC = () => {
                 <BenchmarkPassRateChart
                   series={passRateSeries}
                   activeAgentKeys={activeAgentKeys}
-                  onToggleAgent={(agentKey, label) => handleToggleFilter({ field: 'agent', value: agentKey, label })}
+                  onToggleAgent={(agentId, label) => handleToggleFilter({ field: 'agent', value: agentId, label })}
                 />
               </div>
               <RunFilterPills
