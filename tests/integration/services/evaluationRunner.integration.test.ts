@@ -135,6 +135,9 @@ function createMockStorageModule(): IStorageModule {
     },
     evaluationRuns: {
       updateResult: jest.fn().mockResolvedValue(true),
+      // The sink reads the run doc for its lease echo / fence (lib/runLease.ts);
+      // `null` = a run document without a lease (legacy path, no fencing).
+      getById: jest.fn().mockResolvedValue(null),
     },
     testCases: {
       create: jest.fn().mockResolvedValue({}),

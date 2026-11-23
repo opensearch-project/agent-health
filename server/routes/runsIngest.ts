@@ -18,25 +18,41 @@
  *   POST  /api/runs/ingest/:runId/finalize                  finalize        → EvaluationRun
  *
  * Every mutation after `createRun` carries the executor token minted by
- * `createRun` in `X-AH-Executor`; it is required and echoed back, but not yet
- * checked against the run (lease fencing is the next step of #612).
+ * `createRun` in `X-AH-Executor` (and the lease generation it holds in
+ * `X-AH-Lease-Generation`, default 1). Each write is FENCED on them
+ * (lib/runLease.ts): the sink's compare-and-swap refuses a write whose
+ * token/generation no longer match the run, or whose run is no longer
+ * `running`, with `409 { error: 'lease-lost', generation, at, status }`.
+ * `createRun` is refused with 503 while the server is draining.
  *
  * All writes are idempotent: a retried request after a lost response is a
  * no-op merge, never a duplicate (`reportId` is client-minted; `finalize`
- * recomputes from the persisted document).
+ * recomputes from the persisted document; a retried finalize by the same
+ * executor returns the terminal state it already wrote).
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { getStorageModule } from '../adapters/index.js';
-import { LocalRunSink, EXECUTOR_TOKEN_HEADER, type FinalizeInput, type RunSink } from '../../services/runSink.js';
+import { LocalRunSink, EXECUTOR_TOKEN_HEADER, LEASE_GENERATION_HEADER, type FinalizeInput } from '../../services/runSink.js';
+import { isLeaseLostError } from '../../lib/runLease.js';
+import { refuseWhenDraining } from '../services/serverDrain.js';
 
 const router = Router();
 
 /** One sink per storage module instance (its report-id memo is per process). */
-let cached: { storage: unknown; sink: RunSink } | undefined;
-function sinkFor(storage: ReturnType<typeof getStorageModule>): RunSink {
-  if (!cached || cached.storage !== storage) cached = { storage, sink: new LocalRunSink(storage) };
+let cached: { storage: unknown; sink: LocalRunSink } | undefined;
+function baseSink(storage: ReturnType<typeof getStorageModule>): LocalRunSink {
+  // Runs ingested here are executed by another process (the CLI); its version
+  // travels in the create body.
+  if (!cached || cached.storage !== storage) cached = { storage, sink: new LocalRunSink(storage, { executorKind: 'cli' }) };
   return cached.sink;
+}
+
+/** The sink bound to the executor THIS request speaks for. */
+function sinkFor(req: Request): LocalRunSink {
+  const token = req.header(EXECUTOR_TOKEN_HEADER)!;
+  const generation = Number.parseInt(req.header(LEASE_GENERATION_HEADER) ?? '1', 10);
+  return baseSink(getStorageModule()).forExecutor({ executorId: token, generation });
 }
 
 function requireExecutorToken(req: Request, res: Response, next: NextFunction): void {
@@ -45,11 +61,22 @@ function requireExecutorToken(req: Request, res: Response, next: NextFunction): 
     res.status(400).json({ error: `Missing ${EXECUTOR_TOKEN_HEADER} header (the executor token returned by POST /api/runs/ingest)` });
     return;
   }
+  const generation = req.header(LEASE_GENERATION_HEADER);
+  if (generation !== undefined && !(/^[1-9]\d*$/.test(generation) && Number.isSafeInteger(Number(generation)))) {
+    res.status(400).json({ error: `${LEASE_GENERATION_HEADER} must be a positive safe integer when given` });
+    return;
+  }
   res.setHeader(EXECUTOR_TOKEN_HEADER, token);
   next();
 }
 
 function fail(res: Response, error: any): void {
+  if (isLeaseLostError(error)) {
+    // The run no longer belongs to this executor: swept as lost, finished,
+    // or cancelled by a fallback path. Nothing was written.
+    res.status(409).json(error.info);
+    return;
+  }
   const message = error?.message ?? String(error);
   const status = /not found/i.test(message) ? 404 : 500;
   console.error('[RunsIngest]', message);
@@ -60,13 +87,18 @@ const isObject = (v: unknown): v is Record<string, any> => !!v && typeof v === '
 /** `EvaluationRun.results[*].status` values (types/index.ts `RunResultStatus`). */
 const CASE_RESULT_STATUSES: ReadonlySet<string> = new Set(['pending', 'running', 'completed', 'failed', 'cancelled']);
 
-router.post('/api/runs/ingest', async (req: Request, res: Response) => {
+router.post('/api/runs/ingest', refuseWhenDraining, async (req: Request, res: Response) => {
   const run = req.body?.run;
   if (!isObject(run) || typeof run.id !== 'string' || !run.id) {
     return res.status(400).json({ error: 'body.run must be an evaluation run document with a string id' });
   }
+  const executorVersion = req.body?.executor?.version;
+  if (executorVersion !== undefined && !(typeof executorVersion === 'string' && /^[\x21-\x7e]{1,64}$/.test(executorVersion))) {
+    return res.status(400).json({ error: 'body.executor.version must be a printable string of at most 64 characters when given' });
+  }
   try {
-    const created = await sinkFor(getStorageModule()).createRun(run as any);
+    const sink = new LocalRunSink(getStorageModule(), { executorKind: 'cli', executorVersion });
+    const created = await sink.createRun(run as any);
     res.setHeader(EXECUTOR_TOKEN_HEADER, created.executorToken);
     res.status(201).json(created);
   } catch (error) {
@@ -90,7 +122,7 @@ router.put('/api/runs/ingest/:runId/cases/:caseId/report', requireExecutorToken,
     return res.status(400).json({ error: 'body.attempt must be a positive integer when given' });
   }
   try {
-    const saved = await sinkFor(getStorageModule()).upsertCaseReport({
+    const saved = await sinkFor(req).upsertCaseReport({
       runId: req.params.runId,
       testCaseId: req.params.caseId,
       attempt: attempt ?? 1,
@@ -107,7 +139,7 @@ router.patch('/api/runs/ingest/:runId/reports/:reportId', requireExecutorToken, 
   const patch = req.body?.patch;
   if (!isObject(patch)) return res.status(400).json({ error: 'body.patch (object) is required' });
   try {
-    await sinkFor(getStorageModule()).patchCaseReport(req.params.runId, req.params.reportId, patch);
+    await sinkFor(req).patchCaseReport(req.params.runId, req.params.reportId, patch);
     res.json({ ok: true });
   } catch (error) {
     fail(res, error);
@@ -120,7 +152,7 @@ router.patch('/api/runs/ingest/:runId/cases/:caseId/result', requireExecutorToke
     return res.status(400).json({ error: `body.result.status must be one of ${[...CASE_RESULT_STATUSES].join(', ')}` });
   }
   try {
-    res.json(await sinkFor(getStorageModule()).setCaseResult(req.params.runId, req.params.caseId, result as any));
+    res.json(await sinkFor(req).setCaseResult(req.params.runId, req.params.caseId, result as any));
   } catch (error) {
     fail(res, error);
   }
@@ -128,7 +160,7 @@ router.patch('/api/runs/ingest/:runId/cases/:caseId/result', requireExecutorToke
 
 router.post('/api/runs/ingest/:runId/heartbeat', requireExecutorToken, async (req: Request, res: Response) => {
   try {
-    res.json(await sinkFor(getStorageModule()).heartbeat(req.params.runId, req.body ?? {}));
+    res.json(await sinkFor(req).heartbeat(req.params.runId, req.body ?? {}));
   } catch (error) {
     fail(res, error);
   }
@@ -147,7 +179,7 @@ router.post('/api/runs/ingest/:runId/finalize', requireExecutorToken, async (req
     return res.status(400).json({ error: 'body.completedRun (object) is required for status completed/cancelled' });
   }
   try {
-    res.json(await sinkFor(getStorageModule()).finalize(req.params.runId, input!));
+    res.json(await sinkFor(req).finalize(req.params.runId, input!));
   } catch (error) {
     fail(res, error);
   }

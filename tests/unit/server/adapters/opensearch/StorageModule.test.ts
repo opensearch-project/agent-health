@@ -1927,7 +1927,7 @@ describe('OpenSearchStorageModule', () => {
       const call = mockClient.update.mock.calls[0][0];
       expect(call.id).toBe('eval-run-1');
       expect(call.retry_on_conflict).toBeGreaterThanOrEqual(10);
-      expect(call.body.script.params).toEqual({ testCaseId: 'tc-1', result: { reportId: 'r1', status: 'completed' } });
+      expect(call.body.script.params).toEqual({ testCaseId: 'tc-1', result: { reportId: 'r1', status: 'completed' }, guard: null });
       expect(call.body.script.source).toContain('results.put(params.testCaseId, params.result)');
     });
 
@@ -2007,7 +2007,7 @@ describe('OpenSearchStorageModule', () => {
       await expect(mod.evaluationRuns.mergeMissingResults('eval-run-1', entries)).resolves.toBe(true);
       const call = mockClient.update.mock.calls[0][0];
       expect(call.retry_on_conflict).toBeGreaterThanOrEqual(10);
-      expect(call.body.script.params).toEqual({ results: entries });
+      expect(call.body.script.params).toEqual({ results: entries, guard: null });
       expect(call.body.script.source).toContain('containsKey(entry.getKey())');
       expect(call.body.script.source).not.toContain('ctx._source.results = params');
       expect(mockClient.index).not.toHaveBeenCalled();
@@ -2017,6 +2017,76 @@ describe('OpenSearchStorageModule', () => {
       mockClient.update.mockRejectedValueOnce(conflictError()).mockResolvedValueOnce({ body: { result: 'updated' } });
       await expect(mod.evaluationRuns.mergeMissingResults('eval-run-1', { a: { reportId: '', status: 'cancelled' } })).resolves.toBe(true);
       expect(mockClient.update).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ==========================================================================
+  // evaluationRuns — lease fencing (#612): the guard is evaluated INSIDE the
+  // Painless script (atomic with the write); a guarded no-op is classified
+  // against the live document.
+  // ==========================================================================
+  describe('evaluationRuns — lease-guarded writes', () => {
+    const guard = { executorId: 'tok-1', generation: 1 };
+    const leased = (over: Record<string, unknown> = {}) => ({
+      id: 'eval-run-1', docType: 'evaluation-run', status: 'running', results: {},
+      executor: { id: 'tok-1', kind: 'server', version: '1' }, lease: { generation: 1, heartbeatAt: '2026-01-01T00:00:00.000Z', ttlMs: 300000 },
+      ...over,
+    });
+
+    it('update()/updateResult()/mergeMissingResults() pass the guard as script params and check it in the script before writing', async () => {
+      mockClient.update.mockResolvedValue({ body: { result: 'updated' } });
+      mockClient.get.mockResolvedValue({ body: { found: true, _source: leased() } });
+      await mod.evaluationRuns.update('eval-run-1', { cancelRequestedAt: 'x' }, guard);
+      await mod.evaluationRuns.updateResult('eval-run-1', 'tc-1', { reportId: 'r', status: 'completed' }, guard);
+      await mod.evaluationRuns.mergeMissingResults('eval-run-1', { 'tc-2': { reportId: '', status: 'cancelled' } }, guard);
+      expect(mockClient.update).toHaveBeenCalledTimes(3);
+      for (const [call] of mockClient.update.mock.calls) {
+        expect(call.body.script.params.guard).toEqual(guard);
+        const source: string = call.body.script.source;
+        // Guard first, mutation after — never the other way round.
+        expect(source.indexOf('params.guard')).toBeLessThan(source.indexOf('ctx._source.results') === -1 ? source.indexOf('params.fields') : source.indexOf('ctx._source.results'));
+        expect(source).toContain("ctx._source.status != 'running'");
+        expect(source).toContain('ex.id != params.guard.executorId');
+        expect(source).toContain('ls.generation != params.guard.generation');
+        expect(source).toContain('params.guard.heartbeatAt != null && ls.heartbeatAt != params.guard.heartbeatAt');
+        expect(source).toContain("ctx.op = 'none'");
+      }
+    });
+
+    it('a sweeper guard pinning heartbeatAt that no longer matches the live document is a LeaseLostError (the executor heartbeated in between)', async () => {
+      mockClient.update.mockResolvedValue({ body: { result: 'noop' } });
+      mockClient.get.mockResolvedValue({ body: { found: true, _source: leased({ lease: { generation: 1, heartbeatAt: '2026-01-01T00:04:59.000Z', ttlMs: 300000 } }) } });
+      await expect(mod.evaluationRuns.update('eval-run-1', { status: 'failed' }, { ...guard, heartbeatAt: '2026-01-01T00:00:00.000Z' }))
+        .rejects.toMatchObject({ name: 'LeaseLostError', info: { status: 'running', generation: 1 } });
+      expect(mockClient.update.mock.calls[0][0].body.script.params.guard).toEqual({ ...guard, heartbeatAt: '2026-01-01T00:00:00.000Z' });
+    });
+
+    it('a guarded no-op whose live document no longer satisfies the guard is a LeaseLostError carrying generation/status/at', async () => {
+      const { LeaseLostError } = await import('@/lib/runLease');
+      mockClient.update.mockResolvedValue({ body: { result: 'noop' } });
+      // Swept: token cleared, generation bumped, failed.
+      mockClient.get.mockResolvedValue({ body: { found: true, _source: leased({ status: 'failed', completedAt: '2026-01-01T00:06:00.000Z', executor: { id: null, kind: 'server', version: '1' }, lease: { generation: 2, heartbeatAt: '2026-01-01T00:00:00.000Z', ttlMs: 300000 } }) } });
+      await expect(mod.evaluationRuns.update('eval-run-1', { status: 'completed' }, guard)).rejects.toMatchObject({
+        name: 'LeaseLostError', info: { error: 'lease-lost', runId: 'eval-run-1', generation: 2, status: 'failed', at: '2026-01-01T00:06:00.000Z' },
+      });
+      await expect(mod.evaluationRuns.updateResult('eval-run-1', 'tc-1', { reportId: 'r', status: 'completed' }, guard)).rejects.toBeInstanceOf(LeaseLostError);
+      await expect(mod.evaluationRuns.mergeMissingResults('eval-run-1', { 'tc-2': { reportId: '', status: 'cancelled' } }, guard)).rejects.toBeInstanceOf(LeaseLostError);
+      // No outer 409 retry loop for a lease refusal: one scripted update per call.
+      expect(mockClient.update).toHaveBeenCalledTimes(3);
+    });
+
+    it('a guarded no-op whose live document STILL satisfies the guard is a genuine no-change (mergeMissingResults with nothing absent)', async () => {
+      mockClient.update.mockResolvedValue({ body: { result: 'noop' } });
+      mockClient.get.mockResolvedValue({ body: { found: true, _source: leased({ results: { 'tc-2': { reportId: 'r2', status: 'completed' } } }) } });
+      await expect(mod.evaluationRuns.mergeMissingResults('eval-run-1', { 'tc-2': { reportId: '', status: 'cancelled' } }, guard)).resolves.toBe(true);
+    });
+
+    it('unguarded calls send guard: null and never classify a no-op', async () => {
+      mockClient.update.mockResolvedValue({ body: { result: 'noop' } });
+      mockClient.get.mockResolvedValue({ body: { found: true, _source: leased({ status: 'completed' }) } });
+      await expect(mod.evaluationRuns.update('eval-run-1', { name: 'renamed' })).resolves.toMatchObject({ status: 'completed' });
+      expect(mockClient.update.mock.calls[0][0].body.script.params.guard).toBeNull();
+      expect(mockClient.get).toHaveBeenCalledTimes(1);
     });
   });
 });

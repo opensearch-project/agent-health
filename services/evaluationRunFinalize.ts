@@ -32,6 +32,7 @@
 import type { IStorageModule, EvaluationRunResultEntry } from '../server/adapters/types';
 import type { BenchmarkRunStatus, EvaluationRun, RunStats } from '@/types';
 import { bucketRunResults } from '@/lib/runStats';
+import type { LeaseGuard } from '@/lib/runLease';
 
 export type FinalRunStatus = Extract<BenchmarkRunStatus, 'completed' | 'cancelled'>;
 
@@ -80,6 +81,13 @@ export interface FinalizeEvaluationRunInput {
    */
   completedRun: Pick<EvaluationRun, 'results' | 'testCaseSnapshots'> & Partial<Pick<EvaluationRun, 'judgeFailureSummary' | 'judgeModel' | 'judgeProvider'>>;
   completedAt?: string;
+  /**
+   * The executor's lease guard (lib/runLease.ts). Both writes below are then
+   * compare-and-swap: if the lease sweeper took the run over in between, the
+   * terminal write rejects with `LeaseLostError` instead of resurrecting a
+   * run already marked `failed`.
+   */
+  guard?: LeaseGuard;
 }
 
 export interface FinalizeEvaluationRunOutput {
@@ -96,7 +104,7 @@ export async function finalizeEvaluationRun(
   storage: Pick<IStorageModule, 'evaluationRuns'>,
   input: FinalizeEvaluationRunInput,
 ): Promise<FinalizeEvaluationRunOutput> {
-  const { runId, finalStatus, completedRun } = input;
+  const { runId, finalStatus, completedRun, guard } = input;
   const completedAt = input.completedAt ?? new Date().toISOString();
   const plannedIds = (completedRun.testCaseSnapshots || []).map(s => s.id);
 
@@ -116,7 +124,7 @@ export async function finalizeEvaluationRun(
   for (const [id, entry] of Object.entries(completedRun.results || {})) {
     if (entry.status === 'completed' || entry.status === 'failed' || entry.status === 'cancelled') healable[id] = entry;
   }
-  await storage.evaluationRuns.mergeMissingResults(runId, { ...healable, ...cancelledMarkers });
+  await storage.evaluationRuns.mergeMissingResults(runId, { ...healable, ...cancelledMarkers }, guard);
 
   const persisted = await storage.evaluationRuns.getById(runId);
   if (!persisted) throw new Error(`Evaluation run ${runId} not found during finalization`);
@@ -133,6 +141,6 @@ export async function finalizeEvaluationRun(
     ...(completedRun.judgeFailureSummary ? { judgeFailureSummary: completedRun.judgeFailureSummary } : {}),
     ...(completedRun.judgeModel ? { judgeModel: completedRun.judgeModel } : {}),
     ...(completedRun.judgeProvider ? { judgeProvider: completedRun.judgeProvider } : {}),
-  });
+  }, guard);
   return { run, persisted, stats, cancelledMarkers };
 }

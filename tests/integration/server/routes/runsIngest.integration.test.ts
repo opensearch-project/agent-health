@@ -128,7 +128,7 @@ describe('run ingestion API on a real FILE-storage server (#612)', () => {
       testCaseSnapshots: [{ id: 'tc-ingest-1', version: 1, name: 'ingest one' }], results: {},
     };
     const created = await sink.createRun(run);
-    expect(created).toEqual({ runId, executorToken: expect.stringMatching(/^[0-9a-f]{32}$/) });
+    expect(created).toEqual({ runId, executorToken: expect.stringMatching(/^[0-9a-f]{32}$/), lease: { generation: 1, heartbeatAt: expect.any(String), ttlMs: 5 * 60 * 1000 } });
 
     // The run is visible (and `running`) as soon as it is created.
     const running = await httpJson('GET', `${baseUrl}/api/storage/evaluation-runs/${runId}`);
@@ -148,8 +148,8 @@ describe('run ingestion API on a real FILE-storage server (#612)', () => {
     });
     expect(final.report).toMatchObject({ id: reportId, status: 'completed', passFailStatus: 'passed', agentKey: 'external-agent' });
 
-    expect(await sink.setCaseResult(runId, 'tc-ingest-1', { reportId, status: 'completed', passFailStatus: 'passed' })).toEqual({ generation: 0 });
-    expect(await sink.heartbeat(runId, { startedCount: 1, completedCount: 1, totalTestCases: 1 })).toEqual({ generation: 0 });
+    expect(await sink.setCaseResult(runId, 'tc-ingest-1', { reportId, status: 'completed', passFailStatus: 'passed' })).toEqual({ generation: 1 });
+    expect(await sink.heartbeat(runId, { startedCount: 1, completedCount: 1, totalTestCases: 1 })).toEqual({ generation: 1 });
 
     const finalized = await sink.finalize(runId, {
       status: 'completed', benchmarkId,

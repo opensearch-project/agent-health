@@ -40,6 +40,7 @@ import { Benchmark, TestCase, BenchmarkRun, EvaluationRun } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { computeRunStats, getEffectiveRunStatus } from '@/lib/runStats';
+import { isExecutorLostError } from '@/lib/runLease';
 import { sortGroupsByRecency } from '@/lib/runSort';
 import { getRunActionVisibility } from '@/lib/runActions';
 import { formatRelativeTime, getModelName, getEvaluatorLabel } from '@/lib/utils';
@@ -806,10 +807,13 @@ export const EvalRunsPage: React.FC = () => {
             {rr.status === 'failed' && (
               <span
                 data-testid="run-row-status-failed"
-                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30"
+                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-medium whitespace-nowrap bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30"
                 title={rr.run.error ? `Run failed: ${rr.run.error}` : 'This run failed before finishing'}
               >
-                <XCircle size={9} /> Failed
+                {/* A run the lease sweeper failed (its executor stopped
+                    heartbeating — crashed server / killed CLI) says so in the
+                    badge itself; the full "no heartbeat since …" is the title. */}
+                <XCircle size={9} /> {isExecutorLostError(rr.run.error) ? 'Failed · executor lost' : 'Failed'}
               </span>
             )}
           </div>

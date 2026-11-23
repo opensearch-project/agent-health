@@ -123,7 +123,7 @@ function makeStorageModule() {
       list: jest.fn(),
       delete: jest.fn(),
     },
-    evaluationRuns: { updateResult: jest.fn().mockResolvedValue(true) },
+    evaluationRuns: { updateResult: jest.fn().mockResolvedValue(true), getById: jest.fn().mockResolvedValue(null) },
     testCases: { create: jest.fn(), update: jest.fn(), get: jest.fn(), list: jest.fn(), delete: jest.fn() },
     benchmarks: { create: jest.fn(), update: jest.fn(), get: jest.fn(), list: jest.fn(), delete: jest.fn() },
   } as any;
