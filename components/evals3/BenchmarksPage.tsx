@@ -203,19 +203,13 @@ export const BenchmarksPage4: React.FC = () => {
     return () => el.removeEventListener('scroll', handler);
   }, []);
 
-  // Agent options: configured agents + any agentKey seen in a run (runs from
-  // agents since removed from the config, or from another server's config,
-  // used to be unfilterable). Value stays the bare agentKey because this
-  // preference is shared with the Runs and Traces pages.
+  // Agent options from config. (Listing agent keys only seen in runs is a
+  // follow-up: this preference is shared with the Runs and Traces pages,
+  // whose dropdowns/filters would not recognise an unconfigured key.)
   const agentOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const a of DEFAULT_CONFIG.agents) if (a.enabled !== false) seen.set(a.key, a.name);
-    for (const bm of benchmarks) for (const r of bm.runs || []) {
-      if (r.agentKey && !seen.has(r.agentKey)) seen.set(r.agentKey, r.agentKey);
-    }
-    const agents = [...seen].map(([value, label]) => ({ value, label }));
+    const agents = DEFAULT_CONFIG.agents.filter(a => a.enabled !== false).map(a => ({ value: a.key, label: a.name }));
     return [{ value: 'all', label: 'All Agents' }, ...agents];
-  }, [benchmarks]);
+  }, []);
   const agentNameFor = useCallback(
     (key: string) => DEFAULT_CONFIG.agents.find(a => a.key === key)?.name || key || 'Unknown', []);
 

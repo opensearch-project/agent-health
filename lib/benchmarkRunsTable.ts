@@ -112,6 +112,11 @@ function isTerminalStatus(status: BenchmarkRun['status']): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
+/**
+ * Low-level: one row from one run. `agentName` is the resolver's name for the
+ * key with NO endpoint disambiguation (that needs the whole run set) — pages
+ * build their rows with {@link buildRunTableRows}.
+ */
 export function buildRunTableRow(run: BenchmarkRun, resolve: RowLabelResolvers): RunTableRow {
   const status = getEffectiveRunStatus(run);
   const terminal = isTerminalStatus(run.status);

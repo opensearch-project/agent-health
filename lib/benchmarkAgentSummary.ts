@@ -22,6 +22,7 @@
  */
 
 import type { BenchmarkRun } from '@/types';
+import { computeRunStats, passRateOverJudged } from '@/lib/runStats';
 
 // ─── Agent identity ──────────────────────────────────────────────────────────
 
@@ -31,13 +32,17 @@ export interface AgentIdentityRun {
 }
 
 /**
- * Stable identity of the agent behind a run: the bare `agentKey` when the run
- * used the configured endpoint, `agentKey@endpoint` when it overrode it. Two
- * runs of the same key against different hosts are different agents for
- * latest/trend/series purposes.
+ * Stable identity of the agent behind a run: `encodeURIComponent(agentKey)`
+ * when the run used the configured endpoint, `encodeURIComponent(agentKey)@
+ * endpoint` when it overrode it. The key is URI-encoded so a literal `@` in a
+ * key can never make two different (key, endpoint) pairs collide — the first
+ * `@` always delimits. Opaque: compare it, don't parse it (ordinary keys such
+ * as `demo` or `claude-code` encode to themselves). Two runs of the same key
+ * against different endpoints are different agents for latest/trend/series
+ * purposes.
  */
 export function agentIdentityKey(run: AgentIdentityRun): string {
-  const key = run.agentKey || '';
+  const key = encodeURIComponent(run.agentKey || '');
   return run.agentEndpoint ? `${key}@${run.agentEndpoint}` : key;
 }
 
@@ -56,28 +61,34 @@ export function endpointHost(endpoint: string): string {
  * same `agentKey` appears with ≥2 distinct endpoints among `runs`, in which
  * case each identity is suffixed with its host — `Name (host)` — and the
  * configured-endpoint variant with `(default endpoint)`, so the lines can be
- * told apart.
+ * told apart. When two endpoints of one key share a host (same host, different
+ * scheme or path) the full endpoint is used instead of the host.
  */
 export function agentIdentityLabels(
   runs: AgentIdentityRun[],
   nameFor: (agentKey: string) => string,
 ): Map<string, string> {
-  const identitiesByKey = new Map<string, Set<string>>();
+  // agentKey → distinct identities (one per endpoint variant) seen in runs.
+  const byKey = new Map<string, Map<string, AgentIdentityRun>>();
   for (const run of runs) {
     const key = run.agentKey || '';
-    if (!identitiesByKey.has(key)) identitiesByKey.set(key, new Set());
-    identitiesByKey.get(key)!.add(agentIdentityKey(run));
+    if (!byKey.has(key)) byKey.set(key, new Map());
+    const ids = byKey.get(key)!;
+    const id = agentIdentityKey(run);
+    if (!ids.has(id)) ids.set(id, run);
   }
   const labels = new Map<string, string>();
-  for (const run of runs) {
-    const id = agentIdentityKey(run);
-    if (labels.has(id)) continue;
-    const key = run.agentKey || '';
+  for (const [key, ids] of byKey) {
     const name = nameFor(key);
-    const ambiguous = (identitiesByKey.get(key)?.size ?? 0) >= 2;
-    labels.set(id, ambiguous
-      ? `${name} (${run.agentEndpoint ? endpointHost(run.agentEndpoint) : 'default endpoint'})`
-      : name);
+    if (ids.size < 2) {
+      for (const id of ids.keys()) labels.set(id, name);
+      continue;
+    }
+    const suffix = (r: AgentIdentityRun, full: boolean) =>
+      r.agentEndpoint ? (full ? r.agentEndpoint : endpointHost(r.agentEndpoint)) : 'default endpoint';
+    const hosts = [...ids.values()].map(r => suffix(r, false));
+    const hostsCollide = new Set(hosts).size < hosts.length;
+    for (const [id, r] of ids) labels.set(id, `${name} (${suffix(r, hostsCollide)})`);
   }
   return labels;
 }
@@ -85,20 +96,13 @@ export function agentIdentityLabels(
 // ─── Scores / trend ──────────────────────────────────────────────────────────
 
 /**
- * Pass rate (0–100) of a run, or null when nothing is evaluable. Errored
- * cases (evaluator produced no verdict, #242) are excluded from both sides.
+ * Pass rate (0–100) over the JUDGED cases of a run, or null when nothing has
+ * been judged. Counts come from {@link computeRunStats} — the app-wide single
+ * source of truth (results first, denormalized `run.stats` as fallback) — so
+ * the number can't disagree with the pass/fail counts shown next to it.
  */
 export function computeRunScore(run: BenchmarkRun): number | null {
-  if (run.stats && run.stats.total > 0) {
-    const errored = run.stats.errored ?? 0;
-    const evaluable = Math.max(0, run.stats.total - errored);
-    if (evaluable === 0) return null;
-    return Math.round((run.stats.passed / evaluable) * 100);
-  }
-  const results = Object.values(run.results || {});
-  if (results.length === 0) return null;
-  const completed = results.filter(r => r.status === 'completed').length;
-  return Math.round((completed / results.length) * 100);
+  return passRateOverJudged(computeRunStats(run));
 }
 
 export type TrendDir = 'improving' | 'stable' | 'regressing' | 'unknown';
@@ -131,7 +135,7 @@ export interface AgentRunSummary {
   total: number;
   /** Latest vs previous run of THIS agent only. */
   trend: TrendDir;
-  /** Scores of this agent's last 10 runs, oldest first (null scores → 0). */
+  /** Scores of this agent's last 10 runs, oldest first; runs with nothing judged are omitted. */
   passRateHistory: number[];
 }
 
@@ -160,7 +164,8 @@ export function summarizeRunsByAgent(
   for (const [agentId, agentRuns] of byAgent) {
     const sorted = [...agentRuns].sort((a, b) => createdAtMs(b) - createdAtMs(a));
     const latestRun = sorted[0];
-    const latestScore = computeRunScore(latestRun);
+    const latestStats = computeRunStats(latestRun);
+    const latestScore = passRateOverJudged(latestStats);
     const prevScore = sorted.length > 1 ? computeRunScore(sorted[1]) : undefined;
     out.push({
       agentId,
@@ -171,11 +176,11 @@ export function summarizeRunsByAgent(
       latestRun,
       latestAt: createdAtMs(latestRun),
       latestScore,
-      passed: latestRun.stats?.passed ?? 0,
-      failed: latestRun.stats?.failed ?? 0,
-      total: latestRun.stats?.total ?? Object.keys(latestRun.results || {}).length,
+      passed: latestStats.passed,
+      failed: latestStats.failed,
+      total: latestStats.total,
       trend: trendBetween(latestScore, prevScore),
-      passRateHistory: sorted.slice(0, 10).reverse().map(r => computeRunScore(r) ?? 0),
+      passRateHistory: sorted.slice(0, 10).reverse().map(computeRunScore).filter((x): x is number => x !== null),
     });
   }
   out.sort((a, b) => b.latestAt - a.latestAt || a.label.localeCompare(b.label));

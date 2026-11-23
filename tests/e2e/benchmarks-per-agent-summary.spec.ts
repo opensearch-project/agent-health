@@ -33,9 +33,9 @@ test.describe('Benchmarks list — one latest result + trend per agent', () => {
   const MULTI = uniqueTestName('per-agent-multi');
   const SINGLE = uniqueTestName('per-agent-single');
   const MANY = uniqueTestName('per-agent-many');
-  let multiId: string | null = null;
-  let singleId: string | null = null;
-  let manyId: string | null = null;
+  let multiId = '';
+  let singleId = '';
+  let manyId = '';
   const testCaseIds: string[] = [];
 
   test.beforeAll(async ({ request }) => {
@@ -43,13 +43,12 @@ test.describe('Benchmarks list — one latest result + trend per agent', () => {
       const r = await request.post('/api/storage/test-cases', {
         data: { name: uniqueTestName(`per-agent-tc-${i}`), category: 'Test', difficulty: 'Easy', initialPrompt: 'p', expectedOutcomes: ['o'] },
       });
-      if (!r.ok()) return;
+      if (!r.ok()) throw new Error(`seed test case failed: ${r.status()} ${await r.text()}`);
       const j = await r.json();
       const id = j.id || j.testCase?.id;
       tracker.testCase(id);
       testCaseIds.push(id);
     }
-    if (testCaseIds.length !== 2) return;
 
     const hour = 3_600_000;
     const now = Date.now();
@@ -70,11 +69,12 @@ test.describe('Benchmarks list — one latest result + trend per agent', () => {
           versions: [{ version: 1, createdAt: new Date().toISOString(), testCaseIds }],
         },
       });
-      if (!res.ok()) return null;
+      if (!res.ok()) throw new Error(`seed benchmark failed: ${res.status()} ${await res.text()}`);
       const id = (await res.json()).id as string;
       tracker.benchmark(id);
       const put = await request.put(`/api/storage/benchmarks/${id}`, { data: { name, description: 'per-agent E2E', testCaseIds, runs } });
-      return put.ok() ? id : null;
+      if (!put.ok()) throw new Error(`seed runs failed: ${put.status()} ${await put.text()}`);
+      return id;
     };
 
     multiId = await create(MULTI, [
@@ -116,7 +116,6 @@ test.describe('Benchmarks list — one latest result + trend per agent', () => {
   }
 
   test('multi-agent benchmark: one line per agent, trend never crosses agents, endpoints are separate agents', async ({ page }) => {
-    test.skip(!multiId, 'Could not seed benchmark runs (storage not configured?)');
     const row = await openList(page, MULTI);
 
     const lines = row.getByTestId('agent-latest-line');
@@ -143,7 +142,6 @@ test.describe('Benchmarks list — one latest result + trend per agent', () => {
   });
 
   test('single-agent benchmark looks like before apart from the agent label', async ({ page }) => {
-    test.skip(!singleId, 'Could not seed benchmark runs (storage not configured?)');
     const row = await openList(page, SINGLE);
     const lines = row.getByTestId('agent-latest-line');
     await expect(lines).toHaveCount(1);
@@ -154,7 +152,6 @@ test.describe('Benchmarks list — one latest result + trend per agent', () => {
   });
 
   test('more than 3 agents collapse to 3 lines with a "+N more" toggle', async ({ page }) => {
-    test.skip(!manyId, 'Could not seed benchmark runs (storage not configured?)');
     const row = await openList(page, MANY);
     await expect(row.getByTestId('agent-latest-line')).toHaveCount(3);
     await expect(row.getByTestId('agent-trend-line')).toHaveCount(3);
@@ -169,7 +166,6 @@ test.describe('Benchmarks list — one latest result + trend per agent', () => {
   });
 
   test('summary card never averages across agents silently', async ({ page }) => {
-    test.skip(!multiId, 'Could not seed benchmark runs (storage not configured?)');
     await page.goto('/evaluations/benchmarks');
     await page.waitForSelector('h2:has-text("Benchmarks")', { timeout: 30_000 });
     const agentSelect = page.locator('button[role="combobox"]').first();
@@ -180,18 +176,18 @@ test.describe('Benchmarks list — one latest result + trend per agent', () => {
     // Several agents have runs → the card reports the agent count, not an average.
     await expect(page.getByTestId('summary-agent-count')).toBeVisible();
     await expect(page.getByTestId('summary-avg-pass-rate')).toHaveCount(0);
-    // The agent filter lists agents SEEN IN RUNS, not only configured ones.
+    // Filtering to one agent KEY still leaves two identities in view (the
+    // configured endpoint and the second endpoint) — still no blended average.
     await agentSelect.click();
-    await page.getByRole('option', { name: 'e2e-other-agent', exact: true }).click();
-    // One agent in view → average pass rate is meaningful again.
-    await expect(page.getByTestId('summary-avg-pass-rate')).toBeVisible();
+    await page.getByRole('option', { name: 'Demo Agent', exact: true }).click();
+    await expect(page.getByTestId('summary-agent-count')).toContainText('2');
+    await expect(page.getByTestId('summary-avg-pass-rate')).toHaveCount(0);
     // Restore the shared preference for other specs.
     await agentSelect.click();
     await page.getByRole('option', { name: 'All Agents' }).click();
   });
 
   test('benchmark detail chart draws one line per endpoint of the same agent key', async ({ page }) => {
-    test.skip(!multiId, 'Could not seed benchmark runs (storage not configured?)');
     await page.goto(`/evaluations/benchmarks/${multiId}/runs`);
     await expect(page.getByTestId('benchmark-runs-table')).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId('run-row')).toHaveCount(6);
