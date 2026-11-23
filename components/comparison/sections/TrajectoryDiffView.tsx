@@ -31,6 +31,7 @@ import {
 } from '@/services/trajectoryDiffService';
 import { cn } from '@/lib/utils';
 import { Markdown } from '@/components/ui/markdown';
+import { stepContentText } from '@/lib/trajectoryStepDisplay';
 
 interface TrajectoryDiffViewProps {
   runs: BenchmarkRun[];
@@ -91,6 +92,9 @@ const DiffStepRow: React.FC<{
 }> = ({ aligned, baselineRunName, comparisonRunName }) => {
   const [isOpen, setIsOpen] = useState(false);
   const step = aligned.baselineStep || aligned.comparisonStep;
+  // Persisted steps may carry a missing / non-string `content`; never hand
+  // `step.content` to <Markdown> directly (react-markdown throws on non-strings).
+  const stepText = step ? stepContentText(step) : '';
 
   const latencyDelta = useMemo(() => {
     if (aligned.baselineStep?.latencyMs && aligned.comparisonStep?.latencyMs) {
@@ -199,8 +203,8 @@ const DiffStepRow: React.FC<{
               <p className="text-xs font-medium text-muted-foreground mb-1">
                 {aligned.type === 'added' ? comparisonRunName : baselineRunName}
               </p>
-              {step.content && (
-                <Markdown className="text-xs bg-muted/30 p-2 rounded mb-2">{step.content}</Markdown>
+              {stepText && (
+                <Markdown className="text-xs bg-muted/30 p-2 rounded mb-2">{stepText}</Markdown>
               )}
               {step.toolArgs && (
                 <pre className="text-xs bg-muted/30 p-2 rounded overflow-x-auto">
