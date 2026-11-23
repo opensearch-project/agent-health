@@ -17,7 +17,10 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { PanelRightClose, Layers, ChevronRight, ChevronDown, Info, MessageSquare, Bot, PieChart, AlertTriangle, Copy, Check } from 'lucide-react';
 import { Span, CategorizedSpan } from '@/types';
 import { formatDuration, getKeyAttributes } from '@/services/traces/utils';
-import { checkOTelCompliance } from '@/services/traces/spanCategorization';
+import { checkOTelCompliance, getSpanCategory, isDbSpan } from '@/services/traces/spanCategorization';
+import { extractRetrievalIO } from '@/services/traces/retrievalSpan';
+import { formatClockTime, formatIsoTime } from '@/services/traces/spanTime';
+import RetrievedReturnedLists from './RetrievedReturnedLists';
 import ContextWindowBar from './ContextWindowBar';
 import FormattedMessages from './FormattedMessages';
 import { ATTR_GEN_AI_USAGE_INPUT_TOKENS } from '@opentelemetry/semantic-conventions/incubating';
@@ -40,8 +43,19 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
   const toolMessageEvent = span.events?.find(e => e.name === 'gen_ai.tool.message');
   const toolChoiceEvent = span.events?.find(e => e.name === 'gen_ai.choice');
 
+  // DB-semconv details (query / rows / ids) for any span carrying db.*. They
+  // become the INPUT/OUTPUT only when the span's category IS RETRIEVAL; a
+  // hybrid span (e.g. an execute_tool that also carries db.*) keeps its tool
+  // arguments/result as I/O and shows the DB caption alongside.
+  const retrieval = useMemo(() => (isDbSpan(span) ? extractRetrievalIO(span) : null), [span]);
+  const retrievalIO = useMemo(
+    () => (retrieval && getSpanCategory(span) === 'RETRIEVAL' ? retrieval : null),
+    [retrieval, span]
+  );
+
   // Extract input/output data from span attributes OR events
-  const inputData = span.attributes?.['gen_ai.tool.call.arguments'] ||
+  const inputData = retrievalIO?.queryText ||
+                    span.attributes?.['gen_ai.tool.call.arguments'] ||
                     toolMessageEvent?.attributes?.['content'] ||
                     span.attributes?.['gen_ai.tool.input'] ||
                     span.attributes?.['input'] ||
@@ -49,7 +63,8 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
                     span.attributes?.['test.case.input'] ||
                     llmRequestEvent?.attributes?.['llm.prompt'] ||
                     llmRequestEvent?.attributes?.['llm.system_prompt'];
-  const outputData = span.attributes?.['gen_ai.tool.call.result'] ||
+  const outputData = retrievalIO?.outputText ||
+                     span.attributes?.['gen_ai.tool.call.result'] ||
                      toolChoiceEvent?.attributes?.['message'] ||
                      toolChoiceEvent?.attributes?.['content'] ||
                      span.attributes?.['gen_ai.tool.output'] ||
@@ -169,12 +184,22 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
     <div className="h-full flex flex-col overflow-hidden min-w-0 bg-muted/30 border-l rounded-tr-lg" data-testid="span-details-panel">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b shrink-0 rounded-tr-lg">
-        <div className="min-w-0 flex-1 flex items-center gap-2">
-          <h3 className="text-sm font-semibold truncate" data-testid="span-details-name">
+        <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+          {/* Full name, wrapping rather than truncating: the tree row may have
+              ellipsized a long `invoke_agent <service>` / `execute_tool <tool>`
+              and the panel header is the recourse. */}
+          <h3 className="text-sm font-semibold break-words min-w-0" data-testid="span-details-name" title={span.name}>
             {span.name}
           </h3>
           <span className="text-[10px] font-mono text-muted-foreground truncate hidden sm:inline">
             {span.spanId}
+          </span>
+          <span
+            className="text-[10px] font-mono text-muted-foreground"
+            title={`Started ${formatIsoTime(span.startTime)}`}
+            data-testid="span-details-start"
+          >
+            {formatClockTime(span.startTime)}
           </span>
         </div>
         <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onCollapse || onClose} data-testid="span-details-close">
@@ -226,10 +251,15 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
                 </div>
               )}
             </div>
+            {expandedSections.input && retrieval?.caption && (
+              <div className="text-[10px] font-mono text-cyan-700 dark:text-cyan-300" data-testid="span-details-retrieval-caption">
+                {retrieval.caption}
+              </div>
+            )}
             {expandedSections.input && (
               inputData ? (
                 <div className="w-full max-h-64 overflow-auto rounded-md border border-border bg-muted/30 dark:bg-slate-900/50">
-                  <pre className="p-3 text-[11px] font-mono text-foreground m-0" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                  <pre className="p-3 text-[11px] font-mono text-foreground m-0" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }} data-testid="span-details-input">
                     {formatData(inputData, inputViewMode)}
                   </pre>
                 </div>
@@ -285,7 +315,7 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
             {expandedSections.output && (
               outputData ? (
                 <div className="w-full max-h-64 overflow-auto rounded-md border border-border bg-muted/30 dark:bg-slate-900/50">
-                  <pre className="p-3 text-[11px] font-mono text-foreground m-0" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                  <pre className="p-3 text-[11px] font-mono text-foreground m-0" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }} data-testid="span-details-output">
                     {formatData(outputData, outputViewMode)}
                   </pre>
                 </div>
@@ -296,6 +326,10 @@ const SpanDetailsPanel: React.FC<SpanDetailsPanelProps> = ({ span, onClose, onCo
               )
             )}
           </div>
+
+          {/* RETRIEVED vs RETURNED — labelled id-list pair (renders nothing
+              when the span has neither key family). */}
+          <RetrievedReturnedLists span={span} />
 
           {/* Timing & Key Info section - Combined */}
           <div className="space-y-3 bg-muted/30 rounded-md p-3 border">

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { otlpToSpans, normalizeId } from '@/server/services/otlpTransform';
+import { otlpToSpans, normalizeId, spanKindName } from '@/server/services/otlpTransform';
 
 describe('otlpTransform', () => {
   describe('normalizeId', () => {
@@ -130,6 +130,43 @@ describe('otlpTransform', () => {
       expect(otlpToSpans({})).toEqual([]);
       expect(otlpToSpans({ resourceSpans: [] })).toEqual([]);
       expect(otlpToSpans(null)).toEqual([]);
+    });
+
+    it('persists the OTLP span kind as attributes.spanKind (SPAN_KIND_* like the OpenSearch path)', () => {
+      const s = otlpToSpans(body)[0];
+      expect(s.attributes?.spanKind).toBe('SPAN_KIND_CLIENT'); // kind: 3
+      const server = otlpToSpans({
+        resourceSpans: [{ scopeSpans: [{ spans: [
+          { traceId: 'aaaa0000bbbb1111cccc2222dddd3333', spanId: '1111222233334444', name: 'POST /ask', kind: 'SPAN_KIND_SERVER' },
+          { traceId: 'aaaa0000bbbb1111cccc2222dddd3333', spanId: '1111222233334445', name: 'no-kind' },
+          { traceId: 'aaaa0000bbbb1111cccc2222dddd3333', spanId: '1111222233334446', name: 'explicit', kind: 2,
+            attributes: [{ key: 'spanKind', value: { stringValue: 'SPAN_KIND_INTERNAL' } }] },
+        ] }] }],
+      });
+      expect(server[0].attributes?.spanKind).toBe('SPAN_KIND_SERVER');
+      expect(server[1].attributes?.spanKind).toBeUndefined();
+      // An explicit spanKind attribute is never overwritten
+      expect(server[2].attributes?.spanKind).toBe('SPAN_KIND_INTERNAL');
+    });
+  });
+
+  describe('spanKindName', () => {
+    it('maps numeric codes, decimal strings and exact enum names only', () => {
+      expect(spanKindName(2)).toBe('SPAN_KIND_SERVER');
+      expect(spanKindName('3')).toBe('SPAN_KIND_CLIENT');
+      expect(spanKindName('SPAN_KIND_PRODUCER')).toBe('SPAN_KIND_PRODUCER');
+      expect(spanKindName(0)).toBe('SPAN_KIND_UNSPECIFIED');
+    });
+    it('returns undefined for unknown / missing / look-alike input instead of laundering it', () => {
+      expect(spanKindName(undefined)).toBeUndefined();
+      expect(spanKindName(null)).toBeUndefined();
+      expect(spanKindName('')).toBeUndefined();
+      expect(spanKindName(9)).toBeUndefined();
+      expect(spanKindName('9')).toBeUndefined();
+      expect(spanKindName('consumer')).toBeUndefined();
+      expect(spanKindName('server')).toBeUndefined();
+      expect(spanKindName('SPAN_KIND_API_SERVER')).toBeUndefined();
+      expect(spanKindName('2.5')).toBeUndefined();
     });
   });
 });
