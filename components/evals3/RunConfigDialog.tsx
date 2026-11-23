@@ -52,6 +52,7 @@ import { EvaluationRun, Evaluator, Benchmark, RunConfigInput } from '@/types';
 import { DEFAULT_CONFIG } from '@/lib/constants';
 import { ENV_CONFIG } from '@/lib/config';
 import { computeRerunName } from '@/lib/evaluationRerun';
+import { JUDGE_PROVIDER_NONE } from '@/lib/judgeIdentity';
 import { rerunEvaluationRun, RerunOverrides } from '@/services/client';
 import { asyncBenchmarkStorage } from '@/services/storage';
 
@@ -85,11 +86,17 @@ export function computeRerunOverrides(run: EvaluationRun, values: RunConfigValue
   const nextConcurrency = values.concurrency ?? DEFAULT_CONCURRENCY;
   const nextJudge = values.judgeModelId || '';
   const nextEvaluator = values.evaluatorId || '';
+  // All-deterministic source run: the pickers are disabled, so the (empty)
+  // judge / evaluator are never a tweak — the re-run is a faithful duplicate.
+  // Swapping the test-case source to a benchmark re-enables them: those
+  // cases may be judged, so a (cleared) value is a real override again.
+  const sourceSwapped = !!values.benchmarkId && values.benchmarkId !== run.benchmarkId;
+  const judgeApplies = judgeApplicabilityForRerun(run) !== 'none' || sourceSwapped;
   return {
     name: values.name.trim() || undefined,
     agentKey: values.agentKey !== run.agentKey ? values.agentKey : undefined,
-    judgeModelId: nextJudge !== (run.judgeModelId || '') ? (nextJudge || null) : undefined,
-    evaluatorId: nextEvaluator !== (run.evaluatorId || '') ? (nextEvaluator || null) : undefined,
+    judgeModelId: judgeApplies && nextJudge !== (run.judgeModelId || '') ? (nextJudge || null) : undefined,
+    evaluatorId: judgeApplies && nextEvaluator !== (run.evaluatorId || '') ? (nextEvaluator || null) : undefined,
     concurrency: nextConcurrency !== srcConcurrency ? nextConcurrency : undefined,
     // Only an explicit, DIFFERENT benchmark selection is sent. `undefined`
     // (the "keep source" sentinel) never becomes a `null` clear: for a
@@ -106,15 +113,46 @@ export function hasRerunTweaks(o: RerunOverrides): boolean {
     || o.concurrency !== undefined || o.benchmarkId !== undefined;
 }
 
+/**
+ * How the evaluator / judge pickers apply to a re-run of `run`:
+ *
+ *   - `'none'`     every case of the source run ran as code assertions only:
+ *                  the run COMPLETED, no case errored (an agent failure or a
+ *                  cancelled case may have stopped a body before its `judge()`
+ *                  call — that proves nothing), and `judgeProvider` is `'none'`
+ *                  (set only while NO report called an LLM judge). No
+ *                  evaluator or judge model is used, so the pickers are
+ *                  disabled and left empty rather than pre-selecting "RCA
+ *                  Default" / a judge for cases that never call one.
+ *   - `'per-case'` the run includes code-SDK cases (a `code-import` source):
+ *                  evaluator/judge apply per CASE, only to cases that call
+ *                  `judge()` (also the answer whenever `'none'` cannot be
+ *                  established for a code-SDK run).
+ *   - `'all'`      classic JSON/UI cases — the evaluator/judge grade every case.
+ *
+ * Exported for tests.
+ */
+export type JudgeApplicability = 'none' | 'per-case' | 'all';
+export function judgeApplicabilityForRerun(run: Pick<EvaluationRun, 'judgeProvider' | 'sources' | 'status' | 'stats'>): JudgeApplicability {
+  const codeSdk = (run.sources ?? []).some(s => s.type === 'code-import');
+  if (run.judgeProvider === JUDGE_PROVIDER_NONE && run.status === 'completed' && (run.stats?.errored ?? 0) === 0) return 'none';
+  if (codeSdk || run.judgeProvider === JUDGE_PROVIDER_NONE) return 'per-case';
+  return 'all';
+}
+
 /** Seed dialog values from a source run (rerun mode). Exported for tests. */
 export function valuesFromRun(run: EvaluationRun): RunConfigValues {
+  const deterministic = judgeApplicabilityForRerun(run) === 'none';
   return {
     name: computeRerunName(run.name),
     description: run.description,
     agentKey: run.agentKey || '',
     modelId: run.modelId,
-    judgeModelId: run.judgeModelId || undefined,
-    evaluatorId: run.evaluatorId || undefined,
+    // Never carry an evaluator / judge onto an all-deterministic re-run: the
+    // source run's cases never called a judge, so a value here would only be
+    // a misleading pre-selection (lib/evaluationRerun treats both as "unchanged").
+    judgeModelId: deterministic ? undefined : (run.judgeModelId || undefined),
+    evaluatorId: deterministic ? undefined : (run.evaluatorId || undefined),
     concurrency: run.concurrency ?? undefined,
     headers: run.headers,
     agentEndpoint: run.agentEndpoint,
@@ -214,6 +252,10 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = (props) => {
 
   const agents = DEFAULT_CONFIG.agents;
   const agentMissing = !!values.agentKey && !agents.some(a => a.key === values.agentKey);
+  // Source swapped to another benchmark → its cases may be judged → pickers back.
+  const sourceSwapped = isRerun && !!sourceRun && !!values.benchmarkId && values.benchmarkId !== sourceRun.benchmarkId;
+  const judgeApplicability: JudgeApplicability = isRerun && sourceRun && !sourceSwapped ? judgeApplicabilityForRerun(sourceRun) : 'all';
+  const judgeDisabled = judgeApplicability === 'none';
   const evaluatorMissing = evaluatorsLoaded && !!values.evaluatorId
     && !evaluators.some(e => e.id === values.evaluatorId);
 
@@ -341,11 +383,12 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = (props) => {
                   silently. */}
               <Label className="text-xs">Evaluator</Label>
               <Select
-                value={values.evaluatorId || DEFAULT_EVALUATOR}
+                value={judgeDisabled ? '' : (values.evaluatorId || DEFAULT_EVALUATOR)}
                 onValueChange={val => set('evaluatorId', val === DEFAULT_EVALUATOR ? undefined : val)}
+                disabled={judgeDisabled}
               >
                 <SelectTrigger className="h-8" data-testid="run-config-evaluator-trigger">
-                  <SelectValue placeholder={DEFAULT_EVALUATOR_LABEL} />
+                  <SelectValue placeholder={judgeDisabled ? 'Not used' : DEFAULT_EVALUATOR_LABEL} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={DEFAULT_EVALUATOR}>{DEFAULT_EVALUATOR_LABEL}</SelectItem>
@@ -377,10 +420,20 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = (props) => {
                 value={values.judgeModelId ?? ''}
                 onValueChange={val => set('judgeModelId', val || undefined)}
                 allowDefault
+                defaultLabel={judgeDisabled ? 'Not used' : undefined}
+                disabled={judgeDisabled}
                 triggerClassName="h-8"
               />
             </div>
           </div>
+          {judgeApplicability !== 'all' && (
+            <div className="text-[11px] text-muted-foreground flex items-center gap-1" data-testid="run-config-judge-applicability" data-applicability={judgeApplicability}>
+              <Info size={11} />
+              {judgeApplicability === 'none'
+                ? 'Every case is deterministic (code assertions only, no judge() call) — no evaluator or judge model is used.'
+                : 'Evaluator and judge apply per case: only cases that call judge() use them; deterministic cases run without a judge.'}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">

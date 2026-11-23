@@ -303,10 +303,11 @@ describe('SDK matcher-session report.metrics — partial credit + dimensional pa
     expect(report.metrics.accuracy).toBe(0);
   });
 
-  it('body that runs cleanly with no claims: report.metrics === {100, 100, 100, 100} (vacuous pass, BC)', async () => {
+  it('body that never calls judge(): deterministic report with NO metrics (not the {100,100,100,100} placeholder)', async () => {
     const evaluateFn: EvaluateFn = async ({ agent }: any) => {
       await agent.run('P');
-      // No expect/judge calls — body just exercises the agent.
+      // No judge() call — code-only body. Pre-fix the report carried the RCA
+      // judge's four rubric keys at 100 and rendered as "Score 100%".
     };
     const evaluateFnMap = new Map<string, EvaluateFn>([['tc-no-claims', evaluateFn]]);
 
@@ -318,21 +319,20 @@ describe('SDK matcher-session report.metrics — partial credit + dimensional pa
 
     const report = finalReport(captured, 'tc-no-claims');
     expect(report.passFailStatus).toBe('passed');
-    expect(report.metrics).toEqual({
-      accuracy: 100,
-      faithfulness: 100,
-      latency_score: 100,
-      trajectory_alignment_score: 100,
-    });
+    expect(report).toMatchObject({ evaluationType: 'deterministic', skipJudge: true, judgeProvider: 'none' });
+    expect(report.metrics).toEqual({});
   });
 
-  it('body that throws (chai expect fail-fast): report.metrics === {0, 0, 0, 0} (BC)', async () => {
+  it('body that throws (chai expect fail-fast) after a judge() call: report.metrics === {0, 0, 0, 0} (BC)', async () => {
     // chai expect() is fail-fast: a failing assertion throws, the body
     // bails, evalError is set on the matcher session, and the runner's
-    // helper returns 0s regardless of partial pass-rate. Locks BC.
-    const evaluateFn: EvaluateFn = async ({ agent, expect }: any) => {
+    // helper returns 0s regardless of partial pass-rate. Locks BC for
+    // judged bodies (a code-only body gets `{}` — see the no-judge test).
+    installJudgeFetchMock([{ pass: true }]);
+    const evaluateFn: EvaluateFn = async ({ agent, expect, judge }: any) => {
       const result = await agent.run('P');
-      expect(result).to.exist;                       // pass (matcher #1)
+      await judge(result, 'claim-1');                // pass (judged)
+      expect(result).to.exist;                       // pass (matcher #2)
       expect(result.agentDurationMs).to.equal(999);  // FAIL (throws)
       // never reached:
       expect(result).to.exist;

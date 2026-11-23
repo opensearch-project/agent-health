@@ -34,7 +34,7 @@ import { resolveCanonicalEvaluationRun } from '@/lib/resolveCanonicalRun';
 import { ResultStatus, getResultStatus, StatusIcon, StatusLabel, getErrorStage } from './ResultStatus';
 import { markPageReady } from '@/lib/pageLatency';
 import { DEFAULT_CONFIG } from '@/lib/constants';
-import { formatDate, getModelName } from '@/lib/utils';
+import { formatDate, getRunModelLabel } from '@/lib/utils';
 import { getRunActionVisibility } from '@/lib/runActions';
 import { TestCaseInspectorPanel } from './TestCaseInspectorPanel';
 import { InlineRenameField } from './InlineRenameField';
@@ -549,7 +549,7 @@ export const RunInspectorPage: React.FC = () => {
   }
 
   const agentName = DEFAULT_CONFIG.agents.find(a => a.key === run.agentKey)?.name || run.agentKey;
-  const modelName = getModelName(run.modelId);
+  const modelName = getRunModelLabel(run);
   // Narrow once for the render below -- avoids repeated isEvaluationRun()
   // calls and unsafe `as EvaluationRun` casts inside nested closures (TS
   // narrowing of `run` doesn't reliably persist into inline arrow-function

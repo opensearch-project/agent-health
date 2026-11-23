@@ -197,11 +197,10 @@ describe('ALWAYS-RECORD: objective actuals survive a mid-body throw (regression)
     expect(report.matcherResults[1].notReached).toBe(true);
     expect(report.matcherResults[1].pass).toBe(false);
 
-    // The notReached marker must NOT be double-counted in the aggregate
-    // score computation (it's neither a real pass nor a real fail).
-    expect(report.metrics).toEqual({
-      accuracy: 0, faithfulness: 0, latency_score: 0, trajectory_alignment_score: 0,
-    }); // hasEvalError bypass — unchanged BC behavior, pinned for clarity.
+    // A code-only body (no judge() call) carries no judge metrics at all —
+    // the verdict is `passFailStatus`; the notReached marker is never
+    // counted as a pass or a fail anywhere.
+    expect(report.metrics).toEqual({});
   });
 
   it('control: all matchers pass — totalTokens/totalCostUsd are present with the SAME contract (no throw needed to see them)', async () => {

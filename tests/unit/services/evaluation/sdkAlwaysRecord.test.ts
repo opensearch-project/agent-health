@@ -147,9 +147,11 @@ describe('appendNotReachedMarker', () => {
 });
 
 describe('computeSdkMatcherSessionMetrics — excludes notReached markers from the gate denominator', () => {
+  // Metrics exist only when a judge() call ran (code-assertion-only bodies
+  // get `{}`), so the passing gate here is a judged claim.
   it('a notReached entry does not count against accuracy (1 passing gate + 1 notReached → 100, not 50)', () => {
     const res = computeSdkMatcherSessionMetrics([
-      m({ pass: true }),
+      m({ pass: true, method: 'llm-judge' }),
       m({ pass: false, notReached: true }),
     ]);
     expect(res.accuracy).toBe(100);
@@ -157,12 +159,12 @@ describe('computeSdkMatcherSessionMetrics — excludes notReached markers from t
 
   it('mirrors the existing observe/errored exclusions — notReached is excluded the same way', () => {
     const withMarker = computeSdkMatcherSessionMetrics([
-      m({ pass: true }),
+      m({ pass: true, method: 'llm-judge' }),
       m({ pass: true }),
       m({ pass: false, notReached: true }),
     ]);
     const withoutMarker = computeSdkMatcherSessionMetrics([
-      m({ pass: true }),
+      m({ pass: true, method: 'llm-judge' }),
       m({ pass: true }),
     ]);
     expect(withMarker).toEqual(withoutMarker);

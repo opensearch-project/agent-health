@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { observeModelFromSpans } from '@/lib/observedModel';
+import { getAgentModelOwnership } from '@/server/services/runModelResolution';
 import {
   Benchmark,
   BenchmarkRun,
@@ -1192,6 +1194,14 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
   const config = getConfig();
   const allAgents = [...config.agents, ...getCustomAgents()];
   const agentConfig = allAgents.find(a => a.key === report.agentKey);
+  // Single-case runs (`POST /api/evaluate`) of an agent that owns its model
+  // and declared none carry no model until its spans say which one ran —
+  // same rule as the evaluation-run runner (lib/observedModel.ts).
+  const observedModelPatch = (spans: unknown): Partial<EvaluationReport> => {
+    if (report.modelId || !agentConfig || !getAgentModelOwnership(agentConfig).ownsModel || !Array.isArray(spans)) return {};
+    const observed = observeModelFromSpans(spans as any);
+    return observed ? { modelId: observed.modelId, modelName: observed.modelName, modelSource: 'observed' } : {};
+  };
 
   return tracePollingManager.startPollingAsync(
     report.id,
@@ -1236,6 +1246,7 @@ export function startTracePollingForReportWithModule(report: EvaluationReport, t
           await storage.runs.update(report.id, {
             trajectory: finalTrajectory,
             metricsStatus: 'ready',
+            ...observedModelPatch(spans),
             ...scoringFieldsFromJudgment(judgment),
             llmJudgeReasoning: judgment.llmJudgeReasoning,
             // Set only by the agent (trace) judge provider -- see

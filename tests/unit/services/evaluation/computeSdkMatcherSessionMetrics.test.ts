@@ -27,25 +27,47 @@ const m = (overrides: Partial<MatcherResult>): MatcherResult => ({
 });
 
 describe('computeSdkMatcherSessionMetrics', () => {
-  it('returns 100s for empty matcher results (vacuous pass, BC with pre-fix)', () => {
-    // Pre-fix: empty matcherResults + no evalError went through the
-    // `!failed` branch and produced {100,100,100,100}. Preserve that
-    // — a body that runs cleanly with no claims is a vacuous pass, not
-    // a 0-score failure.
-    expect(computeSdkMatcherSessionMetrics([])).toEqual({
-      accuracy: 100,
-      faithfulness: 100,
-      latency_score: 100,
-      trajectory_alignment_score: 100,
+  // A body that never called judge() is a deterministic case (skipJudge,
+  // judgeProvider 'none'): the four legacy keys are the RCA judge's rubric
+  // and must not be fabricated for it — `{}` so the UI shows no score, only
+  // the verdict and the matcher rows.
+  describe('no LLM judge call in the body → no metrics (never the {100,100,100,100} placeholder)', () => {
+    it('empty matcher results → {}', () => {
+      expect(computeSdkMatcherSessionMetrics([])).toEqual({});
+    });
+
+    it('code assertions only, all passing → {} (not accuracy: 100)', () => {
+      expect(computeSdkMatcherSessionMetrics([m({ pass: true }), m({ pass: true }), m({ pass: true })])).toEqual({});
+      expect(computeSdkMatcherSessionMetrics([m({ pass: true }), m({ pass: true })])).not.toHaveProperty('accuracy');
+    });
+
+    it('code assertions only, some failing → {} (the verdict is passFailStatus, not a fake accuracy)', () => {
+      expect(computeSdkMatcherSessionMetrics([m({ pass: true }), m({ pass: false })])).toEqual({});
+    });
+
+    it('observe-only / errored / notReached-only sessions → {}', () => {
+      expect(computeSdkMatcherSessionMetrics([m({ pass: true, role: 'observe' }), m({ pass: false, role: 'observe' })])).toEqual({});
+      expect(computeSdkMatcherSessionMetrics([m({ pass: false, errored: true })])).toEqual({});
+    });
+
+    it('a skipped or not-reached judge() does not count as a judge call', () => {
+      expect(computeSdkMatcherSessionMetrics([m({ pass: true, method: 'llm-judge', skipped: true })])).toEqual({});
+      expect(computeSdkMatcherSessionMetrics([m({ pass: true }), m({ pass: false, method: 'llm-judge', notReached: true })])).toEqual({});
+    });
+
+    it('body threw but no judge ran → {} (not {0,0,0,0})', () => {
+      expect(computeSdkMatcherSessionMetrics([m({ pass: true })], { hasEvalError: true })).toEqual({});
     });
   });
 
-  it('returns hard 0s when the bench body itself threw (evalError bypass)', () => {
-    // Even if every matcher passed, an evalError means the body never
+  const j = (overrides: Partial<MatcherResult>): MatcherResult => m({ method: 'llm-judge', ...overrides });
+
+  it('returns hard 0s when the bench body itself threw after judging (evalError bypass)', () => {
+    // Even if every judged claim passed, an evalError means the body never
     // reached its conclusion — the run never produced a verdict to grade.
     expect(
       computeSdkMatcherSessionMetrics(
-        [m({ pass: true }), m({ pass: true })],
+        [j({ pass: true }), j({ pass: true })],
         { hasEvalError: true },
       ),
     ).toEqual({
@@ -56,12 +78,12 @@ describe('computeSdkMatcherSessionMetrics', () => {
     });
   });
 
-  it('returns 100 across all four legacy keys when every gate matcher passes', () => {
+  it('returns 100 across all four legacy keys when every judged gate passes', () => {
     expect(
       computeSdkMatcherSessionMetrics([
-        m({ pass: true }),
-        m({ pass: true }),
-        m({ pass: true }),
+        j({ pass: true }),
+        j({ pass: true }),
+        j({ pass: true }),
       ]),
     ).toEqual({
       accuracy: 100,
@@ -73,14 +95,14 @@ describe('computeSdkMatcherSessionMetrics', () => {
 
   // The headline regression: a 4-of-6 passing run must NOT show 0 (pre-fix
   // behavior). It must show 67 — the proportion of passing gate matchers.
-  it('reflects partial credit (4-of-6 passing → accuracy 67, not 0)', () => {
+  it('reflects partial credit (4-of-6 passing judged claims → accuracy 67, not 0)', () => {
     const res = computeSdkMatcherSessionMetrics([
-      m({ pass: true }),
-      m({ pass: true }),
-      m({ pass: true }),
-      m({ pass: true }),
-      m({ pass: false }),
-      m({ pass: false }),
+      j({ pass: true }),
+      j({ pass: true }),
+      j({ pass: true }),
+      j({ pass: true }),
+      j({ pass: false }),
+      j({ pass: false }),
     ]);
     expect(res.accuracy).toBe(67);
     expect(res.faithfulness).toBe(67);
@@ -88,11 +110,15 @@ describe('computeSdkMatcherSessionMetrics', () => {
     expect(res.trajectory_alignment_score).toBe(67);
   });
 
+  it('code assertions count as gates alongside judged claims (1 judge pass + 1 code fail → 50)', () => {
+    expect(computeSdkMatcherSessionMetrics([j({ pass: true }), m({ pass: false })]).accuracy).toBe(50);
+  });
+
   it('excludes observe-role matchers from the denominator (RFC 004 §4.8)', () => {
     // 1 passing gate + 1 failing observe → gates = [pass:true] → 100, not 50.
     const res = computeSdkMatcherSessionMetrics([
-      m({ pass: true, role: 'gate' }),
-      m({ pass: false, role: 'observe' }),
+      j({ pass: true, role: 'gate' }),
+      j({ pass: false, role: 'observe' }),
     ]);
     expect(res.accuracy).toBe(100);
   });
@@ -100,24 +126,10 @@ describe('computeSdkMatcherSessionMetrics', () => {
   it('excludes errored matchers from the denominator', () => {
     // 1 passing gate + 1 errored → gates = [pass:true] → 100, not 50.
     const res = computeSdkMatcherSessionMetrics([
-      m({ pass: true }),
-      m({ pass: false, errored: true }),
+      j({ pass: true }),
+      j({ pass: false, errored: true }),
     ]);
     expect(res.accuracy).toBe(100);
-  });
-
-  it('returns 100s when every matcher is observe-only (vacuous pass on gate dimension)', () => {
-    // No GATE matchers — only `observe` ones. Pre-fix this also fell
-    // through the `!failed` branch (`anyGateFailed = false`) and produced
-    // 100s. Preserve.
-    const res = computeSdkMatcherSessionMetrics([
-      m({ pass: true, role: 'observe' }),
-      m({ pass: false, role: 'observe' }),
-    ]);
-    expect(res.accuracy).toBe(100);
-    expect(res.faithfulness).toBe(100);
-    expect(res.latency_score).toBe(100);
-    expect(res.trajectory_alignment_score).toBe(100);
   });
 
   // Dimensional pass-through — the second part of the fix. A custom

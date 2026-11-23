@@ -4,6 +4,7 @@
  */
 
 import {
+  startTracePollingForReportWithModule,
   createCancellationToken,
   executeRun,
   runBenchmark,
@@ -1769,4 +1770,48 @@ describe('Experiment Runner', () => {
     });
   });
 
+
+  describe('startTracePollingForReportWithModule — observed model for an agent that owns its model (POST /api/evaluate path)', () => {
+    const SERVICE_SPANS = [
+      { spanId: 'root', traceId: 't', name: 'invoke_agent', startTime: '2026-01-01T00:00:00.000Z', endTime: '2026-01-01T00:00:01.000Z', attributes: { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.provider.name': 'example-provider' } },
+      { spanId: 'chat', traceId: 't', name: 'chat', startTime: '2026-01-01T00:00:00.100Z', endTime: '2026-01-01T00:00:00.900Z', attributes: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'example-model-v1', 'gen_ai.provider.name': 'example-provider' } },
+    ];
+    const judged = { passFailStatus: 'passed', metrics: { accuracy: 95 }, llmJudgeReasoning: 'ok', improvementStrategies: [] };
+
+    async function poll(report: any, spans: any[]) {
+      mockStartPollingAsync.mockReset();
+      mockStartPollingAsync.mockResolvedValue(undefined); // an earlier test left it rejecting
+      mockRunsUpdate.mockClear();
+      mockCallBedrockJudge.mockResolvedValue(judged);
+      const p = startTracePollingForReportWithModule(report, createTestCase('tc-1'), mockStorageModule);
+      const callbacks = mockStartPollingAsync.mock.calls[0][2];
+      await callbacks.onTracesFound(spans, { ...report, trajectory: [{ type: 'response', content: 'traced' }] });
+      await p;
+      return mockRunsUpdate.mock.calls.find((c) => c[0] === report.id && c[1].metricsStatus === 'ready')?.[1];
+    }
+
+    it('an owning agent with no model → the judged update stamps the model observed on the chat spans', async () => {
+      mockConfig.agents.push({ key: 'search-service', name: 'Search service', endpoint: 'http://s', connectorType: 'rest', connectorConfig: { agentOwnsModel: true } } as any);
+      try {
+        const update = await poll({ id: 'r-owned', agentKey: 'search-service', runId: 'agent-run', trajectory: [], metricsStatus: 'pending' }, SERVICE_SPANS);
+        expect(update).toMatchObject({ modelId: 'example-model-v1', modelName: 'example-provider · example-model-v1', modelSource: 'observed' });
+      } finally {
+        mockConfig.agents.pop();
+      }
+    });
+
+    it('no model on the spans → nothing stamped; a catalog agent with a model keeps it untouched', async () => {
+      mockConfig.agents.push({ key: 'search-service', name: 'Search service', endpoint: 'http://s', connectorType: 'rest', connectorConfig: { agentOwnsModel: true } } as any);
+      try {
+        const noModel = await poll({ id: 'r-owned-2', agentKey: 'search-service', runId: 'agent-run', trajectory: [], metricsStatus: 'pending' }, [SERVICE_SPANS[0]]);
+        expect(noModel).not.toHaveProperty('modelId');
+        expect(noModel).not.toHaveProperty('modelSource');
+      } finally {
+        mockConfig.agents.pop();
+      }
+      const catalog = await poll({ id: 'r-catalog', agentKey: 'test-agent', modelId: 'claude-sonnet', runId: 'agent-run', trajectory: [], metricsStatus: 'pending' }, SERVICE_SPANS);
+      expect(catalog).not.toHaveProperty('modelId');
+      expect(catalog).not.toHaveProperty('modelSource');
+    });
+  });
 });
