@@ -90,6 +90,10 @@ function toBenchmarkRun(stored: StorageBenchmarkRunConfig): BenchmarkRun {
     createdAt: stored.createdAt,
     // Handle both current (agentKey) and legacy (agentId) field names
     agentKey: stored.agentKey || stored.agentId || '',
+    // Endpoint override — the server persists it, but this allow-list mapper
+    // used to drop it, so two endpoints of one agentKey were indistinguishable
+    // in the UI (lib/benchmarkAgentSummary treats them as two agents).
+    agentEndpoint: stored.agentEndpoint,
     modelId: stored.modelId,
     // Judge model id / evaluator id (Evaluation Runs page Judge + Evaluator
     // columns) — distinct from the agent's `modelId` above. Both fields are
@@ -157,6 +161,7 @@ function toStorageFormat(benchmark: Partial<Benchmark>): Record<string, any> {
       name: run.name,
       description: run.description,
       agentKey: run.agentKey,
+      ...(run.agentEndpoint && { agentEndpoint: run.agentEndpoint }),
       modelId: run.modelId,
       judgeModelId: run.judgeModelId,
       judgeModel: run.judgeModel,

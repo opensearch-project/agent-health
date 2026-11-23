@@ -18,9 +18,9 @@ import { PassRateSeries, PassRatePoint, seriesColor } from '@/lib/benchmarkRunsT
 
 interface Props {
   series: PassRateSeries[];
-  /** agentKeys currently used as active filters (highlighted in the legend). */
+  /** Agent identities (series keys) currently used as active filters (highlighted in the legend). */
   activeAgentKeys: Set<string>;
-  onToggleAgent: (agentKey: string, label: string) => void;
+  onToggleAgent: (agentId: string, label: string) => void;
   height?: number;
 }
 

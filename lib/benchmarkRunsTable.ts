@@ -13,6 +13,7 @@
 
 import type { BenchmarkRun } from '@/types';
 import { computeRunStats, getEffectiveRunStatus } from '@/lib/runStats';
+import { agentIdentityKey, agentIdentityLabels } from '@/lib/benchmarkAgentSummary';
 
 // ─── Row model ───────────────────────────────────────────────────────────────
 
@@ -30,6 +31,13 @@ export interface RunFilter {
 export interface RunTableRow {
   run: BenchmarkRun;
   agentKey: string;
+  /**
+   * Agent identity = agentKey + agentEndpoint override (see
+   * {@link agentIdentityKey}). The Agent filter and the chart series key on
+   * THIS, not on agentKey, so two endpoints of one key stay two agents.
+   */
+  agentId: string;
+  /** Display label; {@link buildRunTableRows} suffixes the host when needed. */
   agentName: string;
   modelId: string;
   modelName: string;
@@ -131,6 +139,7 @@ export function buildRunTableRow(run: BenchmarkRun, resolve: RowLabelResolvers):
   return {
     run,
     agentKey,
+    agentId: agentIdentityKey(run),
     agentName: resolve.agentName(agentKey),
     modelId,
     modelName: resolve.modelName(modelId),
@@ -146,11 +155,26 @@ export function buildRunTableRow(run: BenchmarkRun, resolve: RowLabelResolvers):
   };
 }
 
+/**
+ * Rows for a whole run set. Same as mapping {@link buildRunTableRow}, except
+ * that when one agentKey ran against ≥2 distinct endpoints each identity's
+ * `agentName` becomes `Name (host)` (see agentIdentityLabels) so the Agent
+ * column, filter pills and chart legend can tell them apart.
+ */
+export function buildRunTableRows(runs: BenchmarkRun[], resolve: RowLabelResolvers): RunTableRow[] {
+  const labels = agentIdentityLabels(runs, resolve.agentName);
+  return runs.map(run => {
+    const row = buildRunTableRow(run, resolve);
+    const label = labels.get(row.agentId);
+    return label && label !== row.agentName ? { ...row, agentName: label } : row;
+  });
+}
+
 // ─── Filters ─────────────────────────────────────────────────────────────────
 
 export function rowFieldValue(row: RunTableRow, field: RunFilterField): string {
   switch (field) {
-    case 'agent': return row.agentKey;
+    case 'agent': return row.agentId;
     case 'model': return row.modelId;
     case 'judge': return row.judgeModelId;
     case 'evaluator': return row.evaluatorId;
@@ -298,14 +322,19 @@ export interface PassRatePoint {
 }
 
 export interface PassRateSeries {
-  /** Series key = agentKey (the sketch groups lines by agent, e.g. CC vs AIS). */
+  /**
+   * Series key = agent identity ({@link RunTableRow.agentId}): one line per
+   * agent, and per endpoint when a run overrode the agent's endpoint.
+   */
   key: string;
   label: string;
   points: PassRatePoint[];
 }
 
 /**
- * One line per agent, points ordered by time. Runs without an evaluable
+ * One line per agent identity (agentKey + endpoint override), points ordered
+ * by time; labels are the rows' `agentName` (build rows with
+ * {@link buildRunTableRows} for `Name (host)` disambiguation). Runs without an evaluable
  * result (pass rate null — e.g. still running with nothing judged, or fully
  * errored) are excluded: plotting them as 0% would read as a regression.
  */
@@ -315,10 +344,10 @@ export function buildPassRateSeries(rows: RunTableRow[]): PassRateSeries[] {
     if (row.passRate === null) continue;
     const t = new Date(row.run.createdAt).getTime();
     if (Number.isNaN(t)) continue;
-    let series = byAgent.get(row.agentKey);
+    let series = byAgent.get(row.agentId);
     if (!series) {
-      series = { key: row.agentKey, label: row.agentName, points: [] };
-      byAgent.set(row.agentKey, series);
+      series = { key: row.agentId, label: row.agentName, points: [] };
+      byAgent.set(row.agentId, series);
     }
     series.points.push({
       t, runId: row.run.id, runName: row.run.name,

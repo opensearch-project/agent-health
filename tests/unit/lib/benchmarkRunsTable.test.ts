@@ -12,7 +12,7 @@ import type { BenchmarkRun } from '@/types';
 import {
   buildRunTableRow, computePassRate, applyRunFilters, toggleRunFilter, removeRunFilter,
   sortRunRows, toggleRunSort, buildPassRateSeries, rowFieldValue, rowFieldLabel,
-  seriesColor, SERIES_COLORS, DEFAULT_RUN_SORT, latestRunId, RunTableRow, RunFilter,
+  seriesColor, SERIES_COLORS, DEFAULT_RUN_SORT, latestRunId, buildRunTableRows, RunTableRow, RunFilter,
 } from '@/lib/benchmarkRunsTable';
 
 const resolvers = {
@@ -331,6 +331,45 @@ describe('buildPassRateSeries', () => {
       ].map(r => buildRunTableRow(r, resolvers)),
     ]).map(s => s.key);
     expect(after).toEqual(before);
+  });
+});
+
+describe('agent identity = agentKey + agentEndpoint (two endpoints of one key are two agents)', () => {
+  const PROD = 'https://prod.example.com/agent';
+  const STAGING = 'https://staging.example.com:8443/agent';
+  const runs = () => [
+    run({ id: 'prod-1', agentKey: 'agent-cc', agentEndpoint: PROD, createdAt: '2026-09-01T00:00:00Z', results: { t: res('completed', 'passed') } }),
+    run({ id: 'stg-1', agentKey: 'agent-cc', agentEndpoint: STAGING, createdAt: '2026-09-02T00:00:00Z', results: { t: res('completed', 'failed') } }),
+    run({ id: 'stg-2', agentKey: 'agent-cc', agentEndpoint: STAGING, createdAt: '2026-09-03T00:00:00Z', results: { t: res('completed', 'passed') } }),
+    run({ id: 'ais-1', agentKey: 'agent-ais', agentEndpoint: PROD, createdAt: '2026-09-03T00:00:00Z', results: { t: res('completed', 'passed') } }),
+  ];
+
+  it('buildPassRateSeries draws one line per endpoint, labelled `Name (host)` only where the key is ambiguous', () => {
+    const series = buildPassRateSeries(buildRunTableRows(runs(), resolvers));
+    expect(series.map(s => s.key)).toEqual([`agent-cc@${PROD}`, `agent-cc@${STAGING}`, `agent-ais@${PROD}`]);
+    expect(series.map(s => s.label)).toEqual(['Agent A (prod.example.com)', 'Agent A (staging.example.com:8443)', 'Agent B']);
+    expect(series[1].points.map(p => p.runId)).toEqual(['stg-1', 'stg-2']);
+    expect(series[0].points.map(p => p.runId)).toEqual(['prod-1']);
+  });
+
+  it('the Agent filter value is the identity, so filtering on one endpoint keeps only that endpoint\'s runs', () => {
+    const all = buildRunTableRows(runs(), resolvers);
+    const stg = all.find(r => r.run.id === 'stg-1')!;
+    expect(rowFieldValue(stg, 'agent')).toBe(`agent-cc@${STAGING}`);
+    expect(rowFieldLabel(stg, 'agent')).toBe('Agent A (staging.example.com:8443)');
+    const filtered = applyRunFilters(all, [{ field: 'agent', value: rowFieldValue(stg, 'agent'), label: stg.agentName }]);
+    expect(filtered.map(r => r.run.id).sort()).toEqual(['stg-1', 'stg-2']);
+  });
+
+  it('buildRunTableRows keeps plain names when every key has a single endpoint (incl. none), matching buildRunTableRow', () => {
+    const plain = [
+      run({ id: 'a', agentKey: 'agent-cc' }),
+      run({ id: 'b', agentKey: 'agent-ais', agentEndpoint: PROD }),
+    ];
+    const rows = buildRunTableRows(plain, resolvers);
+    expect(rows.map(r => r.agentName)).toEqual(['Agent A', 'Agent B']);
+    expect(rows.map(r => r.agentId)).toEqual(['agent-cc', `agent-ais@${PROD}`]);
+    expect(rows).toEqual(plain.map(r => buildRunTableRow(r, resolvers)));
   });
 });
 
