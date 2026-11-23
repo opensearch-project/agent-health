@@ -780,6 +780,42 @@ describe('Benchmark Command - Real Module Coverage', () => {
       expect(process.exitCode).toBe(1);
     });
 
+    it('a run the server still holds as running but with delivered reports: partial counts are shown, the error is kept, exit 1', async () => {
+      const benchmark = makeBenchmark({ id: 'bench-partial', name: 'Partial', testCaseIds: ['tc-1', 'tc-2', 'tc-3'] });
+      currentApi.findBenchmark.mockResolvedValue(benchmark);
+      const run = makeRun({ id: 'run-partial', status: 'running', results: { 'tc-1': { reportId: 'report-1', status: 'completed' } } });
+      mockLocalRun({ run, testCases: [{ id: 'tc-1', name: 'a' }, { id: 'tc-2', name: 'b' }, { id: 'tc-3', name: 'c' }], fail: new LocalRunFailure('lease lost', 'run-partial', 'lease-lost') });
+      currentApi.getEvaluationRun.mockResolvedValue(run);
+      currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
+
+      await runBenchmarkCommand(['-n', 'Partial', '-a', 'demo-agent', '--output', 'json']);
+
+      const out = joinedConsoleOutput(logSpy);
+      const parsed = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
+      expect(parsed[0]).toMatchObject({ runId: 'run-partial', passed: 1, error: 'lease lost' });
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('Ctrl-C during the first agent cancels THAT run and stops the command: the remaining agents are never started', async () => {
+      const benchmark = makeBenchmark({ id: 'bench-cancel', name: 'Cancel Me', testCaseIds: ['tc-1', 'tc-2'] });
+      currentApi.findBenchmark.mockResolvedValue(benchmark);
+      // What `finalize` writes for a cancelled run: the never-started case is marked `cancelled`.
+      const run = makeRun({ id: 'run-cancel', status: 'cancelled', agentKey: 'demo-agent', results: { 'tc-1': { reportId: 'report-1', status: 'completed' }, 'tc-2': { status: 'cancelled' } } });
+      mockLocalRun({ run, testCases: [{ id: 'tc-1', name: 'a' }, { id: 'tc-2', name: 'b' }] });
+      currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
+
+      await runBenchmarkCommand(['-n', 'Cancel Me', '-a', 'demo-agent', '-a', 'backup-agent', '--output', 'markdown']);
+
+      expect(mockExecuteRunLocally).toHaveBeenCalledTimes(1);
+      expect(mockExecuteRunLocally.mock.calls[0][0].request.agentKey).toBe('demo-agent');
+      const out = joinedConsoleOutput(logSpy);
+      expect(out).toContain('Cancelled — not starting the remaining runs.');
+      // The summary table has one row: the backup agent never got a run.
+      expect(out).not.toMatch(/\| Backup Agent \|/);
+      expect(out).toMatch(/\| Demo Agent \| 1 \|/);
+      expect(process.exitCode).toBe(1); // a case that never ran is an exit-1 outcome
+    });
+
     it('exits with a helpful error when the server is already running and no source is specified', async () => {
       mockIsServerRunning.mockResolvedValue(true);
 

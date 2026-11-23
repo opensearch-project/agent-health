@@ -104,6 +104,8 @@ interface AgentResults {
    */
   runError?: string;
   reports?: TestCaseRun[];
+  /** The user interrupted this run (SIGINT/SIGTERM); the agent loop stops after it. */
+  cancelled?: boolean;
 }
 
 /**
@@ -254,7 +256,9 @@ async function runBenchmarkForAgent(
     failed: 0,
   };
 
-  const totalTestCases = benchmark.testCaseIds.length;
+  // Planned count from the stored benchmark; replaced by the server's resolved
+  // snapshot count once the run exists (stale / deduplicated ids drop out).
+  let totalTestCases = benchmark.testCaseIds.length;
   const spinner = ora(`Running ${agent.name} (0/${totalTestCases})`).start();
 
   // Track the run id from the moment the server created the run, so a later
@@ -263,8 +267,12 @@ async function runBenchmarkForAgent(
   const caseNames = new Map<string, string>();
   let completed = 0;
 
-  /** Read verdicts the same way the UI does: reports by id from `run.results`, then `calculateRunStats`. */
-  const summarize = async (run: BenchmarkRun): Promise<RunStats> => {
+  /**
+   * Adopt a run document as this agent's result: fetch its reports by id
+   * (network), compute `calculateRunStats` the way the UI does and fill every
+   * `results.*` field the summary table / export / exit code read.
+   */
+  const adoptRun = async (run: BenchmarkRun): Promise<RunStats> => {
     const reportsMap = await fetchReportsForRun(api, run);
     const stats = calculateRunStats(run, reportsMap);
     results.run = run;
@@ -301,6 +309,8 @@ async function runBenchmarkForAgent(
       callbacks: {
         onStarted: ({ runId, testCases }) => {
           startedRunId = runId;
+          results.runId = runId;
+          totalTestCases = testCases.length;
           for (const tc of testCases) caseNames.set(tc.id, tc.name);
         },
         onProgress: (progress) => {
@@ -324,7 +334,8 @@ async function runBenchmarkForAgent(
 
     // What `finalize` confirmed is the persisted run; its `results` / `stats`
     // are the same fields the benchmark-embedded projection carries.
-    const stats = await summarize(outcome.run as unknown as BenchmarkRun);
+    const stats = await adoptRun(outcome.run as unknown as BenchmarkRun);
+    if (outcome.status === 'cancelled') results.cancelled = true;
 
     // Issue #242: when the evaluator couldn't produce verdicts on some runs,
     // call them out explicitly so users don't conflate "evaluator misconfigured"
@@ -344,20 +355,24 @@ async function runBenchmarkForAgent(
       // Try to recover partial results by fetching run state from server
       try {
         const run = await api.getEvaluationRun(results.runId!);
-        // Only a TERMINAL state the server confirmed is worth summarizing; a
-        // run still `running` on the server has no counts this CLI can vouch
-        // for (every planned case reads as not run below).
-        if (run && (run.status === 'completed' || run.status === 'cancelled' || run.status === 'failed')) {
-          const stats = await summarize(run as unknown as BenchmarkRun);
+        if (run) {
+          const terminal = run.status === 'completed' || run.status === 'cancelled' || run.status === 'failed';
+          // A run the server still holds as `running` with no delivered report
+          // has no counts to show: leave `stats` unset so the summary reads
+          // every planned case as not run instead of "0 of 0".
+          const stats = terminal || Object.keys(run.results ?? {}).length > 0
+            ? await adoptRun(run as unknown as BenchmarkRun)
+            : undefined;
 
           // The run reached a terminal state the server confirmed (e.g. cancelled)
-          if (run.status === 'completed' || run.status === 'cancelled') {
+          if (stats && (run.status === 'completed' || run.status === 'cancelled')) {
             report(stats);
+            if (run.status === 'cancelled') results.cancelled = true;
             return results; // Successfully recovered
           }
 
           // Run failed - show the error from the run if available
-          {
+          if (run.status === 'failed') {
             const runError = run.error || errorMessage;
             results.runError = runError;
             spinner.fail(`${agent.name}: ${chalk.red('Failed')} - ${runError}`);
@@ -395,7 +410,9 @@ async function runBenchmarkForAgent(
       console.log(chalk.gray(`  Hint: The beforeRequest hook in agent-health.config.ts threw an error.`));
       console.log(chalk.gray(`        Check the hook logic and any external services it calls.`));
     }
-    console.log(chalk.gray(`  Debug: Run with DEBUG=true for verbose server logs`));
+    // The run executes in THIS process (#612): the runner's output is in the
+    // run log above; -v (or DEBUG=true) echoes it to the terminal as it happens.
+    console.log(chalk.gray(`  Debug: Run with -v (or DEBUG=true) to see the runner's output as it happens`));
   }
 
   return results;
@@ -1372,7 +1389,9 @@ export function createBenchmarkCommand(): Command {
         const allResults: AgentResults[] = [];
         let totalTestCasesAcrossBenchmarks = 0;
 
+        let cancelled = false;
         for (const benchmark of benchmarksToRun) {
+          if (cancelled) break;
           if (benchmarksToRun.length > 1) {
             console.log('');
             console.log(chalk.bold(`Benchmark: ${benchmark.name}`));
@@ -1395,6 +1414,12 @@ export function createBenchmarkCommand(): Command {
             // Annotate the result so the summary can attribute it to the right benchmark
             (results as any).benchmark = benchmark;
             allResults.push(results);
+            if (results.cancelled) {
+              // One Ctrl-C means "stop this command", not "on to the next agent".
+              console.log(chalk.yellow(`  Cancelled — not starting the remaining runs.`));
+              cancelled = true;
+              break;
+            }
           }
         }
 
