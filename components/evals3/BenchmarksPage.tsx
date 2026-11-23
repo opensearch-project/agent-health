@@ -106,7 +106,9 @@ type SortDir = 'asc' | 'desc';
 
 /** Tiny inline sparkline for pass rate trend */
 function MiniSparkline({ values }: { values: number[] }) {
-  if (values.length < 2) return <span className="text-[9px] text-muted-foreground">—</span>;
+  // Fixed-width spacer when there is nothing to draw so the trend badges of a
+  // row's agent lines stay aligned (the badge itself shows the "—").
+  if (values.length < 2) return <span className="inline-block w-12" aria-hidden="true" />;
   const max = 100;
   const w = 48;
   const h = 16;
@@ -520,7 +522,7 @@ export const BenchmarksPage4: React.FC = () => {
                                 <div className="flex flex-col">
                                   {shown.map(a => (
                                     <div key={a.agentId} className={line} data-testid="agent-latest-line" data-agent-id={a.agentId}>
-                                      <span className="text-muted-foreground truncate max-w-[160px]" title={a.agentEndpoint ? `${a.label} — ${a.agentEndpoint}` : a.label} data-testid="agent-label">{a.label}</span>
+                                      <span className="text-muted-foreground truncate max-w-[240px]" title={a.agentEndpoint ? `${a.label} — ${a.agentEndpoint}` : a.label} data-testid="agent-label">{a.label}</span>
                                       <span className="inline-flex items-center gap-0.5">
                                         <CheckCircle2 size={11} className="text-green-500" />
                                         <span className="text-green-500 font-medium">{a.passed}</span>
