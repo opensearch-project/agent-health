@@ -240,13 +240,15 @@ class CloudWatchTracesOperations implements ITracesOperations {
    * Scan window: explicit bounds win; otherwise, when narrowing is allowed, the
    * union of the agents' run windows ±5 min (a run's spans cannot fall outside
    * its own wall-clock window); otherwise the configured lookback, EXTENDED
-   * back to cover any agents' window the request carries (a hint may be wrong
-   * — #640 — so it can never narrow an exact-id scan, but when it is right it
-   * is what finds a run older than the lookback). Always clamped to
-   * `maxWindowMs` (the newest part of the range is kept).
+   * back to cover any run window the request carries — `agents[]` or the
+   * caller's advisory `scanWindow` (the precise-first exact phase strips
+   * `agents[]` and hands their bounds back through it). A hint may be wrong
+   * (#640), so it can never narrow an exact-id scan; when it is right it is
+   * what finds a run older than the lookback. Always clamped to `maxWindowMs`
+   * (the newest part of the range is kept).
    */
   window(
-    options: Pick<TracesQueryOptions, 'startTime' | 'endTime' | 'agents'>,
+    options: Pick<TracesQueryOptions, 'startTime' | 'endTime' | 'agents' | 'scanWindow'>,
     /** Narrow to the agents' windows. Only valid when every correlator on the request belongs to the run(s) those windows describe. */
     narrowToAgents = true
   ): { startMs: number; endMs: number; clamped: boolean } {
@@ -257,11 +259,15 @@ class CloudWatchTracesOperations implements ITracesOperations {
       endMs = options.endTime ? toMs(options.endTime) : now;
       startMs = options.startTime ? toMs(options.startTime) : endMs - this.lookbackMs;
     } else {
-      const windows = (options.agents || []).filter((a) => Number.isFinite(a.startedAt) && Number.isFinite(a.endedAt));
-      const hintStartMs = windows.length > 0 ? Math.min(...windows.map((a) => a.startedAt)) - WINDOW_PAD_MS : Infinity;
-      if (narrowToAgents && windows.length > 0) {
-        startMs = hintStartMs;
-        endMs = Math.min(now, Math.max(...windows.map((a) => a.endedAt)) + WINDOW_PAD_MS);
+      const finite = (w: { startedAt: number; endedAt: number }) => Number.isFinite(w.startedAt) && Number.isFinite(w.endedAt);
+      const agentWindows = (options.agents || []).filter(finite);
+      // Every run window the request carries, for WIDENING only: `scanWindow`
+      // is advisory and never narrows (see TracesQueryOptions.scanWindow).
+      const hints = [...agentWindows, ...(options.scanWindow ? [options.scanWindow] : [])].filter(finite);
+      const hintStartMs = hints.length > 0 ? Math.min(...hints.map((w) => w.startedAt)) - WINDOW_PAD_MS : Infinity;
+      if (narrowToAgents && agentWindows.length > 0) {
+        startMs = Math.min(...agentWindows.map((a) => a.startedAt)) - WINDOW_PAD_MS;
+        endMs = Math.min(now, Math.max(...agentWindows.map((a) => a.endedAt)) + WINDOW_PAD_MS);
       } else {
         endMs = now;
         startMs = Math.min(now - this.lookbackMs, hintStartMs);

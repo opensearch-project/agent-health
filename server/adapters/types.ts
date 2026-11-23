@@ -102,9 +102,22 @@ export interface TracesQueryOptions {
   serviceName?: string;
   textSearch?: string;
   cursor?: string;
-  /** Strategy C (opt-in): service.name + time-window correlation. See AGENTS.md. */
+  /** Strategy C (always-on FALLBACK, see AGENTS.md): service.name + time-window correlation. */
   /** Strategy D: per-agent `sessionId` correlates on `attributes.session.id`. */
   agents?: Array<{ serviceName: string; startedAt: number; endedAt: number; sessionId?: string }>;
+  /**
+   * Advisory run window for backends that SCAN storage (CloudWatch Logs): the
+   * caller believes the run(s) behind the exact correlators executed inside
+   * it. WIDENING only — a scanning backend extends its lookback back to cover
+   * it (so a run older than the lookback is still found when the hint is
+   * right) and never narrows an exact-id scan to it (the hint can be wrong:
+   * #640 — a window built around "now" for a report with no timestamp turned
+   * exact lookups into 0 spans). Never a filter — backends with indexed
+   * lookups (OpenSearch, file) ignore it. Set by the precise-first direct
+   * phase (`server/services/traceCorrelation.ts`) from the `agents[]` windows
+   * it strips off the exact query.
+   */
+  scanWindow?: { startedAt: number; endedAt: number };
 }
 
 // ============================================================================
