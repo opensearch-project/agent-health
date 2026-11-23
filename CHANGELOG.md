@@ -10,6 +10,7 @@ Inspired by [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 ### Fixed
+- CI: `link-check` no longer goes red when github.com answers 503 for file pages — github.com `blob` links are checked at raw.githubusercontent.com (same file, same 404 when it is gone), and the CHANGELOG's ~170 links to this repo's own PRs and issues (which cannot break) are skipped, cutting github.com page requests per run from ~270 to ~80 ([.github/workflows/links-checker.yml](.github/workflows/links-checker.yml)) ([#639](https://github.com/opensearch-project/agent-health/pull/639))
 - CI / dev deps: `@playwright/test` bumped from 1.57.0 to 1.65.1 (Chromium 159) and the `e2e-tests` job moved back to `ubuntu-latest` (now ubuntu-26.04) — ubuntu 26.04 host support arrived in Playwright 1.61, so the `ubuntu-24.04` pin from #633 is no longer needed. No e2e spec or `playwright.config.ts` change ([package.json](package.json), [.github/workflows/ci.yml](.github/workflows/ci.yml)) ([#639](https://github.com/opensearch-project/agent-health/pull/639))
 
 ### Added

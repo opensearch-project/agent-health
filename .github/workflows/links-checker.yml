@@ -20,6 +20,12 @@ jobs:
       # passes cannot drift). Each pass appends only what is specific to it.
       # --max-concurrency: most links point at github.com, which answers a burst
       # of 128 parallel requests from one runner with 502/503 even after retries.
+      # --remap blob → raw: github.com `blob` pages still answer anonymous runner
+      # requests with 503 Service Unavailable (6 links on #638's run, twice), so a
+      # file link is checked at raw.githubusercontent.com instead — same file, same
+      # 404 when it is gone, served from a CDN.
+      # --exclude own /pull/N and /issues/N: ~170 CHANGELOG links that cannot break
+      # (PRs and issues are never deleted) and were most of the github.com burst.
       LYCHEE_ARGS: >-
         --verbose
         --no-progress
@@ -32,6 +38,8 @@ jobs:
         --exclude '.*xenproject\.org.*'
         --exclude '.*opentelemetry\.io.*'
         --exclude '.*star-history\.com.*'
+        --exclude '^https://github\.com/opensearch-project/agent-health/(pull|issues)/[0-9]+'
+        --remap 'https://github\.com/([^/]+/[^/]+)/blob/(.+) https://raw.githubusercontent.com/$1/$2'
         --retry-wait-time 5
         --max-retries 3
         --timeout 30
