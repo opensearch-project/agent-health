@@ -7,8 +7,13 @@
  * Benchmark Command
  * Run a full benchmark against one or more agents
  *
- * Architecture: CLI → Server HTTP API → OpenSearch
- * This command is a thin wrapper that delegates all logic to the server.
+ * Architecture (#612): stored test cases and benchmarks live behind the project
+ * server's storage API; the run itself — connector, hooks, SDK bodies, judge —
+ * EXECUTES IN THIS PROCESS with the caller's cwd / env / config
+ * (cli/utils/localExecutor.ts) and is persisted through the server's
+ * run-ingestion API. Every mode (`-n <existing>`, `-f`, `-d`, `-t`, `--label`,
+ * quick mode) goes through that one path; the server's legacy `/execute`
+ * route is kept for the UI only.
  */
 
 import { Command } from 'commander';
@@ -21,7 +26,7 @@ import { loadConfig, DEFAULT_SERVER_CONFIG, type ResolvedConfig } from '@/lib/co
 import { resolveAgentModel } from '@/lib/resolveAgentModel.js';
 import { ensureServer, createServerCleanup, isServerRunning, type EnsureServerResult } from '@/cli/utils/serverLifecycle.js';
 import { applyAgentPathOption } from '@/cli/utils/agentPathOption.js';
-import { ApiClient, ServerError, type BenchmarkExecutionEvent } from '@/cli/utils/apiClient.js';
+import { ApiClient } from '@/cli/utils/apiClient.js';
 import { resolveUnifiedRunOutcome } from '@/cli/utils/evaluationRunOutcome.js';
 import {
   summarizeRunResults,
@@ -41,6 +46,7 @@ import { existsSync, statSync } from 'fs';
 import { isCodeFile, detectSourceLanguage } from '@/lib/testCases/loader.js';
 import { createBenchmarkDoctorCommand } from '@/cli/commands/benchmarkDoctor.js';
 import { collectEvalRootsHints, formatEvalRootsHint } from '@/cli/utils/evalRootsHint.js';
+import { getEvalRoots, setConfiguredEvalRoots } from '@/lib/config/evalRoots.js';
 import {
   currentBenchmarkTestCaseIds,
   checkBenchmarkSourceMismatch,
@@ -218,10 +224,22 @@ async function fetchReportsForRun(
 }
 
 /**
- * Run benchmark for a single agent via server API
+ * Run one stored benchmark against one agent — IN THIS PROCESS (#612 step
+ * 3b): the benchmark's stored cases are the run's source
+ * (`{ type: 'benchmark', benchmarkId }`, resolved through the storage API —
+ * never a file), the connector / hooks / SDK bodies / judge execute with the
+ * caller's cwd, env and config, and the run is persisted through the server's
+ * run-ingestion API and linked into `benchmark.runs[]` by `finalize`. The
+ * legacy `/execute` route stays for the UI; it required OpenSearch storage,
+ * which is why `benchmark -n <existing>` failed on FILE storage before.
+ *
+ * The result shape (`run`, `runId`, `stats`, `reports`, `runError`) is what
+ * the summary table, `--export` and the exit code read; it is unchanged.
  */
 async function runBenchmarkForAgent(
   api: ApiClient,
+  serverUrl: string,
+  config: ResolvedConfig,
   agent: AgentConfig,
   modelId: string,
   benchmark: Benchmark,
@@ -239,62 +257,74 @@ async function runBenchmarkForAgent(
   const totalTestCases = benchmark.testCaseIds.length;
   const spinner = ora(`Running ${agent.name} (0/${totalTestCases})`).start();
 
-  // Track runId from started event so we have it even if execution fails
+  // Track the run id from the moment the server created the run, so a later
+  // failure still prints where to look.
   let startedRunId: string | undefined;
+  const caseNames = new Map<string, string>();
+  let completed = 0;
+
+  /** Read verdicts the same way the UI does: reports by id from `run.results`, then `calculateRunStats`. */
+  const summarize = async (run: BenchmarkRun): Promise<RunStats> => {
+    const reportsMap = await fetchReportsForRun(api, run);
+    const stats = calculateRunStats(run, reportsMap);
+    results.run = run;
+    results.passed = stats.passed;
+    results.failed = stats.failed;
+    results.stats = stats;
+    results.reports = Object.values(reportsMap).filter((r): r is TestCaseRun => r !== null);
+    return stats;
+  };
+  const report = (stats: RunStats, suffix = '') => {
+    const passRate = stats.passRate;
+    const line = `${agent.name}: ${stats.passed}/${stats.total} passed (${passRate}% pass rate)${suffix}`;
+    if (passRate >= 80) spinner.succeed(line.replace(`${stats.passed}/${stats.total} passed`, chalk.green(`${stats.passed}/${stats.total} passed`)));
+    else if (passRate >= 50) spinner.warn(line.replace(`${stats.passed}/${stats.total} passed`, chalk.yellow(`${stats.passed}/${stats.total} passed`)));
+    else spinner.fail(line.replace(`${stats.passed}/${stats.total} passed`, chalk.red(`${stats.passed}/${stats.total} passed`)));
+  };
 
   try {
-    // Execute benchmark via server API (SSE stream)
-    const completedRun = await api.executeBenchmark(
-      benchmark.id,
-      {
+    const outcome = await executeRunLocally({
+      serverUrl,
+      config,
+      request: {
         name: `CLI Run - ${agent.name}`,
+        sources: [{ type: 'benchmark', benchmarkId: benchmark.id }],
         agentKey: agent.key,
-        modelId: modelId,
+        modelId,
         ...(concurrency && concurrency > 1 ? { concurrency } : {}),
         ...(evaluatorId ? { evaluatorId } : {}),
         // Forward customer-supplied judge model id alongside agent model.
         ...(judgeModelId ? { judgeModelId } : {}),
+        benchmarkId: benchmark.id,
       },
-      (event: BenchmarkExecutionEvent) => {
-        if (event.type === 'started') {
-          startedRunId = event.runId;
-        } else if (event.type === 'progress') {
-          const current = event.currentTestCaseIndex + 1;
-          const completed = event.completedCount ?? 0;
-          const testCaseName = event.currentTestCase?.name || `Test ${current}`;
-
-          if (event.result) {
-            const status = event.result.status === 'completed' ? chalk.green('✓') : chalk.red('✗');
+      verbose: verbose || !!process.env.DEBUG,
+      callbacks: {
+        onStarted: ({ runId, testCases }) => {
+          startedRunId = runId;
+          for (const tc of testCases) caseNames.set(tc.id, tc.name);
+        },
+        onProgress: (progress) => {
+          const testCaseName = caseNames.get(progress.testCaseId) || progress.testCaseId;
+          if (progress.status === 'completed' || progress.status === 'failed') {
+            completed = progress.completedCount;
+            const status = progress.status === 'completed' ? chalk.green('✓') : chalk.red('✗');
             spinner.text = `${agent.name}: ${testCaseName} ${status} (${completed}/${totalTestCases} evaluated)`;
-
-            // Show per-test-case errors in verbose mode
-            if (verbose && event.result.status === 'failed' && event.result.error) {
-              spinner.info(`${agent.name}: ${testCaseName} ${chalk.red('✗')} - ${event.result.error}`);
-              spinner.start(`${agent.name}: (${completed}/${totalTestCases} evaluated)`);
-            }
           } else {
             spinner.text = `${agent.name}: ${testCaseName} — evaluating... (${completed}/${totalTestCases} done)`;
           }
-        }
-      }
-    );
+        },
+        onDeliveryRetry: ({ operation, attempt, delayMs, error }) => {
+          spinner.text = `${agent.name}: server unreachable while recording ${operation} (attempt ${attempt}: ${error}) — retrying in ${Math.round(delayMs / 1000)}s`;
+        },
+        onCancelRequested: () => {
+          spinner.text = `${agent.name}: cancel requested — letting in-flight test cases finish…`;
+        },
+      },
+    });
 
-    results.run = completedRun;
-
-    // Use shared stats calculation (same approach as UI)
-    // Fetch reports using reportIds from run.results, then calculate stats
-    const reportsMap = await fetchReportsForRun(api, completedRun);
-    const stats = calculateRunStats(completedRun, reportsMap);
-
-    results.passed = stats.passed;
-    results.failed = stats.failed;
-    results.stats = stats;
-
-    // Store reports for export
-    results.reports = Object.values(reportsMap).filter((r): r is TestCaseRun => r !== null);
-
-    // Use pass rate from shared calculation
-    const passRate = stats.passRate;
+    // What `finalize` confirmed is the persisted run; its `results` / `stats`
+    // are the same fields the benchmark-embedded projection carries.
+    const stats = await summarize(outcome.run as unknown as BenchmarkRun);
 
     // Issue #242: when the evaluator couldn't produce verdicts on some runs,
     // call them out explicitly so users don't conflate "evaluator misconfigured"
@@ -302,61 +332,32 @@ async function runBenchmarkForAgent(
     const erroredSuffix = stats.errored > 0
       ? chalk.yellow(` (${stats.errored} errored — evaluator could not run)`)
       : '';
-
-    if (passRate >= 80) {
-      spinner.succeed(
-        `${agent.name}: ${chalk.green(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
-      );
-    } else if (passRate >= 50) {
-      spinner.warn(
-        `${agent.name}: ${chalk.yellow(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
-      );
-    } else {
-      spinner.fail(
-        `${agent.name}: ${chalk.red(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)${erroredSuffix}`
-      );
-    }
+    report(stats, erroredSuffix);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const isServerError = error instanceof ServerError;
+    const failure = error instanceof LocalRunFailure ? error : undefined;
 
     // Preserve runId even if execution failed (for URL output)
-    if (startedRunId) {
-      results.runId = startedRunId;
+    if (failure?.runId ?? startedRunId) {
+      results.runId = failure?.runId ?? startedRunId;
 
       // Try to recover partial results by fetching run state from server
       try {
-        const run = await api.getRun(benchmark.id, startedRunId);
-        if (run) {
-          results.run = run;
-          const reportsMap = await fetchReportsForRun(api, run);
-          const stats = calculateRunStats(run, reportsMap);
-          results.passed = stats.passed;
-          results.failed = stats.failed;
-          results.stats = stats;
-          results.reports = Object.values(reportsMap).filter((r): r is TestCaseRun => r !== null);
+        const run = await api.getEvaluationRun(results.runId!);
+        // Only a TERMINAL state the server confirmed is worth summarizing; a
+        // run still `running` on the server has no counts this CLI can vouch
+        // for (every planned case reads as not run below).
+        if (run && (run.status === 'completed' || run.status === 'cancelled' || run.status === 'failed')) {
+          const stats = await summarize(run as unknown as BenchmarkRun);
 
-          // Check if the run actually completed successfully (recovered after stream disconnect)
+          // The run reached a terminal state the server confirmed (e.g. cancelled)
           if (run.status === 'completed' || run.status === 'cancelled') {
-            const passRate = stats.passRate;
-            if (passRate >= 80) {
-              spinner.succeed(
-                `${agent.name}: ${chalk.green(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
-              );
-            } else if (passRate >= 50) {
-              spinner.warn(
-                `${agent.name}: ${chalk.yellow(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
-              );
-            } else {
-              spinner.fail(
-                `${agent.name}: ${chalk.red(`${stats.passed}/${stats.total} passed`)} (${passRate}% pass rate)`
-              );
-            }
+            report(stats);
             return results; // Successfully recovered
           }
 
           // Run failed - show the error from the run if available
-          if (run.status === 'failed') {
+          {
             const runError = run.error || errorMessage;
             results.runError = runError;
             spinner.fail(`${agent.name}: ${chalk.red('Failed')} - ${runError}`);
@@ -374,24 +375,11 @@ async function runBenchmarkForAgent(
     // Not recovered as a completed run: whatever counts we hold are partial.
     // The final summary exits 1 for this agent (see exitCodeForAgentResults).
     results.runError = errorMessage;
-
-    // Server-sent errors are definitive failures - show the error directly
-    if (isServerError) {
-      spinner.fail(`${agent.name}: ${chalk.red('Failed')} - ${errorMessage}`);
-    } else {
-      // Check if this was a stream disconnect (server may still be running)
-      const isStreamError = errorMessage.includes('terminated') ||
-                            errorMessage.includes('network') ||
-                            errorMessage.includes('stream') ||
-                            errorMessage.includes('aborted');
-
-      if (isStreamError && startedRunId) {
-        spinner.warn(`${agent.name}: ${chalk.yellow('Stream disconnected')} - server may still be processing`);
-        console.log(chalk.gray(`  Check status: Use the UI to monitor progress`));
-      } else {
-        spinner.fail(`${agent.name}: ${chalk.red('Failed')} - ${errorMessage}`);
-      }
+    spinner.fail(`${agent.name}: ${chalk.red('Failed')} - ${errorMessage}`);
+    if (failure?.kind === 'delivery' && failure.spoolPath) {
+      console.log(chalk.gray(`  Unconfirmed writes are spooled at ${failure.spoolPath}`));
     }
+    if (failure?.logPath) console.log(chalk.gray(`  Log: ${failure.logPath}`));
 
     // Print helpful hints based on the error
     const lowerError = errorMessage.toLowerCase();
@@ -407,9 +395,7 @@ async function runBenchmarkForAgent(
       console.log(chalk.gray(`  Hint: The beforeRequest hook in agent-health.config.ts threw an error.`));
       console.log(chalk.gray(`        Check the hook logic and any external services it calls.`));
     }
-    if (errorMessage !== 'terminated') {
-      console.log(chalk.gray(`  Debug: Run with DEBUG=true for verbose server logs`));
-    }
+    console.log(chalk.gray(`  Debug: Run with DEBUG=true for verbose server logs`));
   }
 
   return results;
@@ -1327,15 +1313,18 @@ export function createBenchmarkCommand(): Command {
         }
         console.log(chalk.gray(`  Server: ${serverResult.baseUrl}`));
 
-        // Stored code-SDK test cases whose `sourceFile` the server's eval
-        // roots do not contain: say where the server looks BEFORE running.
-        // Best-effort and advisory only (see cli/utils/evalRootsHint.ts).
+        // Stored code-SDK test cases whose `sourceFile` THIS command's eval
+        // roots do not contain (the run executes here, #612): say so BEFORE
+        // running. Best-effort and advisory only (see cli/utils/evalRootsHint.ts).
         if (!fileMode) {
+          setConfiguredEvalRoots(config.evalRoots ?? null);
           const hints = await collectEvalRootsHints(
             api,
             benchmarksToRun.map(bm => ({ type: 'benchmark' as const, benchmarkId: bm.id })),
+            undefined,
+            getEvalRoots(),
           );
-          for (const hint of hints) console.log(chalk.yellow(`  ${formatEvalRootsHint(hint)}`));
+          for (const hint of hints) console.log(chalk.yellow(`  ${formatEvalRootsHint(hint, 'cli')}`));
         }
 
         // Find agents
@@ -1393,6 +1382,8 @@ export function createBenchmarkCommand(): Command {
             const modelId = resolveAgentModel(agent, getDefaultModel(config));
             const results = await runBenchmarkForAgent(
               api,
+              serverResult.baseUrl,
+              config,
               agent,
               modelId,
               benchmark,
