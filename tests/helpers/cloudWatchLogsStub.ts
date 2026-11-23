@@ -29,19 +29,9 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { AgentSpanInput, AgentSpanSink } from './agentSpanSink';
 
-export interface CloudWatchSpanRecordInput {
-  traceId: string;
-  spanId: string;
-  parentSpanId?: string;
-  name: string;
-  kind: 'SERVER' | 'CLIENT' | 'INTERNAL' | 'PRODUCER' | 'CONSUMER';
-  serviceName: string;
-  startMs: number;
-  endMs: number;
-  attributes: Record<string, unknown>;
-  status?: { code: 'OK' | 'ERROR' | 'UNSET'; message?: string };
-}
+export type CloudWatchSpanRecordInput = AgentSpanInput;
 
 export interface RecordedCall {
   target: string;
@@ -50,7 +40,8 @@ export interface RecordedCall {
   authScheme?: string;
 }
 
-export interface CloudWatchLogsStub {
+export interface CloudWatchLogsStub extends AgentSpanSink {
+  readonly backend: 'cloudwatch';
   /** `http://127.0.0.1:<port>` — value for `AWS_ENDPOINT_URL_CLOUDWATCH_LOGS`. */
   url: string;
   /** Log group the spans live in (default `aws/spans`). */
@@ -59,9 +50,6 @@ export interface CloudWatchLogsStub {
   calls: RecordedCall[];
   /** Append one span record to the log group. */
   putSpan(span: CloudWatchSpanRecordInput): void;
-  /** Number of span records held. */
-  size(): number;
-  close(): Promise<void>;
 }
 
 /** Transaction Search record shape (see tests/fixtures/cloudwatch/aws-spans-trace.json). */
@@ -195,11 +183,15 @@ export async function startCloudWatchLogsStub(options: { logGroup?: string } = {
   const { port } = server.address() as AddressInfo;
 
   return {
+    backend: 'cloudwatch',
     url: `http://127.0.0.1:${port}`,
     logGroup,
     calls,
     putSpan(span) {
       records.push({ message: JSON.stringify(toAwsSpansRecord(span)), timestamp: span.endMs });
+    },
+    async putSpans(spans) {
+      for (const span of spans) this.putSpan(span);
     },
     size: () => records.length,
     close: () =>

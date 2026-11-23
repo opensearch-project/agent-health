@@ -371,6 +371,12 @@ jobs:
           # Backend-aware suites fail (instead of skipping) when the promise
           # is broken, so OpenSearch-only coverage can't silently vanish.
           AH_TEST_EXPECT_BACKEND: opensearch
+          # The same disposable node doubles as the OpenSearch TRACES source of
+          # the file-storage eval matrix (tests/integration/cli/evalMatrixOpenSearch…):
+          # the suite bulk-indexes synthetic spans into a throw-away
+          # otel-v1-apm-span-ahtest-* index and drops it. Declared, so an
+          # unreachable node fails that suite instead of skipping it.
+          AH_TEST_REQUIRE_OPENSEARCH: '1'
           # Real coverage for cli/**: every CLI child the tests spawn (via
           # tests/helpers/cliCoverage.ts) gets NODE_V8_COVERAGE=<this dir>; the
           # "CLI coverage report" step below turns the dumps into lcov with c8.
@@ -575,6 +581,23 @@ jobs:
 
   e2e-tests:
     runs-on: ubuntu-latest
+    # A disposable OpenSearch for the file-storage eval matrix specs
+    # (tests/e2e/file-storage-eval-matrix-opensearch.spec.ts): the spec boots
+    # ITS OWN file-storage server whose TRACES come from a throw-away
+    # otel-v1-apm-span-ahtest-* index on this node. The shared e2e backend
+    # below stays on file storage with no observability source, as before.
+    # Same pinned image/digest as the integration job (supply-chain rule).
+    services:
+      opensearch:
+        image: opensearchproject/opensearch:2.17.0@sha256:7b9517dff561f54456fad947f11820fa595a340fd1034fc63d57b77f724b3f8f
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+          bootstrap.memory_lock: "false"
+        ports:
+          - 9200:9200
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -592,17 +615,38 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       - name: Build application with coverage instrumentation
+        # The eval-matrix specs stage the whole package (cli/dist, lib/dist too)
+        # and start their run through the REAL CLI, so build those as well.
         run: |
           npm run build
           npm run build:server
+          npm run build:cli
+          npm run build:lib
         env:
           E2E_COVERAGE: 'true'
+
+      - name: Wait for OpenSearch to be healthy
+        run: |
+          echo "Waiting for OpenSearch on :9200..."
+          for i in {1..40}; do
+            if curl -s http://localhost:9200/_cluster/health | grep -qE '"status":"(green|yellow)"'; then
+              echo "OpenSearch is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i: OpenSearch not ready yet..."
+            sleep 3
+          done
+          echo "OpenSearch failed to become healthy within ~120s"
+          exit 1
 
       - name: Run Playwright E2E tests
         run: npm run test:e2e 2>&1 | tee e2e-test-output.txt
         env:
           CI: true
           E2E_COVERAGE: 'true'
+          # The service above is promised: the OpenSearch matrix spec fails
+          # (never skips) when the node is unreachable.
+          AH_TEST_REQUIRE_OPENSEARCH: '1'
 
       - name: Generate E2E coverage report
         if: always()

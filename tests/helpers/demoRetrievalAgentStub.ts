@@ -6,10 +6,11 @@
 /**
  * A synthetic REST retrieval agent for CLI/e2e suites: a REAL local HTTP server
  * the agent-health REST connector calls, which "emits" OpenTelemetry spans for
- * each invocation into a {@link CloudWatchLogsStub} (the way an instrumented
- * agent's spans land in Transaction Search's `aws/spans`) and answers with its
- * own `runId` / `sessionId` — the ids it also stamps on every span as
- * `gen_ai.conversation.id` (Strategy B) and `session.id` (Strategy D).
+ * each invocation into an {@link AgentSpanSink} (the way an instrumented
+ * agent's spans land in Transaction Search's `aws/spans` or in a Data Prepper
+ * index) and answers with its own `runId` / `sessionId` — the ids it also
+ * stamps on every span as `gen_ai.conversation.id` (Strategy B) and
+ * `session.id` (Strategy D).
  *
  * Prompt tags steer the fixture (the prompt is the only input a test case
  * controls):
@@ -17,12 +18,14 @@
  *                    and is retried; the run itself still succeeds (#599).
  *   `[no-answer]`  — the agent answers without the expected citation, so an
  *                    `expect(...).to.include(...)` in the eval body fails.
+ *   `[agent-500]`  — the agent is down: HTTP 500, no spans. `agent.run()`
+ *                    throws, so the case is ERRORED (not a verdict, #598/#600).
  */
 
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { randomBytes } from 'node:crypto';
-import type { CloudWatchLogsStub } from './cloudWatchLogsStub';
+import type { AgentSpanInput, AgentSpanSink } from './agentSpanSink';
 
 export const DEMO_AGENT_MODEL = 'demo-provider.demo-model-v1';
 /** Tokens the fixture reports per invocation across its two `chat` spans. */
@@ -43,6 +46,8 @@ export interface DemoAgentInvocation {
   startedAt: number;
   endedAt: number;
   spanCount: number;
+  /** HTTP status the agent answered with (500 for `[agent-500]`, which emits no spans). */
+  httpStatus: number;
 }
 
 export interface DemoRetrievalAgent {
@@ -55,14 +60,14 @@ export interface DemoRetrievalAgent {
 
 const hex = (bytes: number) => randomBytes(bytes).toString('hex');
 
-export async function startDemoRetrievalAgent(cloudWatch: CloudWatchLogsStub, options: { serviceName: string }): Promise<DemoRetrievalAgent> {
+export async function startDemoRetrievalAgent(sink: AgentSpanSink, options: { serviceName: string }): Promise<DemoRetrievalAgent> {
   const { serviceName } = options;
   const invocations: DemoAgentInvocation[] = [];
 
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
-    req.on('end', () => {
+    req.on('end', async () => {
       // The REST connector's contract: POST, JSON body, `prompt` string. Anything else is a 400, never a span.
       let prompt: unknown;
       try {
@@ -83,6 +88,14 @@ export async function startDemoRetrievalAgent(cloudWatch: CloudWatchLogsStub, op
       const traceId = hex(16);
       const toolError = prompt.includes('[tool-error]');
       const noAnswer = prompt.includes('[no-answer]');
+      if (prompt.includes('[agent-500]')) {
+        // An outage: nothing was traced, the connector sees a 5xx.
+        invocations.push({ prompt, runId, sessionId, traceId, startedAt: Date.now(), endedAt: Date.now(), spanCount: 0, httpStatus: 500 });
+        res.statusCode = 500;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ message: 'retrieval backend unavailable' }));
+        return;
+      }
 
       // The invocation's own wall clock: it started ~1.4 s ago and ends now.
       const endedAt = Date.now();
@@ -90,11 +103,8 @@ export async function startDemoRetrievalAgent(cloudWatch: CloudWatchLogsStub, op
       const base = { traceId, serviceName } as const;
       const common = { 'gen_ai.conversation.id': runId, 'session.id': sessionId };
       const rootId = hex(8);
-      let spanCount = 0;
-      const put = (span: Parameters<CloudWatchLogsStub['putSpan']>[0]) => {
-        cloudWatch.putSpan(span);
-        spanCount++;
-      };
+      const spans: AgentSpanInput[] = [];
+      const put = (span: AgentSpanInput) => { spans.push(span); };
 
       put({
         ...base, spanId: rootId, name: 'POST /invoke', kind: 'SERVER', startMs: startedAt, endMs: endedAt,
@@ -120,7 +130,15 @@ export async function startDemoRetrievalAgent(cloudWatch: CloudWatchLogsStub, op
         attributes: { ...common, 'gen_ai.operation.name': 'chat', 'gen_ai.provider.name': 'demo-provider', 'gen_ai.request.model': DEMO_AGENT_MODEL, 'gen_ai.usage.input_tokens': 2400, 'gen_ai.usage.output_tokens': 150, 'gen_ai.usage.cost_usd': 0.0066 },
       });
 
-      invocations.push({ prompt: prompt as string, runId, sessionId, traceId, startedAt, endedAt, spanCount });
+      // The agent's exporter flush: the spans are readable before the reply is on the wire.
+      try {
+        await sink.putSpans(spans);
+      } catch (e) {
+        res.statusCode = 503;
+        res.end(JSON.stringify({ message: `span export failed: ${e instanceof Error ? e.message : String(e)}` }));
+        return;
+      }
+      invocations.push({ prompt: prompt as string, runId, sessionId, traceId, startedAt, endedAt, spanCount: spans.length, httpStatus: 200 });
       res.setHeader('content-type', 'application/json');
       res.end(
         JSON.stringify({
