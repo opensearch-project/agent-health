@@ -44,6 +44,15 @@ describe('findUnresolvableSourceFiles', () => {
     expect(line.split('\n')).toHaveLength(1);
     expect(formatEvalRootsHint({ sourceFile: 'f', testCaseNames: ['a'], roots: [] })).toContain('1 stored test case reference');
   });
+
+  it("the CLI-side variant (#612: runs execute in the CLI) names THIS command's roots and says the bodies will not run", () => {
+    const line = formatEvalRootsHint({ sourceFile: 'dist/suite.eval.js', testCaseNames: ['a'], roots: ['/home/me/proj'] }, 'cli');
+    expect(line).toContain('1 stored test case reference "dist/suite.eval.js"');
+    expect(line).toContain("this command's eval roots [\"/home/me/proj\"]");
+    expect(line).toContain('judge only');
+    expect(line).toContain('AGENT_HEALTH_EVAL_ROOTS');
+    expect(line).not.toContain("server's eval roots");
+  });
 });
 
 describe('collectEvalRootsHints', () => {
@@ -77,6 +86,15 @@ describe('collectEvalRootsHints', () => {
     const failing = api();
     failing.getBenchmark.mockRejectedValue(new Error('boom'));
     expect(await collectEvalRootsHints(failing, [{ type: 'benchmark', benchmarkId: 'bm' }], () => false)).toEqual([]);
+  });
+
+  it('with local roots given (the CLI executes the run) it never asks the server for its roots and resolves against them', async () => {
+    const a = api();
+    const hints = await collectEvalRootsHints(a, [{ type: 'benchmark', benchmarkId: 'b' }], () => false, ['/home/me/proj']);
+    expect(hints).toEqual([{ sourceFile: 'dist/suite.eval.js', testCaseNames: ['case-t1'], roots: ['/home/me/proj'] }]);
+    expect(a.getConfigStatus).not.toHaveBeenCalled();
+    // Found under the CLI's roots → silent, whatever the server would say.
+    expect(await collectEvalRootsHints(api({ status: null }), [{ type: 'benchmark', benchmarkId: 'b' }], (p) => p === path.resolve('/home/me/proj', 'dist/suite.eval.js'), ['/home/me/proj'])).toEqual([]);
   });
 
   it('skips the check for very large benchmarks instead of hammering the server', async () => {

@@ -167,8 +167,8 @@ different `-n`, or pass `--force` to run anyway: the CLI then prints which test
 cases it added and records the added file in the benchmark description. If the
 stored test cases cannot be read the check is skipped with a warning.
 
-**Where the run executes.** `run` and the `-t` / `-d` / `--label` / code-SDK
-(`-f *.eval.*`) modes of `benchmark` execute **in the CLI process**: the agent
+**Where the run executes.** `run` and every mode of `benchmark` execute **in
+the CLI process**: the agent
 connector and its hooks, the SDK test bodies and the LLM judge all run with the
 shell environment, `.env` and `agent-health.config.*` of the directory you ran
 the command from — so two projects can share one server and each sees its own
@@ -190,9 +190,10 @@ killing the CLI abandons the run (the server marks it failed, "executor lost",
 once its lease expires; use `nohup` / `tmux` for long runs) — and the spool and
 log files under `.agent-health/` contain prompts, trajectories and model output
 (written owner-only, `0600`; the spool is deleted once the server has confirmed
-every write; keep `.agent-health/` out of version control). The legacy
-single-JSON-file mode (`-f cases.json` alone) and `-n <benchmark>` alone still
-execute on the server.
+every write; keep `.agent-health/` out of version control). This holds for
+every mode, including re-running a stored benchmark by name (`-n <existing>`),
+the single-JSON-file mode (`-f cases.json` alone) and quick mode — none of them
+needs OpenSearch storage any more.
 
 Every evaluation run is stamped with an **image digest** — a content hash of
 its test-case contents + eval conditions (evaluator, judge model). Runs with

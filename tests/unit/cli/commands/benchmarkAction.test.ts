@@ -20,7 +20,16 @@ jest.mock('@/lib/config/index.js', () => ({
 
 // The local executor (#612) pulls in the runner, connectors and the AWS SDK;
 // this suite covers the command's option handling / summary only.
-jest.mock('@/cli/utils/localExecutor.js', () => ({ __esModule: true, executeRunLocally: jest.fn(), LocalRunFailure: class LocalRunFailure extends Error {} }));
+// The local executor (#612) is the ONE execution path of every mode since step
+// 3b; this suite drives it at its boundary and covers the command's modes,
+// summary, export and exit codes around it.
+jest.mock('@/cli/utils/localExecutor.js', () => ({
+  __esModule: true,
+  executeRunLocally: jest.fn(),
+  LocalRunFailure: class LocalRunFailure extends Error {
+    constructor(message: string, public readonly runId?: string, public readonly kind: string = 'execution', public readonly leaseLost?: unknown, public readonly spoolPath?: string, public readonly logPath?: string) { super(message); this.name = 'LocalRunFailure'; }
+  },
+}));
 jest.mock('@/cli/utils/serverLifecycle.js', () => ({
   __esModule: true,
   ensureServer: jest.fn(),
@@ -113,10 +122,11 @@ import {
 type MockApiClient = {
   bulkCreateTestCases: jest.Mock;
   createBenchmark: jest.Mock;
-  executeBenchmark: jest.Mock;
   findBenchmark: jest.Mock;
   getReportById: jest.Mock;
-  getRun: jest.Mock;
+  getEvaluationRun: jest.Mock;
+  getConfigStatus: jest.Mock;
+  getTestCaseSummaries: jest.Mock;
   listTestCases: jest.Mock;
 };
 
@@ -178,10 +188,11 @@ function makeApiClient(overrides: Partial<MockApiClient> = {}): MockApiClient {
   return {
     bulkCreateTestCases: jest.fn(),
     createBenchmark: jest.fn(),
-    executeBenchmark: jest.fn(),
     findBenchmark: jest.fn(),
     getReportById: jest.fn(),
-    getRun: jest.fn(),
+    getEvaluationRun: jest.fn(),
+    getConfigStatus: jest.fn().mockResolvedValue(null),
+    getTestCaseSummaries: jest.fn().mockResolvedValue([]),
     listTestCases: jest.fn(),
     ...overrides,
   };
@@ -256,7 +267,7 @@ function makeErroredReport(id: string, testCaseId: string): TestCaseRun {
   } as unknown as TestCaseRun;
 }
 
-/** Drive the legacy `/execute` path for a named benchmark with the given per-case results + reports. */
+/** Drive the named-benchmark mode (local executor) with the given per-case results + reports. */
 function mockNamedBenchmarkRun(
   currentApi: MockApiClient,
   cases: Array<{ id: string; report: TestCaseRun }>,
@@ -273,16 +284,7 @@ function mockNamedBenchmarkRun(
     ...runOverrides,
   });
   currentApi.findBenchmark.mockResolvedValue(benchmark);
-  currentApi.executeBenchmark.mockImplementation(
-    async (_benchmarkId: string, _runConfig: any, onProgress?: (event: any) => void) => {
-      onProgress?.({
-        type: 'started',
-        runId: run.id,
-        testCases: cases.map(c => ({ id: c.id, name: c.id, status: 'pending' })),
-      });
-      return run;
-    }
-  );
+  mockLocalRun({ run, testCases: cases.map(c => ({ id: c.id, name: c.id })) });
   const byId = new Map(cases.map(c => [c.report.id, c.report]));
   currentApi.getReportById.mockImplementation(async (id: string) => byId.get(id) ?? null);
 }
@@ -308,6 +310,33 @@ function validFileTestCases() {
 
 function joinedConsoleOutput(spy: jest.SpyInstance): string {
   return spy.mock.calls.map((call) => call.map(String).join(' ')).join('\n');
+}
+
+import { executeRunLocally, LocalRunFailure } from '@/cli/utils/localExecutor.js';
+const mockExecuteRunLocally = executeRunLocally as jest.MockedFunction<typeof executeRunLocally>;
+
+/**
+ * Drive the local executor for one run: `started` with the cases, optional
+ * progress events, then the persisted run (or a thrown failure). `request`
+ * assertions run inside so a wrong request fails the test, not the mock.
+ */
+function mockLocalRun(opts: {
+  run: BenchmarkRun;
+  testCases?: Array<{ id: string; name: string }>;
+  progress?: Array<{ testCaseId: string; completedCount: number; status: 'running' | 'completed' | 'failed' }>;
+  assertRequest?: (request: any) => void;
+  fail?: Error;
+}): void {
+  mockExecuteRunLocally.mockImplementation(async ({ request, callbacks }) => {
+    opts.assertRequest?.(request);
+    const testCases = (opts.testCases ?? []).map((tc) => ({ ...tc, version: 1 }));
+    await callbacks?.onStarted?.({ runId: opts.run.id, testCases });
+    for (const p of opts.progress ?? []) {
+      callbacks?.onProgress?.({ runId: opts.run.id, testCaseId: p.testCaseId, startedCount: p.completedCount, completedCount: p.completedCount, totalTestCases: testCases.length, status: p.status });
+    }
+    if (opts.fail) throw opts.fail;
+    return { runId: opts.run.id, run: opts.run as any, status: (opts.run.status === 'cancelled' ? 'cancelled' : 'completed'), testCases, logPath: '/tmp/run.log' };
+  });
 }
 
 async function runBenchmarkCommand(args: string[]): Promise<void> {
@@ -437,37 +466,24 @@ describe('Benchmark Command - Real Module Coverage', () => {
       });
       currentApi.findBenchmark.mockResolvedValue(null);
       currentApi.createBenchmark.mockResolvedValue(benchmark);
-      currentApi.executeBenchmark.mockImplementation(
-        async (_benchmarkId: string, runConfig: any, onProgress?: (event: any) => void) => {
-          expect(runConfig).toMatchObject({
+      mockLocalRun({
+        run,
+        testCases: [{ id: 'tc-1', name: 'File Case 1' }, { id: 'tc-2', name: 'File Case 2' }],
+        progress: [{ testCaseId: 'tc-2', completedCount: 2, status: 'completed' }],
+        assertRequest: (request) => {
+          // The stored benchmark is the run's SOURCE (never a file), linked back into it.
+          expect(request).toMatchObject({
             name: 'CLI Run - Demo Agent',
+            sources: [{ type: 'benchmark', benchmarkId: benchmark.id }],
+            benchmarkId: benchmark.id,
             agentKey: 'demo-agent',
             modelId: 'agent-model-1',
             concurrency: 3,
             evaluatorId: 'rca-default',
             judgeModelId: 'judge-v2',
           });
-
-          onProgress?.({
-            type: 'started',
-            runId: 'run-file',
-            testCases: [
-              { id: 'tc-1', name: 'File Case 1', status: 'pending' },
-              { id: 'tc-2', name: 'File Case 2', status: 'pending' },
-            ],
-          });
-          onProgress?.({
-            type: 'progress',
-            currentTestCaseIndex: 1,
-            totalTestCases: 2,
-            currentTestCase: { id: 'tc-2', name: 'File Case 2' },
-            completedCount: 2,
-            result: { status: 'completed' },
-          });
-
-          return run;
-        }
-      );
+        },
+      });
       currentApi.getReportById
         .mockResolvedValueOnce(makeReport('report-1', 'tc-1', 'passed'))
         .mockResolvedValueOnce(makeReport('report-2', 'tc-2', 'passed'));
@@ -547,28 +563,11 @@ describe('Benchmark Command - Real Module Coverage', () => {
         { id: 'tc-2', name: 'Quick Case 2' },
       ]);
       currentApi.createBenchmark.mockResolvedValue(benchmark);
-      currentApi.executeBenchmark.mockImplementation(
-        async (_benchmarkId: string, _runConfig: any, onProgress?: (event: any) => void) => {
-          onProgress?.({
-            type: 'started',
-            runId: 'run-quick',
-            testCases: [
-              { id: 'tc-1', name: 'Quick Case 1', status: 'pending' },
-              { id: 'tc-2', name: 'Quick Case 2', status: 'pending' },
-            ],
-          });
-          onProgress?.({
-            type: 'progress',
-            currentTestCaseIndex: 1,
-            totalTestCases: 2,
-            currentTestCase: { id: 'tc-2', name: 'Quick Case 2' },
-            completedCount: 1,
-            result: { status: 'failed', error: 'Judge failed' },
-          });
-
-          return run;
-        }
-      );
+      mockLocalRun({
+        run,
+        testCases: [{ id: 'tc-1', name: 'Quick Case 1' }, { id: 'tc-2', name: 'Quick Case 2' }],
+        progress: [{ testCaseId: 'tc-2', completedCount: 1, status: 'failed' }],
+      });
       currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
 
       await runBenchmarkCommand(['--output', 'markdown', '--verbose']);
@@ -609,25 +608,13 @@ describe('Benchmark Command - Real Module Coverage', () => {
         wasStarted: false,
       } as any);
       currentApi.findBenchmark.mockResolvedValue(benchmark);
-      currentApi.executeBenchmark.mockImplementation(
-        async (_benchmarkId: string, _runConfig: any, onProgress?: (event: any) => void) => {
-          onProgress?.({
-            type: 'started',
-            runId: 'run-existing',
-            testCases: [{ id: 'tc-1', name: 'Named Case', status: 'pending' }],
-          });
-          onProgress?.({
-            type: 'progress',
-            currentTestCaseIndex: 0,
-            totalTestCases: 1,
-            currentTestCase: { id: 'tc-1', name: 'Named Case' },
-            completedCount: 1,
-            result: { status: 'completed' },
-          });
-
-          return run;
-        }
-      );
+      mockLocalRun({
+        run,
+        testCases: [{ id: 'tc-1', name: 'Named Case' }],
+        progress: [{ testCaseId: 'tc-1', completedCount: 1, status: 'completed' }],
+        // `-n <existing>` re-runs the STORED benchmark: its id is the source, no file is involved (#612 step 3b).
+        assertRequest: (request) => expect(request).toMatchObject({ sources: [{ type: 'benchmark', benchmarkId: benchmark.id }], benchmarkId: benchmark.id, agentKey: 'demo-agent' }),
+      });
       currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'failed'));
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -727,12 +714,11 @@ describe('Benchmark Command - Real Module Coverage', () => {
       expect(process.exitCode).toBeUndefined();
     });
 
-    it('a run the server rejected (no verdicts at all) exits 1 and carries the error in -o json', async () => {
+    it('a run that could not be created (no verdicts at all) exits 1 and carries the error in -o json', async () => {
       const benchmark = makeBenchmark({ id: 'bench-rejected', name: 'Rejected', testCaseIds: ['tc-1', 'tc-2'] });
       currentApi.findBenchmark.mockResolvedValue(benchmark);
-      currentApi.executeBenchmark.mockRejectedValue(
-        new (jest.requireMock('@/cli/utils/apiClient.js').ServerError)('Failed to execute benchmark: OpenSearch not configured.')
-      );
+      // The run could not even be created (e.g. the source failed to resolve): no run id, nothing to recover.
+      mockExecuteRunLocally.mockRejectedValue(new LocalRunFailure('Benchmark not found: bench-rejected', undefined, 'execution'));
 
       await runBenchmarkCommand(['-n', 'Rejected', '-a', 'demo-agent', '--output', 'json']);
 
@@ -746,12 +732,12 @@ describe('Benchmark Command - Real Module Coverage', () => {
         total: 2,
         passRate: 0,
         passRateJudged: null,
-        error: 'Failed to execute benchmark: OpenSearch not configured.',
+        error: 'Benchmark not found: bench-rejected',
       });
       expect(process.exitCode).toBe(1);
     });
 
-    it('a cancelled run recovered from the server (1 passed, 1 never ran) exits 1 — same outcome as the unified path', async () => {
+    it('a cancelled run read back from the server (1 passed, 1 never ran) exits 1 — same outcome as the unified path', async () => {
       const benchmark = makeBenchmark({ id: 'bench-cancelled', name: 'Cancelled', testCaseIds: ['tc-1', 'tc-2'] });
       const run = makeRun({
         id: 'run-cancelled',
@@ -762,13 +748,9 @@ describe('Benchmark Command - Real Module Coverage', () => {
         },
       });
       currentApi.findBenchmark.mockResolvedValue(benchmark);
-      currentApi.executeBenchmark.mockImplementation(
-        async (_benchmarkId: string, _runConfig: any, onProgress?: (event: any) => void) => {
-          onProgress?.({ type: 'started', runId: 'run-cancelled', testCases: [] });
-          throw new Error('stream terminated');
-        }
-      );
-      currentApi.getRun.mockResolvedValue(run);
+      // The executor lost its lease after the run was created (e.g. the server cancelled it); the CLI reads the persisted state back.
+      mockLocalRun({ run, fail: new LocalRunFailure('lease lost', 'run-cancelled', 'lease-lost') });
+      currentApi.getEvaluationRun.mockResolvedValue(run);
       currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
 
       await runBenchmarkCommand(['-n', 'Cancelled', '-a', 'demo-agent', '--output', 'json']);
@@ -777,6 +759,61 @@ describe('Benchmark Command - Real Module Coverage', () => {
       const parsed = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
       expect(parsed[0]).toMatchObject({ status: 'cancelled', passed: 1, failed: 0, errored: 0, notRun: 1, total: 2, passRateJudged: 100 });
       expect(process.exitCode).toBe(1);
+    });
+
+    it('a run whose results could not be delivered to the server exits 1, names the spool and the log, and keeps the run id for the link', async () => {
+      const benchmark = makeBenchmark({ id: 'bench-spool', name: 'Spooled', testCaseIds: ['tc-1', 'tc-2'] });
+      currentApi.findBenchmark.mockResolvedValue(benchmark);
+      const run = makeRun({ id: 'run-spooled', results: {} });
+      mockLocalRun({ run, fail: new LocalRunFailure('finalize could not be delivered to the server within 300s (7 attempts; last error: fetch failed)', 'run-spooled', 'delivery', undefined, '/proj/.agent-health/spool/run-spooled.ndjson', '/proj/.agent-health/logs/run-spooled.log') });
+      // Nothing terminal to read back: the server never confirmed the run.
+      currentApi.getEvaluationRun.mockResolvedValue({ ...run, status: 'running' });
+
+      await runBenchmarkCommand(['-n', 'Spooled', '-a', 'demo-agent', '--output', 'json']);
+
+      const out = joinedConsoleOutput(logSpy);
+      expect(out).toContain('Unconfirmed writes are spooled at /proj/.agent-health/spool/run-spooled.ndjson');
+      expect(out).toContain('Log: /proj/.agent-health/logs/run-spooled.log');
+      const parsed = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
+      expect(parsed[0]).toMatchObject({ runId: 'run-spooled', notRun: 2, total: 2, error: expect.stringContaining('could not be delivered') });
+      expect(out).toContain('run-spooled');
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('a run the server still holds as running but with delivered reports: partial counts are shown, the error is kept, exit 1', async () => {
+      const benchmark = makeBenchmark({ id: 'bench-partial', name: 'Partial', testCaseIds: ['tc-1', 'tc-2', 'tc-3'] });
+      currentApi.findBenchmark.mockResolvedValue(benchmark);
+      const run = makeRun({ id: 'run-partial', status: 'running', results: { 'tc-1': { reportId: 'report-1', status: 'completed' } } });
+      mockLocalRun({ run, testCases: [{ id: 'tc-1', name: 'a' }, { id: 'tc-2', name: 'b' }, { id: 'tc-3', name: 'c' }], fail: new LocalRunFailure('lease lost', 'run-partial', 'lease-lost') });
+      currentApi.getEvaluationRun.mockResolvedValue(run);
+      currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
+
+      await runBenchmarkCommand(['-n', 'Partial', '-a', 'demo-agent', '--output', 'json']);
+
+      const out = joinedConsoleOutput(logSpy);
+      const parsed = JSON.parse(out.slice(out.indexOf('['), out.lastIndexOf(']') + 1));
+      expect(parsed[0]).toMatchObject({ runId: 'run-partial', passed: 1, error: 'lease lost' });
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('Ctrl-C during the first agent cancels THAT run and stops the command: the remaining agents are never started', async () => {
+      const benchmark = makeBenchmark({ id: 'bench-cancel', name: 'Cancel Me', testCaseIds: ['tc-1', 'tc-2'] });
+      currentApi.findBenchmark.mockResolvedValue(benchmark);
+      // What `finalize` writes for a cancelled run: the never-started case is marked `cancelled`.
+      const run = makeRun({ id: 'run-cancel', status: 'cancelled', agentKey: 'demo-agent', results: { 'tc-1': { reportId: 'report-1', status: 'completed' }, 'tc-2': { status: 'cancelled' } } });
+      mockLocalRun({ run, testCases: [{ id: 'tc-1', name: 'a' }, { id: 'tc-2', name: 'b' }] });
+      currentApi.getReportById.mockResolvedValue(makeReport('report-1', 'tc-1', 'passed'));
+
+      await runBenchmarkCommand(['-n', 'Cancel Me', '-a', 'demo-agent', '-a', 'backup-agent', '--output', 'markdown']);
+
+      expect(mockExecuteRunLocally).toHaveBeenCalledTimes(1);
+      expect(mockExecuteRunLocally.mock.calls[0][0].request.agentKey).toBe('demo-agent');
+      const out = joinedConsoleOutput(logSpy);
+      expect(out).toContain('Cancelled — not starting the remaining runs.');
+      // The summary table has one row: the backup agent never got a run.
+      expect(out).not.toMatch(/\| Backup Agent \|/);
+      expect(out).toMatch(/\| Demo Agent \| 1 \|/);
+      expect(process.exitCode).toBe(1); // a case that never ran is an exit-1 outcome
     });
 
     it('exits with a helpful error when the server is already running and no source is specified', async () => {

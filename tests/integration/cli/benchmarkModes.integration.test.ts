@@ -40,7 +40,6 @@ import {
   trackEvaluationRun,
   trackTestCasesByName,
   httpJson,
-  storageBackend as readStorageBackend,
   getEvaluationRun,
   listEvaluationRunsOf,
   jsonTail,
@@ -53,7 +52,6 @@ const JUDGE = ['--judge-model', 'demo-model'];
 describe('CLI benchmark — modes, errors and repair (real CLI processes)', () => {
   const tracker = createTestDataTracker();
   let ready = false;
-  let storageBackend = 'file';
   let tmp: string;
   let fileA: string;
   let fileB: string;
@@ -65,7 +63,6 @@ describe('CLI benchmark — modes, errors and repair (real CLI processes)', () =
   beforeAll(async () => {
     ready = await backendReadyOrSkip('cli-benchmark', BASE_URL);
     if (!ready) return;
-    storageBackend = await readStorageBackend(BASE_URL);
     ensureCliBundle();
     tmp = makeTempDir('ah-cli-benchmark');
     fileA = join(tmp, 'cases-a.json');
@@ -195,9 +192,9 @@ describe('CLI benchmark — modes, errors and repair (real CLI processes)', () =
       expect(out).toMatch(/list benchmarks/);
     }, TEST_TIMEOUT);
 
-    it('re-running an existing benchmark by name (-n) with --export: scored on OpenSearch, clear failure on file storage', async () => {
+    it('re-running an existing benchmark by name (-n) with --export: scored on EVERY storage backend (executes in the CLI process, #612 step 3b)', async () => {
       if (!ready) return;
-      // Seed a benchmark the unified way (works on every backend), then re-run it by name.
+      // Seed a benchmark the unified way, then re-run it by name — no file.
       const name = uniqueTestName('cli-bm-legacy-rerun');
       const seed = runCli(['benchmark', '-f', fileA, '-f', fileB, '-a', 'demo', '-n', name, ...JUDGE], { timeoutMs: TEST_TIMEOUT - 30_000 });
       expect(seed.status).toBe(0);
@@ -208,29 +205,34 @@ describe('CLI benchmark — modes, errors and repair (real CLI processes)', () =
       const out = plain(res.output);
 
       expect(bm).not.toBeNull();
+      // Before step 3b this mode alone still went through the server's legacy
+      // `/execute` route, which needs OpenSearch storage: on file storage it
+      // printed `Demo Agent: Failed - … OpenSearch not configured`.
+      expect(out).not.toMatch(/OpenSearch not configured/);
       expect(res.status).toBe(0);
+      expect(out).toMatch(/Demo Agent: 3\/3 passed \(100% pass rate\)/);
       expect(out).toMatch(/Results exported to: .*legacy-export\.json/);
       expect(existsSync(exportPath)).toBe(true);
       const exported = JSON.parse(readFileSync(exportPath, 'utf-8')) as {
         benchmark: { id: string; name: string; testCaseCount: number };
-        runs: Array<{ agent: { key: string }; passed: number; failed: number; runId?: string }>;
+        runs: Array<{ agent: { key: string }; passed: number; failed: number; runId?: string; status?: string; results?: Record<string, unknown> }>;
       };
       expect(exported.benchmark).toEqual({ id: bm!.id, name, testCaseCount: 3 });
       expect(exported.runs).toHaveLength(1);
-      expect(exported.runs[0].agent.key).toBe('demo');
-
-      if (storageBackend === 'file') {
-        // The per-benchmark /execute route needs OpenSearch; the CLI must say so
-        // instead of hanging or crashing.
-        expect(out).toMatch(/Demo Agent: Failed - .*OpenSearch not configured/);
-        expect(exported.runs[0].passed).toBe(0);
-      } else {
-        expect(out).toMatch(/Demo Agent: 3\/3 passed \(100% pass rate\)/);
-        expect(exported.runs[0].passed).toBe(3);
-        expect(exported.runs[0].runId).toBeTruthy();
-        // -o json prints the per-agent summary as JSON too.
-        expect(out).toMatch(/"passed": 3/);
-      }
+      expect(exported.runs[0]).toMatchObject({ agent: { key: 'demo' }, passed: 3, failed: 0, status: 'completed' });
+      expect(exported.runs[0].runId).toBeTruthy();
+      expect(Object.keys(exported.runs[0].results ?? {})).toHaveLength(3);
+      // -o json prints the per-agent summary as JSON too.
+      expect(out).toMatch(/"passed": 3/);
+      // The run's source is the STORED benchmark and it executed in the CLI (lease kind cli), on this backend too.
+      const runDoc = await httpJson<any>(`${BASE_URL}/api/storage/evaluation-runs/${exported.runs[0].runId}`);
+      const run = runDoc.body.evaluationRun ?? runDoc.body;
+      expect(run.sources).toEqual([{ type: 'benchmark', benchmarkId: bm!.id }]);
+      expect(run.executor?.kind).toBe('cli');
+      expect(run.benchmarkId).toBe(bm!.id);
+      // Linked into the benchmark next to the seed run.
+      const linked = await httpJson<any>(`${BASE_URL}/api/storage/benchmarks/${bm!.id}`);
+      expect((linked.body.benchmark ?? linked.body).runs.map((r: any) => r.id)).toContain(exported.runs[0].runId);
     }, TEST_TIMEOUT);
   });
 

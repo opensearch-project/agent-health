@@ -335,7 +335,7 @@ describe('eval roots + describePath (own headless servers, FILE storage)', () =>
   );
 
   it(
-    'CLI `benchmark -n <stored benchmark>` prints a one-line hint naming the server\'s eval roots when a stored sourceFile is under none of them',
+    'CLI `benchmark -n <stored benchmark>` resolves a stored sourceFile against the CLI\'s own eval roots (the run executes in the CLI, #612): silent + bodies run from the eval repo; a one-line hint naming THIS command\'s roots from anywhere else',
     async () => {
       const tc = await http(BASE_B, 'POST', '/api/storage/test-cases', {
         name: 'stored-elsewhere',
@@ -354,43 +354,43 @@ describe('eval roots + describePath (own headless servers, FILE storage)', () =>
         testCaseIds: [tc.body.id],
       });
       expect(bm.status).toBe(201);
-
-      const cli = spawnSync(
-        'node',
-        [CLI_BUNDLE, 'benchmark', '-n', bm.body.name, '-a', 'demo', '--judge-model', 'demo-model'],
-        {
-          cwd: evalRepo,
-          encoding: 'utf-8',
-          timeout: 90_000,
+      const run = (cwd: string, args: string[]) => {
+        const cli = spawnSync('node', [CLI_BUNDLE, 'benchmark', ...args, '-a', 'demo', '--judge-model', 'demo-model'], {
+          cwd, encoding: 'utf-8', timeout: 90_000,
           env: cleanEnv({ AH_PORT: String(PORT_B), AGENT_HEALTH_PORT: String(PORT_B), AH_REUSE_FOREIGN_SERVER: '1' }),
-        },
-      );
-      const out = `${cli.stdout}\n${cli.stderr}`.replace(/\u001b\[[0-9;]*m/g, '');
-      expect(cli.status).not.toBeNull();
-      const hint = out.split('\n').find(l => l.includes('Hint:'));
-      if (!hint) throw new Error(`no hint in CLI output:\n${out}`);
+        });
+        return { status: cli.status, out: `${cli.stdout}\n${cli.stderr}`.replace(/\u001b\[[0-9;]*m/g, '') };
+      };
+
+      // From the eval repo (the file IS under this command's cwd): no hint, the
+      // run executes in the CLI and completes — the server's roots never matter.
+      // Red on main: `-n` went through the server's /execute route, which
+      // printed the SERVER's roots and failed on file storage.
+      const fromRepo = run(evalRepo, ['-n', bm.body.name]);
+      expect(fromRepo.status).toBe(0);
+      expect(fromRepo.out).toMatch(/Demo Agent: 1\/1 passed/);
+      expect(fromRepo.out.split('\n').find(l => l.includes('Hint:'))).toBeUndefined();
+
+      // From a directory that does NOT contain the file: the hint names this
+      // command's roots (its cwd), says the bodies will not run, and the run
+      // still completes (classic judge path).
+      const elsewhere = mkdtempSync(path.join(tmp, 'elsewhere-'));
+      const fromElsewhere = run(elsewhere, ['-n', bm.body.name]);
+      expect(fromElsewhere.status).toBe(0);
+      const hint = fromElsewhere.out.split('\n').find(l => l.includes('Hint:'));
+      if (!hint) throw new Error(`no hint in CLI output:\n${fromElsewhere.out}`);
       expect(hint).toContain(`1 stored test case reference "${EVAL_FILE_REL}"`);
-      expect(hint).toContain(JSON.stringify(serverCwd));
+      expect(hint).toContain("this command's eval roots");
+      expect(hint).toContain(JSON.stringify(elsewhere));
+      expect(hint).not.toContain(JSON.stringify(serverCwd));
       expect(hint).toContain('AGENT_HEALTH_EVAL_ROOTS');
+      expect(fromElsewhere.out).toMatch(/Demo Agent: 1\/1 passed/);
 
-      // The unified path (`-t <id>`) EXECUTES IN THE CLI PROCESS since #612
-      // step 3: the stored `sourceFile` is resolved against the CLI's own cwd
-      // (the eval repo, where the file is), so the server's eval roots are
-      // irrelevant and no hint is printed — the run simply completes.
-      const cliUnified = spawnSync(
-        'node',
-        [CLI_BUNDLE, 'benchmark', '-t', tc.body.id, '-a', 'demo', '--judge-model', 'demo-model'],
-        {
-          cwd: evalRepo,
-          encoding: 'utf-8',
-          timeout: 90_000,
-          env: cleanEnv({ AH_PORT: String(PORT_B), AGENT_HEALTH_PORT: String(PORT_B), AH_REUSE_FOREIGN_SERVER: '1' }),
-        },
-      );
-      const outUnified = `${cliUnified.stdout}\n${cliUnified.stderr}`.replace(/\u001b\[[0-9;]*m/g, '');
-      expect(cliUnified.status).toBe(0);
-      expect(outUnified).toMatch(/Evaluation run completed \(1\/1 test cases\)/);
-      expect(outUnified.split('\n').find(l => l.includes('Hint:'))).toBeUndefined();
+      // The unified path (`-t <id>`) behaves the same from the eval repo.
+      const unified = run(evalRepo, ['-t', tc.body.id]);
+      expect(unified.status).toBe(0);
+      expect(unified.out).toMatch(/Evaluation run completed \(1\/1 test cases\)/);
+      expect(unified.out.split('\n').find(l => l.includes('Hint:'))).toBeUndefined();
     },
     TEST_TIMEOUT,
   );

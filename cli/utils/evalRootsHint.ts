@@ -65,9 +65,19 @@ export function findUnresolvableSourceFiles(
 }
 
 /** One-line, colour-free rendering of a hint (caller applies chalk). */
-export function formatEvalRootsHint(hint: EvalRootsHint): string {
+export function formatEvalRootsHint(hint: EvalRootsHint, where: 'server' | 'cli' = 'server'): string {
   const n = hint.testCaseNames.length;
   const rootsList = hint.roots.map(r => JSON.stringify(r)).join(', ');
+  if (where === 'cli') {
+    // Runs execute in the CLI process (#612): the stored relative `sourceFile`
+    // is resolved against THIS command's eval roots (AGENT_HEALTH_EVAL_ROOTS >
+    // evalRoots in the config > the cwd), not the server's.
+    return (
+      `Hint: ${n} stored test case${n === 1 ? '' : 's'} reference "${hint.sourceFile}", which was not found under this ` +
+      `command's eval roots [${rootsList}] — the SDK bodies will not run (judge only). Run from the directory that ` +
+      `contains it, or set AGENT_HEALTH_EVAL_ROOTS (or evalRoots in agent-health.config.ts).`
+    );
+  }
   return (
     `Hint: ${n} stored test case${n === 1 ? '' : 's'} reference "${hint.sourceFile}", which was not found under the ` +
     `server's eval roots [${rootsList}] — set AGENT_HEALTH_EVAL_ROOTS (or evalRoots in agent-health.config.ts) on the ` +
@@ -93,6 +103,8 @@ export async function collectEvalRootsHints(
   api: EvalRootsHintApi,
   sources: TestCaseSource[],
   exists: (p: string) => boolean = existsSync,
+  /** Resolve against THESE roots (the executing CLI's) instead of the server's reported roots. */
+  localRoots?: string[],
 ): Promise<EvalRootsHint[]> {
   try {
     const ids = new Set<string>();
@@ -106,8 +118,7 @@ export async function collectEvalRootsHints(
     }
     if (ids.size === 0 || ids.size > EVAL_ROOTS_HINT_MAX_CASES) return [];
 
-    const status = await api.getConfigStatus();
-    const roots = status?.evalRoots?.roots;
+    const roots = localRoots ?? (await api.getConfigStatus())?.evalRoots?.roots;
     if (!roots || roots.length === 0) return [];
 
     const testCases = await api.getTestCaseSummaries([...ids]);
