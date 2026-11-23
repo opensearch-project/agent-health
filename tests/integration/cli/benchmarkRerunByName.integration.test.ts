@@ -43,7 +43,9 @@ import {
   type FileStorageCloudWatchProject,
 } from '../../helpers/fileStorageCloudWatchProject';
 import { DEMO_AGENT_SPANS, DEMO_AGENT_TOKENS } from '../../helpers/demoRetrievalAgentStub';
-import { resolveRawOpenSearchEndpoint, rawOpenSearchOptInHint } from '../../helpers/rawOpenSearchCluster';
+import { resolveRawOpenSearchEndpoint,
+  createRawOpenSearchClient,
+  rawClusterReachable, rawOpenSearchOptInHint } from '../../helpers/rawOpenSearchCluster';
 import { uniqueTestName } from '../../helpers/testDataTracker';
 
 const SUITE_TIMEOUT = 240_000;
@@ -108,9 +110,20 @@ describe.each(BACKENDS)('benchmark -n <existing> re-runs the STORED benchmark in
   let rerun: Awaited<ReturnType<typeof runCli>>;
   let runDoc: any;
   let exportPath: string;
+  /** False when the opted-in OpenSearch endpoint does not answer (e.g. a CI job without the service container): the variant skips, never guesses. */
+  let ready = true;
 
   beforeAll(async () => {
     if (!existsSync(CLI_BUNDLE)) throw new Error(`${CLI_BUNDLE} missing — npm run build:cli`);
+    if (traces !== 'cloudwatch') {
+      const probe = createRawOpenSearchClient(traces.opensearchEndpoint);
+      ready = await rawClusterReachable(probe);
+      await probe.close().catch(() => undefined);
+      if (!ready) {
+        console.warn(`[skip] OpenSearch not reachable at ${traces.opensearchEndpoint} — skipping the OpenSearch-traces variant`);
+        return;
+      }
+    }
     project = await createFileStorageCloudWatchProject({ prefix: 'ah-rerun-by-name', traces, evalSource: EVAL_TS_SOURCE, evalFile: EVAL_FILE });
     await project.startServer('cli');
 
@@ -141,7 +154,11 @@ describe.each(BACKENDS)('benchmark -n <existing> re-runs the STORED benchmark in
     await project?.cleanup();
   }, 60_000);
 
-  it('completes in the CLI process: exit 0 (a FAILED verdict is data), 2/3 passed in the summary, the run executed by executor.kind=cli', () => {
+  // Each spec is a no-op when the backend variant could not be provisioned.
+  const itIfReady = (name: string, fn: () => void | Promise<void>, timeout?: number) =>
+    it(name, async () => { if (!ready) return; await fn(); }, timeout);
+
+  itIfReady('completes in the CLI process: exit 0 (a FAILED verdict is data), 2/3 passed in the summary, the run executed by executor.kind=cli', () => {
     expect(rerun.status).toBe(0);
     expect(rerun.out).not.toMatch(/OpenSearch not configured/);
     expect(rerun.out).toMatch(/Demo Retrieval Agent: 2\/3 passed \(67% pass rate\)/);
@@ -149,7 +166,7 @@ describe.each(BACKENDS)('benchmark -n <existing> re-runs the STORED benchmark in
     expect(runDoc.stats).toMatchObject({ passed: 2, failed: 1, errored: 0, total: 3 });
   });
 
-  it('uses the STORED test cases as its source (type benchmark, not a file) and re-materialises their SDK bodies from the stored sourceFile', async () => {
+  itIfReady('uses the STORED test cases as its source (type benchmark, not a file) and re-materialises their SDK bodies from the stored sourceFile', async () => {
     expect(runDoc.sources).toEqual([{ type: 'benchmark', benchmarkId }]);
     const bench = (await httpJson<any>(`${project.baseUrl}/api/storage/benchmarks/${benchmarkId}`)).body;
     expect(runDoc.testCaseSnapshots.map((s: any) => s.id).sort()).toEqual([...bench.testCaseIds].sort());
@@ -170,7 +187,7 @@ describe.each(BACKENDS)('benchmark -n <existing> re-runs the STORED benchmark in
     }
   });
 
-  it('its traces were found during the run (the `traces.totalTokens` matcher passed) and are found again through /api/traces for each report', async () => {
+  itIfReady('its traces were found during the run (the `traces.totalTokens` matcher passed) and are found again through /api/traces for each report', async () => {
     const byName = new Map<string, any>();
     for (const entry of Object.values<any>(runDoc.results)) {
       const report = (await httpJson<any>(`${project.baseUrl}/api/storage/runs/${entry.reportId}`)).body;
@@ -200,7 +217,7 @@ describe.each(BACKENDS)('benchmark -n <existing> re-runs the STORED benchmark in
     expect(reportRunIds).toEqual(rerunInvocations.map((i) => i.runId).sort());
   });
 
-  it('is linked into the benchmark next to the import run; the --export file keeps the legacy shape; -o json prints the per-agent summary', async () => {
+  itIfReady('is linked into the benchmark next to the import run; the --export file keeps the legacy shape; -o json prints the per-agent summary', async () => {
     const bench = (await httpJson<any>(`${project.baseUrl}/api/storage/benchmarks/${benchmarkId}`)).body;
     expect(bench.runs.map((r: any) => r.id).sort()).toEqual([importRunId, runDoc.id].sort());
     const exported = JSON.parse(readFileSync(exportPath, 'utf-8'));
@@ -216,7 +233,7 @@ describe.each(BACKENDS)('benchmark -n <existing> re-runs the STORED benchmark in
     expect(rerun.stdout).toMatch(/"passed": 2,\s*"failed": 1,/);
   });
 
-  it('the server executed nothing: no runner activity in its log, the legacy /execute route was never used', async () => {
+  itIfReady('the server executed nothing: no runner activity in its log, the legacy /execute route was never used', async () => {
     const health = await httpJson<any>(`${project.baseUrl}/health`);
     expect(health.body.instance.pid).toBe(project.serverPid);
     const inFlight = await httpJson<any>(`${project.baseUrl}/api/runs/in-flight`);
