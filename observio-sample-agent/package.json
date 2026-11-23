@@ -14,11 +14,11 @@
     "opensearch:watch": "ts-node src/opensearch_ingestion.ts --watch"
   },
   "dependencies": {
-    "@ag-ui/client": "^1.0.0",
-    "@ag-ui/core": "^0.0.36",
+    "@ag-ui/client": "^1.0.5",
+    "@ag-ui/core": "^1.0.5",
     "@langchain/aws": "^0.1.15",
     "@langchain/core": "^1.1.40",
-    "@langchain/langgraph": "^0.4.9",
+    "@langchain/langgraph": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@opensearch-project/opensearch": "^2.13.0",
     "@opentelemetry/api": "^1.9.1",
