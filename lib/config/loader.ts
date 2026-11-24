@@ -8,9 +8,10 @@
  * Loads and resolves agent-health.config.ts files
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, realpathSync } from 'fs';
 import { createHash } from 'crypto';
-import { resolve, join, dirname } from 'path';
+import { createRequire } from 'module';
+import { resolve, join, dirname, sep } from 'path';
 import { projectStatePath, userStatePath } from './statePaths.js';
 import { logStartupDiagnostic } from '@/lib/diagnostics';
 import { pathToFileURL } from 'url';
@@ -203,31 +204,54 @@ function mergeConfigs(
 }
 
 /**
- * Load user config file
+ * Load user config file.
  *
- * @param reload - Re-evaluate the file even if this process already imported
- *   it. Node caches ES modules by URL for the life of the process, so a plain
- *   re-import of an edited `agent-health.config.ts` returns the OLD module;
- *   a query string keyed on the content hash of the file (and of `.env`
- *   next to it, which the file may read at import) makes an edited file a
- *   new URL (and an unchanged file the same, cached one — so the cache grows
- *   by one module graph per distinct config version, not per run).
- *   Limitation: only the config file itself is re-evaluated; modules it
- *   imports are still served from Node's cache (restart after editing those).
+ * The file is imported with a query string keyed on the content hash of the
+ * file (and of `.env` next to it, which the file may read at import) — Node
+ * caches ES modules by URL for the life of the process, so a plain re-import
+ * of an edited `agent-health.config.ts` would return the OLD module. An
+ * edited file is a new URL, an unchanged file the same, cached one: the cache
+ * grows by one module graph per distinct config version, not per run, and an
+ * unchanged file is evaluated exactly once per process.
+ *
+ * The query only works for ES modules. A config that Node loads as CommonJS
+ * (a `.js`/`.ts` file in a project whose package.json says
+ * `"type": "commonjs"`, or has no `type`) is cached by FILENAME in
+ * `require.cache`, where the query is ignored and the module loaded first is
+ * returned (#655). So when the digest changed since this process last
+ * imported the file, its stale entry — and the local modules it required —
+ * is evicted first (`evictLocalCjsModules`). Consequence: in a CommonJS
+ * project the config's own local imports are re-evaluated with it — when
+ * Node loaded them through its CommonJS loader (tsx; built-in type stripping
+ * from Node 24 on; Node 22 requires them through the ESM loader's cache,
+ * where `module.children` stays empty and nothing can be evicted).
+ * Limitation: for an ES-module config (and the Node 22 case above) only the
+ * config file itself is re-evaluated; modules it imports are still served
+ * from Node's ESM cache (restart after editing those).
  */
-async function loadUserConfig(configPath: string, reload: boolean = false): Promise<UserConfig> {
-  try {
-    // Use dynamic import with file URL for cross-platform compatibility
-    let fileUrl = pathToFileURL(configPath).href;
-    if (reload) {
-      // Keyed on the config file AND `<cwd>/.env`: a config that reads
-      // `process.env` at import must be re-evaluated after a `.env` edit too.
-      const hash = createHash('sha1').update(readFileSync(configPath));
-      const envFile = join(dirname(configPath), '.env');
-      if (existsSync(envFile)) hash.update(readFileSync(envFile));
-      fileUrl += `?reload=${hash.digest('hex').slice(0, 16)}`;
-    }
+async function loadUserConfig(configPath: string): Promise<UserConfig> {
+  // Keyed on the config file AND `<cwd>/.env`: a config that reads
+  // `process.env` at import must be re-evaluated after a `.env` edit too.
+  const hash = createHash('sha1').update(readFileSync(configPath));
+  const envFile = join(dirname(configPath), '.env');
+  if (existsSync(envFile)) hash.update(readFileSync(envFile));
+  const digest = hash.digest('hex').slice(0, 16);
+  // Use dynamic import with file URL for cross-platform compatibility
+  const fileUrl = `${pathToFileURL(configPath).href}?reload=${digest}`;
 
+  const previous = lastImport.get(configPath);
+  if (previous?.digest !== digest) {
+    // Also the local modules recorded last time: a config that threw at
+    // import after requiring them left them cached (Node drops only the
+    // throwing module), so they are not reachable from the entry any more.
+    const evicted = evictLocalCjsModules(configPath, previous?.localModules);
+    if (evicted.length) {
+      logStartupDiagnostic(`[Config] Re-evaluating ${evicted.length} CommonJS module(s) of ${configPath}`);
+    }
+    lastImport.set(configPath, { digest, localModules: evicted });
+  }
+
+  try {
     // For TypeScript files, we need tsx or ts-node to be available
     // The CLI build process compiles TS, so this works in production
     const module = await import(fileUrl);
@@ -249,6 +273,45 @@ async function loadUserConfig(configPath: string, reload: boolean = false): Prom
 
     throw new Error(`Failed to load config file ${configPath}: ${message}${helpText}`);
   }
+}
+
+/**
+ * Per config path: the `?reload=` digest of the version imported last and the
+ * CommonJS modules evicted for it — so the cache is evicted once per edit,
+ * not on every run, and the modules a failed import left behind are known.
+ */
+const lastImport = new Map<string, { digest: string; localModules: string[] }>();
+
+/**
+ * Remove `entryPath` and, transitively, the LOCAL modules it required from
+ * Node's CommonJS module cache (`require.cache`), so the next `require` /
+ * `import` of it evaluates the files on disk again. Local = under the entry
+ * file's directory and not under a `node_modules` directory; dependencies
+ * from `node_modules` and modules outside the project keep their cached
+ * (possibly stateful) instance. `alsoEvict` names further local modules to
+ * evict (with their local children) when still cached. No-op for a module
+ * Node loaded as ESM (not in `require.cache`). Returns the evicted filenames.
+ */
+export function evictLocalCjsModules(entryPath: string, alsoEvict: string[] = []): string[] {
+  // require.cache is keyed by the real path (Node resolves symlinks) — or by
+  // the path as given under --preserve-symlinks, so both are tried.
+  let realEntry = entryPath;
+  try { realEntry = realpathSync(entryPath); } catch { /* keep as given */ }
+  const cache = createRequire(realEntry).cache;
+  const root = dirname(realEntry) + sep;
+  const isLocal = (file: string) => file.startsWith(root) && !file.includes(`${sep}node_modules${sep}`);
+  const evicted = new Set<string>();
+  const visit = (file: string) => {
+    const entry = cache[file];
+    if (!entry || evicted.has(file)) return;
+    evicted.add(file);
+    for (const child of entry.children ?? []) {
+      if (isLocal(child.filename)) visit(child.filename);
+    }
+    delete cache[file];
+  };
+  for (const file of [realEntry, entryPath, ...alsoEvict]) visit(file);
+  return [...evicted];
 }
 
 /**
@@ -278,7 +341,7 @@ export async function loadConfig(
 
   if (configFile) {
     logStartupDiagnostic(`[Config] Loading ${configFile.path}`);
-    userConfig = await loadUserConfig(configFile.path, force);
+    userConfig = await loadUserConfig(configFile.path);
   } else if (hasServerJsonConfig(cwd)) {
     // Code config absent, but server-side JSON config present — it's loaded
     // by separate server services (storage / observability / custom agents).
@@ -339,6 +402,7 @@ export function loadConfigSync(cwd: string = process.cwd()): ResolvedConfig {
 export function clearConfigCache(): void {
   cachedConfig = null;
   cachedConfigPath = null;
+  lastImport.clear();
 }
 
 /**
