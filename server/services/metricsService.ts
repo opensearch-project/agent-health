@@ -13,6 +13,7 @@ import { Client } from '@opensearch-project/opensearch';
 import { MetricsResult, AggregateMetrics, OpenSearchConfig, Span } from '@/types';
 import { getSampleSpansForRunIds } from '../../cli/demo/sampleTraces.js';
 import { transformSpan, buildRunIdShouldClauses, buildSessionIdShouldClauses, buildAgentHintClause, type ServiceWindowHint } from './tracesService.js';
+import { attributeLeafUsage } from '../../lib/usageAggregates.js';
 
 // ============================================================================
 // Model Pricing
@@ -76,6 +77,8 @@ interface OpenSearchSpanSource {
   endTime?: string;
   durationInNanos?: number;
   status?: { code?: number; message?: string };
+  /** Flat Data Prepper schema: the OTel status code as a dotted top-level field. */
+  'status.code'?: number;
   // Plain-raw (OTEL-faithful) schema: span attributes are a nested object
   // keyed by the literal dotted OTel attribute name, e.g.
   // attributes['agent_health.run.id'] for the runId. (Data Prepper trace-analytics-plain-raw.)
@@ -133,6 +136,20 @@ function readOutputTokens(attrs: Record<string, any>): number {
   return Number(
     attrs['gen_ai.usage.output_tokens'] ?? attrs['gen_ai.usage.completion_tokens'] ?? attrs['output_tokens'] ?? 0,
   ) || 0;
+}
+
+/**
+ * A span's OTel status code under BOTH index schemas: nested `status.code`
+ * (plain-raw) and the flat dotted `"status.code"` field (Data Prepper's
+ * flattened schema) — the same pair `transformSpan` in tracesService.ts reads.
+ * Pre-fix this file read only the nested form, so errored spans in a flat
+ * index never counted toward `agentErrorSpans` / the run outcome.
+ */
+function spanStatusCode(span: OpenSearchSpanSource): number | undefined {
+  const flat = span['status.code'];
+  if (typeof flat === 'number') return flat;
+  const nested = span.status?.code;
+  return typeof nested === 'number' ? nested : undefined;
 }
 
 /**
@@ -516,6 +533,8 @@ const METRICS_SOURCE_FIELDS = [
   'endTime',
   'durationInNanos',
   'status',
+  // Flat Data Prepper schema stores the OTel status code as a dotted field.
+  'status.code',
 ];
 
 /**
@@ -553,19 +572,34 @@ export function computeMetricsFromSpans(
   const toolsUsed = new Set<string>();
   let modelId = 'default';
 
-  for (const span of spans) {
-    const attrs = readAttrs(span);
-    // Strategy A correlation (below) pulls in the whole shared trace, which
-    // can include agent-health's own eval/judge spans — exclude them so the
-    // agent's own tokens/cost/LLM-call count aren't inflated by ours.
-    if (isEvalOrJudgeSpan(attrs, span.name)) continue;
-    const inTokens = readInputTokens(attrs);
-    const outTokens = readOutputTokens(attrs);
-    inputTokens += inTokens;
-    outputTokens += outTokens;
+  // Read each span's attributes once; the leaf-usage pass and the loop below
+  // share the merged map. Strategy A correlation (below) pulls in the whole
+  // shared trace, which can include agent-health's own eval/judge spans —
+  // they are excluded up front so they neither inflate the agent's
+  // tokens/cost/LLM-call count nor take part in the roll-up attribution.
+  const attrsBySpan = new Map<OpenSearchSpanSource, Record<string, any>>();
+  for (const span of spans) attrsBySpan.set(span, readAttrs(span));
+  const agentOwnSpans = spans.filter(s => !isEvalOrJudgeSpan(attrsBySpan.get(s)!, s.name));
+  // Leaf-usage invariant (lib/usageAggregates.ts, #653): agent frameworks
+  // following the GenAI conventions stamp the roll-up of a whole turn on the
+  // `invoke_agent` span AND the per-call usage on each `chat` child, so
+  // summing every span counted those tokens twice. Each span contributes only
+  // what its descendants do not already account for; a pure roll-up is NOT an
+  // LLM call; a parent carrying MORE than its children still contributes the
+  // remainder, so nothing is dropped.
+  const usage = attributeLeafUsage(agentOwnSpans, (s) => {
+    const attrs = attrsBySpan.get(s)!;
+    return { input: readInputTokens(attrs), output: readOutputTokens(attrs) };
+  });
+
+  for (const span of agentOwnSpans) {
+    const attrs = attrsBySpan.get(span)!;
+    const counted = usage.get(span)!;
+    inputTokens += counted.input;
+    outputTokens += counted.output;
 
     const spanModel = attrs['gen_ai.request.model'];
-    if (spanModel) {
+    if (spanModel && !counted.isAggregate) {
       llmCalls++;
       modelId = spanModel;
     }
@@ -605,15 +639,14 @@ export function computeMetricsFromSpans(
   // query failed", dropped the only source holding the spans, and the run
   // inspector read "Metrics unavailable" for a run with 300K measured tokens.
   // Child-span errors are counted separately in `agentErrorSpans` instead.
-  const agentOwnSpans = spans.filter(s => !isEvalOrJudgeSpan(readAttrs(s), s.name));
-  const agentErrorSpans = agentOwnSpans.filter(s => s.status?.code === 2).length;
+  const agentErrorSpans = agentOwnSpans.filter(s => spanStatusCode(s) === 2).length;
   const agentOwnSpanIds = new Set(agentOwnSpans.map(s => s.spanId).filter(Boolean));
   const outcomeSpans = rootSpan
     ? [rootSpan]
     : agentOwnSpans.filter(s => !s.parentSpanId || !agentOwnSpanIds.has(s.parentSpanId));
   let status: 'pending' | 'success' | 'error' = 'pending';
   if (outcomeSpans.length > 0) {
-    status = outcomeSpans.some(s => s.status?.code === 2) ? 'error' : 'success';
+    status = outcomeSpans.some(s => spanStatusCode(s) === 2) ? 'error' : 'success';
   } else if (spans.length > 0) {
     status = 'success';
   }
@@ -779,7 +812,10 @@ export async function computeBatchMetrics(
         console.warn(
           `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ${e.message}`
         );
-        return chunk.map(runId => computeMetricsFromSpans(runId, []));
+        // A failed query is UNKNOWN, not "no spans": the pending/hasSpans:false
+        // placeholder rendered an expired credential or a timeout as an
+        // untraced run (#652). Same shape the CloudWatch reader emits.
+        return chunk.map(runId => failedMetricsResult(runId, e?.message));
       }
     }));
 
@@ -830,7 +866,7 @@ export async function computeBatchMetrics(
         `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ` +
         `${response.status} ${response.statusText}. Response body: ${responseBody}`
       );
-      return chunk.map(runId => computeMetricsFromSpans(runId, []));
+      return chunk.map(runId => failedMetricsResult(runId, `OpenSearch query failed: ${response.status} ${response.statusText}`));
     }
 
     const data: OpenSearchResponse = await response.json();

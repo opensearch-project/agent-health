@@ -6,6 +6,7 @@
 import { MODEL_PRICING, getPricing, computeAggregateMetrics, computeMetrics, computeMetricsFromSpans, computeBatchMetrics } from '@/server/services/metricsService';
 import type { MetricsResult, OpenSearchConfig } from '@/types';
 import { buildAgentTraceWithErrorSpan, AGENT_TRACE_FIXTURE } from '../../../helpers/agentTraceWithErrorSpan';
+import { buildAgentTraceWithRollup, ROLLUP_FIXTURE } from '../../../helpers/agentTraceWithRollup';
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -935,6 +936,82 @@ describe('metricsService', () => {
         expect(result.status).toBe('success');
         expect(result.agentErrorSpans).toBeUndefined();
       });
+
+      it('reads the FLAT `"status.code"` field (Data Prepper flattened schema) as well as the nested one', () => {
+        const flat = (name: string, spanId: string, parentSpanId: string | undefined, code: number) => ({
+          name, traceId, spanId, parentSpanId, 'status.code': code,
+          attributes: { 'agent_health.run.id': 'run-flat' },
+        });
+        // Errored child under an OK top-level span: counted, run still succeeds.
+        const child = computeMetricsFromSpans('run-flat', [
+          flat('invoke_agent', 'top', undefined, 1),
+          flat('execute_tool search', 'tool', 'top', 2),
+        ] as any);
+        expect(child.status).toBe('success');
+        expect(child.agentErrorSpans).toBe(1);
+        // Errored top-level span: the run outcome is error.
+        const top = computeMetricsFromSpans('run-flat', [flat('invoke_agent', 'top', undefined, 2)] as any);
+        expect(top.status).toBe('error');
+        expect(top.agentErrorSpans).toBe(1);
+      });
+    });
+
+    describe('leaf-usage invariant (#653): a roll-up parent is not counted again', () => {
+      const traceId = 'cafebabecafebabecafebabecafebabe';
+      const span = (spanId: string, parentSpanId: string | undefined, attrs: Record<string, unknown>, name = 'chat') => ({
+        name, traceId, spanId, parentSpanId, status: { code: 1 }, attributes: { 'agent_health.run.id': 'run-rollup', ...attrs },
+      });
+      const usage = (input: number, output: number) => ({
+        'gen_ai.request.model': 'anthropic.claude-sonnet-4-20250514-v1:0',
+        'gen_ai.usage.input_tokens': input,
+        'gen_ai.usage.output_tokens': output,
+      });
+
+      it('real-shaped trace: invoke_agent carrying exactly the sum of its 3 chat children → 1×, 3 LLM calls (not 2×, 4)', () => {
+        const docs = buildAgentTraceWithRollup({ runId: 'run-rollup', traceId });
+        const result = computeMetricsFromSpans('run-rollup', docs as any);
+        expect(result.inputTokens).toBe(ROLLUP_FIXTURE.inputTokens);
+        expect(result.outputTokens).toBe(ROLLUP_FIXTURE.outputTokens);
+        expect(result.totalTokens).toBe(ROLLUP_FIXTURE.totalTokens);
+        expect(result.totalTokens).not.toBe(ROLLUP_FIXTURE.doubleCountedTotalTokens);
+        expect(result.llmCalls).toBe(ROLLUP_FIXTURE.llmCalls);
+        expect(result.toolCalls).toBe(ROLLUP_FIXTURE.toolCalls);
+        // Cost follows the de-duplicated tokens: 6,000 × $3/M + 300 × $15/M.
+        expect(result.costUsd).toBeCloseTo((6000 * 3 + 300 * 15) / 1e6, 10);
+      });
+
+      it('parent carrying MORE than its children: the remainder is counted and the parent stays an LLM call', () => {
+        const result = computeMetricsFromSpans('run-rollup', [
+          span('req', undefined, usage(1000, 100), 'chat'),
+          span('stream', 'req', usage(700, 100), 'chat.stream'),
+        ] as any);
+        expect(result.inputTokens).toBe(1000);
+        expect(result.outputTokens).toBe(100);
+        expect(result.llmCalls).toBe(2);
+      });
+
+      it('parent carrying usage while no descendant does: counted in full (the only record of that work)', () => {
+        const result = computeMetricsFromSpans('run-rollup', [
+          span('agent', undefined, usage(500, 40), 'invoke_agent'),
+          span('tool', 'agent', { 'gen_ai.tool.name': 'search' }, 'execute_tool search'),
+        ] as any);
+        expect(result.totalTokens).toBe(540);
+        expect(result.llmCalls).toBe(1);
+      });
+
+      it('nested roll-ups (agent → loop cycle → chat) collapse at every level; multi-trace input never links across traces', () => {
+        const other = 'feedfacefeedfacefeedfacefeedface';
+        const result = computeMetricsFromSpans('run-rollup', [
+          span('agent', undefined, usage(300, 30), 'invoke_agent'),
+          span('cycle', 'agent', {}, 'event_loop_cycle'),
+          span('c1', 'cycle', usage(300, 30)),
+          // Same span ids on ANOTHER trace: a separate 100/10, not a child of `agent`.
+          { ...span('c1', 'agent', usage(100, 10)), traceId: other },
+        ] as any);
+        expect(result.inputTokens).toBe(400);
+        expect(result.outputTokens).toBe(40);
+        expect(result.llmCalls).toBe(2);
+      });
     });
   });
 
@@ -1026,18 +1103,23 @@ describe('metricsService', () => {
       expect(result[0].status).toBe('pending');
     });
 
-    it('should handle OpenSearch failure gracefully', async () => {
+    it('a failed OpenSearch query yields the store-failure shape (status error + error), never "no spans" (#652)', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
+        statusText: 'Internal Server Error',
         text: () => Promise.resolve('Internal error'),
       });
 
       const result = await computeBatchMetrics(['run-1', 'run-2'], defaultConfig);
 
       expect(result).toHaveLength(2);
-      expect(result[0].status).toBe('pending');
-      expect(result[1].status).toBe('pending');
+      for (const m of result) {
+        expect(m.status).toBe('error');
+        expect(m.error).toMatch(/500/);
+        // Unknown, not "looked and found nothing".
+        expect(m.hasSpans).toBeUndefined();
+      }
     });
 
     it('ORs in Strategy-D session.id terms (one per runId) when sessionIdByRunId is supplied', async () => {

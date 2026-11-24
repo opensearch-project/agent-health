@@ -113,6 +113,7 @@ export const ComparisonPage: React.FC = () => {
   // the PREVIOUS selection is still in flight; that response (success or
   // error) must be discarded, not applied on top of the new selection.
   const reportsRequestIdRef = useRef(0);
+  const traceMetricsRequestIdRef = useRef(0);
   // Report ids whose batch fetch has COMPLETED (found or not, success or
   // failure). A report that is absent from `reports` but settled is known to
   // be unavailable, so nothing downstream keeps waiting for it.
@@ -421,13 +422,36 @@ export const ComparisonPage: React.FC = () => {
       const { keys, sessionIdByKey, traceIdByKey, agentsByKey } =
         collectMetricsCorrelationFromReports(selectedRunsForMetrics, reports, getAgentTraceServiceName);
       if (keys.length === 0) { setTraceMetricsMap(new Map()); return; }
+      // A slow batch for an earlier selection must not overwrite the current
+      // one's result (same guard as the reports loader above).
+      const requestId = ++traceMetricsRequestIdRef.current;
       try {
         const { metrics } = await fetchBatchMetrics(keys, sessionIdByKey, traceIdByKey, agentsByKey);
+        if (requestId !== traceMetricsRequestIdRef.current) return; // superseded — discard
         const map = new Map<string, TraceMetrics>();
-        metrics.forEach(m => { if (m.runId && !('error' in m)) map.set(m.runId, m as TraceMetrics); });
+        // Per-key store failures (`{ runId, status: 'error', error }`) are
+        // KEPT: mergeTraceMetrics turns them into "unavailable" on the
+        // scoreboard. Dropping them (pre-fix) made a trace-store outage —
+        // expired credentials, a timeout — render exactly like an untraced
+        // run's "--" (#652).
+        metrics.forEach(m => {
+          if (!m.runId) return;
+          map.set(m.runId, 'error' in m ? { ...(m as TraceMetrics), status: 'error' } : (m as TraceMetrics));
+        });
         setTraceMetricsMap(map);
       } catch (error) {
+        if (requestId !== traceMetricsRequestIdRef.current) return; // superseded — discard
         console.warn('[ComparisonPage] Failed to fetch trace metrics:', error);
+        // The whole batch call failed: every key is "unavailable", not "--".
+        const message = error instanceof Error ? error.message : String(error);
+        const map = new Map<string, TraceMetrics>();
+        for (const key of keys) {
+          map.set(key, {
+            runId: key, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0,
+            llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'error', error: message || 'trace metrics request failed',
+          });
+        }
+        setTraceMetricsMap(map);
       }
     };
     if (selectedRunIds.length > 0 && Object.keys(reports).length > 0) loadTraceMetrics();

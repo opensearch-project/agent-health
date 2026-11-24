@@ -216,8 +216,8 @@ export function calculateRunAggregates(
  * Overlay trace-derived metrics (tokens/cost/duration/calls) onto a run's
  * base aggregate (from {@link calculateRunAggregates}), which deliberately
  * leaves these fields undefined since they come from a separate trace
- * metrics fetch. Two honesty fixes live here, both found comparing
- * EnterpriseRAG-Bench runs:
+ * metrics fetch. Three honesty fixes live here (the first two found
+ * comparing EnterpriseRAG-Bench runs, the third in #652):
  *
  * 1. The batch metrics API returns a zero-filled `status: 'pending'`
  *    placeholder when a runId has no spans at all (no tracing configured, or
@@ -230,6 +230,10 @@ export function calculateRunAggregates(
  *    already persists (averaged across cases with a real value) before the
  *    coarser run-level `performanceMetrics` fields — real data we already
  *    have beats another "0ms".
+ * 3. A per-key trace-store FAILURE (`error` set) is neither data nor "no
+ *    spans": it is skipped from the sums and remembered — as
+ *    `traceMetricsUnavailable` when no case produced spans, as a lower-bound
+ *    `traceMetricsPartial` when some did — so the cells can say so.
  */
 export function mergeTraceMetrics(
   base: RunAggregateMetrics,
@@ -239,11 +243,25 @@ export function mergeTraceMetrics(
 ): RunAggregateMetrics {
   let totalTokens = 0, totalInputTokens = 0, totalOutputTokens = 0, totalCostUsd = 0, totalDurationMs = 0, totalLlmCalls = 0, totalToolCalls = 0, mc = 0;
   let anyPartial = false, anyWindow = false;
+  let storeError: string | undefined;
   for (const result of Object.values(run.results)) {
     const report = reports[result.reportId];
     const key = report ? metricsKeyForReport(report) : undefined;
     if (key) {
       const tm = traceMetricsMap.get(key);
+      // 3. A per-key STORE FAILURE is the `error`-carrying shape
+      //    (`failedMetricsResult` / the batch route, when the trace store
+      //    query threw — expired credentials, timeout); `status: 'error'`
+      //    ALONE is the agent run's own outcome (root span ERROR) and its
+      //    tokens are real data. A store failure's zero-filled numbers are
+      //    UNKNOWN, not measured: summing them as `$0 / 0 tokens` — or
+      //    dropping them so the run reads exactly like an untraced one — both
+      //    lie; remember the failure instead so the scoreboard can say
+      //    "unavailable" (no case succeeded) or "lower bound" (some did) (#652).
+      if (tm && tm.error !== undefined) {
+        storeError ??= tm.error;
+        continue;
+      }
       if (tm && tm.status !== 'pending') {
         if (tm.partial) anyPartial = true;
         if (tm.correlatedBy === 'window' || tm.correlatedBy === 'mixed') anyWindow = true;
@@ -308,8 +326,11 @@ export function mergeTraceMetrics(
     // in a tool-calling loop). Stays a dash without real trace data.
     totalLlmCalls: mc > 0 ? totalLlmCalls : undefined,
     totalToolCalls: mc > 0 ? totalToolCalls : (toolCallFallbackKnown ? fallbackToolCalls : undefined),
-    ...(mc > 0 && anyPartial ? { traceMetricsPartial: true } : {}),
+    // A store failure on SOME cases makes the sums a lower bound (`≥`), same
+    // as a size-capped query; on EVERY case nothing is known at all.
+    ...(mc > 0 && (anyPartial || storeError) ? { traceMetricsPartial: true } : {}),
     ...(mc > 0 && anyWindow ? { traceMetricsWindowCorrelated: true } : {}),
+    ...(mc === 0 && storeError ? { traceMetricsUnavailable: storeError } : {}),
   };
 }
 

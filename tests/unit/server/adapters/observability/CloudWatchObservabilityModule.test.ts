@@ -604,13 +604,13 @@ describe('CloudWatchObservabilityModule', () => {
       expect(reader.calls.filter[0].pattern).toBe(`"${RUN}"`);
       expect(reader.calls.insights).toHaveLength(1);
       expect(reader.calls.insights[0].query).toContain(`"${RUN}"`);
-      expect(m).toMatchObject({ runId: RUN, traceId: TRACE, inputTokens: 42952, outputTokens: 1686, llmCalls: 4, toolCalls: 3, status: 'success' });
+      expect(m).toMatchObject({ runId: RUN, traceId: TRACE, inputTokens: 21476, outputTokens: 843, llmCalls: 3, toolCalls: 3, status: 'success' });
       expect(m.partial).toBeUndefined();
     });
 
     it('forRun threads upstream hints (traceId / agents) and stamps correlatedBy', async () => {
       const m = await mod(reader).metrics.forRun('report-key', { traceId: TRACE, agents: [{ serviceName: SERVICE, startedAt: T0_MS - 1000, endedAt: T0_MS + 60_000 }] });
-      expect(m.inputTokens).toBe(42952);
+      expect(m.inputTokens).toBe(21476);
       expect(m.correlatedBy).toBe('ids'); // traceId is an id correlator
       expect(m.hasSpans).toBe(true);
       expect(reader.calls.insights).toHaveLength(1); // phase 1 (ids) found the agent → no phase-2 window query
@@ -629,8 +629,8 @@ describe('CloudWatchObservabilityModule', () => {
       // …but, being eval-only, must not suppress the window (phase 2 runs for that key).
       expect(reader.calls.insights).toHaveLength(2);
       expect(reader.calls.insights[1].query).toContain(SERVICE);
-      expect(m.inputTokens).toBe(42952);
-      expect(m.llmCalls).toBe(4);
+      expect(m.inputTokens).toBe(21476);
+      expect(m.llmCalls).toBe(3);
       expect(m.correlatedBy).toBe('mixed'); // eval span by id + agent spans by window
     });
 
@@ -644,7 +644,7 @@ describe('CloudWatchObservabilityModule', () => {
       });
       expect(reader.calls.insights).toHaveLength(2); // ids for both keys, then the window ONLY for the key the ids missed
       expect(reader.calls.insights[1].query).not.toContain(RUN);
-      expect(byId).toMatchObject({ runId: RUN, inputTokens: 42952, correlatedBy: 'ids' });
+      expect(byId).toMatchObject({ runId: RUN, inputTokens: 21476, correlatedBy: 'ids' });
       expect(byWindow).toMatchObject({ runId: 'report-xyz', correlatedBy: 'window' });
       expect(byWindow.inputTokens).toBeGreaterThan(0);
     });
@@ -660,7 +660,7 @@ describe('CloudWatchObservabilityModule', () => {
       // the other key's hint (fixture time + 10 days, still older than the lookback) gets its own window query, outside the lookback
       expect(reader.calls.insights[1].startMs).toBeLessThan(idScan.startMs);
       expect(reader.calls.insights[1]).toMatchObject({ startMs: T0_MS + 10 * 86_400_000 - 5 * 60 * 1000 });
-      expect(real).toMatchObject({ runId: RUN, inputTokens: 42952, correlatedBy: 'ids' });
+      expect(real).toMatchObject({ runId: RUN, inputTokens: 21476, correlatedBy: 'ids' });
     });
 
     it('a truncated Insights result, or a fresh scan that ran out of pages, marks every key of the chunk partial', async () => {
@@ -684,7 +684,7 @@ describe('CloudWatchObservabilityModule', () => {
       // Only the fresh scan failing: Insights still answers, flagged partial.
       reader.failInsights = undefined;
       const [p] = await mod(reader).metrics.forRuns([RUN]);
-      expect(p).toMatchObject({ status: 'success', inputTokens: 42952, partial: true });
+      expect(p).toMatchObject({ status: 'success', inputTokens: 21476, partial: true });
       warn.mockRestore();
     });
 
@@ -697,7 +697,7 @@ describe('CloudWatchObservabilityModule', () => {
       const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
       const res = await mod(reader).metrics.forRuns(ids);
       expect(res.slice(0, 50).every((m) => m.status === 'error')).toBe(true);
-      expect(res[50]).toMatchObject({ runId: RUN, inputTokens: 42952, status: 'success', partial: true });
+      expect(res[50]).toMatchObject({ runId: RUN, inputTokens: 21476, status: 'success', partial: true });
       warn.mockRestore();
     });
   });

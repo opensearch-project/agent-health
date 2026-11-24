@@ -145,7 +145,7 @@ describe('several observability sources side by side (HTTP integration)', () => 
     expect(res.status).toBe(200);
     const [os, cw] = res.body.metrics;
     expect(os).toMatchObject({ runId: 'os-run-1', inputTokens: 500, llmCalls: 1, source: 'primary' });
-    expect(cw).toMatchObject({ runId: CW_RUN, inputTokens: 42952, source: 'Team CloudWatch' });
+    expect(cw).toMatchObject({ runId: CW_RUN, inputTokens: 21476, source: 'Team CloudWatch' });
   });
 
   it('a metrics-store failure in one source does not hide a run the other source holds', async () => {

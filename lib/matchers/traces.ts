@@ -25,6 +25,7 @@
 
 import type { Span } from '../../types/index.js';
 import { lookupModelRates, computeCost } from './tracesPricing.js';
+import { attributeLeafUsage } from '../usageAggregates.js';
 
 /**
  * Where `totalCost` came from:
@@ -141,6 +142,23 @@ export function buildTracesAccessor(spans: Span[]): TracesAccessor {
   let unresolvedCostSpanCount = 0;
   const toolCalls: { name: string; durationMs: number }[] = [];
 
+  // Leaf-usage invariant (lib/usageAggregates.ts, #653): a parent span whose
+  // descendants already carry its usage (an `invoke_agent` roll-up over its
+  // `chat` children) contributes nothing, so `totalTokens` / `totalCost` here
+  // agree with `/api/metrics` and the Traces tab. Input-side tokens (prompt +
+  // cache read + cache creation) and output tokens are attributed separately.
+  const rawUsage = (span: Span) => {
+    const attrs = span.attributes ?? {};
+    return {
+      input:
+        (pickNumber(attrs, PROMPT_TOKEN_KEYS) ?? 0) +
+        (pickNumber(attrs, CACHE_READ_TOKEN_KEYS) ?? 0) +
+        (pickNumber(attrs, CACHE_CREATION_TOKEN_KEYS) ?? 0),
+      output: pickNumber(attrs, COMPLETION_TOKEN_KEYS) ?? 0,
+    };
+  };
+  const attributed = attributeLeafUsage(spans, rawUsage);
+
   for (const span of spans) {
     const attrs = span.attributes ?? {};
     const promptTokens = pickNumber(attrs, PROMPT_TOKEN_KEYS);
@@ -155,17 +173,20 @@ export function buildTracesAccessor(spans: Span[]): TracesAccessor {
       cacheCreationTokens !== undefined;
 
     if (hasTokenAttr) tokenBearingSpanCount += 1;
-    if (promptTokens) totalTokens += promptTokens;
-    if (completionTokens) totalTokens += completionTokens;
-    if (cacheReadTokens) totalTokens += cacheReadTokens;
-    if (cacheCreationTokens) totalTokens += cacheCreationTokens;
+    const counted = attributed.get(span)!;
+    const raw = rawUsage(span);
+    totalTokens += counted.input + counted.output;
 
     const reported = pickNumber(attrs, [
       'gen_ai.usage.cost_usd',
       'gen_ai.usage.cost',
       'llm.usage.cost_usd',
     ]);
-    if (reported !== undefined) {
+    if (hasTokenAttr && counted.isAggregate) {
+      // Pure roll-up of its descendants: the children's cost — reported or
+      // computed — already covers it, so neither its reported cost attribute
+      // nor a computed estimate is added.
+    } else if (reported !== undefined) {
       hadReportedCost = true;
       reportedCost += reported;
     } else if (hasTokenAttr) {
@@ -175,13 +196,19 @@ export function buildTracesAccessor(spans: Span[]): TracesAccessor {
       const rates = lookupModelRates(modelId);
       if (rates) {
         hadComputedCost = true;
+        const isLeaf = counted.input === raw.input && counted.output === raw.output;
         computedCost += computeCost(
-          {
-            input: promptTokens ?? 0,
-            output: completionTokens ?? 0,
-            cacheRead: cacheReadTokens ?? 0,
-            cacheCreation: cacheCreationTokens ?? 0,
-          },
+          isLeaf
+            ? {
+                input: promptTokens ?? 0,
+                output: completionTokens ?? 0,
+                cacheRead: cacheReadTokens ?? 0,
+                cacheCreation: cacheCreationTokens ?? 0,
+              }
+            : // A parent carrying MORE than its descendants: only the remainder
+              // is new spend; the cache split of that remainder is unknown, so
+              // it is priced at the plain input/output rates.
+              { input: counted.input, output: counted.output, cacheRead: 0, cacheCreation: 0 },
           rates,
         );
       } else {

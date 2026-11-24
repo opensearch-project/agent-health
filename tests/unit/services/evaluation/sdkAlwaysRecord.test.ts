@@ -78,11 +78,43 @@ describe('stampObjectiveActuals', () => {
     expect(perf.agentDurationMs).toBe(500);
   });
 
-  it('stamps legitimate zeros when useTraces=false (emptyTracesAccessor) — distinct from "unset"', () => {
+  it('leaves totalTokens/totalCostUsd UNSET when useTraces=false (emptyTracesAccessor) — not captured is not 0 (#654)', () => {
+    // A `0` here is a claim ("this run used no tokens"); for an agent whose
+    // usage was simply never captured it is false, and every view would then
+    // show it as a measured zero and average it in.
     const perf: TestCasePerformanceMetrics = { durationMs: 10, agentDurationMs: 10 };
     stampObjectiveActuals(perf, emptyTracesAccessor(), true);
-    expect(perf.totalTokens).toBe(0);
-    expect(perf.totalCostUsd).toBe(0);
+    expect(perf).not.toHaveProperty('totalTokens');
+    expect(perf).not.toHaveProperty('totalCostUsd');
+  });
+
+  it('stamps totalTokens even when totalCost is not determinable (unpriced model) (#652)', () => {
+    // A self-hosted model id is not in the pricing table, so `totalCost`
+    // throws (#440 "never under-report") while `totalTokens` is perfectly
+    // known. Pre-fix a single destructuring read lost BOTH.
+    const spans: Span[] = [
+      { traceId: 't', spanId: 'chat', name: 'chat', attributes: {
+        'gen_ai.request.model': '/opt/self-hosted/model', 'gen_ai.usage.input_tokens': 4000, 'gen_ai.usage.output_tokens': 250,
+      } } as unknown as Span,
+    ];
+    const perf: TestCasePerformanceMetrics = { durationMs: 10, agentDurationMs: 10 };
+    stampObjectiveActuals(perf, buildTracesAccessor(spans), true);
+    expect(perf.totalTokens).toBe(4250);
+    expect(perf).not.toHaveProperty('totalCostUsd');
+  });
+
+  it('stamps the leaf-attributed total when an agent span rolls up its chat children (#653)', () => {
+    const spans: Span[] = [
+      { traceId: 't', spanId: 'agent', name: 'invoke_agent', attributes: {
+        'gen_ai.operation.name': 'invoke_agent', 'gen_ai.usage.input_tokens': 300, 'gen_ai.usage.output_tokens': 30, 'gen_ai.usage.cost_usd': 0,
+      } },
+      { traceId: 't', spanId: 'c1', parentSpanId: 'agent', name: 'chat', attributes: { 'gen_ai.usage.input_tokens': 100, 'gen_ai.usage.output_tokens': 10, 'gen_ai.usage.cost_usd': 0.1 } },
+      { traceId: 't', spanId: 'c2', parentSpanId: 'agent', name: 'chat', attributes: { 'gen_ai.usage.input_tokens': 200, 'gen_ai.usage.output_tokens': 20, 'gen_ai.usage.cost_usd': 0.2 } },
+    ] as unknown as Span[];
+    const perf: TestCasePerformanceMetrics = { durationMs: 10, agentDurationMs: 10 };
+    stampObjectiveActuals(perf, buildTracesAccessor(spans), true);
+    expect(perf.totalTokens).toBe(330);
+    expect(perf.totalCostUsd).toBeCloseTo(0.3, 10);
   });
 
   it('leaves totalTokens/totalCostUsd UNSET (not 0) when the accessor is the loud-failure kind', () => {

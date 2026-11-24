@@ -20,9 +20,10 @@
  * `executeEvaluationRun` runner (mocking only the connector/storage
  * boundary — the matcher session, chai plugin, and always-record helpers
  * are all real) where matcher #1 fails, and asserts the persisted report
- * JSON carries `performanceMetrics.durationMs` / `.totalTokens` /
- * `.totalCostUsd` plus a distinctly-flagged `notReached` marker for
- * matcher #2, which never ran.
+ * JSON carries `performanceMetrics.durationMs` plus a distinctly-flagged
+ * `notReached` marker for matcher #2, which never ran; for a TRACED agent
+ * `.totalTokens` / `.totalCostUsd` are stamped from the spans (counted once,
+ * #653), for an untraced one they are ABSENT, never `0` (#654).
  *
  * Mirrors the harness in sdkMatcherSessionMetrics.integration.test.ts.
  */
@@ -44,12 +45,14 @@ jest.mock('@/services/connectors/server', () => ({
 
 jest.mock('@/lib/config/index', () => ({
   loadConfigSync: () => ({
-    // No `useTraces` — the deterministic path loads `emptyTracesAccessor()`
-    // (real zeros), deterministically, with no OpenSearch/trace-fetch
-    // mocking required. That's sufficient to prove the FIELD is present
-    // post-fix (it was simply absent — `undefined` — pre-fix).
     agents: [
+      // No `useTraces` — the deterministic path loads `emptyTracesAccessor()`:
+      // usage is NOT captured, so the report must carry NO token/cost numbers
+      // (never a literal 0 — #654).
       { key: 'test-agent', name: 'Test Agent', endpoint: 'http://localhost:3000/agent', connectorType: 'mock' },
+      // `useTraces: true` — the runner reads the spans the stub TracesClient
+      // below returns and stamps the always-record actuals from them.
+      { key: 'traced-agent', name: 'Traced Agent', endpoint: 'http://localhost:3000/agent', connectorType: 'mock', useTraces: true, tracePolling: { maxAttempts: 1, intervalMs: 0 } },
     ],
     models: {
       'claude-sonnet': { model_id: 'anthropic.claude-test', display_name: 'Test', context_window: 200000, max_output_tokens: 4096 },
@@ -80,6 +83,35 @@ jest.spyOn(console, 'warn').mockImplementation(() => {});
 
 import { invokeAgent } from '@/services/evaluation';
 import { executeEvaluationRun } from '@/services/evaluationRunner';
+import type { Span } from '@/types';
+import type { TracesClient } from '@/services/traces/index';
+
+/**
+ * Real-shaped agent trace: an `invoke_agent` span stamped with the ROLL-UP
+ * of its three `chat` children (exactly their sum, as GenAI-convention
+ * frameworks do), plus a tool span. Summing every span would read 2× the
+ * real usage (#653); the leaf-usage invariant counts 6,000 / 300 once.
+ */
+const MODEL = 'anthropic.claude-sonnet-4-20250514-v1:0';
+const TRACED_SPANS: Span[] = [
+  { traceId: 'trace-1', spanId: 'agent', name: 'invoke_agent demo', status: 'OK', startTime: '2026-01-01T00:00:00Z', endTime: '2026-01-01T00:00:10Z',
+    attributes: { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.request.model': MODEL, 'gen_ai.usage.input_tokens': 6000, 'gen_ai.usage.output_tokens': 300, 'agent_health.run.id': 'req-traced-1' } },
+  { traceId: 'trace-1', spanId: 'chat-1', parentSpanId: 'agent', name: 'chat', status: 'OK', startTime: '2026-01-01T00:00:01Z', endTime: '2026-01-01T00:00:03Z',
+    attributes: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': MODEL, 'gen_ai.usage.input_tokens': 1000, 'gen_ai.usage.output_tokens': 50 } },
+  { traceId: 'trace-1', spanId: 'tool-1', parentSpanId: 'agent', name: 'execute_tool search', status: 'OK', startTime: '2026-01-01T00:00:03Z', endTime: '2026-01-01T00:00:04Z',
+    attributes: { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'search' } },
+  { traceId: 'trace-1', spanId: 'chat-2', parentSpanId: 'agent', name: 'chat', status: 'OK', startTime: '2026-01-01T00:00:04Z', endTime: '2026-01-01T00:00:06Z',
+    attributes: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': MODEL, 'gen_ai.usage.input_tokens': 2000, 'gen_ai.usage.output_tokens': 100 } },
+  { traceId: 'trace-1', spanId: 'chat-3', parentSpanId: 'agent', name: 'chat', status: 'OK', startTime: '2026-01-01T00:00:06Z', endTime: '2026-01-01T00:00:09Z',
+    attributes: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': MODEL, 'gen_ai.usage.input_tokens': 3000, 'gen_ai.usage.output_tokens': 150 } },
+] as unknown as Span[];
+const EXPECTED_LEAF_TOKENS = 6000 + 300;
+// Sonnet-class rates: $3 / M input, $15 / M output.
+const EXPECTED_LEAF_COST = (6000 * 3 + 300 * 15) / 1_000_000;
+
+const stubTraces: TracesClient = {
+  fetchTracesForRun: jest.fn().mockResolvedValue({ spans: TRACED_SPANS, total: TRACED_SPANS.length }),
+};
 
 const mockInvokeAgent = invokeAgent as jest.Mock;
 
@@ -179,14 +211,13 @@ describe('ALWAYS-RECORD: objective actuals survive a mid-body throw (regression)
     // non-regression, not the headline assertion.
     expect(report.performanceMetrics.durationMs).toBe(4242);
     expect(report.performanceMetrics.agentDurationMs).toBe(4242);
-    // THE GAP THIS PR CLOSES: totalTokens/totalCostUsd are now PRESENT
-    // (real zeros — this mock agent has no useTraces, so the accessor is
-    // the deterministic emptyTracesAccessor) even though the body never
-    // reached a `traces.totalTokens`/`totalCost` matcher. Pre-fix these
-    // were `undefined` on the persisted report — this is the literal
-    // "cost n/a" symptom from the bug report.
-    expect(report.performanceMetrics.totalTokens).toBe(0);
-    expect(report.performanceMetrics.totalCostUsd).toBe(0);
+    // This mock agent has no useTraces (emptyTracesAccessor): usage was not
+    // captured, so the persisted report carries NO totalTokens/totalCostUsd
+    // — absent, never a literal `0` that every view would then show and
+    // average as a measured zero (#654). The always-record contract for a
+    // TRACED agent is the next test.
+    expect(report.performanceMetrics).not.toHaveProperty('totalTokens');
+    expect(report.performanceMetrics).not.toHaveProperty('totalCostUsd');
 
     // Matcher panel data: matcher #1 recorded as a real failure; matcher
     // #2 is a distinctly-flagged synthetic "not reached" entry, not just
@@ -204,7 +235,38 @@ describe('ALWAYS-RECORD: objective actuals survive a mid-body throw (regression)
     }); // hasEvalError bypass — unchanged BC behavior, pinned for clarity.
   });
 
-  it('control: all matchers pass — totalTokens/totalCostUsd are present with the SAME contract (no throw needed to see them)', async () => {
+  it('TRACED agent, matcher #1 fails: totalTokens/totalCostUsd are stamped from the spans, counted ONCE despite the invoke_agent roll-up (#653)', async () => {
+    mockInvokeAgent.mockResolvedValue({
+      trajectory: [{ type: 'response', content: 'agent output' }],
+      rawEvents: [],
+      runId: 'req-traced-1',
+      agentDurationMs: 4242,
+      connector: { type: 'mock' } as any,
+    });
+    const evaluateFn: EvaluateFn = async ({ agent, expect }: any) => {
+      const result = await agent.run('P');
+      expect(result.agentDurationMs).to.equal(999); // matcher #1: FAILS — throws
+      expect(result.traces.totalTokens).to.be.lessThan(1); // matcher #2: NEVER reached
+    };
+    const evaluateFnMap = new Map<string, EvaluateFn>([['tc-traced-throw', evaluateFn]]);
+
+    await executeEvaluationRun(
+      run({ agentKey: 'traced-agent' }),
+      [tc('tc-traced-throw')],
+      { storageModule: storage, evaluateFnMap, onProgress: jest.fn(), traces: stubTraces },
+    );
+
+    const report = finalReport(captured, 'tc-traced-throw');
+    expect(report.passFailStatus).toBe('failed');
+    // Always-record: stamped even though the body threw before reading them …
+    expect(report.performanceMetrics.totalTokens).toBe(EXPECTED_LEAF_TOKENS);
+    expect(report.performanceMetrics.totalCostUsd).toBeCloseTo(EXPECTED_LEAF_COST, 10);
+    // … and NOT the 2× a plain sum over every usage-carrying span gives.
+    expect(report.performanceMetrics.totalTokens).not.toBe(EXPECTED_LEAF_TOKENS * 2);
+    expect(report.matcherResults[1].notReached).toBe(true);
+  });
+
+  it('control (untraced): all matchers pass — the report still carries NO token/cost numbers', async () => {
     const evaluateFn: EvaluateFn = async ({ agent, expect }: any) => {
       const result = await agent.run('P');
       expect(result).to.exist;
@@ -219,8 +281,8 @@ describe('ALWAYS-RECORD: objective actuals survive a mid-body throw (regression)
 
     const report = finalReport(captured, 'tc-clean');
     expect(report.passFailStatus).toBe('passed');
-    expect(report.performanceMetrics.totalTokens).toBe(0);
-    expect(report.performanceMetrics.totalCostUsd).toBe(0);
+    expect(report.performanceMetrics).not.toHaveProperty('totalTokens');
+    expect(report.performanceMetrics).not.toHaveProperty('totalCostUsd');
     // No throw → no notReached marker.
     expect(report.matcherResults.some((m: any) => m.notReached)).toBe(false);
   });

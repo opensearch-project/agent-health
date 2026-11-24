@@ -1296,6 +1296,12 @@ export interface TraceMetrics {
    * the same service. `mixed` when spans came in through more than one.
    */
   correlatedBy?: 'ids' | 'window' | 'mixed';
+  /**
+   * Why `status` is 'error': the trace store query for this key FAILED
+   * (expired credentials, timeout, 5xx). The numbers above are then UNKNOWN,
+   * not zero — consumers must render "unavailable", never "--"/"$0.00".
+   */
+  error?: string;
 }
 
 // ============ Trace Types ============
@@ -1578,9 +1584,12 @@ export interface TestCasePerformanceMetrics {
    * test cases, the runner stamps this immediately after `agent.run()`
    * resolves — independent of whether any matcher in the test body actually
    * asserted on it — so a later-failing gate doesn't erase this objective
-   * actual. Undefined when the agent was never invoked (no-prompt test), or
-   * when `useTraces: true` but spans were never retrievable (the "loud
-   * failure" case — see lib/matchers/traces.ts `unavailableTracesAccessor`).
+   * actual. Undefined when the agent was never invoked (no-prompt test), when
+   * `useTraces: true` but spans were never retrievable (the "loud failure"
+   * case — see lib/matchers/traces.ts `unavailableTracesAccessor`), or when
+   * `useTraces: false` — usage was not captured, which is NOT a `0` (#654).
+   * Follows the leaf-usage invariant (lib/usageAggregates.ts): a parent span
+   * that only rolls up its children's usage is not counted again (#653).
    */
   totalTokens?: number;
   /** Same always-record guarantee as {@link totalTokens}, for USD cost. */
@@ -2131,6 +2140,14 @@ export interface RunAggregateMetrics {
    * service. Surfaces as a tooltip note on the trace-derived cells.
    */
   traceMetricsWindowCorrelated?: boolean;
+  /**
+   * Set when NO case of this run produced trace metrics because the trace
+   * store query itself failed for at least one of them (expired
+   * credentials, timeout, 5xx) — the message of the first such failure. The
+   * trace cells then say "unavailable" instead of the same "--" an untraced
+   * run shows, so a store outage is never mistaken for "not captured" (#652).
+   */
+  traceMetricsUnavailable?: string;
 }
 
 /**

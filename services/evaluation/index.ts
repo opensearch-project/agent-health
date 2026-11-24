@@ -246,15 +246,36 @@ export function stampObjectiveActuals(
   hasCapturedResult: boolean,
 ): void {
   if (!hasCapturedResult || !performanceMetrics) return;
+  // Each read in its own try: the accessor throws per PROPERTY, not as a
+  // whole. `totalCost` throws when a token-bearing span's model is not in the
+  // pricing table (an unpriced self-hosted model) while `totalTokens` is
+  // perfectly known — pre-fix one destructuring read lost BOTH, so a traced
+  // run whose cost could not be priced had no token count stamped either
+  // (#652). And when the accessor holds NO spans at all (`useTraces: false`
+  // → `emptyTracesAccessor()`), nothing is stamped: a `0` there would claim
+  // "this run used no tokens" for a run whose usage was simply never
+  // captured, and every view would then average and compare that false zero
+  // (#654). The report carries no token/cost numbers and views show "—".
   try {
-    const { totalTokens, totalCost } = loadedTraces;
-    if (typeof totalTokens === 'number') performanceMetrics.totalTokens = totalTokens;
-    if (typeof totalCost === 'number') performanceMetrics.totalCostUsd = totalCost;
+    if (loadedTraces.spans.length === 0) return;
   } catch {
     // `loadedTraces` is the "loud failure" accessor (#230) when
     // `useTraces: true` but spans never arrived — every read throws. Leave
     // totalTokens/totalCostUsd unset rather than writing a misleading `0`
     // (0 would assert "no cost incurred", which we don't actually know).
+    return;
+  }
+  try {
+    const { totalTokens } = loadedTraces;
+    if (typeof totalTokens === 'number') performanceMetrics.totalTokens = totalTokens;
+  } catch {
+    // No recognized token attribute on any span — unknown, not zero.
+  }
+  try {
+    const { totalCost } = loadedTraces;
+    if (typeof totalCost === 'number') performanceMetrics.totalCostUsd = totalCost;
+  } catch {
+    // Cost not determinable (unpriced model / no cost attribute) — unknown, not zero.
   }
 }
 

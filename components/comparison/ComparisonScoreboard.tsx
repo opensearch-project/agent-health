@@ -190,14 +190,47 @@ const traceCellPrefix = (
   value: number | undefined
 ): string => (value !== undefined && run.traceMetricsPartial ? '≥' : '');
 
+/** Tooltip of an EMPTY trace cell: the run has no trace data (not an outage). */
+export const TRACE_CELL_NO_DATA_TITLE =
+  'No trace data for this run — tokens, cost and LLM calls were not captured (agent not traced, or spans not found).';
+/** Tooltip prefix of a trace cell whose store query FAILED — the numbers are unknown, not "none". */
+export const TRACE_CELL_UNAVAILABLE_PREFIX = 'Trace metrics unavailable: ';
+
+/**
+ * Three states of a trace-derived cell (Cost / Tokens / LLM Calls / Tool
+ * Calls), distinguishable by eye AND by `data-trace-state`:
+ *   - `value`       — a number (maybe `≥`-prefixed, see traceCellPrefix)
+ *   - `none`        — "--": the run produced no trace data (untraced agent)
+ *   - `unavailable` — "⚠ --": the trace store query failed, so nothing is known
+ * Pre-fix `none` and `unavailable` rendered identically, so an expired
+ * credential on the trace store read as "this run was not traced" (#652).
+ */
+const traceCellState = (
+  run: Pick<RunAggregateMetrics, 'traceMetricsUnavailable'>,
+  value: number | undefined
+): 'value' | 'none' | 'unavailable' => (value !== undefined ? 'value' : run.traceMetricsUnavailable ? 'unavailable' : 'none');
+
 const traceCellTitle = (
-  run: Pick<RunAggregateMetrics, 'traceMetricsPartial' | 'traceMetricsWindowCorrelated'>
+  run: Pick<RunAggregateMetrics, 'traceMetricsPartial' | 'traceMetricsWindowCorrelated' | 'traceMetricsUnavailable'>,
+  value: number | undefined
 ): string | undefined => {
+  const state = traceCellState(run, value);
+  if (state === 'unavailable') return `${TRACE_CELL_UNAVAILABLE_PREFIX}${run.traceMetricsUnavailable}`;
+  if (state === 'none') return TRACE_CELL_NO_DATA_TITLE;
   const notes: string[] = [];
-  if (run.traceMetricsPartial) notes.push('Lower bound: the trace query hit its size cap, so some spans may be missing.');
+  if (run.traceMetricsPartial) notes.push('Lower bound: the trace query hit its size cap or failed for some cases, so some spans may be missing.');
   if (run.traceMetricsWindowCorrelated) notes.push('Correlated by the agent\'s service name + run time window (no precise run id on some reports); may include unrelated traffic of the same service.');
   return notes.length > 0 ? notes.join(' ') : undefined;
 };
+
+/** The `⚠ ` marker in front of an unavailable cell's "--". */
+const traceCellWarning = (
+  run: Pick<RunAggregateMetrics, 'traceMetricsUnavailable'>,
+  value: number | undefined
+): React.ReactNode =>
+  traceCellState(run, value) === 'unavailable'
+    ? <span className="text-amber-600 dark:text-amber-500 mr-1" aria-label="unavailable">⚠</span>
+    : null;
 
 const formatDelta = (a: number | undefined, b: number | undefined, suffix = ''): string => {
   if (a === undefined || b === undefined) return '';
@@ -629,20 +662,20 @@ export const ComparisonScoreboard: React.FC<ComparisonScoreboardProps> = ({
                             </td>
                           );
                         })}
-                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-cost-${run.runId}`} title={traceCellTitle(run)}>
-                          {traceCellPrefix(run, run.totalCostUsd)}{formatCostSafe(run.totalCostUsd)}
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-cost-${run.runId}`} data-trace-state={traceCellState(run, run.totalCostUsd)} title={traceCellTitle(run, run.totalCostUsd)}>
+                          {traceCellWarning(run, run.totalCostUsd)}{traceCellPrefix(run, run.totalCostUsd)}{formatCostSafe(run.totalCostUsd)}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-duration-${run.runId}`}>
                           {formatDurationSafe(run.avgDurationMs)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-tokens-${run.runId}`} title={traceCellTitle(run)}>
-                          {traceCellPrefix(run, run.totalTokens)}{formatTokensSafe(run.totalTokens)}
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-tokens-${run.runId}`} data-trace-state={traceCellState(run, run.totalTokens)} title={traceCellTitle(run, run.totalTokens)}>
+                          {traceCellWarning(run, run.totalTokens)}{traceCellPrefix(run, run.totalTokens)}{formatTokensSafe(run.totalTokens)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-llmcalls-${run.runId}`} title={traceCellTitle(run)}>
-                          {traceCellPrefix(run, run.totalLlmCalls)}{formatCountSafe(run.totalLlmCalls)}
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-llmcalls-${run.runId}`} data-trace-state={traceCellState(run, run.totalLlmCalls)} title={traceCellTitle(run, run.totalLlmCalls)}>
+                          {traceCellWarning(run, run.totalLlmCalls)}{traceCellPrefix(run, run.totalLlmCalls)}{formatCountSafe(run.totalLlmCalls)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-toolcalls-${run.runId}`} title={traceCellTitle(run)}>
-                          {traceCellPrefix(run, run.totalToolCalls)}{formatCountSafe(run.totalToolCalls)}
+                        <td className="px-3 py-2 text-right tabular-nums" data-testid={`run-toolcalls-${run.runId}`} data-trace-state={traceCellState(run, run.totalToolCalls)} title={traceCellTitle(run, run.totalToolCalls)}>
+                          {traceCellWarning(run, run.totalToolCalls)}{traceCellPrefix(run, run.totalToolCalls)}{formatCountSafe(run.totalToolCalls)}
                         </td>
                         <td className="px-3 py-2 text-right">
                           {idx === 0 && (
