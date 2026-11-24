@@ -1103,18 +1103,23 @@ describe('metricsService', () => {
       expect(result[0].status).toBe('pending');
     });
 
-    it('should handle OpenSearch failure gracefully', async () => {
+    it('a failed OpenSearch query yields the store-failure shape (status error + error), never "no spans" (#652)', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
+        statusText: 'Internal Server Error',
         text: () => Promise.resolve('Internal error'),
       });
 
       const result = await computeBatchMetrics(['run-1', 'run-2'], defaultConfig);
 
       expect(result).toHaveLength(2);
-      expect(result[0].status).toBe('pending');
-      expect(result[1].status).toBe('pending');
+      for (const m of result) {
+        expect(m.status).toBe('error');
+        expect(m.error).toMatch(/500/);
+        // Unknown, not "looked and found nothing".
+        expect(m.hasSpans).toBeUndefined();
+      }
     });
 
     it('ORs in Strategy-D session.id terms (one per runId) when sessionIdByRunId is supplied', async () => {

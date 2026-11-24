@@ -113,6 +113,7 @@ export const ComparisonPage: React.FC = () => {
   // the PREVIOUS selection is still in flight; that response (success or
   // error) must be discarded, not applied on top of the new selection.
   const reportsRequestIdRef = useRef(0);
+  const traceMetricsRequestIdRef = useRef(0);
   // Report ids whose batch fetch has COMPLETED (found or not, success or
   // failure). A report that is absent from `reports` but settled is known to
   // be unavailable, so nothing downstream keeps waiting for it.
@@ -421,8 +422,12 @@ export const ComparisonPage: React.FC = () => {
       const { keys, sessionIdByKey, traceIdByKey, agentsByKey } =
         collectMetricsCorrelationFromReports(selectedRunsForMetrics, reports, getAgentTraceServiceName);
       if (keys.length === 0) { setTraceMetricsMap(new Map()); return; }
+      // A slow batch for an earlier selection must not overwrite the current
+      // one's result (same guard as the reports loader above).
+      const requestId = ++traceMetricsRequestIdRef.current;
       try {
         const { metrics } = await fetchBatchMetrics(keys, sessionIdByKey, traceIdByKey, agentsByKey);
+        if (requestId !== traceMetricsRequestIdRef.current) return; // superseded — discard
         const map = new Map<string, TraceMetrics>();
         // Per-key store failures (`{ runId, status: 'error', error }`) are
         // KEPT: mergeTraceMetrics turns them into "unavailable" on the
@@ -435,6 +440,7 @@ export const ComparisonPage: React.FC = () => {
         });
         setTraceMetricsMap(map);
       } catch (error) {
+        if (requestId !== traceMetricsRequestIdRef.current) return; // superseded — discard
         console.warn('[ComparisonPage] Failed to fetch trace metrics:', error);
         // The whole batch call failed: every key is "unavailable", not "--".
         const message = error instanceof Error ? error.message : String(error);

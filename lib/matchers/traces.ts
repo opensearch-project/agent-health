@@ -182,11 +182,13 @@ export function buildTracesAccessor(spans: Span[]): TracesAccessor {
       'gen_ai.usage.cost',
       'llm.usage.cost_usd',
     ]);
-    if (reported !== undefined) {
+    if (hasTokenAttr && counted.isAggregate) {
+      // Pure roll-up of its descendants: the children's cost — reported or
+      // computed — already covers it, so neither its reported cost attribute
+      // nor a computed estimate is added.
+    } else if (reported !== undefined) {
       hadReportedCost = true;
       reportedCost += reported;
-    } else if (hasTokenAttr && counted.isAggregate) {
-      // Pure roll-up of its descendants: the children's cost already covers it.
     } else if (hasTokenAttr) {
       // No reported cost attribute on this span — fall back to a computed
       // estimate from token counts, if we know pricing for the model.

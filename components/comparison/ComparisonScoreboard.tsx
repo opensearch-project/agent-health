@@ -218,7 +218,7 @@ const traceCellTitle = (
   if (state === 'unavailable') return `${TRACE_CELL_UNAVAILABLE_PREFIX}${run.traceMetricsUnavailable}`;
   if (state === 'none') return TRACE_CELL_NO_DATA_TITLE;
   const notes: string[] = [];
-  if (run.traceMetricsPartial) notes.push('Lower bound: the trace query hit its size cap, so some spans may be missing.');
+  if (run.traceMetricsPartial) notes.push('Lower bound: the trace query hit its size cap or failed for some cases, so some spans may be missing.');
   if (run.traceMetricsWindowCorrelated) notes.push('Correlated by the agent\'s service name + run time window (no precise run id on some reports); may include unrelated traffic of the same service.');
   return notes.length > 0 ? notes.join(' ') : undefined;
 };

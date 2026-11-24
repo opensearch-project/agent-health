@@ -115,17 +115,3 @@ export function attributeLeafUsage<T extends UsageSpanLike>(
   for (const span of spans) visit(span, new Set());
   return result;
 }
-
-/**
- * Convenience: the spans whose usage was entirely a roll-up of descendants
- * (see {@link AttributedUsage.isAggregate}).
- */
-export function findUsageAggregateSpans<T extends UsageSpanLike>(
-  spans: readonly T[],
-  readUsage: (span: T) => TokenUsage,
-): Set<T> {
-  const attributed = attributeLeafUsage(spans, readUsage);
-  const out = new Set<T>();
-  attributed.forEach((u, span) => { if (u.isAggregate) out.add(span); });
-  return out;
-}

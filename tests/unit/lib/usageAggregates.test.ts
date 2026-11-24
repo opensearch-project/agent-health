@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { attributeLeafUsage, findUsageAggregateSpans } from '@/lib/usageAggregates';
+import { attributeLeafUsage } from '@/lib/usageAggregates';
 
 interface S { traceId?: string; spanId?: string; parentSpanId?: string; input?: number; output?: number }
 
@@ -130,19 +130,5 @@ describe('attributeLeafUsage', () => {
     const t = totals([c1, parent, c2]);
     expect(t.input).toBe(300);
     expect(t.aggregates).toBe(1);
-  });
-});
-
-describe('findUsageAggregateSpans', () => {
-  it('returns exactly the pure roll-up spans', () => {
-    const parent = span('agent', undefined, 300, 30);
-    const c1 = span('chat1', 'agent', 100, 10);
-    const c2 = span('chat2', 'agent', 200, 20);
-    const partialParent = span('req', undefined, 1000, 0);
-    const partialChild = span('stream', 'req', 700, 0);
-    const skipped = findUsageAggregateSpans([parent, c1, c2, partialParent, partialChild], readUsage);
-    expect(skipped.has(parent)).toBe(true);
-    expect(skipped.has(partialParent)).toBe(false);
-    expect(skipped.size).toBe(1);
   });
 });

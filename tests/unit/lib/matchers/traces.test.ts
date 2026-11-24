@@ -268,6 +268,17 @@ describe('buildTracesAccessor', () => {
       expect(t.totalCost).toBeCloseTo((100 * 3 + 10 * 15 + 1000 * 0.3) / 1e6, 12);
     });
 
+    it('a roll-up parent that also REPORTS a cost attribute is not added on top of its children\'s reported costs', () => {
+      const t = buildTracesAccessor([
+        span({ name: 'invoke_agent', spanId: 'agent', attributes: { 'gen_ai.usage.input_tokens': 300, 'gen_ai.usage.output_tokens': 30, 'gen_ai.usage.cost_usd': 0.3 } }),
+        span({ name: 'chat', spanId: 'c1', parentSpanId: 'agent', attributes: { 'gen_ai.usage.input_tokens': 100, 'gen_ai.usage.output_tokens': 10, 'gen_ai.usage.cost_usd': 0.1 } }),
+        span({ name: 'chat', spanId: 'c2', parentSpanId: 'agent', attributes: { 'gen_ai.usage.input_tokens': 200, 'gen_ai.usage.output_tokens': 20, 'gen_ai.usage.cost_usd': 0.2 } }),
+      ]);
+      expect(t.totalTokens).toBe(330);
+      expect(t.totalCost).toBeCloseTo(0.3, 12);
+      expect(t.costSource).toBe('reported');
+    });
+
     it('a roll-up parent with an unpriced model does not make totalCost unknowable (children priced)', () => {
       const t = buildTracesAccessor([
         span({ name: 'invoke_agent', spanId: 'agent', attributes: { 'gen_ai.request.model': '/opt/unpriced', 'gen_ai.usage.input_tokens': 100, 'gen_ai.usage.output_tokens': 10 } }),

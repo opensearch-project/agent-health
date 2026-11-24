@@ -1591,7 +1591,7 @@ describe('comparisonService', () => {
       expect(merged.traceMetricsUnavailable).toBe('The security token included in the request is expired');
     });
 
-    it('does NOT mark a run "unavailable" when some keys errored but others produced real spans (those are summed)', () => {
+    it('some keys errored, others produced real spans: the sums are a LOWER BOUND (partial), not "unavailable" and not exact', () => {
       const traceMetricsMap = new Map<string, TraceMetrics>([
         ['trace-run-1', traceMetrics({ runId: 'trace-run-1', totalTokens: 100, costUsd: 0.5, durationMs: 2000, llmCalls: 3, toolCalls: 1 })],
         ['trace-run-2', traceMetrics({ runId: 'trace-run-2', status: 'error', error: 'timeout' })],
@@ -1599,6 +1599,18 @@ describe('comparisonService', () => {
       const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithRunIds, traceMetricsMap);
       expect(merged.totalTokens).toBe(100);
       expect(merged.traceMetricsUnavailable).toBeUndefined();
+      expect(merged.traceMetricsPartial).toBe(true);
+    });
+
+    it('an agent run whose ROOT span errored (status:"error", no `error` field) is real data and is summed', () => {
+      const traceMetricsMap = new Map<string, TraceMetrics>([
+        ['trace-run-1', traceMetrics({ runId: 'trace-run-1', status: 'error', hasSpans: true, totalTokens: 100, costUsd: 0.5, durationMs: 2000, llmCalls: 3, toolCalls: 1 })],
+        ['trace-run-2', traceMetrics({ runId: 'trace-run-2', totalTokens: 200, costUsd: 1.5, durationMs: 4000, llmCalls: 5, toolCalls: 2 })],
+      ]);
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithRunIds, traceMetricsMap);
+      expect(merged.totalTokens).toBe(300);
+      expect(merged.traceMetricsUnavailable).toBeUndefined();
+      expect(merged.traceMetricsPartial).toBeUndefined();
     });
 
     it('an untraced run (every key a status:"pending" placeholder) has NO unavailable marker — "--" means not captured', () => {

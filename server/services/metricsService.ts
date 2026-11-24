@@ -13,7 +13,7 @@ import { Client } from '@opensearch-project/opensearch';
 import { MetricsResult, AggregateMetrics, OpenSearchConfig, Span } from '@/types';
 import { getSampleSpansForRunIds } from '../../cli/demo/sampleTraces.js';
 import { transformSpan, buildRunIdShouldClauses, buildSessionIdShouldClauses, buildAgentHintClause, type ServiceWindowHint } from './tracesService.js';
-import { attributeLeafUsage, type AttributedUsage } from '../../lib/usageAggregates.js';
+import { attributeLeafUsage } from '../../lib/usageAggregates.js';
 
 // ============================================================================
 // Model Pricing
@@ -136,25 +136,6 @@ function readOutputTokens(attrs: Record<string, any>): number {
   return Number(
     attrs['gen_ai.usage.output_tokens'] ?? attrs['gen_ai.usage.completion_tokens'] ?? attrs['output_tokens'] ?? 0,
   ) || 0;
-}
-
-/**
- * Apply the leaf-usage invariant (lib/usageAggregates.ts) to a span list:
- * each span's countable usage is its stamped `gen_ai.usage.*` minus what its
- * descendants already account for. Agent frameworks following the GenAI
- * conventions stamp the roll-up of a whole turn on the `invoke_agent` span
- * AND the per-call usage on each `chat` child; summing every span counted
- * those tokens twice (#653). A parent carrying MORE than its children still
- * contributes the remainder, so nothing is dropped.
- */
-function attributeTokenUsage<T extends { traceId?: string; spanId?: string; parentSpanId?: string }>(
-  spans: readonly T[],
-  attrsOf: (span: T) => Record<string, any>,
-): Map<T, AttributedUsage> {
-  return attributeLeafUsage(spans, (span) => {
-    const attrs = attrsOf(span);
-    return { input: readInputTokens(attrs), output: readOutputTokens(attrs) };
-  });
 }
 
 /**
@@ -592,28 +573,34 @@ export function computeMetricsFromSpans(
   let modelId = 'default';
 
   // Read each span's attributes once; the leaf-usage pass and the loop below
-  // share the merged map.
+  // share the merged map. Strategy A correlation (below) pulls in the whole
+  // shared trace, which can include agent-health's own eval/judge spans —
+  // they are excluded up front so they neither inflate the agent's
+  // tokens/cost/LLM-call count nor take part in the roll-up attribution.
   const attrsBySpan = new Map<OpenSearchSpanSource, Record<string, any>>();
   for (const span of spans) attrsBySpan.set(span, readAttrs(span));
-  const usage = attributeTokenUsage(spans, (s) => attrsBySpan.get(s)!);
+  const agentOwnSpans = spans.filter(s => !isEvalOrJudgeSpan(attrsBySpan.get(s)!, s.name));
+  // Leaf-usage invariant (lib/usageAggregates.ts, #653): agent frameworks
+  // following the GenAI conventions stamp the roll-up of a whole turn on the
+  // `invoke_agent` span AND the per-call usage on each `chat` child, so
+  // summing every span counted those tokens twice. Each span contributes only
+  // what its descendants do not already account for; a pure roll-up is NOT an
+  // LLM call; a parent carrying MORE than its children still contributes the
+  // remainder, so nothing is dropped.
+  const usage = attributeLeafUsage(agentOwnSpans, (s) => {
+    const attrs = attrsBySpan.get(s)!;
+    return { input: readInputTokens(attrs), output: readOutputTokens(attrs) };
+  });
 
-  for (const span of spans) {
+  for (const span of agentOwnSpans) {
     const attrs = attrsBySpan.get(span)!;
-    // Strategy A correlation (below) pulls in the whole shared trace, which
-    // can include agent-health's own eval/judge spans — exclude them so the
-    // agent's own tokens/cost/LLM-call count aren't inflated by ours.
-    if (isEvalOrJudgeSpan(attrs, span.name)) continue;
-    // Leaf-usage invariant (#653): a span whose descendants already account
-    // for its usage is a roll-up (an `invoke_agent` span totalling its `chat`
-    // children) — it contributes nothing and is NOT an LLM call. A parent
-    // carrying more than its descendants still contributes the remainder.
     const counted = usage.get(span)!;
     inputTokens += counted.input;
     outputTokens += counted.output;
 
     const spanModel = attrs['gen_ai.request.model'];
-    if (spanModel) {
-      if (!counted.isAggregate) llmCalls++;
+    if (spanModel && !counted.isAggregate) {
+      llmCalls++;
       modelId = spanModel;
     }
 
@@ -652,7 +639,6 @@ export function computeMetricsFromSpans(
   // query failed", dropped the only source holding the spans, and the run
   // inspector read "Metrics unavailable" for a run with 300K measured tokens.
   // Child-span errors are counted separately in `agentErrorSpans` instead.
-  const agentOwnSpans = spans.filter(s => !isEvalOrJudgeSpan(attrsBySpan.get(s)!, s.name));
   const agentErrorSpans = agentOwnSpans.filter(s => spanStatusCode(s) === 2).length;
   const agentOwnSpanIds = new Set(agentOwnSpans.map(s => s.spanId).filter(Boolean));
   const outcomeSpans = rootSpan
@@ -826,7 +812,10 @@ export async function computeBatchMetrics(
         console.warn(
           `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ${e.message}`
         );
-        return chunk.map(runId => computeMetricsFromSpans(runId, []));
+        // A failed query is UNKNOWN, not "no spans": the pending/hasSpans:false
+        // placeholder rendered an expired credential or a timeout as an
+        // untraced run (#652). Same shape the CloudWatch reader emits.
+        return chunk.map(runId => failedMetricsResult(runId, e?.message));
       }
     }));
 
@@ -877,7 +866,7 @@ export async function computeBatchMetrics(
         `OpenSearch metrics query failed for chunk (${chunk.length} run IDs): ` +
         `${response.status} ${response.statusText}. Response body: ${responseBody}`
       );
-      return chunk.map(runId => computeMetricsFromSpans(runId, []));
+      return chunk.map(runId => failedMetricsResult(runId, `OpenSearch query failed: ${response.status} ${response.statusText}`));
     }
 
     const data: OpenSearchResponse = await response.json();

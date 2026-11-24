@@ -230,9 +230,10 @@ export function calculateRunAggregates(
  *    already persists (averaged across cases with a real value) before the
  *    coarser run-level `performanceMetrics` fields — real data we already
  *    have beats another "0ms".
- * 3. A per-key trace-store FAILURE (`status: 'error'`) is neither data nor
- *    "no spans": it is skipped from the sums and remembered as
- *    `traceMetricsUnavailable` so the cells can say so.
+ * 3. A per-key trace-store FAILURE (`error` set) is neither data nor "no
+ *    spans": it is skipped from the sums and remembered — as
+ *    `traceMetricsUnavailable` when no case produced spans, as a lower-bound
+ *    `traceMetricsPartial` when some did — so the cells can say so.
  */
 export function mergeTraceMetrics(
   base: RunAggregateMetrics,
@@ -248,14 +249,16 @@ export function mergeTraceMetrics(
     const key = report ? metricsKeyForReport(report) : undefined;
     if (key) {
       const tm = traceMetricsMap.get(key);
-      // 3. A per-key STORE FAILURE (`status: 'error'` + `error`, the shape
-      //    `failedMetricsResult` / the batch route emit when the trace store
-      //    query threw — expired credentials, timeout) carries zero-filled
-      //    numbers that are UNKNOWN, not measured. Summing them as `$0 / 0
-      //    tokens` — or dropping them so the run reads exactly like an
-      //    untraced one — both lie; remember the failure instead so the
-      //    scoreboard can say "unavailable" (#652).
-      if (tm && (tm.status === 'error' && tm.error)) {
+      // 3. A per-key STORE FAILURE is the `error`-carrying shape
+      //    (`failedMetricsResult` / the batch route, when the trace store
+      //    query threw — expired credentials, timeout); `status: 'error'`
+      //    ALONE is the agent run's own outcome (root span ERROR) and its
+      //    tokens are real data. A store failure's zero-filled numbers are
+      //    UNKNOWN, not measured: summing them as `$0 / 0 tokens` — or
+      //    dropping them so the run reads exactly like an untraced one — both
+      //    lie; remember the failure instead so the scoreboard can say
+      //    "unavailable" (no case succeeded) or "lower bound" (some did) (#652).
+      if (tm && tm.error !== undefined) {
         storeError ??= tm.error;
         continue;
       }
@@ -323,7 +326,9 @@ export function mergeTraceMetrics(
     // in a tool-calling loop). Stays a dash without real trace data.
     totalLlmCalls: mc > 0 ? totalLlmCalls : undefined,
     totalToolCalls: mc > 0 ? totalToolCalls : (toolCallFallbackKnown ? fallbackToolCalls : undefined),
-    ...(mc > 0 && anyPartial ? { traceMetricsPartial: true } : {}),
+    // A store failure on SOME cases makes the sums a lower bound (`≥`), same
+    // as a size-capped query; on EVERY case nothing is known at all.
+    ...(mc > 0 && (anyPartial || storeError) ? { traceMetricsPartial: true } : {}),
     ...(mc > 0 && anyWindow ? { traceMetricsWindowCorrelated: true } : {}),
     ...(mc === 0 && storeError ? { traceMetricsUnavailable: storeError } : {}),
   };
