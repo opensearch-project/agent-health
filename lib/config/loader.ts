@@ -221,10 +221,13 @@ function mergeConfigs(
  * returned (#655). So when the digest changed since this process last
  * imported the file, its stale entry — and the local modules it required —
  * is evicted first (`evictLocalCjsModules`). Consequence: in a CommonJS
- * project the config's own local imports are re-evaluated with it.
- * Limitation (ES modules only): the config file itself is re-evaluated;
- * modules it imports are still served from Node's ESM cache (restart after
- * editing those).
+ * project the config's own local imports are re-evaluated with it — when
+ * Node loaded them through its CommonJS loader (tsx; built-in type stripping
+ * from Node 24 on; Node 22 requires them through the ESM loader's cache,
+ * where `module.children` stays empty and nothing can be evicted).
+ * Limitation: for an ES-module config (and the Node 22 case above) only the
+ * config file itself is re-evaluated; modules it imports are still served
+ * from Node's ESM cache (restart after editing those).
  */
 async function loadUserConfig(configPath: string): Promise<UserConfig> {
   // Keyed on the config file AND `<cwd>/.env`: a config that reads

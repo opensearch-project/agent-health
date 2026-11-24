@@ -183,13 +183,22 @@ interface Shape {
   nodeArgs: string[];
   /** How the config imports its sibling (`--import tsx` resolves extensionless; Node's type stripping does not). */
   siblingSpecifier: string;
-  /** Whether an edit to the sibling module is picked up too (CommonJS: yes — its cache entry is evicted with the config's; ESM: no, documented). */
+  /**
+   * Whether an edit to the sibling module is picked up too. CommonJS: yes when
+   * Node loaded the sibling through its CommonJS loader — always under tsx,
+   * and with built-in type stripping from Node 24 on; Node 22's type stripping
+   * requires a CommonJS config's dependencies through the ESM loader's cache
+   * (`module.children` stays empty), which nothing can evict, so there only
+   * the config file itself is re-evaluated. ESM: no (documented limitation).
+   */
   siblingReloads: boolean;
 }
 
+const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
+
 const SHAPES: Shape[] = [
   { name: '"type": "commonjs" + .ts config (ESM syntax), node --import tsx', packageType: 'commonjs', syntax: 'esm', nodeArgs: ['--import', TSX_LOADER], siblingSpecifier: './agents', siblingReloads: true },
-  { name: '"type": "commonjs" + .ts config (CommonJS syntax), plain node (built-in type stripping)', packageType: 'commonjs', syntax: 'cjs', nodeArgs: [], siblingSpecifier: './agents.ts', siblingReloads: true },
+  { name: '"type": "commonjs" + .ts config (CommonJS syntax), plain node (built-in type stripping)', packageType: 'commonjs', syntax: 'cjs', nodeArgs: [], siblingSpecifier: './agents.ts', siblingReloads: NODE_MAJOR >= 24 },
   { name: '"type": "module" + .ts config, node --import tsx', packageType: 'module', syntax: 'esm', nodeArgs: ['--import', TSX_LOADER], siblingSpecifier: './agents', siblingReloads: false },
   { name: '"type": "module" + .ts config, plain node (built-in type stripping)', packageType: 'module', syntax: 'esm', nodeArgs: [], siblingSpecifier: './agents.ts', siblingReloads: false },
 ];
