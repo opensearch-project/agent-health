@@ -236,9 +236,14 @@ describe.each(SHAPES)('UI-started runs re-evaluate an edited agent-health.config
     await closeServer(reservation);
     baseUrl = `http://127.0.0.1:${port}`;
 
+    // V8 coverage only for the plain-node children: under `--import tsx` the
+    // loader hands V8 a transformed copy of the CLI bundle (4.3 MB vs 1 MB on
+    // disk), so its coverage offsets do not match the bundle's source map and
+    // c8's merge would corrupt the `cli` coverage of every other process.
+    const env = cleanEnv({ AH_PORT: String(port), PORT: String(port) });
     server = spawn(process.execPath, [...nodeArgs, CLI_BUNDLE, 'serve', '-p', String(port), '--headless', '--no-browser'], {
       cwd: project,
-      env: withCliCoverage(cleanEnv({ AH_PORT: String(port), PORT: String(port) })),
+      env: nodeArgs.length ? env : withCliCoverage(env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     server.stdout!.on('data', c => { serverLog += c.toString(); });
