@@ -1577,6 +1577,40 @@ describe('comparisonService', () => {
       expect(merged.avgDurationMs).toBe(2000);
     });
 
+    it('a per-key trace-store FAILURE (status:"error" + error) is neither summed as $0 nor silently dropped — it marks the run "unavailable" (#652)', () => {
+      const traceMetricsMap = new Map<string, TraceMetrics>([
+        ['trace-run-1', traceMetrics({ runId: 'trace-run-1', status: 'error', error: 'The security token included in the request is expired' })],
+        ['trace-run-2', traceMetrics({ runId: 'trace-run-2', status: 'error', error: 'The security token included in the request is expired' })],
+      ]);
+
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithRunIds, traceMetricsMap);
+
+      expect(merged.totalTokens).toBeUndefined();
+      expect(merged.totalCostUsd).toBeUndefined();
+      expect(merged.totalLlmCalls).toBeUndefined();
+      expect(merged.traceMetricsUnavailable).toBe('The security token included in the request is expired');
+    });
+
+    it('does NOT mark a run "unavailable" when some keys errored but others produced real spans (those are summed)', () => {
+      const traceMetricsMap = new Map<string, TraceMetrics>([
+        ['trace-run-1', traceMetrics({ runId: 'trace-run-1', totalTokens: 100, costUsd: 0.5, durationMs: 2000, llmCalls: 3, toolCalls: 1 })],
+        ['trace-run-2', traceMetrics({ runId: 'trace-run-2', status: 'error', error: 'timeout' })],
+      ]);
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithRunIds, traceMetricsMap);
+      expect(merged.totalTokens).toBe(100);
+      expect(merged.traceMetricsUnavailable).toBeUndefined();
+    });
+
+    it('an untraced run (every key a status:"pending" placeholder) has NO unavailable marker — "--" means not captured', () => {
+      const traceMetricsMap = new Map<string, TraceMetrics>([
+        ['trace-run-1', traceMetrics({ runId: 'trace-run-1', status: 'pending', hasSpans: false })],
+        ['trace-run-2', traceMetrics({ runId: 'trace-run-2', status: 'pending', hasSpans: false })],
+      ]);
+      const merged = mergeTraceMetrics(baseAgg, runWithReports, reportsWithRunIds, traceMetricsMap);
+      expect(merged.totalTokens).toBeUndefined();
+      expect(merged.traceMetricsUnavailable).toBeUndefined();
+    });
+
     it('falls back to the average of per-result performanceMetrics.durationMs when no trace metrics exist at all', () => {
       const runWithPerResultDurations = {
         ...runWithReports,

@@ -216,8 +216,8 @@ export function calculateRunAggregates(
  * Overlay trace-derived metrics (tokens/cost/duration/calls) onto a run's
  * base aggregate (from {@link calculateRunAggregates}), which deliberately
  * leaves these fields undefined since they come from a separate trace
- * metrics fetch. Two honesty fixes live here, both found comparing
- * EnterpriseRAG-Bench runs:
+ * metrics fetch. Three honesty fixes live here (the first two found
+ * comparing EnterpriseRAG-Bench runs, the third in #652):
  *
  * 1. The batch metrics API returns a zero-filled `status: 'pending'`
  *    placeholder when a runId has no spans at all (no tracing configured, or
@@ -230,6 +230,9 @@ export function calculateRunAggregates(
  *    already persists (averaged across cases with a real value) before the
  *    coarser run-level `performanceMetrics` fields — real data we already
  *    have beats another "0ms".
+ * 3. A per-key trace-store FAILURE (`status: 'error'`) is neither data nor
+ *    "no spans": it is skipped from the sums and remembered as
+ *    `traceMetricsUnavailable` so the cells can say so.
  */
 export function mergeTraceMetrics(
   base: RunAggregateMetrics,
@@ -239,11 +242,23 @@ export function mergeTraceMetrics(
 ): RunAggregateMetrics {
   let totalTokens = 0, totalInputTokens = 0, totalOutputTokens = 0, totalCostUsd = 0, totalDurationMs = 0, totalLlmCalls = 0, totalToolCalls = 0, mc = 0;
   let anyPartial = false, anyWindow = false;
+  let storeError: string | undefined;
   for (const result of Object.values(run.results)) {
     const report = reports[result.reportId];
     const key = report ? metricsKeyForReport(report) : undefined;
     if (key) {
       const tm = traceMetricsMap.get(key);
+      // 3. A per-key STORE FAILURE (`status: 'error'` + `error`, the shape
+      //    `failedMetricsResult` / the batch route emit when the trace store
+      //    query threw — expired credentials, timeout) carries zero-filled
+      //    numbers that are UNKNOWN, not measured. Summing them as `$0 / 0
+      //    tokens` — or dropping them so the run reads exactly like an
+      //    untraced one — both lie; remember the failure instead so the
+      //    scoreboard can say "unavailable" (#652).
+      if (tm && (tm.status === 'error' && tm.error)) {
+        storeError ??= tm.error;
+        continue;
+      }
       if (tm && tm.status !== 'pending') {
         if (tm.partial) anyPartial = true;
         if (tm.correlatedBy === 'window' || tm.correlatedBy === 'mixed') anyWindow = true;
@@ -310,6 +325,7 @@ export function mergeTraceMetrics(
     totalToolCalls: mc > 0 ? totalToolCalls : (toolCallFallbackKnown ? fallbackToolCalls : undefined),
     ...(mc > 0 && anyPartial ? { traceMetricsPartial: true } : {}),
     ...(mc > 0 && anyWindow ? { traceMetricsWindowCorrelated: true } : {}),
+    ...(mc === 0 && storeError ? { traceMetricsUnavailable: storeError } : {}),
   };
 }
 

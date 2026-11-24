@@ -424,10 +424,28 @@ export const ComparisonPage: React.FC = () => {
       try {
         const { metrics } = await fetchBatchMetrics(keys, sessionIdByKey, traceIdByKey, agentsByKey);
         const map = new Map<string, TraceMetrics>();
-        metrics.forEach(m => { if (m.runId && !('error' in m)) map.set(m.runId, m as TraceMetrics); });
+        // Per-key store failures (`{ runId, status: 'error', error }`) are
+        // KEPT: mergeTraceMetrics turns them into "unavailable" on the
+        // scoreboard. Dropping them (pre-fix) made a trace-store outage —
+        // expired credentials, a timeout — render exactly like an untraced
+        // run's "--" (#652).
+        metrics.forEach(m => {
+          if (!m.runId) return;
+          map.set(m.runId, 'error' in m ? { ...(m as TraceMetrics), status: 'error' } : (m as TraceMetrics));
+        });
         setTraceMetricsMap(map);
       } catch (error) {
         console.warn('[ComparisonPage] Failed to fetch trace metrics:', error);
+        // The whole batch call failed: every key is "unavailable", not "--".
+        const message = error instanceof Error ? error.message : String(error);
+        const map = new Map<string, TraceMetrics>();
+        for (const key of keys) {
+          map.set(key, {
+            runId: key, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, durationMs: 0,
+            llmCalls: 0, toolCalls: 0, toolsUsed: [], status: 'error', error: message || 'trace metrics request failed',
+          });
+        }
+        setTraceMetricsMap(map);
       }
     };
     if (selectedRunIds.length > 0 && Object.keys(reports).length > 0) loadTraceMetrics();

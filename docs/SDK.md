@@ -203,9 +203,12 @@ stamps `performanceMetrics.durationMs` / `.agentDurationMs` /
 resolves — reading them straight from the same OTel-derived data
 `result.traces`/the `traces` fixture exposes, independent of whether the
 body's own code ever reached a matcher that asserted on them. (`totalTokens`/
-`totalCostUsd` are `undefined`, not `0`, when `useTraces: true` but spans
-never arrived — see the loud-failure accessor in "Traces fixture" below;
-they're real `0`s when `useTraces: false`.)
+`totalCostUsd` are `undefined`, not `0`, whenever there is no trace data to
+read them from: `useTraces: true` but spans never arrived — see the
+loud-failure accessor in "Traces fixture" below — and `useTraces: false`,
+where usage is simply not captured. A `0` would claim the run used no tokens;
+views show "—" instead. `totalTokens` is stamped even when `totalCost` is
+not determinable — an unpriced model keeps its token count.)
 
 This guarantee has one hard limit: a `judge()`/`evaluate()` call itself is
 already non-throwing and records its score/verdict the instant it's called —

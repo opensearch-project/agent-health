@@ -390,12 +390,13 @@ describe('Experiment Runner', () => {
       // non-regression rather than the headline assertion.
       expect(savedReport.performanceMetrics.durationMs).toBe(250);
       expect(savedReport.performanceMetrics.agentDurationMs).toBe(250);
-      // THE FIX: totalTokens/totalCostUsd are now PRESENT (real zeros, since
-      // this agent has no useTraces — emptyTracesAccessor) even though the
-      // body never reached a `traces.totalTokens`/`totalCost` matcher.
-      // Pre-fix these were `undefined` — nothing ever wrote them.
-      expect(savedReport.performanceMetrics.totalTokens).toBe(0);
-      expect(savedReport.performanceMetrics.totalCostUsd).toBe(0);
+      // This agent has no useTraces (emptyTracesAccessor): usage was NOT
+      // captured, so totalTokens/totalCostUsd stay ABSENT — never a literal
+      // `0`, which would claim "this run used no tokens" and drag every
+      // average down (#654). (The always-record stamp for TRACED agents is
+      // covered in tests/unit/services/evaluation/sdkAlwaysRecord.test.ts.)
+      expect(savedReport.performanceMetrics).not.toHaveProperty('totalTokens');
+      expect(savedReport.performanceMetrics).not.toHaveProperty('totalCostUsd');
 
       // Matcher panel: the failing gate is recorded, PLUS a distinct
       // synthetic entry for the tail that never ran.
