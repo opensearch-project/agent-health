@@ -743,10 +743,13 @@ re-run started from the UI, "Run Test" on a single case, or a direct
   started the server always wins over `.env`, and a value the server set
   itself (for example `AH_PORT` after binding a fallback port) is never
   replaced.
-- **`agent-health.config.{ts,js,mjs}`** — the file is re-evaluated, so edits
-  to agents (endpoint, headers, hooks, model) apply to the next run. A config
-  file that no longer loads fails that run with the loader's error instead of
-  silently using the previous version.
+- **`agent-health.config.{ts,js,mjs}`** — the file is re-evaluated when it
+  (or `.env`) changed since it was last loaded, so edits to agents (endpoint,
+  headers, hooks, model) apply to the next run; an unchanged file is not
+  evaluated again. This works whether Node loads the file as an ES module or,
+  in a project whose package.json says `"type": "commonjs"`, as CommonJS. A
+  config file that no longer loads fails that run with the loader's error
+  instead of silently using the previous version.
 
 Still requires a restart:
 
@@ -758,9 +761,15 @@ Still requires a restart:
 - the **`storage` / `observability`** blocks of the config (clusters are
   connected once at startup — see [Two modes](#two-modes-code-first-vs-ui-first));
 - **connectors** declared in the config (registered once at startup);
-- modules the config file **imports** (only the config file itself is
-  re-evaluated);
-- anything a connector or hook caches in module scope.
+- modules the config file **imports**, in an ES-module project (only the
+  config file itself is re-evaluated). In a CommonJS project the config's own
+  local modules — files under the project directory, not under
+  `node_modules` — are re-evaluated together with the config, but only when
+  the config file (or `.env`) itself changed: editing a sibling module alone
+  does not trigger a reload (touch the config file);
+- anything cached in module scope by a connector, or by a hook that an
+  ES-module config imports (a CommonJS config's local hook modules are
+  re-evaluated as above, so their module-scope state starts over).
 
 The environment is process-wide: a run already in progress when another run
 re-reads `.env` sees the new values from that moment. Runs that must be
