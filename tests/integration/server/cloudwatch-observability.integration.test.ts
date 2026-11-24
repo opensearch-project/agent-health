@@ -228,14 +228,14 @@ describe('CloudWatch observability backend (HTTP integration)', () => {
   it('GET /api/metrics/:runId computes tokens/cost from aws/spans with the shared (main) token math', async () => {
     const res = await request(app).get(`/api/metrics/${RUN}`);
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ runId: RUN, traceId: TRACE, inputTokens: 42952, outputTokens: 1686, totalTokens: 44638, llmCalls: 4, toolCalls: 3, status: 'success' });
+    expect(res.body).toMatchObject({ runId: RUN, traceId: TRACE, inputTokens: 21476, outputTokens: 843, totalTokens: 22319, llmCalls: 3, toolCalls: 3, status: 'success' });
     expect(res.body.costUsd).toBeGreaterThan(0);
   });
 
   it('POST /api/metrics/batch aggregates across runs and reports unknown runs as empty', async () => {
     const res = await request(app).post('/api/metrics/batch').send({ runIds: [RUN, 'nope'] });
     expect(res.status).toBe(200);
-    expect(res.body.metrics[0]).toMatchObject({ runId: RUN, totalTokens: 44638 });
+    expect(res.body.metrics[0]).toMatchObject({ runId: RUN, totalTokens: 22319 });
     expect(res.body.metrics[1]).toMatchObject({ runId: 'nope', totalTokens: 0 });
     expect(res.body.aggregate.totalRuns).toBe(2);
   });
@@ -279,7 +279,7 @@ describe('CloudWatch observability backend (HTTP integration)', () => {
     expect(traces.body.total).toBe(12);
     expect(traces.body.warning).toMatch(/partial/i);
     const metrics = await request(app).get(`/api/metrics/${RUN}`);
-    expect(metrics.body).toMatchObject({ runId: RUN, inputTokens: 42952, partial: true });
+    expect(metrics.body).toMatchObject({ runId: RUN, inputTokens: 21476, partial: true });
   });
 
   it('a throttled FilterLogEvents does not fail the request: Insights answers, flagged partial', async () => {

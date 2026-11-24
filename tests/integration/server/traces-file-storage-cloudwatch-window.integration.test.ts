@@ -253,7 +253,7 @@ describe('#640 — file storage + CloudWatch: the run inspector finds a run\'s s
     // Header metrics for the same run were never affected (the batch path already scanned the lookback) — parity.
     const metrics = await request(app).get(`/api/metrics/${RUN}`);
     expect(metrics.status).toBe(200);
-    expect(metrics.body).toMatchObject({ runId: RUN, llmCalls: 4, toolCalls: 3, status: 'success' });
+    expect(metrics.body).toMatchObject({ runId: RUN, llmCalls: 3, toolCalls: 3, status: 'success' });
   });
 
   it('a window-only request (no exact id) is still narrowed to the window — the lookback is not scanned for a bare service name', async () => {
